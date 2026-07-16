@@ -18,7 +18,7 @@ parallel; everything else is sequential.
 | 10  | [CLI](10-cli.md)                                         | 09                     | done    |
 | 11  | [iOS driver](11-ios-driver.md)                           | 06 (integrates via 09) | done    |
 | 12  | [Android driver](12-android-driver.md)                   | 06 (integrates via 09) | done |
-| 13  | [Doctor, nuke & e2e](13-doctor-e2e.md)                   | 10, 11, 12             | pending |
+| 13  | [Doctor, nuke & e2e](13-doctor-e2e.md)                   | 10, 11, 12             | done |
 
 Workflow for implementing a stage: see [../loop.md](../loop.md).
 When a stage is completed, flip its Status here to `done` in the same commit.

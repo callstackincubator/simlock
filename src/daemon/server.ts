@@ -16,6 +16,8 @@ import {
   RuntimeMissingError,
   UnknownModelError,
   type CleanupReaper,
+  type Doctor,
+  type Nuke,
   UnknownLeaseError,
 } from "../core/index.js";
 import type { Filesystem } from "../ports/index.js";
@@ -43,6 +45,7 @@ interface Connection {
 
 export interface DaemonServerOptions {
   readonly config: Config;
+  readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
@@ -50,6 +53,7 @@ export interface DaemonServerOptions {
   readonly leaseEngine: LeaseEngine;
   readonly protocolVersion?: number;
   readonly reaper: CleanupReaper;
+  readonly nuke?: Nuke;
   readonly registry: Registry;
   readonly socketPath?: string;
   readonly version: string;
@@ -291,6 +295,18 @@ export class DaemonServer {
         return this.options.reaper.run({
           dryRun: optionalBoolean(payload, "dryRun") ?? false,
           ...(typeof payload.rule === "string" ? { rule: payload.rule } : {}),
+        });
+      }
+      case "doctor.run": {
+        const payload = objectPayload(frame.payload);
+        if (this.options.doctor === undefined) throw new Error("Doctor is unavailable");
+        return this.options.doctor.reconcile({ fix: optionalBoolean(payload, "fix") ?? false });
+      }
+      case "nuke.run": {
+        const payload = objectPayload(frame.payload);
+        if (this.options.nuke === undefined) throw new Error("Nuke is unavailable");
+        return this.options.nuke.run({
+          deleteDevices: optionalBoolean(payload, "deleteDevices") ?? false,
         });
       }
       case "events.replay": {

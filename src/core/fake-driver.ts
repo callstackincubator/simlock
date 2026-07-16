@@ -14,7 +14,8 @@ export type FakeDriverOperation =
   | "makeReady"
   | "reclaim"
   | "shutdown"
-  | "destroy";
+  | "destroy"
+  | "listManaged";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -57,6 +58,9 @@ export class FakeDriver implements Driver {
   readonly #reclaimResult: "ready" | "shutdown";
   readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
+  #managedReality:
+    | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
+    | undefined;
 
   constructor(options: FakeDriverOptions) {
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
@@ -140,12 +144,31 @@ export class FakeDriver implements Driver {
     await this.#beforeCall("shutdown", device);
     this.#requireDevice(device);
     this.#devices.set(device.deviceId, "shutdown");
+    this.#managedReality = removeManagedProcess(this.#managedReality, device.deviceId);
   }
 
   async destroy(device: DriverDevice): Promise<void> {
     await this.#beforeCall("destroy", device);
     this.#requireDevice(device);
     this.#devices.delete(device.deviceId);
+    this.#managedReality = removeManagedDevice(this.#managedReality, device.deviceId);
+  }
+
+  async listManaged(): Promise<{
+    readonly devices: readonly DriverDevice[];
+    readonly processes: readonly DriverDevice[];
+  }> {
+    await this.#beforeCall("listManaged");
+    if (this.#managedReality !== undefined) {
+      return cloneReality(this.#managedReality);
+    }
+    return {
+      devices: [...this.#devices.keys()].map((deviceId) => ({
+        deviceId,
+        driverData: { fakeDeviceId: deviceId },
+      })),
+      processes: [],
+    };
   }
 
   estimate(operation: DriverEstimateOperation, _spec: DeviceSpec): number {
@@ -164,6 +187,20 @@ export class FakeDriver implements Driver {
     this.#hangMakeReady = false;
     for (const resolve of this.#pendingMakeReady.splice(0)) {
       resolve();
+    }
+  }
+
+  setManagedReality(reality: {
+    readonly devices: readonly DriverDevice[];
+    readonly processes: readonly DriverDevice[];
+  }): void {
+    const managed = {
+      devices: reality.devices.filter(isPitlaneManaged),
+      processes: reality.processes.filter(isPitlaneManaged),
+    };
+    this.#managedReality = cloneReality(managed);
+    for (const device of [...reality.devices, ...reality.processes]) {
+      this.#devices.set(device.deviceId, "shutdown");
     }
   }
 
@@ -200,6 +237,47 @@ export class FakeDriver implements Driver {
       throw new FakeDriverUnknownDeviceError(device.deviceId);
     }
   }
+}
+
+function isPitlaneManaged(device: DriverDevice): boolean {
+  return device.deviceId.startsWith("pitlane-") || device.deviceId.startsWith("pitlane_");
+}
+
+function cloneReality(reality: {
+  readonly devices: readonly DriverDevice[];
+  readonly processes: readonly DriverDevice[];
+}): { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] } {
+  return {
+    devices: reality.devices.map((device) => ({ ...device })),
+    processes: reality.processes.map((device) => ({ ...device })),
+  };
+}
+
+function removeManagedDevice(
+  reality:
+    | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
+    | undefined,
+  deviceId: string,
+):
+  | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
+  | undefined {
+  if (reality === undefined) return undefined;
+  return { ...reality, devices: reality.devices.filter((device) => device.deviceId !== deviceId) };
+}
+
+function removeManagedProcess(
+  reality:
+    | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
+    | undefined,
+  deviceId: string,
+):
+  | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
+  | undefined {
+  if (reality === undefined) return undefined;
+  return {
+    ...reality,
+    processes: reality.processes.filter((device) => device.deviceId !== deviceId),
+  };
 }
 
 function failureKey(operation: FakeDriverOperation, callNumber: number): string {

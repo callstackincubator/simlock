@@ -273,11 +273,63 @@ export class AndroidDriver implements Driver {
   async destroy(device: DriverDevice): Promise<void> {
     const data = this.#dataFor(device);
     await this.#withDeviceLock(data.avdName, async () => {
-      await this.#shutdown(data, this.#stateFor(data));
+      if (data.port > 0) {
+        await this.#shutdown(data, this.#stateFor(data));
+      }
       await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
       this.#devices.delete(data.avdName);
       this.#portAllocator.release(data.port);
     });
+  }
+
+  async listManaged(): Promise<{
+    readonly devices: readonly DriverDevice[];
+    readonly processes: readonly DriverDevice[];
+  }> {
+    const devices: DriverDevice[] = [];
+    if (await this.#filesystem.exists(this.#avdDirectory)) {
+      for (const entry of await this.#filesystem.readdir(this.#avdDirectory)) {
+        const match = /^(pitlane_.+)\.avd$/.exec(entry);
+        if (match?.[1] === undefined) continue;
+        const avdName = match[1];
+        devices.push({
+          deviceId: avdName,
+          driverData: {
+            avdName,
+            configHash: "recovered",
+            port: 0,
+            serial: "",
+          } satisfies AndroidDriverData,
+        });
+      }
+    }
+
+    const processes: DriverDevice[] = [];
+    const attached = await this.#runOrThrow(this.#sdk.adb, ["devices"]);
+    for (const serial of attached.stdout.matchAll(/^((?:emulator)-\d+)\s+device$/gm)) {
+      const candidate = serial[1];
+      if (candidate === undefined) continue;
+      const name = await this.#runOrThrow(this.#sdk.adb, [
+        "-s",
+        candidate,
+        "shell",
+        "getprop",
+        "ro.boot.qemu.avd_name",
+      ]);
+      const avdName = name.stdout.trim();
+      if (!avdName.startsWith("pitlane_")) continue;
+      const port = Number(candidate.slice("emulator-".length));
+      processes.push({
+        deviceId: avdName,
+        driverData: {
+          avdName,
+          configHash: "recovered",
+          port,
+          serial: candidate,
+        } satisfies AndroidDriverData,
+      });
+    }
+    return { devices, processes };
   }
 
   estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {

@@ -7,11 +7,14 @@ import {
   type ConfigOverrides,
   type Driver,
   CleanupReaper,
+  Doctor,
   LeaseEngine,
   loadConfig,
   Registry,
+  Nuke,
 } from "../core/index.js";
 import { AndroidDriver, SdkMissingError } from "../drivers/android/index.js";
+import { IosSimctlDriver } from "../drivers/ios/index.js";
 import {
   CryptoIdGenerator,
   type Clock,
@@ -77,14 +80,19 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
     diskPath: dataDirectory,
   });
+  const doctor = new Doctor({ clock, drivers, eventBus, leaseEngine, registry });
+  const nuke = new Nuke({ leaseEngine, registry });
+  await doctor.reconcile();
   const daemon = new DaemonServer({
     config,
+    doctor,
     defaultRequesterId: options.defaultRequesterId ?? String(process.pid),
     drivers,
     eventBus,
     filesystem,
     leaseEngine,
     reaper,
+    nuke,
     registry,
     socketPath,
     version: options.version ?? "1.0.0",
@@ -98,8 +106,18 @@ async function discoverDrivers(options: {
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
 }): Promise<Driver[]> {
+  const drivers: Driver[] = [];
+  if (process.platform === "darwin") {
+    drivers.push(
+      new IosSimctlDriver({
+        clock: options.clock,
+        idGenerator: options.idGenerator,
+        processRunner: new NodeProcessRunner(),
+      }),
+    );
+  }
   try {
-    return [
+    drivers.push(
       await AndroidDriver.create({
         clock: options.clock,
         env: process.env,
@@ -108,10 +126,11 @@ async function discoverDrivers(options: {
         idGenerator: options.idGenerator,
         processRunner: new NodeProcessRunner(),
       }),
-    ];
+    );
+    return drivers;
   } catch (error: unknown) {
     if (error instanceof SdkMissingError) {
-      return [];
+      return drivers;
     }
     throw error;
   }

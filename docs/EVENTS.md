@@ -38,7 +38,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `daemon.stopping` | reason | graceful shutdown began | implemented |
 | `disk.pressure-detected` | free bytes, threshold | free disk crossed configured threshold | planned |
 | `cleanup.executed` | rule name, action, target, reason | reaper executed a proposed action | implemented |
-| `doctor.reconciled` | drift findings | state DB reconciled against simctl/adb reality | planned |
+| `doctor.reconciled` | drift findings | state DB reconciled against simctl/adb reality | implemented |
 
 ## Conventions recap
 

@@ -177,6 +177,27 @@ export class Registry {
     return cloneDevice(updated);
   }
 
+  /** Records externally verified disappearance; no driver verb is invoked. */
+  async markDeviceMissing(deviceId: string, initiator: string): Promise<DeviceRecord> {
+    const index = this.#devices.findIndex((device) => device.id === deviceId);
+    const device = this.#devices[index];
+    if (index === -1 || device === undefined) {
+      throw new UnknownDeviceError(deviceId);
+    }
+    if (this.#leases.some((lease) => lease.deviceId === deviceId)) {
+      throw new RegistryEventError(`Cannot mark leased device missing: ${deviceId}`);
+    }
+    if (device.state === "deleted") {
+      return cloneDevice(device);
+    }
+    const updated = { ...device, state: "deleted" as const };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    this.options.eventBus.emit("device.deleted", { deviceId, initiator }, "registry");
+    return cloneDevice(updated);
+  }
+
   async createLease({
     deviceId,
     mode,

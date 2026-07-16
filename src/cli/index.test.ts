@@ -100,6 +100,41 @@ describe("CLI boundary", () => {
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
   });
 
+  it("flagship e2e: queues a second CLI holder until the first connection drops", async () => {
+    const harness = await createHarness();
+    const first = outputCapture();
+    const second = outputCapture();
+    const firstSignals = new EventEmitter();
+    const secondSignals = new EventEmitter();
+    const firstRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      first.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        requesterId: "agent-a",
+        signals: firstSignals,
+      }),
+    );
+    await vi.waitFor(() => expect(first.stdout).not.toBe(""));
+    const secondRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      second.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        requesterId: "agent-b",
+        signals: secondSignals,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(harness.eventBus.replay().some((event) => event.event === "lease.queued")).toBe(true),
+    );
+    expect(second.stdout).toBe("");
+
+    firstSignals.emit("SIGTERM");
+    await expect(firstRun).resolves.toBe(0);
+    await vi.waitFor(() => expect(second.stdout).not.toBe(""));
+    secondSignals.emit("SIGTERM");
+    await expect(secondRun).resolves.toBe(0);
+  });
+
   it("prints a detached token, exits, and renews it", async () => {
     const detached = outputCapture();
     const connection = new StubConnection();
@@ -238,7 +273,7 @@ async function createHarness() {
   });
   runningDaemons.push(daemon);
   await daemon.start();
-  return { registry, socketPath };
+  return { eventBus, registry, socketPath };
 }
 
 function sequence() {

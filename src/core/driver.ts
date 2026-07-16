@@ -11,6 +11,14 @@ export interface DriverDevice {
   readonly driverData: unknown;
 }
 
+/** Reality observable by a driver without trusting the registry. */
+export interface DriverReality {
+  /** Devices whose platform-owned name proves that Pitlane created them. */
+  readonly devices: readonly DriverDevice[];
+  /** Running, Pitlane-attributable device processes not necessarily in the registry. */
+  readonly processes: readonly DriverDevice[];
+}
+
 export interface ReclaimResult {
   readonly state: "ready" | "shutdown";
   readonly strategy: "erase" | "snapshot" | "wipe";
@@ -30,6 +38,7 @@ export interface Driver {
   ): Promise<ReclaimResult>;
   shutdown(device: DriverDevice): Promise<void>;
   destroy(device: DriverDevice): Promise<void>;
+  listManaged(): Promise<DriverReality>;
   estimate(operation: "provision" | "boot" | "reclaim", spec: DeviceSpec): number;
 }
 

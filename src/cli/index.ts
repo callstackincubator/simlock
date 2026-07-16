@@ -116,15 +116,16 @@ export async function runCli(
         return await runList(argv.slice(1), environment);
       case "cleanup":
         return await runCleanup(argv.slice(1), environment);
+      case "doctor":
+        return await runDoctor(argv.slice(1), environment);
+      case "nuke":
+        return await runNuke(argv.slice(1), environment);
       case "events":
         return await runEvents(argv.slice(1), environment);
       case "daemon":
         return await runDaemon(argv.slice(1), environment);
       case "config":
         return await runConfig(argv.slice(1), environment);
-      case "doctor":
-      case "nuke":
-        throw new Error(`${argv[0]} is not implemented until stage 13`);
       default:
         throw new UsageError(`Unknown command: ${argv[0]}`);
     }
@@ -313,6 +314,46 @@ async function runCleanup(argv: readonly string[], environment: CliEnvironment):
     await requestOnce(environment, "cleanup.run", {
       dryRun: values["dry-run"] ?? false,
       ...(typeof values.rule === "string" ? { rule: values.rule } : {}),
+    }),
+  );
+  return 0;
+}
+
+async function runDoctor(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  const values = commandArgs(argv, {
+    fix: { type: "boolean" },
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+  });
+  if (values.help) {
+    environment.stdout.write("Usage: pitlane doctor [--fix] [--json]\n");
+    return 0;
+  }
+  writeResult(
+    environment,
+    await requestOnce(environment, "doctor.run", { fix: values.fix ?? false }),
+  );
+  return 0;
+}
+
+async function runNuke(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  const values = commandArgs(argv, {
+    "delete-devices": { type: "boolean" },
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+    yes: { type: "boolean" },
+  });
+  if (values.help) {
+    environment.stdout.write("Usage: pitlane nuke [--delete-devices] [--yes] [--json]\n");
+    return 0;
+  }
+  const confirmed =
+    values.yes ?? (await environment.confirm?.("Nuke Pitlane-managed devices? [y/N] "));
+  if (!confirmed) throw new UsageError("nuke requires confirmation or --yes");
+  writeResult(
+    environment,
+    await requestOnce(environment, "nuke.run", {
+      deleteDevices: values["delete-devices"] ?? false,
     }),
   );
   return 0;

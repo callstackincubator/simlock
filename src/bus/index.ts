@@ -27,7 +27,8 @@ export interface EventMap {
       | "no-wait"
       | "unresolvable-spec"
       | "already-leased"
-      | "boot-timeout";
+      | "boot-timeout"
+      | "killed";
   };
   "device.provisioned": {
     readonly deviceId: string;

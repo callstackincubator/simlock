@@ -40,6 +40,7 @@ export {
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
+export { type DoctorFinding, type DoctorOptions, type DoctorReport, Doctor } from "./doctor.js";
 export {
   HeldLeaseRenewalError,
   type LeaseEngineOptions,
@@ -49,9 +50,11 @@ export {
   type LeaseTiming,
   NoCapacityError,
   NoDriverError,
+  NukeCancelledError,
   QueueTimeoutError,
   RequesterAlreadyLeasedError,
 } from "./lease-engine.js";
+export { type NukeOptions, type NukeRunOptions, Nuke } from "./nuke.js";
 export {
   type DriverEstimateOperation,
   type FakeDriverCall,

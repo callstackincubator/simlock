@@ -66,6 +66,13 @@ export class HeldLeaseRenewalError extends Error {
   }
 }
 
+export class NukeCancelledError extends Error {
+  constructor() {
+    super("Request cancelled by nuke");
+    this.name = "NukeCancelledError";
+  }
+}
+
 export class NoDriverError extends Error {
   constructor(readonly platform: Platform) {
     super(`No driver registered for platform: ${platform}`);
@@ -191,6 +198,59 @@ export class LeaseEngine {
     const leaseIds = this.options.registry.snapshot.leases.map((lease) => lease.id);
     await Promise.all(leaseIds.map(async (leaseId) => this.release(leaseId, reason)));
     return leaseIds;
+  }
+
+  async expire(leaseId: string): Promise<void> {
+    await this.#release(leaseId, "expired");
+  }
+
+  /** Operator-only reset; targets device records from this registry exclusively. */
+  async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
+    const releasedLeaseIds = await this.releaseAll("killed");
+    await this.#withDecision(async () => {
+      while (this.#queue[0] !== undefined) {
+        const waiter = this.#queue[0];
+        this.#reject(waiter, new NukeCancelledError(), "killed");
+      }
+    });
+
+    for (const device of this.options.registry.snapshot.devices) {
+      if (device.state === "deleted") continue;
+      const driver = this.#driverFor(device.spec.platform);
+      if (device.state === "ready" || device.state === "warm") {
+        await driver.shutdown(toDriverDevice(device));
+        await this.#withDecision(async () => {
+          const current = this.options.registry.snapshot.devices.find(
+            (candidate) => candidate.id === device.id,
+          );
+          if (current?.state === "ready" || current?.state === "warm") {
+            await this.options.registry.transitionDevice(device.id, "shutdown", {
+              event: "device.shutdown",
+              payload: { deviceId: device.id, initiator: "nuke" },
+            });
+          }
+        });
+      }
+      if (deleteDevices) {
+        const current = this.options.registry.snapshot.devices.find(
+          (candidate) => candidate.id === device.id,
+        );
+        if (current?.state !== "shutdown") continue;
+        await driver.destroy(toDriverDevice(current));
+        await this.#withDecision(async () => {
+          const latest = this.options.registry.snapshot.devices.find(
+            (candidate) => candidate.id === device.id,
+          );
+          if (latest?.state === "shutdown") {
+            await this.options.registry.transitionDevice(device.id, "deleted", {
+              event: "device.deleted",
+              payload: { deviceId: device.id, initiator: "nuke" },
+            });
+          }
+        });
+      }
+    }
+    return { releasedLeaseIds };
   }
 
   get queueDepth(): number {
@@ -636,7 +696,13 @@ export class LeaseEngine {
   #reject(
     waiter: Waiter,
     error: Error,
-    reason: "timeout" | "no-wait" | "unresolvable-spec" | "already-leased" | "boot-timeout",
+    reason:
+      | "timeout"
+      | "no-wait"
+      | "unresolvable-spec"
+      | "already-leased"
+      | "boot-timeout"
+      | "killed",
   ): void {
     if (waiter.state === "rejected" || waiter.state === "granted") {
       return;

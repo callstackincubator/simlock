@@ -161,6 +161,14 @@ export class IosSimctlDriver implements Driver {
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
   }
 
+  async listManaged(): Promise<{
+    readonly devices: readonly DriverDevice[];
+    readonly processes: readonly DriverDevice[];
+  }> {
+    const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
+    return { devices: parseManagedDevices(JSON.parse(result.stdout) as unknown), processes: [] };
+  }
+
   estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {
     switch (operation) {
       case "provision":
@@ -289,9 +297,34 @@ export class IosSimctlDriver implements Driver {
 class IosRuntimeMissingError extends RuntimeMissingError {
   constructor(osVersion: string) {
     super("ios", osVersion);
-    // TODO(stage-10): document this no-download behavior in the CLI manual during CLI integration.
     this.message = `iOS runtime ${osVersion} is not installed; install it via Xcode`;
   }
+}
+
+function parseManagedDevices(value: unknown): DriverDevice[] {
+  if (!isRecord(value) || !isRecord(value.devices)) {
+    throw new DriverCrashError("Invalid simctl device list JSON");
+  }
+  const devices: DriverDevice[] = [];
+  for (const runtimeDevices of Object.values(value.devices)) {
+    if (!Array.isArray(runtimeDevices)) continue;
+    for (const device of runtimeDevices) {
+      if (!isRecord(device) || typeof device.name !== "string" || typeof device.udid !== "string") {
+        continue;
+      }
+      if (!device.name.startsWith("pitlane-")) continue;
+      devices.push({
+        deviceId: device.udid,
+        driverData: {
+          deviceTypeId: "",
+          name: device.name,
+          runtimeId: "",
+          udid: device.udid,
+        } satisfies IosDriverData,
+      });
+    }
+  }
+  return devices;
 }
 
 function parseCatalog(value: unknown): SimctlCatalog {

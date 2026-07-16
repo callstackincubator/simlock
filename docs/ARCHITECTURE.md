@@ -45,6 +45,7 @@ reclaim(device)      -> ready | shutdown      // fresh-state strategy lives here
 shutdown(device)
 destroy(device)
 estimate(op)         -> ETA for progress events
+listManaged()        -> Pitlane-prefixed device/process reality for doctor
 ```
 
 The litmus test for the boundary: adding a third driver (e.g. physical
@@ -115,6 +116,9 @@ v1 rules — the tiered cleanup:
 2. idle > T2 → `destroy` (reclaim disk)
 3. unreferenced runtime / system image > T3 (very long, or explicit command
    only) → GC
+
+Runtime GC is explicit-only in v1 (`cleanup --rule runtime-gc`). iOS runtimes
+are Xcode-managed and are never deleted by Pitlane.
 
 Rules are registered in a static in-code list; adding one is a new file plus
 one registration line. Triggers are event-bus subscriptions
