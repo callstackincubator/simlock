@@ -13,6 +13,8 @@ import {
   QueueTimeoutError,
   type Registry,
   RequesterAlreadyLeasedError,
+  RuntimeMissingError,
+  UnknownModelError,
   type CleanupReaper,
   UnknownLeaseError,
 } from "../core/index.js";
@@ -266,13 +268,22 @@ export class DaemonServer {
         connection.heldLeaseIds.delete(leaseId);
         return { leaseId };
       }
+      case "lease.release-all": {
+        const leaseIds = await this.options.leaseEngine.releaseAll("explicit");
+        connection.heldLeaseIds.clear();
+        return { leaseIds };
+      }
       case "lease.renew": {
         const payload = objectPayload(frame.payload);
         const leaseId = requiredString(payload, "leaseId");
-        return this.options.leaseEngine.renew(leaseId, requiredNumber(payload, "ttlMs"));
+        const ttlMs =
+          payload.ttlMs === undefined
+            ? this.options.config.lease.detachedTtlMs
+            : requiredNumber(payload, "ttlMs");
+        return this.options.leaseEngine.renew(leaseId, ttlMs);
       }
       case "status.get":
-        return this.options.registry.snapshot;
+        return this.#status();
       case "list.get":
         return this.#list(objectPayload(frame.payload));
       case "cleanup.run": {
@@ -348,6 +359,27 @@ export class DaemonServer {
       default:
         throw new ProtocolError("BAD_REQUEST", "list kind must be devices, leases, or rules");
     }
+  }
+
+  #status(): unknown {
+    const snapshot = this.options.registry.snapshot;
+    const capacity = Object.fromEntries(
+      (["ios", "android"] as const).map((platform) => [
+        platform,
+        {
+          limit: this.options.config.limits[platform].maxDevices,
+          used: snapshot.devices.filter(
+            (device) => device.spec.platform === platform && device.state !== "deleted",
+          ).length,
+        },
+      ]),
+    );
+    return {
+      ...snapshot,
+      capacity,
+      health: "running",
+      queueDepth: this.options.leaseEngine.queueDepth,
+    };
   }
 
   #pushProgress(
@@ -527,6 +559,12 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof NoDriverError) {
     return "NO_DRIVER";
+  }
+  if (error instanceof RuntimeMissingError) {
+    return "RUNTIME_MISSING";
+  }
+  if (error instanceof UnknownModelError) {
+    return "UNKNOWN_MODEL";
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";

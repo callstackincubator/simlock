@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -114,4 +115,11 @@ async function discoverDrivers(options: {
     }
     throw error;
   }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  void startDaemon().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

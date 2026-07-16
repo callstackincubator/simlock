@@ -186,6 +186,17 @@ export class LeaseEngine {
     await this.#release(leaseId, reason);
   }
 
+  /** Releases the daemon's current leases for an explicit operator command. */
+  async releaseAll(reason: "explicit" | "killed"): Promise<readonly string[]> {
+    const leaseIds = this.options.registry.snapshot.leases.map((lease) => lease.id);
+    await Promise.all(leaseIds.map(async (leaseId) => this.release(leaseId, reason)));
+    return leaseIds;
+  }
+
+  get queueDepth(): number {
+    return this.#queue.length;
+  }
+
   async renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
     return this.#withDecision(async () => {
       const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);

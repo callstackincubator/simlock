@@ -1,1 +1,3 @@
-console.log("pitlane 1.0.0");
+import { runCli } from "./index.js";
+
+process.exitCode = await runCli(process.argv.slice(2));
