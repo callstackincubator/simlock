@@ -11,7 +11,7 @@ parallel; everything else is sequential.
 | 03  | [Event bus](03-event-bus.md)                             | 02                     | done    |
 | 04  | [Domain & registry](04-domain-registry.md)               | 03                     | done    |
 | 05  | [Config & capacity](05-config-capacity.md)               | 02                     | done    |
-| 06  | [Driver interface & fake driver](06-driver-interface.md) | 04                     | pending |
+| 06  | [Driver interface & fake driver](06-driver-interface.md) | 04                     | done    |
 | 07  | [Lease engine](07-lease-engine.md)                       | 04, 05, 06             | pending |
 | 08  | [Cleanup reaper](08-cleanup-reaper.md)                   | 07                     | pending |
 | 09  | [Daemon & IPC](09-daemon-ipc.md)                         | 07, 08                 | pending |

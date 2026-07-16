@@ -23,6 +23,23 @@ export {
   transition,
 } from "./domain.js";
 export {
+  BootTimeoutError,
+  type DeviceRequest,
+  type Driver,
+  DriverCrashError,
+  type DriverDevice,
+  RuntimeMissingError,
+  UnknownModelError,
+} from "./driver.js";
+export {
+  type DriverEstimateOperation,
+  type FakeDriverCall,
+  FakeDriver,
+  type FakeDriverOperation,
+  type FakeDriverOptions,
+  FakeDriverUnknownDeviceError,
+} from "./fake-driver.js";
+export {
   DEFAULT_REGISTRY_PATH,
   type CreateLeaseInput,
   type RegisterDeviceInput,
