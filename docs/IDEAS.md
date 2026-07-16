@@ -1,0 +1,65 @@
+# Post-v1 ideas
+
+Things discussed and deliberately deferred. Roughly ordered by expected value.
+
+## Warm pool
+
+The benchmark showed ~30s of boot is a fixed floor on iOS (and Android without
+a snapshot). Keeping a configurable number of pre-booted idle devices per spec
+would collapse lease acquisition to sub-second on both platforms. The
+architecture already accommodates it: warm-pool *policy* (how many, which
+specs, grow/shrink) is core capacity math; the *mechanism* (keep-booted on
+iOS, snapshot-ready on Android) is the driver's. The tiered cleanup's T1
+becomes "return to warm pool, then shutdown".
+
+## Orphaned-holder fix
+
+Parent-death watch in the holder process (`kqueue`/`EVFILT_PROC` on macOS,
+`prctl(PR_SET_PDEATHSIG)` on Linux) so a crashed agent's backgrounded lease
+holder self-terminates. Includes the `--bind-pid` escape hatch for
+subshell-spawned holders. Details in [known-pitfalls.md](known-pitfalls.md).
+
+## MCP server
+
+Agents are the audience; a `lease_simulator` MCP tool with structured output
+is friendlier than parsing CLI output. Thin wrapper over the same daemon
+protocol — the core must not care which frontend called it.
+
+## Multi-device atomic leases
+
+Device-to-device tests need two devices at once; sequential acquisition by
+multiple agents can deadlock. Requires atomic all-or-nothing acquisition in
+the queue. v1 rule is one lease per agent.
+
+## Physical-device driver
+
+A third driver (devicectl / adb-over-USB) where `provision` is a no-op and
+`reclaim` is uninstall-and-reset. Also the litmus test that the core/driver
+boundary held.
+
+## Foreign-usage detection
+
+Leases are advisory; detect when a managed device changes state without
+pitlane doing it (someone booted it via `simctl` directly) and emit an event /
+flag it in `status`.
+
+## Clone-from-golden baseline option (iOS)
+
+`simctl clone` is as cheap as erase but preserves a *provisioned* baseline
+(pre-installed certs, test apps). Offer per-pool config: reclaim by erase
+(default) or by re-clone from a maintained golden device.
+
+## Cross-machine coordination
+
+A fleet-level broker over multiple hosts. Explicitly out of scope for v1
+(single host only).
+
+## Priorities / preemption
+
+Priority classes in the wait queue; possibly preempting long-idle leases.
+Deferred until fairness of plain FIFO proves insufficient.
+
+## Usage metrics
+
+Utilization, wait-time percentiles, provision durations — derivable from the
+event ring buffer once it exists.
