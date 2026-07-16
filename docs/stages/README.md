@@ -14,7 +14,7 @@ parallel; everything else is sequential.
 | 06  | [Driver interface & fake driver](06-driver-interface.md) | 04                     | done    |
 | 07  | [Lease engine](07-lease-engine.md)                       | 04, 05, 06             | done    |
 | 08  | [Cleanup reaper](08-cleanup-reaper.md)                   | 07                     | done    |
-| 09  | [Daemon & IPC](09-daemon-ipc.md)                         | 07, 08                 | pending |
+| 09  | [Daemon & IPC](09-daemon-ipc.md)                         | 07, 08                 | done    |
 | 10  | [CLI](10-cli.md)                                         | 09                     | pending |
 | 11  | [iOS driver](11-ios-driver.md)                           | 06 (integrates via 09) | pending |
 | 12  | [Android driver](12-android-driver.md)                   | 06 (integrates via 09) | pending |

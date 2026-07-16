@@ -34,8 +34,8 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 
 | Event | Payload (key fields) | Emitted when | Status |
 |---|---|---|---|
-| `daemon.started` | version, config snapshot | daemon finished startup + reconcile | planned |
-| `daemon.stopping` | reason | graceful shutdown began | planned |
+| `daemon.started` | version, config snapshot | daemon finished startup + reconcile | implemented |
+| `daemon.stopping` | reason | graceful shutdown began | implemented |
 | `disk.pressure-detected` | free bytes, threshold | free disk crossed configured threshold | planned |
 | `cleanup.executed` | rule name, action, target, reason | reaper executed a proposed action | implemented |
 | `doctor.reconciled` | drift findings | state DB reconciled against simctl/adb reality | planned |
