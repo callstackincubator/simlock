@@ -2,6 +2,7 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, SystemStats, TimerHandle } from "../ports/index.js";
 import { canProvision } from "./capacity.js";
 import type { Config } from "./config.js";
+import type { Proposal } from "./cleanup/types.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver, type DriverDevice } from "./driver.js";
 import { Registry, type ReleasedLease } from "./registry.js";
@@ -119,6 +120,7 @@ export class LeaseEngine {
   readonly #provisionReservations: Platform[] = [];
   readonly #shutdownReservations = new Set<string>();
   readonly #warmReservations = new Set<string>();
+  readonly #cleanupReservations = new Set<string>();
   readonly #queue: Waiter[] = [];
   readonly #requesters = new Set<string>();
   #decisionTail: Promise<void> = Promise.resolve();
@@ -201,6 +203,67 @@ export class LeaseEngine {
       );
       return renewed;
     });
+  }
+
+  /**
+   * Runs one cleanup action through the same decision queue as leasing. The
+   * reservation prevents a concurrent lease decision from selecting the
+   * device while its driver operation is in progress.
+   */
+  async executeCleanup(proposal: Proposal): Promise<boolean> {
+    const action = proposal.action;
+    if (action !== "shutdown" && action !== "destroy") {
+      return false;
+    }
+
+    const device = await this.#withDecision(async () => {
+      const candidate = this.options.registry.snapshot.devices.find(
+        (current) => current.id === proposal.target,
+      );
+      if (candidate === undefined || !this.#canExecuteCleanup(candidate, action)) {
+        return undefined;
+      }
+      this.#cleanupReservations.add(candidate.id);
+      return candidate;
+    });
+    if (device === undefined) {
+      return false;
+    }
+
+    const driver = this.#driverFor(device.spec.platform);
+    try {
+      if (action === "shutdown") {
+        await driver.shutdown(toDriverDevice(device));
+      } else {
+        await driver.destroy(toDriverDevice(device));
+      }
+    } catch (error: unknown) {
+      await this.#withDecision(async () => {
+        this.#cleanupReservations.delete(device.id);
+      });
+      throw error;
+    }
+
+    await this.#withDecision(async () => {
+      this.#cleanupReservations.delete(device.id);
+      const event =
+        action === "shutdown"
+          ? {
+              event: "device.shutdown" as const,
+              payload: { deviceId: device.id, initiator: "cleanup-reaper" },
+            }
+          : {
+              event: "device.deleted" as const,
+              payload: { deviceId: device.id, initiator: "cleanup-reaper" },
+            };
+      await this.options.registry.transitionDevice(
+        device.id,
+        action === "shutdown" ? "shutdown" : "deleted",
+        event,
+      );
+    });
+    this.#wakeQueue();
+    return true;
   }
 
   async #drive(waiter: Waiter): Promise<void> {
@@ -318,7 +381,10 @@ export class LeaseEngine {
     }
 
     const ready = this.options.registry.snapshot.devices.find(
-      (device) => device.state === "ready" && sameSpec(device.spec, spec),
+      (device) =>
+        device.state === "ready" &&
+        !this.#cleanupReservations.has(device.id) &&
+        sameSpec(device.spec, spec),
     );
     if (ready !== undefined) {
       await this.#grant(waiter, ready.id);
@@ -329,6 +395,7 @@ export class LeaseEngine {
       (device) =>
         device.state === "warm" &&
         !this.#warmReservations.has(device.id) &&
+        !this.#cleanupReservations.has(device.id) &&
         sameSpec(device.spec, spec),
     );
     if (warm !== undefined) {
@@ -341,6 +408,7 @@ export class LeaseEngine {
       (device) =>
         device.state === "shutdown" &&
         !this.#shutdownReservations.has(device.id) &&
+        !this.#cleanupReservations.has(device.id) &&
         sameSpec(device.spec, spec),
     );
     if (shutdown !== undefined) {
@@ -641,6 +709,20 @@ export class LeaseEngine {
     if (index !== -1) {
       this.#queue.splice(index, 1);
     }
+  }
+
+  #canExecuteCleanup(device: DeviceRecord, action: "shutdown" | "destroy"): boolean {
+    if (
+      this.#cleanupReservations.has(device.id) ||
+      this.options.registry.snapshot.leases.some((lease) => lease.deviceId === device.id)
+    ) {
+      return false;
+    }
+
+    return (
+      (action === "shutdown" && (device.state === "ready" || device.state === "warm")) ||
+      (action === "destroy" && device.state === "shutdown")
+    );
   }
 
   #driverFor(platform: Platform): Driver {

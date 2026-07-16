@@ -23,6 +23,14 @@ export {
   transition,
 } from "./domain.js";
 export {
+  type CleanupAction,
+  type CleanupRule,
+  type Proposal,
+  type RegistryView,
+} from "./cleanup/types.js";
+export { automaticCleanupRules, manualCleanupRules } from "./cleanup/rules.js";
+export { type CleanupReaperOptions, type CleanupRunOptions, CleanupReaper } from "./reaper.js";
+export {
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
