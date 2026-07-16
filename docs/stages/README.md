@@ -16,7 +16,7 @@ parallel; everything else is sequential.
 | 08  | [Cleanup reaper](08-cleanup-reaper.md)                   | 07                     | done    |
 | 09  | [Daemon & IPC](09-daemon-ipc.md)                         | 07, 08                 | done    |
 | 10  | [CLI](10-cli.md)                                         | 09                     | pending |
-| 11  | [iOS driver](11-ios-driver.md)                           | 06 (integrates via 09) | pending |
+| 11  | [iOS driver](11-ios-driver.md)                           | 06 (integrates via 09) | done    |
 | 12  | [Android driver](12-android-driver.md)                   | 06 (integrates via 09) | pending |
 | 13  | [Doctor, nuke & e2e](13-doctor-e2e.md)                   | 10, 11, 12             | pending |
 
