@@ -7,7 +7,7 @@ parallel; everything else is sequential.
 | #   | Stage                                                    | Depends on             | Status  |
 | --- | -------------------------------------------------------- | ---------------------- | ------- |
 | 01  | [Scaffolding](01-scaffolding.md)                         | —                      | done    |
-| 02  | [Ports](02-ports.md)                                     | 01                     | pending |
+| 02  | [Ports](02-ports.md)                                     | 01                     | done    |
 | 03  | [Event bus](03-event-bus.md)                             | 02                     | pending |
 | 04  | [Domain & registry](04-domain-registry.md)               | 03                     | pending |
 | 05  | [Config & capacity](05-config-capacity.md)               | 02                     | pending |
