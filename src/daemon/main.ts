@@ -10,12 +10,14 @@ import {
   loadConfig,
   Registry,
 } from "../core/index.js";
+import { AndroidDriver, SdkMissingError } from "../drivers/android/index.js";
 import {
   CryptoIdGenerator,
   type Clock,
   type Filesystem,
   type IdGenerator,
   NodeFilesystem,
+  NodeProcessRunner,
   NodeSystemStats,
   SystemClock,
   type SystemStats,
@@ -55,7 +57,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   });
   const eventBus = new EventBus(clock, config.eventBuffer.capacity);
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
-  const drivers = options.drivers ?? [];
+  const drivers = options.drivers ?? (await discoverDrivers({ clock, filesystem, idGenerator }));
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -88,4 +90,28 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   });
   await daemon.start();
   return daemon;
+}
+
+async function discoverDrivers(options: {
+  readonly clock: Clock;
+  readonly filesystem: Filesystem;
+  readonly idGenerator: IdGenerator;
+}): Promise<Driver[]> {
+  try {
+    return [
+      await AndroidDriver.create({
+        clock: options.clock,
+        env: process.env,
+        filesystem: options.filesystem,
+        homeDirectory: homedir(),
+        idGenerator: options.idGenerator,
+        processRunner: new NodeProcessRunner(),
+      }),
+    ];
+  } catch (error: unknown) {
+    if (error instanceof SdkMissingError) {
+      return [];
+    }
+    throw error;
+  }
 }
