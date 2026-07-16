@@ -1,0 +1,398 @@
+import type { EventBus, EventMap } from "../bus/index.js";
+import type { Clock, Filesystem, IdGenerator } from "../ports/index.js";
+import {
+  type DeviceRecord,
+  type DeviceSpec,
+  type DeviceState,
+  type LeaseRecord,
+  type Platform,
+  transition,
+} from "./domain.js";
+
+export const DEFAULT_REGISTRY_PATH = "~/.pitlane/state.json";
+
+export interface RegistryOptions {
+  readonly filesystem: Filesystem;
+  readonly clock: Clock;
+  readonly idGenerator: IdGenerator;
+  readonly eventBus: EventBus;
+  readonly statePath?: string;
+}
+
+export interface RegistrySnapshot {
+  readonly devices: readonly DeviceRecord[];
+  readonly leases: readonly LeaseRecord[];
+}
+
+export interface RegisterDeviceInput {
+  readonly spec: DeviceSpec;
+  readonly driverData: unknown;
+  readonly provisionDuration: number;
+}
+
+export interface CreateLeaseInput {
+  readonly deviceId: string;
+  readonly requesterId: string;
+  readonly mode: LeaseRecord["mode"];
+  readonly ttlDeadline: number;
+}
+
+export type RegistryDeviceEvent =
+  | { readonly event: "device.ready"; readonly payload: EventMap["device.ready"] }
+  | { readonly event: "device.reclaimed"; readonly payload: EventMap["device.reclaimed"] }
+  | { readonly event: "device.shutdown"; readonly payload: EventMap["device.shutdown"] }
+  | { readonly event: "device.deleted"; readonly payload: EventMap["device.deleted"] };
+
+export class RegistryLoadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RegistryLoadError";
+  }
+}
+
+export class UnknownDeviceError extends Error {
+  constructor(readonly deviceId: string) {
+    super(`Unknown device: ${deviceId}`);
+    this.name = "UnknownDeviceError";
+  }
+}
+
+export class RegistryEventError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RegistryEventError";
+  }
+}
+
+export class Registry {
+  #devices: DeviceRecord[] = [];
+  #leases: LeaseRecord[] = [];
+  #unknownState: Record<string, unknown> = {};
+  readonly #unknownDeviceFields = new Map<string, Record<string, unknown>>();
+  readonly #unknownLeaseFields = new Map<string, Record<string, unknown>>();
+
+  private constructor(private readonly options: Required<RegistryOptions>) {}
+
+  static async load(options: RegistryOptions): Promise<Registry> {
+    const registry = new Registry({
+      ...options,
+      statePath: options.statePath ?? DEFAULT_REGISTRY_PATH,
+    });
+
+    if (await registry.options.filesystem.exists(registry.options.statePath)) {
+      registry.#restore(await registry.options.filesystem.readFile(registry.options.statePath));
+    }
+
+    return registry;
+  }
+
+  get snapshot(): RegistrySnapshot {
+    return {
+      devices: this.#devices.map((device) => ({ ...device, spec: { ...device.spec } })),
+      leases: this.#leases.map((lease) => ({ ...lease })),
+    };
+  }
+
+  async registerDevice({
+    driverData,
+    provisionDuration,
+    spec,
+  }: RegisterDeviceInput): Promise<DeviceRecord> {
+    const record: DeviceRecord = {
+      createdAt: this.options.clock.now(),
+      driverData,
+      id: `dev_${this.options.idGenerator.generate()}`,
+      spec: { ...spec },
+      state: "provisioning",
+    };
+    const devices = [...this.#devices, record];
+
+    await this.#commit(devices, this.#leases);
+    this.options.eventBus.emit(
+      "device.provisioned",
+      {
+        deviceId: record.id,
+        driver: spec.platform,
+        duration: provisionDuration,
+        spec: record.spec,
+      },
+      "registry",
+    );
+
+    return cloneDevice(record);
+  }
+
+  async transitionDevice(
+    deviceId: string,
+    to: DeviceState,
+    event?: RegistryDeviceEvent,
+  ): Promise<DeviceRecord> {
+    const index = this.#devices.findIndex((device) => device.id === deviceId);
+    if (index === -1) {
+      throw new UnknownDeviceError(deviceId);
+    }
+
+    const device = this.#devices[index];
+    if (device === undefined) {
+      throw new UnknownDeviceError(deviceId);
+    }
+    if (to === "deleted" && this.#leases.some((lease) => lease.deviceId === deviceId)) {
+      throw new RegistryEventError(`Cannot delete device with an active lease: ${deviceId}`);
+    }
+
+    const expectedEvent = eventForTransition(device.state, to);
+    if (expectedEvent === undefined ? event !== undefined : event?.event !== expectedEvent) {
+      throw new RegistryEventError(
+        `Transition from ${device.state} to ${to} requires ${expectedEvent ?? "no"} device event`,
+      );
+    }
+    if (event !== undefined && event.payload.deviceId !== deviceId) {
+      throw new RegistryEventError(`Device event payload does not match device: ${deviceId}`);
+    }
+
+    const updated = transition(device, to);
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+
+    if (event !== undefined) {
+      this.#emitDeviceEvent(event);
+    }
+
+    return cloneDevice(updated);
+  }
+
+  async createLease({
+    deviceId,
+    mode,
+    requesterId,
+    ttlDeadline,
+  }: CreateLeaseInput): Promise<LeaseRecord> {
+    const index = this.#devices.findIndex((device) => device.id === deviceId);
+    if (index === -1) {
+      throw new UnknownDeviceError(deviceId);
+    }
+
+    const device = this.#devices[index];
+    if (device === undefined) {
+      throw new UnknownDeviceError(deviceId);
+    }
+    if (this.#leases.some((lease) => lease.deviceId === deviceId)) {
+      throw new RegistryEventError(`Device already has an active lease: ${deviceId}`);
+    }
+
+    const leasedDevice = transition(device, "leased");
+    const lease: LeaseRecord = {
+      deviceId,
+      grantedAt: this.options.clock.now(),
+      id: `lse_${this.options.idGenerator.generate()}`,
+      mode,
+      requesterId,
+      ttlDeadline,
+    };
+    const devices = [...this.#devices];
+    devices[index] = leasedDevice;
+    await this.#commit(devices, [...this.#leases, lease]);
+
+    return cloneLease(lease);
+  }
+
+  async #commit(devices: DeviceRecord[], leases: LeaseRecord[]): Promise<void> {
+    await this.options.filesystem.mkdirp(parentDirectory(this.options.statePath));
+    await this.options.filesystem.writeFileAtomic(
+      this.options.statePath,
+      JSON.stringify({
+        ...this.#unknownState,
+        devices: devices.map((device) => ({
+          ...this.#unknownDeviceFields.get(device.id),
+          ...device,
+        })),
+        leases: leases.map((lease) => ({
+          ...this.#unknownLeaseFields.get(lease.id),
+          ...lease,
+        })),
+      }),
+    );
+    this.#devices = devices;
+    this.#leases = leases;
+  }
+
+  #restore(contents: string): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents) as unknown;
+    } catch {
+      throw new RegistryLoadError(`Invalid JSON in registry state: ${this.options.statePath}`);
+    }
+
+    if (!isObject(parsed) || !Array.isArray(parsed.devices) || !Array.isArray(parsed.leases)) {
+      throw new RegistryLoadError(`Invalid registry state: ${this.options.statePath}`);
+    }
+
+    this.#unknownState = unknownFields(parsed, ["devices", "leases"]);
+    this.#devices = parsed.devices.map((device) => {
+      const record = parseDevice(device);
+      this.#unknownDeviceFields.set(record.id, unknownFields(device, deviceRecordKeys));
+      return record;
+    });
+    this.#leases = parsed.leases.map((lease) => {
+      const record = parseLease(lease);
+      this.#unknownLeaseFields.set(record.id, unknownFields(lease, leaseRecordKeys));
+      return record;
+    });
+  }
+
+  #emitDeviceEvent(event: RegistryDeviceEvent): void {
+    switch (event.event) {
+      case "device.ready":
+        this.options.eventBus.emit(event.event, event.payload, "registry");
+        return;
+      case "device.reclaimed":
+        this.options.eventBus.emit(event.event, event.payload, "registry");
+        return;
+      case "device.shutdown":
+        this.options.eventBus.emit(event.event, event.payload, "registry");
+        return;
+      case "device.deleted":
+        this.options.eventBus.emit(event.event, event.payload, "registry");
+    }
+  }
+}
+
+const deviceRecordKeys = [
+  "id",
+  "spec",
+  "state",
+  "driverData",
+  "createdAt",
+  "lastLeaseEndedAt",
+] as const;
+const leaseRecordKeys = [
+  "id",
+  "deviceId",
+  "requesterId",
+  "mode",
+  "grantedAt",
+  "ttlDeadline",
+] as const;
+
+function cloneDevice(device: DeviceRecord): DeviceRecord {
+  return { ...device, spec: { ...device.spec } };
+}
+
+function cloneLease(lease: LeaseRecord): LeaseRecord {
+  return { ...lease };
+}
+
+function parentDirectory(path: string): string {
+  const separator = path.lastIndexOf("/");
+  return separator <= 0 ? "/" : path.slice(0, separator);
+}
+
+function eventForTransition(
+  from: DeviceState,
+  to: DeviceState,
+): RegistryDeviceEvent["event"] | undefined {
+  if (from === "reclaiming") {
+    return "device.reclaimed";
+  }
+  if (to === "ready") {
+    return "device.ready";
+  }
+  if (to === "shutdown") {
+    return "device.shutdown";
+  }
+  if (to === "deleted") {
+    return "device.deleted";
+  }
+  return undefined;
+}
+
+function parseDevice(value: unknown): DeviceRecord {
+  if (!isObject(value)) {
+    throw new RegistryLoadError("Invalid device record in registry state");
+  }
+
+  const { createdAt, driverData, id, lastLeaseEndedAt, spec, state } = value;
+  if (
+    typeof id !== "string" ||
+    typeof createdAt !== "number" ||
+    !isDeviceState(state) ||
+    !isDeviceSpec(spec) ||
+    !("driverData" in value) ||
+    (lastLeaseEndedAt !== undefined && typeof lastLeaseEndedAt !== "number")
+  ) {
+    throw new RegistryLoadError("Invalid device record in registry state");
+  }
+
+  return {
+    ...(lastLeaseEndedAt === undefined ? {} : { lastLeaseEndedAt }),
+    createdAt,
+    driverData,
+    id,
+    spec,
+    state,
+  };
+}
+
+function parseLease(value: unknown): LeaseRecord {
+  if (!isObject(value)) {
+    throw new RegistryLoadError("Invalid lease record in registry state");
+  }
+
+  const { deviceId, grantedAt, id, mode, requesterId, ttlDeadline } = value;
+  if (
+    typeof id !== "string" ||
+    typeof deviceId !== "string" ||
+    typeof requesterId !== "string" ||
+    (mode !== "held" && mode !== "detached") ||
+    typeof grantedAt !== "number" ||
+    typeof ttlDeadline !== "number"
+  ) {
+    throw new RegistryLoadError("Invalid lease record in registry state");
+  }
+
+  return { deviceId, grantedAt, id, mode, requesterId, ttlDeadline };
+}
+
+function isDeviceSpec(value: unknown): value is DeviceSpec {
+  return (
+    isObject(value) &&
+    isPlatform(value.platform) &&
+    typeof value.model === "string" &&
+    typeof value.osVersion === "string"
+  );
+}
+
+function isPlatform(value: unknown): value is Platform {
+  return value === "ios" || value === "android";
+}
+
+function isDeviceState(value: unknown): value is DeviceState {
+  return (
+    value === "provisioning" ||
+    value === "ready" ||
+    value === "leased" ||
+    value === "reclaiming" ||
+    value === "warm" ||
+    value === "shutdown" ||
+    value === "deleted"
+  );
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function unknownFields(
+  value: Record<string, unknown>,
+  knownKeys: readonly string[],
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (!knownKeys.includes(key)) {
+      fields[key] = child;
+    }
+  }
+  return fields;
+}

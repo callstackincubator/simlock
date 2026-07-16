@@ -1,5 +1,6 @@
 export { type Filesystem, type FileStat, MemoryFilesystem, NodeFilesystem } from "./filesystem.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
+export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
 export {
   FakeSystemStats,
   NodeSystemStats,

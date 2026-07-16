@@ -23,11 +23,11 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 
 | Event | Payload (key fields) | Emitted when | Status |
 |---|---|---|---|
-| `device.provisioned` | device id, spec, driver, duration | driver `provision` committed to registry | planned |
-| `device.ready` | device id, boot duration | readiness probe passed | planned |
-| `device.reclaimed` | device id, strategy (erase/snapshot/wipe), duration | fresh-state reclaim finished | planned |
-| `device.shutdown` | device id, initiator (rule/command) | device stopped, still on disk | planned |
-| `device.deleted` | device id, initiator | device removed from disk and registry | planned |
+| `device.provisioned` | device id, spec, driver, duration | driver `provision` committed to registry | implemented |
+| `device.ready` | device id, boot duration | readiness probe passed | implemented |
+| `device.reclaimed` | device id, strategy (erase/snapshot/wipe), duration | fresh-state reclaim finished | implemented |
+| `device.shutdown` | device id, initiator (rule/command) | device stopped, still on disk | implemented |
+| `device.deleted` | device id, initiator | device removed from disk and registry | implemented |
 | `runtime.deleted` | runtime id, initiator | runtime / system image GC'd | planned |
 
 ## System

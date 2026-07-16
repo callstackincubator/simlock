@@ -9,7 +9,7 @@ parallel; everything else is sequential.
 | 01  | [Scaffolding](01-scaffolding.md)                         | —                      | done    |
 | 02  | [Ports](02-ports.md)                                     | 01                     | done    |
 | 03  | [Event bus](03-event-bus.md)                             | 02                     | done    |
-| 04  | [Domain & registry](04-domain-registry.md)               | 03                     | pending |
+| 04  | [Domain & registry](04-domain-registry.md)               | 03                     | done    |
 | 05  | [Config & capacity](05-config-capacity.md)               | 02                     | done    |
 | 06  | [Driver interface & fake driver](06-driver-interface.md) | 04                     | pending |
 | 07  | [Lease engine](07-lease-engine.md)                       | 04, 05, 06             | pending |
