@@ -22,7 +22,12 @@ export interface EventMap {
   "lease.expired": { readonly leaseId: string; readonly deviceId: string };
   "lease.rejected": {
     readonly requestSpec: unknown;
-    readonly reason: "timeout" | "no-wait" | "unresolvable-spec";
+    readonly reason:
+      | "timeout"
+      | "no-wait"
+      | "unresolvable-spec"
+      | "already-leased"
+      | "boot-timeout";
   };
   "device.provisioned": {
     readonly deviceId: string;

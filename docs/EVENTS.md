@@ -11,13 +11,13 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 
 | Event | Payload (key fields) | Emitted when | Status |
 |---|---|---|---|
-| `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | planned |
-| `lease.queued` | request id, queue position | no capacity; request entered the wait queue | planned |
-| `lease.granted` | lease id, device id, requester, mode (held/detached) | a device was assigned and handed out | planned |
-| `lease.renewed` | lease id, new deadline | detached-mode renew succeeded | planned |
-| `lease.released` | lease id, device id, reason (closed/explicit/killed) | holder connection closed or explicit release | planned |
-| `lease.expired` | lease id, device id | TTL backstop fired | planned |
-| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec) | a request ended without a grant | planned |
+| `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | implemented |
+| `lease.queued` | request id, queue position | no capacity; request entered the wait queue | implemented |
+| `lease.granted` | lease id, device id, requester, mode (held/detached) | a device was assigned and handed out | implemented |
+| `lease.renewed` | lease id, new deadline | detached-mode renew succeeded | implemented |
+| `lease.released` | lease id, device id, reason (closed/explicit/killed) | holder connection closed or explicit release | implemented |
+| `lease.expired` | lease id, device id | TTL backstop fired | implemented |
+| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout) | a request ended without a grant | implemented |
 
 ## Device lifecycle
 

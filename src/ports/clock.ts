@@ -41,6 +41,10 @@ export class FakeClock implements Clock {
     return this.#now;
   }
 
+  get pendingTimerCount(): number {
+    return this.#timers.size;
+  }
+
   setTimer(delayMs: number, callback: () => void): TimerHandle {
     const id = this.#nextTimerId;
     this.#nextTimerId += 1;

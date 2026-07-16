@@ -31,6 +31,7 @@ export interface FakeDriverOptions {
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly platform: Platform;
   readonly reclaimResult?: "ready" | "shutdown";
+  readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
 }
 
 export class FakeDriverUnknownDeviceError extends Error {
@@ -54,6 +55,7 @@ export class FakeDriver implements Driver {
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
   readonly #reclaimResult: "ready" | "shutdown";
+  readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
 
   constructor(options: FakeDriverOptions) {
@@ -65,6 +67,7 @@ export class FakeDriver implements Driver {
     this.#latencyMs = options.latencyMs;
     this.platform = options.platform;
     this.#reclaimResult = options.reclaimResult ?? "ready";
+    this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
   }
 
   get calls(): readonly FakeDriverCall[] {
@@ -123,11 +126,14 @@ export class FakeDriver implements Driver {
   async reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
-  ): Promise<"ready" | "shutdown"> {
+  ): Promise<{
+    readonly state: "ready" | "shutdown";
+    readonly strategy: "erase" | "snapshot" | "wipe";
+  }> {
     await this.#beforeCall("reclaim", device, options);
     this.#requireDevice(device);
     this.#devices.set(device.deviceId, this.#reclaimResult);
-    return this.#reclaimResult;
+    return { state: this.#reclaimResult, strategy: this.#reclaimStrategy };
   }
 
   async shutdown(device: DriverDevice): Promise<void> {

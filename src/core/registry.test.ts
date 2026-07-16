@@ -45,6 +45,7 @@ describe("Registry", () => {
 
     await registry.registerDevice({
       driverData: { driverOnly: "value" },
+      driverDeviceId: "driver_test",
       provisionDuration: 25,
       spec,
     });
@@ -55,6 +56,7 @@ describe("Registry", () => {
       {
         createdAt: 1_000,
         driverData: { driverOnly: "value" },
+        driverDeviceId: "driver_test",
         id: "dev_test",
         spec,
         state: "provisioning",
@@ -75,6 +77,7 @@ describe("Registry", () => {
     const registry = await Registry.load(options);
     await registry.registerDevice({
       driverData: { driverOnly: "value" },
+      driverDeviceId: "driver_test",
       provisionDuration: 25,
       spec,
     });
@@ -95,6 +98,7 @@ describe("Registry", () => {
           {
             createdAt: 500,
             driverData: { driverOnly: "existing" },
+            driverDeviceId: "driver_existing",
             futureDeviceField: "keep me",
             id: "dev_existing",
             spec,
@@ -113,7 +117,12 @@ describe("Registry", () => {
       statePath,
     });
 
-    await registry.registerDevice({ driverData: {}, provisionDuration: 0, spec });
+    await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_new",
+      provisionDuration: 0,
+      spec,
+    });
 
     const saved = JSON.parse(await filesystem.readFile(statePath)) as {
       readonly devices: Array<Record<string, unknown>>;
@@ -135,7 +144,12 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
       statePath,
     });
-    const device = await registry.registerDevice({ driverData: {}, provisionDuration: 0, spec });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
     filesystem.operations.length = 0;
 
     await registry.transitionDevice(device.id, "ready", {
@@ -156,7 +170,12 @@ describe("Registry", () => {
       idGenerator: { generate: () => "test" },
       statePath,
     });
-    const device = await registry.registerDevice({ driverData: {}, provisionDuration: 0, spec });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
 
     await expect(
       registry.transitionDevice(device.id, "ready", {
@@ -179,7 +198,12 @@ describe("Registry", () => {
       statePath,
     };
     const registry = await Registry.load(options);
-    const device = await registry.registerDevice({ driverData: {}, provisionDuration: 0, spec });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
     await registry.transitionDevice(device.id, "ready", {
       event: "device.ready",
       payload: { bootDuration: 0, deviceId: device.id },

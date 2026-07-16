@@ -28,9 +28,22 @@ export {
   type Driver,
   DriverCrashError,
   type DriverDevice,
+  type ReclaimResult,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
+export {
+  HeldLeaseRenewalError,
+  type LeaseEngineOptions,
+  LeaseEngine,
+  type LeaseGrant,
+  type LeaseRequestOptions,
+  type LeaseTiming,
+  NoCapacityError,
+  NoDriverError,
+  QueueTimeoutError,
+  RequesterAlreadyLeasedError,
+} from "./lease-engine.js";
 export {
   type DriverEstimateOperation,
   type FakeDriverCall,
@@ -43,6 +56,7 @@ export {
   DEFAULT_REGISTRY_PATH,
   type CreateLeaseInput,
   type RegisterDeviceInput,
+  type ReleasedLease,
   Registry,
   RegistryEventError,
   RegistryLoadError,
@@ -50,4 +64,5 @@ export {
   type RegistryOptions,
   type RegistrySnapshot,
   UnknownDeviceError,
+  UnknownLeaseError,
 } from "./registry.js";

@@ -5,6 +5,7 @@ import { type DeviceRecord, IllegalTransition, transition } from "./index.js";
 const baseDevice: Omit<DeviceRecord, "state"> = {
   createdAt: 1_000,
   driverData: { opaque: true },
+  driverDeviceId: "driver_test",
   id: "dev_test",
   spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
 };

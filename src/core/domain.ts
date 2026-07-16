@@ -17,6 +17,7 @@ export type DeviceState =
 
 export interface DeviceRecord {
   readonly id: string;
+  readonly driverDeviceId: string;
   readonly spec: DeviceSpec;
   readonly state: DeviceState;
   readonly driverData: unknown;

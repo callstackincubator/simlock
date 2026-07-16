@@ -11,6 +11,11 @@ export interface DriverDevice {
   readonly driverData: unknown;
 }
 
+export interface ReclaimResult {
+  readonly state: "ready" | "shutdown";
+  readonly strategy: "erase" | "snapshot" | "wipe";
+}
+
 export interface Driver {
   readonly platform: Platform;
   resolveSpec(
@@ -22,7 +27,7 @@ export interface Driver {
   reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
-  ): Promise<"ready" | "shutdown">;
+  ): Promise<ReclaimResult>;
   shutdown(device: DriverDevice): Promise<void>;
   destroy(device: DriverDevice): Promise<void>;
   estimate(operation: "provision" | "boot" | "reclaim", spec: DeviceSpec): number;

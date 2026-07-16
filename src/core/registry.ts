@@ -25,9 +25,15 @@ export interface RegistrySnapshot {
 }
 
 export interface RegisterDeviceInput {
+  readonly driverDeviceId: string;
   readonly spec: DeviceSpec;
   readonly driverData: unknown;
   readonly provisionDuration: number;
+}
+
+export interface ReleasedLease {
+  readonly device: DeviceRecord;
+  readonly lease: LeaseRecord;
 }
 
 export interface CreateLeaseInput {
@@ -54,6 +60,13 @@ export class UnknownDeviceError extends Error {
   constructor(readonly deviceId: string) {
     super(`Unknown device: ${deviceId}`);
     this.name = "UnknownDeviceError";
+  }
+}
+
+export class UnknownLeaseError extends Error {
+  constructor(readonly leaseId: string) {
+    super(`Unknown lease: ${leaseId}`);
+    this.name = "UnknownLeaseError";
   }
 }
 
@@ -95,12 +108,14 @@ export class Registry {
 
   async registerDevice({
     driverData,
+    driverDeviceId,
     provisionDuration,
     spec,
   }: RegisterDeviceInput): Promise<DeviceRecord> {
     const record: DeviceRecord = {
       createdAt: this.options.clock.now(),
       driverData,
+      driverDeviceId,
       id: `dev_${this.options.idGenerator.generate()}`,
       spec: { ...spec },
       state: "provisioning",
@@ -197,6 +212,44 @@ export class Registry {
     return cloneLease(lease);
   }
 
+  async beginRelease(leaseId: string): Promise<ReleasedLease> {
+    const leaseIndex = this.#leases.findIndex((lease) => lease.id === leaseId);
+    const lease = this.#leases[leaseIndex];
+    if (leaseIndex === -1 || lease === undefined) {
+      throw new UnknownLeaseError(leaseId);
+    }
+    const deviceIndex = this.#devices.findIndex((device) => device.id === lease.deviceId);
+    const device = this.#devices[deviceIndex];
+    if (deviceIndex === -1 || device === undefined) {
+      throw new UnknownDeviceError(lease.deviceId);
+    }
+
+    const reclaiming = {
+      ...transition(device, "reclaiming"),
+      lastLeaseEndedAt: this.options.clock.now(),
+    };
+    const devices = [...this.#devices];
+    devices[deviceIndex] = reclaiming;
+    const leases = this.#leases.filter((candidate) => candidate.id !== leaseId);
+    await this.#commit(devices, leases);
+
+    return { device: cloneDevice(reclaiming), lease: cloneLease(lease) };
+  }
+
+  async renewLease(leaseId: string, ttlDeadline: number): Promise<LeaseRecord> {
+    const index = this.#leases.findIndex((lease) => lease.id === leaseId);
+    const lease = this.#leases[index];
+    if (index === -1 || lease === undefined) {
+      throw new UnknownLeaseError(leaseId);
+    }
+
+    const renewed = { ...lease, ttlDeadline };
+    const leases = [...this.#leases];
+    leases[index] = renewed;
+    await this.#commit(this.#devices, leases);
+    return cloneLease(renewed);
+  }
+
   async #commit(devices: DeviceRecord[], leases: LeaseRecord[]): Promise<void> {
     await this.options.filesystem.mkdirp(parentDirectory(this.options.statePath));
     await this.options.filesystem.writeFileAtomic(
@@ -261,6 +314,7 @@ export class Registry {
 
 const deviceRecordKeys = [
   "id",
+  "driverDeviceId",
   "spec",
   "state",
   "driverData",
@@ -293,7 +347,7 @@ function eventForTransition(
   from: DeviceState,
   to: DeviceState,
 ): RegistryDeviceEvent["event"] | undefined {
-  if (from === "reclaiming") {
+  if (from === "reclaiming" || from === "warm") {
     return "device.reclaimed";
   }
   if (to === "ready") {
@@ -313,9 +367,10 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const { createdAt, driverData, id, lastLeaseEndedAt, spec, state } = value;
+  const { createdAt, driverData, driverDeviceId, id, lastLeaseEndedAt, spec, state } = value;
   if (
     typeof id !== "string" ||
+    typeof driverDeviceId !== "string" ||
     typeof createdAt !== "number" ||
     !isDeviceState(state) ||
     !isDeviceSpec(spec) ||
@@ -329,6 +384,7 @@ function parseDevice(value: unknown): DeviceRecord {
     ...(lastLeaseEndedAt === undefined ? {} : { lastLeaseEndedAt }),
     createdAt,
     driverData,
+    driverDeviceId,
     id,
     spec,
     state,
