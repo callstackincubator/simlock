@@ -9,7 +9,7 @@ import {
   transition,
 } from "./domain.js";
 
-export const DEFAULT_REGISTRY_PATH = "~/.pitlane/state.json";
+const DEFAULT_REGISTRY_PATH = "~/.pitlane/state.json";
 
 export interface RegistryOptions {
   readonly filesystem: Filesystem;
@@ -49,7 +49,7 @@ export type RegistryDeviceEvent =
   | { readonly event: "device.shutdown"; readonly payload: EventMap["device.shutdown"] }
   | { readonly event: "device.deleted"; readonly payload: EventMap["device.deleted"] };
 
-export class RegistryLoadError extends Error {
+class RegistryLoadError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RegistryLoadError";

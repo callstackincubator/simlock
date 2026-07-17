@@ -13,7 +13,7 @@ import type { Clock, IdGenerator, ProcessResult, ProcessRunner } from "../../por
 const COMMAND_TIMEOUT_MS = 30_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
 
-export interface IosDriverData {
+interface IosDriverData {
   readonly deviceTypeId: string;
   readonly name: string;
   readonly runtimeId: string;

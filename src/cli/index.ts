@@ -4,6 +4,9 @@ import { parseArgs } from "node:util";
 
 import { NodeFilesystem } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "./client.js";
+import { DaemonClientError, type DaemonConnection } from "./protocol.js";
+
+export { DaemonClientError, type DaemonConnection } from "./protocol.js";
 
 const USAGE = `Usage: pitlane <command> [options]
 
@@ -21,23 +24,7 @@ const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   UNKNOWN_MODEL: 12,
 };
 
-export interface DaemonConnection {
-  request(type: string, payload: unknown): Promise<unknown>;
-  onPush(listener: (kind: string, payload: unknown) => void): () => void;
-  close(): Promise<void>;
-}
-
-export class DaemonClientError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "DaemonClientError";
-  }
-}
-
-export class UsageError extends Error {
+class UsageError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "UsageError";
@@ -68,7 +55,7 @@ export interface CliEnvironment {
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
 }
 
-export function defaultCliEnvironment(): CliEnvironment {
+function defaultCliEnvironment(): CliEnvironment {
   const dataDirectory = join(homedir(), ".pitlane");
   const filesystem = new NodeFilesystem();
   const socketPath = join(dataDirectory, "daemon.sock");

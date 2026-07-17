@@ -2,7 +2,7 @@ import type { Filesystem, SystemStats } from "../ports/index.js";
 
 const GIBIBYTE = 1024 ** 3;
 
-export const DEFAULT_CONFIG_PATH = "~/.pitlane/config.json";
+const DEFAULT_CONFIG_PATH = "~/.pitlane/config.json";
 
 export interface Config {
   readonly limits: {
@@ -36,7 +36,7 @@ export interface LoadConfigOptions {
   readonly warn?: (message: string) => void;
 }
 
-export class ConfigError extends Error {
+class ConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ConfigError";
@@ -58,7 +58,7 @@ export async function loadConfig({
   return deepFreeze(mergeConfig(mergeConfig(defaults, fileConfig), overrideConfig));
 }
 
-export function defaultConfig(systemStats: SystemStats): Config {
+function defaultConfig(systemStats: SystemStats): Config {
   const cpuCount = systemStats.cpuCount();
   const totalRamGb = systemStats.totalRamBytes() / GIBIBYTE;
 
