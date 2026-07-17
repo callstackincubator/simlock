@@ -279,6 +279,39 @@ describe("AndroidDriver", () => {
     expect(saves).toHaveLength(1);
   });
 
+  it("boots a shutdown device from its persisted clean baseline after a driver restart", async () => {
+    const harness = await provisionedHarness();
+    await harness.driver.makeReady(harness.device);
+
+    const restartedRunner = new ScriptedProcessRunner([
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      {
+        hangs: true,
+        match: {
+          args: ["-avd", "pitlane_one", "-port", "5554", "-snapshot", "pitlane_clean_baseline"],
+          command: binaries.emulator,
+        },
+      },
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+        "1\n",
+      ),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
+        "",
+      ),
+    ]);
+    const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
+
+    await expect(restartedDriver.makeReady(harness.device)).resolves.toBeUndefined();
+    expect(restartedRunner.calls[1]).toMatchObject({
+      args: ["-avd", "pitlane_one", "-port", "5554", "-snapshot", "pitlane_clean_baseline"],
+      command: binaries.emulator,
+    });
+  });
+
   it("shuts down and deletes only the provisioned pitlane AVD", async () => {
     const filesystem = await androidFilesystem({ config: "hw.ramSize=2048\n" });
     const runner = new ScriptedProcessRunner([

@@ -207,13 +207,33 @@ export class AndroidDriver implements Driver {
         return;
       }
 
+      const baselineHash = await this.#baselineHash(data.avdName);
+      if (!state.needsWipe && baselineHash !== undefined) {
+        const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
+        if (baselineHash === currentHash) {
+          state.baselineCaptured = true;
+          state.configHash = currentHash;
+          state.snapshotExpected = true;
+        } else {
+          await this.#filesystem.rm(`${this.#avdDirectory}/${data.avdName}.avd/snapshots`);
+          state.baselineCaptured = false;
+          state.configHash = currentHash;
+          state.needsWipe = true;
+          state.snapshotExpected = false;
+        }
+      }
+
       const startedAt = this.#clock.now();
       const args = [
         "-avd",
         data.avdName,
         "-port",
         String(data.port),
-        ...(state.needsWipe ? ["-wipe-data", "-no-snapshot-load"] : []),
+        ...(state.needsWipe
+          ? ["-wipe-data", "-no-snapshot-load"]
+          : state.snapshotExpected
+            ? ["-snapshot", CLEAN_BASELINE]
+            : []),
       ];
       const handle = this.#processRunner.spawn(this.#sdk.emulator, args);
       state.handle = handle;
