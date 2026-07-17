@@ -452,13 +452,22 @@ export class AndroidDriver implements Driver {
         throw new BootTimeoutError(data.avdName);
       }
 
-      const completed = await this.#runOrThrow(this.#sdk.adb, [
+      const completed = await this.#processRunner.run(this.#sdk.adb, [
         "-s",
         data.serial,
         "shell",
         "getprop",
         "sys.boot_completed",
       ]);
+      if (completed.code !== 0) {
+        await this.#delay(
+          Math.min(
+            PORT_POLL_INTERVAL_MS,
+            this.#readinessTimeoutMs - (this.#clock.now() - startedAt),
+          ),
+        );
+        continue;
+      }
       if (completed.stdout.trim() === "1") {
         const bootAnimation = await this.#runOrThrow(this.#sdk.adb, [
           "-s",
@@ -479,7 +488,7 @@ export class AndroidDriver implements Driver {
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    await this.#runOrThrow(this.#sdk.adb, ["-s", data.serial, "emu", "kill"]);
+    await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"]);
     const handle = state.handle;
     if (handle === undefined) {
       return;
@@ -654,39 +663,70 @@ async function sdkPathsAt(
   root: string,
   filesystem: Filesystem,
 ): Promise<AndroidSdkPaths | undefined> {
-  const commandLineTools = `${root}/cmdline-tools/latest/bin`;
+  const commandLineTools = await commandLineToolBins(root, filesystem);
   const legacyTools = `${root}/tools/bin`;
-  const avdmanager = await firstExisting(filesystem, [
-    `${commandLineTools}/avdmanager`,
-    `${legacyTools}/avdmanager`,
-  ]);
-  const sdkmanager = await firstExisting(filesystem, [
-    `${commandLineTools}/sdkmanager`,
-    `${legacyTools}/sdkmanager`,
-  ]);
+  const toolBins = [...commandLineTools, legacyTools];
+  const tools = await firstCompleteToolBin(filesystem, toolBins);
   const emulator = `${root}/emulator/emulator`;
   const adb = `${root}/platform-tools/adb`;
   if (
-    avdmanager === undefined ||
-    sdkmanager === undefined ||
+    tools === undefined ||
     !(await filesystem.exists(emulator)) ||
     !(await filesystem.exists(adb))
   ) {
     return undefined;
   }
-  return { adb, avdmanager, emulator, root, sdkmanager };
+  return { adb, emulator, root, ...tools };
 }
 
-async function firstExisting(
+async function commandLineToolBins(root: string, filesystem: Filesystem): Promise<string[]> {
+  const toolsRoot = `${root}/cmdline-tools`;
+  if (!(await filesystem.exists(toolsRoot))) {
+    return [];
+  }
+
+  const directories = await filesystem.readdir(toolsRoot);
+  return directories
+    .sort(compareCommandLineToolVersions)
+    .reverse()
+    .map((directory) => `${toolsRoot}/${directory}/bin`);
+}
+
+async function firstCompleteToolBin(
   filesystem: Filesystem,
-  paths: readonly string[],
-): Promise<string | undefined> {
-  for (const path of paths) {
-    if (await filesystem.exists(path)) {
-      return path;
+  bins: readonly string[],
+): Promise<Pick<AndroidSdkPaths, "avdmanager" | "sdkmanager"> | undefined> {
+  for (const bin of bins) {
+    const avdmanager = `${bin}/avdmanager`;
+    const sdkmanager = `${bin}/sdkmanager`;
+    if ((await filesystem.exists(avdmanager)) && (await filesystem.exists(sdkmanager))) {
+      return { avdmanager, sdkmanager };
     }
   }
   return undefined;
+}
+
+function compareCommandLineToolVersions(left: string, right: string): number {
+  if (left === "latest") {
+    return 1;
+  }
+  if (right === "latest") {
+    return -1;
+  }
+
+  const leftSegments = left.split(".").map(Number);
+  const rightSegments = right.split(".").map(Number);
+  if (leftSegments.every(Number.isFinite) && rightSegments.every(Number.isFinite)) {
+    const length = Math.max(leftSegments.length, rightSegments.length);
+    for (let index = 0; index < length; index += 1) {
+      const difference = (leftSegments[index] ?? 0) - (rightSegments[index] ?? 0);
+      if (difference !== 0) {
+        return difference;
+      }
+    }
+  }
+
+  return left.localeCompare(right);
 }
 
 function parseDeviceProfiles(output: string): DeviceProfile[] {

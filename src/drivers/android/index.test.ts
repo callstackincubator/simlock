@@ -52,6 +52,29 @@ describe("AndroidDriver", () => {
     ).rejects.toBeInstanceOf(SdkMissingError);
   });
 
+  it("discovers versioned command-line tools before obsolete legacy tools", async () => {
+    const filesystem = await androidFilesystem();
+    const versionedTools = `${sdk}/cmdline-tools/19.0/bin`;
+    await filesystem.rm(`${sdk}/cmdline-tools/latest`);
+    await filesystem.mkdirp(versionedTools);
+    await filesystem.writeFileAtomic(`${versionedTools}/avdmanager`, "binary");
+    await filesystem.writeFileAtomic(`${versionedTools}/sdkmanager`, "binary");
+
+    const legacyTools = `${sdk}/tools/bin`;
+    await filesystem.mkdirp(legacyTools);
+    await filesystem.writeFileAtomic(`${legacyTools}/avdmanager`, "binary");
+    await filesystem.writeFileAtomic(`${legacyTools}/sdkmanager`, "binary");
+
+    const runner = new ScriptedProcessRunner([
+      processResult(`${versionedTools}/avdmanager`, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    await expect(
+      driver.resolveSpec({ model: "Pixel 8", platform: "android" }, { allowDownload: false }),
+    ).resolves.toEqual({ model: "Pixel 8", osVersion: "34", platform: "android" });
+  });
+
   it("resolves the newest installed matching image and prefers the host ABI", async () => {
     const filesystem = await androidFilesystem({
       images: [
@@ -188,6 +211,22 @@ describe("AndroidDriver", () => {
     expect(kills).toContain("SIGKILL");
   });
 
+  it("retries adb while the emulator is starting", async () => {
+    const harness = await provisionedHarness({ initialAdbFailure: true });
+    const ready = harness.driver.makeReady(harness.device);
+
+    await vi.waitFor(() =>
+      expect(harness.runner.calls).toContainEqual({
+        args: ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+        command: binaries.adb,
+        options: {},
+      }),
+    );
+    harness.clock.advance(2_000);
+
+    await expect(ready).resolves.toBeUndefined();
+  });
+
   it("invalidates stale quickboot snapshots and flags the next boot to wipe data", async () => {
     const harness = await provisionedHarness({ forReclaim: true });
     await harness.filesystem.mkdirp(`${avdDirectory}/pitlane_one.avd/snapshots/default_boot`);
@@ -244,7 +283,10 @@ describe("AndroidDriver", () => {
       ]),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-      processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]),
+      {
+        match: { args: ["-s", "emulator-5554", "emu", "kill"], command: binaries.adb },
+        result: { code: 1, stderr: "connection refused", stdout: "" },
+      },
       processResult(binaries.avdmanager, ["delete", "avd", "-n", "pitlane_delete-me"]),
     ]);
     const driver: Driver = await createDriver(filesystem, runner, { ids: ["delete-me"] });
@@ -320,6 +362,7 @@ async function provisionedHarness(
     readonly bootCompleted?: string;
     readonly forFullCleanBoot?: boolean;
     readonly forReclaim?: boolean;
+    readonly initialAdbFailure?: boolean;
     readonly readinessTimeoutMs?: number;
   } = {},
 ) {
@@ -357,6 +400,15 @@ async function provisionedHarness(
         args: ["-avd", "pitlane_one", "-port", "5554", "-no-window", "-no-audio", "-no-boot-anim"],
       },
     });
+    if (options.initialAdbFailure === true) {
+      expectations.push({
+        match: {
+          args: ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+          command: binaries.adb,
+        },
+        result: { code: 1, stderr: "connection refused", stdout: "" },
+      });
+    }
     expectations.push(
       processResult(
         binaries.adb,
