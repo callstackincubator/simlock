@@ -1,0 +1,11 @@
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.{ts,js,json,md,yml,yaml}"
+      run: pnpm exec oxfmt --check {staged_files}
+      fail_text: "Run 'pnpm format' to fix formatting."
+    lint:
+      glob: "*.{ts,js,mts,cts}"
+      run: pnpm exec oxlint {staged_files}
+      fail_text: "Run 'pnpm lint' to fix lint errors."
