@@ -17,6 +17,7 @@
     "fallow": "fallow",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
+    "prepare": "lefthook install",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
     "release": "release-it"
   },
@@ -24,6 +25,7 @@
     "@release-it/conventional-changelog": "^11.0.1",
     "@types/node": "^26.1.1",
     "fallow": "^3.6.0",
+    "lefthook": "^2.1.10",
     "oxfmt": "^0.59.0",
     "oxlint": "^1.74.0",
     "release-it": "^20.2.1",
