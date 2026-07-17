@@ -23,7 +23,9 @@ jobs:
         with:
           node-version: 22
       - name: Enable Corepack
-        run: corepack enable
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.9.0 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Quality checks
@@ -39,7 +41,9 @@ jobs:
         with:
           node-version: 22
       - name: Enable Corepack
-        run: corepack enable
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.9.0 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Fallow analysis
