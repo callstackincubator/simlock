@@ -16,6 +16,7 @@ import type {
   ProcessHandle,
   ProcessRunner,
 } from "../../ports/index.js";
+import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
 const COLD_BOOT_ESTIMATE_MS = 31_000;
@@ -42,14 +43,6 @@ export interface AndroidDriverDiagnostic {
   readonly avdName: string;
   readonly kind: "snapshot-cold-boot";
   readonly readyAfterMs: number;
-}
-
-interface AndroidDriverData {
-  readonly avdName: string;
-  readonly configHash: string;
-  readonly imageIdentity?: string;
-  readonly port: number;
-  readonly serial: string;
 }
 
 export class SdkMissingError extends Error {
@@ -918,19 +911,4 @@ function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAlloca
   const allocator = new PortAllocator(adb, processRunner);
   allocationsByRunner.set(processRunner, allocator);
   return allocator;
-}
-
-function isAndroidDriverData(value: unknown): value is AndroidDriverData {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "avdName" in value &&
-    "configHash" in value &&
-    "port" in value &&
-    "serial" in value &&
-    typeof value.avdName === "string" &&
-    typeof value.configHash === "string" &&
-    typeof value.port === "number" &&
-    typeof value.serial === "string"
-  );
 }
