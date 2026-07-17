@@ -102,7 +102,10 @@ Conclusions baked into the drivers:
   pre-booted devices can beat it.
 - **Android `reclaim` = restore an explicit immutable clean-baseline snapshot**,
   with `-wipe-data` as the fallback. The first clean boot captures and validates
-  a named baseline before the first grant. Snapshots are ~1.3 GB each and
+  a named baseline, then restarts from it with automatic snapshot saving
+  disabled before the first grant. Its compatibility tag is captured from the
+  post-boot AVD configuration because the emulator normalizes `config.ini`
+  during first boot. Snapshots are ~1.3 GB each and
   invalidate *silently* on AVD-config / system-image / emulator-version
   changes, so the driver tags the baseline with a config hash and rebuilds it
   before reuse after invalidation.

@@ -168,13 +168,34 @@ describe("AndroidDriver", () => {
     expect(secondDevice.driverData).toMatchObject({ avdName: "pitlane_second", port: 5558 });
   });
 
-  it("launches the emulator with its normal interactive defaults", async () => {
+  it("cold boots without loading or automatically saving snapshots", async () => {
     const harness = await provisionedHarness();
 
     await expect(harness.driver.makeReady(harness.device)).resolves.toBeUndefined();
-    expect(harness.runner.calls.at(-5)).toMatchObject({
-      args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save"],
+    expect(harness.runner.calls).toContainEqual({
+      args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save", "-no-snapshot-load"],
       command: binaries.emulator,
+      options: {},
+    });
+  });
+
+  it("validates a new clean baseline by restarting from it before becoming ready", async () => {
+    const harness = await provisionedHarness();
+
+    await expect(harness.driver.makeReady(harness.device)).resolves.toBeUndefined();
+
+    expect(harness.runner.calls).toContainEqual({
+      args: [
+        "-avd",
+        "pitlane_one",
+        "-port",
+        "5554",
+        "-no-snapshot-save",
+        "-snapshot",
+        "pitlane_clean_baseline",
+      ],
+      command: binaries.emulator,
+      options: {},
     });
   });
 
@@ -285,6 +306,61 @@ describe("AndroidDriver", () => {
     });
     const saves = harness.runner.calls.filter((call) => call.args.includes("save"));
     expect(saves).toHaveLength(1);
+  });
+
+  it("tags the baseline with the emulator-normalized post-boot configuration", async () => {
+    const harness = await provisionedHarness({ forBaselineReclaim: true });
+    await harness.filesystem.writeFileAtomic(
+      `${avdDirectory}/pitlane_one.avd/config.ini`,
+      "hw.ramSize = 2048\n",
+    );
+
+    await harness.driver.makeReady(harness.device);
+    const reclaimCallStart = harness.runner.calls.length;
+
+    await expect(harness.driver.reclaim(harness.device, { clean: "standard" })).resolves.toEqual({
+      state: "ready",
+      strategy: "snapshot",
+    });
+    expect(harness.runner.calls.slice(reclaimCallStart)).not.toContainEqual({
+      args: ["-s", "emulator-5554", "emu", "kill"],
+      command: binaries.adb,
+      options: {},
+    });
+  });
+
+  it("reclaims from persisted baseline metadata after a driver restart", async () => {
+    const harness = await provisionedHarness();
+    await harness.filesystem.writeFileAtomic(
+      `${avdDirectory}/pitlane_one.avd/config.ini`,
+      "hw.ramSize = 2048\n",
+    );
+    await harness.driver.makeReady(harness.device);
+
+    const restartedRunner = new ScriptedProcessRunner([
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "emu", "avd", "snapshot", "load", "pitlane_clean_baseline"],
+        "OK\n",
+      ),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+        "1\n",
+      ),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
+        "",
+      ),
+    ]);
+    const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
+
+    await expect(restartedDriver.reclaim(harness.device, { clean: "standard" })).resolves.toEqual({
+      state: "ready",
+      strategy: "snapshot",
+    });
   });
 
   it("boots a shutdown device from its persisted clean baseline after a driver restart", async () => {
@@ -457,148 +533,21 @@ async function provisionedHarness(
   if (options.forReclaim === true) {
     expectations.push(
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]),
+      ...baselineBuildExpectations({ launchArgs: ["-wipe-data", "-no-snapshot-load"] }),
     );
-  }
-  if (options.forReclaim === true || options.forFullCleanBoot === true) {
-    expectations.push(processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]));
-  }
-  if (options.forReclaim === true) {
+  } else if (options.forFullCleanBoot === true) {
     expectations.push(
-      {
-        hangs: true,
-        match: {
-          command: binaries.emulator,
-          args: [
-            "-avd",
-            "pitlane_one",
-            "-port",
-            "5554",
-            "-no-snapshot-save",
-            "-wipe-data",
-            "-no-snapshot-load",
-          ],
-        },
-      },
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
-        "1\n",
-      ),
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
-        "",
-      ),
-      processResult(binaries.adb, [
-        "-s",
-        "emulator-5554",
-        "emu",
-        "avd",
-        "snapshot",
-        "save",
-        "pitlane_clean_baseline",
-      ]),
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5554", "emu", "avd", "snapshot", "list"],
-        "pitlane_clean_baseline\n",
-      ),
+      processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]),
+      ...baselineBuildExpectations({ launchArgs: ["-wipe-data", "-no-snapshot-load"] }),
     );
-  }
-  if (options.forFullCleanBoot !== true) {
-    expectations.push({
-      hangs: true,
-      match: {
-        command: binaries.emulator,
-        args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save"],
-      },
-    });
-    if (options.initialAdbFailure === true) {
-      expectations.push({
-        match: {
-          args: ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
-          command: binaries.adb,
-        },
-        result: { code: 1, stderr: "connection refused", stdout: "" },
-      });
-    }
-    expectations.push(
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
-        options.bootCompleted ?? "1\n",
-      ),
-    );
-    if ((options.bootCompleted ?? "1\n").trim() === "1") {
-      expectations.push(
-        processResult(
-          binaries.adb,
-          ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
-          "",
-        ),
-      );
-      expectations.push(
-        processResult(binaries.adb, [
-          "-s",
-          "emulator-5554",
-          "emu",
-          "avd",
-          "snapshot",
-          "save",
-          "pitlane_clean_baseline",
-        ]),
-        processResult(
-          binaries.adb,
-          ["-s", "emulator-5554", "emu", "avd", "snapshot", "list"],
-          "pitlane_clean_baseline\n",
-        ),
-      );
-    }
   } else {
-    expectations.push({
-      hangs: true,
-      match: {
-        command: binaries.emulator,
-        args: [
-          "-avd",
-          "pitlane_one",
-          "-port",
-          "5554",
-          "-no-snapshot-save",
-          "-wipe-data",
-          "-no-snapshot-load",
-        ],
-      },
-    });
     expectations.push(
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
-        "1\n",
-      ),
-    );
-    expectations.push(
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
-        "",
-      ),
-    );
-    expectations.push(
-      processResult(binaries.adb, [
-        "-s",
-        "emulator-5554",
-        "emu",
-        "avd",
-        "snapshot",
-        "save",
-        "pitlane_clean_baseline",
-      ]),
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5554", "emu", "avd", "snapshot", "list"],
-        "pitlane_clean_baseline\n",
-      ),
+      ...baselineBuildExpectations({
+        bootCompleted: options.bootCompleted,
+        initialAdbFailure: options.initialAdbFailure,
+        launchArgs: ["-no-snapshot-load"],
+      }),
     );
   }
 
@@ -686,6 +635,92 @@ async function androidFilesystem(
     await filesystem.writeFileAtomic(`${avdDirectory}/pitlane_one.avd/config.ini`, options.config);
   }
   return filesystem;
+}
+
+function baselineBuildExpectations(options: {
+  readonly bootCompleted?: string | undefined;
+  readonly initialAdbFailure?: boolean | undefined;
+  readonly launchArgs: readonly string[];
+}): ScriptedProcessExpectation[] {
+  const bootCompleted = options.bootCompleted ?? "1\n";
+  const expectations: ScriptedProcessExpectation[] = [
+    {
+      hangs: bootCompleted.trim() !== "1",
+      match: {
+        args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save", ...options.launchArgs],
+        command: binaries.emulator,
+      },
+    },
+  ];
+  if (options.initialAdbFailure === true) {
+    expectations.push({
+      match: {
+        args: ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+        command: binaries.adb,
+      },
+      result: { code: 1, stderr: "connection refused", stdout: "" },
+    });
+  }
+  expectations.push(
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+      bootCompleted,
+    ),
+  );
+  if (bootCompleted.trim() !== "1") {
+    return expectations;
+  }
+
+  expectations.push(
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
+      "",
+    ),
+    processResult(binaries.adb, [
+      "-s",
+      "emulator-5554",
+      "emu",
+      "avd",
+      "snapshot",
+      "save",
+      "pitlane_clean_baseline",
+    ]),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5554", "emu", "avd", "snapshot", "list"],
+      "pitlane_clean_baseline\n",
+    ),
+    processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+    processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]),
+    {
+      hangs: true,
+      match: {
+        args: [
+          "-avd",
+          "pitlane_one",
+          "-port",
+          "5554",
+          "-no-snapshot-save",
+          "-snapshot",
+          "pitlane_clean_baseline",
+        ],
+        command: binaries.emulator,
+      },
+    },
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+      "1\n",
+    ),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
+      "",
+    ),
+  );
+  return expectations;
 }
 
 function processResult(command: string, args: readonly (string | RegExp)[], stdout = "") {

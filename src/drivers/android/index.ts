@@ -69,7 +69,6 @@ interface AndroidSdkPaths {
 
 interface DeviceState {
   baselineCaptured: boolean;
-  configHash: string;
   handle: ProcessHandle | undefined;
   imageIdentity: string;
   needsWipe: boolean;
@@ -188,7 +187,6 @@ export class AndroidDriver implements Driver {
     };
     this.#devices.set(avdName, {
       baselineCaptured: false,
-      configHash,
       handle: undefined,
       imageIdentity: `${image.path}@${image.version}`,
       needsWipe: false,
@@ -212,51 +210,31 @@ export class AndroidDriver implements Driver {
         const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
         if (baselineHash === currentHash) {
           state.baselineCaptured = true;
-          state.configHash = currentHash;
           state.snapshotExpected = true;
         } else {
           await this.#filesystem.rm(`${this.#avdDirectory}/${data.avdName}.avd/snapshots`);
           state.baselineCaptured = false;
-          state.configHash = currentHash;
           state.needsWipe = true;
           state.snapshotExpected = false;
         }
       }
 
-      const startedAt = this.#clock.now();
-      const args = [
-        "-avd",
-        data.avdName,
-        "-port",
-        String(data.port),
-        "-no-snapshot-save",
-        ...(state.needsWipe
+      await this.#startEmulator(
+        data,
+        state,
+        state.needsWipe
           ? ["-wipe-data", "-no-snapshot-load"]
           : state.snapshotExpected
             ? ["-snapshot", CLEAN_BASELINE]
-            : []),
-      ];
-      const handle = this.#processRunner.spawn(this.#sdk.emulator, args);
-      state.handle = handle;
-
-      try {
-        await this.#waitForReadiness(data, startedAt);
-      } catch (error: unknown) {
-        handle.kill("SIGKILL");
-        await handle.wait();
-        state.handle = undefined;
-        throw error;
-      }
-
-      const readyAfterMs = this.#clock.now() - startedAt;
-      if (state.snapshotExpected && readyAfterMs > SNAPSHOT_BOOT_ESTIMATE_MS * 3) {
-        this.#onDiagnostic?.({ avdName: data.avdName, kind: "snapshot-cold-boot", readyAfterMs });
-        state.configHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
-      }
+            : ["-no-snapshot-load"],
+        state.snapshotExpected,
+      );
       state.needsWipe = false;
       state.snapshotExpected = false;
       if (!state.baselineCaptured) {
         await this.#captureBaseline(data, state);
+        await this.#shutdown(data, state);
+        await this.#startEmulator(data, state, ["-snapshot", CLEAN_BASELINE], true);
       }
     });
   }
@@ -279,10 +257,9 @@ export class AndroidDriver implements Driver {
 
       const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
       const baselineHash = await this.#baselineHash(data.avdName);
-      if (currentHash !== state.configHash || baselineHash !== currentHash) {
+      if (baselineHash !== currentHash) {
         await this.#shutdown(data, state);
         await this.#filesystem.rm(`${this.#avdDirectory}/${data.avdName}.avd/snapshots`);
-        state.configHash = currentHash;
         state.needsWipe = true;
         state.snapshotExpected = false;
         state.baselineCaptured = false;
@@ -539,6 +516,38 @@ export class AndroidDriver implements Driver {
     }
   }
 
+  async #startEmulator(
+    data: AndroidDriverData,
+    state: DeviceState,
+    launchArgs: readonly string[],
+    fromSnapshot: boolean,
+  ): Promise<void> {
+    const startedAt = this.#clock.now();
+    const handle = this.#processRunner.spawn(this.#sdk.emulator, [
+      "-avd",
+      data.avdName,
+      "-port",
+      String(data.port),
+      "-no-snapshot-save",
+      ...launchArgs,
+    ]);
+    state.handle = handle;
+
+    try {
+      await this.#waitForReadiness(data, startedAt);
+    } catch (error: unknown) {
+      handle.kill("SIGKILL");
+      await handle.wait();
+      state.handle = undefined;
+      throw error;
+    }
+
+    const readyAfterMs = this.#clock.now() - startedAt;
+    if (fromSnapshot && readyAfterMs > SNAPSHOT_BOOT_ESTIMATE_MS * 3) {
+      this.#onDiagnostic?.({ avdName: data.avdName, kind: "snapshot-cold-boot", readyAfterMs });
+    }
+  }
+
   async #captureBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
     await this.#runOrThrow(this.#sdk.adb, [
       "-s",
@@ -560,9 +569,10 @@ export class AndroidDriver implements Driver {
     if (!snapshots.stdout.includes(CLEAN_BASELINE)) {
       throw new DriverCrashError(`Android clean baseline ${CLEAN_BASELINE} was not validated`);
     }
+    const configHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
     await this.#filesystem.writeFileAtomic(
       this.#baselineMetadataPath(data.avdName),
-      JSON.stringify({ configHash: state.configHash, snapshot: CLEAN_BASELINE }),
+      JSON.stringify({ configHash, snapshot: CLEAN_BASELINE }),
     );
     state.baselineCaptured = true;
   }
@@ -650,7 +660,6 @@ export class AndroidDriver implements Driver {
     }
     const restored: DeviceState = {
       baselineCaptured: false,
-      configHash: data.configHash,
       handle: undefined,
       imageIdentity: data.imageIdentity ?? "",
       needsWipe: false,

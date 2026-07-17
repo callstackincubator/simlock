@@ -186,8 +186,11 @@ An Android device's first provisioning flow must:
 
 1. create the AVD;
 2. perform a clean cold boot and readiness check;
-3. capture and validate an explicit clean-baseline snapshot;
-4. make the device eligible for its first lease only after the baseline exists.
+3. capture an explicit clean-baseline snapshot and tag it with the post-boot
+   AVD configuration;
+4. stop the cold-booted emulator, restart from the named baseline with
+   automatic snapshot saving disabled, and pass readiness again;
+5. make the device eligible for its first lease only after that validation boot.
 
 Release-time purge restores that baseline. The baseline is immutable across
 ordinary leases and shutdowns: never overwrite it with lease-mutated state or
@@ -199,6 +202,10 @@ full wipe and clean boot, capture a replacement baseline, and only then return
 the device to normal service. Snapshot restore may fall back to this full
 rebuild; the clean-baseline guarantee is more important than the warm-path
 latency.
+
+The persisted baseline tag is authoritative. Provision-time configuration is
+not: the emulator may normalize `config.ini` during its first boot, and daemon
+restarts discard driver-local state.
 
 ## Purge failure — accepted first-version behavior
 
