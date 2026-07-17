@@ -9,3 +9,7 @@ pre-commit:
       glob: "*.{ts,js,mts,cts}"
       run: pnpm exec oxlint {staged_files}
       fail_text: "Run 'pnpm lint' to fix lint errors."
+    fallow:
+      glob: "*.{ts,js,mts,cts}"
+      run: pnpm exec fallow audit --base HEAD --format compact
+      fail_text: "Fallow found issues in your changes. Run 'pnpm fallow' to see details."
