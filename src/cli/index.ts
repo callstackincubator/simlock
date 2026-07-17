@@ -4,6 +4,9 @@ import { parseArgs } from "node:util";
 
 import { NodeFilesystem } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "./client.js";
+import { DaemonClientError, type DaemonConnection } from "./protocol.js";
+
+export { DaemonClientError, type DaemonConnection } from "./protocol.js";
 
 const USAGE = `Usage: pitlane <command> [options]
 
@@ -20,22 +23,6 @@ const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   RUNTIME_MISSING: 12,
   UNKNOWN_MODEL: 12,
 };
-
-export interface DaemonConnection {
-  request(type: string, payload: unknown): Promise<unknown>;
-  onPush(listener: (kind: string, payload: unknown) => void): () => void;
-  close(): Promise<void>;
-}
-
-export class DaemonClientError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "DaemonClientError";
-  }
-}
 
 export class UsageError extends Error {
   constructor(message: string) {

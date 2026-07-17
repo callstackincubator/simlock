@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_PROTOCOL_VERSION } from "../daemon/server.js";
-import { DaemonClientError, type DaemonConnection } from "./index.js";
+import { DaemonClientError, type DaemonConnection } from "./protocol.js";
 
 interface PendingRequest {
   readonly reject: (error: Error) => void;
