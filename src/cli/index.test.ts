@@ -237,6 +237,186 @@ describe("CLI boundary", () => {
   });
 });
 
+describe("CLI JSON agent contract (pinned exact bytes)", () => {
+  it("prints the held-mode lease result as a single JSON line, byte for byte", async () => {
+    const harness = await createHarness();
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        signals,
+      }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    const stdoutAtGrant = output.stdout;
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+
+    expect(stdoutAtGrant.endsWith("\n")).toBe(true);
+    expect(stdoutAtGrant.trim().split("\n")).toHaveLength(1);
+    const parsed: unknown = JSON.parse(stdoutAtGrant);
+    expect(parsed).toEqual({
+      device: "iPhone 16",
+      lease: expect.any(String),
+      os: "26.5",
+      platform: "ios",
+      state: "leased",
+      udid: expect.any(String),
+    });
+    expect(Object.keys(parsed as Record<string, unknown>).sort()).toEqual(
+      ["device", "lease", "os", "platform", "state", "udid"].sort(),
+    );
+  });
+
+  it("emits queued progress with exactly {event, queue_position}", async () => {
+    const harness = await createHarness();
+    const first = outputCapture();
+    const second = outputCapture();
+    const firstSignals = new EventEmitter();
+    const secondSignals = new EventEmitter();
+    const firstRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      first.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        requesterId: "agent-a",
+        signals: firstSignals,
+      }),
+    );
+    await vi.waitFor(() => expect(first.stdout).not.toBe(""));
+    const secondRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      second.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        requesterId: "agent-b",
+        signals: secondSignals,
+      }),
+    );
+    await vi.waitFor(() => expect(second.stderr).not.toBe(""));
+
+    expect(second.stderr).toBe('{"event":"queued","queue_position":1}\n');
+
+    firstSignals.emit("SIGTERM");
+    await expect(firstRun).resolves.toBe(0);
+    await vi.waitFor(() => expect(second.stdout).not.toBe(""));
+    secondSignals.emit("SIGTERM");
+    await expect(secondRun).resolves.toBe(0);
+  });
+
+  it("emits provisioning/booting progress with exactly {event, eta_seconds}", async () => {
+    const harness = await createHarness();
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        signals,
+      }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    const progressLines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    for (const line of progressLines) {
+      expect(Object.keys(line).sort()).toEqual(["event", "eta_seconds"].sort());
+      expect(typeof line.eta_seconds).toBe("number");
+    }
+    expect(progressLines.map((line) => line.event)).toEqual(
+      expect.arrayContaining(["provisioning", "booting"]),
+    );
+
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+  });
+
+  it("pins status --json to the raw daemon payload, verbatim", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("status.get", { devices: [], leases: [], revision: 3 });
+
+    await expect(
+      runCli(["status", "--json"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+
+    expect(output.stdout).toBe('{"devices":[],"leases":[],"revision":3}\n');
+  });
+
+  it("pins status plain-text formatting exactly", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("status.get", {
+      capacity: {
+        global: { maxRunning: 3, overLimit: false, reserved: 1, running: 1, warm: 1 },
+        ios: {
+          limit: 4,
+          maxRunning: 2,
+          overLimit: false,
+          reserved: 1,
+          running: 1,
+          used: 3,
+          warm: 1,
+        },
+        android: {
+          limit: 2,
+          maxRunning: 2,
+          overLimit: false,
+          reserved: 0,
+          running: 0,
+          used: 1,
+          warm: 0,
+        },
+      },
+      devices: [{ id: "dev_1", state: "ready" }],
+      leases: [{ grantedAt: 1_000, id: "lse_1", requesterId: "agent-a" }],
+      queueDepth: 2,
+    });
+
+    await expect(
+      runCli(["status"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Daemon: running",
+        "Running global: 1 + 1 reserved/3, warm 1",
+        "Capacity ios: managed 3/4, running 1 + 1 reserved/2, warm 1",
+        "Capacity android: managed 1/2, running 0 + 0 reserved/2, warm 0",
+        "Device dev_1: ready",
+        "Lease lse_1: agent-a since 1000",
+        "Queue depth: 2",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("pins the error-case exit code and stderr for an unknown command", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["bogus"], output.environment)).resolves.toBe(2);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toBe(`Unknown command: bogus\n${USAGE_TEXT}\n`);
+  });
+
+  it("pins release --all without confirmation as a usage error, exit 2", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["release", "--all"], output.environment)).resolves.toBe(2);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toBe(`release --all requires confirmation or --yes\n${USAGE_TEXT}\n`);
+  });
+});
+
+const USAGE_TEXT = `Usage: pitlane <command> [options]
+
+Commands:
+  lease, release, status, list, cleanup, doctor, nuke, events, daemon, config
+Run 'pitlane <command> --help' for command usage.`;
+
 class StubConnection implements DaemonConnection {
   readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
   closed = false;

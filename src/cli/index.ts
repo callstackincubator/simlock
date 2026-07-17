@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { NodeFilesystem } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "./client.js";
 import { DaemonClientError, type DaemonConnection } from "./protocol.js";
+import { JsonRenderer, requireArray, requireObject, type Renderer } from "./render.js";
 
 export { DaemonClientError, type DaemonConnection } from "./protocol.js";
 
@@ -48,6 +49,7 @@ export interface CliEnvironment {
   readonly requesterId: string;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly readLogFile?: () => Promise<string>;
+  readonly interactive?: boolean;
   readonly signals: Signals;
   readonly stderr: Output;
   readonly stdout: Output;
@@ -67,6 +69,7 @@ function defaultCliEnvironment(): CliEnvironment {
     connectExisting: () => connectExistingDaemon(socketPath),
     now: () => Date.now(),
     requesterId: String(process.pid),
+    interactive: process.stdout.isTTY === true,
     readConfigFile: async () => {
       if (!(await filesystem.exists(configPath))) return {};
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
@@ -87,38 +90,39 @@ export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment = defaultCliEnvironment(),
 ): Promise<number> {
+  const renderer: Renderer = new JsonRenderer(environment);
   try {
     if (argv.length === 0 || isHelp(argv[0])) {
-      environment.stdout.write(`${USAGE}\n`);
+      renderer.info(USAGE);
       return 0;
     }
     switch (argv[0]) {
       case "lease":
-        return await runLease(argv.slice(1), environment);
+        return await runLease(argv.slice(1), environment, renderer);
       case "release":
-        return await runRelease(argv.slice(1), environment);
+        return await runRelease(argv.slice(1), environment, renderer);
       case "status":
-        return await runStatus(argv.slice(1), environment);
+        return await runStatus(argv.slice(1), environment, renderer);
       case "list":
-        return await runList(argv.slice(1), environment);
+        return await runList(argv.slice(1), environment, renderer);
       case "cleanup":
-        return await runCleanup(argv.slice(1), environment);
+        return await runCleanup(argv.slice(1), environment, renderer);
       case "doctor":
-        return await runDoctor(argv.slice(1), environment);
+        return await runDoctor(argv.slice(1), environment, renderer);
       case "nuke":
-        return await runNuke(argv.slice(1), environment);
+        return await runNuke(argv.slice(1), environment, renderer);
       case "events":
-        return await runEvents(argv.slice(1), environment);
+        return await runEvents(argv.slice(1), environment, renderer);
       case "daemon":
-        return await runDaemon(argv.slice(1), environment);
+        return await runDaemon(argv.slice(1), environment, renderer);
       case "config":
-        return await runConfig(argv.slice(1), environment);
+        return await runConfig(argv.slice(1), environment, renderer);
       default:
         throw new UsageError(`Unknown command: ${argv[0]}`);
     }
   } catch (error: unknown) {
-    environment.stderr.write(`${errorMessage(error)}\n`);
-    if (error instanceof UsageError) environment.stderr.write(`${USAGE}\n`);
+    renderer.error(errorMessage(error));
+    if (error instanceof UsageError) renderer.usage(USAGE);
     return errorExitCode(error);
   }
 }
@@ -141,8 +145,12 @@ export function parseDuration(value: string): number {
   return milliseconds;
 }
 
-async function runLease(argv: readonly string[], environment: CliEnvironment): Promise<number> {
-  if (argv[0] === "renew") return runRenew(argv.slice(1), environment);
+async function runLease(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
+  if (argv[0] === "renew") return runRenew(argv.slice(1), environment, renderer);
   const values = commandArgs(argv, {
     "allow-download": { type: "boolean" },
     detach: { type: "boolean" },
@@ -155,8 +163,8 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     timeout: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write(
-      "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n",
+    renderer.info(
+      "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]",
     );
     return 0;
   }
@@ -169,7 +177,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   const termination = detached ? undefined : waitForTermination(environment.signals);
   const connection = await environment.connect();
   const unsubscribe = connection.onPush((kind, payload) => {
-    if (kind === "progress") environment.stderr.write(`${JSON.stringify(progressLine(payload))}\n`);
+    if (kind === "progress") renderer.progress(payload);
   });
   try {
     const response = await connection.request("lease.request", {
@@ -185,13 +193,13 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
     const result = leaseResult(response);
-    environment.stdout.write(`${JSON.stringify(result)}\n`);
+    renderer.result(result);
     if (detached) return 0;
     await termination;
     try {
       await connection.request("lease.release", { leaseId: result.lease });
     } catch (error: unknown) {
-      environment.stderr.write(`Lease release failed after signal: ${errorMessage(error)}\n`);
+      renderer.error(`Lease release failed after signal: ${errorMessage(error)}`);
     }
     return 0;
   } finally {
@@ -200,7 +208,11 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   }
 }
 
-async function runRenew(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runRenew(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
@@ -208,12 +220,11 @@ async function runRenew(argv: readonly string[], environment: CliEnvironment): P
   });
   const { positionals } = values;
   if (values.help) {
-    environment.stdout.write("Usage: pitlane lease renew <lease-id> [--ttl <duration>]\n");
+    renderer.info("Usage: pitlane lease renew <lease-id> [--ttl <duration>]");
     return 0;
   }
   const leaseId = requiredPositional(positionals, "lease-id");
-  writeResult(
-    environment,
+  renderer.result(
     await requestOnce(environment, "lease.renew", {
       leaseId,
       ...(typeof values.ttl === "string" ? { ttlMs: parseDuration(values.ttl) } : {}),
@@ -222,7 +233,11 @@ async function runRenew(argv: readonly string[], environment: CliEnvironment): P
   return 0;
 }
 
-async function runRelease(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runRelease(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     all: { type: "boolean" },
     help: { type: "boolean", short: "h" },
@@ -231,7 +246,7 @@ async function runRelease(argv: readonly string[], environment: CliEnvironment):
   });
   const { positionals } = values;
   if (values.help) {
-    environment.stdout.write("Usage: pitlane release <lease-id> | --all [--yes]\n");
+    renderer.info("Usage: pitlane release <lease-id> | --all [--yes]");
     return 0;
   }
   if (values.all) {
@@ -239,11 +254,10 @@ async function runRelease(argv: readonly string[], environment: CliEnvironment):
       throw new UsageError("release accepts either a lease id or --all, not both");
     const confirmed = values.yes ?? (await environment.confirm?.("Release every lease? [y/N] "));
     if (!confirmed) throw new UsageError("release --all requires confirmation or --yes");
-    writeResult(environment, await requestOnce(environment, "lease.release-all", {}));
+    renderer.result(await requestOnce(environment, "lease.release-all", {}));
     return 0;
   }
-  writeResult(
-    environment,
+  renderer.result(
     await requestOnce(environment, "lease.release", {
       leaseId: requiredPositional(positionals, "lease-id"),
     }),
@@ -251,22 +265,30 @@ async function runRelease(argv: readonly string[], environment: CliEnvironment):
   return 0;
 }
 
-async function runStatus(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runStatus(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane status [--json]\n");
+    renderer.info("Usage: pitlane status [--json]");
     return 0;
   }
   const status = await requestOnce(environment, "status.get", {});
-  if (values.json) writeResult(environment, status);
-  else environment.stdout.write(`${formatStatus(requireObject(status))}\n`);
+  if (values.json) renderer.result(status);
+  else renderer.status(status);
   return 0;
 }
 
-async function runList(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runList(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     devices: { type: "boolean" },
     help: { type: "boolean", short: "h" },
@@ -275,17 +297,21 @@ async function runList(argv: readonly string[], environment: CliEnvironment): Pr
     rules: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane list [--devices|--leases|--rules] [--json]\n");
+    renderer.info("Usage: pitlane list [--devices|--leases|--rules] [--json]");
     return 0;
   }
   if ([values.devices, values.leases, values.rules].filter(Boolean).length > 1)
     throw new UsageError("list accepts only one of --devices, --leases, or --rules");
   const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
-  writeResult(environment, await requestOnce(environment, "list.get", { kind }));
+  renderer.result(await requestOnce(environment, "list.get", { kind }));
   return 0;
 }
 
-async function runCleanup(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runCleanup(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     "dry-run": { type: "boolean" },
     help: { type: "boolean", short: "h" },
@@ -293,11 +319,10 @@ async function runCleanup(argv: readonly string[], environment: CliEnvironment):
     rule: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane cleanup [--dry-run] [--rule <name>] [--json]\n");
+    renderer.info("Usage: pitlane cleanup [--dry-run] [--rule <name>] [--json]");
     return 0;
   }
-  writeResult(
-    environment,
+  renderer.result(
     await requestOnce(environment, "cleanup.run", {
       dryRun: values["dry-run"] ?? false,
       ...(typeof values.rule === "string" ? { rule: values.rule } : {}),
@@ -306,24 +331,29 @@ async function runCleanup(argv: readonly string[], environment: CliEnvironment):
   return 0;
 }
 
-async function runDoctor(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runDoctor(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     fix: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane doctor [--fix] [--json]\n");
+    renderer.info("Usage: pitlane doctor [--fix] [--json]");
     return 0;
   }
-  writeResult(
-    environment,
-    await requestOnce(environment, "doctor.run", { fix: values.fix ?? false }),
-  );
+  renderer.result(await requestOnce(environment, "doctor.run", { fix: values.fix ?? false }));
   return 0;
 }
 
-async function runNuke(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runNuke(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     "delete-devices": { type: "boolean" },
     help: { type: "boolean", short: "h" },
@@ -331,14 +361,13 @@ async function runNuke(argv: readonly string[], environment: CliEnvironment): Pr
     yes: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane nuke [--delete-devices] [--yes] [--json]\n");
+    renderer.info("Usage: pitlane nuke [--delete-devices] [--yes] [--json]");
     return 0;
   }
   const confirmed =
     values.yes ?? (await environment.confirm?.("Nuke Pitlane-managed devices? [y/N] "));
   if (!confirmed) throw new UsageError("nuke requires confirmation or --yes");
-  writeResult(
-    environment,
+  renderer.result(
     await requestOnce(environment, "nuke.run", {
       deleteDevices: values["delete-devices"] ?? false,
     }),
@@ -346,7 +375,11 @@ async function runNuke(argv: readonly string[], environment: CliEnvironment): Pr
   return 0;
 }
 
-async function runEvents(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runEvents(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const values = commandArgs(argv, {
     follow: { type: "boolean" },
     help: { type: "boolean", short: "h" },
@@ -354,12 +387,12 @@ async function runEvents(argv: readonly string[], environment: CliEnvironment): 
     since: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane events [--follow] [--since <duration>] [--json]\n");
+    renderer.info("Usage: pitlane events [--follow] [--since <duration>] [--json]");
     return 0;
   }
   const connection = await environment.connect();
   const unsubscribe = connection.onPush((kind, payload) => {
-    if (kind === "event") writeResult(environment, payload);
+    if (kind === "event") renderer.result(payload);
   });
   try {
     const sinceTs =
@@ -368,7 +401,7 @@ async function runEvents(argv: readonly string[], environment: CliEnvironment): 
         : undefined;
     const replayPayload = sinceTs === undefined ? {} : { sinceTs };
     for (const event of requireArray(await connection.request("events.replay", replayPayload)))
-      writeResult(environment, event);
+      renderer.result(event);
     if (values.follow) {
       await connection.request("events.subscribe", {});
       await waitForTermination(environment.signals);
@@ -381,21 +414,25 @@ async function runEvents(argv: readonly string[], environment: CliEnvironment): 
   }
 }
 
-async function runDaemon(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runDaemon(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const command = argv[0];
   const values = commandArgs(argv.slice(1), {
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
   });
   if (command === undefined || isHelp(command) || values.help) {
-    environment.stdout.write("Usage: pitlane daemon <start|stop|status|logs>\n");
+    renderer.info("Usage: pitlane daemon <start|stop|status|logs>");
     return 0;
   }
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
   if (command === "start") {
     await requestOnce(environment, "status.get", {});
-    if (values.json) writeResult(environment, { status: "running" });
-    else environment.stdout.write("Daemon running\n");
+    if (values.json) renderer.result({ status: "running" });
+    else renderer.info("Daemon running");
     return 0;
   }
   if (command === "stop") {
@@ -405,21 +442,21 @@ async function runDaemon(argv: readonly string[], environment: CliEnvironment): 
     } finally {
       await connection.close();
     }
-    if (values.json) writeResult(environment, { status: "stopping" });
-    else environment.stdout.write("Daemon stopping\n");
+    if (values.json) renderer.result({ status: "stopping" });
+    else renderer.info("Daemon stopping");
     return 0;
   }
   if (command === "status") {
     try {
       const connection = await (environment.connectExisting ?? environment.connect)();
       try {
-        writeResult(environment, await connection.request("status.get", {}));
+        renderer.result(await connection.request("status.get", {}));
       } finally {
         await connection.close();
       }
     } catch {
-      if (values.json) writeResult(environment, { status: "stopped" });
-      else environment.stdout.write("Daemon stopped\n");
+      if (values.json) renderer.result({ status: "stopped" });
+      else renderer.info("Daemon stopped");
     }
     return 0;
   }
@@ -427,17 +464,21 @@ async function runDaemon(argv: readonly string[], environment: CliEnvironment): 
     if (environment.readLogFile === undefined) throw new Error("Daemon log reader is unavailable");
     const lines = (await environment.readLogFile()).trimEnd().split("\n");
     const output = lines.slice(-100).join("\n");
-    if (values.json) writeResult(environment, { logs: output });
-    else environment.stdout.write(`${output}\n`);
+    if (values.json) renderer.result({ logs: output });
+    else renderer.info(output);
     return 0;
   }
   throw new UsageError(`Unknown daemon command: ${command}`);
 }
 
-async function runConfig(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+async function runConfig(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  renderer: Renderer,
+): Promise<number> {
   const command = argv[0];
   if (command === undefined || command === "--json") {
-    writeResult(environment, await requestOnce(environment, "config.get", {}));
+    renderer.result(await requestOnce(environment, "config.get", {}));
     return 0;
   }
   if (command === "get") {
@@ -448,7 +489,7 @@ async function runConfig(argv: readonly string[], environment: CliEnvironment): 
       key,
     );
     if (value === undefined) throw new UsageError(`Unknown config key: ${key}`);
-    writeResult(environment, value);
+    renderer.result(value);
     return 0;
   }
   if (command === "set") {
@@ -459,13 +500,11 @@ async function runConfig(argv: readonly string[], environment: CliEnvironment): 
     const config = await environment.readConfigFile();
     writeConfigValue(config, key, parseConfigValue(rawValue));
     await environment.writeConfigFile(config);
-    environment.stdout.write(
-      `Updated ${key} in ${environment.configPath}; takes effect on daemon restart.\n`,
-    );
+    renderer.info(`Updated ${key} in ${environment.configPath}; takes effect on daemon restart.`);
     return 0;
   }
   if (isHelp(command)) {
-    environment.stdout.write("Usage: pitlane config [get <key>|set <key> <value>]\n");
+    renderer.info("Usage: pitlane config [get <key>|set <key> <value>]");
     return 0;
   }
   throw new UsageError(`Unknown config command: ${command}`);
@@ -519,55 +558,6 @@ function leaseResult(value: unknown): Record<string, unknown> & { readonly lease
   };
 }
 
-function progressLine(value: unknown): {
-  readonly event: string;
-  readonly eta_seconds?: number;
-  readonly queue_position?: number;
-} {
-  const progress = requireObject(value);
-  if (progress.stage === "queued" && typeof progress.queuePosition === "number") {
-    return { event: "queued", queue_position: progress.queuePosition };
-  }
-  if (
-    (progress.stage === "provisioning" ||
-      progress.stage === "booting" ||
-      progress.stage === "reclaiming") &&
-    typeof progress.etaMs === "number"
-  ) {
-    return { eta_seconds: Math.ceil(progress.etaMs / 1_000), event: progress.stage };
-  }
-  throw new Error("Daemon returned invalid progress");
-}
-
-function formatStatus(status: Record<string, unknown>): string {
-  const devices = requireArray(status.devices);
-  const leases = requireArray(status.leases);
-  const queueDepth = typeof status.queueDepth === "number" ? status.queueDepth : 0;
-  const capacity = requireObject(status.capacity ?? {});
-  const global = requireObject(capacity.global ?? {});
-  const globalLine = `Running global: ${String(global.running ?? 0)} + ${String(global.reserved ?? 0)} reserved/${String(global.maxRunning ?? 0)}, warm ${String(global.warm ?? 0)}${global.overLimit === true ? " (over limit)" : ""}`;
-  const capacityLines = ["ios", "android"].map((platform) => {
-    const usage = requireObject(capacity[platform] ?? {});
-    return `Capacity ${platform}: managed ${String(usage.used ?? 0)}/${String(usage.limit ?? 0)}, running ${String(usage.running ?? 0)} + ${String(usage.reserved ?? 0)} reserved/${String(usage.maxRunning ?? 0)}, warm ${String(usage.warm ?? 0)}${usage.overLimit === true ? " (over limit)" : ""}`;
-  });
-  const deviceLines = devices.map((device) => {
-    const record = requireObject(device);
-    return `Device ${String(record.id)}: ${String(record.state)}`;
-  });
-  const leaseLines = leases.map((lease) => {
-    const record = requireObject(lease);
-    return `Lease ${String(record.id)}: ${String(record.requesterId)} since ${String(record.grantedAt)}`;
-  });
-  return [
-    `Daemon: ${typeof status.health === "string" ? status.health : "running"}`,
-    globalLine,
-    ...capacityLines,
-    ...deviceLines,
-    ...leaseLines,
-    `Queue depth: ${queueDepth}`,
-  ].join("\n");
-}
-
 function requiredPositional(positionals: readonly string[], label: string): string {
   if (positionals.length !== 1 || positionals[0] === undefined)
     throw new UsageError(`Expected ${label}`);
@@ -602,18 +592,6 @@ function parseConfigValue(value: string): unknown {
   } catch {
     return value;
   }
-}
-function requireObject(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error("Daemon returned an invalid response");
-  return value as Record<string, unknown>;
-}
-function requireArray(value: unknown): unknown[] {
-  if (!Array.isArray(value)) throw new Error("Daemon returned an invalid response");
-  return value;
-}
-function writeResult(environment: CliEnvironment, value: unknown): void {
-  environment.stdout.write(`${JSON.stringify(value)}\n`);
 }
 function waitForTermination(signals: Signals): Promise<void> {
   return new Promise((resolve) => {
