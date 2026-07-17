@@ -28,3 +28,22 @@ Edge cases the fix must still consider: the agent may spawn the CLI from a
 short-lived subshell (parent dies immediately even though the agent is alive),
 so the watched PID may need to be configurable (`--bind-pid <pid>`), and
 machine sleep / zombie sockets still rely on the TTL backstop.
+
+## Warm-pool purge failures (accepted in the first version)
+
+Before a released device enters the warm pool, Pitlane attempts to purge the
+previous lease's state. A successful purge produces a clean, ready device.
+
+**The pitfall:** if that purge fails, the first warm-pool version emits
+`device.purge-failed` but still leaves the device running and eligible for
+another lease. The device continues to count against the running-device
+limit. The next agent may therefore observe apps, data, or other state left by
+the previous lease.
+
+**Status in the first warm-pool version:** known and accepted. Purge failure
+must be visible through the event stream so its frequency and impact can be
+measured, but it does not quarantine the device or block acquisition.
+
+**Possible future fix:** quarantine the device after a failed purge, retry
+with backoff, or shut down/delete it after a configurable number of failures.
+Revisit once real-world failure data shows which recovery policy is justified.

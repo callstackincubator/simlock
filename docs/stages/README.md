@@ -1,27 +1,20 @@
-# v1 implementation stages
+# Implementation stages
 
-Topologically ordered. Each stage assumes every stage above it is committed
-and green. Stages 11 and 12 are independent of each other and can run in
-parallel; everything else is sequential.
+These stages describe the next planned changes on top of the completed v1
+implementation. They are topologically ordered: a stage may begin only after
+every dependency is committed, marked `done`, and `pnpm check` is green.
+Stage numbers remain stable when completed stage specifications leave this
+active set, so the table may begin above 01.
 
-| #   | Stage                                                    | Depends on             | Status  |
-| --- | -------------------------------------------------------- | ---------------------- | ------- |
-| 01  | [Scaffolding](01-scaffolding.md)                         | —                      | done    |
-| 02  | [Ports](02-ports.md)                                     | 01                     | done    |
-| 03  | [Event bus](03-event-bus.md)                             | 02                     | done    |
-| 04  | [Domain & registry](04-domain-registry.md)               | 03                     | done    |
-| 05  | [Config & capacity](05-config-capacity.md)               | 02                     | done    |
-| 06  | [Driver interface & fake driver](06-driver-interface.md) | 04                     | done    |
-| 07  | [Lease engine](07-lease-engine.md)                       | 04, 05, 06             | done    |
-| 08  | [Cleanup reaper](08-cleanup-reaper.md)                   | 07                     | done    |
-| 09  | [Daemon & IPC](09-daemon-ipc.md)                         | 07, 08                 | done    |
-| 10  | [CLI](10-cli.md)                                         | 09                     | done    |
-| 11  | [iOS driver](11-ios-driver.md)                           | 06 (integrates via 09) | done    |
-| 12  | [Android driver](12-android-driver.md)                   | 06 (integrates via 09) | done |
-| 13  | [Doctor, nuke & e2e](13-doctor-e2e.md)                   | 10, 11, 12             | done |
+| #   | Stage                                              | Depends on | Status  |
+| --- | -------------------------------------------------- | ---------- | ------- |
+| 02  | [Global and platform maxRunning](02-max-running.md) | —          | pending |
+| 03  | [Adaptive warm pool](03-warm-pool.md)              | 02         | pending |
 
-Workflow for implementing a stage: see [../loop.md](../loop.md).
-When a stage is completed, flip its Status here to `done` in the same commit.
+The stages are intentionally sequential because they change lease acquisition,
+daemon IPC, capacity accounting, and the contention test surface.
+
+Workflow for implementing a stage: see [../LOOP.md](../LOOP.md).
 
 Binding rules for all stages: [../agent-rules/](../agent-rules/).
 Architecture reference: [../ARCHITECTURE.md](../ARCHITECTURE.md).

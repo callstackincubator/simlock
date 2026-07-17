@@ -1,7 +1,7 @@
 # Implementation loop
 
-Instructions for the sub-agent implementing one stage of pitlane v1. You are
-given a stage file path (e.g. `docs/stages/07-lease-engine.md`). Work through
+Instructions for the sub-agent implementing one Pitlane stage. You are given a
+stage file path (for example `docs/stages/02-max-running.md`). Work through
 these phases in order; do not skip the self-review.
 
 ## Phase 0 — Orient
@@ -21,8 +21,7 @@ these phases in order; do not skip the self-review.
 4. Write the tests listed in the stage's "Tests first" section before any
    implementation. Run them; they must fail for the right reason (missing
    implementation, not typos).
-5. Where the stage names a load-bearing test (e.g. stage 07's concurrent-
-   requests race), write that one first.
+5. Where the stage names a load-bearing test, write that one first.
 
 ## Phase 2 — Implement
 

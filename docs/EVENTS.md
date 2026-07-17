@@ -26,6 +26,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.provisioned` | device id, spec, driver, duration | driver `provision` committed to registry | implemented |
 | `device.ready` | device id, boot duration | readiness probe passed | implemented |
 | `device.reclaimed` | device id, strategy (erase/snapshot/wipe), duration | fresh-state reclaim finished | implemented |
+| `device.purge-failed` | device id, lease id, attempted strategy, duration, error | release-time purge failed; the first version may still reuse the device | planned |
 | `device.shutdown` | device id, initiator (rule/command) | device stopped, still on disk | implemented |
 | `device.deleted` | device id, initiator | device removed from disk and registry | implemented |
 | `runtime.deleted` | runtime id, initiator | runtime / system image GC'd | planned |
