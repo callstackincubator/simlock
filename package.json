@@ -17,13 +17,16 @@
     "fallow": "fallow",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test"
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
+    "release": "release-it"
   },
   "devDependencies": {
+    "@release-it/conventional-changelog": "^11.0.1",
     "@types/node": "^26.1.1",
     "fallow": "^3.6.0",
     "oxfmt": "^0.59.0",
     "oxlint": "^1.74.0",
+    "release-it": "^20.2.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
@@ -36,5 +39,31 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "release-it": {
+    "git": {
+      "requireCleanWorkingDir": true,
+      "requireBranch": "main",
+      "requireUpstream": true,
+      "commitMessage": "chore(release): ${version}",
+      "tagName": "v${version}"
+    },
+    "github": {
+      "release": true
+    },
+    "npm": {
+      "publish": false
+    },
+    "hooks": {
+      "before:init": "pnpm check"
+    },
+    "plugins": {
+      "@release-it/conventional-changelog": {
+        "preset": {
+          "name": "conventionalcommits"
+        },
+        "infile": "CHANGELOG.md"
+      }
+    }
   }
 }
