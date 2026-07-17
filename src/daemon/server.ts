@@ -23,7 +23,7 @@ import {
 import type { Filesystem } from "../ports/index.js";
 
 export const DEFAULT_PROTOCOL_VERSION = 1;
-export const DEFAULT_SOCKET_PATH = "~/.pitlane/daemon.sock";
+const DEFAULT_SOCKET_PATH = "~/.pitlane/daemon.sock";
 
 type RequestId = string | number;
 
@@ -60,7 +60,7 @@ export interface DaemonServerOptions {
   readonly version: string;
 }
 
-export class DaemonAlreadyRunningError extends Error {
+class DaemonAlreadyRunningError extends Error {
   constructor(readonly socketPath: string) {
     super(`Pitlane daemon is already running at ${socketPath}`);
     this.name = "DaemonAlreadyRunningError";

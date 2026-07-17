@@ -4,7 +4,7 @@ export type WarmVictimScope =
   | { readonly kind: "global" }
   | { readonly kind: "platform"; readonly platform: Platform };
 
-export function isWarmDevice(device: DeviceRecord): boolean {
+function isWarmDevice(device: DeviceRecord): boolean {
   return device.state === "ready";
 }
 

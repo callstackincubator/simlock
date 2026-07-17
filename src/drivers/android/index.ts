@@ -44,7 +44,7 @@ export interface AndroidDriverDiagnostic {
   readonly readyAfterMs: number;
 }
 
-export interface AndroidDriverData {
+interface AndroidDriverData {
   readonly avdName: string;
   readonly configHash: string;
   readonly imageIdentity?: string;

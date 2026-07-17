@@ -24,7 +24,7 @@ const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   UNKNOWN_MODEL: 12,
 };
 
-export class UsageError extends Error {
+class UsageError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "UsageError";
@@ -55,7 +55,7 @@ export interface CliEnvironment {
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
 }
 
-export function defaultCliEnvironment(): CliEnvironment {
+function defaultCliEnvironment(): CliEnvironment {
   const dataDirectory = join(homedir(), ".pitlane");
   const filesystem = new NodeFilesystem();
   const socketPath = join(dataDirectory, "daemon.sock");

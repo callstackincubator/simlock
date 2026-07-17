@@ -85,7 +85,7 @@ export class HeldLeaseRenewalError extends Error {
   }
 }
 
-export class NukeCancelledError extends Error {
+class NukeCancelledError extends Error {
   constructor() {
     super("Request cancelled by nuke");
     this.name = "NukeCancelledError";
