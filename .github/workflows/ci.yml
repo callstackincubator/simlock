@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  COREPACK_ENABLE_PROJECT_SPEC: "0"
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
