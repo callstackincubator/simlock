@@ -207,12 +207,8 @@ function isSafeProposal(proposal: Proposal, view: RegistryView): boolean {
     return false;
   }
 
-  if (Object.keys(view.config.warmPool).length > 0) {
-    return false;
-  }
-
   return (
-    (proposal.action === "shutdown" && (device.state === "ready" || device.state === "warm")) ||
+    (proposal.action === "shutdown" && device.state === "ready") ||
     (proposal.action === "destroy" && device.state === "shutdown")
   );
 }

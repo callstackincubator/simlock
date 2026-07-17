@@ -33,6 +33,12 @@ export {
   type RegistryView,
 } from "./cleanup/types.js";
 export { automaticCleanupRules, manualCleanupRules } from "./cleanup/rules.js";
+export {
+  compareLeastRecentlyUsed,
+  isWarmDevice,
+  selectManagedVictim,
+  selectWarmVictim,
+} from "./warm-pool.js";
 export { type CleanupReaperOptions, type CleanupRunOptions, CleanupReaper } from "./reaper.js";
 export {
   BootTimeoutError,
@@ -41,6 +47,7 @@ export {
   DriverCrashError,
   type DriverDevice,
   type ReclaimResult,
+  type ReclaimStrategy,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";

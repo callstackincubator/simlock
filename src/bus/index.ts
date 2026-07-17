@@ -42,6 +42,13 @@ export interface EventMap {
     readonly strategy: "erase" | "snapshot" | "wipe";
     readonly duration: number;
   };
+  "device.purge-failed": {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly attemptedStrategy: string;
+    readonly duration: number;
+    readonly error: string;
+  };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
   "runtime.deleted": { readonly runtimeId: string; readonly initiator: string };

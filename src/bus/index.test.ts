@@ -123,6 +123,7 @@ describe("EventBus", () => {
       | "device.provisioned"
       | "device.ready"
       | "device.reclaimed"
+      | "device.purge-failed"
       | "device.shutdown"
       | "device.deleted"
       | "runtime.deleted"

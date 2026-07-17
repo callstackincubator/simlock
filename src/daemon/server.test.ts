@@ -56,6 +56,15 @@ describe("DaemonServer", () => {
 
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
     expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    const observer = await createClient(harness.socketPath);
+    await hello(observer);
+    await expect(observer.request("status.get", {})).resolves.toMatchObject({
+      payload: {
+        capacity: { global: { warm: 1 }, ios: { warm: 1 } },
+        devices: [{ state: "ready" }],
+      },
+    });
+    await observer.close();
   });
 
   it("requires a compatible hello before serving requests", async () => {
@@ -219,7 +228,7 @@ describe("DaemonServer", () => {
       ok: true,
       payload: {
         capacity: {
-          global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0 },
+          global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
           ios: {
             limit: 1,
             maxRunning: 1,
@@ -227,6 +236,7 @@ describe("DaemonServer", () => {
             reserved: 0,
             running: 0,
             used: 0,
+            warm: 0,
           },
         },
       },
@@ -471,6 +481,5 @@ function testConfig(): Config {
       maxRunning: 1 + 1,
     },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
-    warmPool: {},
   };
 }

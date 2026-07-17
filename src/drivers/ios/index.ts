@@ -127,7 +127,13 @@ export class IosSimctlDriver implements Driver {
 
   async makeReady(device: DriverDevice): Promise<void> {
     const data = iosDriverData(device);
-    await this.#simctl(["boot", data.udid], COMMAND_TIMEOUT_MS);
+    const boot = await this.#invokeSimctl(["boot", data.udid], COMMAND_TIMEOUT_MS);
+    if (boot.kind === "timed-out") {
+      throw new BootTimeoutError(device.deviceId);
+    }
+    if (boot.result.code !== 0 && !alreadyBooted(boot.result.stderr)) {
+      this.#assertSuccessful(["boot", data.udid], boot.result);
+    }
     const outcome = await this.#invokeSimctl(
       ["bootstatus", data.udid, "-b"],
       BOOTSTATUS_TIMEOUT_MS,
@@ -149,6 +155,10 @@ export class IosSimctlDriver implements Driver {
     await this.#shutdown(data.udid);
     await this.#simctl(["erase", data.udid], COMMAND_TIMEOUT_MS);
     return { state: "shutdown", strategy: "erase" };
+  }
+
+  reclaimStrategy(_options: { readonly clean: "standard" | "full" }): "erase" {
+    return "erase";
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
@@ -420,6 +430,10 @@ function iosDriverData(device: DriverDevice): IosDriverData {
 
 function alreadyShutdown(stderr: string): boolean {
   return /Unable to shutdown.*current state:\s*Shutdown/i.test(stderr);
+}
+
+function alreadyBooted(stderr: string): boolean {
+  return /current state:\s*Booted|already booted/i.test(stderr);
 }
 
 function specKey(spec: DeviceSpec): string {

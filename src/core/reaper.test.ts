@@ -28,7 +28,6 @@ function config(): Config {
       maxRunning: 1 + 1,
     },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
-    warmPool: {},
   };
 }
 
@@ -189,22 +188,6 @@ describe("CleanupReaper", () => {
     ]);
     expect(harness.driver.calls).toHaveLength(callsBefore);
     expect(harness.registry.snapshot).toEqual(before);
-  });
-
-  it("keeps cleanup out of a configured warm pool until warm-pool policy exists", async () => {
-    const rule: CleanupRule = {
-      evaluate: () => [
-        { action: "shutdown", reason: "test cleanup", rule: "test-rule", target: "dev_1" },
-      ],
-      name: "test-rule",
-    };
-    const cleanupConfig = { ...config(), warmPool: { reserved: 1 } };
-    const harness = await createHarness([rule], {}, { cleanupConfig });
-    await seedReady(harness);
-
-    await expect(harness.reaper.run()).resolves.toEqual([]);
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-    harness.reaper.dispose();
   });
 
   it("registers runtime GC only for explicit manual cleanup", async () => {

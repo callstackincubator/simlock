@@ -11,6 +11,12 @@ import type { Proposal } from "./cleanup/types.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver, type DriverDevice } from "./driver.js";
 import { Registry, type ReleasedLease } from "./registry.js";
+import {
+  compareLeastRecentlyUsed,
+  selectManagedVictim,
+  selectWarmVictim,
+  type WarmVictimScope,
+} from "./warm-pool.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
@@ -114,8 +120,13 @@ interface ProvisionAction {
   readonly kind: "provision";
 }
 
-interface ReclaimWarmAction {
-  readonly kind: "reclaim-warm";
+interface EvictRunningAction {
+  readonly kind: "evict-running";
+  readonly device: DeviceRecord;
+}
+
+interface EvictManagedAction {
+  readonly kind: "evict-managed";
   readonly device: DeviceRecord;
 }
 
@@ -140,7 +151,7 @@ export class LeaseEngine {
   readonly #leaseTimers = new Map<string, TimerHandle>();
   readonly #provisionReservations: Platform[] = [];
   readonly #shutdownReservations = new Set<string>();
-  readonly #warmReservations = new Set<string>();
+  readonly #evictionReservations = new Set<string>();
   readonly #cleanupReservations = new Set<string>();
   readonly #queue: Waiter[] = [];
   readonly #requesters = new Set<string>();
@@ -231,13 +242,13 @@ export class LeaseEngine {
     for (const device of this.options.registry.snapshot.devices) {
       if (device.state === "deleted") continue;
       const driver = this.#driverFor(device.spec.platform);
-      if (device.state === "ready" || device.state === "warm") {
+      if (device.state === "ready") {
         await driver.shutdown(toDriverDevice(device));
         await this.#withDecision(async () => {
           const current = this.options.registry.snapshot.devices.find(
             (candidate) => candidate.id === device.id,
           );
-          if (current?.state === "ready" || current?.state === "warm") {
+          if (current?.state === "ready") {
             await this.options.registry.transitionDevice(device.id, "shutdown", {
               event: "device.shutdown",
               payload: { deviceId: device.id, initiator: "nuke" },
@@ -281,6 +292,22 @@ export class LeaseEngine {
 
   /** Safely converges unleased running devices after startup reconciliation. */
   async convergeRunningCapacity(): Promise<void> {
+    for (const legacy of this.options.registry.snapshot.devices.filter(
+      (device) =>
+        device.state === "reclaiming" &&
+        !this.options.registry.snapshot.leases.some((lease) => lease.deviceId === device.id),
+    )) {
+      const driver = this.#driverFor(legacy.spec.platform);
+      await driver.shutdown(toDriverDevice(legacy));
+      await this.#withDecision(async () => {
+        await this.options.registry.completeFailedPurge(legacy.id, "shutdown");
+        this.options.eventBus.emit(
+          "device.shutdown",
+          { deviceId: legacy.id, initiator: "startup-legacy-warm-migration" },
+          "lease-engine",
+        );
+      });
+    }
     for (;;) {
       const candidate = await this.#withDecision(async () => {
         const capacity = this.runningCapacity;
@@ -296,14 +323,12 @@ export class LeaseEngine {
         return this.options.registry.snapshot.devices
           .filter(
             (device) =>
-              (device.state === "ready" || device.state === "warm") &&
+              device.state === "ready" &&
               !leases.has(device.id) &&
               !this.#cleanupReservations.has(device.id) &&
               (overPlatforms.length === 0 || overPlatforms.includes(device.spec.platform)),
           )
-          .sort(
-            (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
-          )[0];
+          .sort(compareLeastRecentlyUsed)[0];
       });
       if (candidate === undefined) return;
       await this.executeCleanup({
@@ -407,6 +432,18 @@ export class LeaseEngine {
 
   async #drive(waiter: Waiter): Promise<void> {
     const action = await this.#withDecision(async () => this.#decide(waiter));
+    await this.#perform(waiter, action);
+  }
+
+  async #perform(
+    waiter: Waiter,
+    action:
+      | ProvisionAction
+      | BootShutdownAction
+      | EvictRunningAction
+      | EvictManagedAction
+      | undefined,
+  ): Promise<void> {
     if (action === undefined) {
       return;
     }
@@ -427,11 +464,11 @@ export class LeaseEngine {
       await this.#bootShutdown(waiter, action.device);
       return;
     }
-    waiter.timing = estimatedReclaimTiming(
-      this.#driverFor(action.device.spec.platform),
-      action.device.spec,
-    );
-    await this.#reclaimWarm(waiter, action.device);
+    if (action.kind === "evict-running") {
+      await this.#evictRunning(waiter, action.device);
+      return;
+    }
+    await this.#evictManaged(waiter, action.device);
   }
 
   async #provision(waiter: Waiter, _action: ProvisionAction): Promise<void> {
@@ -523,7 +560,9 @@ export class LeaseEngine {
 
   async #decide(
     waiter: Waiter,
-  ): Promise<ProvisionAction | ReclaimWarmAction | BootShutdownAction | undefined> {
+  ): Promise<
+    ProvisionAction | BootShutdownAction | EvictRunningAction | EvictManagedAction | undefined
+  > {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
@@ -548,19 +587,6 @@ export class LeaseEngine {
       return undefined;
     }
 
-    const warm = this.options.registry.snapshot.devices.find(
-      (device) =>
-        device.state === "warm" &&
-        !this.#warmReservations.has(device.id) &&
-        !this.#cleanupReservations.has(device.id) &&
-        sameSpec(device.spec, spec),
-    );
-    if (warm !== undefined) {
-      this.#warmReservations.add(warm.id);
-      waiter.state = "processing";
-      return { device: warm, kind: "reclaim-warm" };
-    }
-
     const shutdown = this.options.registry.snapshot.devices.find(
       (device) =>
         device.state === "shutdown" &&
@@ -576,6 +602,12 @@ export class LeaseEngine {
         this.options.config,
       );
       if (!running.ok) {
+        const victim = this.#runningVictim(running.reason, spec.platform);
+        if (victim !== undefined) {
+          this.#evictionReservations.add(victim.id);
+          waiter.state = "processing";
+          return { device: victim, kind: "evict-running" };
+        }
         if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
         else this.#enqueue(waiter);
         return undefined;
@@ -603,6 +635,22 @@ export class LeaseEngine {
       this.#runningReservations(),
       this.options.config,
     );
+    if (!capacity.ok && capacity.reason === "device-limit") {
+      const victim = selectManagedVictim(this.#eligibleEvictionDevices(), spec.platform);
+      if (victim !== undefined) {
+        this.#evictionReservations.add(victim.id);
+        waiter.state = "processing";
+        return { device: victim, kind: "evict-managed" };
+      }
+    }
+    if (!running.ok) {
+      const victim = this.#runningVictim(running.reason, spec.platform);
+      if (victim !== undefined) {
+        this.#evictionReservations.add(victim.id);
+        waiter.state = "processing";
+        return { device: victim, kind: "evict-running" };
+      }
+    }
     if (capacity.ok && running.ok && waiter.failures < 2) {
       this.#provisionReservations.push(spec.platform);
       waiter.state = "processing";
@@ -652,46 +700,65 @@ export class LeaseEngine {
     waiter.resolve({ device, lease, timing: waiter.timing });
   }
 
-  async #reclaimWarm(waiter: Waiter, device: DeviceRecord): Promise<void> {
+  async #evictRunning(waiter: Waiter, device: DeviceRecord): Promise<void> {
     const driver = this.#driverFor(device.spec.platform);
-    const startedAt = this.options.clock.now();
-    let result: Awaited<ReturnType<Driver["reclaim"]>>;
     try {
-      this.#notifyProgress(waiter, {
-        stage: "reclaiming",
-        etaMs: driver.estimate("reclaim", device.spec),
+      await driver.shutdown(toDriverDevice(device));
+      await this.#withDecision(async () => {
+        await this.options.registry.transitionDevice(device.id, "shutdown", {
+          event: "device.shutdown",
+          payload: { deviceId: device.id, initiator: "warm-pool-active-demand" },
+        });
       });
-      result = await driver.reclaim(toDriverDevice(device), { clean: "standard" });
     } catch {
       await this.#withDecision(async () => {
-        this.#warmReservations.delete(device.id);
-        if (waiter.state !== "rejected") {
-          this.#enqueue(waiter);
-        }
+        this.#evictionReservations.delete(device.id);
+        if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
+        else this.#enqueue(waiter);
       });
       return;
     }
-
-    const granted = await this.#withDecision(async () => {
-      this.#warmReservations.delete(device.id);
-      await this.options.registry.transitionDevice(device.id, result.state, {
-        event: "device.reclaimed",
-        payload: {
-          deviceId: device.id,
-          duration: this.options.clock.now() - startedAt,
-          strategy: result.strategy,
-        },
-      });
-      if (result.state !== "ready" || waiter.state === "rejected") {
-        waiter.state = this.#queue.includes(waiter) ? "queued" : "new";
-        return false;
-      }
-      await this.#grant(waiter, device.id);
-      return true;
+    const next = await this.#withDecision(async () => {
+      this.#evictionReservations.delete(device.id);
+      waiter.state = this.#queue.includes(waiter) ? "queued" : "new";
+      return this.#decide(waiter);
     });
-    if (!granted) {
-      void this.#drive(waiter);
+    await this.#perform(waiter, next);
+  }
+
+  async #evictManaged(waiter: Waiter, device: DeviceRecord): Promise<void> {
+    const driver = this.#driverFor(device.spec.platform);
+    try {
+      if (device.state === "ready") {
+        await driver.shutdown(toDriverDevice(device));
+        await this.#withDecision(async () => {
+          await this.options.registry.transitionDevice(device.id, "shutdown", {
+            event: "device.shutdown",
+            payload: { deviceId: device.id, initiator: "warm-pool-active-demand" },
+          });
+        });
+      }
+      await driver.destroy(toDriverDevice(device));
+      await this.#withDecision(async () => {
+        await this.options.registry.transitionDevice(device.id, "deleted", {
+          event: "device.deleted",
+          payload: { deviceId: device.id, initiator: "warm-pool-active-demand" },
+        });
+      });
+    } catch {
+      await this.#withDecision(async () => {
+        this.#evictionReservations.delete(device.id);
+        if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
+        else this.#enqueue(waiter);
+      });
+      return;
     }
+    const next = await this.#withDecision(async () => {
+      this.#evictionReservations.delete(device.id);
+      waiter.state = this.#queue.includes(waiter) ? "queued" : "new";
+      return this.#decide(waiter);
+    });
+    await this.#perform(waiter, next);
   }
 
   async #bootShutdown(waiter: Waiter, device: DeviceRecord): Promise<void> {
@@ -773,9 +840,34 @@ export class LeaseEngine {
   async #reclaim(released: ReleasedLease): Promise<void> {
     const driver = this.#driverFor(released.device.spec.platform);
     const startedAt = this.options.clock.now();
-    const result = await driver.reclaim(toDriverDevice(released.device), { clean: "standard" });
+    const attemptedStrategy = driver.reclaimStrategy({ clean: "standard" });
+    let result: Awaited<ReturnType<Driver["reclaim"]>>;
+    try {
+      result = await driver.reclaim(toDriverDevice(released.device), { clean: "standard" });
+    } catch (error: unknown) {
+      await this.#recoverPurgeFailure(released, startedAt, attemptedStrategy, error);
+      return;
+    }
+
+    const keepReady = await this.#withDecision(async () => this.#mayRemainWarm(released.device));
+    let finalState: "ready" | "shutdown" = result.state;
+    if (keepReady && result.state === "shutdown") {
+      try {
+        await driver.makeReady(toDriverDevice(released.device));
+        finalState = "ready";
+      } catch {
+        finalState = "shutdown";
+      }
+    } else if (!keepReady && result.state === "ready") {
+      try {
+        await driver.shutdown(toDriverDevice(released.device));
+        finalState = "shutdown";
+      } catch {
+        finalState = "ready";
+      }
+    }
     await this.#withDecision(async () => {
-      await this.options.registry.transitionDevice(released.device.id, result.state, {
+      await this.options.registry.transitionDevice(released.device.id, finalState, {
         event: "device.reclaimed",
         payload: {
           deviceId: released.device.id,
@@ -785,6 +877,58 @@ export class LeaseEngine {
       });
     });
     this.#wakeQueue();
+  }
+
+  async #recoverPurgeFailure(
+    released: ReleasedLease,
+    startedAt: number,
+    attemptedStrategy: "erase" | "snapshot" | "wipe",
+    error: unknown,
+  ): Promise<void> {
+    const driver = this.#driverFor(released.device.spec.platform);
+    let ready = true;
+    try {
+      await driver.makeReady(toDriverDevice(released.device));
+    } catch {
+      ready = false;
+    }
+    const duration = this.options.clock.now() - startedAt;
+    await this.#withDecision(async () => {
+      await this.options.registry.completeFailedPurge(
+        released.device.id,
+        ready ? "ready" : "shutdown",
+      );
+      this.options.eventBus.emit(
+        "device.purge-failed",
+        {
+          attemptedStrategy,
+          deviceId: released.device.id,
+          duration,
+          error: stableError(error),
+          leaseId: released.lease.id,
+        },
+        "lease-engine",
+      );
+    });
+    this.#wakeQueue();
+  }
+
+  #mayRemainWarm(device: DeviceRecord): boolean {
+    const capacity = this.runningCapacity;
+    if (
+      capacity.global.running > capacity.global.maxRunning ||
+      capacity[device.spec.platform].running > capacity[device.spec.platform].maxRunning
+    ) {
+      return false;
+    }
+    const head = this.#queue[0];
+    if (head?.spec === undefined || sameSpec(head.spec, device.spec)) return true;
+    return canReserveRunning(
+      head.spec.platform,
+      this.#capacityDevices(),
+      this.#runningReservations(),
+      this.options.config,
+    ).ok;
   }
 
   #enqueue(waiter: Waiter): void {
@@ -918,6 +1062,30 @@ export class LeaseEngine {
     }));
   }
 
+  #eligibleEvictionDevices(): DeviceRecord[] {
+    const leased = new Set(this.options.registry.snapshot.leases.map((lease) => lease.deviceId));
+    return this.options.registry.snapshot.devices.filter(
+      (device) =>
+        !leased.has(device.id) &&
+        !this.#cleanupReservations.has(device.id) &&
+        !this.#evictionReservations.has(device.id),
+    );
+  }
+
+  #runningVictim(
+    reason: "device-limit" | "ram-budget" | "global-running-limit" | "platform-running-limit",
+    platform: Platform,
+  ): DeviceRecord | undefined {
+    if (reason !== "global-running-limit" && reason !== "platform-running-limit") return undefined;
+    const capacity = this.runningCapacity;
+    const platformBlocked =
+      capacity[platform].running + capacity[platform].reserved >= capacity[platform].maxRunning;
+    const scope: WarmVictimScope = platformBlocked
+      ? { kind: "platform", platform }
+      : { kind: "global" };
+    return selectWarmVictim(this.#eligibleEvictionDevices(), scope);
+  }
+
   #runningReservations(): Platform[] {
     const platforms = new Map(
       this.options.registry.snapshot.devices.map((device) => [device.id, device.spec.platform]),
@@ -947,7 +1115,7 @@ export class LeaseEngine {
     }
 
     return (
-      (action === "shutdown" && (device.state === "ready" || device.state === "warm")) ||
+      (action === "shutdown" && device.state === "ready") ||
       (action === "destroy" && device.state === "shutdown")
     );
   }
@@ -979,6 +1147,11 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function stableError(error: unknown): string {
+  const value = asError(error);
+  return `${value.name}: ${value.message}`;
+}
+
 function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
   const estimatedProvisionMs = driver.estimate("provision", spec);
   const estimatedBootMs = driver.estimate("boot", spec);
@@ -987,16 +1160,6 @@ function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
     estimatedProvisionMs,
     estimatedReclaimMs: 0,
     estimatedReadyMs: estimatedProvisionMs + estimatedBootMs,
-  };
-}
-
-function estimatedReclaimTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  const estimatedReclaimMs = driver.estimate("reclaim", spec);
-  return {
-    estimatedBootMs: 0,
-    estimatedProvisionMs: 0,
-    estimatedReclaimMs,
-    estimatedReadyMs: estimatedReclaimMs,
   };
 }
 

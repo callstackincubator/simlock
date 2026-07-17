@@ -54,15 +54,15 @@ devices) must require **no core changes**. If it does, the interface leaked.
 ## Running capacity
 
 Managed-device limits govern provisioning, while running limits govern any
-operation that starts a device. The core accounts `ready`, `leased`,
-`reclaiming`, and `warm` devices as running. A serialized, platform-agnostic
+operation that starts a device. The core accounts `ready`, `leased`, and
+`reclaiming` devices as running. A serialized, platform-agnostic
 reservation covers provisioning and boots from `shutdown` until the registry
 commits the resulting running or non-running state. Global and driver-provided
 platform limits are checked atomically; no driver-specific runtime details
 participate in this decision.
 
 After startup reconciliation, the lease engine deterministically shuts down
-excess unleased `ready`/`warm` registry devices through the normal driver and
+excess unleased `ready` registry devices through the normal driver and
 state-transition path. Leased devices are never touched, so a lowered limit
 may remain visibly over-limit until leases naturally release.
 
@@ -71,11 +71,17 @@ may remain visibly over-limit until leases naturally release.
 One shared lifecycle for both platforms; drivers map onto it, never extend it:
 
 ```
-provisioning → ready → leased → reclaiming → warm/shutdown → deleted
+provisioning → ready → leased → reclaiming → ready/shutdown → deleted
 ```
 
 All transitions go through the core. `pitlane status` reads identically for
 iOS and Android because of this.
+
+A warm device is derived inventory, not a state: any registry-managed,
+unleased `ready` device is warm. Release always purges while the device is
+`reclaiming`; it returns to `ready` when capacity permits, otherwise it is
+shut down. Active demand may evict deterministic LRU warm inventory before
+starting requested work, without bypassing the FIFO head.
 
 ## Fresh-state strategy (benchmarked 2026-07)
 
@@ -94,11 +100,12 @@ Conclusions baked into the drivers:
   sub-second and tied; erase is the simplest to operate (no golden-device
   bookkeeping). Boot time is a fixed ~30s floor — only a warm pool of
   pre-booted devices can beat it.
-- **Android `reclaim` = quickboot snapshot restore**, with `-wipe-data` as the
-  fallback when a lease needs a truly clean device. Snapshots are ~1.3 GB each
-  and invalidate *silently* on AVD-config / system-image / emulator-version
-  changes, so the driver tags snapshots with a config hash and detects
-  fallback-to-cold-boot.
+- **Android `reclaim` = restore an explicit immutable clean-baseline snapshot**,
+  with `-wipe-data` as the fallback. The first clean boot captures and validates
+  a named baseline before the first grant. Snapshots are ~1.3 GB each and
+  invalidate *silently* on AVD-config / system-image / emulator-version
+  changes, so the driver tags the baseline with a config hash and rebuilds it
+  before reuse after invalidation.
 - **Readiness probes**: iOS `simctl bootstatus` (variance observed up to
   ~30% — use generous timeouts, not a hard SLA). Android:
   `sys.boot_completed == 1` AND (`init.svc.bootanim == "stopped"` OR unset).
@@ -121,7 +128,7 @@ Cleanup **rules** are pure decision logic: given a read-only registry view
 (device states, last-lease time, disk/RAM stats), they *propose* actions.
 A single **reconciliation loop** collects proposals from all registered rules,
 dedupes and orders them, enforces the invariants (never touch a leased device,
-never touch anything outside the registry, honor warm-pool minimums), and
+never touch anything outside the registry), and
 executes via the same driver verbs the lease path uses.
 
 v1 rules — the tiered cleanup:
@@ -143,8 +150,9 @@ reason; `pitlane cleanup --dry-run` previews.
 ## Event bus
 
 An in-process, typed event bus carries **past-tense business facts**
-(`device.released`, `lease.expired`). Observers — cleanup triggers, warm-pool
-policy, logging/metrics, `pitlane events --follow` — subscribe to it.
+(`device.released`, `lease.expired`). Observers — cleanup triggers,
+logging/metrics, `pitlane events --follow` — subscribe to it. Warm-pool
+release disposition and eviction remain direct lease-engine transactions.
 
 The bright line: **events for reactions, direct calls for transactions.** The
 lease workflow (request → queue → provision → ready → grant) is an explicit

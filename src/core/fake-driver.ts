@@ -140,6 +140,12 @@ export class FakeDriver implements Driver {
     return { state: this.#reclaimResult, strategy: this.#reclaimStrategy };
   }
 
+  reclaimStrategy(_options: {
+    readonly clean: "standard" | "full";
+  }): "erase" | "snapshot" | "wipe" {
+    return this.#reclaimStrategy;
+  }
+
   async shutdown(device: DriverDevice): Promise<void> {
     await this.#beforeCall("shutdown", device);
     this.#requireDevice(device);

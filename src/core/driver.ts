@@ -24,6 +24,8 @@ export interface ReclaimResult {
   readonly strategy: "erase" | "snapshot" | "wipe";
 }
 
+export type ReclaimStrategy = ReclaimResult["strategy"];
+
 export interface Driver {
   readonly platform: Platform;
   resolveSpec(
@@ -36,6 +38,7 @@ export interface Driver {
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult>;
+  reclaimStrategy(options: { readonly clean: "standard" | "full" }): ReclaimStrategy;
   shutdown(device: DriverDevice): Promise<void>;
   destroy(device: DriverDevice): Promise<void>;
   listManaged(): Promise<DriverReality>;

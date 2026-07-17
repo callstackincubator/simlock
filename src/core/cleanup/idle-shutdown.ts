@@ -4,7 +4,7 @@ export const idleShutdownRule: CleanupRule = {
   evaluate(view: RegistryView): readonly Proposal[] {
     return view.devices.flatMap((device) => {
       if (
-        (device.state !== "ready" && device.state !== "warm") ||
+        device.state !== "ready" ||
         device.lastLeaseEndedAt === undefined ||
         hasActiveLease(view, device.id)
       ) {

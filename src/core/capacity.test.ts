@@ -22,7 +22,6 @@ const config: Config = {
     maxRunning: 2,
   },
   ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
-  warmPool: {},
 };
 
 function withStats(totalRamBytes: number): FakeSystemStats {
@@ -92,7 +91,7 @@ describe("running capacity", () => {
   it("requires both global and platform room", () => {
     const globallyFull = [
       { platform: "ios", state: "ready" },
-      { platform: "android", state: "warm" },
+      { platform: "android", state: "ready" },
     ] as const;
     expect(canReserveRunning("android", globallyFull, [], config)).toEqual({
       ok: false,

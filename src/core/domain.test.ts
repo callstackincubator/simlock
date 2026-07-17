@@ -18,10 +18,7 @@ describe("transition", () => {
     ["ready", "shutdown"],
     ["leased", "reclaiming"],
     ["reclaiming", "ready"],
-    ["reclaiming", "warm"],
     ["reclaiming", "shutdown"],
-    ["warm", "ready"],
-    ["warm", "shutdown"],
     ["shutdown", "ready"],
     ["shutdown", "deleted"],
   ] as const)("allows %s -> %s", (from, to) => {

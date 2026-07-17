@@ -24,6 +24,7 @@ const PORT_MIN = 5554;
 const PORT_POLL_INTERVAL_MS = 2_000;
 const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+const CLEAN_BASELINE = "pitlane_clean_baseline";
 
 export interface AndroidDriverOptions {
   readonly clock: Clock;
@@ -46,6 +47,7 @@ export interface AndroidDriverDiagnostic {
 export interface AndroidDriverData {
   readonly avdName: string;
   readonly configHash: string;
+  readonly imageIdentity?: string;
   readonly port: number;
   readonly serial: string;
 }
@@ -66,6 +68,7 @@ interface AndroidSdkPaths {
 }
 
 interface DeviceState {
+  baselineCaptured: boolean;
   configHash: string;
   handle: ProcessHandle | undefined;
   imageIdentity: string;
@@ -179,10 +182,12 @@ export class AndroidDriver implements Driver {
     const driverData: AndroidDriverData = {
       avdName,
       configHash,
+      imageIdentity: `${image.path}@${image.version}`,
       port,
       serial: serialFor(port),
     };
     this.#devices.set(avdName, {
+      baselineCaptured: false,
       configHash,
       handle: undefined,
       imageIdentity: `${image.path}@${image.version}`,
@@ -198,6 +203,7 @@ export class AndroidDriver implements Driver {
     await this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
       if (state.handle !== undefined) {
+        await this.#waitForReadiness(data, this.#clock.now());
         return;
       }
 
@@ -228,6 +234,9 @@ export class AndroidDriver implements Driver {
       }
       state.needsWipe = false;
       state.snapshotExpected = false;
+      if (!state.baselineCaptured) {
+        await this.#captureBaseline(data, state);
+      }
     });
   }
 
@@ -238,26 +247,49 @@ export class AndroidDriver implements Driver {
     const data = this.#dataFor(device);
     return this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
-      await this.#shutdown(data, state);
 
       if (options.clean === "full") {
+        await this.#shutdown(data, state);
         state.needsWipe = true;
         state.snapshotExpected = false;
+        state.baselineCaptured = false;
         return { state: "shutdown", strategy: "wipe" };
       }
 
       const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
-      if (currentHash !== state.configHash) {
+      const baselineHash = await this.#baselineHash(data.avdName);
+      if (currentHash !== state.configHash || baselineHash !== currentHash) {
+        await this.#shutdown(data, state);
         await this.#filesystem.rm(`${this.#avdDirectory}/${data.avdName}.avd/snapshots`);
         state.configHash = currentHash;
         state.needsWipe = true;
         state.snapshotExpected = false;
+        state.baselineCaptured = false;
         return { state: "shutdown", strategy: "wipe" };
       }
 
-      state.snapshotExpected = true;
-      return { state: "shutdown", strategy: "snapshot" };
+      const restored = await this.#runOrThrow(this.#sdk.adb, [
+        "-s",
+        data.serial,
+        "emu",
+        "avd",
+        "snapshot",
+        "load",
+        CLEAN_BASELINE,
+      ]);
+      if (!/OK|loaded|success/i.test(`${restored.stdout}\n${restored.stderr}`)) {
+        await this.#shutdown(data, state);
+        state.needsWipe = true;
+        state.baselineCaptured = false;
+        return { state: "shutdown", strategy: "wipe" };
+      }
+      await this.#waitForReadiness(data, this.#clock.now());
+      return { state: "ready", strategy: "snapshot" };
     });
+  }
+
+  reclaimStrategy(options: { readonly clean: "standard" | "full" }): "snapshot" | "wipe" {
+    return options.clean === "full" ? "wipe" : "snapshot";
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
@@ -294,6 +326,7 @@ export class AndroidDriver implements Driver {
           driverData: {
             avdName,
             configHash: "recovered",
+            imageIdentity: "",
             port: 0,
             serial: "",
           } satisfies AndroidDriverData,
@@ -321,6 +354,7 @@ export class AndroidDriver implements Driver {
         driverData: {
           avdName,
           configHash: "recovered",
+          imageIdentity: "",
           port,
           serial: candidate,
         } satisfies AndroidDriverData,
@@ -484,6 +518,54 @@ export class AndroidDriver implements Driver {
     }
   }
 
+  async #captureBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
+    await this.#runOrThrow(this.#sdk.adb, [
+      "-s",
+      data.serial,
+      "emu",
+      "avd",
+      "snapshot",
+      "save",
+      CLEAN_BASELINE,
+    ]);
+    const snapshots = await this.#runOrThrow(this.#sdk.adb, [
+      "-s",
+      data.serial,
+      "emu",
+      "avd",
+      "snapshot",
+      "list",
+    ]);
+    if (!snapshots.stdout.includes(CLEAN_BASELINE)) {
+      throw new DriverCrashError(`Android clean baseline ${CLEAN_BASELINE} was not validated`);
+    }
+    await this.#filesystem.writeFileAtomic(
+      this.#baselineMetadataPath(data.avdName),
+      JSON.stringify({ configHash: state.configHash, snapshot: CLEAN_BASELINE }),
+    );
+    state.baselineCaptured = true;
+  }
+
+  async #baselineHash(avdName: string): Promise<string | undefined> {
+    try {
+      const value = JSON.parse(
+        await this.#filesystem.readFile(this.#baselineMetadataPath(avdName)),
+      ) as {
+        readonly configHash?: unknown;
+        readonly snapshot?: unknown;
+      };
+      return value.snapshot === CLEAN_BASELINE && typeof value.configHash === "string"
+        ? value.configHash
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  #baselineMetadataPath(avdName: string): string {
+    return `${this.#avdDirectory}/${avdName}.avd/pitlane-clean-baseline.json`;
+  }
+
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
     await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"]);
     const handle = state.handle;
@@ -546,9 +628,10 @@ export class AndroidDriver implements Driver {
       return existing;
     }
     const restored: DeviceState = {
+      baselineCaptured: false,
       configHash: data.configHash,
       handle: undefined,
-      imageIdentity: "",
+      imageIdentity: data.imageIdentity ?? "",
       needsWipe: false,
       snapshotExpected: false,
     };

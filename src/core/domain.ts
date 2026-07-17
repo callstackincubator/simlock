@@ -11,7 +11,6 @@ export type DeviceState =
   | "ready"
   | "leased"
   | "reclaiming"
-  | "warm"
   | "shutdown"
   | "deleted";
 
@@ -38,8 +37,7 @@ const legalTransitions: Readonly<Record<DeviceState, readonly DeviceState[]>> = 
   provisioning: ["ready", "deleted"],
   ready: ["leased", "shutdown"],
   leased: ["reclaiming"],
-  reclaiming: ["ready", "warm", "shutdown"],
-  warm: ["ready", "shutdown"],
+  reclaiming: ["ready", "shutdown"],
   shutdown: ["ready", "deleted"],
   deleted: [],
 };

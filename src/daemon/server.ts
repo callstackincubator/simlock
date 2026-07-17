@@ -397,12 +397,14 @@ export class DaemonServer {
   #status(): unknown {
     const snapshot = this.options.registry.snapshot;
     const running = this.options.leaseEngine.runningCapacity;
+    const warmDevices = snapshot.devices.filter((device) => device.state === "ready");
     const capacity = Object.fromEntries(
       (["ios", "android"] as const).map((platform) => [
         platform,
         {
           limit: this.options.config.limits[platform].maxDevices,
           ...running[platform],
+          warm: warmDevices.filter((device) => device.spec.platform === platform).length,
           used: snapshot.devices.filter(
             (device) => device.spec.platform === platform && device.state !== "deleted",
           ).length,
@@ -411,7 +413,7 @@ export class DaemonServer {
     );
     return {
       ...snapshot,
-      capacity: { ...capacity, global: running.global },
+      capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
       health: "running",
       queueDepth: this.options.leaseEngine.queueDepth,
     };

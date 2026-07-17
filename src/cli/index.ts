@@ -558,10 +558,10 @@ function formatStatus(status: Record<string, unknown>): string {
   const queueDepth = typeof status.queueDepth === "number" ? status.queueDepth : 0;
   const capacity = requireObject(status.capacity ?? {});
   const global = requireObject(capacity.global ?? {});
-  const globalLine = `Running global: ${String(global.running ?? 0)} + ${String(global.reserved ?? 0)} reserved/${String(global.maxRunning ?? 0)}${global.overLimit === true ? " (over limit)" : ""}`;
+  const globalLine = `Running global: ${String(global.running ?? 0)} + ${String(global.reserved ?? 0)} reserved/${String(global.maxRunning ?? 0)}, warm ${String(global.warm ?? 0)}${global.overLimit === true ? " (over limit)" : ""}`;
   const capacityLines = ["ios", "android"].map((platform) => {
     const usage = requireObject(capacity[platform] ?? {});
-    return `Capacity ${platform}: managed ${String(usage.used ?? 0)}/${String(usage.limit ?? 0)}, running ${String(usage.running ?? 0)} + ${String(usage.reserved ?? 0)} reserved/${String(usage.maxRunning ?? 0)}${usage.overLimit === true ? " (over limit)" : ""}`;
+    return `Capacity ${platform}: managed ${String(usage.used ?? 0)}/${String(usage.limit ?? 0)}, running ${String(usage.running ?? 0)} + ${String(usage.reserved ?? 0)} reserved/${String(usage.maxRunning ?? 0)}, warm ${String(usage.warm ?? 0)}${usage.overLimit === true ? " (over limit)" : ""}`;
   });
   const deviceLines = devices.map((device) => {
     const record = requireObject(device);

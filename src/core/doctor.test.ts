@@ -164,6 +164,5 @@ function config(): Config {
       maxRunning: 1 + 1,
     },
     ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
-    warmPool: {},
   };
 }

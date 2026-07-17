@@ -177,6 +177,21 @@ export class Registry {
     return cloneDevice(updated);
   }
 
+  /** Commits accepted first-version purge-failure disposition without a success fact. */
+  async completeFailedPurge(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord> {
+    const index = this.#devices.findIndex((device) => device.id === deviceId);
+    const device = this.#devices[index];
+    if (index === -1 || device === undefined) throw new UnknownDeviceError(deviceId);
+    if (device.state !== "reclaiming") {
+      throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
+    }
+    const updated = transition(device, to);
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
   /** Records externally verified disappearance; no driver verb is invoked. */
   async markDeviceMissing(deviceId: string, initiator: string): Promise<DeviceRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
@@ -368,7 +383,7 @@ function eventForTransition(
   from: DeviceState,
   to: DeviceState,
 ): RegistryDeviceEvent["event"] | undefined {
-  if (from === "reclaiming" || from === "warm") {
+  if (from === "reclaiming") {
     return "device.reclaimed";
   }
   if (to === "ready") {
@@ -393,7 +408,7 @@ function parseDevice(value: unknown): DeviceRecord {
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
     typeof createdAt !== "number" ||
-    !isDeviceState(state) ||
+    !(isDeviceState(state) || state === "warm") ||
     !isDeviceSpec(spec) ||
     !("driverData" in value) ||
     (lastLeaseEndedAt !== undefined && typeof lastLeaseEndedAt !== "number")
@@ -408,7 +423,7 @@ function parseDevice(value: unknown): DeviceRecord {
     driverDeviceId,
     id,
     spec,
-    state,
+    state: state === "warm" ? "reclaiming" : state,
   };
 }
 
@@ -451,7 +466,6 @@ function isDeviceState(value: unknown): value is DeviceState {
     value === "ready" ||
     value === "leased" ||
     value === "reclaiming" ||
-    value === "warm" ||
     value === "shutdown" ||
     value === "deleted"
   );

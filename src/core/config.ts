@@ -23,7 +23,6 @@ export interface Config {
     readonly detachedTtlMs: number;
   };
   readonly diskPressure: { readonly freeBytesThreshold: number };
-  readonly warmPool: Readonly<Record<string, unknown>>;
   readonly eventBuffer: { readonly capacity: number };
 }
 
@@ -88,7 +87,6 @@ export function defaultConfig(systemStats: SystemStats): Config {
       detachedTtlMs: 15 * 60_000,
     },
     diskPressure: { freeBytesThreshold: 10 * GIBIBYTE },
-    warmPool: {},
     eventBuffer: { capacity: 1_000 },
   };
 }
@@ -150,7 +148,6 @@ const validators = {
     detachedTtlMs: nonNegativeNumber,
   }),
   diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
-  warmPool: warmPoolValidator,
   eventBuffer: objectValidator({ capacity: positiveInteger }),
 } satisfies Record<string, Validator>;
 
@@ -189,10 +186,6 @@ function nonNegativeNumber(value: unknown, path: string): number {
   }
 
   return value;
-}
-
-function warmPoolValidator(value: unknown, path: string): Record<string, unknown> {
-  return requireObject(value, path);
 }
 
 function requireObject(value: unknown, path: string): Record<string, unknown> {

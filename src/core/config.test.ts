@@ -46,7 +46,6 @@ describe("loadConfig", () => {
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
       lease: { detachedTtlMs: 15 * 60_000, heldTtlBackstopMs: 60 * 60_000 },
       ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
-      warmPool: {},
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.limits)).toBe(true);

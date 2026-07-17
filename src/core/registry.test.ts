@@ -87,6 +87,39 @@ describe("Registry", () => {
     expect(reloaded.snapshot).toEqual(registry.snapshot);
   });
 
+  it("loads a legacy warm record as busy reclaiming rather than eligible ready inventory", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 500,
+            driverData: {},
+            driverDeviceId: "driver_legacy",
+            id: "dev_legacy",
+            lastLeaseEndedAt: 900,
+            spec,
+            state: "warm",
+          },
+        ],
+        leases: [],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "new" },
+      statePath,
+    });
+
+    expect(registry.snapshot.devices).toMatchObject([{ id: "dev_legacy", state: "reclaiming" }]);
+  });
+
   it("preserves unknown persisted fields when saving a later mutation", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();

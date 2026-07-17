@@ -50,7 +50,7 @@ As soon as the device is ready, one JSON line is printed on stdout:
 then the process stays alive holding the lease. **Kill the process to
 release.** Progress streams on stderr and reflects only the action selected
 for that request. A queued request reports its position without speculative
-work stages; reclaiming a warm device is reported separately:
+work stages; reclaiming work is reported separately:
 
 ```json
 {"event":"queued","queue_position":1}
@@ -71,6 +71,10 @@ intervention). `--all` force-releases every lease — confirmation required
 unless `--yes`.
 
 ## `pitlane status`
+
+Human and JSON status include derived warm counts globally and per platform.
+`ready` devices contribute to those counts; `reclaiming` devices remain
+visible as busy running capacity and never contribute to warm inventory.
 
 Human-oriented overview: daemon health, managed capacity (used/limit per
 platform), running and reserved capacity (globally and per platform), every
@@ -117,6 +121,6 @@ Manage the daemon explicitly. Other commands auto-start it on demand;
 
 Show the effective configuration (defaults + config file + overrides):
 managed and running capacity limits, idle tiers T1/T2/T3, TTLs, disk-pressure
-threshold, warm-pool sizes. With no args, prints everything. Running capacity
+threshold. With no args, prints everything. Running capacity
 uses `limits.maxRunning` globally and `limits.<platform>.maxRunning` for each
 driver; both must have room before provisioning or booting a shutdown device.
