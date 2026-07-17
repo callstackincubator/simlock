@@ -127,12 +127,24 @@ describe("CLI boundary", () => {
       expect(harness.eventBus.replay().some((event) => event.event === "lease.queued")).toBe(true),
     );
     expect(second.stdout).toBe("");
+    expect(
+      second.stderr
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([{ event: "queued", queue_position: 1 }]);
 
     firstSignals.emit("SIGTERM");
     await expect(firstRun).resolves.toBe(0);
     await vi.waitFor(() => expect(second.stdout).not.toBe(""));
     secondSignals.emit("SIGTERM");
     await expect(secondRun).resolves.toBe(0);
+    expect(
+      second.stderr
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([{ event: "queued", queue_position: 1 }]);
   });
 
   it("prints a detached token, exits, and renews it", async () => {
@@ -255,7 +267,6 @@ async function createHarness() {
   const daemon = new DaemonServer({
     config,
     defaultRequesterId: "test-process",
-    drivers: [driver],
     eventBus,
     filesystem: new NodeFilesystem(),
     leaseEngine: engine,

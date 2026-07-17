@@ -48,11 +48,15 @@ As soon as the device is ready, one JSON line is printed on stdout:
 ```
 
 then the process stays alive holding the lease. **Kill the process to
-release.** Progress while provisioning/booting streams on stderr:
+release.** Progress streams on stderr and reflects only the action selected
+for that request. A queued request reports its position without speculative
+work stages; reclaiming a warm device is reported separately:
 
 ```json
+{"event":"queued","queue_position":1}
 {"event":"provisioning","eta_seconds":90}
 {"event":"booting","eta_seconds":30}
+{"event":"reclaiming","eta_seconds":15}
 ```
 
 ### `pitlane lease renew <lease-id> [--ttl <duration>]`

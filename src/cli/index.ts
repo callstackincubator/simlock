@@ -532,11 +532,24 @@ function leaseResult(value: unknown): Record<string, unknown> & { readonly lease
   };
 }
 
-function progressLine(value: unknown): { readonly event: string; readonly eta_seconds: number } {
+function progressLine(value: unknown): {
+  readonly event: string;
+  readonly eta_seconds?: number;
+  readonly queue_position?: number;
+} {
   const progress = requireObject(value);
-  if (typeof progress.stage !== "string" || typeof progress.etaMs !== "number")
-    throw new Error("Daemon returned invalid progress");
-  return { eta_seconds: Math.ceil(progress.etaMs / 1_000), event: progress.stage };
+  if (progress.stage === "queued" && typeof progress.queuePosition === "number") {
+    return { event: "queued", queue_position: progress.queuePosition };
+  }
+  if (
+    (progress.stage === "provisioning" ||
+      progress.stage === "booting" ||
+      progress.stage === "reclaiming") &&
+    typeof progress.etaMs === "number"
+  ) {
+    return { eta_seconds: Math.ceil(progress.etaMs / 1_000), event: progress.stage };
+  }
+  throw new Error("Daemon returned invalid progress");
 }
 
 function formatStatus(status: Record<string, unknown>): string {

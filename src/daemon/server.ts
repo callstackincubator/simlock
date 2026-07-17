@@ -6,8 +6,8 @@ import {
   HeldLeaseRenewalError,
   type Config,
   type DeviceRequest,
-  type Driver,
   LeaseEngine,
+  type LeaseProgress,
   NoCapacityError,
   NoDriverError,
   QueueTimeoutError,
@@ -36,6 +36,8 @@ interface RequestFrame {
 interface Connection {
   readonly socket: Socket;
   readonly heldLeaseIds: Set<string>;
+  readonly progressDisposers: Set<() => void>;
+  readonly progressRequesters: Set<string>;
   buffer: string;
   helloReceived: boolean;
   closed: boolean;
@@ -47,7 +49,6 @@ export interface DaemonServerOptions {
   readonly config: Config;
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
-  readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
   readonly filesystem: Filesystem;
   readonly leaseEngine: LeaseEngine;
@@ -68,7 +69,6 @@ export class DaemonAlreadyRunningError extends Error {
 
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
-  readonly #drivers: ReadonlyMap<string, Driver>;
   readonly #protocolVersion: number;
   readonly #socketPath: string;
   #server: Server | undefined;
@@ -77,7 +77,6 @@ export class DaemonServer {
   #stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: DaemonServerOptions) {
-    this.#drivers = new Map(options.drivers.map((driver) => [driver.platform, driver]));
     this.#protocolVersion = options.protocolVersion ?? DEFAULT_PROTOCOL_VERSION;
     this.#socketPath = options.socketPath ?? DEFAULT_SOCKET_PATH;
   }
@@ -161,6 +160,8 @@ export class DaemonServer {
       closed: false,
       helloReceived: false,
       heldLeaseIds: new Set(),
+      progressDisposers: new Set(),
+      progressRequesters: new Set(),
       socket,
       releasing: undefined,
       unsubscribeEvents: undefined,
@@ -345,15 +346,31 @@ export class DaemonServer {
     };
     const mode = payload.mode === "detached" ? "detached" : "held";
     const requesterId = optionalString(payload, "requesterId") ?? this.options.defaultRequesterId;
-    this.#pushProgress(connection.socket, request, "provisioning", "provision");
-    this.#pushProgress(connection.socket, request, "booting", "boot");
-    const grant = await this.options.leaseEngine.request(request, {
-      allowDownload: optionalBoolean(payload, "allowDownload") ?? false,
-      mode,
-      noWait: optionalBoolean(payload, "noWait") ?? false,
-      requesterId,
-      ...(typeof payload.timeoutMs === "number" ? { timeoutMs: payload.timeoutMs } : {}),
-    });
+    let progressSocket: Socket | undefined = connection.socket;
+    const disposeProgress = () => {
+      progressSocket = undefined;
+    };
+    connection.progressDisposers.add(disposeProgress);
+    connection.progressRequesters.add(requesterId);
+    let grant;
+    try {
+      grant = await this.options.leaseEngine.request(request, {
+        allowDownload: optionalBoolean(payload, "allowDownload") ?? false,
+        mode,
+        noWait: optionalBoolean(payload, "noWait") ?? false,
+        onProgress: (progress) => {
+          if (progressSocket !== undefined) {
+            void this.#pushProgress(progressSocket, progress);
+          }
+        },
+        requesterId,
+        ...(typeof payload.timeoutMs === "number" ? { timeoutMs: payload.timeoutMs } : {}),
+      });
+    } finally {
+      connection.progressDisposers.delete(disposeProgress);
+      connection.progressRequesters.delete(requesterId);
+      disposeProgress();
+    }
     if (mode === "held" && (connection.closed || this.#stopping)) {
       await this.options.leaseEngine.release(grant.lease.id, "closed");
     } else if (mode === "held") {
@@ -398,20 +415,10 @@ export class DaemonServer {
     };
   }
 
-  #pushProgress(
-    socket: Socket,
-    request: DeviceRequest,
-    stage: "provisioning" | "booting",
-    operation: "provision" | "boot",
-  ): void {
-    const driver = this.#drivers.get(request.platform);
-    if (driver === undefined) {
-      return;
-    }
-    const spec = { ...request, osVersion: request.osVersion ?? "" };
-    void writeFrame(socket, {
+  async #pushProgress(socket: Socket, progress: LeaseProgress): Promise<void> {
+    return writeFrame(socket, {
       push: "progress",
-      payload: { etaMs: driver.estimate(operation, spec), stage },
+      payload: progress,
     });
   }
 
@@ -433,6 +440,14 @@ export class DaemonServer {
       return;
     }
     connection.closed = true;
+    for (const disposeProgress of connection.progressDisposers) {
+      disposeProgress();
+    }
+    connection.progressDisposers.clear();
+    for (const requesterId of connection.progressRequesters) {
+      void this.options.leaseEngine.detachQueuedProgress(requesterId);
+    }
+    connection.progressRequesters.clear();
     this.#connections.delete(connection);
     connection.unsubscribeEvents?.();
     connection.unsubscribeEvents = undefined;

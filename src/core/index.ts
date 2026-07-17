@@ -46,6 +46,7 @@ export {
   type LeaseEngineOptions,
   LeaseEngine,
   type LeaseGrant,
+  type LeaseProgress,
   type LeaseRequestOptions,
   type LeaseTiming,
   NoCapacityError,

@@ -13,6 +13,7 @@ const gibibyte = 1024 ** 3;
 
 interface Client {
   readonly socket: Socket;
+  frames(): readonly ServerFrame[];
   nextFrame(predicate: (frame: ServerFrame) => boolean): Promise<ServerFrame>;
   request(type: string, payload: unknown, id?: string): Promise<ServerFrame>;
   send(contents: string): void;
@@ -101,6 +102,41 @@ describe("DaemonServer", () => {
 
     await expect(queuedGrant).resolves.toMatchObject({ ok: true });
     expect(harness.registry.snapshot.leases.map((lease) => lease.requesterId)).toEqual(["waiter"]);
+  });
+
+  it("keeps lease progress on its requesting connection", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    const waiter = await createClient(harness.socketPath);
+    await Promise.all([hello(holder), hello(waiter)]);
+    await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    const queuedGrant = waiter.request("lease.request", {
+      mode: "held",
+      requesterId: "waiter",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    await expect(waiter.nextFrame((frame) => frame.push === "progress")).resolves.toMatchObject({
+      payload: { queuePosition: 1, stage: "queued" },
+      push: "progress",
+    });
+
+    expect(
+      holder
+        .frames()
+        .filter(
+          (frame) =>
+            frame.push === "progress" &&
+            (frame.payload as { readonly stage?: unknown } | undefined)?.stage === "queued",
+        ),
+    ).toEqual([]);
+    await holder.close();
+    await expect(queuedGrant).resolves.toMatchObject({ ok: true });
+    await waiter.close();
   });
 
   it("multiplexes interleaved request ids on concurrent connections", async () => {
@@ -307,7 +343,6 @@ async function createHarness(
   const daemon = new DaemonServer({
     config,
     defaultRequesterId: "test-process",
-    drivers: [driver],
     eventBus,
     filesystem: new NodeFilesystem(),
     leaseEngine: engine,
@@ -371,6 +406,7 @@ async function createClient(socketPath: string): Promise<Client> {
   let nextRequestId = 1;
   return {
     socket,
+    frames: () => [...frames],
     nextFrame,
     async request(type, payload, id = `request-${nextRequestId++}`) {
       const response = nextFrame((frame) => frame.id === id);

@@ -87,7 +87,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     config,
     doctor,
     defaultRequesterId: options.defaultRequesterId ?? String(process.pid),
-    drivers,
     eventBus,
     filesystem,
     leaseEngine,

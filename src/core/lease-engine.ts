@@ -13,7 +13,15 @@ export interface LeaseRequestOptions {
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
+  readonly onProgress?: (progress: LeaseProgress) => void;
 }
+
+/** Request-scoped progress for the lease action currently being performed. */
+export type LeaseProgress =
+  | { readonly stage: "queued"; readonly queuePosition: number }
+  | { readonly stage: "provisioning"; readonly etaMs: number }
+  | { readonly stage: "booting"; readonly etaMs: number }
+  | { readonly stage: "reclaiming"; readonly etaMs: number };
 
 export interface LeaseTiming {
   readonly estimatedProvisionMs: number;
@@ -86,6 +94,7 @@ interface Waiter {
   readonly id: string;
   readonly request: DeviceRequest;
   readonly options: LeaseRequestOptions;
+  onProgress: ((progress: LeaseProgress) => void) | undefined;
   readonly promise: Promise<LeaseGrant>;
   readonly reject: (error: Error) => void;
   readonly resolve: (grant: LeaseGrant) => void;
@@ -257,6 +266,16 @@ export class LeaseEngine {
     return this.#queue.length;
   }
 
+  /** Stops client feedback for a queued request without affecting its lease outcome. */
+  async detachQueuedProgress(requesterId: string): Promise<void> {
+    await this.#withDecision(async () => {
+      const waiter = this.#queue.find((candidate) => candidate.options.requesterId === requesterId);
+      if (waiter !== undefined) {
+        waiter.onProgress = undefined;
+      }
+    });
+  }
+
   async renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
     return this.#withDecision(async () => {
       const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
@@ -375,6 +394,10 @@ export class LeaseEngine {
     const provisionStartedAt = this.options.clock.now();
     let driverDevice: DriverDevice;
     try {
+      this.#notifyProgress(waiter, {
+        stage: "provisioning",
+        etaMs: driver.estimate("provision", spec),
+      });
       driverDevice = await driver.provision(spec);
     } catch {
       const retry = await this.#withDecision(async () => {
@@ -408,6 +431,7 @@ export class LeaseEngine {
 
     const readyStartedAt = this.options.clock.now();
     try {
+      this.#notifyProgress(waiter, { stage: "booting", etaMs: driver.estimate("boot", spec) });
       await driver.makeReady(driverDevice);
     } catch {
       await driver.destroy(driverDevice);
@@ -447,6 +471,10 @@ export class LeaseEngine {
     }
     const spec = waiter.spec;
     if (this.#queue[0] !== undefined && this.#queue[0] !== waiter) {
+      if (waiter.options.noWait) {
+        this.#reject(waiter, new NoCapacityError(), "no-wait");
+        return undefined;
+      }
       this.#enqueue(waiter);
       return undefined;
     }
@@ -554,6 +582,10 @@ export class LeaseEngine {
     const startedAt = this.options.clock.now();
     let result: Awaited<ReturnType<Driver["reclaim"]>>;
     try {
+      this.#notifyProgress(waiter, {
+        stage: "reclaiming",
+        etaMs: driver.estimate("reclaim", device.spec),
+      });
       result = await driver.reclaim(toDriverDevice(device), { clean: "standard" });
     } catch {
       await this.#withDecision(async () => {
@@ -591,6 +623,10 @@ export class LeaseEngine {
     const driver = this.#driverFor(device.spec.platform);
     const startedAt = this.options.clock.now();
     try {
+      this.#notifyProgress(waiter, {
+        stage: "booting",
+        etaMs: driver.estimate("boot", device.spec),
+      });
       await driver.makeReady(toDriverDevice(device));
     } catch {
       await driver.destroy(toDriverDevice(device));
@@ -674,11 +710,13 @@ export class LeaseEngine {
     }
     if (!this.#queue.includes(waiter)) {
       this.#queue.push(waiter);
+      waiter.state = "queued";
       this.options.eventBus.emit(
         "lease.queued",
         { queuePosition: this.#queue.length, requestId: waiter.id },
         "lease-engine",
       );
+      this.#notifyProgress(waiter, { queuePosition: this.#queue.length, stage: "queued" });
     }
     waiter.state = "queued";
     if (waiter.timer === undefined && waiter.options.timeoutMs !== undefined) {
@@ -742,6 +780,7 @@ export class LeaseEngine {
       failures: 0,
       id: `req_${this.options.idGenerator.generate()}`,
       options,
+      onProgress: options.onProgress,
       promise,
       reject,
       request,
@@ -749,6 +788,14 @@ export class LeaseEngine {
       state: "new",
       timing: noTiming,
     };
+  }
+
+  #notifyProgress(waiter: Waiter, progress: LeaseProgress): void {
+    try {
+      waiter.onProgress?.(progress);
+    } catch {
+      // Client feedback must not affect lease acquisition.
+    }
   }
 
   #ttlFor(mode: LeaseRecord["mode"]): number {

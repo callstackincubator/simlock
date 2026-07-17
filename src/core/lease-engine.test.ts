@@ -120,10 +120,16 @@ describe("LeaseEngine", () => {
     const harness = await createHarness();
     const matching = await seedReady(harness);
     await seedReady(harness, { model: "iPhone SE", osVersion: "26.5", platform: "ios" });
+    const progress: string[] = [];
 
-    const grant = await harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
+    const grant = await harness.engine.request(request, {
+      mode: "held",
+      onProgress: (update) => progress.push(update.stage),
+      requesterId: "agent-1",
+    });
 
     expect(grant.device.id).toBe(matching.id);
+    expect(progress).toEqual([]);
     expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
   });
 
@@ -137,7 +143,12 @@ describe("LeaseEngine", () => {
     });
     const harness = await createHarness({ driver });
 
-    const grant = await harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
+    const progress: string[] = [];
+    const grant = await harness.engine.request(request, {
+      mode: "held",
+      onProgress: (update) => progress.push(update.stage),
+      requesterId: "agent-1",
+    });
 
     expect(grant).toMatchObject({
       device: { spec: request, state: "leased" },
@@ -148,6 +159,97 @@ describe("LeaseEngine", () => {
       "provision",
       "makeReady",
     ]);
+  });
+
+  it("reports only the selected work as it begins", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      estimateMs: { boot: 20, provision: 10, reclaim: 15 },
+      platform: "ios",
+    });
+    const harness = await createHarness({ driver });
+    const provisioned: string[] = [];
+
+    const provisionedGrant = await harness.engine.request(request, {
+      mode: "held",
+      onProgress: (progress) => provisioned.push(progress.stage),
+      requesterId: "provisioned",
+    });
+    expect(provisioned).toEqual(["provisioning", "booting"]);
+    await harness.engine.release(provisionedGrant.lease.id, "explicit");
+
+    const shutdown = harness.registry.snapshot.devices[0];
+    if (shutdown === undefined) throw new Error("Expected provisioned device");
+    await harness.registry.transitionDevice(shutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: shutdown.id, initiator: "test" },
+    });
+    const booted: string[] = [];
+    await harness.engine.request(request, {
+      mode: "held",
+      onProgress: (progress) => booted.push(progress.stage),
+      requesterId: "shutdown",
+    });
+    expect(booted).toEqual(["booting"]);
+  });
+
+  it("reports queue insertion without speculative work and isolates callback failures", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const harness = await createHarness({ driver });
+    const holder = await harness.engine.request(request, { mode: "held", requesterId: "holder" });
+    const progress: string[] = [];
+    const queued = harness.engine.request(request, {
+      mode: "held",
+      onProgress: (update) => progress.push(update.stage),
+      requesterId: "queued",
+    });
+    await flush();
+    expect(progress).toEqual(["queued"]);
+
+    await expect(
+      harness.engine.request(request, {
+        mode: "held",
+        noWait: true,
+        onProgress: () => progress.push("unexpected"),
+        requesterId: "no-wait",
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+    expect(progress).toEqual(["queued"]);
+
+    await harness.engine.release(holder.lease.id, "explicit");
+    await queued;
+
+    const callbackFailure = await createHarness();
+    await expect(
+      callbackFailure.engine.request(request, {
+        mode: "held",
+        onProgress: () => {
+          throw new Error("client disconnected");
+        },
+        requesterId: "throwing-callback",
+      }),
+    ).resolves.toMatchObject({ device: { state: "leased" } });
+    expect(callbackFailure.driver.calls.map((call) => call.operation)).toContain("makeReady");
+  });
+
+  it("detaches progress from a queued request without cancelling its lease", async () => {
+    const harness = await createHarness();
+    const holder = await harness.engine.request(request, { mode: "held", requesterId: "holder" });
+    const progress: string[] = [];
+    const queued = harness.engine.request(request, {
+      mode: "held",
+      onProgress: (update) => progress.push(update.stage),
+      requesterId: "queued",
+    });
+    await flush();
+
+    await harness.engine.detachQueuedProgress("queued");
+    await harness.engine.release(holder.lease.id, "explicit");
+    await expect(queued).resolves.toMatchObject({ lease: { requesterId: "queued" } });
+    expect(progress).toEqual(["queued"]);
   });
 
   it("reclaims a matching warm device before granting it and reports its reclaim estimate", async () => {
@@ -172,7 +274,12 @@ describe("LeaseEngine", () => {
       payload: { deviceId: device.id, duration: 0, strategy: "wipe" },
     });
 
-    const grant = await harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
+    const progress: string[] = [];
+    const grant = await harness.engine.request(request, {
+      mode: "held",
+      onProgress: (update) => progress.push(update.stage),
+      requesterId: "agent-1",
+    });
 
     expect(grant).toMatchObject({
       device: { id: device.id, state: "leased" },
@@ -180,6 +287,40 @@ describe("LeaseEngine", () => {
     });
     expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
     expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    expect(progress).toEqual(["reclaiming"]);
+  });
+
+  it("reports booting only after a warm reclaim actually returns shutdown", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      estimateMs: { boot: 20, reclaim: 15 },
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+    const device = await seedReady(harness);
+    const lease = await harness.registry.createLease({
+      deviceId: device.id,
+      mode: "held",
+      requesterId: "former-agent",
+      ttlDeadline: 2_000,
+    });
+    await harness.registry.beginRelease(lease.id);
+    await harness.registry.transitionDevice(device.id, "warm", {
+      event: "device.reclaimed",
+      payload: { deviceId: device.id, duration: 0, strategy: "wipe" },
+    });
+    const progress: string[] = [];
+
+    await harness.engine.request(request, {
+      mode: "held",
+      onProgress: (update) => progress.push(update.stage),
+      requesterId: "agent-1",
+    });
+
+    expect(progress).toEqual(["reclaiming", "booting"]);
   });
 
   it("queues at capacity in FIFO order across three waiters", async () => {
@@ -255,8 +396,10 @@ describe("LeaseEngine", () => {
   it("rejects a timed-out queue entry and skips it on a later release", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
+    const progress: string[] = [];
     const timedOut = harness.engine.request(request, {
       mode: "held",
+      onProgress: (update) => progress.push(update.stage),
       requesterId: "agent-2",
       timeoutMs: 10,
     });
@@ -265,6 +408,7 @@ describe("LeaseEngine", () => {
 
     harness.clock.advance(10);
     await expect(timedOut).rejects.toBeInstanceOf(QueueTimeoutError);
+    expect(progress).toEqual(["queued"]);
     await harness.engine.release(first.lease.id, "explicit");
 
     await expect(next).resolves.toMatchObject({ lease: { requesterId: "agent-3" } });
