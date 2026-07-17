@@ -199,6 +199,26 @@ describe("CLI boundary", () => {
       }
     `);
   });
+
+  it("renders managed and running capacity separately", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("status.get", {
+      capacity: {
+        global: { maxRunning: 3, overLimit: false, reserved: 1, running: 1 },
+        ios: { limit: 4, maxRunning: 2, overLimit: false, reserved: 1, running: 1, used: 3 },
+        android: { limit: 2, maxRunning: 2, overLimit: false, reserved: 0, running: 0, used: 1 },
+      },
+      devices: [],
+      leases: [],
+    });
+
+    await expect(
+      runCli(["status"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toContain("Running global: 1 + 1 reserved/3");
+    expect(output.stdout).toContain("Capacity ios: managed 3/4, running 1 + 1 reserved/2");
+  });
 });
 
 class StubConnection implements DaemonConnection {
@@ -298,7 +318,11 @@ function testConfig(): Config {
     eventBuffer: { capacity: 100 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000 },
-    limits: { android: { maxDevices: 1 }, ios: { maxDevices: 1 } },
+    limits: {
+      android: { maxDevices: 1, maxRunning: 1 },
+      ios: { maxDevices: 1, maxRunning: 1 },
+      maxRunning: 1 + 1,
+    },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     warmPool: {},
   };

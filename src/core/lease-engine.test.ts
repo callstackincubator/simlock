@@ -25,7 +25,11 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     eventBuffer: { capacity: 100 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, ...overrides },
-    limits: { android: { maxDevices: 1 }, ios: { maxDevices: 1 } },
+    limits: {
+      android: { maxDevices: 1, maxRunning: 1 },
+      ios: { maxDevices: 1, maxRunning: 1 },
+      maxRunning: 1 + 1,
+    },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     warmPool: {},
   };
@@ -34,7 +38,9 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
 async function createHarness(
   options: {
     readonly driver?: FakeDriver;
+    readonly drivers?: readonly FakeDriver[];
     readonly lease?: Partial<Config["lease"]>;
+    readonly limits?: Config["limits"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -50,10 +56,13 @@ async function createHarness(
     idGenerator: { generate: () => `${nextId++}` },
     statePath,
   });
+  const baseConfig = config(options.lease);
+  const engineConfig: Config =
+    options.limits === undefined ? baseConfig : { ...baseConfig, limits: options.limits };
   const engine = new LeaseEngine({
     clock,
-    config: config(options.lease),
-    drivers: [driver],
+    config: engineConfig,
+    drivers: options.drivers ?? [driver],
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     registry,
@@ -91,6 +100,149 @@ async function flush(): Promise<void> {
 }
 
 describe("LeaseEngine", () => {
+  it("enforces global and platform limits together across drivers", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+    const harness = await createHarness({
+      driver: ios,
+      drivers: [ios, android],
+      limits: {
+        android: { maxDevices: 2, maxRunning: 2 },
+        ios: { maxDevices: 2, maxRunning: 1 },
+        maxRunning: 1,
+      },
+    });
+    const holder = await harness.engine.request(request, {
+      mode: "held",
+      requesterId: "ios-holder",
+    });
+    const androidRequest = { model: "Pixel 9", osVersion: "36", platform: "android" } as const;
+
+    await expect(
+      harness.engine.request(androidRequest, {
+        mode: "held",
+        noWait: true,
+        requesterId: "android-no-wait",
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+    expect(android.calls.filter((call) => call.operation === "provision")).toHaveLength(0);
+    expect(android.calls.filter((call) => call.operation === "makeReady")).toHaveLength(0);
+
+    await harness.engine.release(holder.lease.id, "explicit");
+    await expect(
+      harness.engine.request(androidRequest, { mode: "held", requesterId: "android" }),
+    ).resolves.toMatchObject({ device: { spec: { platform: "android" } } });
+  });
+
+  it("converges startup excess through shutdown without touching leases and is idempotent", async () => {
+    const harness = await createHarness({
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 3, maxRunning: 1 },
+        maxRunning: 1,
+      },
+    });
+    const leasedDevice = await seedReady(harness);
+    const unleasedDevice = await seedReady(harness);
+    await harness.registry.createLease({
+      deviceId: leasedDevice.id,
+      mode: "held",
+      requesterId: "active",
+      ttlDeadline: 2_000,
+    });
+
+    await harness.engine.convergeRunningCapacity();
+    await harness.engine.convergeRunningCapacity();
+
+    expect(harness.registry.snapshot.devices).toMatchObject([
+      { id: leasedDevice.id, state: "leased" },
+      { id: unleasedDevice.id, state: "shutdown" },
+    ]);
+    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+    expect(harness.engine.runningCapacity.global.overLimit).toBe(false);
+  });
+
+  it("reports unavoidable leased running overage", async () => {
+    const harness = await createHarness({
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 3, maxRunning: 1 },
+        maxRunning: 1,
+      },
+    });
+    for (const requesterId of ["one", "two"]) {
+      const device = await seedReady(harness);
+      await harness.registry.createLease({
+        deviceId: device.id,
+        mode: "held",
+        requesterId,
+        ttlDeadline: 2_000,
+      });
+    }
+
+    await harness.engine.convergeRunningCapacity();
+
+    expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(0);
+    expect(harness.engine.runningCapacity.global.overLimit).toBe(true);
+    await expect(
+      harness.engine.request(request, { mode: "held", noWait: true, requesterId: "three" }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+  });
+
+  it("holds one running reservation across provision and readiness", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    driver.hangMakeReady();
+    const harness = await createHarness({ driver });
+
+    const first = harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
+    const second = harness.engine.request(request, { mode: "held", requesterId: "agent-2" });
+    await flush();
+
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+    expect(harness.engine.runningCapacity.global.reserved).toBe(1);
+    expect(harness.engine.queueDepth).toBe(1);
+
+    driver.releaseMakeReady();
+    const grant = await first;
+    await harness.engine.release(grant.lease.id, "explicit");
+    await expect(second).resolves.toMatchObject({ lease: { requesterId: "agent-2" } });
+  });
+
+  it("starts exactly one of two existing shutdown devices at running capacity one", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const harness = await createHarness({ driver });
+    for (let index = 0; index < 2; index += 1) {
+      const device = await seedReady(harness);
+      await harness.registry.transitionDevice(device.id, "shutdown", {
+        event: "device.shutdown",
+        payload: { deviceId: device.id, initiator: "test" },
+      });
+    }
+    driver.hangMakeReady();
+
+    void harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
+    void harness.engine.request(request, { mode: "held", requesterId: "agent-2" });
+    await flush();
+
+    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+    expect(harness.engine.queueDepth).toBe(1);
+    driver.releaseMakeReady();
+  });
+
   it("serializes simultaneous requests so one device of capacity starts exactly one provision", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({

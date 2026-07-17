@@ -83,6 +83,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const doctor = new Doctor({ clock, drivers, eventBus, leaseEngine, registry });
   const nuke = new Nuke({ leaseEngine, registry });
   await doctor.reconcile();
+  await leaseEngine.convergeRunningCapacity();
   const daemon = new DaemonServer({
     config,
     doctor,

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeSystemStats } from "../ports/index.js";
-import { canProvision, type Config, type CapacityDevice } from "./index.js";
+import {
+  canProvision,
+  canReserveRunning,
+  type Config,
+  type CapacityDevice,
+  runningCapacity,
+} from "./index.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -10,7 +16,11 @@ const config: Config = {
   eventBuffer: { capacity: 1000 },
   idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
   lease: { detachedTtlMs: 15 * 60_000, heldTtlBackstopMs: 60 * 60_000 },
-  limits: { android: { maxDevices: 4 }, ios: { maxDevices: 1 } },
+  limits: {
+    android: { maxDevices: 4, maxRunning: 2 },
+    ios: { maxDevices: 1, maxRunning: 1 },
+    maxRunning: 2,
+  },
   ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
   warmPool: {},
 };
@@ -57,5 +67,40 @@ describe("canProvision", () => {
     const devices: CapacityDevice[] = [{ platform: "android", state: "ready" }];
 
     expect(canProvision("ios", devices, config, withStats(9.5 * gibibyte))).toEqual({ ok: true });
+  });
+});
+
+describe("running capacity", () => {
+  it("counts only running lifecycle states and reservations", () => {
+    expect(
+      runningCapacity(
+        [
+          { platform: "ios", state: "ready" },
+          { platform: "android", state: "shutdown" },
+          { platform: "android", state: "deleted" },
+        ],
+        ["android"],
+        config,
+      ),
+    ).toEqual({
+      global: { maxRunning: 2, overLimit: false, reserved: 1, running: 1 },
+      ios: { maxRunning: 1, overLimit: false, reserved: 0, running: 1 },
+      android: { maxRunning: 2, overLimit: false, reserved: 1, running: 0 },
+    });
+  });
+
+  it("requires both global and platform room", () => {
+    const globallyFull = [
+      { platform: "ios", state: "ready" },
+      { platform: "android", state: "warm" },
+    ] as const;
+    expect(canReserveRunning("android", globallyFull, [], config)).toEqual({
+      ok: false,
+      reason: "global-running-limit",
+    });
+    expect(canReserveRunning("ios", [{ platform: "ios", state: "leased" }], [], config)).toEqual({
+      ok: false,
+      reason: "platform-running-limit",
+    });
   });
 });

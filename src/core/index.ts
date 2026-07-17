@@ -9,9 +9,13 @@ export {
 } from "./config.js";
 export {
   canProvision,
+  canReserveRunning,
   type CapacityDecision,
   type CapacityDevice,
   type CapacityPlatform,
+  type RunningCapacity,
+  type RunningCapacityEntry,
+  runningCapacity,
 } from "./capacity.js";
 export {
   type DeviceRecord,

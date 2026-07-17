@@ -1,6 +1,11 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, SystemStats, TimerHandle } from "../ports/index.js";
-import { canProvision } from "./capacity.js";
+import {
+  canProvision,
+  canReserveRunning,
+  runningCapacity,
+  type RunningCapacity,
+} from "./capacity.js";
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
@@ -266,6 +271,50 @@ export class LeaseEngine {
     return this.#queue.length;
   }
 
+  get runningCapacity(): RunningCapacity {
+    return runningCapacity(
+      this.#capacityDevices(),
+      this.#runningReservations(),
+      this.options.config,
+    );
+  }
+
+  /** Safely converges unleased running devices after startup reconciliation. */
+  async convergeRunningCapacity(): Promise<void> {
+    for (;;) {
+      const candidate = await this.#withDecision(async () => {
+        const capacity = this.runningCapacity;
+        const overPlatforms = (["ios", "android"] as const).filter(
+          (platform) => capacity[platform].running > capacity[platform].maxRunning,
+        );
+        if (capacity.global.running <= capacity.global.maxRunning && overPlatforms.length === 0) {
+          return undefined;
+        }
+        const leases = new Set(
+          this.options.registry.snapshot.leases.map((lease) => lease.deviceId),
+        );
+        return this.options.registry.snapshot.devices
+          .filter(
+            (device) =>
+              (device.state === "ready" || device.state === "warm") &&
+              !leases.has(device.id) &&
+              !this.#cleanupReservations.has(device.id) &&
+              (overPlatforms.length === 0 || overPlatforms.includes(device.spec.platform)),
+          )
+          .sort(
+            (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+          )[0];
+      });
+      if (candidate === undefined) return;
+      await this.executeCleanup({
+        action: "shutdown",
+        reason: "running capacity exceeds configured maxRunning",
+        rule: "startup-max-running",
+        target: candidate.id,
+      });
+    }
+  }
+
   /** Stops client feedback for a queued request without affecting its lease outcome. */
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.#withDecision(async () => {
@@ -420,7 +469,6 @@ export class LeaseEngine {
     }
 
     const device = await this.#withDecision(async () => {
-      this.#removeReservation(spec.platform);
       return this.options.registry.registerDevice({
         driverData: driverDevice.driverData,
         driverDeviceId: driverDevice.deviceId,
@@ -434,20 +482,30 @@ export class LeaseEngine {
       this.#notifyProgress(waiter, { stage: "booting", etaMs: driver.estimate("boot", spec) });
       await driver.makeReady(driverDevice);
     } catch {
-      await driver.destroy(driverDevice);
+      let destroyed = true;
+      try {
+        await driver.destroy(driverDevice);
+      } catch {
+        destroyed = false;
+      }
       await this.#withDecision(async () => {
-        await this.options.registry.transitionDevice(device.id, "deleted", {
-          event: "device.deleted",
-          payload: { deviceId: device.id, initiator: "lease-engine" },
-        });
+        if (destroyed) {
+          this.#removeReservation(spec.platform);
+          await this.options.registry.transitionDevice(device.id, "deleted", {
+            event: "device.deleted",
+            payload: { deviceId: device.id, initiator: "lease-engine" },
+          });
+        }
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
       });
+      if (destroyed) this.#wakeQueue();
       return;
     }
 
     const granted = await this.#withDecision(async () => {
+      this.#removeReservation(spec.platform);
       await this.options.registry.transitionDevice(device.id, "ready", {
         event: "device.ready",
         payload: { bootDuration: this.options.clock.now() - readyStartedAt, deviceId: device.id },
@@ -511,6 +569,17 @@ export class LeaseEngine {
         sameSpec(device.spec, spec),
     );
     if (shutdown !== undefined) {
+      const running = canReserveRunning(
+        spec.platform,
+        this.#capacityDevices(),
+        this.#runningReservations(),
+        this.options.config,
+      );
+      if (!running.ok) {
+        if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
+        else this.#enqueue(waiter);
+        return undefined;
+      }
       this.#shutdownReservations.add(shutdown.id);
       waiter.state = "processing";
       return { device: shutdown, kind: "boot-shutdown" };
@@ -528,7 +597,13 @@ export class LeaseEngine {
       this.options.config,
       this.options.systemStats,
     );
-    if (capacity.ok && waiter.failures < 2) {
+    const running = canReserveRunning(
+      spec.platform,
+      this.#capacityDevices(),
+      this.#runningReservations(),
+      this.options.config,
+    );
+    if (capacity.ok && running.ok && waiter.failures < 2) {
       this.#provisionReservations.push(spec.platform);
       waiter.state = "processing";
       return { kind: "provision" };
@@ -629,17 +704,25 @@ export class LeaseEngine {
       });
       await driver.makeReady(toDriverDevice(device));
     } catch {
-      await driver.destroy(toDriverDevice(device));
+      let destroyed = true;
+      try {
+        await driver.destroy(toDriverDevice(device));
+      } catch {
+        destroyed = false;
+      }
       await this.#withDecision(async () => {
-        this.#shutdownReservations.delete(device.id);
-        await this.options.registry.transitionDevice(device.id, "deleted", {
-          event: "device.deleted",
-          payload: { deviceId: device.id, initiator: "lease-engine" },
-        });
+        if (destroyed) {
+          this.#shutdownReservations.delete(device.id);
+          await this.options.registry.transitionDevice(device.id, "deleted", {
+            event: "device.deleted",
+            payload: { deviceId: device.id, initiator: "lease-engine" },
+          });
+        }
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
         }
       });
+      if (destroyed) this.#wakeQueue();
       return;
     }
 
@@ -826,6 +909,26 @@ export class LeaseEngine {
     if (index !== -1) {
       this.#provisionReservations.splice(index, 1);
     }
+  }
+
+  #capacityDevices(): { readonly platform: Platform; readonly state: string }[] {
+    return this.options.registry.snapshot.devices.map((device) => ({
+      platform: device.spec.platform,
+      state: device.state,
+    }));
+  }
+
+  #runningReservations(): Platform[] {
+    const platforms = new Map(
+      this.options.registry.snapshot.devices.map((device) => [device.id, device.spec.platform]),
+    );
+    return [
+      ...this.#provisionReservations,
+      ...[...this.#shutdownReservations].flatMap((deviceId) => {
+        const platform = platforms.get(deviceId);
+        return platform === undefined ? [] : [platform];
+      }),
+    ];
   }
 
   #removeFromQueue(waiter: Waiter): void {

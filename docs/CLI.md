@@ -72,9 +72,12 @@ unless `--yes`.
 
 ## `pitlane status`
 
-Human-oriented overview: daemon health, capacity (used/limit per platform),
-every managed device with its state, current leases (who, since when), and
-queue depth. `--json` for the structured equivalent.
+Human-oriented overview: daemon health, managed capacity (used/limit per
+platform), running and reserved capacity (globally and per platform), every
+managed device with its state, current leases (who, since when), and queue
+depth. `--json` for the structured equivalent. `overLimit` is true when a
+lowered limit cannot yet be met, for example because active leases consume
+all running slots.
 
 ## `pitlane list [--devices|--leases|--rules]`
 
@@ -113,5 +116,7 @@ Manage the daemon explicitly. Other commands auto-start it on demand;
 ## `pitlane config [get <key>|set <key> <value>]`
 
 Show the effective configuration (defaults + config file + overrides):
-capacity limits per platform, idle tiers T1/T2/T3, TTLs, disk-pressure
-threshold, warm-pool sizes. With no args, prints everything.
+managed and running capacity limits, idle tiers T1/T2/T3, TTLs, disk-pressure
+threshold, warm-pool sizes. With no args, prints everything. Running capacity
+uses `limits.maxRunning` globally and `limits.<platform>.maxRunning` for each
+driver; both must have room before provisioning or booting a shutdown device.

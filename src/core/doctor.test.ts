@@ -158,7 +158,11 @@ function config(): Config {
     eventBuffer: { capacity: 10 },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000 },
-    limits: { android: { maxDevices: 1 }, ios: { maxDevices: 1 } },
+    limits: {
+      android: { maxDevices: 1, maxRunning: 1 },
+      ios: { maxDevices: 1, maxRunning: 1 },
+      maxRunning: 1 + 1,
+    },
     ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
     warmPool: {},
   };

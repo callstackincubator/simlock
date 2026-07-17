@@ -26,6 +26,11 @@ describe("loadConfig", () => {
     expect(config.limits.android.maxDevices).toBe(
       Math.max(1, Math.min(Math.floor(8 / 4), Math.floor(32 / 8))),
     );
+    expect(config.limits).toMatchObject({
+      android: { maxRunning: 2 },
+      ios: { maxRunning: 4 },
+      maxRunning: 6,
+    });
   });
 
   it("uses the documented defaults for budgets, timeouts, and the event buffer", async () => {
@@ -53,7 +58,7 @@ describe("loadConfig", () => {
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({
-        limits: { ios: { maxDevices: 3 } },
+        limits: { ios: { maxDevices: 3, maxRunning: 2 }, maxRunning: 4 },
         lease: { detachedTtlMs: 123 },
       }),
     );
@@ -63,12 +68,18 @@ describe("loadConfig", () => {
       filesystem,
       overrides: {
         lease: { detachedTtlMs: 456 },
+        limits: { android: { maxRunning: 1 } },
       },
       systemStats: createStats(),
     });
 
     expect(config.limits.ios.maxDevices).toBe(3);
     expect(config.limits.android.maxDevices).toBe(2);
+    expect(config.limits).toMatchObject({
+      android: { maxRunning: 1 },
+      ios: { maxRunning: 2 },
+      maxRunning: 4,
+    });
     expect(config.lease.detachedTtlMs).toBe(456);
   });
 
@@ -103,6 +114,20 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow("limits.ios.maxDevices");
+  });
+
+  it.each([
+    [{ limits: { maxRunning: 0 } }, "limits.maxRunning"],
+    [{ limits: { ios: { maxRunning: 1.5 } } }, "limits.ios.maxRunning"],
+    [{ limits: { android: { maxRunning: "many" } } }, "limits.android.maxRunning"],
+  ])("rejects invalid maxRunning values in every scope", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
   });
 
   it("warns about unknown keys without rejecting the file", async () => {

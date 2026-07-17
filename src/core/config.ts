@@ -6,8 +6,9 @@ export const DEFAULT_CONFIG_PATH = "~/.pitlane/config.json";
 
 export interface Config {
   readonly limits: {
-    readonly ios: { readonly maxDevices: number };
-    readonly android: { readonly maxDevices: number };
+    readonly maxRunning: number;
+    readonly ios: { readonly maxDevices: number; readonly maxRunning: number };
+    readonly android: { readonly maxDevices: number; readonly maxRunning: number };
   };
   readonly ramBudget: {
     readonly iosBytesPerDevice: number;
@@ -62,12 +63,17 @@ export function defaultConfig(systemStats: SystemStats): Config {
   const cpuCount = systemStats.cpuCount();
   const totalRamGb = systemStats.totalRamBytes() / GIBIBYTE;
 
+  const iosMaxDevices = Math.max(1, Math.floor(cpuCount / 2));
+  const androidMaxDevices = Math.max(
+    1,
+    Math.min(Math.floor(cpuCount / 4), Math.floor(totalRamGb / 8)),
+  );
+
   return {
     limits: {
-      ios: { maxDevices: Math.max(1, Math.floor(cpuCount / 2)) },
-      android: {
-        maxDevices: Math.max(1, Math.min(Math.floor(cpuCount / 4), Math.floor(totalRamGb / 8))),
-      },
+      maxRunning: iosMaxDevices + androidMaxDevices,
+      ios: { maxDevices: iosMaxDevices, maxRunning: iosMaxDevices },
+      android: { maxDevices: androidMaxDevices, maxRunning: androidMaxDevices },
     },
     ramBudget: {
       iosBytesPerDevice: 1.5 * GIBIBYTE,
@@ -130,8 +136,9 @@ type Validator = (value: unknown, path: string, warn: (message: string) => void)
 
 const validators = {
   limits: objectValidator({
-    ios: objectValidator({ maxDevices: positiveInteger }),
-    android: objectValidator({ maxDevices: positiveInteger }),
+    maxRunning: positiveInteger,
+    ios: objectValidator({ maxDevices: positiveInteger, maxRunning: positiveInteger }),
+    android: objectValidator({ maxDevices: positiveInteger, maxRunning: positiveInteger }),
   }),
   ramBudget: objectValidator({
     iosBytesPerDevice: nonNegativeNumber,

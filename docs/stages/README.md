@@ -8,7 +8,7 @@ active set, so the table may begin above 01.
 
 | #   | Stage                                              | Depends on | Status  |
 | --- | -------------------------------------------------- | ---------- | ------- |
-| 02  | [Global and platform maxRunning](02-max-running.md) | —          | pending |
+| 02  | [Global and platform maxRunning](02-max-running.md) | —          | done    |
 | 03  | [Adaptive warm pool](03-warm-pool.md)              | 02         | pending |
 
 The stages are intentionally sequential because they change lease acquisition,

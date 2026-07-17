@@ -51,6 +51,21 @@ listManaged()        -> Pitlane-prefixed device/process reality for doctor
 The litmus test for the boundary: adding a third driver (e.g. physical
 devices) must require **no core changes**. If it does, the interface leaked.
 
+## Running capacity
+
+Managed-device limits govern provisioning, while running limits govern any
+operation that starts a device. The core accounts `ready`, `leased`,
+`reclaiming`, and `warm` devices as running. A serialized, platform-agnostic
+reservation covers provisioning and boots from `shutdown` until the registry
+commits the resulting running or non-running state. Global and driver-provided
+platform limits are checked atomically; no driver-specific runtime details
+participate in this decision.
+
+After startup reconciliation, the lease engine deterministically shuts down
+excess unleased `ready`/`warm` registry devices through the normal driver and
+state-transition path. Leased devices are never touched, so a lowered limit
+may remain visibly over-limit until leases naturally release.
+
 ## Device state machine
 
 One shared lifecycle for both platforms; drivers map onto it, never extend it:

@@ -8,7 +8,11 @@ const config: Config = {
   eventBuffer: { capacity: 1 },
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   lease: { detachedTtlMs: 1, heldTtlBackstopMs: 1 },
-  limits: { android: { maxDevices: 1 }, ios: { maxDevices: 1 } },
+  limits: {
+    android: { maxDevices: 1, maxRunning: 1 },
+    ios: { maxDevices: 1, maxRunning: 1 },
+    maxRunning: 1 + 1,
+  },
   ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
   warmPool: {},
 };

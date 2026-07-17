@@ -215,7 +215,22 @@ describe("DaemonServer", () => {
     const client = await createClient(harness.socketPath);
     await hello(client);
 
-    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    await expect(client.request("status.get", {})).resolves.toMatchObject({
+      ok: true,
+      payload: {
+        capacity: {
+          global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0 },
+          ios: {
+            limit: 1,
+            maxRunning: 1,
+            overLimit: false,
+            reserved: 0,
+            running: 0,
+            used: 0,
+          },
+        },
+      },
+    });
     await expect(client.request("list.get", {})).resolves.toMatchObject({ ok: true });
     await expect(client.request("config.get", {})).resolves.toMatchObject({ ok: true });
     await expect(client.request("cleanup.run", { dryRun: true })).resolves.toMatchObject({
@@ -450,7 +465,11 @@ function testConfig(): Config {
     eventBuffer: { capacity: 100 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000 },
-    limits: { android: { maxDevices: 1 }, ios: { maxDevices: 1 } },
+    limits: {
+      android: { maxDevices: 1, maxRunning: 1 },
+      ios: { maxDevices: 1, maxRunning: 1 },
+      maxRunning: 1 + 1,
+    },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     warmPool: {},
   };
