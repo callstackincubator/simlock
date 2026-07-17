@@ -229,6 +229,7 @@ export class AndroidDriver implements Driver {
         data.avdName,
         "-port",
         String(data.port),
+        "-no-snapshot-save",
         ...(state.needsWipe
           ? ["-wipe-data", "-no-snapshot-load"]
           : state.snapshotExpected

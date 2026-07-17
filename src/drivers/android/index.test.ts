@@ -173,7 +173,7 @@ describe("AndroidDriver", () => {
 
     await expect(harness.driver.makeReady(harness.device)).resolves.toBeUndefined();
     expect(harness.runner.calls.at(-5)).toMatchObject({
-      args: ["-avd", "pitlane_one", "-port", "5554"],
+      args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save"],
       command: binaries.emulator,
     });
   });
@@ -255,7 +255,15 @@ describe("AndroidDriver", () => {
     await harness.driver.makeReady(harness.device);
 
     expect(harness.runner.calls).toContainEqual({
-      args: ["-avd", "pitlane_one", "-port", "5554", "-wipe-data", "-no-snapshot-load"],
+      args: [
+        "-avd",
+        "pitlane_one",
+        "-port",
+        "5554",
+        "-no-snapshot-save",
+        "-wipe-data",
+        "-no-snapshot-load",
+      ],
       command: binaries.emulator,
       options: {},
     });
@@ -288,7 +296,15 @@ describe("AndroidDriver", () => {
       {
         hangs: true,
         match: {
-          args: ["-avd", "pitlane_one", "-port", "5554", "-snapshot", "pitlane_clean_baseline"],
+          args: [
+            "-avd",
+            "pitlane_one",
+            "-port",
+            "5554",
+            "-no-snapshot-save",
+            "-snapshot",
+            "pitlane_clean_baseline",
+          ],
           command: binaries.emulator,
         },
       },
@@ -307,7 +323,15 @@ describe("AndroidDriver", () => {
 
     await expect(restartedDriver.makeReady(harness.device)).resolves.toBeUndefined();
     expect(restartedRunner.calls[1]).toMatchObject({
-      args: ["-avd", "pitlane_one", "-port", "5554", "-snapshot", "pitlane_clean_baseline"],
+      args: [
+        "-avd",
+        "pitlane_one",
+        "-port",
+        "5554",
+        "-no-snapshot-save",
+        "-snapshot",
+        "pitlane_clean_baseline",
+      ],
       command: binaries.emulator,
     });
   });
@@ -444,7 +468,15 @@ async function provisionedHarness(
         hangs: true,
         match: {
           command: binaries.emulator,
-          args: ["-avd", "pitlane_one", "-port", "5554", "-wipe-data", "-no-snapshot-load"],
+          args: [
+            "-avd",
+            "pitlane_one",
+            "-port",
+            "5554",
+            "-no-snapshot-save",
+            "-wipe-data",
+            "-no-snapshot-load",
+          ],
         },
       },
       processResult(
@@ -478,7 +510,7 @@ async function provisionedHarness(
       hangs: true,
       match: {
         command: binaries.emulator,
-        args: ["-avd", "pitlane_one", "-port", "5554"],
+        args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save"],
       },
     });
     if (options.initialAdbFailure === true) {
@@ -527,7 +559,15 @@ async function provisionedHarness(
       hangs: true,
       match: {
         command: binaries.emulator,
-        args: ["-avd", "pitlane_one", "-port", "5554", "-wipe-data", "-no-snapshot-load"],
+        args: [
+          "-avd",
+          "pitlane_one",
+          "-port",
+          "5554",
+          "-no-snapshot-save",
+          "-wipe-data",
+          "-no-snapshot-load",
+        ],
       },
     });
     expectations.push(
