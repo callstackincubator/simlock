@@ -13,6 +13,20 @@ The daemon starts on demand. Use `pitlane doctor` to reconcile managed state,
 and `pitlane nuke --yes --delete-devices` only for an emergency reset of
 Pitlane-managed devices.
 
+## Releases
+
+Releases run from a clean, up-to-date `main` branch. `release-it` runs the
+full quality suite, determines the semantic version from Conventional Commits,
+updates `CHANGELOG.md`, commits and tags the release, pushes it, and creates a
+GitHub release. It never publishes to npm.
+
+```sh
+pnpm release
+```
+
+Set `GITHUB_TOKEN` with repository contents write access before running the
+command outside GitHub Actions.
+
 Running devices are limited independently from the number of managed devices.
 All values are positive integers; omitted running limits default to the derived
 managed limits (and their global sum).
