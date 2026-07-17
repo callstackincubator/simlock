@@ -86,8 +86,7 @@ Conclusions baked into the drivers:
   fallback-to-cold-boot.
 - **Readiness probes**: iOS `simctl bootstatus` (variance observed up to
   ~30% — use generous timeouts, not a hard SLA). Android:
-  `sys.boot_completed == 1` AND (`init.svc.bootanim == "stopped"` OR unset —
-  the property is never set under `-no-boot-anim`).
+  `sys.boot_completed == 1` AND (`init.svc.bootanim == "stopped"` OR unset).
 
 ## Leases
 

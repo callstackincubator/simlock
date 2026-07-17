@@ -207,9 +207,6 @@ export class AndroidDriver implements Driver {
         data.avdName,
         "-port",
         String(data.port),
-        "-no-window",
-        "-no-audio",
-        "-no-boot-anim",
         ...(state.needsWipe ? ["-wipe-data", "-no-snapshot-load"] : []),
       ];
       const handle = this.#processRunner.spawn(this.#sdk.emulator, args);

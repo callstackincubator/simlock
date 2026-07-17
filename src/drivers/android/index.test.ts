@@ -168,12 +168,12 @@ describe("AndroidDriver", () => {
     expect(secondDevice.driverData).toMatchObject({ avdName: "pitlane_second", port: 5558 });
   });
 
-  it("treats an unset boot animation property as ready", async () => {
+  it("launches the emulator with its normal interactive defaults", async () => {
     const harness = await provisionedHarness();
 
     await expect(harness.driver.makeReady(harness.device)).resolves.toBeUndefined();
     expect(harness.runner.calls.at(-3)).toMatchObject({
-      args: ["-avd", "pitlane_one", "-port", "5554", "-no-window", "-no-audio", "-no-boot-anim"],
+      args: ["-avd", "pitlane_one", "-port", "5554"],
       command: binaries.emulator,
     });
   });
@@ -251,17 +251,7 @@ describe("AndroidDriver", () => {
     await harness.driver.makeReady(harness.device);
 
     expect(harness.runner.calls).toContainEqual({
-      args: [
-        "-avd",
-        "pitlane_one",
-        "-port",
-        "5554",
-        "-no-window",
-        "-no-audio",
-        "-no-boot-anim",
-        "-wipe-data",
-        "-no-snapshot-load",
-      ],
+      args: ["-avd", "pitlane_one", "-port", "5554", "-wipe-data", "-no-snapshot-load"],
       command: binaries.emulator,
       options: {},
     });
@@ -397,7 +387,7 @@ async function provisionedHarness(
       hangs: true,
       match: {
         command: binaries.emulator,
-        args: ["-avd", "pitlane_one", "-port", "5554", "-no-window", "-no-audio", "-no-boot-anim"],
+        args: ["-avd", "pitlane_one", "-port", "5554"],
       },
     });
     if (options.initialAdbFailure === true) {
@@ -430,17 +420,7 @@ async function provisionedHarness(
       hangs: true,
       match: {
         command: binaries.emulator,
-        args: [
-          "-avd",
-          "pitlane_one",
-          "-port",
-          "5554",
-          "-no-window",
-          "-no-audio",
-          "-no-boot-anim",
-          "-wipe-data",
-          "-no-snapshot-load",
-        ],
+        args: ["-avd", "pitlane_one", "-port", "5554", "-wipe-data", "-no-snapshot-load"],
       },
     });
     expectations.push(
