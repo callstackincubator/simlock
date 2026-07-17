@@ -14,12 +14,14 @@
     "test": "vitest run src",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
+    "fallow": "fallow",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "fallow": "^3.6.0",
     "oxfmt": "^0.59.0",
     "oxlint": "^1.74.0",
     "typescript": "^7.0.2",
