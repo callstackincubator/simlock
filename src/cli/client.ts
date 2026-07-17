@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_PROTOCOL_VERSION } from "../daemon/server.js";
-import { DaemonClientError, type DaemonConnection } from "./protocol.js";
+import { DaemonClientError, type DaemonConnection, parseDaemonResponse } from "./protocol.js";
 
 interface PendingRequest {
   readonly reject: (error: Error) => void;
@@ -100,20 +100,20 @@ class NodeDaemonConnection implements DaemonConnection {
     }
   }
   #dispatch(value: unknown): void {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    const frame = parseDaemonResponse(value);
+    if (frame === undefined) {
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) return;
       this.#failPending(new Error("Daemon sent an invalid frame"));
       return;
     }
-    const frame = value as Record<string, unknown>;
-    if (typeof frame.push === "string") {
+    if (frame.kind === "push") {
       for (const listener of this.#listeners) listener(frame.push, frame.payload);
       return;
     }
-    if (typeof frame.id !== "number") return;
     const pending = this.#pending.get(frame.id);
     if (pending === undefined) return;
     this.#pending.delete(frame.id);
-    if (frame.ok === true) {
+    if (frame.kind === "success") {
       pending.resolve(frame.payload);
       return;
     }
