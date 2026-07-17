@@ -1,17 +1,16 @@
 # Implementation loop
 
-Instructions for the sub-agent implementing one Pitlane stage. You are given a
-stage file path (for example `docs/stages/02-max-running.md`). Work through
-these phases in order; do not skip the self-review.
+Historical instructions for implementing a Pitlane stage. Completed stage
+specifications have been removed from `docs/stages/`.
 
 ## Phase 0 — Orient
 
 1. Read `AGENTS.md`, all of `docs/agent-rules/`, and `docs/ARCHITECTURE.md`.
    The agent rules are binding; architecture violations are defects even if
    tests pass.
-2. Read your stage file completely, and `docs/stages/README.md` to confirm
-   every stage yours depends on is marked `done`. If a dependency is not
-   done, STOP and report — do not implement around it.
+2. Read the relevant stage specification and confirm every stage it depends on
+   is marked `done`. If a dependency is not done, STOP and report — do not
+   implement around it.
 3. Skim the existing code your stage builds on (the modules named in the
    stage file). Verify `pnpm check` is green before you change anything; if
    it isn't, STOP and report.
@@ -52,7 +51,7 @@ these phases in order; do not skip the self-review.
 
 ## Phase 4 — Finish
 
-12. Update `docs/stages/README.md`: flip your stage's Status to `done`.
+12. Update the stage tracker: flip your stage's Status to `done`.
 13. Commit everything as ONE commit:
     `stage NN: <stage title>` + a body summarizing what was built, notable
     decisions, and any TODO(stage-NN) markers left. Do not push. Verify the
