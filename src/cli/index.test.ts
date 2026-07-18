@@ -338,6 +338,273 @@ describe("CLI human rendering (interactive terminal)", () => {
     secondSignals.emit("SIGTERM");
     await expect(secondRun).resolves.toBe(0);
   });
+
+  it("renders an aligned, colored device table for list --devices", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("list.get", [
+      {
+        id: "dev_1",
+        spec: { model: "iPhone 16", osVersion: "18.0", platform: "ios" },
+        state: "ready",
+      },
+      {
+        id: "dev_2",
+        spec: { model: "Pixel 8", osVersion: "15", platform: "android" },
+        state: "booting",
+      },
+    ]);
+
+    await expect(
+      runCli(["list", "--devices"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("ID");
+    expect(rendered).toContain("dev_1");
+    expect(rendered).toContain("iPhone 16");
+    expect(rendered).toContain("ready");
+    expect(rendered).toContain("dev_2");
+    expect(rendered).toContain("booting");
+  });
+
+  it("renders a dim placeholder line for an empty list", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("list.get", []);
+
+    await expect(
+      runCli(["list", "--leases"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(stripAnsi(output.stdout).trim()).toBe("No leases");
+  });
+
+  it("renders leases with a human-relative granted time", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("list.get", [
+      {
+        deviceId: "dev_1",
+        grantedAt: Date.now() - 3 * 60_000,
+        id: "lse_1",
+        requesterId: "agent-a",
+      },
+    ]);
+
+    await expect(
+      runCli(["list", "--leases"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("lse_1");
+    expect(rendered).toContain("agent-a");
+    expect(rendered).toMatch(/3m ago/);
+  });
+
+  it("renders planned cleanup actions with arrows on --dry-run", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("cleanup.run", [
+      { action: "shutdown", reason: "idle 10m", rule: "idle-shutdown", target: "dev_1" },
+    ]);
+
+    await expect(
+      runCli(["cleanup", "--dry-run"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("→ idle-shutdown: shutdown dev_1 (idle 10m)");
+  });
+
+  it("renders performed cleanup actions with checkmarks and a summary", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("cleanup.run", [
+      { action: "shutdown", reason: "idle 10m", rule: "idle-shutdown", target: "dev_1" },
+    ]);
+
+    await expect(
+      runCli(["cleanup"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("✓ idle-shutdown: shutdown dev_1 (idle 10m)");
+    expect(rendered).toContain("1 action, 0 failures");
+  });
+
+  it("renders 'Nothing to clean up' when there are no proposals", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("cleanup.run", []);
+
+    await expect(
+      runCli(["cleanup"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(stripAnsi(output.stdout).trim()).toBe("Nothing to clean up");
+  });
+
+  it("renders doctor findings with colored glyphs and a summary", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [
+        { deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" },
+        { device: { deviceId: "dev_2" }, kind: "orphan-process", platform: "android" },
+      ],
+    });
+
+    await expect(
+      runCli(["doctor"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("✗ Registry device dev_1");
+    expect(rendered).toContain("! Orphan android process for device dev_2");
+    expect(rendered).toContain("2 findings");
+  });
+
+  it("renders doctor findings as fixed when --fix is passed", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [{ deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" }],
+    });
+
+    await expect(
+      runCli(["doctor", "--fix"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("✓ Registry device dev_1");
+    expect(rendered).toContain("1 finding, 1 fixed");
+  });
+
+  it("renders 'No issues found' when doctor finds nothing", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("doctor.run", { findings: [] });
+
+    await expect(
+      runCli(["doctor"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(stripAnsi(output.stdout)).toContain("No issues found");
+  });
+
+  it("renders a red warning and proceeds after an interactive nuke is confirmed", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("nuke.run", { deletedDevices: [], releasedLeaseIds: ["lse_1", "lse_2"] });
+    const confirm = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      runCli(["nuke"], output.environmentWith({ confirm, connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0]?.[0]).toContain("force-release every active lease");
+    expect(stripAnsi(output.stdout)).toContain("Released 2 leases");
+  });
+
+  it("exits like the unconfirmed path when an interactive nuke is declined or cancelled", async () => {
+    const output = outputCapture({ interactive: true });
+    const confirm = vi.fn().mockResolvedValue(false);
+
+    await expect(runCli(["nuke"], output.environmentWith({ confirm }))).resolves.toBe(2);
+    expect(output.stdout).toBe("");
+    expect(stripAnsi(output.stderr)).toContain("nuke requires confirmation or --yes");
+  });
+
+  it("skips the confirm prompt entirely when --yes is passed", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("nuke.run", { deletedDevices: [], releasedLeaseIds: [] });
+    const confirm = vi.fn().mockResolvedValue(false);
+
+    await expect(
+      runCli(
+        ["nuke", "--yes"],
+        output.environmentWith({ confirm, connect: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("renders each event with a dim time, colored name, and payload summary", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("events.replay", [
+      {
+        event: "lease.granted",
+        module: "daemon",
+        payload: { deviceId: "dev_1", leaseId: "lse_1" },
+        seq: 1,
+        timestamp: Date.now(),
+      },
+    ]);
+
+    await expect(
+      runCli(["events"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("lease.granted");
+    expect(rendered).toContain("leaseId=lse_1");
+  });
+
+  it("renders colored daemon state words for start/stop/status", async () => {
+    const running = outputCapture({ interactive: true });
+    const startConnection = new StubConnection();
+    await expect(
+      runCli(
+        ["daemon", "start"],
+        running.environmentWith({ connect: async () => startConnection }),
+      ),
+    ).resolves.toBe(0);
+    expect(stripAnsi(running.stdout)).toContain("Daemon ● running");
+
+    const stopping = outputCapture({ interactive: true });
+    const stopConnection = new StubConnection();
+    await expect(
+      runCli(
+        ["daemon", "stop"],
+        stopping.environmentWith({ connectExisting: async () => stopConnection }),
+      ),
+    ).resolves.toBe(0);
+    expect(stripAnsi(stopping.stdout)).toContain("Daemon ● stopping");
+
+    const stopped = outputCapture({ interactive: true });
+    await expect(
+      runCli(
+        ["daemon", "status"],
+        stopped.environmentWith({
+          connectExisting: async () => {
+            throw new Error("daemon not running");
+          },
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(stripAnsi(stopped.stdout)).toContain("Daemon ● stopped");
+  });
+
+  it("renders the effective configuration as an indented, dim-keyed tree", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("config.get", {
+      lease: { detachedTtlMs: 60_000 },
+      limits: { maxRunning: 2 },
+    });
+
+    await expect(
+      runCli(["config"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("lease:");
+    expect(rendered).toContain("detachedTtlMs:");
+    expect(rendered).toContain("60000");
+  });
+
+  it("renders a confirmation line with the new value and restart note for config set", async () => {
+    const output = outputCapture({ interactive: true });
+
+    await expect(
+      runCli(["config", "set", "lease.detachedTtlMs", "90000"], output.environmentWith({})),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("lease.detachedTtlMs = 90000");
+    expect(rendered).toContain("takes effect on next daemon restart");
+  });
 });
 
 describe("CLI JSON agent contract (pinned exact bytes)", () => {
@@ -501,6 +768,160 @@ describe("CLI JSON agent contract (pinned exact bytes)", () => {
     await expect(runCli(["release", "--all"], output.environment)).resolves.toBe(2);
     expect(output.stdout).toBe("");
     expect(output.stderr).toBe(`release --all requires confirmation or --yes\n${USAGE_TEXT}\n`);
+  });
+
+  it("pins list --devices to the raw daemon array, verbatim", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const devices = [
+      {
+        id: "dev_1",
+        spec: { model: "iPhone 16", osVersion: "18.0", platform: "ios" },
+        state: "ready",
+      },
+    ];
+    connection.response("list.get", devices);
+
+    await expect(
+      runCli(["list", "--devices"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(`${JSON.stringify(devices)}\n`);
+  });
+
+  it("pins cleanup --dry-run to the raw proposal array, verbatim", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const proposals = [
+      { action: "shutdown", reason: "idle 10m", rule: "idle-shutdown", target: "dev_1" },
+    ];
+    connection.response("cleanup.run", proposals);
+
+    await expect(
+      runCli(["cleanup", "--dry-run"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(`${JSON.stringify(proposals)}\n`);
+  });
+
+  it("pins doctor.run to the raw report object, verbatim", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const report = {
+      findings: [{ deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" }],
+    };
+    connection.response("doctor.run", report);
+
+    await expect(
+      runCli(["doctor"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(`${JSON.stringify(report)}\n`);
+  });
+
+  it("pins nuke.run to the raw result object, verbatim", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const result = { deletedDevices: [], releasedLeaseIds: ["lse_1"] };
+    connection.response("nuke.run", result);
+
+    await expect(
+      runCli(["nuke", "--yes"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(`${JSON.stringify(result)}\n`);
+  });
+
+  it("pins events replay to raw JSON lines, one event per line", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const event = {
+      event: "lease.granted",
+      module: "daemon",
+      payload: { deviceId: "dev_1", leaseId: "lse_1" },
+      seq: 1,
+      timestamp: 1_000,
+    };
+    connection.response("events.replay", [event]);
+
+    await expect(
+      runCli(["events"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(`${JSON.stringify(event)}\n`);
+  });
+
+  it("pins daemon start/stop/status/logs to their existing raw payloads", async () => {
+    const start = outputCapture();
+    const startConnection = new StubConnection();
+    await expect(
+      runCli(["daemon", "start"], start.environmentWith({ connect: async () => startConnection })),
+    ).resolves.toBe(0);
+    expect(start.stdout).toBe('{"status":"running"}\n');
+
+    const stop = outputCapture();
+    const stopConnection = new StubConnection();
+    await expect(
+      runCli(
+        ["daemon", "stop"],
+        stop.environmentWith({ connectExisting: async () => stopConnection }),
+      ),
+    ).resolves.toBe(0);
+    expect(stop.stdout).toBe('{"status":"stopping"}\n');
+
+    const status = outputCapture();
+    await expect(
+      runCli(
+        ["daemon", "status"],
+        status.environmentWith({
+          connectExisting: async () => {
+            throw new Error("daemon not running");
+          },
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(status.stdout).toBe('{"status":"stopped"}\n');
+
+    const logs = outputCapture();
+    await expect(
+      runCli(
+        ["daemon", "logs"],
+        logs.environmentWith({ readLogFile: async () => "line one\nline two\n" }),
+      ),
+    ).resolves.toBe(0);
+    expect(logs.stdout).toBe("line one\nline two\n");
+  });
+
+  it("pins a running daemon status to the raw status.get payload, not a {status} wrapper", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const daemonStatus = { devices: [], health: "running", leases: [] };
+    connection.response("status.get", daemonStatus);
+
+    await expect(
+      runCli(
+        ["daemon", "status"],
+        output.environmentWith({ connectExisting: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(`${JSON.stringify(daemonStatus)}\n`);
+  });
+
+  it("pins config get/set to their existing raw payloads", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("config.get", { lease: { detachedTtlMs: 60_000 } });
+
+    await expect(
+      runCli(["config"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe('{"lease":{"detachedTtlMs":60000}}\n');
+
+    const setOutput = outputCapture();
+    await expect(
+      runCli(["config", "set", "lease.detachedTtlMs", "90000"], setOutput.environment),
+    ).resolves.toBe(0);
+    expect(JSON.parse(setOutput.stdout)).toEqual({
+      configPath: "/config.json",
+      effectiveAt: "next daemon restart",
+      key: "lease.detachedTtlMs",
+      updated: true,
+    });
   });
 });
 

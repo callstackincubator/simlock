@@ -2,6 +2,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 
+import { confirm as clackConfirm, isCancel, log } from "@clack/prompts";
+import pc from "picocolors";
+
 import { NodeFilesystem } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "./client.js";
 import { DaemonClientError, type DaemonConnection } from "./protocol.js";
@@ -85,7 +88,7 @@ function defaultCliEnvironment(): CliEnvironment {
     signals: process,
     stderr: process.stderr,
     stdout: process.stdout,
-    confirm: confirmTerminal,
+    confirm: process.stdout.isTTY === true ? confirmInteractive : confirmTerminal,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -266,7 +269,8 @@ async function runRelease(
   if (values.all) {
     if (positionals.length > 0)
       throw new UsageError("release accepts either a lease id or --all, not both");
-    const confirmed = values.yes ?? (await environment.confirm?.("Release every lease? [y/N] "));
+    const confirmed =
+      values.yes ?? (await environment.confirm?.("This will force-release every active lease."));
     if (!confirmed) throw new UsageError("release --all requires confirmation or --yes");
     renderer.result(await requestOnce(environment, "lease.release-all", {}));
     return 0;
@@ -317,7 +321,7 @@ async function runList(
   if ([values.devices, values.leases, values.rules].filter(Boolean).length > 1)
     throw new UsageError("list accepts only one of --devices, --leases, or --rules");
   const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
-  renderer.result(await requestOnce(environment, "list.get", { kind }));
+  renderer.list(kind, await requestOnce(environment, "list.get", { kind }));
   return 0;
 }
 
@@ -336,12 +340,12 @@ async function runCleanup(
     renderer.info("Usage: pitlane cleanup [--dry-run] [--rule <name>] [--json]");
     return 0;
   }
-  renderer.result(
-    await requestOnce(environment, "cleanup.run", {
-      dryRun: values["dry-run"] ?? false,
-      ...(typeof values.rule === "string" ? { rule: values.rule } : {}),
-    }),
-  );
+  const dryRun = values["dry-run"] === true;
+  const actions = await requestOnce(environment, "cleanup.run", {
+    dryRun,
+    ...(typeof values.rule === "string" ? { rule: values.rule } : {}),
+  });
+  renderer.cleanup(actions, { dryRun });
   return 0;
 }
 
@@ -359,7 +363,9 @@ async function runDoctor(
     renderer.info("Usage: pitlane doctor [--fix] [--json]");
     return 0;
   }
-  renderer.result(await requestOnce(environment, "doctor.run", { fix: values.fix ?? false }));
+  const fix = values.fix === true;
+  const report = await requestOnce(environment, "doctor.run", { fix });
+  renderer.doctor(report, { fix });
   return 0;
 }
 
@@ -378,14 +384,13 @@ async function runNuke(
     renderer.info("Usage: pitlane nuke [--delete-devices] [--yes] [--json]");
     return 0;
   }
-  const confirmed =
-    values.yes ?? (await environment.confirm?.("Nuke Pitlane-managed devices? [y/N] "));
+  const deleteDevices = values["delete-devices"] ?? false;
+  const warning = deleteDevices
+    ? "This will force-release every active lease, shut down every Pitlane-managed device, and delete them from the registry."
+    : "This will force-release every active lease and shut down every Pitlane-managed device.";
+  const confirmed = values.yes ?? (await environment.confirm?.(warning));
   if (!confirmed) throw new UsageError("nuke requires confirmation or --yes");
-  renderer.result(
-    await requestOnce(environment, "nuke.run", {
-      deleteDevices: values["delete-devices"] ?? false,
-    }),
-  );
+  renderer.nuke(await requestOnce(environment, "nuke.run", { deleteDevices }));
   return 0;
 }
 
@@ -406,7 +411,7 @@ async function runEvents(
   }
   const connection = await environment.connect();
   const unsubscribe = connection.onPush((kind, payload) => {
-    if (kind === "event") renderer.result(payload);
+    if (kind === "event") renderer.event(payload);
   });
   try {
     const sinceTs =
@@ -415,7 +420,7 @@ async function runEvents(
         : undefined;
     const replayPayload = sinceTs === undefined ? {} : { sinceTs };
     for (const event of requireArray(await connection.request("events.replay", replayPayload)))
-      renderer.result(event);
+      renderer.event(event);
     if (values.follow) {
       await connection.request("events.subscribe", {});
       await waitForTermination(environment.signals);
@@ -445,7 +450,7 @@ async function runDaemon(
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
   if (command === "start") {
     await requestOnce(environment, "status.get", {});
-    renderer.result({ status: "running" });
+    renderer.daemonState("running", { status: "running" });
     return 0;
   }
   if (command === "stop") {
@@ -455,19 +460,24 @@ async function runDaemon(
     } finally {
       await connection.close();
     }
-    renderer.result({ status: "stopping" });
+    renderer.daemonState("stopping", { status: "stopping" });
     return 0;
   }
   if (command === "status") {
     try {
       const connection = await (environment.connectExisting ?? environment.connect)();
       try {
-        renderer.result(await connection.request("status.get", {}));
+        const status = await connection.request("status.get", {});
+        const health =
+          typeof status === "object" && status !== null && !Array.isArray(status)
+            ? (status as Record<string, unknown>).health
+            : undefined;
+        renderer.daemonState(typeof health === "string" ? health : "running", status);
       } finally {
         await connection.close();
       }
     } catch {
-      renderer.result({ status: "stopped" });
+      renderer.daemonState("stopped", { status: "stopped" });
     }
     return 0;
   }
@@ -489,7 +499,7 @@ async function runConfig(
 ): Promise<number> {
   const command = argv[0];
   if (command === undefined || command === "--json") {
-    renderer.result(await requestOnce(environment, "config.get", {}));
+    renderer.config(await requestOnce(environment, "config.get", {}));
     return 0;
   }
   if (command === "get") {
@@ -500,7 +510,7 @@ async function runConfig(
       key,
     );
     if (value === undefined) throw new UsageError(`Unknown config key: ${key}`);
-    renderer.result(value);
+    renderer.config(value);
     return 0;
   }
   if (command === "set") {
@@ -509,14 +519,18 @@ async function runConfig(
     if (key === undefined || rawValue === undefined || extra.length > 0)
       throw new UsageError("Usage: pitlane config set <key> <value>");
     const config = await environment.readConfigFile();
-    writeConfigValue(config, key, parseConfigValue(rawValue));
+    const value = parseConfigValue(rawValue);
+    writeConfigValue(config, key, value);
     await environment.writeConfigFile(config);
-    renderer.result({
-      configPath: environment.configPath,
-      effectiveAt: "next daemon restart",
-      key,
-      updated: true,
-    });
+    renderer.configSet(
+      {
+        configPath: environment.configPath,
+        effectiveAt: "next daemon restart",
+        key,
+        updated: true,
+      },
+      { key, value },
+    );
     return 0;
   }
   if (isHelp(command)) {
@@ -625,10 +639,21 @@ async function confirmTerminal(question: string): Promise<boolean> {
   const { createInterface } = await import("node:readline/promises");
   const prompt = createInterface({ input: process.stdin, output: process.stderr });
   try {
-    return (await prompt.question(question)).trim().toLowerCase() === "y";
+    return (await prompt.question(`${question} [y/N] `)).trim().toLowerCase() === "y";
   } finally {
     prompt.close();
   }
+}
+/**
+ * Default `confirm` implementation when interactive: a red warning line stating
+ * exactly what will be destroyed, then a clack confirm prompt. A clack cancel
+ * (Ctrl+C / Esc) resolves to `false`, the same as answering "no".
+ */
+async function confirmInteractive(question: string): Promise<boolean> {
+  const colors = pc.createColors(!process.env.NO_COLOR);
+  log.warn(colors.red(question), { output: process.stderr });
+  const answer = await clackConfirm({ message: "Proceed?", output: process.stderr });
+  return !isCancel(answer) && answer === true;
 }
 function isHelp(value: string | undefined): boolean {
   return value === "--help" || value === "-h";
