@@ -5,7 +5,14 @@ import { parseArgs } from "node:util";
 import { NodeFilesystem } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "./client.js";
 import { DaemonClientError, type DaemonConnection } from "./protocol.js";
-import { JsonRenderer, requireArray, requireObject, type Renderer } from "./render.js";
+import {
+  HumanRenderer,
+  JsonRenderer,
+  requireArray,
+  requireObject,
+  type LeaseGrant,
+  type Renderer,
+} from "./render.js";
 
 export { DaemonClientError, type DaemonConnection } from "./protocol.js";
 
@@ -90,7 +97,13 @@ export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment = defaultCliEnvironment(),
 ): Promise<number> {
-  const renderer: Renderer = new JsonRenderer(environment);
+  // Output-mode policy: `--json` always wins; otherwise human rendering only
+  // in an interactive terminal, JSON everywhere else (piped/redirected — the
+  // agent case). See docs/CLI.md "Output modes".
+  const useHuman = environment.interactive === true && !argv.includes("--json");
+  const renderer: Renderer = useHuman
+    ? new HumanRenderer(environment)
+    : new JsonRenderer(environment);
   try {
     if (argv.length === 0 || isHelp(argv[0])) {
       renderer.info(USAGE);
@@ -193,11 +206,12 @@ async function runLease(
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
     const result = leaseResult(response);
-    renderer.result(result);
+    renderer.leaseGranted(result, { held: !detached });
     if (detached) return 0;
     await termination;
     try {
       await connection.request("lease.release", { leaseId: result.lease });
+      renderer.leaseReleased();
     } catch (error: unknown) {
       renderer.error(`Lease release failed after signal: ${errorMessage(error)}`);
     }
@@ -431,8 +445,7 @@ async function runDaemon(
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
   if (command === "start") {
     await requestOnce(environment, "status.get", {});
-    if (values.json) renderer.result({ status: "running" });
-    else renderer.info("Daemon running");
+    renderer.result({ status: "running" });
     return 0;
   }
   if (command === "stop") {
@@ -442,8 +455,7 @@ async function runDaemon(
     } finally {
       await connection.close();
     }
-    if (values.json) renderer.result({ status: "stopping" });
-    else renderer.info("Daemon stopping");
+    renderer.result({ status: "stopping" });
     return 0;
   }
   if (command === "status") {
@@ -455,8 +467,7 @@ async function runDaemon(
         await connection.close();
       }
     } catch {
-      if (values.json) renderer.result({ status: "stopped" });
-      else renderer.info("Daemon stopped");
+      renderer.result({ status: "stopped" });
     }
     return 0;
   }
@@ -500,7 +511,12 @@ async function runConfig(
     const config = await environment.readConfigFile();
     writeConfigValue(config, key, parseConfigValue(rawValue));
     await environment.writeConfigFile(config);
-    renderer.info(`Updated ${key} in ${environment.configPath}; takes effect on daemon restart.`);
+    renderer.result({
+      configPath: environment.configPath,
+      effectiveAt: "next daemon restart",
+      key,
+      updated: true,
+    });
     return 0;
   }
   if (isHelp(command)) {
@@ -535,7 +551,7 @@ function commandArgs(
   }
 }
 
-function leaseResult(value: unknown): Record<string, unknown> & { readonly lease: string } {
+function leaseResult(value: unknown): LeaseGrant {
   const grant = requireObject(value);
   const lease = requireObject(grant.lease);
   const device = requireObject(grant.device);

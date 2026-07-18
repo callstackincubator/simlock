@@ -200,8 +200,8 @@ describe("CLI boundary", () => {
     `);
   });
 
-  it("renders managed and running capacity separately", async () => {
-    const output = outputCapture();
+  it("renders managed and running capacity separately in an interactive terminal", async () => {
+    const output = outputCapture({ interactive: true });
     const connection = new StubConnection();
     connection.response("status.get", {
       capacity: {
@@ -232,8 +232,111 @@ describe("CLI boundary", () => {
     await expect(
       runCli(["status"], output.environmentWith({ connect: async () => connection })),
     ).resolves.toBe(0);
-    expect(output.stdout).toContain("Running global: 1 + 1 reserved/3, warm 1");
-    expect(output.stdout).toContain("Capacity ios: managed 3/4, running 1 + 1 reserved/2, warm 1");
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("Capacity global: running 1 + 1 reserved/3, warm 1");
+    expect(rendered).toContain("Capacity ios: managed 3/4, running 1 + 1 reserved/2, warm 1");
+  });
+});
+
+describe("CLI human rendering (interactive terminal)", () => {
+  it("renders health and capacity in the interactive status report", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("status.get", {
+      capacity: {
+        global: { maxRunning: 3, overLimit: false, reserved: 1, running: 1, warm: 1 },
+        ios: {
+          limit: 4,
+          maxRunning: 2,
+          overLimit: false,
+          reserved: 1,
+          running: 1,
+          used: 3,
+          warm: 1,
+        },
+        android: {
+          limit: 2,
+          maxRunning: 2,
+          overLimit: false,
+          reserved: 0,
+          running: 0,
+          used: 1,
+          warm: 0,
+        },
+      },
+      devices: [{ id: "dev_1", state: "ready" }],
+      leases: [{ grantedAt: 1_000, id: "lse_1", requesterId: "agent-a" }],
+      queueDepth: 2,
+    });
+
+    await expect(
+      runCli(["status"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("Daemon: running");
+    expect(rendered).toContain("Capacity ios: managed 3/4");
+    expect(rendered).toContain("Capacity android: managed 1/2");
+    expect(rendered).toContain("dev_1");
+    expect(rendered).toContain("lse_1");
+    expect(rendered).toContain("Queue depth: 2");
+  });
+
+  it("renders an interactive lease flow: intro, details, holding line, outro on release", async () => {
+    const harness = await createHarness();
+    const output = outputCapture({ interactive: true });
+    const signals = new EventEmitter();
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        signals,
+      }),
+    );
+
+    await vi.waitFor(() => expect(stripAnsi(output.stdout)).toContain("iPhone 16"));
+    const stderrAtGrant = stripAnsi(output.stderr);
+    expect(stderrAtGrant).toContain("pitlane");
+    expect(stderrAtGrant).toContain("Holding lease");
+    expect(stripAnsi(output.stdout)).toContain("26.5");
+
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+    expect(stripAnsi(output.stderr)).toContain("Lease released");
+    await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
+  });
+
+  it("shows queue position while a second interactive holder waits", async () => {
+    const harness = await createHarness();
+    const first = outputCapture();
+    const second = outputCapture({ interactive: true });
+    const firstSignals = new EventEmitter();
+    const secondSignals = new EventEmitter();
+    const firstRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      first.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        requesterId: "agent-a",
+        signals: firstSignals,
+      }),
+    );
+    await vi.waitFor(() => expect(first.stdout).not.toBe(""));
+    const secondRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      second.environmentWith({
+        connect: () => connectExistingDaemon(harness.socketPath),
+        requesterId: "agent-b",
+        signals: secondSignals,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(stripAnsi(second.stderr)).toContain("Waiting in queue (position 1)"),
+    );
+
+    firstSignals.emit("SIGTERM");
+    await expect(firstRun).resolves.toBe(0);
+    await vi.waitFor(() => expect(stripAnsi(second.stdout)).toContain("iPhone 16"));
+    secondSignals.emit("SIGTERM");
+    await expect(secondRun).resolves.toBe(0);
   });
 });
 
@@ -346,10 +449,9 @@ describe("CLI JSON agent contract (pinned exact bytes)", () => {
     expect(output.stdout).toBe('{"devices":[],"leases":[],"revision":3}\n');
   });
 
-  it("pins status plain-text formatting exactly", async () => {
+  it("pins non-interactive status (no --json) to raw JSON, same as --json (contract change)", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("status.get", {
+    const statusPayload = {
       capacity: {
         global: { maxRunning: 3, overLimit: false, reserved: 1, running: 1, warm: 1 },
         ios: {
@@ -374,24 +476,15 @@ describe("CLI JSON agent contract (pinned exact bytes)", () => {
       devices: [{ id: "dev_1", state: "ready" }],
       leases: [{ grantedAt: 1_000, id: "lse_1", requesterId: "agent-a" }],
       queueDepth: 2,
-    });
+    };
+    const connection = new StubConnection();
+    connection.response("status.get", statusPayload);
 
     await expect(
       runCli(["status"], output.environmentWith({ connect: async () => connection })),
     ).resolves.toBe(0);
 
-    expect(output.stdout).toBe(
-      [
-        "Daemon: running",
-        "Running global: 1 + 1 reserved/3, warm 1",
-        "Capacity ios: managed 3/4, running 1 + 1 reserved/2, warm 1",
-        "Capacity android: managed 1/2, running 0 + 0 reserved/2, warm 0",
-        "Device dev_1: ready",
-        "Lease lse_1: agent-a since 1000",
-        "Queue depth: 2",
-        "",
-      ].join("\n"),
-    );
+    expect(output.stdout).toBe(`${JSON.stringify(statusPayload)}\n`);
   });
 
   it("pins the error-case exit code and stderr for an unknown command", async () => {
@@ -523,7 +616,7 @@ function testConfig(): Config {
   };
 }
 
-function outputCapture() {
+function outputCapture(options: { readonly interactive?: boolean } = {}) {
   let stderr = "";
   let stdout = "";
   const environment: CliEnvironment = {
@@ -531,6 +624,7 @@ function outputCapture() {
       throw new Error("Unexpected daemon connection");
     },
     configPath: "/config.json",
+    ...(options.interactive === undefined ? {} : { interactive: options.interactive }),
     readConfigFile: async () => ({}),
     requesterId: "test-requester",
     signals: new EventEmitter(),
@@ -550,4 +644,13 @@ function outputCapture() {
       return stdout;
     },
   };
+}
+
+/** Strips ANSI escape sequences (SGR colors, cursor movement) for assertions on human-mode output. */
+function stripAnsi(value: string): string {
+  const pattern = new RegExp(
+    `[\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d/#&.:=?%@~_]*)*)?)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))`,
+    "g",
+  );
+  return value.replace(pattern, "");
 }

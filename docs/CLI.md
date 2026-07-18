@@ -2,8 +2,20 @@
 
 Part of the user manual: every command the pitlane CLI is expected to
 implement. All commands accept `--json` for machine-readable output (agents
-are the primary audience). Progress/diagnostics go to **stderr** as JSON
-lines; results go to **stdout**.
+are the primary audience). Progress/diagnostics go to **stderr**; results go
+to **stdout**.
+
+## Output modes
+
+- `--json` always selects JSON output, regardless of terminal.
+- Without `--json`, output is JSON whenever stdout is **not** a TTY (piped,
+  redirected, or run by an agent) — this is the primary, scriptable contract.
+- Human-friendly, colorized rendering (via clack + picocolors) only kicks in
+  when running interactively (no `--json`, stdout is a TTY).
+- Progress and decoration (spinners, banners, confirmations) always go to
+  **stderr** in both modes; real command results go to **stdout**.
+- [`NO_COLOR`](https://no-color.org/) is respected: setting it (to any
+  non-empty value) disables color in human mode.
 
 ## Global exit codes
 

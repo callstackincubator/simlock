@@ -21,6 +21,10 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
     "release": "release-it"
   },
+  "dependencies": {
+    "@clack/prompts": "^1.7.0",
+    "picocolors": "^1.1.1"
+  },
   "devDependencies": {
     "@release-it/conventional-changelog": "^11.0.1",
     "@types/node": "^26.1.1",
