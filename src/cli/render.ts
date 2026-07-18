@@ -62,6 +62,20 @@ export interface Renderer {
   configSet(payload: unknown, details: { readonly key: string; readonly value: unknown }): void;
 }
 
+/**
+ * Strips ANSI/SGR escape sequences. Needed because citty's own `renderUsage`
+ * (used for generated `--help` text) colorizes unconditionally unless
+ * `NO_COLOR` is exactly `"1"`, `TERM=dumb`, or `CI`/`TEST` is set — it never
+ * checks TTY-ness. `JsonRenderer` is used for every non-interactive/agent
+ * invocation (piped, redirected, `--json`), so any raw text it forwards
+ * (help output, error/usage text) must never carry color regardless of what
+ * produced it. See docs/CLI.md "Output modes".
+ */
+function stripAnsi(value: string): string {
+  // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+  return value.replace(/\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 export class JsonRenderer implements Renderer {
   readonly #stderr: RendererOutput;
   readonly #stdout: RendererOutput;
@@ -85,15 +99,15 @@ export class JsonRenderer implements Renderer {
   }
 
   info(message: string): void {
-    this.#stdout.write(`${message}\n`);
+    this.#stdout.write(`${stripAnsi(message)}\n`);
   }
 
   error(message: string): void {
-    this.#stderr.write(`${message}\n`);
+    this.#stderr.write(`${stripAnsi(message)}\n`);
   }
 
   usage(text: string): void {
-    this.#stderr.write(`${text}\n`);
+    this.#stderr.write(`${stripAnsi(text)}\n`);
   }
 
   leaseGranted(result: LeaseGrant): void {

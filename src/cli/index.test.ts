@@ -18,6 +18,7 @@ import {
   type CliEnvironment,
   type DaemonConnection,
 } from "./index.js";
+import { JsonRenderer } from "./render.js";
 
 const gibibyte = 1024 ** 3;
 const runningDaemons: DaemonServer[] = [];
@@ -95,6 +96,49 @@ describe("CLI boundary", () => {
     const bareLease = outputCapture();
     await expect(runCli(["lease", "-h"], bareLease.environment)).resolves.toBe(0);
     expect(bareLease.stdout).toContain("--platform");
+  });
+
+  it("JsonRenderer strips ANSI escapes from any raw text it forwards (help/error/usage)", async () => {
+    // citty's own renderUsage colorizes its generated --help text unconditionally unless
+    // NO_COLOR/TERM=dumb/CI/TEST is set — it never checks TTY-ness. JsonRenderer is used for every
+    // non-interactive/agent invocation (piped, redirected, --json), so it must strip any ANSI color it is
+    // handed regardless of source. See docs/CLI.md "Output modes": non-TTY output must never carry color.
+    const ansiText =
+      "\u001b[4m\u001b[1mUSAGE\u001b[22m\u001b[24m \u001b[36mpitlane [OPTIONS]\u001b[39m";
+    let stdout = "";
+    let stderr = "";
+    const renderer = new JsonRenderer({
+      stderr: { write: (value: string) => (stderr += value) },
+      stdout: { write: (value: string) => (stdout += value) },
+    });
+
+    renderer.info(ansiText);
+    renderer.error(ansiText);
+    renderer.usage(ansiText);
+
+    // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+    expect(stdout).not.toMatch(/\u001b\[/);
+    // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+    expect(stderr).not.toMatch(/\u001b\[/);
+    expect(stdout).toContain("USAGE pitlane [OPTIONS]");
+    expect(stderr).toContain("USAGE pitlane [OPTIONS]");
+  });
+
+  it("prints the generated --help/usage text without ANSI escapes end-to-end (non-interactive)", async () => {
+    const root = outputCapture();
+    await expect(runCli(["--help"], root.environment)).resolves.toBe(0);
+    // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+    expect(root.stdout).not.toMatch(/\u001b\[/);
+
+    const lease = outputCapture();
+    await expect(runCli(["lease", "--help"], lease.environment)).resolves.toBe(0);
+    // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+    expect(lease.stdout).not.toMatch(/\u001b\[/);
+
+    const usage = outputCapture();
+    await expect(runCli(["lease"], usage.environment)).resolves.toBe(2);
+    // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+    expect(usage.stderr).not.toMatch(/\u001b\[/);
   });
 
   it("routes nested subcommands: lease renew, daemon logs, config set", async () => {

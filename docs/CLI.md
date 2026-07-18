@@ -118,6 +118,8 @@ leases. `--fix` applies the safe corrections.
 Emergency reset: force-release all leases, kill emulator/simulator processes
 pitlane started, clear the queue. With `--delete-devices`, also destroy every
 registry-managed device. Never touches devices outside the registry.
+Confirmation required unless `--yes` — the warning names exactly what will be
+force-released/destroyed before the prompt.
 
 ## `pitlane events [--follow] [--since <duration>]`
 
