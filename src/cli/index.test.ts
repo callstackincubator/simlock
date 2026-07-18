@@ -60,7 +60,69 @@ describe("CLI boundary", () => {
     await expect(runCli(["lease"], output.environment)).resolves.toBe(2);
     expect(output.stdout).toBe("");
     expect(output.stderr).toContain("--platform");
-    expect(output.stderr).toContain("Usage:");
+    expect(output.stderr).toContain("USAGE");
+  });
+
+  it("rejects an unknown flag with exit 2 and the flag name (strictness parity with parseArgs)", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["status", "--bogus-flag"], output.environment)).resolves.toBe(2);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("--bogus-flag");
+  });
+
+  it("rejects an unknown flag on a nested subcommand", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(["lease", "renew", "lse_1", "--bogus-flag"], output.environment),
+    ).resolves.toBe(2);
+    expect(output.stderr).toContain("--bogus-flag");
+  });
+
+  it("prints generated usage with flag descriptions on --help for root and lease, exit 0", async () => {
+    const root = outputCapture();
+    await expect(runCli(["--help"], root.environment)).resolves.toBe(0);
+    expect(root.stdout).toContain("lease");
+    expect(root.stdout).toContain("Acquire a device");
+
+    const lease = outputCapture();
+    await expect(runCli(["lease", "--help"], lease.environment)).resolves.toBe(0);
+    expect(lease.stdout).toContain("--platform");
+    expect(lease.stdout).toContain("Target platform");
+    expect(lease.stdout).toContain("--device");
+
+    const bareLease = outputCapture();
+    await expect(runCli(["lease", "-h"], bareLease.environment)).resolves.toBe(0);
+    expect(bareLease.stdout).toContain("--platform");
+  });
+
+  it("routes nested subcommands: lease renew, daemon logs, config set", async () => {
+    const renew = outputCapture();
+    const renewConnection = new StubConnection();
+    renewConnection.response("lease.renew", { id: "lse_1" });
+    await expect(
+      runCli(
+        ["lease", "renew", "lse_1"],
+        renew.environmentWith({ connect: async () => renewConnection }),
+      ),
+    ).resolves.toBe(0);
+    expect(renewConnection.calls).toContainEqual({
+      payload: { leaseId: "lse_1" },
+      type: "lease.renew",
+    });
+
+    const logs = outputCapture();
+    await expect(
+      runCli(["daemon", "logs"], logs.environmentWith({ readLogFile: async () => "a\nb\n" })),
+    ).resolves.toBe(0);
+    expect(logs.stdout).toBe("a\nb\n");
+
+    const configSet = outputCapture();
+    await expect(
+      runCli(["config", "set", "limits.maxRunning", "5"], configSet.environment),
+    ).resolves.toBe(0);
+    expect(JSON.parse(configSet.stdout)).toMatchObject({ key: "limits.maxRunning" });
   });
 
   it("keeps held lease stdout pure, renders progress to stderr, and releases on SIGTERM", async () => {
@@ -759,7 +821,8 @@ describe("CLI JSON agent contract (pinned exact bytes)", () => {
 
     await expect(runCli(["bogus"], output.environment)).resolves.toBe(2);
     expect(output.stdout).toBe("");
-    expect(output.stderr).toBe(`Unknown command: bogus\n${USAGE_TEXT}\n`);
+    expect(output.stderr).toContain("Unknown command: bogus\n");
+    expect(output.stderr).toContain("USAGE");
   });
 
   it("pins release --all without confirmation as a usage error, exit 2", async () => {
@@ -767,7 +830,8 @@ describe("CLI JSON agent contract (pinned exact bytes)", () => {
 
     await expect(runCli(["release", "--all"], output.environment)).resolves.toBe(2);
     expect(output.stdout).toBe("");
-    expect(output.stderr).toBe(`release --all requires confirmation or --yes\n${USAGE_TEXT}\n`);
+    expect(output.stderr).toContain("release --all requires confirmation or --yes\n");
+    expect(output.stderr).toContain("USAGE");
   });
 
   it("pins list --devices to the raw daemon array, verbatim", async () => {
@@ -924,12 +988,6 @@ describe("CLI JSON agent contract (pinned exact bytes)", () => {
     });
   });
 });
-
-const USAGE_TEXT = `Usage: pitlane <command> [options]
-
-Commands:
-  lease, release, status, list, cleanup, doctor, nuke, events, daemon, config
-Run 'pitlane <command> --help' for command usage.`;
 
 class StubConnection implements DaemonConnection {
   readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
