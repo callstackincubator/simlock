@@ -530,14 +530,17 @@ describe("CLI human rendering (interactive terminal)", () => {
     connection.response("list.get", [
       {
         deviceId: "dev_1",
-        grantedAt: Date.now() - 3 * 60_000,
+        grantedAt: 820_000,
         id: "lse_1",
         requesterId: "agent-a",
       },
     ]);
 
     await expect(
-      runCli(["list", "--leases"], output.environmentWith({ connect: async () => connection })),
+      runCli(
+        ["list", "--leases"],
+        output.environmentWith({ connect: async () => connection, now: () => 1_000_000 }),
+      ),
     ).resolves.toBe(0);
     const rendered = stripAnsi(output.stdout);
     expect(rendered).toContain("lse_1");
@@ -697,14 +700,18 @@ describe("CLI human rendering (interactive terminal)", () => {
         module: "daemon",
         payload: { deviceId: "dev_1", leaseId: "lse_1" },
         seq: 1,
-        timestamp: Date.now(),
+        timestamp: 1_000_000,
       },
     ]);
 
     await expect(
-      runCli(["events"], output.environmentWith({ connect: async () => connection })),
+      runCli(
+        ["events"],
+        output.environmentWith({ connect: async () => connection, now: () => 1_000_000 }),
+      ),
     ).resolves.toBe(0);
     const rendered = stripAnsi(output.stdout);
+    expect(rendered).toContain("just now");
     expect(rendered).toContain("lease.granted");
     expect(rendered).toContain("leaseId=lse_1");
   });

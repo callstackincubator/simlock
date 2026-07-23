@@ -181,6 +181,7 @@ function progressLine(value: unknown): {
 export class HumanRenderer implements Renderer {
   readonly #colors: ReturnType<typeof pc.createColors>;
   readonly #noColor: boolean;
+  readonly #now: () => number;
   readonly #stderr: RendererOutput;
   readonly #stderrStream: Writable;
   readonly #stdout: RendererOutput;
@@ -189,6 +190,7 @@ export class HumanRenderer implements Renderer {
 
   constructor(environment: {
     readonly noColor?: () => boolean;
+    readonly now?: () => number;
     readonly stderr: RendererOutput;
     readonly stdout: RendererOutput;
   }) {
@@ -198,6 +200,7 @@ export class HumanRenderer implements Renderer {
     // it is not a real `Writable`, but structurally sufficient for clack's calls.
     this.#stderrStream = environment.stderr as unknown as Writable;
     this.#noColor = environment.noColor?.() ?? false;
+    this.#now = environment.now ?? (() => 0);
     this.#colors = pc.createColors(!this.#noColor);
   }
 
@@ -265,11 +268,11 @@ export class HumanRenderer implements Renderer {
   }
 
   list(kind: "devices" | "leases" | "rules", items: unknown): void {
-    this.#stdout.write(`${renderList(kind, requireArray(items), this.#colors)}\n`);
+    this.#stdout.write(`${renderList(kind, requireArray(items), this.#colors, this.#now())}\n`);
   }
 
   event(payload: unknown): void {
-    this.#stdout.write(`${renderEvent(payload, this.#colors)}\n`);
+    this.#stdout.write(`${renderEvent(payload, this.#colors, this.#now())}\n`);
   }
 
   cleanup(actions: unknown, options: { readonly dryRun: boolean }): void {
@@ -429,6 +432,7 @@ function renderList(
   kind: "devices" | "leases" | "rules",
   items: readonly unknown[],
   colors: ReturnType<typeof pc.createColors>,
+  now: number,
 ): string {
   if (items.length === 0) return colors.dim(`No ${kind}`);
   if (kind === "devices") {
@@ -447,7 +451,6 @@ function renderList(
     return renderTable(["ID", "PLATFORM", "MODEL", "OS", "STATE"], rows, colors);
   }
   if (kind === "leases") {
-    const now = Date.now();
     const rows = items.map((item) => {
       const record = requireObject(item);
       return [
@@ -515,11 +518,15 @@ function summarizePayload(value: unknown): string {
   return entries.map(([key, entry]) => `${key}=${formatPayloadValue(entry)}`).join(" ");
 }
 
-function renderEvent(value: unknown, colors: ReturnType<typeof pc.createColors>): string {
+function renderEvent(
+  value: unknown,
+  colors: ReturnType<typeof pc.createColors>,
+  now: number,
+): string {
   const envelope = requireObject(value);
   const name = String(envelope.event);
-  const timestamp = typeof envelope.timestamp === "number" ? envelope.timestamp : Date.now();
-  const time = colors.dim(formatEventTime(timestamp, Date.now()));
+  const timestamp = typeof envelope.timestamp === "number" ? envelope.timestamp : now;
+  const time = colors.dim(formatEventTime(timestamp, now));
   const summary = summarizePayload(envelope.payload);
   const coloredName = eventColor(name, colors)(name);
   return summary === ""
