@@ -5,7 +5,12 @@ import { confirm as clackConfirm, isCancel, log } from "@clack/prompts";
 import pc from "picocolors";
 
 import { NodeFilesystem } from "../ports/index.js";
-import { renderHelp, rootCommand, runTopCommand } from "./commands.js";
+import {
+  assertStrictBooleanFlagSyntax,
+  renderHelp,
+  rootCommand,
+  runTopCommand,
+} from "./commands.js";
 import { connectDaemon, connectExistingDaemon } from "./client.js";
 import { isUsageError } from "./errors.js";
 import { DaemonClientError, type DaemonConnection } from "./protocol.js";
@@ -90,6 +95,7 @@ export async function runCli(
     ? new HumanRenderer(environment)
     : new JsonRenderer(environment);
   try {
+    assertStrictBooleanFlagSyntax(argv);
     if (argv.length === 0 || isHelp(argv[0])) {
       renderer.info(await renderHelp(rootCommand));
       return 0;

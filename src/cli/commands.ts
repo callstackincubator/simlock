@@ -178,6 +178,38 @@ const jsonArg = {
   type: "boolean",
 } as const;
 
+/**
+ * Citty accepts assignments to boolean options (for example `--json=true`).
+ * Pitlane's established flag surface is strict: booleans are presence flags,
+ * so reject assignments before output mode selection can misclassify them.
+ */
+const booleanOptionNames = new Set([
+  "all",
+  "allow-download",
+  "delete-devices",
+  "detach",
+  "devices",
+  "dry-run",
+  "fix",
+  "follow",
+  "help",
+  "json",
+  "leases",
+  "no-wait",
+  "rules",
+  "wait",
+  "yes",
+]);
+
+export function assertStrictBooleanFlagSyntax(argv: readonly string[]): void {
+  for (const argument of argv) {
+    const match = /^--([^=]+)=/.exec(argument);
+    if (match !== null && booleanOptionNames.has(match[1] as string)) {
+      throw new UsageError(`Boolean option does not accept a value: --${match[1] as string}`);
+    }
+  }
+}
+
 // --- lease ------------------------------------------------------------
 
 interface LeaseRequest {

@@ -81,6 +81,15 @@ describe("CLI boundary", () => {
     expect(output.stderr).toContain("--bogus-flag");
   });
 
+  it("rejects value-bearing boolean flags before interactive renderer selection", async () => {
+    const output = outputCapture({ interactive: true });
+
+    await expect(runCli(["status", "--json=true"], output.environment)).resolves.toBe(2);
+
+    expect(output.stdout).toBe("");
+    expect(stripAnsi(output.stderr)).toContain("Boolean option does not accept a value: --json");
+  });
+
   it("prints generated usage with flag descriptions on --help for root and lease, exit 0", async () => {
     const root = outputCapture();
     await expect(runCli(["--help"], root.environment)).resolves.toBe(0);
