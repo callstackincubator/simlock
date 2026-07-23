@@ -24,11 +24,12 @@ async function createHarness() {
     idGenerator: { generate: () => `${nextId++}` },
     statePath,
   });
+  const claims = new DeviceOperationClaims();
   const lifecycle = new ManagedDeviceLifecycle(
     new DriverCatalog([driver]),
     registry,
     new SerializedDecision(),
-    new DeviceOperationClaims(),
+    claims,
     clock,
   );
   const driverDevice = await driver.provision({
@@ -42,7 +43,7 @@ async function createHarness() {
     provisionDuration: 0,
     spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
   });
-  return { clock, device, driver, eventBus, lifecycle, registry };
+  return { claims, clock, device, driver, eventBus, lifecycle, registry };
 }
 
 async function readyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
@@ -137,5 +138,28 @@ describe("ManagedDeviceLifecycle", () => {
 
     harness.driver.releaseMakeReady();
     await expect(booting).resolves.toMatchObject({ state: "ready" });
+  });
+
+  it("retains a boot claim after readiness for the immediate lease handoff", async () => {
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    await harness.driver.shutdown({ deviceId: ready.driverDeviceId, driverData: ready.driverData });
+    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: ready.id, initiator: "test" },
+    });
+    const claim = harness.claims.tryClaim(shutdown.id, "boot");
+    if (claim === undefined) throw new Error("expected boot claim");
+
+    const handoff = await harness.lifecycle.bootForLease(shutdown, claim);
+    expect(handoff).toMatchObject({ device: { state: "ready" } });
+    await expect(
+      harness.lifecycle.shutdown(handoff!.device, "test", "cleanup"),
+    ).resolves.toBeUndefined();
+
+    handoff!.claim.release();
+    await expect(
+      harness.lifecycle.shutdown(handoff!.device, "test", "cleanup"),
+    ).resolves.toMatchObject({ state: "shutdown" });
   });
 });

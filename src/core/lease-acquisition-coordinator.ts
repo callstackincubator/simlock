@@ -10,7 +10,10 @@ import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
 import { type DriverCatalog } from "./driver-catalog.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
-import { type ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
+import {
+  type ManagedDeviceLifecycle,
+  type ReadyDeviceHandoff,
+} from "./managed-device-lifecycle.js";
 import { type SerializedDecision } from "./serialized-decision.js";
 import {
   type LeaseGrant,
@@ -65,7 +68,10 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly leases: Pick<LeaseLifecycle, "grant">;
-  readonly lifecycle: Pick<ManagedDeviceLifecycle, "boot" | "destroy" | "dispose" | "shutdown">;
+  readonly lifecycle: Pick<
+    ManagedDeviceLifecycle,
+    "bootForLease" | "destroy" | "dispose" | "shutdown"
+  >;
   readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly queue: AcquisitionQueue;
@@ -206,9 +212,9 @@ export class LeaseAcquisitionCoordinator {
       reservation.release();
       return;
     }
-    let device: DeviceRecord;
+    let handoff: ReadyDeviceHandoff;
     try {
-      device = await this.options.provisioner.provision(spec, {
+      handoff = await this.options.provisioner.provision(spec, {
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
@@ -233,12 +239,7 @@ export class LeaseAcquisitionCoordinator {
       if (retry) void this.#drive(waiter);
       return;
     }
-    const granted = await this.options.decisions.run(async () => {
-      if (waiter.state === "rejected") return false;
-      await this.#grant(waiter, device.id);
-      return true;
-    });
-    if (!granted) this.#wakeQueue();
+    await this.#grantHandoff(waiter, handoff);
   }
 
   async #decide(waiter: AcquisitionWaiter): Promise<OperationPlan | undefined> {
@@ -347,13 +348,15 @@ export class LeaseAcquisitionCoordinator {
     claim: DeviceOperationClaim,
   ): Promise<void> {
     const driver = this.options.drivers.get(device.spec.platform);
+    let handoff: ReadyDeviceHandoff;
     try {
       this.options.queue.notifyProgress(waiter, {
         stage: "booting",
         etaMs: driver.estimate("boot", device.spec),
       });
-      const ready = await this.options.lifecycle.boot(device, claim);
+      const ready = await this.options.lifecycle.bootForLease(device, claim);
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
+      handoff = ready;
     } catch {
       let destroyed = true;
       try {
@@ -373,19 +376,30 @@ export class LeaseAcquisitionCoordinator {
       if (destroyed) this.#wakeQueue();
       return;
     }
-    const granted = await this.options.decisions.run(async () => {
-      capacityReservation.release();
-      claim.release();
-      if (waiter.state === "rejected") return false;
-      await this.#grant(waiter, device.id);
-      return true;
-    });
-    if (!granted) this.#wakeQueue();
+    await this.#grantHandoff(waiter, handoff, capacityReservation);
   }
 
   #defer(waiter: AcquisitionWaiter): void {
     if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
     else this.#enqueue(waiter);
+  }
+
+  async #grantHandoff(
+    waiter: AcquisitionWaiter,
+    handoff: ReadyDeviceHandoff,
+    capacityReservation?: CapacityReservation,
+  ): Promise<void> {
+    const granted = await this.options.decisions.run(async () => {
+      try {
+        if (waiter.state === "rejected") return false;
+        await this.#grant(waiter, handoff.device.id);
+        return true;
+      } finally {
+        capacityReservation?.release();
+        handoff.claim.release();
+      }
+    });
+    if (!granted) this.#wakeQueue();
   }
 
   #enqueue(waiter: AcquisitionWaiter): void {

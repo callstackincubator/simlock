@@ -92,8 +92,8 @@ export class LeaseEngine {
       lifecycle: this.#deviceLifecycle,
       registry: options.registry,
     });
-    this.#expiry = new LeaseExpiryScheduler(options.clock, async (leaseId) => {
-      await this.#releaseCoordinator.expire(leaseId);
+    this.#expiry = new LeaseExpiryScheduler(options.clock, async (leaseId, expectedDeadline) => {
+      await this.#releaseCoordinator.expire(leaseId, expectedDeadline);
     });
     this.#leases = new LeaseLifecycle({
       clock: options.clock,

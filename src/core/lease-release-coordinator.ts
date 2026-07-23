@@ -12,7 +12,7 @@ export interface LeaseReleaseCommands {
 }
 
 export interface LeaseExpirationAdmin {
-  expire(leaseId: string): Promise<void>;
+  expire(leaseId: string, expectedDeadline?: number): Promise<void>;
 }
 
 export interface LeaseReleaseLifecycle {
@@ -51,18 +51,27 @@ export class LeaseReleaseCoordinator implements LeaseReleaseCommands, LeaseExpir
     return leaseIds;
   }
 
-  async expire(leaseId: string): Promise<void> {
-    await this.#release(leaseId, "expired");
+  async expire(leaseId: string, expectedDeadline?: number): Promise<void> {
+    await this.#release(leaseId, "expired", expectedDeadline);
   }
 
   renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
     return this.options.decisions.run(() => this.options.lifecycle.renew(leaseId, ttlMs));
   }
 
-  async #release(leaseId: string, reason: LeaseReleaseReason | "expired"): Promise<void> {
-    const released = await this.options.decisions.run(() =>
-      this.options.lifecycle.beginRelease(leaseId, reason),
-    );
+  async #release(
+    leaseId: string,
+    reason: LeaseReleaseReason | "expired",
+    expectedDeadline?: number,
+  ): Promise<void> {
+    const released = await this.options.decisions.run(() => {
+      if (expectedDeadline !== undefined) {
+        const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
+        if (current?.ttlDeadline !== expectedDeadline) return undefined;
+      }
+      return this.options.lifecycle.beginRelease(leaseId, reason);
+    });
+    if (released === undefined) return;
     await this.options.warmPool.reclaim(released);
   }
 }

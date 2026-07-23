@@ -55,7 +55,7 @@ async function createHarness(latencyMs?: {
     lifecycle,
     registry,
   });
-  return { clock, driver, eventBus, provisioner, registry };
+  return { clock, driver, eventBus, lifecycle, provisioner, registry };
 }
 
 describe("DeviceProvisioner", () => {
@@ -98,7 +98,7 @@ describe("DeviceProvisioner", () => {
       reservation: reserved,
     });
 
-    expect(ready).toMatchObject({ state: "ready" });
+    expect(ready.device).toMatchObject({ state: "ready" });
     expect(progress).toEqual(["provisioning:30", "booting:20"]);
     expect(readyStateAtEvent).toBe("ready");
     expect(reserved.releaseCount()).toBe(1);
@@ -108,6 +108,20 @@ describe("DeviceProvisioner", () => {
         payload: expect.objectContaining({ duration: 0 }),
       }),
     );
+  });
+
+  it("retains exclusive ownership after ready until the lease handoff releases it", async () => {
+    const harness = await createHarness();
+    const handoff = await harness.provisioner.provision(spec, { reservation: reservation() });
+
+    await expect(
+      harness.lifecycle.shutdown(handoff.device, "test", "cleanup"),
+    ).resolves.toBeUndefined();
+
+    handoff.claim.release();
+    await expect(
+      harness.lifecycle.shutdown(handoff.device, "test", "cleanup"),
+    ).resolves.toMatchObject({ state: "shutdown" });
   });
 
   it("rolls back a registered device and returns BootTimeoutError-compatible failure on boot failure", async () => {

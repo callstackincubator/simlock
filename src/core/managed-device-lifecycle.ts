@@ -34,8 +34,15 @@ export interface ManagedDeviceRegistry {
 }
 
 interface ClaimedDevice {
+  readonly claim: DeviceOperationClaim;
   readonly device: DeviceRecord;
   readonly release: () => void;
+}
+
+/** An exclusively claimed ready device that must be leased or released. */
+export interface ReadyDeviceHandoff {
+  readonly claim: DeviceOperationClaim;
+  readonly device: DeviceRecord;
 }
 
 /**
@@ -60,6 +67,19 @@ export class ManagedDeviceLifecycle {
 
   async readyProvisioned(target: DeviceRecord): Promise<DeviceRecord | undefined> {
     return this.#makeReady(target, "provisioning");
+  }
+
+  /** Makes a device ready while retaining its claim for an immediate lease handoff. */
+  async bootForLease(
+    target: DeviceRecord,
+    claim: DeviceOperationClaim,
+  ): Promise<ReadyDeviceHandoff | undefined> {
+    return this.#makeReadyForLease(target, "shutdown", claim);
+  }
+
+  /** Makes a provisioned device ready while retaining its claim for lease handoff. */
+  async readyProvisionedForLease(target: DeviceRecord): Promise<ReadyDeviceHandoff | undefined> {
+    return this.#makeReadyForLease(target, "provisioning");
   }
 
   async shutdown(
@@ -166,6 +186,39 @@ export class ManagedDeviceLifecycle {
     });
   }
 
+  async #makeReadyForLease(
+    target: DeviceRecord,
+    expectedState: "provisioning" | "shutdown",
+    existingClaim?: DeviceOperationClaim,
+  ): Promise<ReadyDeviceHandoff | undefined> {
+    const claimed = await this.#claim(target, [expectedState], "boot", existingClaim);
+    if (claimed === undefined) return undefined;
+    const startedAt = this.clock.now();
+    try {
+      await this.catalog
+        .get(claimed.device.spec.platform)
+        .makeReady(toDriverDevice(claimed.device));
+    } catch (error: unknown) {
+      await this.#release(claimed);
+      throw error;
+    }
+
+    try {
+      const device = await this.#commitWithoutRelease(claimed, [expectedState], "ready", {
+        event: "device.ready",
+        payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
+      });
+      if (device === undefined) {
+        await this.#release(claimed);
+        return undefined;
+      }
+      return { claim: claimed.claim, device };
+    } catch (error: unknown) {
+      await this.#release(claimed);
+      throw error;
+    }
+  }
+
   async #claim(
     target: DeviceRecord,
     expectedStates: readonly DeviceState[],
@@ -183,10 +236,10 @@ export class ManagedDeviceLifecycle {
         ) {
           return undefined;
         }
-        return { device, release: existingClaim.release };
+        return { claim: existingClaim, device, release: existingClaim.release };
       }
       const claim = this.claims.tryClaim(device.id, operation);
-      return claim === undefined ? undefined : { device, release: claim.release };
+      return claim === undefined ? undefined : { claim, device, release: claim.release };
     });
   }
 

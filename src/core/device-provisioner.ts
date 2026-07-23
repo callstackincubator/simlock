@@ -3,7 +3,7 @@ import type { CapacityReservation } from "./capacity-coordinator.js";
 import type { DeviceRecord, DeviceSpec } from "./domain.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
+import { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import type { LeaseProgress } from "./wait-queue.js";
 
@@ -25,7 +25,7 @@ export interface DeviceProvisionerOptions {
   readonly catalog: DriverCatalog;
   readonly clock: Clock;
   readonly decisions: SerializedDecision;
-  readonly lifecycle: ManagedDeviceLifecycle;
+  readonly lifecycle: Pick<ManagedDeviceLifecycle, "destroy" | "readyProvisionedForLease">;
   readonly registry: DeviceProvisionerRegistry;
 }
 
@@ -38,7 +38,7 @@ export interface ProvisionDeviceOptions {
 export class DeviceProvisioner {
   constructor(private readonly options: DeviceProvisionerOptions) {}
 
-  async provision(spec: DeviceSpec, options: ProvisionDeviceOptions): Promise<DeviceRecord> {
+  async provision(spec: DeviceSpec, options: ProvisionDeviceOptions): Promise<ReadyDeviceHandoff> {
     const driver = this.options.catalog.get(spec.platform);
     const startedAt = this.options.clock.now();
     let driverDevice: DriverDevice;
@@ -61,7 +61,7 @@ export class DeviceProvisioner {
 
     try {
       options.onProgress?.({ stage: "booting", etaMs: driver.estimate("boot", spec) });
-      const ready = await this.options.lifecycle.readyProvisioned(device);
+      const ready = await this.options.lifecycle.readyProvisionedForLease(device);
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);
       return ready;

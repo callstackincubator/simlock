@@ -60,4 +60,15 @@ describe("LeaseExpiryScheduler", () => {
     clock.advance(10);
     expect(clock.pendingTimerCount).toBe(0);
   });
+
+  it("contains asynchronous timer-delivery failures", async () => {
+    const clock = new FakeClock(100);
+    const scheduler = new LeaseExpiryScheduler(clock, async () => {
+      throw new Error("delivery failed");
+    });
+
+    scheduler.arm(lease("one", 110));
+    expect(() => clock.advance(10)).not.toThrow();
+    await Promise.resolve();
+  });
 });

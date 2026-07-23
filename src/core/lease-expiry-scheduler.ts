@@ -1,7 +1,10 @@
 import type { Clock, TimerHandle } from "../ports/index.js";
 import type { LeaseRecord } from "./domain.js";
 
-export type LeaseExpiryHandler = (leaseId: string) => void | Promise<void>;
+export type LeaseExpiryHandler = (
+  leaseId: string,
+  expectedDeadline: number,
+) => void | Promise<void>;
 
 /** Owns TTL timers; expiry is delivered directly to the lease lifecycle. */
 export class LeaseExpiryScheduler {
@@ -17,14 +20,14 @@ export class LeaseExpiryScheduler {
     if (this.#disposed) return;
     this.cancel(lease.id);
     if (lease.ttlDeadline <= this.clock.now()) {
-      void this.#expire(lease.id);
+      void this.#deliverExpiry(lease.id, lease.ttlDeadline);
       return;
     }
     this.#timers.set(
       lease.id,
       this.clock.setTimer(lease.ttlDeadline - this.clock.now(), () => {
         this.#timers.delete(lease.id);
-        void this.#expire(lease.id);
+        void this.#deliverExpiry(lease.id, lease.ttlDeadline);
       }),
     );
   }
@@ -46,7 +49,7 @@ export class LeaseExpiryScheduler {
     for (const lease of [...leases].sort(compareLeaseDeadlines)) {
       this.cancel(lease.id);
       if (lease.ttlDeadline <= this.clock.now()) {
-        await this.#expire(lease.id);
+        await this.#expire(lease.id, lease.ttlDeadline);
       } else {
         this.arm(lease);
       }
@@ -59,8 +62,12 @@ export class LeaseExpiryScheduler {
     this.#disposed = true;
   }
 
-  async #expire(leaseId: string): Promise<void> {
-    if (!this.#disposed) await this.onExpiry(leaseId);
+  #deliverExpiry(leaseId: string, expectedDeadline: number): void {
+    void this.#expire(leaseId, expectedDeadline).catch(() => undefined);
+  }
+
+  async #expire(leaseId: string, expectedDeadline: number): Promise<void> {
+    if (!this.#disposed) await this.onExpiry(leaseId, expectedDeadline);
   }
 }
 

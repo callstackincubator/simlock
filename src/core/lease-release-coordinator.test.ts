@@ -121,6 +121,18 @@ describe("LeaseReleaseCoordinator", () => {
     );
   });
 
+  it("ignores an expiry delivery for a deadline replaced by renewal", async () => {
+    const harness = await createHarness();
+    const granted = await grant(harness, "detached");
+    const staleDeadline = granted.lease.ttlDeadline;
+
+    await harness.coordinator.renew(granted.lease.id, 30);
+    await harness.coordinator.expire(granted.lease.id, staleDeadline);
+
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: granted.lease.id }]);
+    expect(harness.reclaims).toEqual([]);
+  });
+
   it("does not reclaim an unknown lease", async () => {
     const harness = await createHarness();
 
