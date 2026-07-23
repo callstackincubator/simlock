@@ -1,24 +1,27 @@
 import type { EventBus } from "../bus/index.js";
 import type { CapacityReservation } from "./capacity-coordinator.js";
-import { AcquisitionPlanner, type AcquisitionPlan } from "./acquisition-planner.js";
-import { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
-import { DeviceProvisioner } from "./device-provisioner.js";
+import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
+import {
+  type DeviceOperationClaim,
+  type DeviceOperationClaims,
+} from "./device-operation-claims.js";
+import { type DeviceProvisioner } from "./device-provisioner.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
-import { DriverCatalog } from "./driver-catalog.js";
-import { LeaseLifecycle } from "./lease-lifecycle.js";
-import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
-import { SerializedDecision } from "./serialized-decision.js";
+import { type DriverCatalog } from "./driver-catalog.js";
+import { type LeaseLifecycle } from "./lease-lifecycle.js";
+import { type ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
+import { type SerializedDecision } from "./serialized-decision.js";
 import {
   type LeaseGrant,
   type LeaseRequestOptions,
   type LeaseTiming,
   RequesterAlreadyLeasedError,
   type Waiter,
-  WaitQueue,
+  type WaitQueue,
 } from "./wait-queue.js";
 
-export type { LeaseGrant, LeaseProgress, LeaseRequestOptions, LeaseTiming } from "./wait-queue.js";
+export type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
 export { QueueTimeoutError, RequesterAlreadyLeasedError } from "./wait-queue.js";
 export { NoDriverError } from "./driver-catalog.js";
 
@@ -36,16 +39,36 @@ export interface LeaseAcquisitionRegistry {
   };
 }
 
+export type AcquisitionClaims = Pick<DeviceOperationClaims, "isClaimed" | "tryClaim">;
+export type AcquisitionDecision = Pick<SerializedDecision, "run">;
+export type AcquisitionDrivers = Pick<DriverCatalog, "get">;
+export type AcquisitionPlannerPort = Pick<AcquisitionPlanner, "plan">;
+export type AcquisitionQueue = Pick<
+  WaitQueue,
+  | "create"
+  | "depth"
+  | "detachProgress"
+  | "enqueue"
+  | "hasPendingRequester"
+  | "head"
+  | "isQueued"
+  | "markNew"
+  | "markProcessing"
+  | "notifyProgress"
+  | "reject"
+  | "resolve"
+>;
+
 export interface LeaseAcquisitionCoordinatorOptions {
-  readonly claims: DeviceOperationClaims;
-  readonly decisions: SerializedDecision;
-  readonly drivers: DriverCatalog;
+  readonly claims: AcquisitionClaims;
+  readonly decisions: AcquisitionDecision;
+  readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly leases: Pick<LeaseLifecycle, "grant">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "boot" | "destroy" | "dispose" | "shutdown">;
-  readonly planner: AcquisitionPlanner;
+  readonly planner: AcquisitionPlannerPort;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
-  readonly queue: WaitQueue;
+  readonly queue: AcquisitionQueue;
   readonly registry: LeaseAcquisitionRegistry;
 }
 
