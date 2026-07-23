@@ -57,9 +57,15 @@ function createHarness(devices: DeviceRecord[]) {
     },
     devices: lifecycle,
     leases: {
-      async releaseAll(reason) {
+      async beginMaintenance() {
+        calls.push("release-maintenance:begin");
+      },
+      async releaseAllDuringMaintenance(reason) {
         calls.push(`release:${reason}`);
         return ["lse_1", "lse_2"];
+      },
+      async endMaintenance() {
+        calls.push("release-maintenance:end");
       },
     },
     registry,
@@ -75,7 +81,13 @@ describe("NukeService", () => {
       releasedLeaseIds: ["lse_1", "lse_2"],
     });
 
-    expect(harness.calls).toEqual(["maintenance:begin", "release:killed", "maintenance:end"]);
+    expect(harness.calls).toEqual([
+      "maintenance:begin",
+      "release-maintenance:begin",
+      "release:killed",
+      "release-maintenance:end",
+      "maintenance:end",
+    ]);
   });
 
   it("targets only non-deleted registry records and supports shutdown-only mode", async () => {
@@ -86,8 +98,10 @@ describe("NukeService", () => {
 
     expect(harness.calls).toEqual([
       "maintenance:begin",
+      "release-maintenance:begin",
       "release:killed",
       "shutdown:registered",
+      "release-maintenance:end",
       "maintenance:end",
     ]);
     expect(harness.registry.devices).toMatchObject([
@@ -103,10 +117,12 @@ describe("NukeService", () => {
 
     expect(harness.calls).toEqual([
       "maintenance:begin",
+      "release-maintenance:begin",
       "release:killed",
       "shutdown:ready",
       "destroy:ready",
       "destroy:shutdown",
+      "release-maintenance:end",
       "maintenance:end",
     ]);
     expect(harness.registry.devices.map((candidate) => candidate.state)).toEqual([
@@ -131,7 +147,13 @@ describe("NukeService", () => {
 
     await harness.service.nuke(true);
 
-    expect(harness.calls).toEqual(["maintenance:begin", "release:killed", "maintenance:end"]);
+    expect(harness.calls).toEqual([
+      "maintenance:begin",
+      "release-maintenance:begin",
+      "release:killed",
+      "release-maintenance:end",
+      "maintenance:end",
+    ]);
   });
 
   it("skips lifecycle-refused and state-changed targets without forcing destruction", async () => {
@@ -153,9 +175,11 @@ describe("NukeService", () => {
 
     expect(harness.calls).toEqual([
       "maintenance:begin",
+      "release-maintenance:begin",
       "release:killed",
       "shutdown:refused",
       "shutdown:changed",
+      "release-maintenance:end",
       "maintenance:end",
     ]);
   });
@@ -172,6 +196,7 @@ describe("NukeService", () => {
 
   it("reopens admission even when reset work fails", async () => {
     const harness = createHarness([]);
+    let fail = true;
     harness.service = new NukeService({
       acquisition: {
         async beginMaintenance() {
@@ -183,14 +208,36 @@ describe("NukeService", () => {
       },
       devices: harness.lifecycle,
       leases: {
-        async releaseAll() {
-          throw new Error("release failed");
+        async beginMaintenance() {
+          harness.calls.push("release-maintenance:begin");
+        },
+        async releaseAllDuringMaintenance() {
+          if (fail) {
+            fail = false;
+            throw new Error("release failed");
+          }
+          harness.calls.push("release:killed");
+          return [];
+        },
+        async endMaintenance() {
+          harness.calls.push("release-maintenance:end");
         },
       },
       registry: harness.registry,
     });
 
     await expect(harness.service.nuke(false)).rejects.toThrow("release failed");
-    expect(harness.calls).toEqual(["maintenance:begin", "maintenance:end"]);
+    await expect(harness.service.nuke(false)).resolves.toEqual({ releasedLeaseIds: [] });
+    expect(harness.calls).toEqual([
+      "maintenance:begin",
+      "release-maintenance:begin",
+      "release-maintenance:end",
+      "maintenance:end",
+      "maintenance:begin",
+      "release-maintenance:begin",
+      "release:killed",
+      "release-maintenance:end",
+      "maintenance:end",
+    ]);
   });
 });

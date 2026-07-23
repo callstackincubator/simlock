@@ -61,7 +61,72 @@ describe("Nuke", () => {
       expect.objectContaining({ deviceId: "foreign" }),
     );
   });
+
+  it("waits for a blocked reclaim before deleting the registry-owned device", async () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+    const driver = new FakeDriver({
+      availableOsVersions: ["1"],
+      clock,
+      latencyMs: { reclaim: 20 },
+      platform: "ios",
+    });
+    const engine = new LeaseEngine({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      idGenerator: sequence(),
+      registry,
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * 1024 ** 3,
+        totalRamBytes: 32 * 1024 ** 3,
+      }),
+    });
+    const grant = await engine.request(
+      { model: "Phone", osVersion: "1", platform: "ios" },
+      { mode: "held", requesterId: "agent" },
+    );
+
+    const release = engine.release(grant.lease.id, "explicit");
+    await flush();
+    expect(registry.snapshot.devices).toMatchObject([{ id: grant.device.id, state: "reclaiming" }]);
+
+    let nukeComplete = false;
+    const nuke = engine.nuke(true).then((result) => {
+      nukeComplete = true;
+      return result;
+    });
+    await flush();
+    expect(nukeComplete).toBe(false);
+
+    clock.advance(20);
+    await release;
+    await expect(nuke).resolves.toEqual({ releasedLeaseIds: [] });
+    expect(registry.snapshot.devices).toMatchObject([{ id: grant.device.id, state: "deleted" }]);
+
+    clock.advance(100);
+    await flush();
+    expect(registry.snapshot.devices).toMatchObject([{ id: grant.device.id, state: "deleted" }]);
+    expect(
+      registry.snapshot.devices.some(
+        (device) => device.state === "ready" || device.state === "shutdown",
+      ),
+    ).toBe(false);
+  });
 });
+
+async function flush(): Promise<void> {
+  for (let count = 0; count < 100; count += 1) await Promise.resolve();
+}
 
 function sequence() {
   let next = 1;

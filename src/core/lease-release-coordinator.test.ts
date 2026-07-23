@@ -156,6 +156,56 @@ describe("LeaseReleaseCoordinator", () => {
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
   });
 
+  it("drains an active reclaim and holds new releases until maintenance reopens", async () => {
+    const harness = await createHarness();
+    const first = await grant(harness);
+    const second = await grant(harness);
+    let unblockReclaim!: () => void;
+    let reclaimStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      reclaimStarted = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      unblockReclaim = resolve;
+    });
+    harness.warmPool.reclaim = async (released) => {
+      harness.reclaims.push(released);
+      reclaimStarted();
+      await blocked;
+    };
+
+    const activeRelease = harness.coordinator.release(first.lease.id, "explicit");
+    await started;
+    const maintenance = harness.coordinator.beginMaintenance();
+    const queuedRelease = harness.coordinator.release(second.lease.id, "explicit");
+
+    await Promise.resolve();
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: second.lease.id }]);
+
+    unblockReclaim();
+    await activeRelease;
+    await maintenance;
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: second.lease.id }]);
+
+    await harness.coordinator.endMaintenance();
+    await queuedRelease;
+    expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+
+  it("retries an expiry after maintenance reopens", async () => {
+    const harness = await createHarness();
+    const granted = await grant(harness, "detached");
+
+    await harness.coordinator.beginMaintenance();
+    const expiry = harness.coordinator.expire(granted.lease.id, granted.lease.ttlDeadline);
+    await Promise.resolve();
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: granted.lease.id }]);
+
+    await harness.coordinator.endMaintenance();
+    await expiry;
+    expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+
   it("preserves concurrent releaseAll behavior: overlapping snapshots can reject", async () => {
     const harness = await createHarness();
     await grant(harness);

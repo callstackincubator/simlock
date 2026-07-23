@@ -1,9 +1,11 @@
 import type { DeviceRecord, LeaseRecord } from "./domain.js";
 import type { NukeExecutor } from "./lease-ports.js";
 
-/** Administrative lease release capability required by an operator reset. */
-export interface LeaseAdministration {
-  releaseAll(reason: "killed"): Promise<readonly string[]>;
+/** Release maintenance boundary required by an operator reset. */
+export interface LeaseMaintenance {
+  beginMaintenance(): Promise<void>;
+  releaseAllDuringMaintenance(reason: "killed"): Promise<readonly string[]>;
+  endMaintenance(): Promise<void>;
 }
 
 /** Acquisition maintenance boundary required by an operator reset. */
@@ -37,7 +39,7 @@ export interface NukeDeviceLifecycle {
 export interface NukeServiceOptions {
   readonly devices: NukeDeviceLifecycle;
   readonly acquisition: AcquisitionMaintenance;
-  readonly leases: LeaseAdministration;
+  readonly leases: LeaseMaintenance;
   readonly registry: NukeRegistryView;
 }
 
@@ -47,12 +49,33 @@ export interface NukeServiceOptions {
  * operations, which perform their own final ownership and claim checks.
  */
 export class NukeService implements NukeExecutor {
+  #tail: Promise<void> = Promise.resolve();
+
   constructor(private readonly options: NukeServiceOptions) {}
 
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
-    await this.options.acquisition.beginMaintenance();
+    let release!: () => void;
+    const previous = this.#tail;
+    this.#tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
     try {
-      const releasedLeaseIds = await this.options.leases.releaseAll("killed");
+      return await this.#runNuke(deleteDevices);
+    } finally {
+      release();
+    }
+  }
+
+  async #runNuke(
+    deleteDevices: boolean,
+  ): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
+    await this.options.acquisition.beginMaintenance();
+    let releaseMaintenanceStarted = false;
+    try {
+      await this.options.leases.beginMaintenance();
+      releaseMaintenanceStarted = true;
+      const releasedLeaseIds = await this.options.leases.releaseAllDuringMaintenance("killed");
 
       for (const device of this.options.registry.snapshot.devices) {
         await this.#resetDevice(device, deleteDevices);
@@ -60,7 +83,11 @@ export class NukeService implements NukeExecutor {
 
       return { releasedLeaseIds };
     } finally {
-      await this.options.acquisition.endMaintenance();
+      try {
+        if (releaseMaintenanceStarted) await this.options.leases.endMaintenance();
+      } finally {
+        await this.options.acquisition.endMaintenance();
+      }
     }
   }
 
