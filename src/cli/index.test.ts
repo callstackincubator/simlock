@@ -7,9 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
+import { connectExistingDaemon } from "../daemon-client/client.js";
 import { FakeClock, FakeSystemStats, MemoryFilesystem, NodeFilesystem } from "../ports/index.js";
 import { DaemonServer } from "../daemon/server.js";
-import { connectExistingDaemon } from "./client.js";
 import {
   DaemonClientError,
   errorExitCode,
@@ -156,7 +156,13 @@ describe("CLI boundary", () => {
         spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
         state: "leased",
       },
-      lease: { id: "lse_9f2c" },
+      lease: { id: "lse_9f2c", mode: "detached", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 20,
+        estimatedProvisionMs: 10,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 30,
+      },
     });
 
     await expect(
@@ -165,7 +171,9 @@ describe("CLI boundary", () => {
         detached.environmentWith({ connect: async () => connection }),
       ),
     ).resolves.toBe(0);
-    expect(JSON.parse(detached.stdout)).toMatchObject({ lease: "lse_9f2c" });
+    expect(detached.stdout).toBe(
+      '{"device":"iPhone 17 Pro","lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","udid":"ABCD"}\n',
+    );
     expect(connection.closed).toBe(true);
 
     const renew = outputCapture();
