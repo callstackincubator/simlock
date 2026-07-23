@@ -50,14 +50,20 @@ export class DeviceProvisioner {
       throw error;
     }
 
-    const device = await this.options.decisions.run(() =>
-      this.options.registry.registerDevice({
-        driverData: driverDevice.driverData,
-        driverDeviceId: driverDevice.deviceId,
-        provisionDuration: this.options.clock.now() - startedAt,
-        spec,
-      }),
-    );
+    let device: DeviceRecord;
+    try {
+      device = await this.options.decisions.run(() =>
+        this.options.registry.registerDevice({
+          driverData: driverDevice.driverData,
+          driverDeviceId: driverDevice.deviceId,
+          provisionDuration: this.options.clock.now() - startedAt,
+          spec,
+        }),
+      );
+    } catch (error: unknown) {
+      options.reservation.release();
+      throw error;
+    }
 
     try {
       options.onProgress?.({ stage: "booting", etaMs: driver.estimate("boot", spec) });

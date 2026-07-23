@@ -150,4 +150,27 @@ describe("DeviceProvisioner", () => {
     expect(harness.registry.snapshot.devices).toEqual([]);
     expect(reserved.releaseCount()).toBe(1);
   });
+
+  it("releases capacity without destroying an unregistered device when registration fails", async () => {
+    const harness = await createHarness();
+    const reserved = reservation();
+    const registrationError = new Error("state persistence failed");
+    const provisioner = new DeviceProvisioner({
+      catalog: new DriverCatalog([harness.driver]),
+      clock: harness.clock,
+      decisions: new SerializedDecision(),
+      lifecycle: harness.lifecycle,
+      registry: {
+        async registerDevice() {
+          throw registrationError;
+        },
+      },
+    });
+
+    await expect(provisioner.provision(spec, { reservation: reserved })).rejects.toBe(
+      registrationError,
+    );
+    expect(reserved.releaseCount()).toBe(1);
+    expect(harness.driver.calls.filter((call) => call.operation === "destroy")).toEqual([]);
+  });
 });
