@@ -6,9 +6,10 @@ export interface LeaseAdministration {
   releaseAll(reason: "killed"): Promise<readonly string[]>;
 }
 
-/** Direct pending-request cancellation capability required by an operator reset. */
-export interface PendingRequestCancellation {
-  cancelAll(reason: "killed"): Promise<void>;
+/** Acquisition maintenance boundary required by an operator reset. */
+export interface AcquisitionMaintenance {
+  beginMaintenance(): Promise<void>;
+  endMaintenance(): Promise<void>;
 }
 
 /** Read-only registry view used to select Pitlane-owned device records. */
@@ -35,8 +36,8 @@ export interface NukeDeviceLifecycle {
 
 export interface NukeServiceOptions {
   readonly devices: NukeDeviceLifecycle;
+  readonly acquisition: AcquisitionMaintenance;
   readonly leases: LeaseAdministration;
-  readonly pendingRequests: PendingRequestCancellation;
   readonly registry: NukeRegistryView;
 }
 
@@ -49,14 +50,18 @@ export class NukeService implements NukeExecutor {
   constructor(private readonly options: NukeServiceOptions) {}
 
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
-    const releasedLeaseIds = await this.options.leases.releaseAll("killed");
-    await this.options.pendingRequests.cancelAll("killed");
+    await this.options.acquisition.beginMaintenance();
+    try {
+      const releasedLeaseIds = await this.options.leases.releaseAll("killed");
 
-    for (const device of this.options.registry.snapshot.devices) {
-      await this.#resetDevice(device, deleteDevices);
+      for (const device of this.options.registry.snapshot.devices) {
+        await this.#resetDevice(device, deleteDevices);
+      }
+
+      return { releasedLeaseIds };
+    } finally {
+      await this.options.acquisition.endMaintenance();
     }
-
-    return { releasedLeaseIds };
   }
 
   #canOperate(deviceId: string, expectedState: "ready" | "shutdown"): boolean {

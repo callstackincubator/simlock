@@ -47,16 +47,19 @@ function createHarness(devices: DeviceRecord[]) {
     },
   };
   const service = new NukeService({
+    acquisition: {
+      async beginMaintenance() {
+        calls.push("maintenance:begin");
+      },
+      async endMaintenance() {
+        calls.push("maintenance:end");
+      },
+    },
     devices: lifecycle,
     leases: {
       async releaseAll(reason) {
         calls.push(`release:${reason}`);
         return ["lse_1", "lse_2"];
-      },
-    },
-    pendingRequests: {
-      async cancelAll(reason) {
-        calls.push(`cancel:${reason}`);
       },
     },
     registry,
@@ -65,14 +68,14 @@ function createHarness(devices: DeviceRecord[]) {
 }
 
 describe("NukeService", () => {
-  it("releases killed leases before directly cancelling pending requests and returns their ids", async () => {
+  it("fences acquisition before releasing killed leases and returns their ids", async () => {
     const harness = createHarness([]);
 
     await expect(harness.service.nuke(false)).resolves.toEqual({
       releasedLeaseIds: ["lse_1", "lse_2"],
     });
 
-    expect(harness.calls).toEqual(["release:killed", "cancel:killed"]);
+    expect(harness.calls).toEqual(["maintenance:begin", "release:killed", "maintenance:end"]);
   });
 
   it("targets only non-deleted registry records and supports shutdown-only mode", async () => {
@@ -81,7 +84,12 @@ describe("NukeService", () => {
 
     await harness.service.nuke(false);
 
-    expect(harness.calls).toEqual(["release:killed", "cancel:killed", "shutdown:registered"]);
+    expect(harness.calls).toEqual([
+      "maintenance:begin",
+      "release:killed",
+      "shutdown:registered",
+      "maintenance:end",
+    ]);
     expect(harness.registry.devices).toMatchObject([
       { id: "registered", state: "shutdown" },
       { id: "already-deleted", state: "deleted" },
@@ -94,11 +102,12 @@ describe("NukeService", () => {
     await harness.service.nuke(true);
 
     expect(harness.calls).toEqual([
+      "maintenance:begin",
       "release:killed",
-      "cancel:killed",
       "shutdown:ready",
       "destroy:ready",
       "destroy:shutdown",
+      "maintenance:end",
     ]);
     expect(harness.registry.devices.map((candidate) => candidate.state)).toEqual([
       "deleted",
@@ -122,7 +131,7 @@ describe("NukeService", () => {
 
     await harness.service.nuke(true);
 
-    expect(harness.calls).toEqual(["release:killed", "cancel:killed"]);
+    expect(harness.calls).toEqual(["maintenance:begin", "release:killed", "maintenance:end"]);
   });
 
   it("skips lifecycle-refused and state-changed targets without forcing destruction", async () => {
@@ -143,10 +152,11 @@ describe("NukeService", () => {
     await harness.service.nuke(true);
 
     expect(harness.calls).toEqual([
+      "maintenance:begin",
       "release:killed",
-      "cancel:killed",
       "shutdown:refused",
       "shutdown:changed",
+      "maintenance:end",
     ]);
   });
 
@@ -158,5 +168,29 @@ describe("NukeService", () => {
 
     expect(events).toEqual([]);
     expect(harness.calls).toContain("shutdown:ready");
+  });
+
+  it("reopens admission even when reset work fails", async () => {
+    const harness = createHarness([]);
+    harness.service = new NukeService({
+      acquisition: {
+        async beginMaintenance() {
+          harness.calls.push("maintenance:begin");
+        },
+        async endMaintenance() {
+          harness.calls.push("maintenance:end");
+        },
+      },
+      devices: harness.lifecycle,
+      leases: {
+        async releaseAll() {
+          throw new Error("release failed");
+        },
+      },
+      registry: harness.registry,
+    });
+
+    await expect(harness.service.nuke(false)).rejects.toThrow("release failed");
+    expect(harness.calls).toEqual(["maintenance:begin", "maintenance:end"]);
   });
 });

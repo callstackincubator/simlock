@@ -10,6 +10,7 @@ import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
 import { type DriverCatalog } from "./driver-catalog.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
+import type { AcquisitionMaintenance } from "./nuke-service.js";
 import {
   type ManagedDeviceLifecycle,
   type ReadyDeviceHandoff,
@@ -35,6 +36,13 @@ export class NoCapacityError extends Error {
   }
 }
 
+class NukeCancelledError extends Error {
+  constructor() {
+    super("Request cancelled by nuke");
+    this.name = "NukeCancelledError";
+  }
+}
+
 export interface LeaseAcquisitionRegistry {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];
@@ -49,6 +57,7 @@ export type AcquisitionPlannerPort = Pick<AcquisitionPlanner, "plan">;
 export type AcquisitionQueue = Pick<
   WaitQueue,
   | "create"
+  | "cancelAll"
   | "depth"
   | "detachProgress"
   | "enqueue"
@@ -97,7 +106,12 @@ const noTiming: LeaseTiming = {
 };
 
 /** Coordinates admission, planning, device work, and queue settlement for acquisition only. */
-export class LeaseAcquisitionCoordinator {
+export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
+  readonly #activeWorkflows = new Set<Promise<void>>();
+  readonly #driving = new WeakSet<AcquisitionWaiter>();
+  #admissionClosed = false;
+  #maintenanceDepth = 0;
+
   constructor(private readonly options: LeaseAcquisitionCoordinatorOptions) {}
 
   get queueDepth(): number {
@@ -112,6 +126,14 @@ export class LeaseAcquisitionCoordinator {
     let waiter: AcquisitionWaiter;
     try {
       waiter = await this.options.decisions.run(async () => {
+        if (this.#admissionClosed) {
+          this.options.eventBus.emit(
+            "lease.rejected",
+            { requestSpec: request, reason: "killed" },
+            "lease-acquisition-coordinator",
+          );
+          throw new NukeCancelledError();
+        }
         const alreadyActive = this.options.registry.snapshot.leases.some(
           (lease) => lease.requesterId === options.requesterId,
         );
@@ -139,6 +161,41 @@ export class LeaseAcquisitionCoordinator {
       return Promise.reject(error);
     }
 
+    this.#track(this.#resolveAndDrive(waiter, request, options));
+    return waiter.promise;
+  }
+
+  /** Closes acquisition admission, settles all demand, and drains driver work. */
+  async beginMaintenance(): Promise<void> {
+    await this.options.decisions.run(async () => {
+      this.#maintenanceDepth += 1;
+      this.#admissionClosed = true;
+      for (const waiter of this.options.queue.cancelAll(() => new NukeCancelledError())) {
+        this.options.eventBus.emit(
+          "lease.rejected",
+          { requestSpec: waiter.request, reason: "killed" },
+          "lease-acquisition-coordinator",
+        );
+      }
+    });
+    while (this.#activeWorkflows.size > 0) {
+      await Promise.allSettled(this.#activeWorkflows);
+    }
+  }
+
+  /** Reopens acquisition admission after an administrative maintenance operation. */
+  async endMaintenance(): Promise<void> {
+    await this.options.decisions.run(async () => {
+      this.#maintenanceDepth = Math.max(0, this.#maintenanceDepth - 1);
+      this.#admissionClosed = this.#maintenanceDepth > 0;
+    });
+  }
+
+  async #resolveAndDrive(
+    waiter: AcquisitionWaiter,
+    request: DeviceRequest,
+    options: LeaseRequestOptions,
+  ): Promise<void> {
     let driver: Driver;
     try {
       driver = this.options.drivers.get(request.platform);
@@ -146,7 +203,7 @@ export class LeaseAcquisitionCoordinator {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
       });
-      return waiter.promise;
+      return;
     }
     try {
       waiter.spec = await driver.resolveSpec(request, {
@@ -156,11 +213,10 @@ export class LeaseAcquisitionCoordinator {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
       });
-      return waiter.promise;
+      return;
     }
 
-    void this.#drive(waiter);
-    return waiter.promise;
+    await this.#drive(waiter);
   }
 
   async detachQueuedProgress(requesterId: string): Promise<void> {
@@ -175,8 +231,14 @@ export class LeaseAcquisitionCoordinator {
   }
 
   async #drive(waiter: AcquisitionWaiter): Promise<void> {
-    const action = await this.options.decisions.run(async () => this.#decide(waiter));
-    await this.#perform(waiter, action);
+    if (this.#driving.has(waiter)) return;
+    this.#driving.add(waiter);
+    try {
+      const action = await this.options.decisions.run(async () => this.#decide(waiter));
+      await this.#perform(waiter, action);
+    } finally {
+      this.#driving.delete(waiter);
+    }
   }
 
   async #perform(waiter: AcquisitionWaiter, action: OperationPlan | undefined): Promise<void> {
@@ -236,13 +298,20 @@ export class LeaseAcquisitionCoordinator {
         this.#enqueue(waiter);
         return false;
       });
-      if (retry) void this.#drive(waiter);
+      if (retry) {
+        this.#driving.delete(waiter);
+        await this.#drive(waiter);
+      }
       return;
     }
     await this.#grantHandoff(waiter, handoff);
   }
 
   async #decide(waiter: AcquisitionWaiter): Promise<OperationPlan | undefined> {
+    if (this.#admissionClosed && waiter.state !== "rejected") {
+      this.#reject(waiter, new NukeCancelledError(), "killed");
+      return undefined;
+    }
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
     if (plan.kind === "grant-ready") {
@@ -436,8 +505,16 @@ export class LeaseAcquisitionCoordinator {
   #wakeQueue(): void {
     void this.options.decisions.run(async () => {
       const next = this.options.queue.head as AcquisitionWaiter | undefined;
-      if (next !== undefined && next.state === "queued") void this.#drive(next);
+      if (next !== undefined && next.state === "queued") this.#track(this.#drive(next));
     });
+  }
+
+  #track(workflow: Promise<void>): void {
+    this.#activeWorkflows.add(workflow);
+    void workflow.then(
+      () => this.#activeWorkflows.delete(workflow),
+      () => this.#activeWorkflows.delete(workflow),
+    );
   }
 
   #newWaiter(request: DeviceRequest, options: LeaseRequestOptions): AcquisitionWaiter {

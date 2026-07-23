@@ -23,22 +23,24 @@ const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.pitlane/state.json";
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
-function config(): Config {
+function config(maxDevices = 1): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100 },
     limits: {
-      android: { maxDevices: 1, maxRunning: 1 },
-      ios: { maxDevices: 1, maxRunning: 1 },
+      android: { maxDevices, maxRunning: 1 },
+      ios: { maxDevices, maxRunning: 1 },
       maxRunning: 1,
     },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
   };
 }
 
-async function createHarness(options: { readonly drivers?: readonly FakeDriver[] } = {}) {
+async function createHarness(
+  options: { readonly drivers?: readonly FakeDriver[]; readonly maxDevices?: number } = {},
+) {
   const clock = new FakeClock(1_000);
   const bus = new EventBus(clock);
   const driver =
@@ -57,7 +59,7 @@ async function createHarness(options: { readonly drivers?: readonly FakeDriver[]
   const claims = new DeviceOperationClaims();
   const catalog = new DriverCatalog(drivers);
   const capacity = new CapacityCoordinator(
-    config(),
+    config(options.maxDevices),
     new FakeSystemStats({ cpuCount: 8, freeRamBytes: 32 * gibibyte, totalRamBytes: 32 * gibibyte }),
   );
   const lifecycle = new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock);
@@ -238,5 +240,116 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(eviction.registry.snapshot.devices.find((device) => device.id === old.id)?.state).toBe(
       "deleted",
     );
+  });
+
+  it("drains a cancelled in-flight boot before maintenance returns", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedReady(harness);
+    await harness.driver.shutdown({
+      deviceId: shutdown.driverDeviceId,
+      driverData: shutdown.driverData,
+    });
+    await harness.registry.transitionDevice(shutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: shutdown.id, initiator: "test" },
+    });
+    harness.driver.hangMakeReady();
+    const makeReadyBeforeRequest = harness.driver.calls.filter(
+      (call) => call.operation === "makeReady",
+    ).length;
+
+    const acquisition = harness.coordinator.request(request, {
+      mode: "held",
+      requesterId: "drained",
+    });
+    await flush();
+    expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
+      makeReadyBeforeRequest + 1,
+    );
+
+    let maintenanceReturned = false;
+    const maintenance = harness.coordinator.beginMaintenance().then(() => {
+      maintenanceReturned = true;
+    });
+    await flush();
+    expect(maintenanceReturned).toBe(false);
+    expect(harness.registry.snapshot.leases).toEqual([]);
+    await expect(
+      harness.coordinator.request(request, { mode: "held", requesterId: "during-maintenance" }),
+    ).rejects.toMatchObject({ name: "NukeCancelledError" });
+
+    harness.driver.releaseMakeReady();
+    await maintenance;
+    await expect(acquisition).rejects.toMatchObject({ name: "NukeCancelledError" });
+    expect(harness.registry.snapshot.leases).toEqual([]);
+
+    await harness.coordinator.endMaintenance();
+  });
+
+  it("coalesces simultaneous kicks for the same queued waiter", async () => {
+    const harness = await createHarness({ maxDevices: 2 });
+    const first = await harness.coordinator.request(request, {
+      mode: "held",
+      requesterId: "first",
+    });
+    const shutdown = await seedReady(harness);
+    await harness.driver.shutdown({
+      deviceId: shutdown.driverDeviceId,
+      driverData: shutdown.driverData,
+    });
+    await harness.registry.transitionDevice(shutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: shutdown.id, initiator: "test" },
+    });
+
+    const queued = harness.coordinator.request(request, { mode: "held", requesterId: "queued" });
+    await flush();
+    harness.driver.hangMakeReady();
+    await harness.registry.beginRelease(first.lease.id);
+    const leased = harness.registry.snapshot.devices.find(
+      (candidate) => candidate.id === first.device.id,
+    );
+    if (leased === undefined) throw new Error("expected leased device");
+    await harness.registry.transitionDevice(leased.id, "shutdown", {
+      event: "device.reclaimed",
+      payload: { deviceId: leased.id, duration: 0, strategy: "wipe" },
+    });
+
+    const makeReadyBeforeKick = harness.driver.calls.filter(
+      (call) => call.operation === "makeReady",
+    ).length;
+    harness.coordinator.kick();
+    harness.coordinator.kick();
+    await flush();
+    expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
+      makeReadyBeforeKick + 1,
+    );
+
+    let maintenanceReturned = false;
+    const maintenance = harness.coordinator.beginMaintenance().then(() => {
+      maintenanceReturned = true;
+    });
+    await flush();
+    expect(maintenanceReturned).toBe(false);
+    harness.driver.releaseMakeReady();
+    await maintenance;
+    await expect(queued).rejects.toMatchObject({ name: "NukeCancelledError" });
+    await harness.coordinator.endMaintenance();
+  });
+
+  it("keeps admission closed until concurrent maintenance callers have all finished", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.beginMaintenance();
+    await harness.coordinator.beginMaintenance();
+    await harness.coordinator.endMaintenance();
+
+    await expect(
+      harness.coordinator.request(request, { mode: "held", requesterId: "still-maintained" }),
+    ).rejects.toMatchObject({ name: "NukeCancelledError" });
+
+    await harness.coordinator.endMaintenance();
+    await expect(
+      harness.coordinator.request(request, { mode: "held", requesterId: "reopened" }),
+    ).resolves.toMatchObject({ lease: { requesterId: "reopened" } });
   });
 });

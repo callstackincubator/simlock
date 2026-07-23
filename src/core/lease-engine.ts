@@ -48,13 +48,6 @@ export {
 
 export { HeldLeaseRenewalError } from "./lease-lifecycle.js";
 
-class NukeCancelledError extends Error {
-  constructor() {
-    super("Request cancelled by nuke");
-    this.name = "NukeCancelledError";
-  }
-}
-
 /** Composition root and compatibility facade for the daemon's lease subsystem. */
 export class LeaseEngine {
   readonly cleanup: CleanupActionExecutor;
@@ -155,21 +148,9 @@ export class LeaseEngine {
       registry: options.registry,
     });
     this.#nuke = new NukeService({
+      acquisition: this.#acquisition,
       devices: this.#deviceLifecycle,
       leases: this.#releaseCoordinator,
-      pendingRequests: {
-        cancelAll: async () => {
-          await this.#withDecision(async () => {
-            for (const waiter of this.#queue.cancelAll(() => new NukeCancelledError())) {
-              this.options.eventBus.emit(
-                "lease.rejected",
-                { requestSpec: waiter.request, reason: "killed" },
-                "wait-queue",
-              );
-            }
-          });
-        },
-      },
       registry: options.registry,
     });
     this.#startup = new StartupConverger({
@@ -245,9 +226,5 @@ export class LeaseEngine {
       platform: device.spec.platform,
       state: device.state,
     }));
-  }
-
-  #withDecision<Result>(operation: () => Promise<Result>): Promise<Result> {
-    return this.#decisions.run(operation);
   }
 }
