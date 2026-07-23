@@ -11,6 +11,10 @@ import {
   LeaseEngine,
   Registry,
 } from "./index.js";
+import { CleanupExecutor } from "./cleanup-executor.js";
+import { DeviceOperationClaims } from "./device-operation-claims.js";
+import { DriverCatalog } from "./driver-catalog.js";
+import { SerializedDecision } from "./serialized-decision.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.pitlane/state.json";
@@ -34,7 +38,11 @@ function config(): Config {
 async function createHarness(
   rules: readonly CleanupRule[],
   latencyMs: Partial<Record<"destroy" | "shutdown", number>> = {},
-  options: { readonly cleanupConfig?: Config; readonly tickMs?: number } = {},
+  options: {
+    readonly cleanupConfig?: Config;
+    readonly tickMs?: number;
+    readonly useLeaseEngineExecutor?: boolean;
+  } = {},
 ) {
   const clock = new FakeClock(1_000);
   const filesystem = new MemoryFilesystem();
@@ -67,12 +75,25 @@ async function createHarness(
       totalRamBytes: 32 * gibibyte,
     }),
   });
+  const executor = options.useLeaseEngineExecutor
+    ? {
+        execute: (proposal: Parameters<LeaseEngine["executeCleanup"]>[0]) =>
+          engine.executeCleanup(proposal),
+      }
+    : new CleanupExecutor({
+        claims: new DeviceOperationClaims(),
+        decisions: new SerializedDecision(),
+        drivers: new DriverCatalog([driver]),
+        eventBus,
+        notifyAvailability: () => {},
+        registry,
+      });
   const reaper = new CleanupReaper({
     clock,
     config: cleanupConfig,
     eventBus,
     filesystem,
-    leaseEngine: engine,
+    executor,
     registry,
     rules,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
@@ -250,7 +271,7 @@ describe("CleanupReaper", () => {
       ],
       name: "test-rule",
     };
-    const harness = await createHarness([rule], { shutdown: 10 });
+    const harness = await createHarness([rule], { shutdown: 10 }, { useLeaseEngineExecutor: true });
     await seedReady(harness);
 
     const cleanup = harness.reaper.run();

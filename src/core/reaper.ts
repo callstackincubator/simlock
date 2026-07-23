@@ -1,9 +1,9 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, Filesystem, TimerHandle } from "../ports/index.js";
 import type { Config } from "./config.js";
+import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import { automaticCleanupRules, manualCleanupRules } from "./cleanup/rules.js";
 import type { CleanupRule, Proposal, RegistryView } from "./cleanup/types.js";
-import type { LeaseEngine } from "./lease-engine.js";
 import type { Registry } from "./registry.js";
 
 export interface CleanupReaperOptions {
@@ -11,7 +11,9 @@ export interface CleanupReaperOptions {
   readonly config: Config;
   readonly eventBus: EventBus;
   readonly filesystem: Filesystem;
-  readonly leaseEngine: LeaseEngine;
+  readonly executor?: CleanupActionExecutor;
+  /** @deprecated Transitional compatibility while daemon wiring is migrated. */
+  readonly leaseEngine?: { executeCleanup(proposal: Proposal): Promise<boolean> };
   readonly registry: Registry;
   readonly rules?: readonly CleanupRule[];
   readonly diskPath?: string;
@@ -36,6 +38,9 @@ export class CleanupReaper {
   #disposed = false;
 
   constructor(private readonly options: CleanupReaperOptions) {
+    if (options.executor === undefined && options.leaseEngine === undefined) {
+      throw new Error("CleanupReaper requires an executor");
+    }
     this.#automaticRules = options.rules ?? automaticCleanupRules;
     this.#manualRules = manualCleanupRules;
     this.#unsubscribe = [
@@ -80,18 +85,7 @@ export class CleanupReaper {
     }
 
     for (const proposal of proposals) {
-      if (await this.options.leaseEngine.executeCleanup(proposal)) {
-        this.options.eventBus.emit(
-          "cleanup.executed",
-          {
-            action: proposal.action,
-            reason: proposal.reason,
-            ruleName: proposal.rule,
-            target: proposal.target,
-          },
-          "cleanup-reaper",
-        );
-      }
+      await this.#executor().execute(proposal);
     }
 
     return proposals;
@@ -102,6 +96,30 @@ export class CleanupReaper {
       return;
     }
     void this.#scheduleRun().catch(() => undefined);
+  }
+
+  #executor(): CleanupActionExecutor {
+    if (this.options.executor !== undefined) return this.options.executor;
+    const legacy = this.options.leaseEngine;
+    if (legacy === undefined) throw new Error("CleanupReaper requires an executor");
+    return {
+      execute: async (proposal) => {
+        const executed = await legacy.executeCleanup(proposal);
+        if (executed) {
+          this.options.eventBus.emit(
+            "cleanup.executed",
+            {
+              action: proposal.action,
+              reason: proposal.reason,
+              ruleName: proposal.rule,
+              target: proposal.target,
+            },
+            "cleanup-reaper",
+          );
+        }
+        return executed;
+      },
+    };
   }
 
   #scheduleRun(): Promise<readonly Proposal[]> {
