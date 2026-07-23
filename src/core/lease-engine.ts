@@ -1,11 +1,9 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, SystemStats } from "../ports/index.js";
 import type { RunningCapacity } from "./capacity.js";
+import { AcquisitionPlanner, type AcquisitionPlan } from "./acquisition-planner.js";
 import { CapacityCoordinator, type CapacityReservation } from "./capacity-coordinator.js";
-import {
-  CleanupExecutor,
-  type CleanupActionExecutor,
-} from "./cleanup-executor.js";
+import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.js";
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
@@ -25,12 +23,7 @@ import {
   type Waiter,
   WaitQueue,
 } from "./wait-queue.js";
-import {
-  compareLeastRecentlyUsed,
-  selectManagedVictim,
-  selectWarmVictim,
-  type WarmVictimScope,
-} from "./warm-pool.js";
+import { compareLeastRecentlyUsed } from "./warm-pool.js";
 
 export type { LeaseProgress } from "./wait-queue.js";
 
@@ -70,29 +63,10 @@ interface AcquisitionWaiter extends Waiter {
   timing: LeaseTiming;
 }
 
-interface ProvisionAction {
-  readonly kind: "provision";
-  readonly reservation: CapacityReservation;
-}
-
-interface EvictRunningAction {
-  readonly kind: "evict-running";
-  readonly claim: DeviceOperationClaim;
-  readonly device: DeviceRecord;
-}
-
-interface EvictManagedAction {
-  readonly kind: "evict-managed";
-  readonly claim: DeviceOperationClaim;
-  readonly device: DeviceRecord;
-}
-
-interface BootShutdownAction {
-  readonly kind: "boot-shutdown";
-  readonly capacityReservation: CapacityReservation;
-  readonly claim: DeviceOperationClaim;
-  readonly device: DeviceRecord;
-}
+type OperationPlan = Exclude<
+  AcquisitionPlan,
+  { readonly kind: "grant-ready" | "wait" | "no-capacity" }
+>;
 
 const noTiming: LeaseTiming = {
   estimatedBootMs: 0,
@@ -112,11 +86,13 @@ export class LeaseEngine {
   readonly #drivers: DriverCatalog;
   readonly #expiry: LeaseExpiryScheduler;
   readonly #leases: LeaseLifecycle;
+  readonly #planner: AcquisitionPlanner;
   readonly #queue: WaitQueue;
   readonly #decisions = new SerializedDecision();
 
   constructor(private readonly options: LeaseEngineOptions) {
     this.#capacity = new CapacityCoordinator(options.config, options.systemStats);
+    this.#planner = new AcquisitionPlanner(this.#capacity, this.#claims);
     this.#drivers = new DriverCatalog(options.drivers);
     this.#expiry = new LeaseExpiryScheduler(options.clock, async (leaseId) => {
       await this.#release(leaseId, "expired");
@@ -361,15 +337,7 @@ export class LeaseEngine {
     await this.#perform(waiter, action);
   }
 
-  async #perform(
-    waiter: AcquisitionWaiter,
-    action:
-      | ProvisionAction
-      | BootShutdownAction
-      | EvictRunningAction
-      | EvictManagedAction
-      | undefined,
-  ): Promise<void> {
+  async #perform(waiter: AcquisitionWaiter, action: OperationPlan | undefined): Promise<void> {
     if (action === undefined) {
       return;
     }
@@ -484,105 +452,44 @@ export class LeaseEngine {
     }
   }
 
-  async #decide(
-    waiter: AcquisitionWaiter,
-  ): Promise<
-    ProvisionAction | BootShutdownAction | EvictRunningAction | EvictManagedAction | undefined
-  > {
+  async #decide(waiter: AcquisitionWaiter): Promise<OperationPlan | undefined> {
+    const plan = this.#nextPlan(waiter);
+    if (plan === undefined) return undefined;
+    if (plan.kind === "grant-ready") {
+      await this.#grant(waiter, plan.device.id);
+      return undefined;
+    }
+    const operation = operationPlan(plan);
+    if (operation === undefined) {
+      this.#defer(waiter);
+      return undefined;
+    }
+    this.#queue.markProcessing(waiter);
+    return operation;
+  }
+
+  #nextPlan(waiter: AcquisitionWaiter): AcquisitionPlan | undefined {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
-    const spec = waiter.spec;
     if (this.#queue.head !== undefined && this.#queue.head !== waiter) {
-      if (waiter.options.noWait) {
-        this.#reject(waiter, new NoCapacityError(), "no-wait");
-        return undefined;
-      }
-      this.#enqueue(waiter);
-      return undefined;
+      return this.#blockedPlan(waiter);
     }
+    return this.#planner.plan({
+      failures: waiter.failures,
+      noWait: waiter.options.noWait ?? false,
+      snapshot: this.options.registry.snapshot,
+      spec: waiter.spec,
+    });
+  }
 
-    const ready = this.options.registry.snapshot.devices.find(
-      (device) =>
-        device.state === "ready" &&
-        !this.#claims.isClaimed(device.id) &&
-        sameSpec(device.spec, spec),
-    );
-    if (ready !== undefined) {
-      await this.#grant(waiter, ready.id);
-      return undefined;
-    }
+  #blockedPlan(waiter: AcquisitionWaiter): AcquisitionPlan {
+    return waiter.options.noWait ? { kind: "no-capacity" } : { kind: "wait" };
+  }
 
-    const shutdown = this.options.registry.snapshot.devices.find(
-      (device) =>
-        device.state === "shutdown" &&
-        !this.#claims.isClaimed(device.id) &&
-        sameSpec(device.spec, spec),
-    );
-    if (shutdown !== undefined) {
-      const running = this.#capacity.tryReserveRunning(spec.platform, this.#capacityDevices());
-      if (!running.ok) {
-        const victim = this.#runningVictim(running.reason, spec.platform);
-        if (victim !== undefined) {
-          const claim = this.#claims.tryClaim(victim.id, "eviction");
-          if (claim === undefined) throw new Error(`Failed to claim selected victim: ${victim.id}`);
-          this.#queue.markProcessing(waiter);
-          return { claim, device: victim, kind: "evict-running" };
-        }
-        if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
-        else this.#enqueue(waiter);
-        return undefined;
-      }
-      const claim = this.#claims.tryClaim(shutdown.id, "boot");
-      if (claim === undefined) {
-        running.reservation.release();
-        throw new Error(`Failed to claim selected shutdown device: ${shutdown.id}`);
-      }
-      this.#queue.markProcessing(waiter);
-      return {
-        capacityReservation: running.reservation,
-        claim,
-        device: shutdown,
-        kind: "boot-shutdown",
-      };
-    }
-
-    const reservation = this.#capacity.tryReserveProvisioning(
-      spec.platform,
-      this.#capacityDevices(),
-    );
-    if (!reservation.ok && reservation.reason === "device-limit") {
-      const victim = selectManagedVictim(this.#eligibleEvictionDevices(), spec.platform);
-      if (victim !== undefined) {
-        const claim = this.#claims.tryClaim(victim.id, "eviction");
-        if (claim === undefined) throw new Error(`Failed to claim selected victim: ${victim.id}`);
-        this.#queue.markProcessing(waiter);
-        return { claim, device: victim, kind: "evict-managed" };
-      }
-    }
-    if (!reservation.ok) {
-      const victim = this.#runningVictim(reservation.reason, spec.platform);
-      if (victim !== undefined) {
-        const claim = this.#claims.tryClaim(victim.id, "eviction");
-        if (claim === undefined) throw new Error(`Failed to claim selected victim: ${victim.id}`);
-        this.#queue.markProcessing(waiter);
-        return { claim, device: victim, kind: "evict-running" };
-      }
-    }
-    if (reservation.ok && waiter.failures < 2) {
-      this.#queue.markProcessing(waiter);
-      return { kind: "provision", reservation: reservation.reservation };
-    }
-    if (reservation.ok) {
-      reservation.reservation.release();
-    }
-
-    if (waiter.options.noWait) {
-      this.#reject(waiter, new NoCapacityError(), "no-wait");
-      return undefined;
-    }
-    this.#enqueue(waiter);
-    return undefined;
+  #defer(waiter: AcquisitionWaiter): void {
+    if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
+    else this.#enqueue(waiter);
   }
 
   async #grant(waiter: AcquisitionWaiter, deviceId: string): Promise<void> {
@@ -878,27 +785,6 @@ export class LeaseEngine {
     }));
   }
 
-  #eligibleEvictionDevices(): DeviceRecord[] {
-    const leased = new Set(this.options.registry.snapshot.leases.map((lease) => lease.deviceId));
-    return this.options.registry.snapshot.devices.filter(
-      (device) => !leased.has(device.id) && !this.#claims.isClaimed(device.id),
-    );
-  }
-
-  #runningVictim(
-    reason: "device-limit" | "ram-budget" | "global-running-limit" | "platform-running-limit",
-    platform: Platform,
-  ): DeviceRecord | undefined {
-    if (reason !== "global-running-limit" && reason !== "platform-running-limit") return undefined;
-    const capacity = this.runningCapacity;
-    const platformBlocked =
-      capacity[platform].running + capacity[platform].reserved >= capacity[platform].maxRunning;
-    const scope: WarmVictimScope = platformBlocked
-      ? { kind: "platform", platform }
-      : { kind: "global" };
-    return selectWarmVictim(this.#eligibleEvictionDevices(), scope);
-  }
-
   #driverFor(platform: Platform): Driver {
     return this.#drivers.get(platform);
   }
@@ -936,6 +822,12 @@ function estimatedBootTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
     estimatedReclaimMs: 0,
     estimatedReadyMs: estimatedBootMs,
   };
+}
+
+function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {
+  return plan.kind === "grant-ready" || plan.kind === "wait" || plan.kind === "no-capacity"
+    ? undefined
+    : plan;
 }
 
 function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
