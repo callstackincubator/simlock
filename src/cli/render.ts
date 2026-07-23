@@ -180,19 +180,25 @@ function progressLine(value: unknown): {
  */
 export class HumanRenderer implements Renderer {
   readonly #colors: ReturnType<typeof pc.createColors>;
+  readonly #noColor: boolean;
   readonly #stderr: RendererOutput;
   readonly #stderrStream: Writable;
   readonly #stdout: RendererOutput;
   #introduced = false;
   #spinner: SpinnerResult | undefined;
 
-  constructor(environment: { readonly stderr: RendererOutput; readonly stdout: RendererOutput }) {
+  constructor(environment: {
+    readonly noColor?: () => boolean;
+    readonly stderr: RendererOutput;
+    readonly stdout: RendererOutput;
+  }) {
     this.#stdout = environment.stdout;
     this.#stderr = environment.stderr;
     // `RendererOutput` only requires `write`, which is all clack's primitives use;
     // it is not a real `Writable`, but structurally sufficient for clack's calls.
     this.#stderrStream = environment.stderr as unknown as Writable;
-    this.#colors = pc.createColors(!isNoColorSet());
+    this.#noColor = environment.noColor?.() ?? false;
+    this.#colors = pc.createColors(!this.#noColor);
   }
 
   result(value: unknown): void {
@@ -215,7 +221,7 @@ export class HumanRenderer implements Renderer {
   }
 
   info(message: string): void {
-    this.#stdout.write(`${message}\n`);
+    this.#stdout.write(`${this.#noColor ? stripAnsi(message) : message}\n`);
   }
 
   error(message: string): void {
@@ -295,10 +301,6 @@ export class HumanRenderer implements Renderer {
     this.#introduced = true;
     intro(this.#colors.bold("pitlane"), { output: this.#stderrStream });
   }
-}
-
-function isNoColorSet(): boolean {
-  return Boolean(process.env.NO_COLOR);
 }
 
 const PROGRESS_LABELS: Readonly<Record<string, string>> = {

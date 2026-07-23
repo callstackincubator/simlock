@@ -47,6 +47,7 @@ export interface CliEnvironment {
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly readLogFile?: () => Promise<string>;
   readonly interactive?: boolean;
+  readonly noColor?: () => boolean;
   readonly signals: Signals;
   readonly stderr: Output;
   readonly stdout: Output;
@@ -67,6 +68,7 @@ function defaultCliEnvironment(): CliEnvironment {
     now: () => Date.now(),
     requesterId: String(process.pid),
     interactive: process.stdout.isTTY === true,
+    noColor: () => Boolean(process.env.NO_COLOR),
     readConfigFile: async () => {
       if (!(await filesystem.exists(configPath))) return {};
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
@@ -75,7 +77,10 @@ function defaultCliEnvironment(): CliEnvironment {
     signals: process,
     stderr: process.stderr,
     stdout: process.stdout,
-    confirm: process.stdout.isTTY === true ? confirmInteractive : confirmTerminal,
+    confirm:
+      process.stdout.isTTY === true
+        ? (question) => confirmInteractive(question, () => Boolean(process.env.NO_COLOR))
+        : confirmTerminal,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -129,8 +134,8 @@ async function confirmTerminal(question: string): Promise<boolean> {
  * exactly what will be destroyed, then a clack confirm prompt. A clack cancel
  * (Ctrl+C / Esc) resolves to `false`, the same as answering "no".
  */
-async function confirmInteractive(question: string): Promise<boolean> {
-  const colors = pc.createColors(!process.env.NO_COLOR);
+async function confirmInteractive(question: string, noColor: () => boolean): Promise<boolean> {
+  const colors = pc.createColors(!noColor());
   log.warn(colors.red(question), { output: process.stderr });
   const answer = await clackConfirm({ message: "Proceed?", output: process.stderr });
   return !isCancel(answer) && answer === true;

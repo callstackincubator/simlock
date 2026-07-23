@@ -25,6 +25,7 @@ const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(runningDaemons.splice(0).map((daemon) => daemon.stop("test")));
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
@@ -148,6 +149,18 @@ describe("CLI boundary", () => {
     await expect(runCli(["lease"], usage.environment)).resolves.toBe(2);
     // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
     expect(usage.stderr).not.toMatch(/\u001b\[/);
+  });
+
+  it("honors NO_COLOR=true for interactive generated help without leaking test environment state", async () => {
+    vi.stubEnv("NO_COLOR", "true");
+    const output = outputCapture({ interactive: true });
+
+    await expect(
+      runCli(["--help"], output.environmentWith({ noColor: () => Boolean(process.env.NO_COLOR) })),
+    ).resolves.toBe(0);
+
+    // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+    expect(output.stdout).not.toMatch(/\u001b\[/);
   });
 
   it("routes nested subcommands: lease renew, daemon logs, config set", async () => {
