@@ -7,6 +7,7 @@ import pc from "picocolors";
 import { NodeFilesystem } from "../ports/index.js";
 import {
   assertStrictBooleanFlagSyntax,
+  assertRootHelpArguments,
   renderHelp,
   rootCommand,
   runTopCommand,
@@ -102,6 +103,7 @@ export async function runCli(
   try {
     assertStrictBooleanFlagSyntax(argv);
     if (argv.length === 0 || isHelp(argv[0])) {
+      assertRootHelpArguments(argv);
       renderer.info(await renderHelp(rootCommand));
       return 0;
     }

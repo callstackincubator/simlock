@@ -210,6 +210,17 @@ export function assertStrictBooleanFlagSyntax(argv: readonly string[]): void {
   }
 }
 
+function assertHelpArguments(argv: readonly string[], allowed: readonly string[] = []): void {
+  for (const argument of argv) {
+    if (isHelp(argument) || allowed.includes(argument)) continue;
+    throw new UsageError(`Unknown option: ${argument}`);
+  }
+}
+
+export function assertRootHelpArguments(argv: readonly string[]): void {
+  assertHelpArguments(argv);
+}
+
 // --- lease ------------------------------------------------------------
 
 interface LeaseRequest {
@@ -316,8 +327,8 @@ const leaseCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(leaseCommand, renderer);
     assertKnownArgs(leaseCommand, args);
+    if (args.help === true) return showHelp(leaseCommand, renderer);
     const request = parseLeaseArgs(args);
     const connection = await environment.connect();
     const unsubscribe = connection.onPush((kind, payload) => {
@@ -350,8 +361,8 @@ const leaseRenewCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(leaseRenewCommand, renderer);
     assertKnownArgs(leaseRenewCommand, args);
+    if (args.help === true) return showHelp(leaseRenewCommand, renderer);
     const leaseId = requiredPositional(args._, "lease-id");
     renderer.result(
       await requestOnce(environment, "lease.renew", {
@@ -383,8 +394,8 @@ const releaseCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(releaseCommand, renderer);
     assertKnownArgs(releaseCommand, args);
+    if (args.help === true) return showHelp(releaseCommand, renderer);
     if (args.all === true) {
       if (args._.length > 0)
         throw new UsageError("release accepts either a lease id or --all, not both");
@@ -415,8 +426,8 @@ const statusCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(statusCommand, renderer);
     assertKnownArgs(statusCommand, args);
+    if (args.help === true) return showHelp(statusCommand, renderer);
     const status = await requestOnce(environment, "status.get", {});
     if (args.json === true) renderer.result(status);
     else renderer.status(status);
@@ -441,8 +452,8 @@ const listCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(listCommand, renderer);
     assertKnownArgs(listCommand, args);
+    if (args.help === true) return showHelp(listCommand, renderer);
     if ([args.devices, args.leases, args.rules].filter((flag) => flag === true).length > 1)
       throw new UsageError("list accepts only one of --devices, --leases, or --rules");
     const kind = args.leases === true ? "leases" : args.rules === true ? "rules" : "devices";
@@ -470,8 +481,8 @@ const cleanupCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(cleanupCommand, renderer);
     assertKnownArgs(cleanupCommand, args);
+    if (args.help === true) return showHelp(cleanupCommand, renderer);
     const dryRun = args["dry-run"] === true;
     const actions = await requestOnce(environment, "cleanup.run", {
       dryRun,
@@ -497,8 +508,8 @@ const doctorCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(doctorCommand, renderer);
     assertKnownArgs(doctorCommand, args);
+    if (args.help === true) return showHelp(doctorCommand, renderer);
     const fix = args.fix === true;
     const report = await requestOnce(environment, "doctor.run", { fix });
     renderer.doctor(report, { fix });
@@ -525,8 +536,8 @@ const nukeCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(nukeCommand, renderer);
     assertKnownArgs(nukeCommand, args);
+    if (args.help === true) return showHelp(nukeCommand, renderer);
     const deleteDevices = args["delete-devices"] === true;
     const warning = deleteDevices
       ? "This will force-release every active lease and permanently destroy every registry-managed simulator and emulator device."
@@ -554,8 +565,8 @@ const eventsCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(eventsCommand, renderer);
     assertKnownArgs(eventsCommand, args);
+    if (args.help === true) return showHelp(eventsCommand, renderer);
     const connection = await environment.connect();
     const unsubscribe = connection.onPush((kind, payload) => {
       if (kind === "event") renderer.event(payload);
@@ -592,8 +603,8 @@ const daemonStartCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(daemonStartCommand, renderer);
     assertKnownArgs(daemonStartCommand, args);
+    if (args.help === true) return showHelp(daemonStartCommand, renderer);
     if (args._.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
     await requestOnce(environment, "status.get", {});
     renderer.daemonState("running", { status: "running" });
@@ -607,8 +618,8 @@ const daemonStopCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(daemonStopCommand, renderer);
     assertKnownArgs(daemonStopCommand, args);
+    if (args.help === true) return showHelp(daemonStopCommand, renderer);
     if (args._.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
     const connection = await (environment.connectExisting ?? environment.connect)();
     try {
@@ -627,8 +638,8 @@ const daemonStatusCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(daemonStatusCommand, renderer);
     assertKnownArgs(daemonStatusCommand, args);
+    if (args.help === true) return showHelp(daemonStatusCommand, renderer);
     if (args._.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
     try {
       const connection = await (environment.connectExisting ?? environment.connect)();
@@ -655,8 +666,8 @@ const daemonLogsCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(daemonLogsCommand, renderer);
     assertKnownArgs(daemonLogsCommand, args);
+    if (args.help === true) return showHelp(daemonLogsCommand, renderer);
     if (args._.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
     if (environment.readLogFile === undefined) throw new Error("Daemon log reader is unavailable");
     const lines = (await environment.readLogFile()).trimEnd().split("\n");
@@ -697,8 +708,8 @@ const configGetCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(configGetCommand, renderer);
     assertKnownArgs(configGetCommand, args);
+    if (args.help === true) return showHelp(configGetCommand, renderer);
     const key = requiredPositional(args._, "key");
     const value = readConfigValue(
       requireObject(await requestOnce(environment, "config.get", {})),
@@ -732,8 +743,8 @@ const configSetCommand = defineCommand({
   async run(context) {
     const args = argsOf(context);
     const { environment, renderer } = dataOf(context);
-    if (args.help === true) return showHelp(configSetCommand, renderer);
     assertKnownArgs(configSetCommand, args);
+    if (args.help === true) return showHelp(configSetCommand, renderer);
     const [key, rawValue, ...extra] = args._;
     if (key === undefined || rawValue === undefined || extra.length > 0)
       throw new UsageError("Usage: pitlane config set <key> <value>");
@@ -802,7 +813,11 @@ async function runLeaseGroup(argv: readonly string[], data: CommandData): Promis
 
 async function runDaemonGroup(argv: readonly string[], data: CommandData): Promise<number> {
   const command = argv[0];
-  if (command === undefined || isHelp(command)) return showHelp(daemonCommand, data.renderer);
+  if (command === undefined) return showHelp(daemonCommand, data.renderer);
+  if (isHelp(command)) {
+    assertHelpArguments(argv, ["--json"]);
+    return showHelp(daemonCommand, data.renderer);
+  }
   const leaf =
     command === "start"
       ? daemonStartCommand
@@ -833,7 +848,10 @@ async function runConfigGroup(argv: readonly string[], data: CommandData): Promi
     const { result } = await runCommand(configSetCommand, { data, rawArgs: argv.slice(1) });
     return result as number;
   }
-  if (isHelp(command)) return showHelp(configCommand, data.renderer);
+  if (isHelp(command)) {
+    assertHelpArguments(argv, ["--json"]);
+    return showHelp(configCommand, data.renderer);
+  }
   throw new UsageError(`Unknown config command: ${command}`);
 }
 

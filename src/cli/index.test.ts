@@ -91,6 +91,24 @@ describe("CLI boundary", () => {
     expect(stripAnsi(output.stderr)).toContain("Boolean option does not accept a value: --json");
   });
 
+  it("rejects unknown options even when top-level help is requested", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["--help", "--bogus-flag"], output.environment)).resolves.toBe(2);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("--bogus-flag");
+  });
+
+  it("rejects unknown options even when nested help is requested", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["daemon", "--help", "--bogus-flag"], output.environment)).resolves.toBe(2);
+
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("--bogus-flag");
+  });
+
   it("prints generated usage with flag descriptions on --help for root and lease, exit 0", async () => {
     const root = outputCapture();
     await expect(runCli(["--help"], root.environment)).resolves.toBe(0);
