@@ -1,9 +1,10 @@
 # CLI reference
 
 Part of the user manual: every command the pitlane CLI is expected to
-implement. All commands accept `--json` for machine-readable output (agents
-are the primary audience). Progress/diagnostics go to **stderr** as JSON
-lines; results go to **stdout**.
+implement. Except for `pitlane mcp`, commands accept `--json` for
+machine-readable output (agents are the primary audience). Their
+progress/diagnostics go to **stderr** as JSON lines; results go to **stdout**.
+`pitlane mcp` instead reserves stdout for MCP JSON-RPC framing.
 
 ## Global exit codes
 
@@ -69,6 +70,13 @@ already expired.
 Explicitly release a lease (primarily for detached mode or operator
 intervention). `--all` force-releases every lease — confirmation required
 unless `--yes`.
+
+## `pitlane mcp`
+
+Start Pitlane's local stdio MCP server. It accepts no flags. Standard output
+is reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The
+server auto-starts the daemon when needed and exposes the focused
+`lease_simulator` and `release_simulator` tool surface for one agent session.
 
 ## `pitlane status`
 
