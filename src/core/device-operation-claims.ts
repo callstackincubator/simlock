@@ -3,6 +3,8 @@ export type DeviceOperation = "boot" | "eviction" | "cleanup" | "nuke";
 
 /** An exclusive, idempotently releasable claim for one device operation. */
 export interface DeviceOperationClaim {
+  readonly deviceId: string;
+  readonly operation: DeviceOperation;
   release(): void;
 }
 
@@ -11,27 +13,34 @@ export interface DeviceOperationClaim {
  * device lifecycle, cleanup, or leasing policy.
  */
 export class DeviceOperationClaims {
-  readonly #claims = new Map<string, DeviceOperation>();
+  readonly #claims = new Map<string, DeviceOperationClaim>();
 
   tryClaim(deviceId: string, operation: DeviceOperation): DeviceOperationClaim | undefined {
     if (this.#claims.has(deviceId)) return undefined;
 
-    this.#claims.set(deviceId, operation);
     let released = false;
-    return {
+    const claim: DeviceOperationClaim = {
+      deviceId,
+      operation,
       release: () => {
         if (released) return;
         released = true;
-        if (this.#claims.get(deviceId) === operation) this.#claims.delete(deviceId);
+        if (this.#claims.get(deviceId) === claim) this.#claims.delete(deviceId);
       },
     };
+    this.#claims.set(deviceId, claim);
+    return claim;
   }
 
   operationFor(deviceId: string): DeviceOperation | undefined {
-    return this.#claims.get(deviceId);
+    return this.#claims.get(deviceId)?.operation;
   }
 
   isClaimed(deviceId: string): boolean {
     return this.#claims.has(deviceId);
+  }
+
+  isActive(claim: DeviceOperationClaim): boolean {
+    return this.#claims.get(claim.deviceId) === claim;
   }
 }

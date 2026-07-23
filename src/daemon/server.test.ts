@@ -461,7 +461,7 @@ async function hello(client: Client): Promise<void> {
 }
 
 async function flush(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 100; index += 1) {
     await Promise.resolve();
   }
 }

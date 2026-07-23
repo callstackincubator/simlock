@@ -1,5 +1,9 @@
 import type { Clock } from "../ports/index.js";
-import { DeviceOperationClaims, type DeviceOperation } from "./device-operation-claims.js";
+import {
+  DeviceOperationClaims,
+  type DeviceOperation,
+  type DeviceOperationClaim,
+} from "./device-operation-claims.js";
 import type { DeviceRecord, DeviceState, LeaseRecord } from "./domain.js";
 import type { DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
@@ -48,8 +52,11 @@ export class ManagedDeviceLifecycle {
   ) {}
 
   // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
-  async boot(target: DeviceRecord): Promise<DeviceRecord | undefined> {
-    return this.#makeReady(target, "shutdown");
+  async boot(
+    target: DeviceRecord,
+    claim?: DeviceOperationClaim,
+  ): Promise<DeviceRecord | undefined> {
+    return this.#makeReady(target, "shutdown", claim);
   }
 
   async readyProvisioned(target: DeviceRecord): Promise<DeviceRecord | undefined> {
@@ -61,8 +68,9 @@ export class ManagedDeviceLifecycle {
     target: DeviceRecord,
     initiator: string,
     operation: Exclude<DeviceOperation, "boot">,
+    claim?: DeviceOperationClaim,
   ): Promise<DeviceRecord | undefined> {
-    const claimed = await this.#claim(target, ["ready"], operation);
+    const claimed = await this.#claim(target, ["ready"], operation, claim);
     if (claimed === undefined) return undefined;
 
     try {
@@ -82,8 +90,9 @@ export class ManagedDeviceLifecycle {
     target: DeviceRecord,
     initiator: string,
     operation: DeviceOperation,
+    claim?: DeviceOperationClaim,
   ): Promise<DeviceRecord | undefined> {
-    const claimed = await this.#claim(target, ["provisioning", "shutdown"], operation);
+    const claimed = await this.#claim(target, ["provisioning", "shutdown"], operation, claim);
     if (claimed === undefined) return undefined;
 
     try {
@@ -99,11 +108,48 @@ export class ManagedDeviceLifecycle {
     });
   }
 
+  /** Shuts down a ready device when needed, then destroys it under one claim. */
+  async dispose(
+    target: DeviceRecord,
+    initiator: string,
+    operation: Exclude<DeviceOperation, "boot">,
+    existingClaim?: DeviceOperationClaim,
+  ): Promise<DeviceRecord | undefined> {
+    const claimed = await this.#claim(target, ["ready", "shutdown"], operation, existingClaim);
+    if (claimed === undefined) return undefined;
+
+    try {
+      let current = claimed.device;
+      if (current.state === "ready") {
+        await this.catalog.get(current.spec.platform).shutdown(toDriverDevice(current));
+        const shutdown = await this.#commitWithoutRelease(claimed, ["ready"], "shutdown", {
+          event: "device.shutdown",
+          payload: { deviceId: current.id, initiator },
+        });
+        if (shutdown === undefined) {
+          await this.#release(claimed);
+          return undefined;
+        }
+        current = shutdown;
+      }
+
+      await this.catalog.get(current.spec.platform).destroy(toDriverDevice(current));
+      return this.#commit(claimed, ["shutdown"], "deleted", {
+        event: "device.deleted",
+        payload: { deviceId: current.id, initiator },
+      });
+    } catch (error: unknown) {
+      await this.#release(claimed);
+      throw error;
+    }
+  }
+
   async #makeReady(
     target: DeviceRecord,
     expectedState: "provisioning" | "shutdown",
+    existingClaim?: DeviceOperationClaim,
   ): Promise<DeviceRecord | undefined> {
-    const claimed = await this.#claim(target, [expectedState], "boot");
+    const claimed = await this.#claim(target, [expectedState], "boot", existingClaim);
     if (claimed === undefined) return undefined;
     const startedAt = this.clock.now();
 
@@ -126,10 +172,21 @@ export class ManagedDeviceLifecycle {
     target: DeviceRecord,
     expectedStates: readonly DeviceState[],
     operation: DeviceOperation,
+    existingClaim?: DeviceOperationClaim,
   ): Promise<ClaimedDevice | undefined> {
     return this.decisions.run(() => {
       const device = this.#registeredTarget(target, expectedStates);
       if (device === undefined) return undefined;
+      if (existingClaim !== undefined) {
+        if (
+          existingClaim.deviceId !== device.id ||
+          existingClaim.operation !== operation ||
+          !this.claims.isActive(existingClaim)
+        ) {
+          return undefined;
+        }
+        return { device, release: existingClaim.release };
+      }
       const claim = this.claims.tryClaim(device.id, operation);
       return claim === undefined ? undefined : { device, release: claim.release };
     });
@@ -149,6 +206,19 @@ export class ManagedDeviceLifecycle {
       } finally {
         claimed.release();
       }
+    });
+  }
+
+  async #commitWithoutRelease(
+    claimed: ClaimedDevice,
+    expectedStates: readonly DeviceState[],
+    to: DeviceState,
+    event: Parameters<ManagedDeviceRegistry["transitionDevice"]>[2],
+  ): Promise<DeviceRecord | undefined> {
+    return this.decisions.run(async () => {
+      const device = this.#registeredTarget(claimed.device, expectedStates);
+      if (device === undefined) return undefined;
+      return this.registry.transitionDevice(device.id, to, event);
     });
   }
 

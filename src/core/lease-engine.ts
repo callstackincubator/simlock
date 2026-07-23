@@ -7,11 +7,13 @@ import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
+import { DeviceProvisioner } from "./device-provisioner.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
+import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry, type ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import {
@@ -84,9 +86,11 @@ export class LeaseEngine {
   readonly #capacity: CapacityCoordinator;
   readonly #claims = new DeviceOperationClaims();
   readonly #drivers: DriverCatalog;
+  readonly #deviceLifecycle: ManagedDeviceLifecycle;
   readonly #expiry: LeaseExpiryScheduler;
   readonly #leases: LeaseLifecycle;
   readonly #planner: AcquisitionPlanner;
+  readonly #provisioner: DeviceProvisioner;
   readonly #queue: WaitQueue;
   readonly #decisions = new SerializedDecision();
 
@@ -94,6 +98,20 @@ export class LeaseEngine {
     this.#capacity = new CapacityCoordinator(options.config, options.systemStats);
     this.#planner = new AcquisitionPlanner(this.#capacity, this.#claims);
     this.#drivers = new DriverCatalog(options.drivers);
+    this.#deviceLifecycle = new ManagedDeviceLifecycle(
+      this.#drivers,
+      options.registry,
+      this.#decisions,
+      this.#claims,
+      options.clock,
+    );
+    this.#provisioner = new DeviceProvisioner({
+      catalog: this.#drivers,
+      clock: options.clock,
+      decisions: this.#decisions,
+      lifecycle: this.#deviceLifecycle,
+      registry: options.registry,
+    });
     this.#expiry = new LeaseExpiryScheduler(options.clock, async (leaseId) => {
       await this.#release(leaseId, "expired");
     });
@@ -216,38 +234,15 @@ export class LeaseEngine {
 
     for (const device of this.options.registry.snapshot.devices) {
       if (device.state === "deleted") continue;
-      const driver = this.#driverFor(device.spec.platform);
       if (device.state === "ready") {
-        await driver.shutdown(toDriverDevice(device));
-        await this.#withDecision(async () => {
-          const current = this.options.registry.snapshot.devices.find(
-            (candidate) => candidate.id === device.id,
-          );
-          if (current?.state === "ready") {
-            await this.options.registry.transitionDevice(device.id, "shutdown", {
-              event: "device.shutdown",
-              payload: { deviceId: device.id, initiator: "nuke" },
-            });
-          }
-        });
+        await this.#deviceLifecycle.shutdown(device, "nuke", "nuke");
       }
       if (deleteDevices) {
         const current = this.options.registry.snapshot.devices.find(
           (candidate) => candidate.id === device.id,
         );
         if (current?.state !== "shutdown") continue;
-        await driver.destroy(toDriverDevice(current));
-        await this.#withDecision(async () => {
-          const latest = this.options.registry.snapshot.devices.find(
-            (candidate) => candidate.id === device.id,
-          );
-          if (latest?.state === "shutdown") {
-            await this.options.registry.transitionDevice(device.id, "deleted", {
-              event: "device.deleted",
-              payload: { deviceId: device.id, initiator: "nuke" },
-            });
-          }
-        });
+        await this.#deviceLifecycle.destroy(current, "nuke", "nuke");
       }
     }
     return { releasedLeaseIds };
@@ -368,20 +363,24 @@ export class LeaseEngine {
   async #provision(waiter: AcquisitionWaiter, reservation: CapacityReservation): Promise<void> {
     const spec = waiter.spec;
     if (spec === undefined) {
+      reservation.release();
       return;
     }
-    const driver = this.#driverFor(spec.platform);
-    const provisionStartedAt = this.options.clock.now();
-    let driverDevice: DriverDevice;
+    let device: DeviceRecord;
     try {
-      this.#notifyProgress(waiter, {
-        stage: "provisioning",
-        etaMs: driver.estimate("provision", spec),
+      device = await this.#provisioner.provision(spec, {
+        onProgress: (progress) => this.#notifyProgress(waiter, progress),
+        reservation,
       });
-      driverDevice = await driver.provision(spec);
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof BootTimeoutError) {
+        await this.#withDecision(async () => {
+          if (waiter.state !== "rejected") this.#reject(waiter, error, "boot-timeout");
+        });
+        this.#wakeQueue();
+        return;
+      }
       const retry = await this.#withDecision(async () => {
-        reservation.release();
         if (waiter.state === "rejected") {
           return false;
         }
@@ -399,48 +398,7 @@ export class LeaseEngine {
       return;
     }
 
-    const device = await this.#withDecision(async () => {
-      return this.options.registry.registerDevice({
-        driverData: driverDevice.driverData,
-        driverDeviceId: driverDevice.deviceId,
-        provisionDuration: this.options.clock.now() - provisionStartedAt,
-        spec,
-      });
-    });
-
-    const readyStartedAt = this.options.clock.now();
-    try {
-      this.#notifyProgress(waiter, { stage: "booting", etaMs: driver.estimate("boot", spec) });
-      await driver.makeReady(driverDevice);
-    } catch {
-      let destroyed = true;
-      try {
-        await driver.destroy(driverDevice);
-      } catch {
-        destroyed = false;
-      }
-      await this.#withDecision(async () => {
-        if (destroyed) {
-          reservation.release();
-          await this.options.registry.transitionDevice(device.id, "deleted", {
-            event: "device.deleted",
-            payload: { deviceId: device.id, initiator: "lease-engine" },
-          });
-        }
-        if (waiter.state !== "rejected") {
-          this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
-        }
-      });
-      if (destroyed) this.#wakeQueue();
-      return;
-    }
-
     const granted = await this.#withDecision(async () => {
-      reservation.release();
-      await this.options.registry.transitionDevice(device.id, "ready", {
-        event: "device.ready",
-        payload: { bootDuration: this.options.clock.now() - readyStartedAt, deviceId: device.id },
-      });
       if (waiter.state === "rejected") {
         return false;
       }
@@ -507,15 +465,15 @@ export class LeaseEngine {
     device: DeviceRecord,
     claim: DeviceOperationClaim,
   ): Promise<void> {
-    const driver = this.#driverFor(device.spec.platform);
     try {
-      await driver.shutdown(toDriverDevice(device));
-      await this.#withDecision(async () => {
-        await this.options.registry.transitionDevice(device.id, "shutdown", {
-          event: "device.shutdown",
-          payload: { deviceId: device.id, initiator: "warm-pool-active-demand" },
-        });
-      });
+      const shutdown = await this.#deviceLifecycle.shutdown(
+        device,
+        "warm-pool-active-demand",
+        "eviction",
+        claim,
+      );
+      if (shutdown === undefined)
+        throw new Error(`Eviction target is no longer safe: ${device.id}`);
     } catch {
       await this.#withDecision(async () => {
         claim.release();
@@ -537,24 +495,14 @@ export class LeaseEngine {
     device: DeviceRecord,
     claim: DeviceOperationClaim,
   ): Promise<void> {
-    const driver = this.#driverFor(device.spec.platform);
     try {
-      if (device.state === "ready") {
-        await driver.shutdown(toDriverDevice(device));
-        await this.#withDecision(async () => {
-          await this.options.registry.transitionDevice(device.id, "shutdown", {
-            event: "device.shutdown",
-            payload: { deviceId: device.id, initiator: "warm-pool-active-demand" },
-          });
-        });
-      }
-      await driver.destroy(toDriverDevice(device));
-      await this.#withDecision(async () => {
-        await this.options.registry.transitionDevice(device.id, "deleted", {
-          event: "device.deleted",
-          payload: { deviceId: device.id, initiator: "warm-pool-active-demand" },
-        });
-      });
+      const deleted = await this.#deviceLifecycle.dispose(
+        device,
+        "warm-pool-active-demand",
+        "eviction",
+        claim,
+      );
+      if (deleted === undefined) throw new Error(`Eviction target is no longer safe: ${device.id}`);
     } catch {
       await this.#withDecision(async () => {
         claim.release();
@@ -578,28 +526,26 @@ export class LeaseEngine {
     claim: DeviceOperationClaim,
   ): Promise<void> {
     const driver = this.#driverFor(device.spec.platform);
-    const startedAt = this.options.clock.now();
     try {
       this.#notifyProgress(waiter, {
         stage: "booting",
         etaMs: driver.estimate("boot", device.spec),
       });
-      await driver.makeReady(toDriverDevice(device));
+      const ready = await this.#deviceLifecycle.boot(device, claim);
+      if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
     } catch {
       let destroyed = true;
       try {
-        await driver.destroy(toDriverDevice(device));
+        const deleted = await this.#deviceLifecycle.destroy(device, "lease-engine", "boot");
+        destroyed = deleted !== undefined;
       } catch {
         destroyed = false;
       }
       await this.#withDecision(async () => {
         if (destroyed) {
           capacityReservation.release();
-          claim.release();
-          await this.options.registry.transitionDevice(device.id, "deleted", {
-            event: "device.deleted",
-            payload: { deviceId: device.id, initiator: "lease-engine" },
-          });
+        } else if (!this.#claims.isClaimed(device.id)) {
+          this.#claims.tryClaim(device.id, "boot");
         }
         if (waiter.state !== "rejected") {
           this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
@@ -612,10 +558,6 @@ export class LeaseEngine {
     const granted = await this.#withDecision(async () => {
       capacityReservation.release();
       claim.release();
-      await this.options.registry.transitionDevice(device.id, "ready", {
-        event: "device.ready",
-        payload: { bootDuration: this.options.clock.now() - startedAt, deviceId: device.id },
-      });
       if (waiter.state !== "rejected") {
         await this.#grant(waiter, device.id);
         return true;
