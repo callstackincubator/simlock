@@ -45,6 +45,14 @@ export class RequesterAlreadyLeasedError extends Error {
   }
 }
 
+/** Thrown when a caller passes a waiter created by a different queue instance. */
+export class ForeignWaiterError extends Error {
+  constructor() {
+    super("Waiter does not belong to this queue");
+    this.name = "ForeignWaiterError";
+  }
+}
+
 export type WaiterState = "new" | "queued" | "processing" | "granted" | "rejected";
 
 export interface Waiter {
@@ -78,6 +86,7 @@ export interface WaitQueueOptions {
  * terminal states while this class owns queue membership and settlement.
  */
 export class WaitQueue {
+  readonly #ownedWaiters = new WeakSet<MutableWaiter>();
   readonly #waiters: MutableWaiter[] = [];
   readonly #pendingWaiters = new Set<MutableWaiter>();
   readonly #pendingRequesters = new Set<string>();
@@ -118,6 +127,7 @@ export class WaitQueue {
       state: "new",
       timer: undefined,
     };
+    this.#ownedWaiters.add(waiter);
     this.#pendingWaiters.add(waiter);
     this.#pendingRequesters.add(requestOptions.requesterId);
     return waiter;
@@ -169,8 +179,9 @@ export class WaitQueue {
   }
 
   notifyProgress(waiter: Waiter, progress: LeaseProgress): void {
+    const mutable = this.#mutable(waiter);
     try {
-      this.#mutable(waiter).onProgress?.(progress);
+      mutable.onProgress?.(progress);
     } catch {
       // Client feedback must not affect lease acquisition.
     }
@@ -231,7 +242,9 @@ export class WaitQueue {
   }
 
   #mutable(waiter: Waiter): MutableWaiter {
-    return waiter as MutableWaiter;
+    const mutable = waiter as MutableWaiter;
+    if (!this.#ownedWaiters.has(mutable)) throw new ForeignWaiterError();
+    return mutable;
   }
 }
 

@@ -11,13 +11,13 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseEngine | implemented |
-| `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseEngine | implemented |
+| `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseAcquisitionCoordinator | implemented |
+| `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator | implemented |
 | `lease.granted` | lease id, device id, requester, mode (held/detached) | a device was assigned and handed out | LeaseLifecycle | implemented |
 | `lease.renewed` | lease id, new deadline | detached-mode renew succeeded | LeaseLifecycle | implemented |
 | `lease.released` | lease id, device id, reason (closed/explicit/killed) | holder connection closed or explicit release | LeaseLifecycle | implemented |
 | `lease.expired` | lease id, device id | TTL backstop fired | LeaseLifecycle | implemented |
-| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed) | a request ended without a grant | LeaseEngine / WaitQueue integration | implemented |
+| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed) | a request ended without a grant | LeaseAcquisitionCoordinator / WaitQueue | implemented |
 
 ## Device lifecycle
 

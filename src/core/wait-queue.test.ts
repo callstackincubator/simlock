@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { FakeClock } from "../ports/index.js";
 import type { DeviceRequest } from "./driver.js";
 import {
+  ForeignWaiterError,
   QueueTimeoutError,
   RequesterAlreadyLeasedError,
   WaitQueue,
@@ -41,6 +42,29 @@ function createWaiter(queue: WaitQueue, requesterId: string, options: { timeoutM
 }
 
 describe("WaitQueue", () => {
+  it("refuses foreign waiters without disturbing their owning queue", async () => {
+    const { queue: owner } = createQueue();
+    const { queue: other } = createQueue();
+    const waiter = createWaiter(owner, "owner");
+    owner.enqueue(waiter);
+
+    expect(() => other.enqueue(waiter)).toThrow(ForeignWaiterError);
+    expect(() => other.markProcessing(waiter)).toThrow(ForeignWaiterError);
+    expect(() => other.markNew(waiter)).toThrow(ForeignWaiterError);
+    expect(() => other.isQueued(waiter)).toThrow(ForeignWaiterError);
+    expect(() => other.attachProgress(waiter, () => undefined)).toThrow(ForeignWaiterError);
+    expect(() => other.notifyProgress(waiter, { etaMs: 10, stage: "booting" })).toThrow(
+      ForeignWaiterError,
+    );
+    expect(() => other.resolve(waiter, grant())).toThrow(ForeignWaiterError);
+    expect(() => other.reject(waiter, new Error("foreign"))).toThrow(ForeignWaiterError);
+
+    expect(owner.depth).toBe(1);
+    expect(owner.head).toBe(waiter);
+    expect(owner.resolve(waiter, grant())).toBe(true);
+    await expect(waiter.promise).resolves.toEqual(grant());
+  });
+
   it("maintains FIFO order while processing entries leave the queue", () => {
     const { queue } = createQueue();
     const first = createWaiter(queue, "first");
