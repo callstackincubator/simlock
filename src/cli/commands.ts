@@ -497,7 +497,7 @@ const nukeCommand = defineCommand({
     assertKnownArgs(nukeCommand, args);
     const deleteDevices = args["delete-devices"] === true;
     const warning = deleteDevices
-      ? "This will force-release every active lease, shut down every Pitlane-managed device, and delete them from the registry."
+      ? "This will force-release every active lease and permanently destroy every registry-managed simulator and emulator device."
       : "This will force-release every active lease and shut down every Pitlane-managed device.";
     const confirmed = args.yes === true || (await environment.confirm?.(warning));
     if (!confirmed) throw new UsageError("nuke requires confirmation or --yes");

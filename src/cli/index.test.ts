@@ -628,6 +628,26 @@ describe("CLI human rendering (interactive terminal)", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it("warns that --delete-devices permanently destroys every registry-managed device", async () => {
+    const output = outputCapture({ interactive: true });
+    const connection = new StubConnection();
+    connection.response("nuke.run", { deletedDevices: [], releasedLeaseIds: [] });
+    const confirm = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      runCli(
+        ["nuke", "--delete-devices"],
+        output.environmentWith({ confirm, connect: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "permanently destroy every registry-managed simulator and emulator device",
+      ),
+    );
+  });
+
   it("renders each event with a dim time, colored name, and payload summary", async () => {
     const output = outputCapture({ interactive: true });
     const connection = new StubConnection();
