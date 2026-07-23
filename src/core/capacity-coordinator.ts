@@ -90,6 +90,13 @@ export class CapacityCoordinator {
     return { ok: true, reservation: this.#reservation(this.#runningReservations, reservation) };
   }
 
+  canReserveRunning(
+    platform: CapacityPlatform,
+    devices: readonly CapacityDevice[],
+  ): CapacityDecision {
+    return canReserveRunning(platform, devices, this.#allRunningReservations(), this.config);
+  }
+
   runningCapacity(devices: readonly CapacityDevice[]): RunningCapacity {
     return runningCapacity(devices, this.#allRunningReservations(), this.config);
   }

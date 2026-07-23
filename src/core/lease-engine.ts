@@ -1,16 +1,26 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, IdGenerator, SystemStats, TimerHandle } from "../ports/index.js";
-import {
-  canProvision,
-  canReserveRunning,
-  runningCapacity,
-  type RunningCapacity,
-} from "./capacity.js";
+import type { Clock, IdGenerator, SystemStats } from "../ports/index.js";
+import type { RunningCapacity } from "./capacity.js";
+import { CapacityCoordinator, type CapacityReservation } from "./capacity-coordinator.js";
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
+import { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver, type DriverDevice } from "./driver.js";
+import { DriverCatalog } from "./driver-catalog.js";
+import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
+import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { Registry, type ReleasedLease } from "./registry.js";
+import { SerializedDecision } from "./serialized-decision.js";
+import {
+  type LeaseGrant,
+  type LeaseProgress,
+  type LeaseRequestOptions,
+  type LeaseTiming,
+  RequesterAlreadyLeasedError,
+  type Waiter,
+  WaitQueue,
+} from "./wait-queue.js";
 import {
   compareLeastRecentlyUsed,
   selectManagedVictim,
@@ -18,34 +28,7 @@ import {
   type WarmVictimScope,
 } from "./warm-pool.js";
 
-export interface LeaseRequestOptions {
-  readonly requesterId: string;
-  readonly mode: "held" | "detached";
-  readonly timeoutMs?: number;
-  readonly noWait?: boolean;
-  readonly allowDownload?: boolean;
-  readonly onProgress?: (progress: LeaseProgress) => void;
-}
-
-/** Request-scoped progress for the lease action currently being performed. */
-export type LeaseProgress =
-  | { readonly stage: "queued"; readonly queuePosition: number }
-  | { readonly stage: "provisioning"; readonly etaMs: number }
-  | { readonly stage: "booting"; readonly etaMs: number }
-  | { readonly stage: "reclaiming"; readonly etaMs: number };
-
-export interface LeaseTiming {
-  readonly estimatedProvisionMs: number;
-  readonly estimatedBootMs: number;
-  readonly estimatedReclaimMs: number;
-  readonly estimatedReadyMs: number;
-}
-
-export interface LeaseGrant {
-  readonly device: DeviceRecord;
-  readonly lease: LeaseRecord;
-  readonly timing: LeaseTiming;
-}
+export type { LeaseProgress } from "./wait-queue.js";
 
 export interface LeaseEngineOptions {
   readonly clock: Clock;
@@ -64,26 +47,9 @@ export class NoCapacityError extends Error {
   }
 }
 
-export class QueueTimeoutError extends Error {
-  constructor(readonly requestId: string) {
-    super(`Timed out waiting for a device: ${requestId}`);
-    this.name = "QueueTimeoutError";
-  }
-}
+export { QueueTimeoutError, RequesterAlreadyLeasedError } from "./wait-queue.js";
 
-export class RequesterAlreadyLeasedError extends Error {
-  constructor(readonly requesterId: string) {
-    super(`Requester already has a lease or pending request: ${requesterId}`);
-    this.name = "RequesterAlreadyLeasedError";
-  }
-}
-
-export class HeldLeaseRenewalError extends Error {
-  constructor(readonly leaseId: string) {
-    super(`Held lease cannot be renewed: ${leaseId}`);
-    this.name = "HeldLeaseRenewalError";
-  }
-}
+export { HeldLeaseRenewalError } from "./lease-lifecycle.js";
 
 class NukeCancelledError extends Error {
   constructor() {
@@ -92,46 +58,35 @@ class NukeCancelledError extends Error {
   }
 }
 
-export class NoDriverError extends Error {
-  constructor(readonly platform: Platform) {
-    super(`No driver registered for platform: ${platform}`);
-    this.name = "NoDriverError";
-  }
-}
+export { NoDriverError } from "./driver-catalog.js";
 
-type WaiterState = "new" | "queued" | "processing" | "granted" | "rejected";
-
-interface Waiter {
-  readonly id: string;
-  readonly request: DeviceRequest;
-  readonly options: LeaseRequestOptions;
-  onProgress: ((progress: LeaseProgress) => void) | undefined;
-  readonly promise: Promise<LeaseGrant>;
-  readonly reject: (error: Error) => void;
-  readonly resolve: (grant: LeaseGrant) => void;
+interface AcquisitionWaiter extends Waiter {
   failures: number;
   spec?: DeviceSpec;
-  state: WaiterState;
-  timer?: TimerHandle;
   timing: LeaseTiming;
 }
 
 interface ProvisionAction {
   readonly kind: "provision";
+  readonly reservation: CapacityReservation;
 }
 
 interface EvictRunningAction {
   readonly kind: "evict-running";
+  readonly claim: DeviceOperationClaim;
   readonly device: DeviceRecord;
 }
 
 interface EvictManagedAction {
   readonly kind: "evict-managed";
+  readonly claim: DeviceOperationClaim;
   readonly device: DeviceRecord;
 }
 
 interface BootShutdownAction {
   readonly kind: "boot-shutdown";
+  readonly capacityReservation: CapacityReservation;
+  readonly claim: DeviceOperationClaim;
   readonly device: DeviceRecord;
 }
 
@@ -147,27 +102,52 @@ const noTiming: LeaseTiming = {
  * intentionally performed after each decision section has been released.
  */
 export class LeaseEngine {
-  readonly #drivers = new Map<Platform, Driver>();
-  readonly #leaseTimers = new Map<string, TimerHandle>();
-  readonly #provisionReservations: Platform[] = [];
-  readonly #shutdownReservations = new Set<string>();
-  readonly #evictionReservations = new Set<string>();
-  readonly #cleanupReservations = new Set<string>();
-  readonly #queue: Waiter[] = [];
-  readonly #requesters = new Set<string>();
-  #decisionTail: Promise<void> = Promise.resolve();
+  readonly #capacity: CapacityCoordinator;
+  readonly #claims = new DeviceOperationClaims();
+  readonly #drivers: DriverCatalog;
+  readonly #expiry: LeaseExpiryScheduler;
+  readonly #leases: LeaseLifecycle;
+  readonly #queue: WaitQueue;
+  readonly #decisions = new SerializedDecision();
 
   constructor(private readonly options: LeaseEngineOptions) {
-    for (const driver of options.drivers) {
-      this.#drivers.set(driver.platform, driver);
-    }
+    this.#capacity = new CapacityCoordinator(options.config, options.systemStats);
+    this.#drivers = new DriverCatalog(options.drivers);
+    this.#expiry = new LeaseExpiryScheduler(options.clock, async (leaseId) => {
+      await this.#release(leaseId, "expired");
+    });
+    this.#leases = new LeaseLifecycle({
+      clock: options.clock,
+      eventBus: options.eventBus,
+      expiryScheduler: this.#expiry,
+      registry: options.registry,
+      ttl: {
+        detachedMs: options.config.lease.detachedTtlMs,
+        heldBackstopMs: options.config.lease.heldTtlBackstopMs,
+      },
+    });
+    this.#queue = new WaitQueue({
+      clock: options.clock,
+      idGenerator: options.idGenerator,
+      onTimeout: (waiter) => {
+        this.options.eventBus.emit(
+          "lease.rejected",
+          { requestSpec: waiter.request, reason: "timeout" },
+          "wait-queue",
+        );
+        this.#wakeQueue();
+      },
+    });
   }
 
   async request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant> {
-    const waiter = this.#newWaiter(request, options);
+    let waiter: AcquisitionWaiter;
     try {
-      await this.#withDecision(async () => {
-        if (this.#requesters.has(options.requesterId)) {
+      waiter = await this.#withDecision(async () => {
+        const alreadyActive = this.options.registry.snapshot.leases.some(
+          (lease) => lease.requesterId === options.requesterId,
+        );
+        if (alreadyActive || this.#queue.hasPendingRequester(options.requesterId)) {
           this.options.eventBus.emit(
             "lease.rejected",
             { requestSpec: request, reason: "already-leased" },
@@ -176,7 +156,7 @@ export class LeaseEngine {
           throw new RequesterAlreadyLeasedError(options.requesterId);
         }
 
-        this.#requesters.add(options.requesterId);
+        const accepted = this.#newWaiter(request, options);
         this.options.eventBus.emit(
           "lease.requested",
           {
@@ -186,15 +166,18 @@ export class LeaseEngine {
           },
           "lease-engine",
         );
+        return accepted;
       });
     } catch (error: unknown) {
       return Promise.reject(error);
     }
 
-    const driver = this.#drivers.get(request.platform);
-    if (driver === undefined) {
+    let driver: Driver;
+    try {
+      driver = this.#drivers.get(request.platform);
+    } catch (error: unknown) {
       await this.#withDecision(async () => {
-        this.#reject(waiter, new NoDriverError(request.platform), "unresolvable-spec");
+        this.#reject(waiter, asError(error), "unresolvable-spec");
       });
       return waiter.promise;
     }
@@ -233,9 +216,12 @@ export class LeaseEngine {
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
     const releasedLeaseIds = await this.releaseAll("killed");
     await this.#withDecision(async () => {
-      while (this.#queue[0] !== undefined) {
-        const waiter = this.#queue[0];
-        this.#reject(waiter, new NukeCancelledError(), "killed");
+      for (const waiter of this.#queue.cancelAll(() => new NukeCancelledError())) {
+        this.options.eventBus.emit(
+          "lease.rejected",
+          { requestSpec: waiter.request, reason: "killed" },
+          "wait-queue",
+        );
       }
     });
 
@@ -279,19 +265,16 @@ export class LeaseEngine {
   }
 
   get queueDepth(): number {
-    return this.#queue.length;
+    return this.#queue.depth;
   }
 
   get runningCapacity(): RunningCapacity {
-    return runningCapacity(
-      this.#capacityDevices(),
-      this.#runningReservations(),
-      this.options.config,
-    );
+    return this.#capacity.runningCapacity(this.#capacityDevices());
   }
 
   /** Safely converges unleased running devices after startup reconciliation. */
   async convergeRunningCapacity(): Promise<void> {
+    await this.#leases.restoreExpiryTimers();
     for (const legacy of this.options.registry.snapshot.devices.filter(
       (device) =>
         device.state === "reclaiming" &&
@@ -325,7 +308,7 @@ export class LeaseEngine {
             (device) =>
               device.state === "ready" &&
               !leases.has(device.id) &&
-              !this.#cleanupReservations.has(device.id) &&
+              !this.#claims.isClaimed(device.id) &&
               (overPlatforms.length === 0 || overPlatforms.includes(device.spec.platform)),
           )
           .sort(compareLeastRecentlyUsed)[0];
@@ -343,30 +326,12 @@ export class LeaseEngine {
   /** Stops client feedback for a queued request without affecting its lease outcome. */
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.#withDecision(async () => {
-      const waiter = this.#queue.find((candidate) => candidate.options.requesterId === requesterId);
-      if (waiter !== undefined) {
-        waiter.onProgress = undefined;
-      }
+      this.#queue.detachProgress(requesterId);
     });
   }
 
   async renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
-    return this.#withDecision(async () => {
-      const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
-      if (current?.mode === "held") {
-        throw new HeldLeaseRenewalError(leaseId);
-      }
-      const deadline = this.options.clock.now() + ttlMs;
-      const renewed = await this.options.registry.renewLease(leaseId, deadline);
-      this.#cancelLeaseTimer(leaseId);
-      this.#armLeaseTimer(renewed);
-      this.options.eventBus.emit(
-        "lease.renewed",
-        { leaseId: renewed.id, newDeadline: renewed.ttlDeadline },
-        "lease-engine",
-      );
-      return renewed;
-    });
+    return this.#withDecision(async () => this.#leases.renew(leaseId, ttlMs));
   }
 
   /**
@@ -380,19 +345,20 @@ export class LeaseEngine {
       return false;
     }
 
-    const device = await this.#withDecision(async () => {
+    const selected = await this.#withDecision(async () => {
       const candidate = this.options.registry.snapshot.devices.find(
         (current) => current.id === proposal.target,
       );
       if (candidate === undefined || !this.#canExecuteCleanup(candidate, action)) {
         return undefined;
       }
-      this.#cleanupReservations.add(candidate.id);
-      return candidate;
+      const claim = this.#claims.tryClaim(candidate.id, "cleanup");
+      return claim === undefined ? undefined : { claim, device: candidate };
     });
-    if (device === undefined) {
+    if (selected === undefined) {
       return false;
     }
+    const { claim, device } = selected;
 
     const driver = this.#driverFor(device.spec.platform);
     try {
@@ -403,13 +369,13 @@ export class LeaseEngine {
       }
     } catch (error: unknown) {
       await this.#withDecision(async () => {
-        this.#cleanupReservations.delete(device.id);
+        claim.release();
       });
       throw error;
     }
 
     await this.#withDecision(async () => {
-      this.#cleanupReservations.delete(device.id);
+      claim.release();
       const event =
         action === "shutdown"
           ? {
@@ -430,13 +396,13 @@ export class LeaseEngine {
     return true;
   }
 
-  async #drive(waiter: Waiter): Promise<void> {
+  async #drive(waiter: AcquisitionWaiter): Promise<void> {
     const action = await this.#withDecision(async () => this.#decide(waiter));
     await this.#perform(waiter, action);
   }
 
   async #perform(
-    waiter: Waiter,
+    waiter: AcquisitionWaiter,
     action:
       | ProvisionAction
       | BootShutdownAction
@@ -453,7 +419,7 @@ export class LeaseEngine {
       if (spec !== undefined) {
         waiter.timing = estimatedTiming(this.#driverFor(spec.platform), spec);
       }
-      await this.#provision(waiter, action);
+      await this.#provision(waiter, action.reservation);
       return;
     }
     if (action.kind === "boot-shutdown") {
@@ -461,17 +427,17 @@ export class LeaseEngine {
         this.#driverFor(action.device.spec.platform),
         action.device.spec,
       );
-      await this.#bootShutdown(waiter, action.device);
+      await this.#bootShutdown(waiter, action.device, action.capacityReservation, action.claim);
       return;
     }
     if (action.kind === "evict-running") {
-      await this.#evictRunning(waiter, action.device);
+      await this.#evictRunning(waiter, action.device, action.claim);
       return;
     }
-    await this.#evictManaged(waiter, action.device);
+    await this.#evictManaged(waiter, action.device, action.claim);
   }
 
-  async #provision(waiter: Waiter, _action: ProvisionAction): Promise<void> {
+  async #provision(waiter: AcquisitionWaiter, reservation: CapacityReservation): Promise<void> {
     const spec = waiter.spec;
     if (spec === undefined) {
       return;
@@ -487,13 +453,13 @@ export class LeaseEngine {
       driverDevice = await driver.provision(spec);
     } catch {
       const retry = await this.#withDecision(async () => {
-        this.#removeReservation(spec.platform);
+        reservation.release();
         if (waiter.state === "rejected") {
           return false;
         }
         waiter.failures += 1;
         if (waiter.failures === 1) {
-          waiter.state = this.#queue.includes(waiter) ? "queued" : "new";
+          this.#queue.markNew(waiter);
           return true;
         }
         this.#enqueue(waiter);
@@ -527,7 +493,7 @@ export class LeaseEngine {
       }
       await this.#withDecision(async () => {
         if (destroyed) {
-          this.#removeReservation(spec.platform);
+          reservation.release();
           await this.options.registry.transitionDevice(device.id, "deleted", {
             event: "device.deleted",
             payload: { deviceId: device.id, initiator: "lease-engine" },
@@ -542,7 +508,7 @@ export class LeaseEngine {
     }
 
     const granted = await this.#withDecision(async () => {
-      this.#removeReservation(spec.platform);
+      reservation.release();
       await this.options.registry.transitionDevice(device.id, "ready", {
         event: "device.ready",
         payload: { bootDuration: this.options.clock.now() - readyStartedAt, deviceId: device.id },
@@ -559,7 +525,7 @@ export class LeaseEngine {
   }
 
   async #decide(
-    waiter: Waiter,
+    waiter: AcquisitionWaiter,
   ): Promise<
     ProvisionAction | BootShutdownAction | EvictRunningAction | EvictManagedAction | undefined
   > {
@@ -567,7 +533,7 @@ export class LeaseEngine {
       return undefined;
     }
     const spec = waiter.spec;
-    if (this.#queue[0] !== undefined && this.#queue[0] !== waiter) {
+    if (this.#queue.head !== undefined && this.#queue.head !== waiter) {
       if (waiter.options.noWait) {
         this.#reject(waiter, new NoCapacityError(), "no-wait");
         return undefined;
@@ -579,7 +545,7 @@ export class LeaseEngine {
     const ready = this.options.registry.snapshot.devices.find(
       (device) =>
         device.state === "ready" &&
-        !this.#cleanupReservations.has(device.id) &&
+        !this.#claims.isClaimed(device.id) &&
         sameSpec(device.spec, spec),
     );
     if (ready !== undefined) {
@@ -590,71 +556,65 @@ export class LeaseEngine {
     const shutdown = this.options.registry.snapshot.devices.find(
       (device) =>
         device.state === "shutdown" &&
-        !this.#shutdownReservations.has(device.id) &&
-        !this.#cleanupReservations.has(device.id) &&
+        !this.#claims.isClaimed(device.id) &&
         sameSpec(device.spec, spec),
     );
     if (shutdown !== undefined) {
-      const running = canReserveRunning(
-        spec.platform,
-        this.#capacityDevices(),
-        this.#runningReservations(),
-        this.options.config,
-      );
+      const running = this.#capacity.tryReserveRunning(spec.platform, this.#capacityDevices());
       if (!running.ok) {
         const victim = this.#runningVictim(running.reason, spec.platform);
         if (victim !== undefined) {
-          this.#evictionReservations.add(victim.id);
-          waiter.state = "processing";
-          return { device: victim, kind: "evict-running" };
+          const claim = this.#claims.tryClaim(victim.id, "eviction");
+          if (claim === undefined) throw new Error(`Failed to claim selected victim: ${victim.id}`);
+          this.#queue.markProcessing(waiter);
+          return { claim, device: victim, kind: "evict-running" };
         }
         if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
         else this.#enqueue(waiter);
         return undefined;
       }
-      this.#shutdownReservations.add(shutdown.id);
-      waiter.state = "processing";
-      return { device: shutdown, kind: "boot-shutdown" };
+      const claim = this.#claims.tryClaim(shutdown.id, "boot");
+      if (claim === undefined) {
+        running.reservation.release();
+        throw new Error(`Failed to claim selected shutdown device: ${shutdown.id}`);
+      }
+      this.#queue.markProcessing(waiter);
+      return {
+        capacityReservation: running.reservation,
+        claim,
+        device: shutdown,
+        kind: "boot-shutdown",
+      };
     }
 
-    const capacity = canProvision(
-      spec.platform,
-      [
-        ...this.options.registry.snapshot.devices.map((device) => ({
-          platform: device.spec.platform,
-          state: device.state,
-        })),
-        ...this.#provisionReservations.map((platform) => ({ platform, state: "provisioning" })),
-      ],
-      this.options.config,
-      this.options.systemStats,
-    );
-    const running = canReserveRunning(
+    const reservation = this.#capacity.tryReserveProvisioning(
       spec.platform,
       this.#capacityDevices(),
-      this.#runningReservations(),
-      this.options.config,
     );
-    if (!capacity.ok && capacity.reason === "device-limit") {
+    if (!reservation.ok && reservation.reason === "device-limit") {
       const victim = selectManagedVictim(this.#eligibleEvictionDevices(), spec.platform);
       if (victim !== undefined) {
-        this.#evictionReservations.add(victim.id);
-        waiter.state = "processing";
-        return { device: victim, kind: "evict-managed" };
+        const claim = this.#claims.tryClaim(victim.id, "eviction");
+        if (claim === undefined) throw new Error(`Failed to claim selected victim: ${victim.id}`);
+        this.#queue.markProcessing(waiter);
+        return { claim, device: victim, kind: "evict-managed" };
       }
     }
-    if (!running.ok) {
-      const victim = this.#runningVictim(running.reason, spec.platform);
+    if (!reservation.ok) {
+      const victim = this.#runningVictim(reservation.reason, spec.platform);
       if (victim !== undefined) {
-        this.#evictionReservations.add(victim.id);
-        waiter.state = "processing";
-        return { device: victim, kind: "evict-running" };
+        const claim = this.#claims.tryClaim(victim.id, "eviction");
+        if (claim === undefined) throw new Error(`Failed to claim selected victim: ${victim.id}`);
+        this.#queue.markProcessing(waiter);
+        return { claim, device: victim, kind: "evict-running" };
       }
     }
-    if (capacity.ok && running.ok && waiter.failures < 2) {
-      this.#provisionReservations.push(spec.platform);
-      waiter.state = "processing";
-      return { kind: "provision" };
+    if (reservation.ok && waiter.failures < 2) {
+      this.#queue.markProcessing(waiter);
+      return { kind: "provision", reservation: reservation.reservation };
+    }
+    if (reservation.ok) {
+      reservation.reservation.release();
     }
 
     if (waiter.options.noWait) {
@@ -665,42 +625,21 @@ export class LeaseEngine {
     return undefined;
   }
 
-  async #grant(waiter: Waiter, deviceId: string): Promise<void> {
-    const ttlDeadline = this.options.clock.now() + this.#ttlFor(waiter.options.mode);
-    const lease = await this.options.registry.createLease({
+  async #grant(waiter: AcquisitionWaiter, deviceId: string): Promise<void> {
+    const { device, lease } = await this.#leases.grant({
       deviceId,
       mode: waiter.options.mode,
       requesterId: waiter.options.requesterId,
-      ttlDeadline,
     });
-    const device = this.options.registry.snapshot.devices.find(
-      (candidate) => candidate.id === deviceId,
-    );
-    if (device === undefined) {
-      throw new Error(`Granted device disappeared from registry: ${deviceId}`);
-    }
 
-    this.#removeFromQueue(waiter);
-    if (waiter.timer !== undefined) {
-      this.options.clock.cancel(waiter.timer);
-      delete waiter.timer;
-    }
-    waiter.state = "granted";
-    this.#armLeaseTimer(lease);
-    this.options.eventBus.emit(
-      "lease.granted",
-      {
-        deviceId: lease.deviceId,
-        leaseId: lease.id,
-        mode: lease.mode,
-        requester: lease.requesterId,
-      },
-      "lease-engine",
-    );
-    waiter.resolve({ device, lease, timing: waiter.timing });
+    this.#queue.resolve(waiter, { device, lease, timing: waiter.timing });
   }
 
-  async #evictRunning(waiter: Waiter, device: DeviceRecord): Promise<void> {
+  async #evictRunning(
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+    claim: DeviceOperationClaim,
+  ): Promise<void> {
     const driver = this.#driverFor(device.spec.platform);
     try {
       await driver.shutdown(toDriverDevice(device));
@@ -712,21 +651,25 @@ export class LeaseEngine {
       });
     } catch {
       await this.#withDecision(async () => {
-        this.#evictionReservations.delete(device.id);
+        claim.release();
         if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
         else this.#enqueue(waiter);
       });
       return;
     }
     const next = await this.#withDecision(async () => {
-      this.#evictionReservations.delete(device.id);
-      waiter.state = this.#queue.includes(waiter) ? "queued" : "new";
+      claim.release();
+      this.#queue.markNew(waiter);
       return this.#decide(waiter);
     });
     await this.#perform(waiter, next);
   }
 
-  async #evictManaged(waiter: Waiter, device: DeviceRecord): Promise<void> {
+  async #evictManaged(
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+    claim: DeviceOperationClaim,
+  ): Promise<void> {
     const driver = this.#driverFor(device.spec.platform);
     try {
       if (device.state === "ready") {
@@ -747,21 +690,26 @@ export class LeaseEngine {
       });
     } catch {
       await this.#withDecision(async () => {
-        this.#evictionReservations.delete(device.id);
+        claim.release();
         if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
         else this.#enqueue(waiter);
       });
       return;
     }
     const next = await this.#withDecision(async () => {
-      this.#evictionReservations.delete(device.id);
-      waiter.state = this.#queue.includes(waiter) ? "queued" : "new";
+      claim.release();
+      this.#queue.markNew(waiter);
       return this.#decide(waiter);
     });
     await this.#perform(waiter, next);
   }
 
-  async #bootShutdown(waiter: Waiter, device: DeviceRecord): Promise<void> {
+  async #bootShutdown(
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+    capacityReservation: CapacityReservation,
+    claim: DeviceOperationClaim,
+  ): Promise<void> {
     const driver = this.#driverFor(device.spec.platform);
     const startedAt = this.options.clock.now();
     try {
@@ -779,7 +727,8 @@ export class LeaseEngine {
       }
       await this.#withDecision(async () => {
         if (destroyed) {
-          this.#shutdownReservations.delete(device.id);
+          capacityReservation.release();
+          claim.release();
           await this.options.registry.transitionDevice(device.id, "deleted", {
             event: "device.deleted",
             payload: { deviceId: device.id, initiator: "lease-engine" },
@@ -794,7 +743,8 @@ export class LeaseEngine {
     }
 
     const granted = await this.#withDecision(async () => {
-      this.#shutdownReservations.delete(device.id);
+      capacityReservation.release();
+      claim.release();
       await this.options.registry.transitionDevice(device.id, "ready", {
         event: "device.ready",
         payload: { bootDuration: this.options.clock.now() - startedAt, deviceId: device.id },
@@ -815,23 +765,7 @@ export class LeaseEngine {
     reason: "closed" | "explicit" | "killed" | "expired",
   ): Promise<void> {
     const released = await this.#withDecision(async () => {
-      const result = await this.options.registry.beginRelease(leaseId);
-      this.#cancelLeaseTimer(leaseId);
-      this.#requesters.delete(result.lease.requesterId);
-      if (reason === "expired") {
-        this.options.eventBus.emit(
-          "lease.expired",
-          { deviceId: result.lease.deviceId, leaseId: result.lease.id },
-          "lease-engine",
-        );
-      } else {
-        this.options.eventBus.emit(
-          "lease.released",
-          { deviceId: result.lease.deviceId, leaseId: result.lease.id, reason },
-          "lease-engine",
-        );
-      }
-      return result;
+      return this.#leases.beginRelease(leaseId, reason);
     });
 
     await this.#reclaim(released);
@@ -921,45 +855,24 @@ export class LeaseEngine {
     ) {
       return false;
     }
-    const head = this.#queue[0];
+    const head = this.#queue.head as AcquisitionWaiter | undefined;
     if (head?.spec === undefined || sameSpec(head.spec, device.spec)) return true;
-    return canReserveRunning(
-      head.spec.platform,
-      this.#capacityDevices(),
-      this.#runningReservations(),
-      this.options.config,
-    ).ok;
+    return this.#capacity.canReserveRunning(head.spec.platform, this.#capacityDevices()).ok;
   }
 
-  #enqueue(waiter: Waiter): void {
-    if (waiter.state === "rejected" || waiter.state === "granted") {
-      return;
-    }
-    if (!this.#queue.includes(waiter)) {
-      this.#queue.push(waiter);
-      waiter.state = "queued";
+  #enqueue(waiter: AcquisitionWaiter): void {
+    const alreadyQueued = this.#queue.isQueued(waiter);
+    if (this.#queue.enqueue(waiter) && !alreadyQueued) {
       this.options.eventBus.emit(
         "lease.queued",
-        { queuePosition: this.#queue.length, requestId: waiter.id },
+        { queuePosition: this.#queue.depth, requestId: waiter.id },
         "lease-engine",
       );
-      this.#notifyProgress(waiter, { queuePosition: this.#queue.length, stage: "queued" });
-    }
-    waiter.state = "queued";
-    if (waiter.timer === undefined && waiter.options.timeoutMs !== undefined) {
-      waiter.timer = this.options.clock.setTimer(waiter.options.timeoutMs, () => {
-        void this.#withDecision(async () => {
-          if (waiter.state === "queued") {
-            this.#reject(waiter, new QueueTimeoutError(waiter.id), "timeout");
-            this.#wakeQueue();
-          }
-        });
-      });
     }
   }
 
   #reject(
-    waiter: Waiter,
+    waiter: AcquisitionWaiter,
     error: Error,
     reason:
       | "timeout"
@@ -969,90 +882,33 @@ export class LeaseEngine {
       | "boot-timeout"
       | "killed",
   ): void {
-    if (waiter.state === "rejected" || waiter.state === "granted") {
-      return;
+    if (this.#queue.reject(waiter, error)) {
+      this.options.eventBus.emit(
+        "lease.rejected",
+        { requestSpec: waiter.request, reason },
+        "lease-engine",
+      );
     }
-    this.#removeFromQueue(waiter);
-    if (waiter.timer !== undefined) {
-      this.options.clock.cancel(waiter.timer);
-      delete waiter.timer;
-    }
-    waiter.state = "rejected";
-    this.#requesters.delete(waiter.options.requesterId);
-    this.options.eventBus.emit(
-      "lease.rejected",
-      { requestSpec: waiter.request, reason },
-      "lease-engine",
-    );
-    waiter.reject(error);
   }
 
   #wakeQueue(): void {
     void this.#withDecision(async () => {
-      const next = this.#queue[0];
+      const next = this.#queue.head as AcquisitionWaiter | undefined;
       if (next !== undefined && next.state === "queued") {
         void this.#drive(next);
       }
     });
   }
 
-  #newWaiter(request: DeviceRequest, options: LeaseRequestOptions): Waiter {
-    let resolve!: (grant: LeaseGrant) => void;
-    let reject!: (error: Error) => void;
-    const promise = new Promise<LeaseGrant>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
-    return {
+  #newWaiter(request: DeviceRequest, options: LeaseRequestOptions): AcquisitionWaiter {
+    return Object.assign(this.#queue.create(request, options), {
       failures: 0,
-      id: `req_${this.options.idGenerator.generate()}`,
-      options,
-      onProgress: options.onProgress,
-      promise,
-      reject,
-      request,
-      resolve,
-      state: "new",
       timing: noTiming,
-    };
+    });
   }
 
-  #notifyProgress(waiter: Waiter, progress: LeaseProgress): void {
-    try {
-      waiter.onProgress?.(progress);
-    } catch {
-      // Client feedback must not affect lease acquisition.
-    }
-  }
-
-  #ttlFor(mode: LeaseRecord["mode"]): number {
-    return mode === "held"
-      ? this.options.config.lease.heldTtlBackstopMs
-      : this.options.config.lease.detachedTtlMs;
-  }
-
-  #armLeaseTimer(lease: LeaseRecord): void {
-    this.#leaseTimers.set(
-      lease.id,
-      this.options.clock.setTimer(Math.max(0, lease.ttlDeadline - this.options.clock.now()), () => {
-        void this.#release(lease.id, "expired");
-      }),
-    );
-  }
-
-  #cancelLeaseTimer(leaseId: string): void {
-    const timer = this.#leaseTimers.get(leaseId);
-    if (timer !== undefined) {
-      this.options.clock.cancel(timer);
-      this.#leaseTimers.delete(leaseId);
-    }
-  }
-
-  #removeReservation(platform: Platform): void {
-    const index = this.#provisionReservations.indexOf(platform);
-    if (index !== -1) {
-      this.#provisionReservations.splice(index, 1);
-    }
+  #notifyProgress(waiter: AcquisitionWaiter, progress: LeaseProgress): void {
+    this.#queue.notifyProgress(waiter, progress);
   }
 
   #capacityDevices(): { readonly platform: Platform; readonly state: string }[] {
@@ -1065,10 +921,7 @@ export class LeaseEngine {
   #eligibleEvictionDevices(): DeviceRecord[] {
     const leased = new Set(this.options.registry.snapshot.leases.map((lease) => lease.deviceId));
     return this.options.registry.snapshot.devices.filter(
-      (device) =>
-        !leased.has(device.id) &&
-        !this.#cleanupReservations.has(device.id) &&
-        !this.#evictionReservations.has(device.id),
+      (device) => !leased.has(device.id) && !this.#claims.isClaimed(device.id),
     );
   }
 
@@ -1086,29 +939,9 @@ export class LeaseEngine {
     return selectWarmVictim(this.#eligibleEvictionDevices(), scope);
   }
 
-  #runningReservations(): Platform[] {
-    const platforms = new Map(
-      this.options.registry.snapshot.devices.map((device) => [device.id, device.spec.platform]),
-    );
-    return [
-      ...this.#provisionReservations,
-      ...[...this.#shutdownReservations].flatMap((deviceId) => {
-        const platform = platforms.get(deviceId);
-        return platform === undefined ? [] : [platform];
-      }),
-    ];
-  }
-
-  #removeFromQueue(waiter: Waiter): void {
-    const index = this.#queue.indexOf(waiter);
-    if (index !== -1) {
-      this.#queue.splice(index, 1);
-    }
-  }
-
   #canExecuteCleanup(device: DeviceRecord, action: "shutdown" | "destroy"): boolean {
     if (
-      this.#cleanupReservations.has(device.id) ||
+      this.#claims.isClaimed(device.id) ||
       this.options.registry.snapshot.leases.some((lease) => lease.deviceId === device.id)
     ) {
       return false;
@@ -1121,25 +954,11 @@ export class LeaseEngine {
   }
 
   #driverFor(platform: Platform): Driver {
-    const driver = this.#drivers.get(platform);
-    if (driver === undefined) {
-      throw new NoDriverError(platform);
-    }
-    return driver;
+    return this.#drivers.get(platform);
   }
 
-  async #withDecision<Result>(operation: () => Promise<Result>): Promise<Result> {
-    let release!: () => void;
-    const previous = this.#decisionTail;
-    this.#decisionTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
+  #withDecision<Result>(operation: () => Promise<Result>): Promise<Result> {
+    return this.#decisions.run(operation);
   }
 }
 

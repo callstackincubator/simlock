@@ -125,6 +125,32 @@ Conclusions baked into the drivers:
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).
 
+### Lease subsystem boundaries
+
+The lease subsystem is assembled from focused modules rather than implemented
+as one stateful engine:
+
+- the wait queue owns pending demand, FIFO order, request timeouts, and progress
+  listeners;
+- lease lifecycle owns grant, renewal, release commits, and expiry scheduling;
+- the capacity coordinator owns provisioning and running reservations while
+  delegating policy calculations to the pure capacity functions;
+- device-operation claims prevent boot, eviction, cleanup, and operator
+  commands from selecting the same device concurrently;
+- provisioning and warm-pool coordinators perform their explicit driver
+  workflows outside the serialized decision section;
+- the cleanup executor, startup converger, and nuke service expose narrow
+  command interfaces to their consumers.
+
+A shared serialized decision gate protects only short read-decide-commit
+sections. Driver operations are never performed while it is held. Availability
+changes wake the FIFO acquisition coordinator through a direct call; the event
+bus is still reserved for post-commit facts and observers.
+
+`LeaseEngine` is the lease-subsystem composition root and compatibility facade.
+The daemon, reaper, doctor, and nuke command depend on role-specific interfaces,
+not on the concrete engine.
+
 ## Cleanup: many rules, one reaper
 
 Cleanup **rules** are pure decision logic: given a read-only registry view
