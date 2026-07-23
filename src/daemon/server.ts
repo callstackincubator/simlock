@@ -18,10 +18,13 @@ import {
 } from "../core/index.js";
 import type { CapacityReader, LeaseCommands, QueueControl } from "../core/lease-ports.js";
 import type { IpcConnection } from "../ports/index.js";
-import { DAEMON_PROTOCOL_VERSION, type RequestFrame } from "../daemon-protocol/index.js";
+import {
+  DAEMON_PROTOCOL_VERSION,
+  parseRequestFrame,
+  type RequestFrame,
+} from "../daemon-protocol/index.js";
 import type { ConnectionHost } from "./connection-host.js";
 
-const DEFAULT_SOCKET_PATH = "~/.pitlane/daemon.sock";
 type RequestId = string | number;
 
 interface Connection {
@@ -49,25 +52,22 @@ export interface DaemonServerOptions {
   readonly reaper: CleanupReaper;
   readonly nuke?: Nuke;
   readonly registry: Registry;
-  readonly socketPath?: string;
   readonly version: string;
 }
 
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
   readonly #protocolVersion: number;
-  readonly #socketPath: string;
   #stopping = false;
   #stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: DaemonServerOptions) {
     this.#protocolVersion = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION;
-    this.#socketPath = options.socketPath ?? options.host.endpoint ?? DEFAULT_SOCKET_PATH;
   }
 
   // fallow-ignore-next-line unused-class-member -- retained as a daemon compatibility facade.
   get socketPath(): string {
-    return this.#socketPath;
+    return this.options.host.endpoint;
   }
 
   async start(): Promise<void> {
@@ -140,7 +140,20 @@ export class DaemonServer {
   async #dispatchLine(connection: Connection, line: string): Promise<void> {
     let frame: RequestFrame;
     try {
-      frame = parseRequestFrame(line);
+      let value: unknown;
+      try {
+        value = JSON.parse(line) as unknown;
+      } catch {
+        throw new ProtocolError("BAD_FRAME", "Invalid JSON frame");
+      }
+      const parsed = parseRequestFrame(value);
+      if (parsed === undefined) {
+        throw new ProtocolError(
+          "BAD_FRAME",
+          "Request frame requires string or number id and string type",
+        );
+      }
+      frame = parsed;
     } catch (error: unknown) {
       await this.#respondError(connection.socket, null, "BAD_FRAME", errorMessage(error));
       return;
@@ -448,26 +461,6 @@ class ProtocolError extends Error {
     super(message);
     this.name = "ProtocolError";
   }
-}
-
-function parseRequestFrame(line: string): RequestFrame {
-  let value: unknown;
-  try {
-    value = JSON.parse(line) as unknown;
-  } catch {
-    throw new ProtocolError("BAD_FRAME", "Invalid JSON frame");
-  }
-  const frame = objectPayload(value);
-  if (
-    (typeof frame.id !== "string" && typeof frame.id !== "number") ||
-    typeof frame.type !== "string"
-  ) {
-    throw new ProtocolError(
-      "BAD_FRAME",
-      "Request frame requires string or number id and string type",
-    );
-  }
-  return { id: frame.id, payload: frame.payload, type: frame.type };
 }
 
 function objectPayload(value: unknown): Record<string, unknown> {

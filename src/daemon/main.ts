@@ -112,7 +112,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     reaper,
     nuke,
     registry,
-    socketPath,
     version: options.version ?? "1.0.0",
   });
   await daemon.start();

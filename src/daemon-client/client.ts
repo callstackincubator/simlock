@@ -5,7 +5,6 @@ import { DaemonStartupCoordinator } from "./startup-coordinator.js";
 
 export interface ConnectDaemonOptions {
   readonly clock: Clock;
-  readonly dataDirectory: string;
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;
   readonly socketPath: string;

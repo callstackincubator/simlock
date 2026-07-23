@@ -388,7 +388,6 @@ async function createHarness(
     queue: engine,
     reaper,
     registry,
-    socketPath,
     version: "test",
   });
   runningDaemons.push(daemon);

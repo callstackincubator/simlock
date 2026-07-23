@@ -329,7 +329,6 @@ async function createHarness() {
       registry,
     }),
     registry,
-    socketPath,
     version: "test",
   });
   runningDaemons.push(daemon);

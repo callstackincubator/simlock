@@ -15,14 +15,15 @@ export class DaemonStartupCoordinator {
   constructor(private readonly options: DaemonStartupCoordinatorOptions) {}
 
   async connect(): Promise<DaemonConnection> {
+    let lastError: unknown;
     try {
       return await this.options.connector.connect();
     } catch (error: unknown) {
       if (!isUnavailable(error)) throw error;
+      lastError = error;
     }
     await this.options.launcher.launch();
     const deadline = this.options.clock.now() + (this.options.startupTimeoutMs ?? 5_000);
-    let lastError: unknown;
     while (this.options.clock.now() < deadline) {
       try {
         return await this.options.connector.connect();

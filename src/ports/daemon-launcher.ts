@@ -24,6 +24,10 @@ export class NodeDaemonLauncher implements DaemonLauncher {
         detached: true,
         stdio: ["ignore", log.fd, log.fd],
       });
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
       child.unref();
     } finally {
       await log.close();

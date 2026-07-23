@@ -42,10 +42,23 @@ export interface IpcListenerFactory {
 export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
   async connect(endpoint: string): Promise<IpcConnection> {
     const socket = connect(endpoint);
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve);
-      socket.once("error", (error) => reject(normalizeIpcError(error)));
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onConnect = () => {
+          socket.off("error", onError);
+          resolve();
+        };
+        const onError = (error: Error) => {
+          socket.off("connect", onConnect);
+          reject(normalizeIpcError(error));
+        };
+        socket.once("connect", onConnect);
+        socket.once("error", onError);
+      });
+    } catch (error: unknown) {
+      socket.destroy();
+      throw error;
+    }
     return new NodeIpcConnection(socket);
   }
 
@@ -54,13 +67,19 @@ export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
     accept: (connection: IpcConnection) => void,
   ): Promise<IpcListener> {
     const server = createServer((socket) => accept(new NodeIpcConnection(socket)));
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", (error) => reject(normalizeIpcError(error)));
-      server.listen(endpoint, () => {
-        server.off("error", reject);
-        resolve();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => reject(normalizeIpcError(error));
+        server.once("error", onError);
+        server.listen(endpoint, () => {
+          server.off("error", onError);
+          resolve();
+        });
       });
-    });
+    } catch (error: unknown) {
+      server.close();
+      throw error;
+    }
     return new NodeIpcListener(server);
   }
 }

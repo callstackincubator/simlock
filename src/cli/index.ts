@@ -74,7 +74,6 @@ function defaultCliEnvironment(): CliEnvironment {
     connect: () =>
       connectDaemon({
         clock,
-        dataDirectory,
         ipc,
         launcher: new NodeDaemonLauncher({
           args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
