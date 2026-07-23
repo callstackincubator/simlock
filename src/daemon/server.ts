@@ -21,17 +21,10 @@ import {
 } from "../core/index.js";
 import type { CapacityReader, LeaseCommands, QueueControl } from "../core/lease-ports.js";
 import type { Filesystem } from "../ports/index.js";
+import { DAEMON_PROTOCOL_VERSION, type RequestFrame } from "../daemon-protocol/index.js";
 
-export const DEFAULT_PROTOCOL_VERSION = 1;
 const DEFAULT_SOCKET_PATH = "~/.pitlane/daemon.sock";
-
 type RequestId = string | number;
-
-interface RequestFrame {
-  readonly id: RequestId;
-  readonly type: string;
-  readonly payload: unknown;
-}
 
 interface Connection {
   readonly socket: Socket;
@@ -79,7 +72,7 @@ export class DaemonServer {
   #stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: DaemonServerOptions) {
-    this.#protocolVersion = options.protocolVersion ?? DEFAULT_PROTOCOL_VERSION;
+    this.#protocolVersion = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION;
     this.#socketPath = options.socketPath ?? DEFAULT_SOCKET_PATH;
   }
 

@@ -4,7 +4,7 @@ import { connect, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_PROTOCOL_VERSION } from "../daemon/server.js";
+import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonClientError, type DaemonConnection, parseDaemonResponse } from "./protocol.js";
 
 interface PendingRequest {
@@ -45,7 +45,7 @@ export async function connectExistingDaemon(socketPath: string): Promise<DaemonC
   const connection = new NodeDaemonConnection(socket);
   await connection.request("hello", {
     clientVersion: "1.0.0",
-    protocolVersion: DEFAULT_PROTOCOL_VERSION,
+    protocolVersion: DAEMON_PROTOCOL_VERSION,
   });
   return connection;
 }
