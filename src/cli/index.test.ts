@@ -564,7 +564,7 @@ describe("CLI human rendering (interactive terminal)", () => {
     expect(rendered).toContain("2 findings");
   });
 
-  it("renders doctor findings as fixed when --fix is passed", async () => {
+  it("does not claim doctor findings were fixed when outcomes are unavailable", async () => {
     const output = outputCapture({ interactive: true });
     const connection = new StubConnection();
     connection.response("doctor.run", {
@@ -575,8 +575,8 @@ describe("CLI human rendering (interactive terminal)", () => {
       runCli(["doctor", "--fix"], output.environmentWith({ connect: async () => connection })),
     ).resolves.toBe(0);
     const rendered = stripAnsi(output.stdout);
-    expect(rendered).toContain("✓ Registry device dev_1");
-    expect(rendered).toContain("1 finding, 1 fixed");
+    expect(rendered).toContain("• Registry device dev_1");
+    expect(rendered).toContain("1 finding returned; correction outcomes unavailable");
   });
 
   it("renders 'No issues found' when doctor finds nothing", async () => {

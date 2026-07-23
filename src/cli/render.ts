@@ -576,7 +576,7 @@ function renderDoctor(
     const finding = requireObject(item);
     const severity = findingSeverity(String(finding.kind));
     const glyph = options.fix
-      ? colors.green("✓")
+      ? colors.dim("•")
       : severity === "warning"
         ? colors.yellow("!")
         : colors.red("✗");
@@ -586,7 +586,7 @@ function renderDoctor(
   lines.push(
     colors.dim(
       options.fix
-        ? `${findings.length} ${noun}, ${findings.length} fixed`
+        ? `${findings.length} ${noun} returned; correction outcomes unavailable`
         : `${findings.length} ${noun}`,
     ),
   );
