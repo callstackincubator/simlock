@@ -301,11 +301,13 @@ async function createHarness() {
     }),
   });
   const daemon = new DaemonServer({
+    capacity: engine,
     config,
     defaultRequesterId: "test-process",
     eventBus,
     filesystem: new NodeFilesystem(),
-    leaseEngine: engine,
+    leases: engine,
+    queue: engine,
     reaper: new CleanupReaper({
       clock,
       config,

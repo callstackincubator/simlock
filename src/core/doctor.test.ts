@@ -138,9 +138,13 @@ describe("Doctor", () => {
       systemStats: new FakeSystemStats({ cpuCount: 8, freeRamBytes: 32, totalRamBytes: 32 }),
     });
 
-    await new Doctor({ clock, drivers: [driver], eventBus, leaseEngine, registry }).reconcile({
-      fix: true,
-    });
+    await new Doctor({
+      clock,
+      drivers: [driver],
+      eventBus,
+      leaseExpirer: leaseEngine,
+      registry,
+    }).reconcile({ fix: true });
 
     expect(registry.snapshot.leases).toEqual([]);
     expect(eventBus.replay()).toContainEqual(expect.objectContaining({ event: "lease.expired" }));

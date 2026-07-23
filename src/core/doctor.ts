@@ -2,7 +2,7 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
 import type { Platform } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
-import type { LeaseEngine } from "./lease-engine.js";
+import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
 
 export type DoctorFinding =
@@ -23,7 +23,7 @@ export interface DoctorOptions {
   readonly clock: Clock;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
-  readonly leaseEngine?: LeaseEngine;
+  readonly leaseExpirer?: LeaseExpirer;
   readonly registry: Registry;
 }
 
@@ -113,8 +113,8 @@ export class Doctor {
           break;
         }
         case "expired-live-lease":
-          if (this.options.leaseEngine !== undefined) {
-            await this.options.leaseEngine.expire(finding.leaseId);
+          if (this.options.leaseExpirer !== undefined) {
+            await this.options.leaseExpirer.expire(finding.leaseId);
           }
           break;
       }

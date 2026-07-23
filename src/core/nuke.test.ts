@@ -51,7 +51,7 @@ describe("Nuke", () => {
       }),
     });
 
-    await new Nuke({ leaseEngine: engine, registry }).run({ deleteDevices: true });
+    await new Nuke({ executor: engine, registry }).run({ deleteDevices: true });
 
     expect(registry.snapshot.devices[0]?.state).toBe("deleted");
     expect(driver.calls.filter((call) => call.operation === "destroy")).toEqual([

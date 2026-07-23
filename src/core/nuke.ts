@@ -1,8 +1,8 @@
-import type { LeaseEngine } from "./lease-engine.js";
+import type { NukeExecutor } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
 
 export interface NukeOptions {
-  readonly leaseEngine: LeaseEngine;
+  readonly executor: NukeExecutor;
   readonly registry: Registry;
 }
 
@@ -10,7 +10,7 @@ export interface NukeRunOptions {
   readonly deleteDevices: boolean;
 }
 
-/** Thin operator command facade; the lease engine keeps destructive ownership. */
+/** Thin operator command facade over the dedicated nuke capability. */
 export class Nuke {
   constructor(private readonly options: NukeOptions) {}
 
@@ -21,7 +21,7 @@ export class Nuke {
     const before = this.options.registry.snapshot.devices
       .filter((device) => device.state !== "deleted")
       .map((device) => device.id);
-    const { releasedLeaseIds } = await this.options.leaseEngine.nuke(options.deleteDevices);
+    const { releasedLeaseIds } = await this.options.executor.nuke(options.deleteDevices);
     const deleted = new Set(
       this.options.registry.snapshot.devices
         .filter((device) => device.state === "deleted")

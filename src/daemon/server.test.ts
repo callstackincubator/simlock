@@ -366,12 +366,14 @@ async function createHarness(
     registry,
   });
   const daemon = new DaemonServer({
+    capacity: engine,
     config,
     defaultRequesterId: "test-process",
     eventBus,
     filesystem: new NodeFilesystem(),
-    leaseEngine: engine,
+    leases: engine,
     protocolVersion: 1,
+    queue: engine,
     reaper,
     registry,
     socketPath,
