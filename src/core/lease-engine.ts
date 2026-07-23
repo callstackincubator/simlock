@@ -2,6 +2,10 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, SystemStats } from "../ports/index.js";
 import type { RunningCapacity } from "./capacity.js";
 import { CapacityCoordinator, type CapacityReservation } from "./capacity-coordinator.js";
+import {
+  CleanupExecutor,
+  type CleanupActionExecutor,
+} from "./cleanup-executor.js";
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
@@ -102,6 +106,7 @@ const noTiming: LeaseTiming = {
  * intentionally performed after each decision section has been released.
  */
 export class LeaseEngine {
+  readonly cleanup: CleanupActionExecutor;
   readonly #capacity: CapacityCoordinator;
   readonly #claims = new DeviceOperationClaims();
   readonly #drivers: DriverCatalog;
@@ -137,6 +142,14 @@ export class LeaseEngine {
         );
         this.#wakeQueue();
       },
+    });
+    this.cleanup = new CleanupExecutor({
+      claims: this.#claims,
+      decisions: this.#decisions,
+      drivers: this.#drivers,
+      eventBus: options.eventBus,
+      notifyAvailability: () => this.#wakeQueue(),
+      registry: options.registry,
     });
   }
 
@@ -340,60 +353,7 @@ export class LeaseEngine {
    * device while its driver operation is in progress.
    */
   async executeCleanup(proposal: Proposal): Promise<boolean> {
-    const action = proposal.action;
-    if (action !== "shutdown" && action !== "destroy") {
-      return false;
-    }
-
-    const selected = await this.#withDecision(async () => {
-      const candidate = this.options.registry.snapshot.devices.find(
-        (current) => current.id === proposal.target,
-      );
-      if (candidate === undefined || !this.#canExecuteCleanup(candidate, action)) {
-        return undefined;
-      }
-      const claim = this.#claims.tryClaim(candidate.id, "cleanup");
-      return claim === undefined ? undefined : { claim, device: candidate };
-    });
-    if (selected === undefined) {
-      return false;
-    }
-    const { claim, device } = selected;
-
-    const driver = this.#driverFor(device.spec.platform);
-    try {
-      if (action === "shutdown") {
-        await driver.shutdown(toDriverDevice(device));
-      } else {
-        await driver.destroy(toDriverDevice(device));
-      }
-    } catch (error: unknown) {
-      await this.#withDecision(async () => {
-        claim.release();
-      });
-      throw error;
-    }
-
-    await this.#withDecision(async () => {
-      claim.release();
-      const event =
-        action === "shutdown"
-          ? {
-              event: "device.shutdown" as const,
-              payload: { deviceId: device.id, initiator: "cleanup-reaper" },
-            }
-          : {
-              event: "device.deleted" as const,
-              payload: { deviceId: device.id, initiator: "cleanup-reaper" },
-            };
-      await this.options.registry.transitionDevice(
-        device.id,
-        action === "shutdown" ? "shutdown" : "deleted",
-        event,
-      );
-    });
-    this.#wakeQueue();
-    return true;
+    return this.cleanup.execute(proposal);
   }
 
   async #drive(waiter: AcquisitionWaiter): Promise<void> {
@@ -937,20 +897,6 @@ export class LeaseEngine {
       ? { kind: "platform", platform }
       : { kind: "global" };
     return selectWarmVictim(this.#eligibleEvictionDevices(), scope);
-  }
-
-  #canExecuteCleanup(device: DeviceRecord, action: "shutdown" | "destroy"): boolean {
-    if (
-      this.#claims.isClaimed(device.id) ||
-      this.options.registry.snapshot.leases.some((lease) => lease.deviceId === device.id)
-    ) {
-      return false;
-    }
-
-    return (
-      (action === "shutdown" && device.state === "ready") ||
-      (action === "destroy" && device.state === "shutdown")
-    );
   }
 
   #driverFor(platform: Platform): Driver {

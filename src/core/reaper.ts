@@ -10,10 +10,8 @@ export interface CleanupReaperOptions {
   readonly clock: Clock;
   readonly config: Config;
   readonly eventBus: EventBus;
+  readonly executor: CleanupActionExecutor;
   readonly filesystem: Filesystem;
-  readonly executor?: CleanupActionExecutor;
-  /** @deprecated Transitional compatibility while daemon wiring is migrated. */
-  readonly leaseEngine?: { executeCleanup(proposal: Proposal): Promise<boolean> };
   readonly registry: Registry;
   readonly rules?: readonly CleanupRule[];
   readonly diskPath?: string;
@@ -38,9 +36,6 @@ export class CleanupReaper {
   #disposed = false;
 
   constructor(private readonly options: CleanupReaperOptions) {
-    if (options.executor === undefined && options.leaseEngine === undefined) {
-      throw new Error("CleanupReaper requires an executor");
-    }
     this.#automaticRules = options.rules ?? automaticCleanupRules;
     this.#manualRules = manualCleanupRules;
     this.#unsubscribe = [
@@ -85,7 +80,7 @@ export class CleanupReaper {
     }
 
     for (const proposal of proposals) {
-      await this.#executor().execute(proposal);
+      await this.options.executor.execute(proposal);
     }
 
     return proposals;
@@ -96,30 +91,6 @@ export class CleanupReaper {
       return;
     }
     void this.#scheduleRun().catch(() => undefined);
-  }
-
-  #executor(): CleanupActionExecutor {
-    if (this.options.executor !== undefined) return this.options.executor;
-    const legacy = this.options.leaseEngine;
-    if (legacy === undefined) throw new Error("CleanupReaper requires an executor");
-    return {
-      execute: async (proposal) => {
-        const executed = await legacy.executeCleanup(proposal);
-        if (executed) {
-          this.options.eventBus.emit(
-            "cleanup.executed",
-            {
-              action: proposal.action,
-              reason: proposal.reason,
-              ruleName: proposal.rule,
-              target: proposal.target,
-            },
-            "cleanup-reaper",
-          );
-        }
-        return executed;
-      },
-    };
   }
 
   #scheduleRun(): Promise<readonly Proposal[]> {

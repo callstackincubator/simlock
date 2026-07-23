@@ -75,8 +75,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     clock,
     config,
     eventBus,
+    executor: leaseEngine.cleanup,
     filesystem,
-    leaseEngine,
     registry,
     diskPath: dataDirectory,
   });

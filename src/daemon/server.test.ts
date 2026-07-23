@@ -361,8 +361,8 @@ async function createHarness(
     clock,
     config,
     eventBus,
+    executor: engine.cleanup,
     filesystem: new MemoryFilesystem(),
-    leaseEngine: engine,
     registry,
   });
   const daemon = new DaemonServer({
