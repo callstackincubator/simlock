@@ -519,7 +519,7 @@ describe("CLI human rendering (interactive terminal)", () => {
     expect(rendered).toContain("→ idle-shutdown: shutdown dev_1 (idle 10m)");
   });
 
-  it("renders performed cleanup actions with checkmarks and a summary", async () => {
+  it("does not claim cleanup proposals were executed when outcomes are unavailable", async () => {
     const output = outputCapture({ interactive: true });
     const connection = new StubConnection();
     connection.response("cleanup.run", [
@@ -530,8 +530,8 @@ describe("CLI human rendering (interactive terminal)", () => {
       runCli(["cleanup"], output.environmentWith({ connect: async () => connection })),
     ).resolves.toBe(0);
     const rendered = stripAnsi(output.stdout);
-    expect(rendered).toContain("✓ idle-shutdown: shutdown dev_1 (idle 10m)");
-    expect(rendered).toContain("1 action, 0 failures");
+    expect(rendered).toContain("• idle-shutdown: shutdown dev_1 (idle 10m)");
+    expect(rendered).toContain("1 proposed action returned; execution outcomes unavailable");
   });
 
   it("renders 'Nothing to clean up' when there are no proposals", async () => {

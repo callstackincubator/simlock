@@ -48,7 +48,7 @@ export interface Renderer {
   list(kind: "devices" | "leases" | "rules", items: unknown): void;
   /** A single business event, from `events.replay` or `--follow` streaming. */
   event(payload: unknown): void;
-  /** The raw `Proposal[]` from `cleanup.run`; `dryRun` selects planned-vs-performed phrasing. */
+  /** The raw `Proposal[]` from `cleanup.run`; `dryRun` selects planned-vs-returned phrasing. */
   cleanup(actions: unknown, options: { readonly dryRun: boolean }): void;
   /** The raw `DoctorReport` from `doctor.run`; `fix` selects problem-vs-corrected phrasing. */
   doctor(report: unknown, options: { readonly fix: boolean }): void;
@@ -533,12 +533,14 @@ function renderCleanup(
   if (actions.length === 0) return colors.dim("Nothing to clean up");
   const lines = actions.map((item) => {
     const proposal = requireObject(item);
-    const glyph = options.dryRun ? colors.dim("→") : colors.green("✓");
+    const glyph = options.dryRun ? colors.dim("→") : colors.dim("•");
     return `${glyph} ${colors.bold(String(proposal.rule))}: ${String(proposal.action)} ${String(proposal.target)} (${colors.dim(String(proposal.reason))})`;
   });
   if (!options.dryRun) {
     const noun = actions.length === 1 ? "action" : "actions";
-    lines.push(colors.dim(`${actions.length} ${noun}, 0 failures`));
+    lines.push(
+      colors.dim(`${actions.length} proposed ${noun} returned; execution outcomes unavailable`),
+    );
   }
   return lines.join("\n");
 }
