@@ -361,17 +361,19 @@ async function createHarness(
     clock,
     config,
     eventBus,
+    executor: engine.cleanup,
     filesystem: new MemoryFilesystem(),
-    leaseEngine: engine,
     registry,
   });
   const daemon = new DaemonServer({
+    capacity: engine,
     config,
     defaultRequesterId: "test-process",
     eventBus,
     filesystem: new NodeFilesystem(),
-    leaseEngine: engine,
+    leases: engine,
     protocolVersion: 1,
+    queue: engine,
     reaper,
     registry,
     socketPath,
@@ -459,7 +461,7 @@ async function hello(client: Client): Promise<void> {
 }
 
 async function flush(): Promise<void> {
-  for (let index = 0; index < 10; index += 1) {
+  for (let index = 0; index < 100; index += 1) {
     await Promise.resolve();
   }
 }

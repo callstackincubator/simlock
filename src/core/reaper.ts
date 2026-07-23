@@ -1,17 +1,17 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, Filesystem, TimerHandle } from "../ports/index.js";
 import type { Config } from "./config.js";
+import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import { automaticCleanupRules, manualCleanupRules } from "./cleanup/rules.js";
 import type { CleanupRule, Proposal, RegistryView } from "./cleanup/types.js";
-import type { LeaseEngine } from "./lease-engine.js";
 import type { Registry } from "./registry.js";
 
 export interface CleanupReaperOptions {
   readonly clock: Clock;
   readonly config: Config;
   readonly eventBus: EventBus;
+  readonly executor: CleanupActionExecutor;
   readonly filesystem: Filesystem;
-  readonly leaseEngine: LeaseEngine;
   readonly registry: Registry;
   readonly rules?: readonly CleanupRule[];
   readonly diskPath?: string;
@@ -80,18 +80,7 @@ export class CleanupReaper {
     }
 
     for (const proposal of proposals) {
-      if (await this.options.leaseEngine.executeCleanup(proposal)) {
-        this.options.eventBus.emit(
-          "cleanup.executed",
-          {
-            action: proposal.action,
-            reason: proposal.reason,
-            ruleName: proposal.rule,
-            target: proposal.target,
-          },
-          "cleanup-reaper",
-        );
-      }
+      await this.options.executor.execute(proposal);
     }
 
     return proposals;

@@ -6,7 +6,6 @@ import {
   HeldLeaseRenewalError,
   type Config,
   type DeviceRequest,
-  LeaseEngine,
   type LeaseProgress,
   NoCapacityError,
   NoDriverError,
@@ -20,6 +19,7 @@ import {
   type Nuke,
   UnknownLeaseError,
 } from "../core/index.js";
+import type { CapacityReader, LeaseCommands, QueueControl } from "../core/lease-ports.js";
 import type { Filesystem } from "../ports/index.js";
 
 export const DEFAULT_PROTOCOL_VERSION = 1;
@@ -51,8 +51,10 @@ export interface DaemonServerOptions {
   readonly defaultRequesterId: string;
   readonly eventBus: EventBus;
   readonly filesystem: Filesystem;
-  readonly leaseEngine: LeaseEngine;
+  readonly capacity: CapacityReader;
+  readonly leases: LeaseCommands;
   readonly protocolVersion?: number;
+  readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly nuke?: Nuke;
   readonly registry: Registry;
@@ -269,12 +271,12 @@ export class DaemonServer {
         return this.#requestLease(connection, frame.payload);
       case "lease.release": {
         const leaseId = requiredString(objectPayload(frame.payload), "leaseId");
-        await this.options.leaseEngine.release(leaseId, "explicit");
+        await this.options.leases.release(leaseId, "explicit");
         connection.heldLeaseIds.delete(leaseId);
         return { leaseId };
       }
       case "lease.release-all": {
-        const leaseIds = await this.options.leaseEngine.releaseAll("explicit");
+        const leaseIds = await this.options.leases.releaseAll("explicit");
         connection.heldLeaseIds.clear();
         return { leaseIds };
       }
@@ -285,7 +287,7 @@ export class DaemonServer {
           payload.ttlMs === undefined
             ? this.options.config.lease.detachedTtlMs
             : requiredNumber(payload, "ttlMs");
-        return this.options.leaseEngine.renew(leaseId, ttlMs);
+        return this.options.leases.renew(leaseId, ttlMs);
       }
       case "status.get":
         return this.#status();
@@ -354,7 +356,7 @@ export class DaemonServer {
     connection.progressRequesters.add(requesterId);
     let grant;
     try {
-      grant = await this.options.leaseEngine.request(request, {
+      grant = await this.options.leases.request(request, {
         allowDownload: optionalBoolean(payload, "allowDownload") ?? false,
         mode,
         noWait: optionalBoolean(payload, "noWait") ?? false,
@@ -372,7 +374,7 @@ export class DaemonServer {
       disposeProgress();
     }
     if (mode === "held" && (connection.closed || this.#stopping)) {
-      await this.options.leaseEngine.release(grant.lease.id, "closed");
+      await this.options.leases.release(grant.lease.id, "closed");
     } else if (mode === "held") {
       connection.heldLeaseIds.add(grant.lease.id);
     }
@@ -396,7 +398,7 @@ export class DaemonServer {
 
   #status(): unknown {
     const snapshot = this.options.registry.snapshot;
-    const running = this.options.leaseEngine.runningCapacity;
+    const running = this.options.capacity.runningCapacity;
     const warmDevices = snapshot.devices.filter((device) => device.state === "ready");
     const capacity = Object.fromEntries(
       (["ios", "android"] as const).map((platform) => [
@@ -415,7 +417,7 @@ export class DaemonServer {
       ...snapshot,
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
       health: "running",
-      queueDepth: this.options.leaseEngine.queueDepth,
+      queueDepth: this.options.queue.queueDepth,
     };
   }
 
@@ -449,7 +451,7 @@ export class DaemonServer {
     }
     connection.progressDisposers.clear();
     for (const requesterId of connection.progressRequesters) {
-      void this.options.leaseEngine.detachQueuedProgress(requesterId);
+      void this.options.queue.detachQueuedProgress(requesterId);
     }
     connection.progressRequesters.clear();
     this.#connections.delete(connection);
@@ -467,7 +469,7 @@ export class DaemonServer {
     const releasing = Promise.all(
       leaseIds.map(async (leaseId) => {
         try {
-          await this.options.leaseEngine.release(leaseId, "closed");
+          await this.options.leases.release(leaseId, "closed");
         } catch (error: unknown) {
           if (!(error instanceof UnknownLeaseError)) {
             throw error;

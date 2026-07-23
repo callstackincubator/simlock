@@ -75,22 +75,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     clock,
     config,
     eventBus,
+    executor: leaseEngine.cleanup,
     filesystem,
-    leaseEngine,
     registry,
     diskPath: dataDirectory,
   });
-  const doctor = new Doctor({ clock, drivers, eventBus, leaseEngine, registry });
-  const nuke = new Nuke({ leaseEngine, registry });
+  const doctor = new Doctor({ clock, drivers, eventBus, leaseExpirer: leaseEngine, registry });
+  const nuke = new Nuke({ executor: leaseEngine, registry });
   await doctor.reconcile();
   await leaseEngine.convergeRunningCapacity();
   const daemon = new DaemonServer({
+    capacity: leaseEngine,
     config,
     doctor,
     defaultRequesterId: options.defaultRequesterId ?? String(process.pid),
     eventBus,
     filesystem,
-    leaseEngine,
+    leases: leaseEngine,
+    queue: leaseEngine,
     reaper,
     nuke,
     registry,

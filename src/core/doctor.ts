@@ -2,7 +2,7 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
 import type { Platform } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
-import type { LeaseEngine } from "./lease-engine.js";
+import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
 
 export type DoctorFinding =
@@ -23,7 +23,7 @@ export interface DoctorOptions {
   readonly clock: Clock;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
-  readonly leaseEngine?: LeaseEngine;
+  readonly leaseExpirer?: LeaseExpirer;
   readonly registry: Registry;
 }
 
@@ -88,7 +88,6 @@ export class Doctor {
   }
 
   async #applySafeFixes(findings: readonly DoctorFinding[]): Promise<void> {
-    const drivers = new Map(this.options.drivers.map((driver) => [driver.platform, driver]));
     for (const finding of findings) {
       switch (finding.kind) {
         case "registry-device-missing": {
@@ -102,19 +101,14 @@ export class Doctor {
           }
           break;
         }
-        case "orphan-device": {
-          const driver = drivers.get(finding.platform);
-          if (driver !== undefined) await driver.destroy(finding.device);
-          break;
-        }
+        case "orphan-device":
         case "orphan-process": {
-          const driver = drivers.get(finding.platform);
-          if (driver !== undefined) await driver.shutdown(finding.device);
+          // Registry-only destruction: unregistered reality is report-only.
           break;
         }
         case "expired-live-lease":
-          if (this.options.leaseEngine !== undefined) {
-            await this.options.leaseEngine.expire(finding.leaseId);
+          if (this.options.leaseExpirer !== undefined) {
+            await this.options.leaseExpirer.expire(finding.leaseId);
           }
           break;
       }

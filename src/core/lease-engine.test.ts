@@ -93,7 +93,7 @@ async function seedReady(
 }
 
 async function flush(): Promise<void> {
-  for (let count = 0; count < 20; count += 1) {
+  for (let count = 0; count < 100; count += 1) {
     await Promise.resolve();
   }
 }
