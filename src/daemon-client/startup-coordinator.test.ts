@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FakeClock, FakeDaemonLauncher, IpcError } from "../ports/index.js";
 import type { DaemonConnector } from "./connector.js";
@@ -51,6 +51,42 @@ describe("DaemonStartupCoordinator", () => {
     });
     await expect(coordinator.connect()).rejects.toThrow("boom");
     expect(launcher.launches).toBe(0);
+  });
+
+  it("retries once after launch and times out with the last transport error", async () => {
+    const clock = new FakeClock();
+    const launcher = new FakeDaemonLauncher();
+    const coordinator = new DaemonStartupCoordinator({
+      clock,
+      connector: {
+        connect: async () => {
+          throw new IpcError("connection-refused", "still booting", undefined);
+        },
+      },
+      launcher,
+      retryIntervalMs: 50,
+      startupTimeoutMs: 50,
+    });
+    const pending = coordinator.connect();
+    await vi.waitFor(() => expect(clock.pendingTimerCount).toBe(1));
+    clock.advance(50);
+    await expect(pending).rejects.toThrow("still booting");
+    expect(launcher.launches).toBe(1);
+  });
+
+  it("propagates launcher failures without retrying", async () => {
+    const coordinator = new DaemonStartupCoordinator({
+      clock: new FakeClock(),
+      connector: {
+        connect: async () => {
+          throw new IpcError("endpoint-not-found", "missing", undefined);
+        },
+      },
+      launcher: new FakeDaemonLauncher(() => {
+        throw new Error("launch failed");
+      }),
+    });
+    await expect(coordinator.connect()).rejects.toThrow("launch failed");
   });
 });
 

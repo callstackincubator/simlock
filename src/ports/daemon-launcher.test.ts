@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { FakeDaemonLauncher } from "./daemon-launcher.js";
+import { FakeDaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
 
 describe("FakeDaemonLauncher", () => {
   it("records launches and delegates to its deterministic callback", async () => {
@@ -11,5 +14,43 @@ describe("FakeDaemonLauncher", () => {
     await launcher.launch();
     expect(launcher.launches).toBe(1);
     expect(started).toBe(true);
+  });
+});
+
+describe("NodeDaemonLauncher", () => {
+  it("rejects asynchronous spawn failures", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pitlane-launcher-"));
+    try {
+      await expect(
+        new NodeDaemonLauncher({
+          args: [],
+          command: join(directory, "missing-command"),
+          logPath: join(directory, "daemon.log"),
+        }).launch(),
+      ).rejects.toThrow();
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("combines stdout and stderr in an append-only log", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pitlane-launcher-"));
+    const logPath = join(directory, "daemon.log");
+    const launcher = new NodeDaemonLauncher({
+      args: ["-e", "console.log('out'); console.error('err')"],
+      command: process.execPath,
+      logPath,
+    });
+    try {
+      await launcher.launch();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await launcher.launch();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const log = await readFile(logPath, "utf8");
+      expect(log.match(/out/g)).toHaveLength(2);
+      expect(log.match(/err/g)).toHaveLength(2);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });

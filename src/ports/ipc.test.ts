@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { MemoryIpcTransport } from "./ipc.js";
+import { MemoryIpcTransport, NodeIpcTransport } from "./ipc.js";
 
 describe("MemoryIpcTransport", () => {
   it("delivers bidirectional data and closure", async () => {
@@ -27,5 +30,34 @@ describe("MemoryIpcTransport", () => {
     await expect(ipc.listen("/daemon.sock", () => undefined)).rejects.toMatchObject({
       code: "address-in-use",
     });
+  });
+});
+
+describe("NodeIpcTransport", () => {
+  it("connects, exchanges data, closes, and normalizes setup failures", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pitlane-ipc-"));
+    const endpoint = join(directory, "daemon.sock");
+    const ipc = new NodeIpcTransport();
+    try {
+      await expect(ipc.connect(endpoint)).rejects.toMatchObject({ code: "endpoint-not-found" });
+      let server: Awaited<ReturnType<typeof ipc.connect>> | undefined;
+      const listener = await ipc.listen(endpoint, (connection) => {
+        server = connection;
+      });
+      await expect(ipc.listen(endpoint, () => undefined)).rejects.toMatchObject({
+        code: "address-in-use",
+      });
+      const client = await ipc.connect(endpoint);
+      await expect.poll(() => server).toBeDefined();
+      const received: string[] = [];
+      server?.onData((chunk) => received.push(chunk));
+      await client.write("ping");
+      await expect.poll(() => received).toEqual(["ping"]);
+      await client.close();
+      await listener.close();
+      await expect(ipc.connect(endpoint)).rejects.toMatchObject({ code: "endpoint-not-found" });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });
