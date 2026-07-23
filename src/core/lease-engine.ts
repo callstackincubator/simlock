@@ -9,14 +9,15 @@ import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
-import { BootTimeoutError, type DeviceRequest, type Driver, type DriverDevice } from "./driver.js";
+import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { NukeService } from "./nuke-service.js";
-import { Registry, type ReleasedLease } from "./registry.js";
+import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
+import { StartupConverger } from "./startup-converger.js";
 import {
   type LeaseGrant,
   type LeaseProgress,
@@ -26,7 +27,7 @@ import {
   type Waiter,
   WaitQueue,
 } from "./wait-queue.js";
-import { compareLeastRecentlyUsed } from "./warm-pool.js";
+import { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
 
 export type { LeaseProgress } from "./wait-queue.js";
 
@@ -95,6 +96,8 @@ export class LeaseEngine {
   readonly #provisioner: DeviceProvisioner;
   readonly #queue: WaitQueue;
   readonly #decisions = new SerializedDecision();
+  readonly #startup: StartupConverger;
+  readonly #warmPool: WarmPoolCoordinator;
 
   constructor(private readonly options: LeaseEngineOptions) {
     this.#capacity = new CapacityCoordinator(options.config, options.systemStats);
@@ -139,6 +142,16 @@ export class LeaseEngine {
         this.#wakeQueue();
       },
     });
+    this.#warmPool = new WarmPoolCoordinator({
+      capacity: this.#capacity,
+      clock: options.clock,
+      decisions: this.#decisions,
+      drivers: this.#drivers,
+      eventBus: options.eventBus,
+      notifyAvailability: () => this.#wakeQueue(),
+      queueHeadDemand: () => this.#queue.head as AcquisitionWaiter | undefined,
+      registry: options.registry,
+    });
     this.cleanup = new CleanupExecutor({
       eventBus: options.eventBus,
       lifecycle: this.#deviceLifecycle,
@@ -162,6 +175,19 @@ export class LeaseEngine {
         },
       },
       registry: options.registry,
+    });
+    this.#startup = new StartupConverger({
+      capacity: this,
+      claims: this.#claims,
+      cleanup: this.cleanup,
+      decisions: this.#decisions,
+      interruptedReclaimRecovery: {
+        recoverInterruptedReclaim: async (device) => {
+          await this.#warmPool.recoverInterrupted(device.id);
+        },
+      },
+      registry: options.registry,
+      timers: this.#leases,
     });
   }
 
@@ -252,53 +278,7 @@ export class LeaseEngine {
 
   /** Safely converges unleased running devices after startup reconciliation. */
   async convergeRunningCapacity(): Promise<void> {
-    await this.#leases.restoreExpiryTimers();
-    for (const legacy of this.options.registry.snapshot.devices.filter(
-      (device) =>
-        device.state === "reclaiming" &&
-        !this.options.registry.snapshot.leases.some((lease) => lease.deviceId === device.id),
-    )) {
-      const driver = this.#driverFor(legacy.spec.platform);
-      await driver.shutdown(toDriverDevice(legacy));
-      await this.#withDecision(async () => {
-        await this.options.registry.completeFailedPurge(legacy.id, "shutdown");
-        this.options.eventBus.emit(
-          "device.shutdown",
-          { deviceId: legacy.id, initiator: "startup-legacy-warm-migration" },
-          "lease-engine",
-        );
-      });
-    }
-    for (;;) {
-      const candidate = await this.#withDecision(async () => {
-        const capacity = this.runningCapacity;
-        const overPlatforms = (["ios", "android"] as const).filter(
-          (platform) => capacity[platform].running > capacity[platform].maxRunning,
-        );
-        if (capacity.global.running <= capacity.global.maxRunning && overPlatforms.length === 0) {
-          return undefined;
-        }
-        const leases = new Set(
-          this.options.registry.snapshot.leases.map((lease) => lease.deviceId),
-        );
-        return this.options.registry.snapshot.devices
-          .filter(
-            (device) =>
-              device.state === "ready" &&
-              !leases.has(device.id) &&
-              !this.#claims.isClaimed(device.id) &&
-              (overPlatforms.length === 0 || overPlatforms.includes(device.spec.platform)),
-          )
-          .sort(compareLeastRecentlyUsed)[0];
-      });
-      if (candidate === undefined) return;
-      await this.executeCleanup({
-        action: "shutdown",
-        reason: "running capacity exceeds configured maxRunning",
-        rule: "startup-max-running",
-        target: candidate.id,
-      });
-    }
+    await this.#startup.converge();
   }
 
   /** Stops client feedback for a queued request without affecting its lease outcome. */
@@ -571,96 +551,7 @@ export class LeaseEngine {
       return this.#leases.beginRelease(leaseId, reason);
     });
 
-    await this.#reclaim(released);
-  }
-
-  async #reclaim(released: ReleasedLease): Promise<void> {
-    const driver = this.#driverFor(released.device.spec.platform);
-    const startedAt = this.options.clock.now();
-    const attemptedStrategy = driver.reclaimStrategy({ clean: "standard" });
-    let result: Awaited<ReturnType<Driver["reclaim"]>>;
-    try {
-      result = await driver.reclaim(toDriverDevice(released.device), { clean: "standard" });
-    } catch (error: unknown) {
-      await this.#recoverPurgeFailure(released, startedAt, attemptedStrategy, error);
-      return;
-    }
-
-    const keepReady = await this.#withDecision(async () => this.#mayRemainWarm(released.device));
-    let finalState: "ready" | "shutdown" = result.state;
-    if (keepReady && result.state === "shutdown") {
-      try {
-        await driver.makeReady(toDriverDevice(released.device));
-        finalState = "ready";
-      } catch {
-        finalState = "shutdown";
-      }
-    } else if (!keepReady && result.state === "ready") {
-      try {
-        await driver.shutdown(toDriverDevice(released.device));
-        finalState = "shutdown";
-      } catch {
-        finalState = "ready";
-      }
-    }
-    await this.#withDecision(async () => {
-      await this.options.registry.transitionDevice(released.device.id, finalState, {
-        event: "device.reclaimed",
-        payload: {
-          deviceId: released.device.id,
-          duration: this.options.clock.now() - startedAt,
-          strategy: result.strategy,
-        },
-      });
-    });
-    this.#wakeQueue();
-  }
-
-  async #recoverPurgeFailure(
-    released: ReleasedLease,
-    startedAt: number,
-    attemptedStrategy: "erase" | "snapshot" | "wipe",
-    error: unknown,
-  ): Promise<void> {
-    const driver = this.#driverFor(released.device.spec.platform);
-    let ready = true;
-    try {
-      await driver.makeReady(toDriverDevice(released.device));
-    } catch {
-      ready = false;
-    }
-    const duration = this.options.clock.now() - startedAt;
-    await this.#withDecision(async () => {
-      await this.options.registry.completeFailedPurge(
-        released.device.id,
-        ready ? "ready" : "shutdown",
-      );
-      this.options.eventBus.emit(
-        "device.purge-failed",
-        {
-          attemptedStrategy,
-          deviceId: released.device.id,
-          duration,
-          error: stableError(error),
-          leaseId: released.lease.id,
-        },
-        "lease-engine",
-      );
-    });
-    this.#wakeQueue();
-  }
-
-  #mayRemainWarm(device: DeviceRecord): boolean {
-    const capacity = this.runningCapacity;
-    if (
-      capacity.global.running > capacity.global.maxRunning ||
-      capacity[device.spec.platform].running > capacity[device.spec.platform].maxRunning
-    ) {
-      return false;
-    }
-    const head = this.#queue.head as AcquisitionWaiter | undefined;
-    if (head?.spec === undefined || sameSpec(head.spec, device.spec)) return true;
-    return this.#capacity.canReserveRunning(head.spec.platform, this.#capacityDevices()).ok;
+    await this.#warmPool.reclaim(released);
   }
 
   #enqueue(waiter: AcquisitionWaiter): void {
@@ -734,11 +625,6 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function stableError(error: unknown): string {
-  const value = asError(error);
-  return `${value.name}: ${value.message}`;
-}
-
 function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
   const estimatedProvisionMs = driver.estimate("provision", spec);
   const estimatedBootMs = driver.estimate("boot", spec);
@@ -764,16 +650,4 @@ function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {
   return plan.kind === "grant-ready" || plan.kind === "wait" || plan.kind === "no-capacity"
     ? undefined
     : plan;
-}
-
-function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
-  return (
-    left.platform === right.platform &&
-    left.model === right.model &&
-    left.osVersion === right.osVersion
-  );
-}
-
-function toDriverDevice(device: DeviceRecord): DriverDevice {
-  return { deviceId: device.driverDeviceId, driverData: device.driverData };
 }
