@@ -138,10 +138,8 @@ export class LeaseEngine {
       },
     });
     this.cleanup = new CleanupExecutor({
-      claims: this.#claims,
-      decisions: this.#decisions,
-      drivers: this.#drivers,
       eventBus: options.eventBus,
+      lifecycle: this.#deviceLifecycle,
       notifyAvailability: () => this.#wakeQueue(),
       registry: options.registry,
     });

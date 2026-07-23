@@ -6,6 +6,7 @@ import { CleanupExecutor } from "./cleanup-executor.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
+import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
@@ -25,12 +26,12 @@ async function createHarness() {
     statePath,
   });
   const claims = new DeviceOperationClaims();
+  const decisions = new SerializedDecision();
+  const catalog = new DriverCatalog([driver]);
   const notifyAvailability = vi.fn();
   const executor = new CleanupExecutor({
-    claims,
-    decisions: new SerializedDecision(),
-    drivers: new DriverCatalog([driver]),
     eventBus,
+    lifecycle: new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock),
     notifyAvailability,
     registry,
   });

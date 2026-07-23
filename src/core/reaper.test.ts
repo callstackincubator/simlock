@@ -14,6 +14,7 @@ import {
 import { CleanupExecutor } from "./cleanup-executor.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
+import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const gibibyte = 1024 ** 3;
@@ -80,14 +81,17 @@ async function createHarness(
         execute: (proposal: Parameters<LeaseEngine["executeCleanup"]>[0]) =>
           engine.executeCleanup(proposal),
       }
-    : new CleanupExecutor({
-        claims: new DeviceOperationClaims(),
-        decisions: new SerializedDecision(),
-        drivers: new DriverCatalog([driver]),
-        eventBus,
-        notifyAvailability: () => {},
-        registry,
-      });
+    : (() => {
+        const claims = new DeviceOperationClaims();
+        const decisions = new SerializedDecision();
+        const catalog = new DriverCatalog([driver]);
+        return new CleanupExecutor({
+          eventBus,
+          lifecycle: new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock),
+          notifyAvailability: () => {},
+          registry,
+        });
+      })();
   const reaper = new CleanupReaper({
     clock,
     config: cleanupConfig,
