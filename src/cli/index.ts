@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
 import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
+import { runMcpStdio } from "../mcp/main.js";
 import { NodeFilesystem } from "../ports/index.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
@@ -13,6 +14,7 @@ const USAGE = `Usage: pitlane <command> [options]
 
 Commands:
   lease, release, status, list, cleanup, doctor, nuke, events, daemon, config
+  mcp                         Start the stdio MCP server
 Run 'pitlane <command> --help' for command usage.`;
 
 const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
@@ -49,6 +51,7 @@ export interface CliEnvironment {
   readonly requesterId: string;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly readLogFile?: () => Promise<string>;
+  readonly runMcpStdio?: () => Promise<void>;
   readonly signals: Signals;
   readonly stderr: Output;
   readonly stdout: Output;
@@ -73,6 +76,7 @@ function defaultCliEnvironment(): CliEnvironment {
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
     },
     readLogFile: async () => filesystem.readFile(logPath),
+    runMcpStdio,
     signals: process,
     stderr: process.stderr,
     stdout: process.stdout,
@@ -114,6 +118,8 @@ export async function runCli(
         return await runDaemon(argv.slice(1), environment);
       case "config":
         return await runConfig(argv.slice(1), environment);
+      case "mcp":
+        return await runMcp(argv.slice(1), environment);
       default:
         throw new UsageError(`Unknown command: ${argv[0]}`);
     }
@@ -122,6 +128,16 @@ export async function runCli(
     if (error instanceof UsageError) environment.stderr.write(`${USAGE}\n`);
     return errorExitCode(error);
   }
+}
+
+async function runMcp(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  if (argv.length === 1 && isHelp(argv[0])) {
+    environment.stdout.write("Usage: pitlane mcp\n");
+    return 0;
+  }
+  if (argv.length > 0) throw new UsageError("mcp accepts no arguments");
+  await (environment.runMcpStdio ?? runMcpStdio)();
+  return 0;
 }
 
 export function errorExitCode(error: unknown): number {
