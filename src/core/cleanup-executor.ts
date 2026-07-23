@@ -28,7 +28,6 @@ export interface CleanupExecutorOptions {
 export class CleanupExecutor implements CleanupActionExecutor {
   constructor(private readonly options: CleanupExecutorOptions) {}
 
-  // fallow-ignore-next-line unused-class-member -- invoked through CleanupActionExecutor by CleanupReaper.
   async execute(proposal: Proposal): Promise<boolean> {
     const action = proposal.action;
     if (action !== "shutdown" && action !== "destroy") return false;

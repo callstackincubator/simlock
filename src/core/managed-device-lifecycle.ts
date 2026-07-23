@@ -51,7 +51,6 @@ export class ManagedDeviceLifecycle {
     private readonly clock: Clock,
   ) {}
 
-  // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
   async boot(
     target: DeviceRecord,
     claim?: DeviceOperationClaim,
@@ -63,7 +62,6 @@ export class ManagedDeviceLifecycle {
     return this.#makeReady(target, "provisioning");
   }
 
-  // fallow-ignore-next-line unused-class-member -- wired into cleanup and eviction in the follow-up integration.
   async shutdown(
     target: DeviceRecord,
     initiator: string,

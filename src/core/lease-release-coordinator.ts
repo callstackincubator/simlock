@@ -45,19 +45,16 @@ export class LeaseReleaseCoordinator implements LeaseReleaseCommands, LeaseExpir
     await this.#release(leaseId, reason);
   }
 
-  // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
   async releaseAll(reason: "explicit" | "killed"): Promise<readonly string[]> {
     const leaseIds = this.options.registry.snapshot.leases.map((lease) => lease.id);
     await Promise.all(leaseIds.map(async (leaseId) => this.release(leaseId, reason)));
     return leaseIds;
   }
 
-  // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
   async expire(leaseId: string): Promise<void> {
     await this.#release(leaseId, "expired");
   }
 
-  // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
   renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
     return this.options.decisions.run(() => this.options.lifecycle.renew(leaseId, ttlMs));
   }

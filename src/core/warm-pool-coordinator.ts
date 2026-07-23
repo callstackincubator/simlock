@@ -83,7 +83,6 @@ export class WarmPoolCoordinator {
   }
 
   /** Safely finishes an unleased reclaim interrupted before its disposition commit. */
-  // fallow-ignore-next-line unused-class-member -- exposed for startup convergence integration.
   async recoverInterrupted(deviceId: string): Promise<boolean> {
     const device = await this.options.decisions.run(async () => {
       const current = this.options.registry.snapshot.devices.find(

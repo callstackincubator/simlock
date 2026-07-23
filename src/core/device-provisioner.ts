@@ -38,7 +38,6 @@ export interface ProvisionDeviceOptions {
 export class DeviceProvisioner {
   constructor(private readonly options: DeviceProvisionerOptions) {}
 
-  // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
   async provision(spec: DeviceSpec, options: ProvisionDeviceOptions): Promise<DeviceRecord> {
     const driver = this.options.catalog.get(spec.platform);
     const startedAt = this.options.clock.now();

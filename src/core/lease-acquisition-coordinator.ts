@@ -18,11 +18,8 @@ import {
   WaitQueue,
 } from "./wait-queue.js";
 
-// fallow-ignore-next-line unused-type -- compatibility facade for LeaseEngine integration.
 export type { LeaseGrant, LeaseProgress, LeaseRequestOptions, LeaseTiming } from "./wait-queue.js";
-// fallow-ignore-next-line unused-export -- compatibility facade for LeaseEngine integration.
 export { QueueTimeoutError, RequesterAlreadyLeasedError } from "./wait-queue.js";
-// fallow-ignore-next-line unused-export -- compatibility facade for LeaseEngine integration.
 export { NoDriverError } from "./driver-catalog.js";
 
 export class NoCapacityError extends Error {
@@ -74,12 +71,14 @@ const noTiming: LeaseTiming = {
 export class LeaseAcquisitionCoordinator {
   constructor(private readonly options: LeaseAcquisitionCoordinatorOptions) {}
 
-  // fallow-ignore-next-line unused-class-member -- LeaseEngine facade delegates here on integration.
   get queueDepth(): number {
     return this.options.queue.depth;
   }
 
-  // fallow-ignore-next-line unused-class-member -- LeaseEngine facade delegates here on integration.
+  get queueHeadSpec(): DeviceSpec | undefined {
+    return (this.options.queue.head as AcquisitionWaiter | undefined)?.spec;
+  }
+
   async request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant> {
     let waiter: AcquisitionWaiter;
     try {
@@ -135,7 +134,6 @@ export class LeaseAcquisitionCoordinator {
     return waiter.promise;
   }
 
-  // fallow-ignore-next-line unused-class-member -- daemon disconnect handling delegates here on integration.
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.options.decisions.run(async () => {
       this.options.queue.detachProgress(requesterId);

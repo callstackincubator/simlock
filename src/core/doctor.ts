@@ -88,7 +88,6 @@ export class Doctor {
   }
 
   async #applySafeFixes(findings: readonly DoctorFinding[]): Promise<void> {
-    const drivers = new Map(this.options.drivers.map((driver) => [driver.platform, driver]));
     for (const finding of findings) {
       switch (finding.kind) {
         case "registry-device-missing": {
@@ -102,14 +101,9 @@ export class Doctor {
           }
           break;
         }
-        case "orphan-device": {
-          const driver = drivers.get(finding.platform);
-          if (driver !== undefined) await driver.destroy(finding.device);
-          break;
-        }
+        case "orphan-device":
         case "orphan-process": {
-          const driver = drivers.get(finding.platform);
-          if (driver !== undefined) await driver.shutdown(finding.device);
+          // Registry-only destruction: unregistered reality is report-only.
           break;
         }
         case "expired-live-lease":

@@ -43,7 +43,6 @@ export class HeldLeaseRenewalError extends Error {
 export class LeaseLifecycle {
   constructor(private readonly options: LeaseLifecycleOptions) {}
 
-  // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
   async grant(input: {
     readonly deviceId: string;
     readonly mode: LeaseRecord["mode"];
@@ -73,7 +72,6 @@ export class LeaseLifecycle {
     return { device, lease };
   }
 
-  // fallow-ignore-next-line unused-class-member -- wired into LeaseEngine in the follow-up integration.
   async renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
     const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
     if (current?.mode === "held") throw new HeldLeaseRenewalError(leaseId);
@@ -113,7 +111,6 @@ export class LeaseLifecycle {
     return released;
   }
 
-  // fallow-ignore-next-line unused-class-member -- invoked by daemon startup after integration.
   restoreExpiryTimers(): Promise<void> {
     return this.options.expiryScheduler.restore(this.options.registry.snapshot.leases);
   }

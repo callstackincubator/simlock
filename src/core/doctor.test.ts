@@ -54,7 +54,7 @@ describe("Doctor", () => {
     expect(eventBus.replay().at(-1)).toMatchObject({ event: "doctor.reconciled" });
   });
 
-  it("fixes only attributable drift and is idempotent", async () => {
+  it("fixes registry-attributable drift and leaves unregistered reality report-only", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
     const registry = await Registry.load({
@@ -89,12 +89,17 @@ describe("Doctor", () => {
       ]),
     });
     expect(registry.snapshot.devices[0]?.state).toBe("deleted");
-    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
-    expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(0);
+    expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(0);
 
-    await expect(doctor.reconcile({ fix: true })).resolves.toEqual({ findings: [] });
-    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
-    expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+    await expect(doctor.reconcile({ fix: true })).resolves.toMatchObject({
+      findings: [
+        expect.objectContaining({ kind: "orphan-device" }),
+        expect.objectContaining({ kind: "orphan-process" }),
+      ],
+    });
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(0);
+    expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(0);
   });
 
   it("expires an overdue live lease through the lease engine when fixing", async () => {
