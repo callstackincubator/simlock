@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   leaseSimulatorInputSchema,
   leaseSimulatorOutputSchema,
+  MAX_TIMEOUT_SECONDS,
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
 } from "./contracts.js";
@@ -22,6 +23,7 @@ describe("MCP contracts", () => {
     [{ device: "Pixel", os: "", platform: "android" }],
     [{ device: "Pixel", platform: "android", timeout_seconds: -1 }],
     [{ device: "Pixel", platform: "android", timeout_seconds: Number.POSITIVE_INFINITY }],
+    [{ device: "Pixel", platform: "android", timeout_seconds: MAX_TIMEOUT_SECONDS + 1 }],
   ])("rejects invalid lease inputs", (input) => {
     expect(() => leaseSimulatorInputSchema.parse(input)).toThrow();
   });

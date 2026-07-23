@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const nonEmptyString = z.string().min(1);
 const finiteNumber = z.number().finite();
+export const MAX_TIMEOUT_SECONDS = Number.MAX_SAFE_INTEGER / 1_000;
 
 export const leaseSimulatorInputSchema = z.object({
   allow_download: z.boolean().default(false),
@@ -9,7 +10,10 @@ export const leaseSimulatorInputSchema = z.object({
   no_wait: z.boolean().default(false),
   os: nonEmptyString.optional(),
   platform: z.enum(["ios", "android"]),
-  timeout_seconds: finiteNumber.nonnegative().optional(),
+  timeout_seconds: finiteNumber
+    .nonnegative()
+    .max(MAX_TIMEOUT_SECONDS, "timeout_seconds is too large to convert safely to milliseconds")
+    .optional(),
 });
 
 export const leaseSimulatorOutputSchema = z.object({

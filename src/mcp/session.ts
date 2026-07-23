@@ -6,7 +6,7 @@ import type {
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
 } from "./contracts.js";
-import { leaseSimulatorOutputSchema } from "./contracts.js";
+import { leaseSimulatorOutputSchema, MAX_TIMEOUT_SECONDS } from "./contracts.js";
 
 export interface McpSessionOptions {
   readonly connect: () => Promise<DaemonConnection>;
@@ -109,9 +109,6 @@ export class McpSession {
   }
 
   async #lease(input: LeaseSimulatorInput, signal?: AbortSignal): Promise<LeaseSimulatorOutput> {
-    if (this.#ownedLeaseId !== undefined) {
-      throw new McpSessionError("LEASE_ALREADY_OWNED", "This session already owns a lease");
-    }
     throwIfAborted(signal);
 
     const abortWatch = this.#watchLeaseAbort(signal);
@@ -121,7 +118,7 @@ export class McpSession {
       await this.#throwIfCancelledBeforeRequest(signal);
       const response = await this.#requestLease(connection, input, abortWatch.cancelled);
       responseReceived = true;
-      return await this.#mapLeaseResponse(response, signal, abortWatch);
+      return await this.#mapLeaseResponse(connection, response, signal, abortWatch);
     } catch (error: unknown) {
       await this.#cleanupFailedLease(responseReceived, abortWatch.cleanup());
       throw error;
@@ -168,6 +165,7 @@ export class McpSession {
   }
 
   async #mapLeaseResponse(
+    connection: DaemonConnection,
     response: unknown,
     signal: AbortSignal | undefined,
     abortWatch: LeaseAbortWatch,
@@ -179,11 +177,22 @@ export class McpSession {
       throw new McpSessionError("CANCELLED", "Lease request cancelled");
     }
     if (grant.lease.mode !== "held") {
+      await this.#releaseUnexpectedLease(connection, grant.lease.id);
       throw new McpSessionError("INVALID_LEASE_GRANT", "Daemon returned a non-held lease grant");
     }
     const output = leaseSimulatorOutputSchema.parse(leaseSimulatorOutput(grant));
     this.#ownedLeaseId = grant.lease.id;
     return output;
+  }
+
+  async #releaseUnexpectedLease(connection: DaemonConnection, leaseId: string): Promise<void> {
+    try {
+      await connection.request("lease.release", { leaseId });
+    } catch {
+      // The connection close below remains the daemon-side held-lease cleanup fallback.
+    } finally {
+      await this.#closeConnection().catch(() => undefined);
+    }
   }
 
   async #cleanupFailedLease(
@@ -267,8 +276,24 @@ function daemonLeaseRequest(
       ...(input.os === undefined ? {} : { osVersion: input.os }),
       platform: input.platform,
     },
-    ...(input.timeout_seconds === undefined ? {} : { timeoutMs: input.timeout_seconds * 1_000 }),
+    ...(input.timeout_seconds === undefined
+      ? {}
+      : { timeoutMs: timeoutMilliseconds(input.timeout_seconds) }),
   };
+}
+
+function timeoutMilliseconds(timeoutSeconds: number): number {
+  if (
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds < 0 ||
+    timeoutSeconds > MAX_TIMEOUT_SECONDS
+  ) {
+    throw new McpSessionError(
+      "INVALID_TIMEOUT",
+      "timeout_seconds is too large to convert safely to milliseconds",
+    );
+  }
+  return timeoutSeconds * 1_000;
 }
 
 function leaseSimulatorOutput(grant: RawLeaseGrant): LeaseSimulatorOutput {

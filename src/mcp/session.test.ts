@@ -85,6 +85,19 @@ describe("McpSession", () => {
     });
   });
 
+  it("rejects timeout values that would overflow milliseconds before requesting the daemon", async () => {
+    const connection = new StubConnection();
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(
+      session.lease({ ...input, timeout_seconds: Number.MAX_VALUE }),
+    ).rejects.toMatchObject({ code: "INVALID_TIMEOUT" });
+    expect(connection.requests).toEqual([]);
+  });
+
   it("rejects releases that this session does not own without calling the daemon", async () => {
     const connection = new StubConnection();
     const session = new McpSession({
@@ -119,6 +132,33 @@ describe("McpSession", () => {
     });
   });
 
+  it("defers repeat lease ownership decisions to the daemon and replaces stale local ownership", async () => {
+    const connection = new StubConnection();
+    const activeError = new DaemonClientError("REQUESTER_ALREADY_LEASED", "Lease is active");
+    const replacementGrant = {
+      ...rawGrant,
+      lease: { ...rawGrant.lease, id: "lse_replacement" },
+    };
+    connection.responses.push(rawGrant, activeError, replacementGrant, {
+      leaseId: "lse_replacement",
+    });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    await session.lease(input);
+    await expect(session.lease(input)).rejects.toBe(activeError);
+    await expect(session.lease(input)).resolves.toMatchObject({ lease_id: "lse_replacement" });
+    await session.release({ lease_id: "lse_replacement" });
+    expect(connection.requests.map((request) => request.type)).toEqual([
+      "lease.request",
+      "lease.request",
+      "lease.request",
+      "lease.release",
+    ]);
+  });
+
   it("rejects malformed and non-held daemon grants", async () => {
     const malformed = new StubConnection();
     malformed.responses.push({ nope: true });
@@ -128,10 +168,17 @@ describe("McpSession", () => {
     expect(malformed.closeCalls).toBe(1);
 
     const detached = new StubConnection();
-    detached.responses.push({ ...rawGrant, lease: { ...rawGrant.lease, mode: "detached" } });
+    detached.responses.push(
+      { ...rawGrant, lease: { ...rawGrant.lease, mode: "detached" } },
+      new DaemonClientError("UNKNOWN_LEASE", "Lease was already gone"),
+    );
     await expect(
       new McpSession({ connect: async () => detached, requesterId: "mcp-session-1" }).lease(input),
     ).rejects.toMatchObject({ code: "INVALID_LEASE_GRANT" });
+    expect(detached.requests).toEqual([
+      expect.objectContaining({ type: "lease.request" }),
+      { payload: { leaseId: "lse_9f2c" }, type: "lease.release" },
+    ]);
     expect(detached.closeCalls).toBe(1);
   });
 
