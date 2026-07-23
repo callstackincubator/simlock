@@ -14,6 +14,7 @@ import { DriverCatalog } from "./driver-catalog.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
+import { NukeService } from "./nuke-service.js";
 import { Registry, type ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import {
@@ -89,6 +90,7 @@ export class LeaseEngine {
   readonly #deviceLifecycle: ManagedDeviceLifecycle;
   readonly #expiry: LeaseExpiryScheduler;
   readonly #leases: LeaseLifecycle;
+  readonly #nuke: NukeService;
   readonly #planner: AcquisitionPlanner;
   readonly #provisioner: DeviceProvisioner;
   readonly #queue: WaitQueue;
@@ -141,6 +143,24 @@ export class LeaseEngine {
       eventBus: options.eventBus,
       lifecycle: this.#deviceLifecycle,
       notifyAvailability: () => this.#wakeQueue(),
+      registry: options.registry,
+    });
+    this.#nuke = new NukeService({
+      devices: this.#deviceLifecycle,
+      leases: { releaseAll: async (reason) => this.releaseAll(reason) },
+      pendingRequests: {
+        cancelAll: async () => {
+          await this.#withDecision(async () => {
+            for (const waiter of this.#queue.cancelAll(() => new NukeCancelledError())) {
+              this.options.eventBus.emit(
+                "lease.rejected",
+                { requestSpec: waiter.request, reason: "killed" },
+                "wait-queue",
+              );
+            }
+          });
+        },
+      },
       registry: options.registry,
     });
   }
@@ -219,31 +239,7 @@ export class LeaseEngine {
 
   /** Operator-only reset; targets device records from this registry exclusively. */
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
-    const releasedLeaseIds = await this.releaseAll("killed");
-    await this.#withDecision(async () => {
-      for (const waiter of this.#queue.cancelAll(() => new NukeCancelledError())) {
-        this.options.eventBus.emit(
-          "lease.rejected",
-          { requestSpec: waiter.request, reason: "killed" },
-          "wait-queue",
-        );
-      }
-    });
-
-    for (const device of this.options.registry.snapshot.devices) {
-      if (device.state === "deleted") continue;
-      if (device.state === "ready") {
-        await this.#deviceLifecycle.shutdown(device, "nuke", "nuke");
-      }
-      if (deleteDevices) {
-        const current = this.options.registry.snapshot.devices.find(
-          (candidate) => candidate.id === device.id,
-        );
-        if (current?.state !== "shutdown") continue;
-        await this.#deviceLifecycle.destroy(current, "nuke", "nuke");
-      }
-    }
-    return { releasedLeaseIds };
+    return this.#nuke.nuke(deleteDevices);
   }
 
   get queueDepth(): number {
