@@ -1,12 +1,18 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { NodeFilesystem } from "../ports/index.js";
-import { connectDaemon, connectExistingDaemon } from "./client.js";
-import { DaemonClientError, type DaemonConnection } from "./protocol.js";
+import {
+  NodeDaemonLauncher,
+  NodeFilesystem,
+  NodeIpcTransport,
+  SystemClock,
+} from "../ports/index.js";
+import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
+import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
-export { DaemonClientError, type DaemonConnection } from "./protocol.js";
+export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
 const USAGE = `Usage: pitlane <command> [options]
 
@@ -58,14 +64,27 @@ export interface CliEnvironment {
 function defaultCliEnvironment(): CliEnvironment {
   const dataDirectory = join(homedir(), ".pitlane");
   const filesystem = new NodeFilesystem();
+  const clock = new SystemClock();
+  const ipc = new NodeIpcTransport();
   const socketPath = join(dataDirectory, "daemon.sock");
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   return {
     configPath,
-    connect: () => connectDaemon({ dataDirectory, socketPath }),
-    connectExisting: () => connectExistingDaemon(socketPath),
-    now: () => Date.now(),
+    connect: () =>
+      connectDaemon({
+        clock,
+        dataDirectory,
+        ipc,
+        launcher: new NodeDaemonLauncher({
+          args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
+          command: process.execPath,
+          logPath,
+        }),
+        socketPath,
+      }),
+    connectExisting: () => connectExistingDaemon(socketPath, ipc),
+    now: () => clock.now(),
     requesterId: String(process.pid),
     readConfigFile: async () => {
       if (!(await filesystem.exists(configPath))) return {};
@@ -141,6 +160,7 @@ export function parseDuration(value: string): number {
   return milliseconds;
 }
 
+// fallow-ignore-next-line complexity -- CLI command parsing remains intentionally local to its rendering boundary.
 async function runLease(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   if (argv[0] === "renew") return runRenew(argv.slice(1), environment);
   const values = commandArgs(argv, {
@@ -381,6 +401,7 @@ async function runEvents(argv: readonly string[], environment: CliEnvironment): 
   }
 }
 
+// fallow-ignore-next-line complexity -- daemon subcommand parsing is a single CLI boundary.
 async function runDaemon(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   const command = argv[0];
   const values = commandArgs(argv.slice(1), {
@@ -434,6 +455,7 @@ async function runDaemon(argv: readonly string[], environment: CliEnvironment): 
   throw new UsageError(`Unknown daemon command: ${command}`);
 }
 
+// fallow-ignore-next-line complexity -- config subcommand parsing is a single CLI boundary.
 async function runConfig(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   const command = argv[0];
   if (command === undefined || command === "--json") {
@@ -539,6 +561,7 @@ function progressLine(value: unknown): {
   throw new Error("Daemon returned invalid progress");
 }
 
+// fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: Record<string, unknown>): string {
   const devices = requireArray(status.devices);
   const leases = requireArray(status.leases);

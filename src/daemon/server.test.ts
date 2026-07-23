@@ -6,7 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem, NodeFilesystem } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeSystemStats,
+  MemoryFilesystem,
+  NodeFilesystem,
+  NodeIpcTransport,
+} from "../ports/index.js";
+import { DaemonEndpointHost } from "./connection-host.js";
 import { DaemonServer } from "./server.js";
 
 const gibibyte = 1024 ** 3;
@@ -370,7 +377,12 @@ async function createHarness(
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    filesystem: new NodeFilesystem(),
+    host: new DaemonEndpointHost({
+      connector: new NodeIpcTransport(),
+      endpoint: socketPath,
+      filesystem: new NodeFilesystem(),
+      listenerFactory: new NodeIpcTransport(),
+    }),
     leases: engine,
     protocolVersion: 1,
     queue: engine,
