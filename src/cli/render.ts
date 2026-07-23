@@ -232,7 +232,7 @@ export class HumanRenderer implements Renderer {
   }
 
   usage(text: string): void {
-    this.#stderr.write(`${text}\n`);
+    this.#stderr.write(`${this.#noColor ? stripAnsi(text) : text}\n`);
   }
 
   leaseGranted(result: LeaseGrant, options: { readonly held: boolean }): void {

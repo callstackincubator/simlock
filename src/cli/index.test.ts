@@ -18,7 +18,7 @@ import {
   type CliEnvironment,
   type DaemonConnection,
 } from "./index.js";
-import { JsonRenderer } from "./render.js";
+import { HumanRenderer, JsonRenderer } from "./render.js";
 
 const gibibyte = 1024 ** 3;
 const runningDaemons: DaemonServer[] = [];
@@ -179,6 +179,21 @@ describe("CLI boundary", () => {
 
     // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
     expect(output.stdout).not.toMatch(/\u001b\[/);
+  });
+
+  it("strips ANSI from human usage when the injected no-color state is enabled", () => {
+    let stderr = "";
+    const renderer = new HumanRenderer({
+      noColor: () => true,
+      stderr: { write: (value: string) => (stderr += value) },
+      stdout: { write: () => undefined },
+    });
+
+    renderer.usage("\u001b[1mUSAGE\u001b[22m pitlane status");
+
+    // eslint-disable-next-line no-control-regex -- matching literal ESC () CSI sequences
+    expect(stderr).not.toMatch(/\u001b\[/);
+    expect(stderr).toBe("USAGE pitlane status\n");
   });
 
   it("routes nested subcommands: lease renew, daemon logs, config set", async () => {
