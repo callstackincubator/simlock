@@ -71,6 +71,21 @@ describe("CLI boundary", () => {
     expect(output.stdout).toContain("Start the stdio MCP server");
   });
 
+  it("does not load the MCP runner for non-MCP commands", async () => {
+    const output = outputCapture();
+    const loadMcpStdio = vi.fn(async () => vi.fn(async () => undefined));
+    const connection = new StubConnection();
+    connection.response("status.get", {});
+
+    await expect(
+      runCli(
+        ["status", "--json"],
+        output.environmentWith({ connect: async () => connection, loadMcpStdio }),
+      ),
+    ).resolves.toBe(0);
+    expect(loadMcpStdio).not.toHaveBeenCalled();
+  });
+
   it.each([["--help"], ["-h"]])("prints MCP help without starting it: %s", async (help) => {
     const output = outputCapture();
     const runner = vi.fn(async () => undefined);

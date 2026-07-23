@@ -16,6 +16,7 @@ interface Signals {
 interface StdinLifecycle {
   off(event: "end", listener: () => void): unknown;
   once(event: "end", listener: () => void): unknown;
+  readonly readableEnded?: boolean;
 }
 
 /** The runner needs only the lifecycle portion of the SDK transport contract. */
@@ -67,6 +68,7 @@ export async function startMcpStdio(
     resolveFinished = resolve;
   });
   let shutdownPromise: Promise<void> | undefined;
+  let serverConnectStarted = false;
 
   const onSignal = () => {
     void shutdown();
@@ -74,12 +76,23 @@ export async function startMcpStdio(
   const onStdinEnd = () => {
     void shutdown();
   };
+  const previousTransportOnClose = transport.onclose;
+  transport.onclose = () => {
+    previousTransportOnClose?.();
+    void shutdown();
+  };
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async () => {
       signals.off("SIGINT", onSignal);
       signals.off("SIGTERM", onSignal);
       stdin.off("end", onStdinEnd);
-      await Promise.allSettled([session.close(), server.close(), transport.close()]);
+      // McpServer owns its transport once connect starts; its close() closes the
+      // transport and fires onclose. Close a never-connected transport ourselves.
+      await Promise.allSettled([
+        session.close(),
+        server.close(),
+        ...(serverConnectStarted ? [] : [transport.close()]),
+      ]);
       resolveFinished();
     })();
     return shutdownPromise;
@@ -88,13 +101,13 @@ export async function startMcpStdio(
   signals.on("SIGINT", onSignal);
   signals.on("SIGTERM", onSignal);
   stdin.once("end", onStdinEnd);
+  if (stdin.readableEnded) {
+    await shutdown();
+    return { finished, shutdown };
+  }
   try {
+    serverConnectStarted = true;
     await server.connect(transport as never);
-    const serverOnClose = transport.onclose;
-    transport.onclose = () => {
-      serverOnClose?.();
-      void shutdown();
-    };
   } catch (error: unknown) {
     await shutdown();
     throw error;

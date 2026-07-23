@@ -5,7 +5,6 @@ import { parseArgs } from "node:util";
 import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
 import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
-import { runMcpStdio } from "../mcp/main.js";
 import { NodeFilesystem } from "../ports/index.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
@@ -43,6 +42,8 @@ interface Signals {
   off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
 }
 
+type McpStdioRunner = () => Promise<void>;
+
 export interface CliEnvironment {
   readonly configPath: string;
   readonly connect: () => Promise<DaemonConnection>;
@@ -51,6 +52,8 @@ export interface CliEnvironment {
   readonly requesterId: string;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly readLogFile?: () => Promise<string>;
+  /** Loads the MCP frontend only when the `mcp` command is dispatched. */
+  readonly loadMcpStdio?: () => Promise<McpStdioRunner>;
   readonly runMcpStdio?: () => Promise<void>;
   readonly signals: Signals;
   readonly stderr: Output;
@@ -76,7 +79,6 @@ function defaultCliEnvironment(): CliEnvironment {
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
     },
     readLogFile: async () => filesystem.readFile(logPath),
-    runMcpStdio,
     signals: process,
     stderr: process.stderr,
     stdout: process.stdout,
@@ -86,6 +88,10 @@ function defaultCliEnvironment(): CliEnvironment {
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
     },
   };
+}
+
+async function loadDefaultMcpStdio(): Promise<McpStdioRunner> {
+  return (await import("../mcp/main.js")).runMcpStdio;
 }
 
 export async function runCli(
@@ -136,7 +142,9 @@ async function runMcp(argv: readonly string[], environment: CliEnvironment): Pro
     return 0;
   }
   if (argv.length > 0) throw new UsageError("mcp accepts no arguments");
-  await (environment.runMcpStdio ?? runMcpStdio)();
+  const runMcpStdio =
+    environment.runMcpStdio ?? (await (environment.loadMcpStdio ?? loadDefaultMcpStdio)());
+  await runMcpStdio();
   return 0;
 }
 

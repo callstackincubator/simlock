@@ -82,15 +82,53 @@ describe("MCP stdio lifecycle", () => {
     expect(transport.closeCalls).toBe(1);
     expect(stdin.listener).toBeUndefined();
   });
+
+  it("finishes when the transport closes during server connection", async () => {
+    const transport = new FakeTransport();
+    const server = new FakeServer(undefined, () => transport.onclose?.());
+    const runner = await startMcpStdio({
+      createServer: () => server as unknown as McpServer,
+      createTransport: () => transport,
+    });
+
+    await runner.finished;
+    expect(server.closeCalls).toBe(1);
+    expect(transport.closeCalls).toBe(1);
+  });
+
+  it("does not connect when stdin had already ended", async () => {
+    const transport = new FakeTransport();
+    const server = new FakeServer();
+    const stdin = new FakeStdin(true);
+    const runner = await startMcpStdio({
+      createServer: () => server as unknown as McpServer,
+      createTransport: () => transport,
+      stdin,
+    });
+
+    await runner.finished;
+    expect(server.connectCalls).toBe(0);
+    expect(server.closeCalls).toBe(1);
+    expect(transport.closeCalls).toBe(1);
+  });
 });
 
 class FakeServer {
   closeCalls = 0;
-  constructor(private readonly connectError?: Error) {}
+  connectCalls = 0;
+  private transport: McpTransport | undefined;
+  constructor(
+    private readonly connectError?: Error,
+    private readonly duringConnect?: () => void,
+  ) {}
   async close(): Promise<void> {
     this.closeCalls += 1;
+    await this.transport?.close();
   }
-  async connect(): Promise<void> {
+  async connect(transport: McpTransport): Promise<void> {
+    this.connectCalls += 1;
+    this.transport = transport;
+    this.duringConnect?.();
     if (this.connectError !== undefined) throw this.connectError;
   }
 }
@@ -143,6 +181,7 @@ class LeaseConnection implements DaemonConnection {
 
 class FakeStdin {
   listener: (() => void) | undefined;
+  constructor(readonly readableEnded = false) {}
   off(): void {
     this.listener = undefined;
   }
