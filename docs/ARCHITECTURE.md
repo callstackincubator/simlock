@@ -31,7 +31,7 @@ agent ──spawns──> pitlane CLI ──unix socket──> pitlane daemon
 ## Core vs. drivers
 
 The core is platform-agnostic and written once: lease table, fair wait queue,
-managed-device registry, capacity accounting (CPU **and** RAM — RAM is the
+managed-device registry, device-limit and RAM capacity accounting (RAM is the
 binding constraint for Android emulators), the device state machine, the
 cleanup reaper, the event bus, and warm-pool *policy*.
 
@@ -57,14 +57,15 @@ Managed-device limits govern provisioning, while running limits govern any
 operation that starts a device. The core accounts `ready`, `leased`, and
 `reclaiming` devices as running. A serialized, platform-agnostic
 reservation covers provisioning and boots from `shutdown` until the registry
-commits the resulting running or non-running state. Global and driver-provided
-platform limits are checked atomically; no driver-specific runtime details
-participate in this decision.
+commits the resulting running or non-running state. Global and platform limits
+are checked atomically; no driver-specific runtime details participate in this
+decision.
 
-After startup reconciliation, the lease engine deterministically shuts down
-excess unleased `ready` registry devices through the normal driver and
-state-transition path. Leased devices are never touched, so a lowered limit
-may remain visibly over-limit until leases naturally release.
+At startup, `StartupConverger` restores persisted lease TTL timers, recovers
+unleased interrupted reclaims through the warm-pool recovery port, then
+deterministically shuts down excess unleased, unclaimed `ready` registry
+devices through `CleanupActionExecutor`. Leased devices are never touched, so
+a lowered limit may remain visibly over-limit until leases naturally release.
 
 ## Device state machine
 
@@ -125,40 +126,49 @@ Conclusions baked into the drivers:
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).
 
-### Lease subsystem boundaries
+### Lease subsystem boundaries and wiring
 
-The lease subsystem is assembled from focused modules rather than implemented
-as one stateful engine:
+The lease subsystem is assembled from focused modules. `LeaseEngine` is the
+composition root and compatibility facade: it wires one shared
+`SerializedDecision`, `DeviceOperationClaims`, `DriverCatalog`, registry, and
+capacity coordinator into these direct transactional call chains:
 
-- the wait queue owns pending demand, FIFO order, request timeouts, and progress
-  listeners;
-- lease lifecycle owns grant, renewal, release commits, and expiry scheduling;
-- the capacity coordinator owns provisioning and running reservations while
-  delegating policy calculations to the pure capacity functions;
-- device-operation claims prevent boot, eviction, cleanup, and operator
-  commands from selecting the same device concurrently;
-- provisioning and warm-pool coordinators perform their explicit driver
-  workflows outside the serialized decision section;
-- the cleanup executor, startup converger, and nuke service expose narrow
-  command interfaces to their consumers.
+- `WaitQueue` owns pending demand, FIFO order, request timeouts, and progress;
+  `AcquisitionPlanner` makes read-only grant/provision/boot/eviction plans;
+  `DeviceProvisioner` and `ManagedDeviceLifecycle` perform the resulting driver
+  work and registry transitions.
+- `LeaseLifecycle` owns grant, renewal, release commits, and expiry scheduling.
+  A release passes its committed result directly to `WarmPoolCoordinator`,
+  which performs reclaim and warm-pool disposition.
+- `CapacityCoordinator` owns provisioning and running reservations while pure
+  capacity functions calculate limits. `DeviceOperationClaims` excludes
+  overlapping boot, eviction, cleanup, and nuke operations per device.
+- `CleanupReaper` evaluates pure rules and directly calls
+  `CleanupActionExecutor`; the executor revalidates registry ownership,
+  lease/state safety, and delegates the driver operation to
+  `ManagedDeviceLifecycle`.
+- `StartupConverger` runs timer restoration, interrupted-reclaim recovery, and
+  running-capacity convergence in that order. `NukeService` coordinates lease
+  release, pending-request cancellation, and registry-scoped reset operations.
 
-A shared serialized decision gate protects only short read-decide-commit
-sections. Driver operations are never performed while it is held. Availability
-changes wake the FIFO acquisition coordinator through a direct call; the event
-bus is still reserved for post-commit facts and observers.
+The serialized decision gate protects only short read-decide-commit sections.
+Driver work remains outside it. Component boundaries use direct calls for
+transactions; capacity-changing components notify the FIFO acquisition
+coordinator directly. The event bus remains only for post-commit facts and
+observers.
 
-`LeaseEngine` is the lease-subsystem composition root and compatibility facade.
-The daemon, reaper, doctor, and nuke command depend on role-specific interfaces,
-not on the concrete engine.
+The daemon consumes role-specific lease, capacity, queue, cleanup, doctor, and
+nuke interfaces rather than duplicating core decisions in the CLI or server.
 
 ## Cleanup: many rules, one reaper
 
 Cleanup **rules** are pure decision logic: given a read-only registry view
 (device states, last-lease time, disk/RAM stats), they *propose* actions.
 A single **reconciliation loop** collects proposals from all registered rules,
-dedupes and orders them, enforces the invariants (never touch a leased device,
-never touch anything outside the registry), and
-executes via the same driver verbs the lease path uses.
+dedupes and orders them, and filters obvious unsafe targets. It calls
+`CleanupActionExecutor` directly; that executor independently revalidates
+registry ownership, lease/state safety, and claims before delegating to the
+shared managed-device lifecycle.
 
 v1 rules — the tiered cleanup:
 
@@ -171,17 +181,18 @@ Runtime GC is explicit-only in v1 (`cleanup --rule runtime-gc`). iOS runtimes
 are Xcode-managed and are never deleted by Pitlane.
 
 Rules are registered in a static in-code list; adding one is a new file plus
-one registration line. Triggers are event-bus subscriptions
-(`device.released`, `disk.pressure-detected`, `daemon.started`) plus a
-periodic tick. Every executed action is logged with the proposing rule and
-reason; `pitlane cleanup --dry-run` previews.
+one registration line. Reaper triggers are observer subscriptions to
+`lease.released`, `disk.pressure-detected`, and `daemon.started`, plus a
+periodic tick. Every successful action emits its rule and reason in
+`cleanup.executed`; `pitlane cleanup --dry-run` previews proposals.
 
 ## Event bus
 
 An in-process, typed event bus carries **past-tense business facts**
-(`device.released`, `lease.expired`). Observers — cleanup triggers,
+(`device.reclaimed`, `lease.expired`). Observers — cleanup triggers,
 logging/metrics, `pitlane events --follow` — subscribe to it. Warm-pool
-release disposition and eviction remain direct lease-engine transactions.
+reclaim/disposition, cleanup execution, startup convergence, eviction, and
+nuke remain explicit direct component call chains.
 
 The bright line: **events for reactions, direct calls for transactions.** The
 lease workflow (request → queue → provision → ready → grant) is an explicit
