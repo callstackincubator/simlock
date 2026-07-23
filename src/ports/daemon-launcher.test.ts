@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,12 +43,14 @@ describe("NodeDaemonLauncher", () => {
     });
     try {
       await launcher.launch();
-      await new Promise((resolve) => setTimeout(resolve, 100));
       await launcher.launch();
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const log = await readFile(logPath, "utf8");
-      expect(log.match(/out/g)).toHaveLength(2);
-      expect(log.match(/err/g)).toHaveLength(2);
+      await expect
+        .poll(async () => {
+          const log = await readFile(logPath, "utf8");
+          return [log.match(/out/g)?.length ?? 0, log.match(/err/g)?.length ?? 0];
+        })
+        .toEqual([2, 2]);
+      expect(await readdir(directory)).toEqual(["daemon.log"]);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

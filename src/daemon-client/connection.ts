@@ -1,5 +1,6 @@
 import type { IpcConnection } from "../ports/index.js";
-import { DaemonClientError, type DaemonConnection, parseDaemonResponse } from "./protocol.js";
+import { parseDaemonResponse, serializeFrame } from "../daemon-protocol/index.js";
+import { DaemonClientError, type DaemonConnection } from "./protocol.js";
 
 interface PendingRequest {
   readonly reject: (error: Error) => void;
@@ -25,12 +26,10 @@ export class IpcDaemonConnection implements DaemonConnection {
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { reject, resolve });
-      void this.connection
-        .write(`${JSON.stringify({ id, payload, type })}\n`)
-        .catch((error: unknown) => {
-          this.#pending.delete(id);
-          reject(error instanceof Error ? error : new Error(String(error)));
-        });
+      void this.connection.write(serializeFrame({ id, payload, type })).catch((error: unknown) => {
+        this.#pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
     });
   }
 
@@ -42,6 +41,7 @@ export class IpcDaemonConnection implements DaemonConnection {
   async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    this.#failPending(new Error("Daemon connection closed"));
     await this.connection.close();
   }
 

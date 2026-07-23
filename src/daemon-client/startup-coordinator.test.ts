@@ -38,6 +38,33 @@ describe("DaemonStartupCoordinator", () => {
     expect(launcher.launches).toBe(1);
   });
 
+  it("eventually connects after launch on the first retry interval", async () => {
+    const clock = new FakeClock();
+    const connection = stubConnection();
+    const launcher = new FakeDaemonLauncher();
+    let attempts = 0;
+    const coordinator = new DaemonStartupCoordinator({
+      clock,
+      connector: {
+        connect: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new IpcError("endpoint-not-found", "missing", undefined);
+          if (attempts === 2) throw new IpcError("connection-refused", "booting", undefined);
+          return connection;
+        },
+      },
+      launcher,
+      retryIntervalMs: 50,
+    });
+    const pending = coordinator.connect();
+    await vi.waitFor(() => expect(clock.pendingTimerCount).toBe(1));
+    expect(attempts).toBe(2);
+    clock.advance(50);
+    await expect(pending).resolves.toBe(connection);
+    expect(attempts).toBe(3);
+    expect(launcher.launches).toBe(1);
+  });
+
   it("propagates unexpected connection errors without launching", async () => {
     const launcher = new FakeDaemonLauncher();
     const coordinator = new DaemonStartupCoordinator({

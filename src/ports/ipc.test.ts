@@ -31,6 +31,15 @@ describe("MemoryIpcTransport", () => {
       code: "address-in-use",
     });
   });
+
+  it("prevents new connections after its listener closes", async () => {
+    const ipc = new MemoryIpcTransport();
+    const listener = await ipc.listen("/daemon.sock", () => undefined);
+    await listener.close();
+    await expect(ipc.connect("/daemon.sock")).rejects.toMatchObject({
+      code: "endpoint-not-found",
+    });
+  });
 });
 
 describe("NodeIpcTransport", () => {

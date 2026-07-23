@@ -21,6 +21,7 @@ import type { IpcConnection } from "../ports/index.js";
 import {
   DAEMON_PROTOCOL_VERSION,
   parseRequestFrame,
+  serializeFrame,
   type RequestFrame,
 } from "../daemon-protocol/index.js";
 import type { ConnectionHost } from "./connection-host.js";
@@ -557,5 +558,5 @@ function errorMessage(error: unknown): string {
 
 function writeFrame(socket: IpcConnection, frame: unknown): Promise<void> {
   if (socket.closed) return Promise.resolve();
-  return socket.write(`${JSON.stringify(frame)}\n`);
+  return socket.write(serializeFrame(frame));
 }

@@ -14,7 +14,6 @@ export interface ConnectionHost {
   stop(): Promise<void>;
 }
 
-// fallow-ignore-next-line unused-export -- callers can distinguish a live daemon from a startup failure.
 export class DaemonAlreadyRunningError extends Error {
   constructor(readonly endpoint: string) {
     super(`Pitlane daemon is already running at ${endpoint}`);
@@ -42,7 +41,7 @@ export class DaemonEndpointHost implements ConnectionHost {
 
   // fallow-ignore-next-line complexity -- endpoint claim, stale recovery, and bind form one lifecycle transaction.
   async start(accept: (connection: IpcConnection) => void): Promise<void> {
-    if (this.#listener !== undefined)
+    if (this.#listener !== undefined || this.#stopped)
       throw new Error("Daemon endpoint host has already been started");
     await this.options.filesystem.mkdirp(dirname(this.endpoint));
     if (await this.options.filesystem.exists(this.endpoint)) {

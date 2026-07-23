@@ -18,9 +18,12 @@ describe("DaemonEndpointHost", () => {
     const ipc = new MemoryIpcTransport();
     const host = hostFor(filesystem, ipc, ipc);
     await host.start(() => undefined);
+    await filesystem.writeFileAtomic(endpoint, "owned");
+    await filesystem.writeFileAtomic("/pitlane/other.sock", "unrelated");
+    await host.stop();
+    await host.stop();
     expect(await filesystem.exists(endpoint)).toBe(false);
-    await host.stop();
-    await host.stop();
+    expect(await filesystem.exists("/pitlane/other.sock")).toBe(true);
     await expect(ipc.connect(endpoint)).rejects.toMatchObject({ code: "endpoint-not-found" });
   });
 
@@ -35,14 +38,26 @@ describe("DaemonEndpointHost", () => {
     await host.stop();
   });
 
-  it("rejects a live endpoint and maps bind races", async () => {
+  it("rejects a live endpoint before binding", async () => {
     const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/pitlane");
+    await filesystem.writeFileAtomic(endpoint, "live");
     const ipc = new MemoryIpcTransport();
     const existing = await ipc.listen(endpoint, () => undefined);
-    await expect(hostFor(filesystem, ipc, ipc).start(() => undefined)).rejects.toBeInstanceOf(
-      DaemonAlreadyRunningError,
-    );
+    const listenerFactory: IpcListenerFactory = {
+      listen: async () => {
+        throw new Error("listener must not bind after a live probe");
+      },
+    };
+    await expect(
+      hostFor(filesystem, ipc, listenerFactory).start(() => undefined),
+    ).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
     await existing.close();
+  });
+
+  it("maps bind races to an already-running error", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipc = new MemoryIpcTransport();
     const racing: IpcListenerFactory = {
       listen: async () => {
         throw new IpcError("address-in-use", "race", undefined);
@@ -51,6 +66,15 @@ describe("DaemonEndpointHost", () => {
     await expect(hostFor(filesystem, ipc, racing).start(() => undefined)).rejects.toBeInstanceOf(
       DaemonAlreadyRunningError,
     );
+  });
+
+  it("is one-shot after stopping", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipc = new MemoryIpcTransport();
+    const host = hostFor(filesystem, ipc, ipc);
+    await host.start(() => undefined);
+    await host.stop();
+    await expect(host.start(() => undefined)).rejects.toThrow("already been started");
   });
 
   it("propagates unknown probe failures", async () => {
