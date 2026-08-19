@@ -87,8 +87,14 @@ Configure an MCP client to spawn it with this generic configuration:
 GUI-launched MCP clients may not inherit your shell `PATH`; in that case,
 replace `pitlane` with its absolute path.
 
-The server provides exactly two tools:
+The server provides exactly three tools:
 
+- `list_devices` returns, per available platform, the resolvable device
+  models, the runtimes / system images already installed, and which
+  installed runtime is the default (the newest). An optional `platform`
+  (`ios` or `android`) narrows the result. It is read-only — it never
+  downloads a runtime or system image — so call it once to pick a valid
+  `device`/`os` before `lease_simulator` instead of guessing.
 - `lease_simulator` requires `platform` (`ios` or `android`) and `device`.
   `os` is optional and otherwise selects the newest installed runtime.
   `no_wait` defaults to `false`; `timeout_seconds` optionally limits queue
@@ -97,11 +103,12 @@ The server provides exactly two tools:
 - `release_simulator` requires the `lease_id` returned by the lease tool and
   releases only that MCP session's lease.
 
-Both tools return structured results as well as JSON text content, so MCP
-clients can reliably consume the leased device details or release confirmation.
-An MCP lease is held by the server process's daemon connection: release it
-explicitly when work is done; it is also released when that MCP process
-disconnects. Run one MCP server process per agent session.
+All three tools return structured results as well as JSON text content, so
+MCP clients can reliably consume the device catalog, leased device details,
+or release confirmation. An MCP lease is held by the server process's daemon
+connection: release it explicitly when work is done; it is also released
+when that MCP process disconnects. Run one MCP server process per agent
+session.
 
 ## Configuration
 

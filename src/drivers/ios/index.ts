@@ -2,6 +2,7 @@ import {
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
+  type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
   RuntimeMissingError,
@@ -179,6 +180,16 @@ export class IosSimctlDriver implements Driver {
     return { devices: parseManagedDevices(JSON.parse(result.stdout) as unknown), processes: [] };
   }
 
+  async listCatalog(): Promise<DriverCatalogEntry> {
+    const catalog = await this.#loadCatalog();
+    const installedRuntimes = catalog.runtimes.filter((runtime) => runtime.isAvailable);
+    return {
+      defaultRuntime: newestRuntime(installedRuntimes)?.version,
+      models: catalog.deviceTypes.map((deviceType) => deviceType.name),
+      runtimes: installedRuntimes.map((runtime) => runtime.version),
+    };
+  }
+
   estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {
     switch (operation) {
       case "provision":
@@ -311,6 +322,7 @@ class IosRuntimeMissingError extends RuntimeMissingError {
   }
 }
 
+// fallow-ignore-next-line complexity -- runtime-keyed device JSON is walked and filtered in one pass by design.
 function parseManagedDevices(value: unknown): DriverDevice[] {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");

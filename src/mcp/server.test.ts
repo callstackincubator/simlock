@@ -4,7 +4,11 @@ import { CallToolResultSchema, ListToolsResultSchema } from "@modelcontextprotoc
 import { describe, expect, it } from "vitest";
 
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
-import { leaseSimulatorOutputSchema, releaseSimulatorOutputSchema } from "./contracts.js";
+import {
+  leaseSimulatorOutputSchema,
+  listDevicesOutputSchema,
+  releaseSimulatorOutputSchema,
+} from "./contracts.js";
 import { McpSession } from "./session.js";
 import { createMcpServer } from "./server.js";
 
@@ -22,14 +26,26 @@ const grant = {
   },
 };
 
+const catalog = {
+  platforms: [
+    {
+      defaultRuntime: "26.5",
+      models: ["iPhone 17 Pro"],
+      platform: "ios" as const,
+      runtimes: ["26.5"],
+    },
+  ],
+};
+
 describe("MCP server", () => {
-  it("advertises exactly the lease tools and returns dual schema-valid results", async () => {
-    const connection = new StubConnection([grant, { leaseId: "lease-1" }]);
+  it("advertises exactly the lease and catalog tools and returns dual schema-valid results", async () => {
+    const connection = new StubConnection([grant, catalog, { leaseId: "lease-1" }]);
     const { client, close } = await connectedServer(connection);
     try {
       const listed = await client.request({ method: "tools/list" }, ListToolsResultSchema);
       expect(listed.tools.map((tool) => tool.name)).toEqual([
         "lease_simulator",
+        "list_devices",
         "release_simulator",
       ]);
       for (const tool of listed.tools) {
@@ -48,11 +64,38 @@ describe("MCP server", () => {
       expect(lease.structuredContent).toMatchObject({ lease_id: "lease-1", mode: "held" });
       expect(JSON.parse(text(lease))).toEqual(lease.structuredContent);
 
+      const devices = await call(client, "list_devices", {});
+      expect(devices.isError).not.toBe(true);
+      listDevicesOutputSchema.parse(devices.structuredContent);
+      expect(devices.structuredContent).toEqual({
+        platforms: [
+          {
+            default_runtime: "26.5",
+            models: ["iPhone 17 Pro"],
+            platform: "ios",
+            runtimes: ["26.5"],
+          },
+        ],
+      });
+      expect(JSON.parse(text(devices))).toEqual(devices.structuredContent);
+
       const release = await call(client, "release_simulator", { lease_id: "lease-1" });
       expect(release.isError).not.toBe(true);
       releaseSimulatorOutputSchema.parse(release.structuredContent);
       expect(release.structuredContent).toEqual({ lease_id: "lease-1", released: true });
       expect(JSON.parse(text(release))).toEqual(release.structuredContent);
+    } finally {
+      await close();
+    }
+  });
+
+  it("forwards the platform filter for list_devices and never triggers a lease request", async () => {
+    const connection = new StubConnection([catalog]);
+    const { client, close } = await connectedServer(connection);
+    try {
+      const devices = await call(client, "list_devices", { platform: "ios" });
+      expect(devices.isError).not.toBe(true);
+      expect(connection.calls).toEqual([{ payload: { platform: "ios" }, type: "catalog.get" }]);
     } finally {
       await close();
     }
@@ -131,6 +174,7 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 
 class StubConnection implements DaemonConnection {
   closeCalls = 0;
+  readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
   constructor(private readonly responses: unknown[]) {}
   async close(): Promise<void> {
     this.closeCalls += 1;
@@ -138,7 +182,8 @@ class StubConnection implements DaemonConnection {
   onPush(): () => void {
     return () => undefined;
   }
-  async request(): Promise<unknown> {
+  async request(type: string, payload: unknown): Promise<unknown> {
+    this.calls.push({ payload, type });
     const response = this.responses.shift();
     if (response instanceof Error) throw response;
     return response;

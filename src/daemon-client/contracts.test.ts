@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRawLeaseGrant } from "./contracts.js";
+import { parseRawCatalog, parseRawLeaseGrant } from "./contracts.js";
 
 const leaseGrant = {
   device: {
@@ -35,5 +35,29 @@ describe("parseRawLeaseGrant", () => {
     [null],
   ])("rejects malformed daemon payloads", (value) => {
     expect(() => parseRawLeaseGrant(value)).toThrow("Daemon returned an invalid lease grant");
+  });
+});
+
+const catalog = {
+  platforms: [
+    { defaultRuntime: "26.5", models: ["iPhone 16"], platform: "ios", runtimes: ["18.4", "26.5"] },
+    { defaultRuntime: undefined, models: ["Pixel 8"], platform: "android", runtimes: [] },
+  ],
+};
+
+describe("parseRawCatalog", () => {
+  it("parses catalog entries shared by daemon frontends", () => {
+    expect(parseRawCatalog(catalog)).toEqual(catalog);
+  });
+
+  it.each([
+    [{ platforms: [{ ...catalog.platforms[0], platform: "web" }] }],
+    [{ platforms: [{ ...catalog.platforms[0], models: [42] }] }],
+    [{ platforms: [{ ...catalog.platforms[0], runtimes: "26.5" }] }],
+    [{ platforms: [{ ...catalog.platforms[0], defaultRuntime: 5 }] }],
+    [{ platforms: "not-an-array" }],
+    [null],
+  ])("rejects malformed daemon payloads", (value) => {
+    expect(() => parseRawCatalog(value)).toThrow("Daemon returned an invalid device catalog");
   });
 });

@@ -3,6 +3,7 @@ import type { DeviceSpec, Platform } from "./domain.js";
 import {
   type DeviceRequest,
   type Driver,
+  type DriverCatalogEntry,
   type DriverDevice,
   RuntimeMissingError,
   UnknownModelError,
@@ -15,7 +16,8 @@ export type FakeDriverOperation =
   | "reclaim"
   | "shutdown"
   | "destroy"
-  | "listManaged";
+  | "listManaged"
+  | "listCatalog";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -174,6 +176,16 @@ export class FakeDriver implements Driver {
         driverData: { fakeDeviceId: deviceId },
       })),
       processes: [],
+    };
+  }
+
+  async listCatalog(): Promise<DriverCatalogEntry> {
+    await this.#beforeCall("listCatalog");
+    const runtimes = [...this.#availableOsVersions].sort(compareVersions);
+    return {
+      defaultRuntime: newestVersion(this.#availableOsVersions),
+      models: this.#knownModels === undefined ? [] : [...this.#knownModels],
+      runtimes,
     };
   }
 

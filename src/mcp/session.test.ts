@@ -315,6 +315,64 @@ describe("McpSession", () => {
       code: "LEASE_NOT_OWNED",
     });
   });
+
+  it("maps the daemon catalog to snake_case tool output", async () => {
+    const connection = new StubConnection();
+    connection.responses.push({
+      platforms: [
+        {
+          defaultRuntime: "26.5",
+          models: ["iPhone 16"],
+          platform: "ios",
+          runtimes: ["18.4", "26.5"],
+        },
+        { defaultRuntime: undefined, models: ["Pixel 8"], platform: "android", runtimes: [] },
+      ],
+    });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(session.listDevices({})).resolves.toEqual({
+      platforms: [
+        {
+          default_runtime: "26.5",
+          models: ["iPhone 16"],
+          platform: "ios",
+          runtimes: ["18.4", "26.5"],
+        },
+        { default_runtime: undefined, models: ["Pixel 8"], platform: "android", runtimes: [] },
+      ],
+    });
+    expect(connection.requests).toEqual([{ payload: {}, type: "catalog.get" }]);
+  });
+
+  it("forwards the platform filter without leasing or releasing anything", async () => {
+    const connection = new StubConnection();
+    connection.responses.push({ platforms: [] });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(session.listDevices({ platform: "android" })).resolves.toEqual({ platforms: [] });
+    expect(connection.requests).toEqual([
+      { payload: { platform: "android" }, type: "catalog.get" },
+    ]);
+  });
+
+  it("rejects listDevices after the session is closed without contacting the daemon", async () => {
+    const connection = new StubConnection();
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.close();
+
+    await expect(session.listDevices({})).rejects.toMatchObject({ code: "SESSION_CLOSED" });
+    expect(connection.requests).toEqual([]);
+  });
 });
 
 class StubConnection implements DaemonConnection {

@@ -332,6 +332,74 @@ describe("CLI boundary", () => {
     expect(output.stdout).toContain("Running global: 1 + 1 reserved/3, warm 1");
     expect(output.stdout).toContain("Capacity ios: managed 3/4, running 1 + 1 reserved/2, warm 1");
   });
+
+  it("requests the full device catalog and prints it as JSON", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("catalog.get", {
+      platforms: [
+        { defaultRuntime: "26.5", models: ["iPhone 16"], platform: "ios", runtimes: ["26.5"] },
+      ],
+    });
+
+    await expect(
+      runCli(["catalog", "--json"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({ payload: {}, type: "catalog.get" });
+    expect(JSON.parse(output.stdout)).toEqual({
+      platforms: [
+        { defaultRuntime: "26.5", models: ["iPhone 16"], platform: "ios", runtimes: ["26.5"] },
+      ],
+    });
+  });
+
+  it("narrows the catalog request to the requested platform", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("catalog.get", { platforms: [] });
+
+    await expect(
+      runCli(
+        ["catalog", "--platform", "android", "--json"],
+        output.environmentWith({ connect: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({
+      payload: { platform: "android" },
+      type: "catalog.get",
+    });
+  });
+
+  it("renders the catalog as human-readable text, marking the default runtime", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("catalog.get", {
+      platforms: [
+        {
+          defaultRuntime: "26.5",
+          models: ["iPhone 16", "iPhone 17 Pro"],
+          platform: "ios",
+          runtimes: ["18.4", "26.5"],
+        },
+      ],
+    });
+
+    await expect(
+      runCli(["catalog"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(
+      "Platform: ios\n" +
+        "  Models: iPhone 16, iPhone 17 Pro\n" +
+        "  Runtimes: 18.4, 26.5 (default: 26.5)\n",
+    );
+  });
+
+  it("rejects an invalid --platform without contacting the daemon", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["catalog", "--platform", "windows"], output.environment)).resolves.toBe(2);
+    expect(output.stderr).toContain("--platform must be ios or android");
+  });
 });
 
 class StubConnection implements DaemonConnection {
@@ -399,6 +467,7 @@ async function createHarness() {
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    catalog: engine,
     config,
     defaultRequesterId: "test-process",
     eventBus,

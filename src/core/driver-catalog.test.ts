@@ -32,4 +32,50 @@ describe("DriverCatalog", () => {
       });
     }
   });
+
+  it("aggregates catalogs across every registered driver, tagged with platform", async () => {
+    const clock = new FakeClock();
+    const ios = new FakeDriver({
+      availableOsVersions: ["18.4", "26.5"],
+      clock,
+      knownModels: ["iPhone 16"],
+      platform: "ios",
+    });
+    const android = new FakeDriver({
+      availableOsVersions: ["34"],
+      clock,
+      knownModels: ["Pixel 8"],
+      platform: "android",
+    });
+    const catalog = new DriverCatalog([ios, android]);
+
+    await expect(catalog.listCatalog()).resolves.toEqual([
+      {
+        defaultRuntime: "26.5",
+        models: ["iPhone 16"],
+        platform: "ios",
+        runtimes: ["18.4", "26.5"],
+      },
+      { defaultRuntime: "34", models: ["Pixel 8"], platform: "android", runtimes: ["34"] },
+    ]);
+  });
+
+  it("narrows to the requested platform without calling the other driver", async () => {
+    const clock = new FakeClock();
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["34"], clock, platform: "android" });
+    const catalog = new DriverCatalog([ios, android]);
+
+    await expect(catalog.listCatalog("ios")).resolves.toEqual([
+      { defaultRuntime: "26.5", models: [], platform: "ios", runtimes: ["26.5"] },
+    ]);
+    expect(android.calls).toEqual([]);
+  });
+
+  it("omits a platform with no registered driver instead of erroring", async () => {
+    const catalog = new DriverCatalog([]);
+
+    await expect(catalog.listCatalog()).resolves.toEqual([]);
+    await expect(catalog.listCatalog("android")).resolves.toEqual([]);
+  });
 });

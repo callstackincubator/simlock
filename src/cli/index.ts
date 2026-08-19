@@ -18,7 +18,8 @@ export { DaemonClientError, type DaemonConnection } from "../daemon-client/proto
 const USAGE = `Usage: pitlane <command> [options]
 
 Commands:
-  lease, release, status, list, cleanup, doctor, nuke, events, daemon, config
+  lease, release, status, list, catalog, cleanup, doctor, nuke, events,
+  daemon, config
   mcp                         Start the stdio MCP server
 Run 'pitlane <command> --help' for command usage.`;
 
@@ -130,6 +131,8 @@ export async function runCli(
         return await runStatus(argv.slice(1), environment);
       case "list":
         return await runList(argv.slice(1), environment);
+      case "catalog":
+        return await runCatalog(argv.slice(1), environment);
       case "cleanup":
         return await runCleanup(argv.slice(1), environment);
       case "doctor":
@@ -326,6 +329,28 @@ async function runList(argv: readonly string[], environment: CliEnvironment): Pr
     throw new UsageError("list accepts only one of --devices, --leases, or --rules");
   const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
   writeResult(environment, await requestOnce(environment, "list.get", { kind }));
+  return 0;
+}
+
+async function runCatalog(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+    platform: { type: "string" },
+  });
+  if (values.help) {
+    environment.stdout.write("Usage: pitlane catalog [--platform <ios|android>] [--json]\n");
+    return 0;
+  }
+  if (values.platform !== undefined && values.platform !== "ios" && values.platform !== "android")
+    throw new UsageError("catalog --platform must be ios or android");
+  const response = await requestOnce(
+    environment,
+    "catalog.get",
+    values.platform === undefined ? {} : { platform: values.platform },
+  );
+  if (values.json) writeResult(environment, response);
+  else environment.stdout.write(`${formatCatalog(requireObject(response))}\n`);
   return 0;
 }
 
@@ -602,6 +627,25 @@ function formatStatus(status: Record<string, unknown>): string {
     ...leaseLines,
     `Queue depth: ${queueDepth}`,
   ].join("\n");
+}
+
+function formatCatalog(response: Record<string, unknown>): string {
+  const platforms = requireArray(response.platforms);
+  if (platforms.length === 0) return "No platforms available.";
+  return platforms
+    .map((entry) => {
+      const record = requireObject(entry);
+      const models = requireArray(record.models).map(String);
+      const runtimes = requireArray(record.runtimes).map(String);
+      const defaultRuntime =
+        typeof record.defaultRuntime === "string" ? record.defaultRuntime : "(none)";
+      return [
+        `Platform: ${String(record.platform)}`,
+        `  Models: ${models.length > 0 ? models.join(", ") : "(none)"}`,
+        `  Runtimes: ${runtimes.length > 0 ? runtimes.join(", ") : "(none)"} (default: ${defaultRuntime})`,
+      ].join("\n");
+    })
+    .join("\n");
 }
 
 function requiredPositional(positionals: readonly string[], label: string): string {

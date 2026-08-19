@@ -459,6 +459,52 @@ describe("AndroidDriver", () => {
     expect(driver.estimate("boot", spec)).toBe(31_000);
     expect(driver.estimate("reclaim", spec)).toBe(2_000);
   });
+
+  it("lists resolvable models and installed API levels, defaulting to the newest", async () => {
+    const filesystem = await androidFilesystem({
+      images: [
+        ["34", "google_apis", "x86_64"],
+        ["35", "google_apis", "arm64-v8a"],
+        ["35", "google_apis", "x86_64"],
+      ],
+    });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    await expect(driver.listCatalog()).resolves.toEqual({
+      defaultRuntime: "35",
+      models: ["Pixel 8"],
+      runtimes: ["34", "35"],
+    });
+  });
+
+  it("reports no default runtime and no installed API levels without system images", async () => {
+    const filesystem = await androidFilesystem({ images: [] });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    await expect(driver.listCatalog()).resolves.toEqual({
+      defaultRuntime: undefined,
+      models: ["Pixel 8"],
+      runtimes: [],
+    });
+  });
+
+  it("never downloads a system image while listing the catalog", async () => {
+    const filesystem = await androidFilesystem();
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    await driver.listCatalog();
+
+    expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
+  });
 });
 
 const live = process.env.PITLANE_LIVE_ANDROID === "1" ? it : it.skip;

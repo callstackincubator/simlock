@@ -160,4 +160,19 @@ describe("FakeDriver", () => {
       "destroy",
     ]);
   });
+
+  it("reports its known models and installed runtimes, marking the newest as default", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["18.4", "26.5"],
+      clock: new FakeClock(),
+      knownModels: ["iPhone 16", "iPhone 17 Pro"],
+      platform: "ios",
+    });
+
+    await expect(driver.listCatalog()).resolves.toEqual({
+      defaultRuntime: "26.5",
+      models: ["iPhone 16", "iPhone 17 Pro"],
+      runtimes: ["18.4", "26.5"],
+    });
+  });
 });

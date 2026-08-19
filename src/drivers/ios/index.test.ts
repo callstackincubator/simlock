@@ -267,6 +267,25 @@ describe("IosSimctlDriver", () => {
     expect(driver.estimate("reclaim", spec)).toBe(1_000);
   });
 
+  it("lists resolvable models and installed runtimes, defaulting to the newest", async () => {
+    const driver = createDriver(scriptedListRunner());
+
+    await expect(driver.listCatalog()).resolves.toEqual({
+      defaultRuntime: "26.5",
+      models: ["iPhone 17 Pro", "iPhone 16", "iPhone 15 Pro"],
+      runtimes: ["18.4", "26.5"],
+    });
+  });
+
+  it("shells out to simctl exactly once per listCatalog call, reusing the catalog parse", async () => {
+    const runner = scriptedListRunner();
+    const driver = createDriver(runner);
+
+    await driver.listCatalog();
+
+    expect(runner.calls).toEqual([{ ...listInvocation, options: { timeoutMs: 30_000 } }]);
+  });
+
   it.skipIf(process.env.PITLANE_LIVE_IOS !== "1")(
     "runs a provision-to-destroy smoke test against simctl",
     async () => {

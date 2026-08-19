@@ -13,6 +13,7 @@ export {
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
+  type DriverCatalogEntry,
   DriverCrashError,
   type DriverDevice,
   RuntimeMissingError,

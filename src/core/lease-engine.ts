@@ -10,7 +10,7 @@ import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import type { LeaseRecord, Platform } from "./domain.js";
 import type { DeviceRequest, Driver } from "./driver.js";
-import { DriverCatalog } from "./driver-catalog.js";
+import { DriverCatalog, type PlatformCatalog } from "./driver-catalog.js";
 import {
   LeaseAcquisitionCoordinator,
   type LeaseGrant,
@@ -188,6 +188,12 @@ export class LeaseEngine {
   /** Operator-only reset; targets device records from this registry exclusively. */
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
     return this.#nuke.nuke(deleteDevices);
+  }
+
+  /** Read-only device catalog; a platform without a registered driver is omitted. */
+  // fallow-ignore-next-line unused-class-member -- called through CatalogReader by DaemonServer.
+  async listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]> {
+    return this.#drivers.listCatalog(platform);
   }
 
   get queueDepth(): number {

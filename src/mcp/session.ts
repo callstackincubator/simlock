@@ -1,12 +1,22 @@
-import { parseRawLeaseGrant, type RawLeaseGrant } from "../daemon-client/contracts.js";
+import {
+  parseRawCatalog,
+  parseRawLeaseGrant,
+  type RawLeaseGrant,
+} from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 import type {
   LeaseSimulatorInput,
   LeaseSimulatorOutput,
+  ListDevicesInput,
+  ListDevicesOutput,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
 } from "./contracts.js";
-import { leaseSimulatorOutputSchema, MAX_TIMEOUT_SECONDS } from "./contracts.js";
+import {
+  leaseSimulatorOutputSchema,
+  listDevicesOutputSchema,
+  MAX_TIMEOUT_SECONDS,
+} from "./contracts.js";
 
 export interface McpSessionOptions {
   readonly connect: () => Promise<DaemonConnection>;
@@ -88,6 +98,29 @@ export class McpSession {
       }
       this.#ownedLeaseId = undefined;
       return { lease_id: input.lease_id, released: true };
+    });
+  }
+
+  listDevices(input: ListDevicesInput): Promise<ListDevicesOutput> {
+    return this.#mutate(async () => {
+      this.#throwIfClosed();
+      const connection = await this.#connectionForUse();
+      const response = await Promise.race([
+        connection.request(
+          "catalog.get",
+          input.platform === undefined ? {} : { platform: input.platform },
+        ),
+        this.#sessionClosed,
+      ]);
+      const catalog = parseRawCatalog(response);
+      return listDevicesOutputSchema.parse({
+        platforms: catalog.platforms.map((entry) => ({
+          default_runtime: entry.defaultRuntime,
+          models: entry.models,
+          platform: entry.platform,
+          runtimes: entry.runtimes,
+        })),
+      });
     });
   }
 

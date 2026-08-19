@@ -26,6 +26,18 @@ export interface ReclaimResult {
 
 export type ReclaimStrategy = ReclaimResult["strategy"];
 
+/**
+ * What a driver can resolve right now, read from the platform SDK without
+ * side effects: resolvable device models plus installed runtimes / system
+ * images, and which installed runtime `resolveSpec` would pick by default
+ * (the newest). `defaultRuntime` is `undefined` when no runtime is installed.
+ */
+export interface DriverCatalogEntry {
+  readonly models: readonly string[];
+  readonly runtimes: readonly string[];
+  readonly defaultRuntime: string | undefined;
+}
+
 export interface Driver {
   readonly platform: Platform;
   resolveSpec(
@@ -42,6 +54,8 @@ export interface Driver {
   shutdown(device: DriverDevice): Promise<void>;
   destroy(device: DriverDevice): Promise<void>;
   listManaged(): Promise<DriverReality>;
+  /** Read-only: must never trigger a runtime / system-image download. */
+  listCatalog(): Promise<DriverCatalogEntry>;
   estimate(operation: "provision" | "boot" | "reclaim", spec: DeviceSpec): number;
 }
 
