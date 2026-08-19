@@ -1,2 +1,5 @@
 allowBuilds:
   lefthook: true
+overrides:
+  "@hono/node-server": 2.0.10
+  ip-address: ">=10.3.1"

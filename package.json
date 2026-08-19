@@ -21,6 +21,10 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
     "release": "release-it"
   },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "^3.25.76"
+  },
   "devDependencies": {
     "@release-it/conventional-changelog": "^11.0.1",
     "@types/node": "^26.1.1",

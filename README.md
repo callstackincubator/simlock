@@ -13,8 +13,10 @@ other exists.
 
 ## The solution
 
-Pitlane is a single CLI (backed by a local daemon) that works the same way
-for both platforms and gives agents one primitive: **lease a device**.
+Pitlane is a CLI-first control plane (backed by a local daemon) that works the
+same way for both platforms and gives agents one primitive: **lease a device**.
+Agents that support the Model Context Protocol (MCP) can optionally use the
+same lease workflow through a local stdio server.
 
 ## Features
 
@@ -35,9 +37,11 @@ for both platforms and gives agents one primitive: **lease a device**.
 - **Managed-device registry.** Pitlane only ever shuts down, erases, or
   deletes devices it created itself. Everything else on the machine is
   read-only to it.
-- **Agent-first output.** Machine-readable JSON everywhere: the lease
-  result is one JSON line on stdout, progress (e.g. provisioning ETAs)
-  streams as JSON lines on stderr.
+- **Agent-first output.** CLI lease results are one JSON line on stdout;
+  progress (e.g. provisioning ETAs) streams as JSON lines on stderr. The
+  optional MCP server reserves stdout for MCP JSON-RPC.
+- **Optional MCP integration.** A local stdio MCP server gives agent clients
+  the lease and release workflow without replacing the CLI operator interface.
 
 ## Getting started
 
@@ -54,6 +58,50 @@ The daemon starts on demand — no separate setup step is needed. Use
 Pitlane-managed devices.
 
 See [docs/CLI.md](docs/CLI.md) for the full command reference.
+
+## MCP integration (optional)
+
+The CLI remains Pitlane's primary, full operator interface. MCP is a focused
+agent integration: it intentionally exposes neither status, configuration,
+events, lease renewal, nor destructive or other operator commands.
+
+Start the local stdio server with:
+
+```sh
+pitlane mcp
+```
+
+Configure an MCP client to spawn it with this generic configuration:
+
+```json
+{
+  "mcpServers": {
+    "pitlane": {
+      "command": "pitlane",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+GUI-launched MCP clients may not inherit your shell `PATH`; in that case,
+replace `pitlane` with its absolute path.
+
+The server provides exactly two tools:
+
+- `lease_simulator` requires `platform` (`ios` or `android`) and `device`.
+  `os` is optional and otherwise selects the newest installed runtime.
+  `no_wait` defaults to `false`; `timeout_seconds` optionally limits queue
+  waiting. `allow_download` defaults to `false` and must be explicitly `true`
+  before a missing runtime or system image may be downloaded.
+- `release_simulator` requires the `lease_id` returned by the lease tool and
+  releases only that MCP session's lease.
+
+Both tools return structured results as well as JSON text content, so MCP
+clients can reliably consume the leased device details or release confirmation.
+An MCP lease is held by the server process's daemon connection: release it
+explicitly when work is done; it is also released when that MCP process
+disconnects. Run one MCP server process per agent session.
 
 ## Configuration
 

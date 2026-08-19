@@ -70,6 +70,88 @@ describe("CLI boundary", () => {
     expect(output.stderr).toContain("Usage:");
   });
 
+  it("lists the MCP server in root help", async () => {
+    const output = outputCapture();
+
+    await expect(runCli([], output.environment)).resolves.toBe(0);
+    expect(output.stdout).toContain("mcp");
+    expect(output.stdout).toContain("Start the stdio MCP server");
+  });
+
+  it("does not load the MCP runner for non-MCP commands", async () => {
+    const output = outputCapture();
+    const loadMcpStdio = vi.fn(async () => vi.fn(async () => undefined));
+    const connection = new StubConnection();
+    connection.response("status.get", {});
+
+    await expect(
+      runCli(
+        ["status", "--json"],
+        output.environmentWith({ connect: async () => connection, loadMcpStdio }),
+      ),
+    ).resolves.toBe(0);
+    expect(loadMcpStdio).not.toHaveBeenCalled();
+  });
+
+  it.each([["--help"], ["-h"]])("prints MCP help without starting it: %s", async (help) => {
+    const output = outputCapture();
+    const runner = vi.fn(async () => undefined);
+
+    await expect(
+      runCli(["mcp", help], output.environmentWith({ runMcpStdio: runner })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe("Usage: pitlane mcp\n");
+    expect(output.stderr).toBe("");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("waits for the MCP runner without writing before it completes", async () => {
+    const output = outputCapture();
+    let complete!: () => void;
+    const runner = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const run = runCli(["mcp"], output.environmentWith({ runMcpStdio: runner }));
+
+    await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toBe("");
+    complete();
+    await expect(run).resolves.toBe(0);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toBe("");
+  });
+
+  it.each([["--json"], ["unexpected"], ["--help=true"]])(
+    "rejects unexpected MCP input: %s",
+    async (argument) => {
+      const output = outputCapture();
+      const runner = vi.fn(async () => undefined);
+
+      await expect(
+        runCli(["mcp", argument], output.environmentWith({ runMcpStdio: runner })),
+      ).resolves.toBe(2);
+      expect(output.stdout).toBe("");
+      expect(output.stderr).toContain("Usage:");
+      expect(runner).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports MCP startup failures safely on stderr", async () => {
+    const output = outputCapture();
+    const runner = vi.fn(async () => {
+      throw new Error("MCP startup failed");
+    });
+
+    await expect(runCli(["mcp"], output.environmentWith({ runMcpStdio: runner }))).resolves.toBe(1);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toBe("MCP startup failed\n");
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps held lease stdout pure, renders progress to stderr, and releases on SIGTERM", async () => {
     const harness = await createHarness();
     const output = outputCapture();
@@ -163,7 +245,13 @@ describe("CLI boundary", () => {
         spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
         state: "leased",
       },
-      lease: { id: "lse_9f2c" },
+      lease: { id: "lse_9f2c", mode: "detached", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 20,
+        estimatedProvisionMs: 10,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 30,
+      },
     });
 
     await expect(
@@ -172,7 +260,9 @@ describe("CLI boundary", () => {
         detached.environmentWith({ connect: async () => connection }),
       ),
     ).resolves.toBe(0);
-    expect(JSON.parse(detached.stdout)).toMatchObject({ lease: "lse_9f2c" });
+    expect(detached.stdout).toBe(
+      '{"device":"iPhone 17 Pro","lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","udid":"ABCD"}\n',
+    );
     expect(connection.closed).toBe(true);
 
     const renew = outputCapture();
