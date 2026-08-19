@@ -10,6 +10,7 @@ import {
   SystemClock,
 } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
+import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
@@ -18,6 +19,7 @@ const USAGE = `Usage: pitlane <command> [options]
 
 Commands:
   lease, release, status, list, cleanup, doctor, nuke, events, daemon, config
+  mcp                         Start the stdio MCP server
 Run 'pitlane <command> --help' for command usage.`;
 
 const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
@@ -46,6 +48,8 @@ interface Signals {
   off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
 }
 
+type McpStdioRunner = () => Promise<void>;
+
 export interface CliEnvironment {
   readonly configPath: string;
   readonly connect: () => Promise<DaemonConnection>;
@@ -54,6 +58,9 @@ export interface CliEnvironment {
   readonly requesterId: string;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly readLogFile?: () => Promise<string>;
+  /** Loads the MCP frontend only when the `mcp` command is dispatched. */
+  readonly loadMcpStdio?: () => Promise<McpStdioRunner>;
+  readonly runMcpStdio?: () => Promise<void>;
   readonly signals: Signals;
   readonly stderr: Output;
   readonly stdout: Output;
@@ -101,6 +108,10 @@ function defaultCliEnvironment(): CliEnvironment {
   };
 }
 
+async function loadDefaultMcpStdio(): Promise<McpStdioRunner> {
+  return (await import("../mcp/main.js")).runMcpStdio;
+}
+
 export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment = defaultCliEnvironment(),
@@ -131,6 +142,8 @@ export async function runCli(
         return await runDaemon(argv.slice(1), environment);
       case "config":
         return await runConfig(argv.slice(1), environment);
+      case "mcp":
+        return await runMcp(argv.slice(1), environment);
       default:
         throw new UsageError(`Unknown command: ${argv[0]}`);
     }
@@ -139,6 +152,18 @@ export async function runCli(
     if (error instanceof UsageError) environment.stderr.write(`${USAGE}\n`);
     return errorExitCode(error);
   }
+}
+
+async function runMcp(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  if (argv.length === 1 && isHelp(argv[0])) {
+    environment.stdout.write("Usage: pitlane mcp\n");
+    return 0;
+  }
+  if (argv.length > 0) throw new UsageError("mcp accepts no arguments");
+  const runMcpStdio =
+    environment.runMcpStdio ?? (await (environment.loadMcpStdio ?? loadDefaultMcpStdio)());
+  await runMcpStdio();
+  return 0;
 }
 
 export function errorExitCode(error: unknown): number {
@@ -518,25 +543,14 @@ function commandArgs(
 }
 
 function leaseResult(value: unknown): Record<string, unknown> & { readonly lease: string } {
-  const grant = requireObject(value);
-  const lease = requireObject(grant.lease);
-  const device = requireObject(grant.device);
-  const spec = requireObject(device.spec);
-  if (
-    typeof lease.id !== "string" ||
-    typeof device.driverDeviceId !== "string" ||
-    typeof spec.model !== "string" ||
-    typeof spec.osVersion !== "string" ||
-    (spec.platform !== "ios" && spec.platform !== "android")
-  )
-    throw new Error("Daemon returned an invalid lease grant");
+  const grant = parseRawLeaseGrant(value);
   return {
-    device: spec.model,
-    lease: lease.id,
-    os: spec.osVersion,
-    platform: spec.platform,
+    device: grant.device.spec.model,
+    lease: grant.lease.id,
+    os: grant.device.spec.osVersion,
+    platform: grant.device.spec.platform,
     state: "leased",
-    udid: device.driverDeviceId,
+    udid: grant.device.driverDeviceId,
   };
 }
 

@@ -3,28 +3,39 @@
 ## Topology
 
 ```
-agent ──spawns──> pitlane CLI ──unix socket──> pitlane daemon
-                                                   │
-                                     ┌─────────────┼─────────────┐
-                                     │        core (platform-    │
-                                     │        agnostic)          │
-                                     │  lease table · wait queue │
-                                     │  registry · capacity      │
-                                     │  state machine · reaper   │
-                                     │  event bus · warm-pool    │
-                                     │  policy                   │
-                                     └──────┬───────────┬────────┘
-                                            │  driver   │  driver
-                                            ▼ interface ▼ interface
-                                       iOS driver   Android driver
-                                       (simctl)     (avdmanager/
-                                                     emulator/adb)
+agent ──spawns──> pitlane CLI ──┐
+                                ├─ shared daemon client ──unix socket──> pitlane daemon
+MCP client ──spawns──> stdio MCP ┘                                      │
+                                                                     ┌───┼─────────────┐
+                                                                     │ core (platform-│
+                                                                     │ agnostic)      │
+                                                                     │ lease table ·  │
+                                                                     │ wait queue ·   │
+                                                                     │ registry ·     │
+                                                                     │ capacity ·     │
+                                                                     │ state machine ·│
+                                                                     │ reaper · event │
+                                                                     │ bus · warm-pool│
+                                                                     │ policy         │
+                                                                     └─┬─────────┬────┘
+                                                                       │ driver  │ driver
+                                                                       ▼ interface ▼ interface
+                                                                  iOS driver   Android driver
+                                                                  (simctl)     (avdmanager/
+                                                                                emulator/adb)
 ```
 
-- **CLI**: thin client. In the default *held* mode it acquires a lease, prints
-  one JSON result line on stdout, then stays alive holding the daemon
-  connection; the connection is the lease heartbeat. Progress streams as JSON
-  lines on stderr.
+- **CLI and stdio MCP server**: sibling thin frontends over the shared daemon
+  client and unix socket. The core never knows which frontend made a request.
+  The CLI is the full operator interface; the MCP server intentionally limits
+  its tool surface to leasing and releasing for an agent session.
+- **CLI**: in the default *held* mode it acquires a lease, prints one JSON
+  result line on stdout, then stays alive holding the daemon connection; the
+  connection is the lease heartbeat. Progress streams as JSON lines on stderr.
+- **stdio MCP server**: its process owns one agent session and exposes MCP over
+  stdin/stdout. A lease is held by that process's daemon connection until the
+  session explicitly releases it or the MCP transport disconnects, at which
+  point the connection closes and releases the lease.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 
@@ -116,8 +127,10 @@ Conclusions baked into the drivers:
 
 ## Leases
 
-- **Held mode (default)**: lease lives as long as the CLI process; connection
-  close = release. Known gap: orphaned holders when the agent dies — see
+- **Held mode (default)**: lease lives as long as its holding frontend's daemon
+  connection. For the CLI, that is the CLI process; for MCP, it is the MCP
+  server process for that agent session. Connection close = release. Known
+  gap: orphaned holders when the agent dies — see
   [known-pitfalls.md](known-pitfalls.md).
 - **Detached mode (`--detach`)**: returns a token, daemon enforces a TTL, the
   agent must `pitlane renew` periodically.

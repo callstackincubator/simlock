@@ -11,8 +11,11 @@ and installing over each other — without ever knowing the other exists.
 
 ## The solution
 
-Pitlane is a higher-order CLI (backed by a local daemon) that is the same for
-both platforms and gives agents one primitive: **lease a device**.
+Pitlane is a CLI-first control plane (backed by a local daemon) that is the
+same for both platforms and gives agents one primitive: **lease a device**.
+An optional local stdio MCP integration exposes the focused lease/release
+workflow to compatible agent clients; the CLI remains the full operator
+interface.
 
 - `pitlane lease` returns a *ready* device — booted and health-checked — that
   no other agent will touch for the duration of the lease.
@@ -35,9 +38,9 @@ both platforms and gives agents one primitive: **lease a device**.
 - **Managed-device registry.** Pitlane only ever shuts down, erases, or
   deletes devices it created itself. Everything else on the machine is
   read-only to it.
-- **Agent-first output.** Machine-readable JSON everywhere: the lease result
-  is one JSON line on stdout, progress (e.g. provisioning ETAs) streams as
-  JSON lines on stderr.
+- **Agent-first output.** CLI lease results are one JSON line on stdout;
+  progress (e.g. provisioning ETAs) streams as JSON lines on stderr. The
+  optional MCP server reserves stdout for MCP JSON-RPC.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's built, [CLI.md](CLI.md)
 for the command surface, and [known-pitfalls.md](known-pitfalls.md) for

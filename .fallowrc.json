@@ -2,6 +2,12 @@
   // This file is JSONC: fallow reads these comments; generic JSON tools may not.
   "$schema": "./node_modules/fallow/schema.json",
   "entry": ["src/index.ts", "src/cli/main.ts", "src/daemon/main.ts"],
+  "ignoreDependencyOverrides": [
+    // MCP SDK 1.29 transitively requires vulnerable node-server 1.x; lockfile/audit verify this patched override.
+    { "package": "@hono/node-server", "source": "pnpm-workspace.yaml" },
+    // MCP SDK 1.29 transitively requires vulnerable ip-address <=10.3.0; lockfile/audit verify this patched override.
+    { "package": "ip-address", "source": "pnpm-workspace.yaml" }
+  ],
   "duplicates": {
     // Hide pair-only clones; focus on widespread copy-paste
     // worth refactoring. Lower to 2 to report every duplicate pair.
