@@ -214,6 +214,8 @@ Filesystem   — read/write/delete/stat/disk-free
 ProcessRunner — spawn/exec/kill, capture stdout/stderr
 Clock        — now(), timers (no direct Date/setTimeout in logic)
 SystemStats  — cpu count, total/free RAM, disk free
+IpcConnector / IpcListenerFactory — connect to and host daemon IPC endpoints
+DaemonLauncher — detached daemon startup with append-only combined logs
 ```
 
 Real implementations are thin adapters wired up once at daemon startup;
@@ -226,6 +228,16 @@ scripted `ProcessRunner` replays recorded `simctl`/`adb` output.
 Rule of thumb: if a module imports `fs`, `child_process`, or reads
 `Date.now()` directly, it's a bug — depend on the port instead
 (see [agent-rules/architecture.md](agent-rules/architecture.md)).
+
+The daemon keeps IPC lifecycle separate from request handling. `DaemonEndpointHost`
+claims an endpoint, verifies live peers, removes confirmed stale entries, and owns
+listener shutdown. `DaemonServer` only accepts abstract IPC connections and routes
+protocol requests to the role-specific `LeaseCommands`, `QueueControl`, and
+`CapacityReader` interfaces. On the client, `IpcDaemonConnection` owns framing and
+request multiplexing, `IpcDaemonConnector` performs the hello handshake, and
+`DaemonStartupCoordinator` uses `Clock` plus `DaemonLauncher` to retry a missing
+or refused daemon. This keeps transport, detached-process logging, and startup
+policies replaceable without introducing an ambient dependency container.
 
 ## Device requests
 

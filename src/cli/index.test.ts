@@ -7,9 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem, NodeFilesystem } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeSystemStats,
+  MemoryFilesystem,
+  NodeFilesystem,
+  NodeIpcTransport,
+} from "../ports/index.js";
+import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
-import { connectExistingDaemon } from "./client.js";
+import { connectExistingDaemon } from "../daemon-client/client.js";
 import {
   DaemonClientError,
   errorExitCode,
@@ -70,7 +77,7 @@ describe("CLI boundary", () => {
     const run = runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 16"],
       output.environmentWith({
-        connect: () => connectExistingDaemon(harness.socketPath),
+        connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
         signals,
       }),
     );
@@ -109,7 +116,7 @@ describe("CLI boundary", () => {
     const firstRun = runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 16"],
       first.environmentWith({
-        connect: () => connectExistingDaemon(harness.socketPath),
+        connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
         requesterId: "agent-a",
         signals: firstSignals,
       }),
@@ -118,7 +125,7 @@ describe("CLI boundary", () => {
     const secondRun = runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 16"],
       second.environmentWith({
-        connect: () => connectExistingDaemon(harness.socketPath),
+        connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
         requesterId: "agent-b",
         signals: secondSignals,
       }),
@@ -305,7 +312,12 @@ async function createHarness() {
     config,
     defaultRequesterId: "test-process",
     eventBus,
-    filesystem: new NodeFilesystem(),
+    host: new DaemonEndpointHost({
+      connector: new NodeIpcTransport(),
+      endpoint: socketPath,
+      filesystem: new NodeFilesystem(),
+      listenerFactory: new NodeIpcTransport(),
+    }),
     leases: engine,
     queue: engine,
     reaper: new CleanupReaper({
@@ -317,7 +329,6 @@ async function createHarness() {
       registry,
     }),
     registry,
-    socketPath,
     version: "test",
   });
   runningDaemons.push(daemon);

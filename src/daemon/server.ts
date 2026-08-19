@@ -1,6 +1,3 @@
-import { createServer, connect, type Server, type Socket } from "node:net";
-import { dirname } from "node:path";
-
 import { type EventBus, type EventEnvelope } from "../bus/index.js";
 import {
   HeldLeaseRenewalError,
@@ -20,21 +17,19 @@ import {
   UnknownLeaseError,
 } from "../core/index.js";
 import type { CapacityReader, LeaseCommands, QueueControl } from "../core/lease-ports.js";
-import type { Filesystem } from "../ports/index.js";
-
-export const DEFAULT_PROTOCOL_VERSION = 1;
-const DEFAULT_SOCKET_PATH = "~/.pitlane/daemon.sock";
+import type { IpcConnection } from "../ports/index.js";
+import {
+  DAEMON_PROTOCOL_VERSION,
+  parseRequestFrame,
+  serializeFrame,
+  type RequestFrame,
+} from "../daemon-protocol/index.js";
+import type { ConnectionHost } from "./connection-host.js";
 
 type RequestId = string | number;
 
-interface RequestFrame {
-  readonly id: RequestId;
-  readonly type: string;
-  readonly payload: unknown;
-}
-
 interface Connection {
-  readonly socket: Socket;
+  readonly socket: IpcConnection;
   readonly heldLeaseIds: Set<string>;
   readonly progressDisposers: Set<() => void>;
   readonly progressRequesters: Set<string>;
@@ -50,7 +45,7 @@ export interface DaemonServerOptions {
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
   readonly eventBus: EventBus;
-  readonly filesystem: Filesystem;
+  readonly host: ConnectionHost;
   readonly capacity: CapacityReader;
   readonly leases: LeaseCommands;
   readonly protocolVersion?: number;
@@ -58,53 +53,26 @@ export interface DaemonServerOptions {
   readonly reaper: CleanupReaper;
   readonly nuke?: Nuke;
   readonly registry: Registry;
-  readonly socketPath?: string;
   readonly version: string;
-}
-
-class DaemonAlreadyRunningError extends Error {
-  constructor(readonly socketPath: string) {
-    super(`Pitlane daemon is already running at ${socketPath}`);
-    this.name = "DaemonAlreadyRunningError";
-  }
 }
 
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
   readonly #protocolVersion: number;
-  readonly #socketPath: string;
-  #server: Server | undefined;
-  #ownsSocket = false;
   #stopping = false;
   #stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: DaemonServerOptions) {
-    this.#protocolVersion = options.protocolVersion ?? DEFAULT_PROTOCOL_VERSION;
-    this.#socketPath = options.socketPath ?? DEFAULT_SOCKET_PATH;
+    this.#protocolVersion = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION;
   }
 
+  // fallow-ignore-next-line unused-class-member -- retained as a daemon compatibility facade.
   get socketPath(): string {
-    return this.#socketPath;
+    return this.options.host.endpoint;
   }
 
   async start(): Promise<void> {
-    if (this.#server !== undefined) {
-      throw new Error("Daemon server has already been started");
-    }
-    await this.#claimSocket();
-
-    const server = createServer((socket) => this.#accept(socket));
-    this.#server = server;
-    try {
-      await listen(server, this.#socketPath);
-    } catch (error: unknown) {
-      this.#server = undefined;
-      if (isAddressInUse(error)) {
-        throw new DaemonAlreadyRunningError(this.#socketPath);
-      }
-      throw error;
-    }
-    this.#ownsSocket = true;
+    await this.options.host.start((connection) => this.#accept(connection));
 
     this.options.eventBus.emit(
       "daemon.started",
@@ -125,36 +93,16 @@ export class DaemonServer {
   async #stop(reason: string): Promise<void> {
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
     this.options.reaper.dispose();
-    const server = this.#server;
-    const serverClosed = server === undefined ? Promise.resolve() : closeServer(server);
-
     await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
     for (const connection of this.#connections) {
-      connection.socket.end();
+      await connection.socket.close();
     }
-    await serverClosed;
-    this.#server = undefined;
-    if (this.#ownsSocket) {
-      await this.options.filesystem.rm(this.#socketPath);
-      this.#ownsSocket = false;
-    }
+    await this.options.host.stop();
   }
 
-  async #claimSocket(): Promise<void> {
-    await this.options.filesystem.mkdirp(dirname(this.#socketPath));
-    if (!(await this.options.filesystem.exists(this.#socketPath))) {
-      return;
-    }
-
-    if (await isLiveSocket(this.#socketPath)) {
-      throw new DaemonAlreadyRunningError(this.#socketPath);
-    }
-    await this.options.filesystem.rm(this.#socketPath);
-  }
-
-  #accept(socket: Socket): void {
+  #accept(socket: IpcConnection): void {
     if (this.#stopping) {
-      socket.end();
+      void socket.close();
       return;
     }
     const connection: Connection = {
@@ -169,10 +117,9 @@ export class DaemonServer {
       unsubscribeEvents: undefined,
     };
     this.#connections.add(connection);
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk: string) => this.#read(connection, chunk));
-    socket.once("close", () => this.#closeConnection(connection));
-    socket.once("error", () => this.#closeConnection(connection));
+    socket.onData((chunk) => this.#read(connection, chunk));
+    socket.onClose(() => this.#closeConnection(connection));
+    socket.onError(() => this.#closeConnection(connection));
   }
 
   #read(connection: Connection, chunk: string): void {
@@ -194,7 +141,20 @@ export class DaemonServer {
   async #dispatchLine(connection: Connection, line: string): Promise<void> {
     let frame: RequestFrame;
     try {
-      frame = parseRequestFrame(line);
+      let value: unknown;
+      try {
+        value = JSON.parse(line) as unknown;
+      } catch {
+        throw new ProtocolError("BAD_FRAME", "Invalid JSON frame");
+      }
+      const parsed = parseRequestFrame(value);
+      if (parsed === undefined) {
+        throw new ProtocolError(
+          "BAD_FRAME",
+          "Request frame requires string or number id and string type",
+        );
+      }
+      frame = parsed;
     } catch (error: unknown) {
       await this.#respondError(connection.socket, null, "BAD_FRAME", errorMessage(error));
       return;
@@ -233,7 +193,7 @@ export class DaemonServer {
         "HANDSHAKE_REQUIRED",
         "First message must be hello",
       );
-      connection.socket.end();
+      await connection.socket.close();
       return;
     }
     const payload = objectPayload(frame.payload);
@@ -244,7 +204,7 @@ export class DaemonServer {
         "BAD_REQUEST",
         "hello requires a clientVersion string",
       );
-      connection.socket.end();
+      await connection.socket.close();
       return;
     }
     if (payload.protocolVersion !== this.#protocolVersion) {
@@ -254,7 +214,7 @@ export class DaemonServer {
         "PROTOCOL_VERSION_MISMATCH",
         `Protocol version ${String(payload.protocolVersion)} is not supported`,
       );
-      connection.socket.end();
+      await connection.socket.close();
       return;
     }
     connection.helloReceived = true;
@@ -265,6 +225,7 @@ export class DaemonServer {
     });
   }
 
+  // fallow-ignore-next-line complexity -- command dispatch is intentionally centralized at the protocol boundary.
   async #handleRequest(connection: Connection, frame: RequestFrame): Promise<unknown> {
     switch (frame.type) {
       case "lease.request":
@@ -337,6 +298,7 @@ export class DaemonServer {
     }
   }
 
+  // fallow-ignore-next-line complexity -- lease payload validation and held-connection lifecycle are one transaction.
   async #requestLease(connection: Connection, value: unknown): Promise<unknown> {
     const payload = objectPayload(value);
     const requestPayload = isObject(payload.request) ? payload.request : payload;
@@ -348,7 +310,7 @@ export class DaemonServer {
     };
     const mode = payload.mode === "detached" ? "detached" : "held";
     const requesterId = optionalString(payload, "requesterId") ?? this.options.defaultRequesterId;
-    let progressSocket: Socket | undefined = connection.socket;
+    let progressSocket: IpcConnection | undefined = connection.socket;
     const disposeProgress = () => {
       progressSocket = undefined;
     };
@@ -421,19 +383,19 @@ export class DaemonServer {
     };
   }
 
-  async #pushProgress(socket: Socket, progress: LeaseProgress): Promise<void> {
+  async #pushProgress(socket: IpcConnection, progress: LeaseProgress): Promise<void> {
     return writeFrame(socket, {
       push: "progress",
       payload: progress,
     });
   }
 
-  async #pushEvent(socket: Socket, event: EventEnvelope): Promise<void> {
+  async #pushEvent(socket: IpcConnection, event: EventEnvelope): Promise<void> {
     await writeFrame(socket, { push: "event", payload: event });
   }
 
   async #respondError(
-    socket: Socket,
+    socket: IpcConnection,
     id: RequestId | null,
     code: string,
     message: string,
@@ -502,26 +464,6 @@ class ProtocolError extends Error {
   }
 }
 
-function parseRequestFrame(line: string): RequestFrame {
-  let value: unknown;
-  try {
-    value = JSON.parse(line) as unknown;
-  } catch {
-    throw new ProtocolError("BAD_FRAME", "Invalid JSON frame");
-  }
-  const frame = objectPayload(value);
-  if (
-    (typeof frame.id !== "string" && typeof frame.id !== "number") ||
-    typeof frame.type !== "string"
-  ) {
-    throw new ProtocolError(
-      "BAD_FRAME",
-      "Request frame requires string or number id and string type",
-    );
-  }
-  return { id: frame.id, payload: frame.payload, type: frame.type };
-}
-
 function objectPayload(value: unknown): Record<string, unknown> {
   if (!isObject(value)) {
     throw new ProtocolError("BAD_REQUEST", "Payload must be an object");
@@ -578,6 +520,7 @@ function requiredPlatform(payload: Record<string, unknown>): "ios" | "android" {
   return platform;
 }
 
+// fallow-ignore-next-line complexity -- preserves stable protocol error mapping.
 function errorCode(error: unknown): string {
   if (error instanceof ProtocolError) {
     return error.code;
@@ -613,44 +556,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function listen(server: Server, socketPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-}
-
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.close((error) => (error === undefined ? resolve() : reject(error)));
-  });
-}
-
-function isLiveSocket(socketPath: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connect(socketPath);
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", () => resolve(false));
-  });
-}
-
-function writeFrame(socket: Socket, frame: unknown): Promise<void> {
-  if (socket.destroyed) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    socket.write(`${JSON.stringify(frame)}\n`, () => resolve());
-  });
-}
-
-function isAddressInUse(error: unknown): error is NodeJS.ErrnoException {
-  return (
-    typeof error === "object" && error !== null && "code" in error && error.code === "EADDRINUSE"
-  );
+function writeFrame(socket: IpcConnection, frame: unknown): Promise<void> {
+  if (socket.closed) return Promise.resolve();
+  return socket.write(serializeFrame(frame));
 }

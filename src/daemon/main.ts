@@ -20,13 +20,18 @@ import {
   type Clock,
   type Filesystem,
   type IdGenerator,
+  type IpcConnector,
+  type IpcListenerFactory,
   NodeFilesystem,
+  NodeIpcTransport,
   NodeProcessRunner,
   NodeSystemStats,
   SystemClock,
   type SystemStats,
+  type ProcessRunner,
 } from "../ports/index.js";
 import { DaemonServer } from "./server.js";
+import { DaemonEndpointHost } from "./connection-host.js";
 
 export interface StartDaemonOptions {
   readonly clock?: Clock;
@@ -37,6 +42,8 @@ export interface StartDaemonOptions {
   readonly drivers?: readonly Driver[];
   readonly filesystem?: Filesystem;
   readonly idGenerator?: IdGenerator;
+  readonly ipc?: IpcConnector & IpcListenerFactory;
+  readonly processRunner?: ProcessRunner;
   readonly socketPath?: string;
   readonly statePath?: string;
   readonly systemStats?: SystemStats;
@@ -44,12 +51,15 @@ export interface StartDaemonOptions {
 }
 
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
+// fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
   const dataDirectory = options.dataDirectory ?? join(homedir(), ".pitlane");
   const filesystem = options.filesystem ?? new NodeFilesystem();
   const clock = options.clock ?? new SystemClock();
   const systemStats = options.systemStats ?? new NodeSystemStats();
   const idGenerator = options.idGenerator ?? new CryptoIdGenerator();
+  const ipc = options.ipc ?? new NodeIpcTransport();
+  const processRunner = options.processRunner ?? new NodeProcessRunner();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? join(dataDirectory, "daemon.sock");
@@ -61,7 +71,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   });
   const eventBus = new EventBus(clock, config.eventBuffer.capacity);
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
-  const drivers = options.drivers ?? (await discoverDrivers({ clock, filesystem, idGenerator }));
+  const drivers =
+    options.drivers ?? (await discoverDrivers({ clock, filesystem, idGenerator, processRunner }));
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -90,13 +101,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     doctor,
     defaultRequesterId: options.defaultRequesterId ?? String(process.pid),
     eventBus,
-    filesystem,
+    host: new DaemonEndpointHost({
+      connector: ipc,
+      endpoint: socketPath,
+      filesystem,
+      listenerFactory: ipc,
+    }),
     leases: leaseEngine,
     queue: leaseEngine,
     reaper,
     nuke,
     registry,
-    socketPath,
     version: options.version ?? "1.0.0",
   });
   await daemon.start();
@@ -107,6 +122,7 @@ async function discoverDrivers(options: {
   readonly clock: Clock;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
+  readonly processRunner: ProcessRunner;
 }): Promise<Driver[]> {
   const drivers: Driver[] = [];
   if (process.platform === "darwin") {
@@ -114,7 +130,7 @@ async function discoverDrivers(options: {
       new IosSimctlDriver({
         clock: options.clock,
         idGenerator: options.idGenerator,
-        processRunner: new NodeProcessRunner(),
+        processRunner: options.processRunner,
       }),
     );
   }
@@ -126,7 +142,7 @@ async function discoverDrivers(options: {
         filesystem: options.filesystem,
         homeDirectory: homedir(),
         idGenerator: options.idGenerator,
-        processRunner: new NodeProcessRunner(),
+        processRunner: options.processRunner,
       }),
     );
     return drivers;
