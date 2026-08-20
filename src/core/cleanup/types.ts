@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { DeviceRecord, LeaseRecord } from "../domain.js";
 
-export type CleanupAction = "shutdown" | "destroy" | "gc-runtime";
+export type CleanupAction = "shutdown" | "destroy";
 
 export interface RegistryView {
   readonly config: Config;

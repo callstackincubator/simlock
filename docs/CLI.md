@@ -189,7 +189,8 @@ structured equivalent:
 
 Run the cleanup reconciliation immediately. `--dry-run` prints the actions
 each rule *would* take (rule name, target, reason) without executing.
-`--rule` restricts to a single rule (e.g. the explicit runtime GC).
+`--rule` restricts to a single named rule (e.g. `--rule idle-destroy`); see
+`pitlane list --rules` for the registered rules.
 
 ## `pitlane doctor [--fix]`
 

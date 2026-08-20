@@ -544,7 +544,7 @@ export class DaemonServer {
       case "leases":
         return snapshot.leases.map((lease) => this.#decorateLease(lease));
       case "rules":
-        return this.options.reaper.manualRules;
+        return this.options.reaper.rules;
       case "devices":
       case undefined:
         return snapshot.devices;

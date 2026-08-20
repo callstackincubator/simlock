@@ -31,7 +31,6 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.deleted` | device id, initiator | device removed from disk and registry | Registry | implemented |
 | `device.foreign-state-detected` | device id, platform, expected (running/stopped), observed (running/stopped) | doctor reconcile found a managed device's observed boot state disagreeing with the committed registry state | Doctor | implemented |
 | `device.foreign-provenance-detected` | device id, platform, detail (erased/mark-mismatch/durable-mark-missing) | doctor reconcile found a managed device's provenance marks no longer proving Pitlane owns it | Doctor | implemented |
-| `runtime.deleted` | runtime id, initiator | runtime / system image GC'd | — | planned |
 
 ## System
 
@@ -39,7 +38,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 |---|---|---|---|---|
 | `daemon.started` | version, config snapshot | daemon finished startup + reconcile | DaemonServer | implemented |
 | `daemon.stopping` | reason | graceful shutdown began | DaemonServer | implemented |
-| `disk.pressure-detected` | free bytes, threshold | free disk crossed configured threshold | — | planned |
+| `disk.pressure-detected` | free bytes, threshold | free disk crossed under the configured threshold (edge-triggered: once per crossing, not once per tick while it persists) | CleanupReaper | implemented |
 | `cleanup.executed` | rule name, action, target, reason | cleanup executor committed a proposed action | CleanupExecutor | implemented |
 | `doctor.reconciled` | drift findings | daemon reconciliation completed | Doctor | implemented |
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { Config, RegistryView } from "../index.js";
+import type { Config, LeaseRecord, RegistryView } from "../index.js";
 import { idleDestroyRule } from "./idle-destroy.js";
+
+const gibibyte = 1024 ** 3;
 
 const config: Config = {
   diskPressure: { freeBytesThreshold: 0 },
@@ -17,7 +19,10 @@ const config: Config = {
   log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
 };
 
-function view(now: number): RegistryView {
+function view(
+  now: number,
+  overrides: { readonly diskFreeBytes?: number; readonly leases?: readonly LeaseRecord[] } = {},
+): RegistryView {
   return {
     config,
     devices: [
@@ -31,14 +36,14 @@ function view(now: number): RegistryView {
         state: "shutdown",
       },
     ],
-    diskFreeBytes: 100,
-    leases: [],
+    diskFreeBytes: overrides.diskFreeBytes ?? 100,
+    leases: overrides.leases ?? [],
     now,
   };
 }
 
 describe("idleDestroyRule", () => {
-  it("proposes destruction only after T2", () => {
+  it("proposes destruction only after T2 when not under disk pressure", () => {
     expect(idleDestroyRule.evaluate(view(30_000))).toEqual([]);
     expect(idleDestroyRule.evaluate(view(30_001))).toEqual([
       {
@@ -48,5 +53,50 @@ describe("idleDestroyRule", () => {
         target: "dev_1",
       },
     ]);
+  });
+
+  it("shortens the threshold to T1 and names disk pressure as the reason when under pressure", () => {
+    const pressuredConfig: Config = {
+      ...config,
+      diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    };
+    const pressured = (now: number): RegistryView => ({
+      ...view(now, { diskFreeBytes: 2 * gibibyte }),
+      config: pressuredConfig,
+    });
+
+    // Still within T1: no proposal even though disk is under pressure.
+    expect(idleDestroyRule.evaluate(pressured(10_000))).toEqual([]);
+    // Past T1 but well short of T2: pressure is what makes this fire.
+    expect(idleDestroyRule.evaluate(pressured(10_001))).toEqual([
+      {
+        action: "destroy",
+        reason: "disk pressure (free 2GiB < 10GiB): idle 10s > T1=10s",
+        rule: "idle-destroy",
+        target: "dev_1",
+      },
+    ]);
+  });
+
+  it("never proposes a leased device for destruction under disk pressure", () => {
+    const pressuredConfig: Config = {
+      ...config,
+      diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    };
+    const leased = view(1_000_000, {
+      diskFreeBytes: 2 * gibibyte,
+      leases: [
+        {
+          deviceId: "dev_1",
+          grantedAt: 0,
+          id: "lse_1",
+          mode: "held",
+          requesterId: "agent-1",
+          ttlDeadline: 1,
+        },
+      ],
+    });
+
+    expect(idleDestroyRule.evaluate({ ...leased, config: pressuredConfig })).toEqual([]);
   });
 });
