@@ -652,9 +652,12 @@ function formatStatus(status: Record<string, unknown>): string {
   });
   const deviceLines = devices.map((device) => {
     const record = requireObject(device);
-    const foreignStateMarker =
-      record.foreignStateDetectedAt === undefined ? "" : " (foreign state change)";
-    return `Device ${String(record.id)}: ${String(record.state)}${foreignStateMarker}`;
+    const markers = [
+      record.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
+      record.foreignProvenanceDetectedAt === undefined ? undefined : "foreign provenance change",
+    ].filter((marker) => marker !== undefined);
+    const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
+    return `Device ${String(record.id)}: ${String(record.state)}${suffix}`;
   });
   const leaseLines = leases.map((lease) => {
     const record = requireObject(lease);

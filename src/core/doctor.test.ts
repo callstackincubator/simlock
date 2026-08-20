@@ -154,6 +154,120 @@ describe("Doctor", () => {
     expect(registry.snapshot.devices[0]?.foreignStateDetectedAt).toBe(10_000);
   });
 
+  it("classifies provenance-mark drift and never repairs it", async () => {
+    const cases = [
+      { detail: "erased", mark: { durable: "tok", erasable: undefined, erasableReadable: true } },
+      {
+        detail: "mark-mismatch",
+        mark: { durable: "tok", erasable: "other", erasableReadable: true },
+      },
+      {
+        detail: "durable-mark-missing",
+        mark: { durable: undefined, erasable: "tok", erasableReadable: true },
+      },
+      { detail: undefined, mark: { durable: "tok", erasable: "tok", erasableReadable: true } },
+      // Unreadable is not absent: an Android mark is only reachable over adb while
+      // the emulator runs, so a shut-down device must never read as erased.
+      { detail: undefined, mark: { durable: "tok", erasable: undefined, erasableReadable: false } },
+    ] as const;
+
+    for (const { detail, mark } of cases) {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "pitlane-marked",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      const driver = new FakeDriver({ clock, platform: "ios" });
+      driver.setManagedReality({
+        devices: [{ deviceId: "pitlane-marked", driverData: {}, mark, runState: "running" }],
+        processes: [],
+      });
+
+      const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile({
+        fix: true,
+      });
+
+      const found = report.findings.filter(
+        (finding) => finding.kind === "foreign-provenance-change",
+      );
+      if (detail === undefined) {
+        expect(found).toEqual([]);
+        expect(registry.snapshot.devices[0]?.foreignProvenanceDetectedAt).toBeUndefined();
+      } else {
+        expect(found).toEqual([
+          { detail, deviceId: device.id, kind: "foreign-provenance-change", platform: "ios" },
+        ]);
+        expect(registry.snapshot.devices[0]?.foreignProvenanceDetectedAt).toBe(10_000);
+        expect(
+          eventBus.replay().some((entry) => entry.event === "device.foreign-provenance-detected"),
+        ).toBe(true);
+      }
+      // Report-only: --fix must never touch a device over a mark finding.
+      expect(registry.snapshot.devices[0]?.state).toBe("ready");
+    }
+  });
+
+  it("ignores provenance marks while Pitlane is itself erasing the device", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "pitlane-reclaiming",
+      provisionDuration: 0,
+      spec: { model: "Phone", osVersion: "1", platform: "ios" },
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      mode: "held",
+      requesterId: "agent",
+      ttlDeadline: 99_000,
+    });
+    await registry.beginRelease(lease.id);
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setManagedReality({
+      devices: [
+        {
+          deviceId: "pitlane-reclaiming",
+          driverData: {},
+          mark: { durable: "tok", erasable: undefined, erasableReadable: true },
+          runState: "running",
+        },
+      ],
+      processes: [],
+    });
+
+    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile();
+
+    expect(report.findings.map((finding) => finding.kind)).not.toContain(
+      "foreign-provenance-change",
+    );
+  });
+
   it("fixes registry-attributable drift and leaves unregistered reality report-only", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
