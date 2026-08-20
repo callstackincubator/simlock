@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  FakeClock,
   IpcError,
+  JsonLinesLogger,
   MemoryFilesystem,
   MemoryIpcTransport,
+  MemoryLogSink,
   type IpcConnection,
   type IpcConnector,
   type IpcListenerFactory,
@@ -90,6 +93,61 @@ describe("DaemonEndpointHost", () => {
     await expect(hostFor(filesystem, connector, ipc).start(() => undefined)).rejects.toThrow(
       "denied",
     );
+  });
+
+  it("logs claiming a fresh endpoint", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipc = new MemoryIpcTransport();
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
+    const host = new DaemonEndpointHost({
+      connector: ipc,
+      endpoint,
+      filesystem,
+      listenerFactory: ipc,
+      logger,
+    });
+
+    await host.start(() => undefined);
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Claimed daemon socket",
+        fields: { endpoint },
+      }),
+    );
+    await host.stop();
+  });
+
+  it("logs recovering a stale endpoint before claiming it", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/pitlane");
+    await filesystem.writeFileAtomic(endpoint, "stale");
+    const ipc = new MemoryIpcTransport();
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
+    const host = new DaemonEndpointHost({
+      connector: ipc,
+      endpoint,
+      filesystem,
+      listenerFactory: ipc,
+      logger,
+    });
+
+    await host.start(() => undefined);
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({ level: "warn", message: "Recovered stale daemon socket" }),
+    );
+    const claimedIndex = sink.records.findIndex(
+      (record) => record.message === "Claimed daemon socket",
+    );
+    const recoveredIndex = sink.records.findIndex(
+      (record) => record.message === "Recovered stale daemon socket",
+    );
+    expect(recoveredIndex).toBeLessThan(claimedIndex);
+    await host.stop();
   });
 });
 

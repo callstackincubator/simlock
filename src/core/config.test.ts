@@ -50,9 +50,42 @@ describe("loadConfig", () => {
         heartbeatIntervalMs: 5 * 60_000,
       },
       ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
+      log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.limits)).toBe(true);
+  });
+
+  it("applies a file-level log override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ log: { level: "debug", rotateBytes: 1024 } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.log).toEqual({ level: "debug", rotateBytes: 1024 });
+  });
+
+  it("rejects a log level outside the known set", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ log: { level: "verbose" } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("log.level");
+  });
+
+  it("rejects a non-positive-integer log rotation cap", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ log: { rotateBytes: 0 } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("log.rotateBytes");
   });
 
   it("applies file values over defaults and explicit overrides over file values", async () => {

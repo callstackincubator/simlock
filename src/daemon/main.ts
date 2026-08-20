@@ -17,11 +17,14 @@ import { AndroidDriver, SdkMissingError } from "../drivers/android/index.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import {
   CryptoIdGenerator,
+  JsonLinesLogger,
+  NodeFileLogSink,
   type Clock,
   type Filesystem,
   type IdGenerator,
   type IpcConnector,
   type IpcListenerFactory,
+  type Logger,
   NodeFilesystem,
   NodeIpcTransport,
   NodeProcessRunner,
@@ -43,6 +46,7 @@ export interface StartDaemonOptions {
   readonly filesystem?: Filesystem;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
+  readonly logger?: Logger;
   readonly processRunner?: ProcessRunner;
   readonly socketPath?: string;
   readonly statePath?: string;
@@ -69,10 +73,21 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     systemStats,
   });
+  const logger =
+    options.logger ??
+    new JsonLinesLogger({
+      clock,
+      level: config.log.level,
+      sink: new NodeFileLogSink({
+        maxBytes: config.log.rotateBytes,
+        path: join(dataDirectory, "daemon.log"),
+      }),
+    });
   const eventBus = new EventBus(clock, config.eventBuffer.capacity);
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
   const drivers =
-    options.drivers ?? (await discoverDrivers({ clock, filesystem, idGenerator, processRunner }));
+    options.drivers ??
+    (await discoverDrivers({ clock, filesystem, idGenerator, logger, processRunner }));
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -109,8 +124,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       endpoint: socketPath,
       filesystem,
       listenerFactory: ipc,
+      logger: logger.child("connection-host"),
     }),
     leases: leaseEngine,
+    logger: logger.child("server"),
     queue: leaseEngine,
     reaper,
     nuke,
@@ -121,13 +138,15 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   return daemon;
 }
 
-async function discoverDrivers(options: {
+export async function discoverDrivers(options: {
   readonly clock: Clock;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
+  readonly logger: Logger;
   readonly processRunner: ProcessRunner;
 }): Promise<Driver[]> {
   const drivers: Driver[] = [];
+  const logger = options.logger.child("driver-discovery");
   if (process.platform === "darwin") {
     drivers.push(
       new IosSimctlDriver({
@@ -137,6 +156,7 @@ async function discoverDrivers(options: {
         processRunner: options.processRunner,
       }),
     );
+    logger.info("Discovered driver", { platform: "ios" });
   }
   try {
     drivers.push(
@@ -149,18 +169,42 @@ async function discoverDrivers(options: {
         processRunner: options.processRunner,
       }),
     );
+    logger.info("Discovered driver", { platform: "android" });
     return drivers;
   } catch (error: unknown) {
     if (error instanceof SdkMissingError) {
+      logger.warn("Skipped Android driver: SDK missing", { reason: error.message });
       return drivers;
     }
     throw error;
   }
 }
 
+/**
+ * Best-effort logger for the fatal startup handler below. It cannot depend on the
+ * daemon's own `Config` — that is exactly what may have failed to load — so it always
+ * writes to the default log location at a fixed level.
+ */
+export function createFatalLogger(): Logger {
+  return new JsonLinesLogger({
+    clock: new SystemClock(),
+    level: "error",
+    module: "daemon",
+    sink: new NodeFileLogSink({ path: join(homedir(), ".pitlane", "daemon.log") }),
+  });
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void startDaemon().catch((error: unknown) => {
-    console.error(error);
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    try {
+      createFatalLogger().error("Daemon failed to start", { message, stack });
+    } catch {
+      // Logging itself failed (e.g. an unwritable data directory) -- fall back to
+      // the original behavior so the failure is not silently swallowed.
+      console.error(error);
+    }
     process.exitCode = 1;
   });
 }

@@ -9,9 +9,12 @@ import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from ".
 import {
   FakeClock,
   FakeSystemStats,
+  JsonLinesLogger,
   MemoryFilesystem,
+  MemoryLogSink,
   NodeFilesystem,
   NodeIpcTransport,
+  type Logger,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
@@ -617,6 +620,117 @@ describe("DaemonServer lease heartbeat", () => {
     });
     await holder.close();
   });
+
+  describe("operational logging", () => {
+    function logger(): { logger: Logger; sink: MemoryLogSink } {
+      const sink = new MemoryLogSink();
+      return {
+        logger: new JsonLinesLogger({ clock: new FakeClock(1_000), level: "debug", sink }),
+        sink,
+      };
+    }
+
+    it("logs the daemon start with version, protocol version, socket path, and effective config", async () => {
+      const { logger: log, sink } = logger();
+      const harness = await createHarness({ logger: log, start: false });
+
+      await harness.daemon.start();
+
+      expect(sink.records).toContainEqual(
+        expect.objectContaining({
+          level: "info",
+          message: "Daemon started",
+          fields: expect.objectContaining({
+            version: "test",
+            protocolVersion: DAEMON_PROTOCOL_VERSION,
+            socketPath: harness.socketPath,
+            config: harness.config,
+          }),
+        }),
+      );
+    });
+
+    it("logs a connection opening with its declared capabilities and closing afterward", async () => {
+      const { logger: log, sink } = logger();
+      const harness = await createHarness({ logger: log });
+      const client = await createClient(harness.socketPath);
+
+      await hello(client, { heartbeat: true });
+      expect(sink.records).toContainEqual(
+        expect.objectContaining({
+          level: "info",
+          message: "Connection opened",
+          fields: expect.objectContaining({ heartbeatCapability: true }),
+        }),
+      );
+
+      await client.close();
+      await expect
+        .poll(() => sink.records.some((record) => record.message === "Connection closed"))
+        .toBe(true);
+    });
+
+    it("logs a clean shutdown", async () => {
+      const { logger: log, sink } = logger();
+      const harness = await createHarness({ logger: log });
+
+      await harness.daemon.stop("test-shutdown");
+
+      expect(sink.records).toContainEqual(
+        expect.objectContaining({
+          level: "info",
+          message: "Daemon stopping",
+          fields: { reason: "test-shutdown" },
+        }),
+      );
+      expect(sink.records).toContainEqual(
+        expect.objectContaining({
+          level: "info",
+          message: "Daemon stopped",
+          fields: { reason: "test-shutdown" },
+        }),
+      );
+    });
+
+    it("logs an unhandled request error at error level", async () => {
+      const { logger: log, sink } = logger();
+      const harness = await createHarness({ logger: log });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await client.request("doctor.run", {});
+
+      expect(sink.records).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          message: "Unhandled request error",
+          fields: expect.objectContaining({ type: "doctor.run" }),
+        }),
+      );
+      await client.close();
+    });
+
+    it("logs a handled/expected request error below error level", async () => {
+      const { logger: log, sink } = logger();
+      const harness = await createHarness({ logger: log });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await client.request("lease.release", { leaseId: "not-a-lease" });
+
+      expect(sink.records).toContainEqual(
+        expect.objectContaining({
+          level: "debug",
+          message: "Handled request error",
+          fields: { code: "UNKNOWN_LEASE", type: "lease.release" },
+        }),
+      );
+      expect(sink.records).not.toContainEqual(
+        expect.objectContaining({ level: "error", message: "Unhandled request error" }),
+      );
+      await client.close();
+    });
+  });
 });
 
 // fallow-ignore-next-line complexity -- a test harness whose branches are all trivial optional-parameter defaulting.
@@ -629,6 +743,7 @@ async function createHarness(
     readonly start?: boolean;
     readonly clock?: FakeClock;
     readonly driver?: FakeDriver;
+    readonly logger?: Logger;
     readonly stateFilesystem?: MemoryFilesystem;
   } = {},
 ) {
@@ -693,6 +808,7 @@ async function createHarness(
       listenerFactory: new NodeIpcTransport(),
     }),
     leases: engine,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     queue: engine,
     reaper,
     registry,
@@ -815,5 +931,6 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       maxRunning: 1 + 1,
     },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
   };
 }

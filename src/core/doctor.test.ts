@@ -726,5 +726,6 @@ function config(): Config {
       maxRunning: 1 + 1,
     },
     ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
+    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
   };
 }
