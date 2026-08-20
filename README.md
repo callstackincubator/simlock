@@ -50,6 +50,27 @@ That's the whole interaction: ask for a platform and a device model, get
 back an identified, ready-to-use device. Release it explicitly, or let its
 TTL expire.
 
+Now say a second agent asks for the same `iPhone 16` a moment later. It's
+already leased to the first agent — no problem, Pitlane just provisions
+another one. Progress streams as JSON lines on stderr while it happens, and
+the lease result lands on stdout the moment the new device is ready:
+
+```json
+{"event":"provisioning","eta_seconds":5}
+{"event":"booting","eta_seconds":30}
+```
+
+```json
+{"lease":"lse_a731","platform":"ios","device":"iPhone 16","os":"18.4","udid":"EFGH-...","state":"leased"}
+```
+
+No manual bookkeeping, no "device busy" error to handle — just a second
+device, a few seconds later. That keeps up until the machine's capacity
+limit is reached (derived from its CPU and RAM, or set explicitly in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md)); after that, further
+requests wait in a fair queue instead of failing, with `--timeout` and
+`--no-wait` for callers that want different behavior.
+
 Agents that speak the Model Context Protocol can skip the CLI entirely and
 get the same lease/release workflow as tools, through a local stdio server:
 
