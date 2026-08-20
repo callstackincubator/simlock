@@ -12,7 +12,6 @@ import {
   NoCapacityError,
   QueueTimeoutError,
   Registry,
-  RequesterAlreadyLeasedError,
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
@@ -773,7 +772,11 @@ describe("LeaseEngine", () => {
 
     await expect(
       harness.engine.request(request, { mode: "held", requesterId: "agent-1" }),
-    ).rejects.toBeInstanceOf(RequesterAlreadyLeasedError);
+    ).rejects.toMatchObject({
+      existingLeaseId: first.lease.id,
+      message: expect.stringContaining(first.lease.id),
+      name: "RequesterAlreadyLeasedError",
+    });
     await harness.engine.release(first.lease.id, "explicit");
     expect(harness.clock.pendingTimerCount).toBe(0);
     await expect(

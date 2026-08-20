@@ -134,16 +134,19 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           );
           throw new NukeCancelledError();
         }
-        const alreadyActive = this.options.registry.snapshot.leases.some(
+        const activeLease = this.options.registry.snapshot.leases.find(
           (lease) => lease.requesterId === options.requesterId,
         );
-        if (alreadyActive || this.options.queue.hasPendingRequester(options.requesterId)) {
+        if (
+          activeLease !== undefined ||
+          this.options.queue.hasPendingRequester(options.requesterId)
+        ) {
           this.options.eventBus.emit(
             "lease.rejected",
             { requestSpec: request, reason: "already-leased" },
             "lease-acquisition-coordinator",
           );
-          throw new RequesterAlreadyLeasedError(options.requesterId);
+          throw new RequesterAlreadyLeasedError(options.requesterId, activeLease?.id);
         }
         const accepted = this.#newWaiter(request, options);
         this.options.eventBus.emit(

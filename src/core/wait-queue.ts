@@ -39,8 +39,16 @@ export class QueueTimeoutError extends Error {
 }
 
 export class RequesterAlreadyLeasedError extends Error {
-  constructor(readonly requesterId: string) {
-    super(`Requester already has a lease or pending request: ${requesterId}`);
+  constructor(
+    readonly requesterId: string,
+    /** The requester's existing lease, when the conflict is a granted lease rather than a queued request. */
+    readonly existingLeaseId?: string,
+  ) {
+    super(
+      existingLeaseId === undefined
+        ? `Requester already has a lease or pending request: ${requesterId}`
+        : `Requester ${requesterId} already holds lease ${existingLeaseId}; release it (\`pitlane release ${existingLeaseId}\`) before requesting another device`,
+    );
     this.name = "RequesterAlreadyLeasedError";
   }
 }
