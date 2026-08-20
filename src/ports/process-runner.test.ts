@@ -145,4 +145,54 @@ describe("NodeProcessRunner", () => {
       }
     }
   }, 4_000);
+
+  it("keeps waiting while output is still arriving after the process exits", async () => {
+    const runner = new NodeProcessRunner();
+    // Same shape as above, but the pipe is still delivering when the process goes:
+    // the grandchild emits a chunk every 200ms for well over a grace window, then
+    // goes quiet. Settling on a bare post-exit timer would cut the capture off at
+    // the first chunk -- a truncated capture surfaces later as a parse error, far
+    // from its cause -- so the window has to restart while output keeps arriving.
+    const handle = runner.spawn(process.execPath, [
+      "-e",
+      `
+          const { spawn } = require("node:child_process");
+          const grandchild = spawn(
+            process.execPath,
+            [
+              "-e",
+              // console.log appends its own newline, which keeps this three-deep
+              // nested source free of escape sequences that have to survive two
+              // rounds of string parsing on the way down.
+              "let n = 0; const t = setInterval(() => { console.log('chunk-' + n); if (++n === 6) { clearInterval(t); setTimeout(() => {}, 3_000); } }, 200);",
+            ],
+            { detached: true, stdio: "inherit" },
+          );
+          grandchild.unref();
+          require("node:fs").writeSync(1, String(grandchild.pid) + "\\n");
+          process.exit(0);
+        `,
+    ]);
+
+    let grandchildPid: number | undefined;
+    try {
+      const lines = handle.stdout[Symbol.asyncIterator]();
+      grandchildPid = Number((await lines.next()).value);
+
+      const result = await handle.wait();
+
+      expect(result.code).toBe(0);
+      expect(result.stdout, "capture was cut off while the pipe was still delivering").toContain(
+        "chunk-5",
+      );
+    } finally {
+      if (grandchildPid !== undefined) {
+        try {
+          process.kill(grandchildPid, "SIGKILL");
+        } catch {
+          // Already gone by the time we get here.
+        }
+      }
+    }
+  }, 8_000);
 });
