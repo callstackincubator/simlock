@@ -99,7 +99,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     capacity: leaseEngine,
     config,
     doctor,
-    defaultRequesterId: options.defaultRequesterId ?? String(process.pid),
+    defaultRequesterId:
+      options.defaultRequesterId ?? process.env.PITLANE_AGENT_ID ?? String(process.pid),
     eventBus,
     host: new DaemonEndpointHost({
       connector: ipc,

@@ -31,6 +31,8 @@ export interface McpStdioEnvironment {
   readonly connect?: () => Promise<DaemonConnection>;
   readonly createServer?: (session: McpSession) => McpServer;
   readonly createTransport?: () => McpTransport;
+  /** Source for `PITLANE_AGENT_ID` when `requesterId` is not given explicitly. */
+  readonly env?: NodeJS.ProcessEnv;
   readonly requesterId?: string;
   readonly signals?: Signals;
   /** The stdio transport currently does not surface stdin EOF as onclose. */
@@ -57,9 +59,10 @@ export async function startMcpStdio(
   environment: McpStdioEnvironment = {},
 ): Promise<McpStdioRunner> {
   const defaults = defaultEnvironment();
+  const env = environment.env ?? process.env;
   const session = new McpSession({
     connect: environment.connect ?? defaults.connect,
-    requesterId: environment.requesterId ?? `mcp:${process.pid}`,
+    requesterId: environment.requesterId ?? env.PITLANE_AGENT_ID ?? `mcp:${process.pid}`,
   });
   const server = (environment.createServer ?? createMcpServer)(session);
   const transport = (environment.createTransport ?? defaults.createTransport)();

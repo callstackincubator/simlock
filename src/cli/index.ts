@@ -68,7 +68,17 @@ export interface CliEnvironment {
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
 }
 
-function defaultCliEnvironment(): CliEnvironment {
+/**
+ * Resolves the fallback requester identity from the environment: `PITLANE_AGENT_ID`
+ * when set, else a pid-derived value so callers that never configure a stable id
+ * keep today's behavior. The per-invocation `--agent-id` flag on `lease` (parsed at
+ * that command's own boundary) takes precedence over this default.
+ */
+export function fallbackRequesterId(env: NodeJS.ProcessEnv): string {
+  return env.PITLANE_AGENT_ID ?? String(process.pid);
+}
+
+function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
   const dataDirectory = join(homedir(), ".pitlane");
   const filesystem = new NodeFilesystem();
   const clock = new SystemClock();
@@ -91,7 +101,7 @@ function defaultCliEnvironment(): CliEnvironment {
       }),
     connectExisting: () => connectExistingDaemon(socketPath, ipc),
     now: () => clock.now(),
-    requesterId: String(process.pid),
+    requesterId: fallbackRequesterId(env),
     readConfigFile: async () => {
       if (!(await filesystem.exists(configPath))) return {};
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
@@ -188,6 +198,7 @@ export function parseDuration(value: string): number {
 async function runLease(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   if (argv[0] === "renew") return runRenew(argv.slice(1), environment);
   const values = commandArgs(argv, {
+    "agent-id": { type: "string" },
     "allow-download": { type: "boolean" },
     detach: { type: "boolean" },
     device: { type: "string" },
@@ -200,7 +211,9 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   });
   if (values.help) {
     environment.stdout.write(
-      "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n",
+      "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n" +
+        "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
+        "                     [--allow-download] [--json]\n",
     );
     return 0;
   }
@@ -208,6 +221,8 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     throw new UsageError("lease requires --platform <ios|android>");
   if (typeof values.device !== "string" || values.device === "")
     throw new UsageError("lease requires --device <model>");
+  if (values["agent-id"] === "") throw new UsageError("lease --agent-id must not be empty");
+  const requesterId = values["agent-id"] ?? environment.requesterId;
   const detached = values.detach ?? false;
   const timeoutMs = typeof values.timeout === "string" ? parseDuration(values.timeout) : undefined;
   const termination = detached ? undefined : waitForTermination(environment.signals);
@@ -220,7 +235,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
       allowDownload: values["allow-download"] ?? false,
       mode: detached ? "detached" : "held",
       noWait: values["no-wait"] ?? false,
-      requesterId: environment.requesterId,
+      requesterId,
       request: {
         model: values.device,
         ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
