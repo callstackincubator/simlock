@@ -129,6 +129,12 @@ Without `--ttl`, the new deadline uses the lease's own mode-aware default:
 (1h) for a held one — never the other mode's default. Exit 1 if the lease is
 unknown or already expired (error code `UNKNOWN_LEASE`).
 
+A holder that declared the `heartbeat` capability (today, the MCP frontend)
+slides its own deadline to now + `lease.heldTtlBackstopMs` on every
+heartbeat, so renewing such a lease to a deadline further out than that does
+not stick — the next heartbeat pulls it back in. Hand-renewal is for holders
+that do not heartbeat, which today means CLI held mode.
+
 ## `pitlane release <lease-id> | --all`
 
 Explicitly release a lease (primarily for detached mode or operator
