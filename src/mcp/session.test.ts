@@ -681,13 +681,166 @@ describe("McpSession", () => {
     grant.resolve(rawGrant);
     await lease;
   });
+
+  it("reconnects lazily after a daemon restart between two calls", async () => {
+    const connectionA = new StubConnection();
+    connectionA.responses.push({ platforms: [] });
+    const connectionB = new StubConnection();
+    connectionB.responses.push({ platforms: [] });
+    const connections = [connectionA, connectionB];
+    let connectCalls = 0;
+    const session = new McpSession({
+      connect: async () => {
+        connectCalls += 1;
+        return connections.shift()!;
+      },
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(session.listDevices({})).resolves.toEqual({ platforms: [] });
+    expect(connectCalls).toBe(1);
+
+    // The daemon restarts: the socket underneath the cached connection dies.
+    connectionA.emitClose();
+
+    await expect(session.listDevices({})).resolves.toEqual({ platforms: [] });
+    expect(connectCalls).toBe(2);
+    expect(connectionA.requests).toEqual([{ payload: {}, type: "catalog.get" }]);
+    expect(connectionB.requests).toEqual([{ payload: {}, type: "catalog.get" }]);
+  });
+
+  it("surfaces DAEMON_CONNECTION_LOST, without retrying, when the connection dies mid lease request", async () => {
+    const connection = new StubConnection();
+    const grant = deferred<unknown>();
+    connection.responses.push(grant.promise);
+    let connectCalls = 0;
+    const session = new McpSession({
+      connect: async () => {
+        connectCalls += 1;
+        return connection;
+      },
+      requesterId: "mcp-session-1",
+    });
+
+    const lease = session.lease(input);
+    await waitFor(() => connection.requests.length === 1);
+
+    // The socket dies while the daemon is still deciding on the lease request.
+    connection.emitClose();
+    grant.reject(new DaemonClientError("DAEMON_CONNECTION_LOST", "Daemon connection closed"));
+
+    await expect(lease).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
+    // A retry here could provision and grant a second device -- must never happen.
+    expect(connectCalls).toBe(1);
+    expect(connection.requests).toHaveLength(1);
+    expect(session.status()).toEqual({ held: false });
+  });
+
+  it("retries a read-only catalog.get once after the connection dies mid-request", async () => {
+    const connection = new StubConnection();
+    const firstResponse = deferred<unknown>();
+    connection.responses.push(firstResponse.promise);
+    connection.responses.push({ platforms: [] });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    const listing = session.listDevices({});
+    await waitFor(() => connection.requests.length === 1);
+    connection.emitClose();
+    firstResponse.reject(
+      new DaemonClientError("DAEMON_CONNECTION_LOST", "Daemon connection closed"),
+    );
+
+    await expect(listing).resolves.toEqual({ platforms: [] });
+    expect(connection.requests).toEqual([
+      { payload: {}, type: "catalog.get" },
+      { payload: {}, type: "catalog.get" },
+    ]);
+  });
+
+  it("forces a fresh connection on retry when DAEMON_CONNECTION_LOST arrives without #connection having been cleared yet", async () => {
+    // This pins the ordering IpcDaemonConnection.request() also rejects synchronously once it
+    // observes the transport already closed, which can race ahead of the underlying `onClose`
+    // propagating back to `#handleConnectionClosed`. `connectionA` here rejects the same way but
+    // deliberately never calls `emitClose()`, so `#connection` is still set to it when the retry
+    // runs -- the retry must not just hand back the same dead connection.
+    const connectionA = new StubConnection();
+    connectionA.responses.push(
+      new DaemonClientError("DAEMON_CONNECTION_LOST", "Daemon connection is closed"),
+    );
+    const connectionB = new StubConnection();
+    connectionB.responses.push({ platforms: [] });
+    const connections = [connectionA, connectionB];
+    let connectCalls = 0;
+    const session = new McpSession({
+      connect: async () => {
+        connectCalls += 1;
+        return connections.shift()!;
+      },
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(session.listDevices({})).resolves.toEqual({ platforms: [] });
+    expect(connectCalls).toBe(2);
+    expect(connectionA.requests).toEqual([{ payload: {}, type: "catalog.get" }]);
+    expect(connectionB.requests).toEqual([{ payload: {}, type: "catalog.get" }]);
+  });
+
+  it("clears an owned lease and notifies onLeaseLost when the connection dies across a restart", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+    expect(session.status()).toMatchObject({ held: true, lease_id: "lse_9f2c" });
+
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+
+    // A graceful stop or an ungraceful crash both release the held lease daemon-side (see
+    // DaemonServer#stop / the startup path's orphan sweep) -- the reconnect never asks.
+    connection.emitClose();
+
+    expect(notices).toEqual([
+      { deviceId: "ABCD", leaseId: "lse_9f2c", reason: "daemon-connection-lost" },
+    ]);
+    expect(session.status()).toEqual({ held: false });
+  });
+
+  it("surfaces DAEMON_UNAVAILABLE when reconnecting after a restart fails", async () => {
+    const connection = new StubConnection();
+    connection.responses.push({ platforms: [] });
+    let connectCalls = 0;
+    const session = new McpSession({
+      connect: async () => {
+        connectCalls += 1;
+        if (connectCalls === 1) return connection;
+        throw new Error("ECONNREFUSED");
+      },
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(session.listDevices({})).resolves.toEqual({ platforms: [] });
+    connection.emitClose();
+
+    await expect(session.listDevices({})).rejects.toMatchObject({
+      code: "DAEMON_UNAVAILABLE",
+    });
+    expect(connectCalls).toBe(2);
+  });
 });
 
 class StubConnection implements DaemonConnection {
   readonly requests: Array<{ readonly payload: unknown; readonly type: string }> = [];
   readonly responses: unknown[] = [];
   closeCalls = 0;
+  #closed = false;
   readonly #listeners = new Set<(kind: string, payload: unknown) => void>();
+  readonly #closeListeners = new Set<() => void>();
 
   async request(type: string, payload: unknown): Promise<unknown> {
     this.requests.push({ payload, type });
@@ -699,6 +852,18 @@ class StubConnection implements DaemonConnection {
   onPush(listener: (kind: string, payload: unknown) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  onClose(listener: () => void): () => void {
+    this.#closeListeners.add(listener);
+    return () => this.#closeListeners.delete(listener);
+  }
+
+  /** Simulates the socket dying under this connection (daemon restart/crash). */
+  emitClose(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const listener of this.#closeListeners) listener();
   }
 
   pushLeaseLost(payload: {
@@ -726,12 +891,19 @@ class StubConnection implements DaemonConnection {
   }
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+function deferred<T>(): {
+  promise: Promise<T>;
+  reject: (error: unknown) => void;
+  resolve: (value: T) => void;
+} {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  promise.catch(() => undefined);
+  return { promise, reject, resolve };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

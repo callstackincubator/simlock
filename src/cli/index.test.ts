@@ -701,6 +701,10 @@ class StubConnection implements DaemonConnection {
     return () => this.#listeners.delete(listener);
   }
 
+  onClose(): () => void {
+    return () => undefined;
+  }
+
   push(kind: string, payload: unknown): void {
     for (const listener of this.#listeners) {
       listener(kind, payload);

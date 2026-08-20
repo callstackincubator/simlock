@@ -38,7 +38,22 @@ MCP client ──spawns──> stdio MCP ┘                                    
   point the connection closes and releases the lease. Like the CLI, it relays
   the daemon's progress pushes for the in-flight `lease_simulator` request —
   as MCP `notifications/progress` instead of stderr JSON lines, and only when
-  the client supplied a progress token.
+  the client supplied a progress token. Unlike the CLI, this process outlives
+  any single daemon connection: `McpSession` does not cache a dead connection.
+  `DaemonConnection#onClose` (`src/daemon-client/protocol.ts`) tells the
+  session the moment its connection dies — from a graceful `daemon stop`, a
+  crash, or `kill -9` — and the next tool call reconnects lazily, auto-starting
+  the daemon exactly as the CLI does. A held lease never survives its
+  connection dying (the daemon releases it on graceful close, and
+  `StartupConverger` sweeps any orphaned lease from an ungraceful death at its
+  own startup — see "Lease subsystem boundaries and wiring" above), so the
+  session never asks the daemon whether its old lease survived; it clears
+  `#ownedLease` and fires `onLeaseLost` (reason
+  `daemon-connection-lost`) so the agent hears the fact instead of silently
+  reacquiring a device. A dead connection surfaces as typed
+  `DAEMON_CONNECTION_LOST` (mid-request) or `DAEMON_UNAVAILABLE` (a failed
+  reconnect), not the opaque `INTERNAL`; only idempotent, read-only requests
+  (`catalog.get`) retry once, never `lease.request`.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 

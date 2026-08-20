@@ -9,6 +9,7 @@ interface PendingRequest {
 
 export class IpcDaemonConnection implements DaemonConnection {
   readonly #listeners = new Set<(kind: string, payload: unknown) => void>();
+  readonly #closeListeners = new Set<() => void>();
   readonly #pending = new Map<number, PendingRequest>();
   #buffer = "";
   #nextId = 1;
@@ -17,12 +18,14 @@ export class IpcDaemonConnection implements DaemonConnection {
   constructor(private readonly connection: IpcConnection) {
     connection.onData((chunk) => this.#read(chunk));
     connection.onError((error) => this.#failPending(error));
-    connection.onClose(() => this.#failPending(new Error("Daemon connection closed")));
+    connection.onClose(() => this.#handleClosed());
   }
 
   request(type: string, payload: unknown): Promise<unknown> {
     if (this.#closed || this.connection.closed)
-      return Promise.reject(new Error("Daemon connection is closed"));
+      return Promise.reject(
+        new DaemonClientError("DAEMON_CONNECTION_LOST", "Daemon connection is closed"),
+      );
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { reject, resolve });
@@ -38,11 +41,23 @@ export class IpcDaemonConnection implements DaemonConnection {
     return () => this.#listeners.delete(listener);
   }
 
+  onClose(listener: () => void): () => void {
+    this.#closeListeners.add(listener);
+    return () => this.#closeListeners.delete(listener);
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
-    this.#closed = true;
-    this.#failPending(new Error("Daemon connection closed"));
+    this.#handleClosed();
     await this.connection.close();
+  }
+
+  /** Idempotent: fires at most once, whether triggered by the socket dying or by our own `close()`. */
+  #handleClosed(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#failPending(new DaemonClientError("DAEMON_CONNECTION_LOST", "Daemon connection closed"));
+    for (const listener of this.#closeListeners) listener();
   }
 
   #read(chunk: string): void {
