@@ -13,6 +13,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
 } from "../ports/index.js";
+import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { DaemonServer } from "./server.js";
 
@@ -50,7 +51,10 @@ describe("DaemonServer", () => {
     const harness = await createHarness();
     const holder = await createClient(harness.socketPath);
 
-    await holder.request("hello", { clientVersion: "test", protocolVersion: 1 });
+    await holder.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
@@ -86,7 +90,25 @@ describe("DaemonServer", () => {
 
     const wrongVersion = await createClient(harness.socketPath);
     await expect(
-      wrongVersion.request("hello", { clientVersion: "test", protocolVersion: 2 }),
+      wrongVersion.request("hello", {
+        clientVersion: "test",
+        protocolVersion: DAEMON_PROTOCOL_VERSION + 1,
+      }),
+    ).resolves.toMatchObject({
+      error: { code: "PROTOCOL_VERSION_MISMATCH" },
+      ok: false,
+    });
+  });
+
+  // Protocol 2 added the `heartbeat` capability and the sliding held-lease TTL that
+  // depends on it, and shipped without back-compat shims. Rejecting v1 is therefore a
+  // deliberate product decision, not just arithmetic on the current constant.
+  it("rejects a protocol v1 client outright rather than serving it without heartbeats", async () => {
+    const harness = await createHarness();
+    const legacy = await createClient(harness.socketPath);
+
+    await expect(
+      legacy.request("hello", { clientVersion: "test", protocolVersion: 1 }),
     ).resolves.toMatchObject({
       error: { code: "PROTOCOL_VERSION_MISMATCH" },
       ok: false,
@@ -210,7 +232,9 @@ describe("DaemonServer", () => {
     const client = await createClient(harness.socketPath);
 
     client.send('{"id":"hello","type":"hel');
-    client.send('lo","payload":{"clientVersion":"test","protocolVersion":1}}\n');
+    client.send(
+      `lo","payload":{"clientVersion":"test","protocolVersion":${DAEMON_PROTOCOL_VERSION}}}\n`,
+    );
     await expect(client.nextFrame((frame) => frame.id === "hello")).resolves.toMatchObject({
       ok: true,
     });
@@ -666,7 +690,6 @@ async function createHarness(
       listenerFactory: new NodeIpcTransport(),
     }),
     leases: engine,
-    protocolVersion: 1,
     queue: engine,
     reaper,
     registry,
@@ -749,7 +772,7 @@ async function hello(client: Client, capabilities?: Record<string, unknown>): Pr
   await expect(
     client.request("hello", {
       clientVersion: "test",
-      protocolVersion: 1,
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
       ...(capabilities === undefined ? {} : { capabilities }),
     }),
   ).resolves.toMatchObject({
