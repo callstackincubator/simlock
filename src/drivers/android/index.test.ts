@@ -354,6 +354,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      markWriteExpectation("emulator-5554", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
 
@@ -394,6 +395,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      markWriteExpectation("emulator-5554", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
 
@@ -514,7 +516,12 @@ describe("AndroidDriver", () => {
       processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
       processResult(
         binaries.adb,
-        ["-s", "emulator-5554", "shell", "getprop", "ro.boot.qemu.avd_name"],
+        [
+          "-s",
+          "emulator-5554",
+          "shell",
+          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+        ],
         "pitlane_running\n",
       ),
     ]);
@@ -568,6 +575,241 @@ describe("AndroidDriver", () => {
     expect(reality.devices).toEqual([
       expect.objectContaining({ deviceId: "pitlane_idle", runState: "stopped" }),
     ]);
+  });
+
+  it("rewrites the mark on makeReady's early-return branch without duplicating the config.ini line", async () => {
+    const filesystem = await androidFilesystem({ config: "hw.ramSize=2048\n" });
+    const clock = new FakeClock();
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      processResult(binaries.avdmanager, [
+        "create",
+        "avd",
+        "-n",
+        "pitlane_one",
+        "-k",
+        /.+/,
+        "-d",
+        "pixel_8",
+      ]),
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }),
+      markWriteExpectation("emulator-5554", "device-2"),
+      // Second makeReady call: `state.handle` is still set from the first call, so this takes
+      // the early-return branch -- it must still wait for readiness and rewrite the mark.
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "shell", "getprop", "sys.boot_completed"],
+        "1\n",
+      ),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
+        "",
+      ),
+      markWriteExpectation("emulator-5554", "device-3"),
+    ]);
+    const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
+    const spec = await driver.resolveSpec(
+      { model: "Pixel 8", osVersion: "34", platform: "android" },
+      { allowDownload: false },
+    );
+    const device = await driver.provision(spec);
+
+    await driver.makeReady(device);
+    await driver.makeReady(device);
+
+    const config = await filesystem.readFile(`${avdDirectory}/pitlane_one.avd/config.ini`);
+    expect(config.split(/\r?\n/).filter((line) => line.startsWith("pitlane.mark="))).toEqual([
+      "pitlane.mark=device-3",
+    ]);
+    expect(config).toContain("hw.ramSize=2048");
+  });
+
+  it("rewrites the mark on reclaim's snapshot-restore success path", async () => {
+    const harness = await provisionedHarness({ forBaselineReclaim: true });
+    await harness.driver.makeReady(harness.device);
+
+    await harness.driver.reclaim(harness.device, { clean: "standard" });
+
+    const config = await harness.filesystem.readFile(`${avdDirectory}/pitlane_one.avd/config.ini`);
+    expect(config).toContain("pitlane.mark=device-3");
+    expect(harness.runner.calls).toContainEqual(
+      expect.objectContaining({
+        args: markWriteExpectation("emulator-5554", "device-3").match.args,
+      }),
+    );
+  });
+
+  it("does not change the config hash when pitlane.mark is present in config.ini", async () => {
+    const withoutMark = await androidFilesystem({ config: "hw.ramSize=2048\n" });
+    const withMark = await androidFilesystem({
+      config: "hw.ramSize=2048\npitlane.mark=some-token\n",
+    });
+    const buildExpectations = (): ScriptedProcessExpectation[] => [
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      processResult(binaries.avdmanager, [
+        "create",
+        "avd",
+        "-n",
+        "pitlane_one",
+        "-k",
+        /.+/,
+        "-d",
+        "pixel_8",
+      ]),
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+    ];
+    const driverA = await createDriver(
+      withoutMark,
+      new ScriptedProcessRunner(buildExpectations()),
+      {
+        ids: ["one"],
+      },
+    );
+    const driverB = await createDriver(withMark, new ScriptedProcessRunner(buildExpectations()), {
+      ids: ["one"],
+    });
+    const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+    await driverA.resolveSpec(spec, { allowDownload: false });
+    await driverB.resolveSpec(spec, { allowDownload: false });
+
+    const deviceA = await driverA.provision(spec);
+    const deviceB = await driverB.provision(spec);
+
+    expect((deviceA.driverData as { configHash: string }).configHash).toBe(
+      (deviceB.driverData as { configHash: string }).configHash,
+    );
+  });
+
+  it("listManaged reports matching durable and erasable marks for a running device", async () => {
+    const filesystem = await androidFilesystem({
+      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+    });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
+      processResult(
+        binaries.adb,
+        [
+          "-s",
+          "emulator-5554",
+          "shell",
+          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+        ],
+        'pitlane_one\n{"token":"tok-123"}',
+      ),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    expect(device?.mark).toEqual({
+      durable: "tok-123",
+      erasable: "tok-123",
+      erasableReadable: true,
+    });
+  });
+
+  it("listManaged reports an erased running device when the erasable mark file is gone", async () => {
+    const filesystem = await androidFilesystem({
+      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+    });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
+      processResult(
+        binaries.adb,
+        [
+          "-s",
+          "emulator-5554",
+          "shell",
+          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+        ],
+        "pitlane_one\n",
+      ),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    expect(device?.mark).toEqual({
+      durable: "tok-123",
+      erasable: undefined,
+      erasableReadable: true,
+    });
+  });
+
+  it("keeps listManaged alive when a serial dies between the scan and the read", async () => {
+    const filesystem = await androidFilesystem({
+      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+    });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
+      {
+        match: {
+          args: [
+            "-s",
+            "emulator-5554",
+            "shell",
+            "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+          ],
+          command: binaries.adb,
+        },
+        result: { code: 1, stderr: "device 'emulator-5554' not found", stdout: "" },
+      },
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    // An emulator can vanish between `adb devices` and the read. Losing the whole
+    // reality view over one dead serial would strand every other managed device.
+    const reality = await driver.listManaged();
+
+    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    expect(device?.runState).toBe("transitioning");
+    // The durable half is a host file and stays readable; the erasable half genuinely
+    // was not read, so it must report unreadable rather than absent -- absent would
+    // classify as a foreign erase.
+    expect(device?.mark).toEqual({
+      durable: "tok-123",
+      erasable: undefined,
+      erasableReadable: false,
+    });
+  });
+
+  it("listManaged reports erasableReadable: false for a stopped, marked device", async () => {
+    const filesystem = await androidFilesystem({
+      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+    });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    expect(device?.mark).toEqual({
+      durable: "tok-123",
+      erasable: undefined,
+      erasableReadable: false,
+    });
+  });
+
+  it("listManaged reports no mark for a stopped, pre-existing AVD with no durable key (upgrade path)", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/pitlane_legacy.avd`);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_legacy");
+    expect(device?.mark).toBeUndefined();
   });
 });
 
@@ -640,16 +882,23 @@ async function provisionedHarness(
     processResult(binaries.adb, ["devices"], "List of devices attached\n"),
   ];
 
+  // The mock idGenerator's first call is spent on the AVD name above, so `makeReady`'s tail
+  // mark write is always the second call, and (when a snapshot-reclaim follows) the third.
+  const firstMarkToken = "device-2";
+  const secondMarkToken = "device-3";
+
   if (options.forReclaim === true) {
     expectations.push(
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]),
       ...baselineBuildExpectations({ launchArgs: ["-wipe-data", "-no-snapshot-load"] }),
+      markWriteExpectation("emulator-5554", firstMarkToken),
     );
   } else if (options.forFullCleanBoot === true) {
     expectations.push(
       processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]),
       ...baselineBuildExpectations({ launchArgs: ["-wipe-data", "-no-snapshot-load"] }),
+      markWriteExpectation("emulator-5554", firstMarkToken),
     );
   } else {
     expectations.push(
@@ -659,6 +908,9 @@ async function provisionedHarness(
         launchArgs: ["-no-snapshot-load"],
       }),
     );
+    if ((options.bootCompleted ?? "1\n").trim() === "1") {
+      expectations.push(markWriteExpectation("emulator-5554", firstMarkToken));
+    }
   }
 
   if (options.forBaselineReclaim === true) {
@@ -679,6 +931,7 @@ async function provisionedHarness(
         ["-s", "emulator-5554", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      markWriteExpectation("emulator-5554", secondMarkToken),
     );
   }
 
@@ -838,4 +1091,14 @@ function processResult(command: string, args: readonly (string | RegExp)[], stdo
     match: { args, command },
     result: { code: 0, stderr: "", stdout },
   };
+}
+
+/** The adb shell call `#writeErasableMark` makes as the second half of every mark write. */
+function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {
+  return processResult(binaries.adb, [
+    "-s",
+    serial,
+    "shell",
+    `echo '${JSON.stringify({ token })}' > /data/local/tmp/pitlane-mark.json`,
+  ]);
 }

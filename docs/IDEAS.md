@@ -45,12 +45,6 @@ A third driver (devicectl / adb-over-USB) where `provision` is a no-op and
 `reclaim` is uninstall-and-reset. Also the litmus test that the core/driver
 boundary held.
 
-## Foreign-usage detection
-
-Leases are advisory; detect when a managed device changes state without
-pitlane doing it (someone booted it via `simctl` directly) and emit an event /
-flag it in `status`.
-
 ## Clone-from-golden baseline option (iOS)
 
 `simctl clone` is as cheap as erase but preserves a *provisioned* baseline

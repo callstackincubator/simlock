@@ -8,6 +8,7 @@ import {
   DriverCrashError,
   type DriverReality,
   type ObservedDevice,
+  type ObservedMark,
   type ReclaimResult,
   RuntimeMissingError,
   UnknownModelError,
@@ -17,6 +18,7 @@ import type {
   Filesystem,
   IdGenerator,
   ProcessHandle,
+  ProcessResult,
   ProcessRunner,
 } from "../../ports/index.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
@@ -29,6 +31,8 @@ const PORT_POLL_INTERVAL_MS = 2_000;
 const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 const CLEAN_BASELINE = "pitlane_clean_baseline";
+const DURABLE_MARK_KEY = "pitlane.mark";
+const ERASABLE_MARK_PATH = "/data/local/tmp/pitlane-mark.json";
 
 export interface AndroidDriverOptions {
   readonly clock: Clock;
@@ -198,6 +202,11 @@ export class AndroidDriver implements Driver {
       const state = this.#stateFor(data);
       if (state.handle !== undefined) {
         await this.#waitForReadiness(data, this.#clock.now());
+        // The device was already running (or booting) under this driver instance -- reclaim
+        // never touched it, so its mark can't have gone stale. Re-mark anyway: this is the
+        // single readiness transition that lets a caller re-lease an already-ready device
+        // without ever seeing a moment where "ready" and "marked" disagree.
+        await this.#writeMark(data);
         return;
       }
 
@@ -232,6 +241,10 @@ export class AndroidDriver implements Driver {
         await this.#shutdown(data, state);
         await this.#startEmulator(data, state, ["-snapshot", CLEAN_BASELINE], true);
       }
+      // Covers all three boot paths above (wipe, snapshot restore, cold boot -- including the
+      // baseline-capture restart) with a single call: whichever path ran, the device is ready
+      // now and must be re-marked unconditionally.
+      await this.#writeMark(data);
     });
   }
 
@@ -244,6 +257,9 @@ export class AndroidDriver implements Driver {
       const state = this.#stateFor(data);
 
       if (options.clean === "full") {
+        // No mark write here: `-wipe-data` hasn't happened yet -- it's deferred to the next
+        // `makeReady` (`state.needsWipe`) -- so there is no post-erase moment on this path to
+        // mark. The next `makeReady` call covers it via its unconditional tail write.
         await this.#shutdown(data, state);
         state.needsWipe = true;
         state.snapshotExpected = false;
@@ -278,6 +294,10 @@ export class AndroidDriver implements Driver {
         return { state: "shutdown", strategy: "wipe" };
       }
       await this.#waitForReadiness(data, this.#clock.now());
+      // Snapshot restore reverts the erasable half of the mark to whatever it was at capture
+      // time, and this path returns "ready" directly without going through `makeReady` --
+      // skipping this write would leave the mark frozen at a stale generation forever.
+      await this.#writeMark(data);
       return { state: "ready", strategy: "snapshot" };
     });
   }
@@ -308,13 +328,30 @@ export class AndroidDriver implements Driver {
   async listManaged(): Promise<DriverReality> {
     const avdNames = await this.#listAvdNames();
     const { settledSerials, unattributableTransitionalSerial } = await this.#scanAdbSerials();
-    const { processes, runningByAvdName } = await this.#resolveRunningAvds(settledSerials);
+    const { processes, runningByAvdName, erasableMarkByAvdName, unreadableSerial } =
+      await this.#resolveRunningAvds(settledSerials);
+    const unattributable = unattributableTransitionalSerial || unreadableSerial;
 
-    const devices: ObservedDevice[] = avdNames.map((avdName) =>
-      observedAndroidDevice(avdName, runningByAvdName, unattributableTransitionalSerial),
+    const devices: ObservedDevice[] = await Promise.all(
+      avdNames.map((avdName) =>
+        this.#observedDevice(avdName, runningByAvdName, unattributable, erasableMarkByAvdName),
+      ),
     );
 
     return { devices, processes };
+  }
+
+  async #observedDevice(
+    avdName: string,
+    runningByAvdName: ReadonlySet<string>,
+    unattributableTransitionalSerial: boolean,
+    erasableMarkByAvdName: ReadonlyMap<string, string | undefined>,
+  ): Promise<ObservedDevice> {
+    const base = observedAndroidDevice(avdName, runningByAvdName, unattributableTransitionalSerial);
+    const running = runningByAvdName.has(avdName);
+    const durable = await this.#readDurableMark(avdName);
+    const mark = buildObservedMark(durable, running, erasableMarkByAvdName.get(avdName));
+    return mark === undefined ? base : { ...base, mark };
   }
 
   async #listAvdNames(): Promise<string[]> {
@@ -355,23 +392,44 @@ export class AndroidDriver implements Driver {
     return { settledSerials, unattributableTransitionalSerial };
   }
 
+  /**
+   * Reads the running AVD's name and its erasable mark in a single `adb shell` round trip
+   * per serial -- the mark read is folded into the `getprop` call that this method already
+   * makes, so it costs nothing extra.
+   */
   async #resolveRunningAvds(settledSerials: readonly string[]): Promise<{
+    readonly erasableMarkByAvdName: ReadonlyMap<string, string | undefined>;
     readonly processes: readonly DriverDevice[];
     readonly runningByAvdName: ReadonlySet<string>;
+    readonly unreadableSerial: boolean;
   }> {
     const processes: DriverDevice[] = [];
     const runningByAvdName = new Set<string>();
+    const erasableMarkByAvdName = new Map<string, string | undefined>();
+    let unreadableSerial = false;
     for (const candidate of settledSerials) {
-      const name = await this.#runOrThrow(this.#sdk.adb, [
+      // `adb shell` reports the exit status of the last command it ran, so a missing
+      // mark file would fail the whole invocation -- and a missing mark file is exactly
+      // the foreign-erase case this feature exists to detect. `|| true` keeps an absent
+      // mark an observation rather than a crash.
+      const output = await this.#adbShellOrUndefined([
         "-s",
         candidate,
         "shell",
-        "getprop",
-        "ro.boot.qemu.avd_name",
+        `getprop ro.boot.qemu.avd_name; cat ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
       ]);
-      const avdName = name.stdout.trim();
+      // An emulator can die between `adb devices` and this call. Losing the whole
+      // reality view over one dead serial would strand every other device, so treat it
+      // like a transitional serial: unattributable this tick, nothing concluded.
+      if (output === undefined) {
+        unreadableSerial = true;
+        continue;
+      }
+      const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
+      const avdName = nameLine.trim();
       if (!avdName.startsWith("pitlane_")) continue;
       runningByAvdName.add(avdName);
+      erasableMarkByAvdName.set(avdName, parseErasableMark(markLines.join("\n")));
       const port = Number(candidate.slice("emulator-".length));
       processes.push({
         deviceId: avdName,
@@ -384,7 +442,16 @@ export class AndroidDriver implements Driver {
         } satisfies AndroidDriverData,
       });
     }
-    return { processes, runningByAvdName };
+    return { erasableMarkByAvdName, processes, runningByAvdName, unreadableSerial };
+  }
+
+  /** Undefined when the serial could not be reached at all, as opposed to answering. */
+  async #adbShellOrUndefined(args: readonly string[]): Promise<ProcessResult | undefined> {
+    try {
+      return await this.#runOrThrow(this.#sdk.adb, args);
+    } catch {
+      return undefined;
+    }
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
@@ -504,9 +571,7 @@ export class AndroidDriver implements Driver {
 
   async #avdConfig(avdName: string): Promise<string> {
     try {
-      const contents = await this.#filesystem.readFile(
-        `${this.#avdDirectory}/${avdName}.avd/config.ini`,
-      );
+      const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
       return contents
         .split(/\r?\n/)
         .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
@@ -514,6 +579,67 @@ export class AndroidDriver implements Driver {
         .join("\n");
     } catch {
       return "";
+    }
+  }
+
+  #configIniPath(avdName: string): string {
+    return `${this.#avdDirectory}/${avdName}.avd/config.ini`;
+  }
+
+  /**
+   * Writes the same provenance token into both regions of the mark: the durable
+   * `pitlane.mark` key in `config.ini` (host-side, survives an erase) and the erasable
+   * `/data/local/tmp/pitlane-mark.json` file on the device (destroyed by an erase). Must be
+   * called after every readiness transition -- see the call sites in `makeReady` and
+   * `reclaim` for why "the tail of `makeReady`" alone is not sufficient.
+   */
+  async #writeMark(data: AndroidDriverData): Promise<void> {
+    const token = this.#idGenerator.generate();
+    await Promise.all([
+      this.#writeDurableMark(data.avdName, token),
+      this.#writeErasableMark(data.serial, token),
+    ]);
+  }
+
+  async #writeDurableMark(avdName: string, token: string): Promise<void> {
+    const path = this.#configIniPath(avdName);
+    let contents: string;
+    try {
+      contents = await this.#filesystem.readFile(path);
+    } catch {
+      contents = "";
+    }
+    const lines = contents === "" ? [] : contents.replace(/\r?\n$/, "").split(/\r?\n/);
+    const markLine = `${DURABLE_MARK_KEY}=${token}`;
+    const existingIndex = lines.findIndex((line) => line.startsWith(`${DURABLE_MARK_KEY}=`));
+    if (existingIndex >= 0) {
+      lines[existingIndex] = markLine;
+    } else {
+      lines.push(markLine);
+    }
+    await this.#filesystem.writeFileAtomic(path, `${lines.join("\n")}\n`);
+  }
+
+  async #writeErasableMark(serial: string, token: string): Promise<void> {
+    const payload = JSON.stringify({ token });
+    await this.#runOrThrow(this.#sdk.adb, [
+      "-s",
+      serial,
+      "shell",
+      `echo '${payload}' > ${ERASABLE_MARK_PATH}`,
+    ]);
+  }
+
+  async #readDurableMark(avdName: string): Promise<string | undefined> {
+    try {
+      const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
+      const line = contents
+        .split(/\r?\n/)
+        .find((entry) => entry.startsWith(`${DURABLE_MARK_KEY}=`));
+      const value = line?.slice(`${DURABLE_MARK_KEY}=`.length).trim();
+      return value === undefined || value === "" ? undefined : value;
+    } catch {
+      return undefined;
     }
   }
 
@@ -956,6 +1082,37 @@ function observedAndroidDevice(
         ? "transitioning"
         : "stopped",
   };
+}
+
+/**
+ * `undefined` (no `mark` at all) only when the durable key is absent *and* the device isn't
+ * running: that is the upgrade path for an AVD provisioned before marks existed, where the
+ * erasable half is also unreadable and can't corroborate either way. Reporting a half-empty
+ * mark there would read as tampering (`durable-mark-missing`) on every tick forever. Once the
+ * device is running with neither half present, a mark object is the correct, honest reading.
+ */
+function buildObservedMark(
+  durable: string | undefined,
+  running: boolean,
+  erasable: string | undefined,
+): ObservedMark | undefined {
+  if (durable === undefined && !running) {
+    return undefined;
+  }
+  return { durable, erasable: running ? erasable : undefined, erasableReadable: running };
+}
+
+function parseErasableMark(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { readonly token?: unknown };
+    return typeof parsed.token === "string" ? parsed.token : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function portsFromAdbDevices(output: string): number[] {
