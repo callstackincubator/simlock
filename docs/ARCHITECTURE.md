@@ -300,6 +300,35 @@ request multiplexing, `IpcDaemonConnector` performs the hello handshake, and
 or refused daemon. This keeps transport, detached-process logging, and startup
 policies replaceable without introducing an ambient dependency container.
 
+### Startup: claim first, converge after
+
+Reachability does not depend on startup recovery work. `DaemonServer#start`
+claims the socket (`DaemonEndpointHost#start`) before running `startDaemon`'s
+`converge` callback — `doctor.reconcile()` followed by
+`leaseEngine.convergeRunningCapacity()`, the two calls that shell out per
+driver/device and, since running-capacity convergence releases orphaned held
+leases and awaits the resulting device reclaim, can take tens of seconds. Two
+consequences follow from claiming first:
+
+- A second daemon racing to start now discovers `DaemonAlreadyRunningError`
+  from the claim itself, before it does any device work — not after, as when
+  convergence ran first.
+- `hello` and `status.get` answer immediately, `status.get` reporting
+  `health: "starting"` while convergence is in flight and `"running"` once it
+  resolves. Every other request type parks on the same readiness promise
+  `#awaitReady` awaits, and proceeds normally once convergence completes; no
+  request can observe half-converged state, and in particular no lease is
+  granted before convergence finishes. A slow startup becomes a slow response
+  instead of `DaemonStartupCoordinator`'s client-side timeout firing a false
+  failure for a daemon that was starting normally.
+
+If convergence itself throws, `start()` stops the daemon (closing the
+listener and any connections that raced in during convergence) rather than
+leaving it accepting connections it can never serve; parked requests reject
+with `DAEMON_STARTUP_FAILED` instead of hanging. Moving the underlying device
+reclaim off the startup path entirely — the remaining source of startup
+latency — is a deliberately separate, more invasive follow-up.
+
 Operational logging is a separate concern from the event bus: `pitlane events`
 carries business facts (lease granted, device cleaned up, …) in an in-memory
 ring buffer that resets on restart, while the `Logger` port writes durable,

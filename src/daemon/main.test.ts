@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FakeDriver } from "../core/index.js";
@@ -74,6 +75,72 @@ describe("startDaemon", () => {
   });
 });
 
+describe("startDaemon startup readiness", () => {
+  // Reproduces the issue #41 symptom end-to-end through the real startDaemon wiring:
+  // doctor.reconcile() shells out to driver.listManaged() per driver, which is where
+  // real convergence time is lost. Here it's held open on the FakeClock so the test
+  // can prove the socket answers hello/status.get ("starting"), parks lease.request,
+  // and only then converges -- without waiting on a real clock.
+  it("claims the socket and answers hello/status.get while doctor.reconcile is still in flight", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pitlane-main-slow-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const socketPath = join(directory, "daemon.sock");
+    const startPromise = startDaemon({
+      clock,
+      dataDirectory: directory,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock,
+          latencyMs: { listManaged: 30_000 },
+          platform: "ios",
+        }),
+      ],
+      filesystem: new MemoryFilesystem(),
+      socketPath,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions).then((daemon) => {
+      runningDaemons.push(daemon);
+      return daemon;
+    });
+
+    const client = await connectRetrying(socketPath);
+    try {
+      await client.request("hello", {
+        clientVersion: "test",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      const starting = await client.request("status.get", {});
+      expect(starting.payload).toMatchObject({ health: "starting" });
+
+      const parkedLease = client.request("lease.request", {
+        mode: "detached",
+        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      });
+      let leaseSettled = false;
+      void parkedLease.then(() => {
+        leaseSettled = true;
+      });
+      // Round-tripping another status.get proves the parked request was already
+      // dispatched (and is awaiting the readiness gate) without relying on a timer.
+      await client.request("status.get", {});
+      expect(leaseSettled).toBe(false);
+
+      clock.advance(30_000);
+      const daemon = await startPromise;
+      expect(daemon).toBeDefined();
+
+      await expect(parkedLease).resolves.toMatchObject({ ok: true });
+      const running = await client.request("status.get", {});
+      expect(running.payload).toMatchObject({ health: "running" });
+    } finally {
+      client.socket.end();
+    }
+  });
+});
+
 describe("discoverDrivers", () => {
   it("logs a skip when the Android SDK cannot be found, without throwing", async () => {
     const sink = new MemoryLogSink();
@@ -98,3 +165,61 @@ describe("discoverDrivers", () => {
     );
   });
 });
+
+interface MinimalClient {
+  readonly socket: import("node:net").Socket;
+  request(
+    type: string,
+    payload: unknown,
+  ): Promise<{ readonly ok: boolean; readonly payload?: unknown }>;
+}
+
+/** Minimal newline-delimited-JSON client, mirroring the real daemon protocol framing. */
+function connectClient(socketPath: string): Promise<MinimalClient> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(socketPath);
+    let buffer = "";
+    let nextId = 1;
+    const waiters = new Map<string, (frame: { ok: boolean; payload?: unknown }) => void>();
+    socket.once("connect", () => {
+      socket.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString("utf8");
+        for (;;) {
+          const newline = buffer.indexOf("\n");
+          if (newline < 0) break;
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (line.trim() === "") continue;
+          const frame = JSON.parse(line) as { id?: string; ok: boolean; payload?: unknown };
+          if (typeof frame.id === "string") {
+            waiters.get(frame.id)?.(frame);
+            waiters.delete(frame.id);
+          }
+        }
+      });
+      resolve({
+        socket,
+        request: (type, payload) =>
+          new Promise((resolveRequest) => {
+            const id = `req-${String(nextId)}`;
+            nextId += 1;
+            waiters.set(id, resolveRequest);
+            socket.write(`${JSON.stringify({ id, payload, type })}\n`);
+          }),
+      });
+    });
+    socket.once("error", reject);
+  });
+}
+
+async function connectRetrying(socketPath: string, timeoutMs = 2_000): Promise<MinimalClient> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return await connectClient(socketPath);
+    } catch (error: unknown) {
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+}
