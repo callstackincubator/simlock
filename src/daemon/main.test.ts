@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -96,5 +96,87 @@ describe("discoverDrivers", () => {
         module: "daemon.driver-discovery",
       }),
     );
+  });
+});
+
+describe("discoverDrivers with PITLANE_DRIVERS_MODULE", () => {
+  const previousModule = process.env.PITLANE_DRIVERS_MODULE;
+
+  afterEach(() => {
+    if (previousModule === undefined) {
+      delete process.env.PITLANE_DRIVERS_MODULE;
+    } else {
+      process.env.PITLANE_DRIVERS_MODULE = previousModule;
+    }
+  });
+
+  async function writeModule(contents: string): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), "pitlane-drivers-module-"));
+    temporaryDirectories.push(directory);
+    const modulePath = join(directory, "drivers.mjs");
+    await writeFile(modulePath, contents, "utf8");
+    return modulePath;
+  }
+
+  async function discover(sink: MemoryLogSink) {
+    const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
+    return discoverDrivers({
+      clock: new FakeClock(),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: new CryptoIdGenerator(),
+      logger,
+      processRunner: new ScriptedProcessRunner([]),
+    });
+  }
+
+  it("substitutes discovery with the module's createDrivers(context), logging the substitution", async () => {
+    process.env.PITLANE_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers(context) {
+         return [{ platform: "ios", fromModule: true, sawContext: typeof context.logger === "object" }];
+       }`,
+    );
+    const sink = new MemoryLogSink();
+
+    const drivers = await discover(sink);
+
+    expect(drivers).toEqual([{ platform: "ios", fromModule: true, sawContext: true }]);
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Substituting driver discovery via PITLANE_DRIVERS_MODULE",
+        module: "daemon.driver-discovery",
+      }),
+    );
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Loaded drivers from PITLANE_DRIVERS_MODULE",
+        module: "daemon.driver-discovery",
+        fields: expect.objectContaining({ count: 1 }),
+      }),
+    );
+  });
+
+  it("supports a synchronous createDrivers returning an array directly", async () => {
+    process.env.PITLANE_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers() { return []; }`,
+    );
+
+    await expect(discover(new MemoryLogSink())).resolves.toEqual([]);
+  });
+
+  it("fails loudly when the module has no createDrivers export", async () => {
+    process.env.PITLANE_DRIVERS_MODULE = await writeModule(`export const nope = 1;`);
+
+    await expect(discover(new MemoryLogSink())).rejects.toThrow(/createDrivers/);
+  });
+
+  it("fails loudly when the module cannot be imported", async () => {
+    process.env.PITLANE_DRIVERS_MODULE = join(
+      tmpdir(),
+      "pitlane-drivers-module-does-not-exist.mjs",
+    );
+
+    await expect(discover(new MemoryLogSink())).rejects.toThrow();
   });
 });

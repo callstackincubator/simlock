@@ -230,3 +230,30 @@ threshold, and the daemon's log level/rotation cap (`log.level`,
 `log.rotateBytes`). With no args, prints everything. Running capacity
 uses `limits.maxRunning` globally and `limits.<platform>.maxRunning` for each
 driver; both must have room before provisioning or booting a shutdown device.
+
+## Environment variables
+
+### `PITLANE_HOME`
+
+Overrides the data directory the CLI, MCP server, and daemon all use for
+`config.json`, `state.json`, `daemon.sock`, and `daemon.log`. Defaults to
+`~/.pitlane`. All three frontends resolve it through the same function
+(`resolvePitlaneHome` in `src/ports/paths.ts`), so setting it once in an
+agent's environment repoints every command at an isolated data directory —
+useful for running multiple independent pitlane instances on one machine, or
+for tests. When the CLI or MCP server auto-starts the daemon, the daemon
+process inherits the variable like the rest of the environment.
+
+### `PITLANE_DRIVERS_MODULE` (advanced / testing hook)
+
+Overrides driver discovery (`discoverDrivers` in `src/daemon/main.ts`) with a
+JavaScript module of your own instead of the real iOS/Android drivers. Point
+it at a file path; the daemon dynamically imports that module and calls its
+exported `createDrivers(context)` (the same `{ clock, filesystem,
+idGenerator, logger, processRunner }` context real discovery receives),
+which must return `Driver[]` (or a promise of it, matching
+`src/core/driver.ts`). This exists so tests — and anyone reproducing a bug
+without real hardware — can run the full daemon against a scripted driver
+instead of `simctl`/`adb`. It is not meant for production use: a module that
+fails to import, or does not export `createDrivers`, fails daemon startup
+loudly rather than silently falling back to real discovery.
