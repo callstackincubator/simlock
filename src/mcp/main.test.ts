@@ -66,6 +66,55 @@ describe("MCP stdio lifecycle", () => {
     await client.close();
   });
 
+  it("sources the requester id from PITLANE_AGENT_ID when none is given explicitly", async () => {
+    const connection = new LeaseConnection();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const runner = await startMcpStdio({
+      connect: async () => connection,
+      createTransport: () => serverTransport,
+      env: { PITLANE_AGENT_ID: "agent-from-env" },
+      signals: new FakeSignals(),
+    });
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await client.connect(clientTransport);
+    await client.request(
+      {
+        method: "tools/call",
+        params: { arguments: { device: "iPhone", platform: "ios" }, name: "lease_simulator" },
+      },
+      CallToolResultSchema,
+    );
+
+    expect(connection.lastRequesterId).toBe("agent-from-env");
+    await runner.shutdown();
+    await client.close();
+  });
+
+  it("prefers an explicit requesterId over PITLANE_AGENT_ID", async () => {
+    const connection = new LeaseConnection();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const runner = await startMcpStdio({
+      connect: async () => connection,
+      createTransport: () => serverTransport,
+      env: { PITLANE_AGENT_ID: "agent-from-env" },
+      requesterId: "explicit-agent",
+      signals: new FakeSignals(),
+    });
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await client.connect(clientTransport);
+    await client.request(
+      {
+        method: "tools/call",
+        params: { arguments: { device: "iPhone", platform: "ios" }, name: "lease_simulator" },
+      },
+      CallToolResultSchema,
+    );
+
+    expect(connection.lastRequesterId).toBe("explicit-agent");
+    await runner.shutdown();
+    await client.close();
+  });
+
   it("closes once when stdin reaches EOF", async () => {
     const transport = new FakeTransport();
     const server = new FakeServer();
@@ -156,13 +205,15 @@ class FakeSignals {
 
 class LeaseConnection implements DaemonConnection {
   closeCalls = 0;
+  lastRequesterId: unknown;
   async close(): Promise<void> {
     this.closeCalls += 1;
   }
   onPush(): () => void {
     return () => undefined;
   }
-  async request(): Promise<unknown> {
+  async request(_type: string, payload: unknown): Promise<unknown> {
+    this.lastRequesterId = (payload as { readonly requesterId?: unknown }).requesterId;
     return {
       device: {
         driverDeviceId: "SIM-1",

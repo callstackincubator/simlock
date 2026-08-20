@@ -3,6 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   leaseSimulatorInputSchema,
   leaseSimulatorOutputSchema,
+  leaseStatusInputSchema,
+  leaseStatusOutputSchema,
   listDevicesInputSchema,
   listDevicesOutputSchema,
   releaseSimulatorInputSchema,
@@ -14,7 +16,7 @@ const SERVER_INFO = { name: "pitlane", version: "1.0.0" };
 
 /** Creates the MCP tool surface for one lease-owning session. */
 export function createMcpServer(session: McpSession): McpServer {
-  const server = new McpServer(SERVER_INFO);
+  const server = new McpServer(SERVER_INFO, { capabilities: { logging: {} } });
 
   server.registerTool(
     "lease_simulator",
@@ -72,6 +74,37 @@ export function createMcpServer(session: McpSession): McpServer {
       }
     },
   );
+
+  server.registerTool(
+    "lease_status",
+    {
+      title: "Lease status",
+      description:
+        "Report this MCP session's current lease, or an explicit no-lease result if it holds nothing. Read-only, small, and safe to call repeatedly (e.g. after a context compaction).",
+      inputSchema: leaseStatusInputSchema,
+      outputSchema: leaseStatusOutputSchema,
+    },
+    () => {
+      try {
+        return success(session.status());
+      } catch (error: unknown) {
+        return failure(error);
+      }
+    },
+  );
+
+  session.onLeaseLost((notice) => {
+    void server.server.sendLoggingMessage({
+      data: {
+        device_id: notice.deviceId,
+        lease_id: notice.leaseId,
+        message: "Pitlane lease ended; this session no longer holds the device.",
+        reason: notice.reason,
+      },
+      level: "warning",
+      logger: "pitlane",
+    });
+  });
 
   return server;
 }

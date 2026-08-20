@@ -1,11 +1,16 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CallToolResultSchema, ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolResultSchema,
+  ListToolsResultSchema,
+  LoggingMessageNotificationSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 import {
   leaseSimulatorOutputSchema,
+  leaseStatusOutputSchema,
   listDevicesOutputSchema,
   releaseSimulatorOutputSchema,
 } from "./contracts.js";
@@ -38,7 +43,7 @@ const catalog = {
 };
 
 describe("MCP server", () => {
-  it("advertises exactly the lease and catalog tools and returns dual schema-valid results", async () => {
+  it("advertises exactly the lease, catalog, and status tools and returns dual schema-valid results", async () => {
     const connection = new StubConnection([grant, catalog, { leaseId: "lease-1" }]);
     const { client, close } = await connectedServer(connection);
     try {
@@ -47,6 +52,7 @@ describe("MCP server", () => {
         "lease_simulator",
         "list_devices",
         "release_simulator",
+        "lease_status",
       ]);
       for (const tool of listed.tools) {
         expect(tool.title).toEqual(expect.any(String));
@@ -54,6 +60,11 @@ describe("MCP server", () => {
         expect(tool.inputSchema).toEqual(expect.any(Object));
         expect(tool.outputSchema).toEqual(expect.any(Object));
       }
+
+      const noLease = await call(client, "lease_status", {});
+      expect(noLease.isError).not.toBe(true);
+      leaseStatusOutputSchema.parse(noLease.structuredContent);
+      expect(noLease.structuredContent).toEqual({ held: false });
 
       const lease = await call(client, "lease_simulator", {
         device: "iPhone 17 Pro",
@@ -79,11 +90,71 @@ describe("MCP server", () => {
       });
       expect(JSON.parse(text(devices))).toEqual(devices.structuredContent);
 
+      const held = await call(client, "lease_status", {});
+      expect(held.isError).not.toBe(true);
+      leaseStatusOutputSchema.parse(held.structuredContent);
+      expect(held.structuredContent).toEqual({
+        device: "iPhone 17 Pro",
+        device_id: "SIM-1",
+        expires_at_ms: 12_345,
+        held: true,
+        lease_id: "lease-1",
+        os: "26.5",
+        platform: "ios",
+        state: "leased",
+      });
+
       const release = await call(client, "release_simulator", { lease_id: "lease-1" });
       expect(release.isError).not.toBe(true);
       releaseSimulatorOutputSchema.parse(release.structuredContent);
       expect(release.structuredContent).toEqual({ lease_id: "lease-1", released: true });
       expect(JSON.parse(text(release))).toEqual(release.structuredContent);
+
+      const afterRelease = await call(client, "lease_status", {});
+      expect(afterRelease.structuredContent).toEqual({ held: false });
+    } finally {
+      await close();
+    }
+  });
+
+  it("relays a daemon lease-lost push as an MCP logging notification and forgets the lease", async () => {
+    const connection = new StubConnection([grant]);
+    const { client, close, session } = await connectedServer(connection);
+    try {
+      const notifications: unknown[] = [];
+      client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
+        notifications.push(notification.params);
+      });
+
+      const lease = await call(client, "lease_simulator", {
+        device: "iPhone 17 Pro",
+        platform: "ios",
+      });
+      expect(lease.isError).not.toBe(true);
+
+      connection.pushLeaseLost({ deviceId: "SIM-1", leaseId: "lease-1", reason: "expired" });
+      await expect
+        .poll(() => notifications)
+        .toEqual([
+          {
+            data: {
+              device_id: "SIM-1",
+              lease_id: "lease-1",
+              message: "Pitlane lease ended; this session no longer holds the device.",
+              reason: "expired",
+            },
+            level: "warning",
+            logger: "pitlane",
+          },
+        ]);
+
+      expect(session.status()).toEqual({ held: false });
+      const releaseAfterLost = await call(client, "release_simulator", { lease_id: "lease-1" });
+      expect(releaseAfterLost.isError).toBe(true);
+      expect(JSON.parse(text(releaseAfterLost))).toEqual({
+        code: "LEASE_NOT_OWNED",
+        message: "This session does not own that lease",
+      });
     } finally {
       await close();
     }
@@ -156,6 +227,7 @@ async function connectedServer(connection: StubConnection) {
     close: async () => {
       await Promise.all([client.close(), server.close(), session.close()]);
     },
+    session,
   };
 }
 
@@ -175,12 +247,21 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 class StubConnection implements DaemonConnection {
   closeCalls = 0;
   readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
+  readonly #listeners = new Set<(kind: string, payload: unknown) => void>();
   constructor(private readonly responses: unknown[]) {}
   async close(): Promise<void> {
     this.closeCalls += 1;
   }
-  onPush(): () => void {
-    return () => undefined;
+  onPush(listener: (kind: string, payload: unknown) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+  pushLeaseLost(payload: {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly reason: string;
+  }): void {
+    for (const listener of this.#listeners) listener("lease-lost", payload);
   }
   async request(type: string, payload: unknown): Promise<unknown> {
     this.calls.push({ payload, type });

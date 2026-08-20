@@ -78,7 +78,10 @@ Configure an MCP client to spawn it with this generic configuration:
   "mcpServers": {
     "pitlane": {
       "command": "pitlane",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "PITLANE_AGENT_ID": "agent-1"
+      }
     }
   }
 }
@@ -87,7 +90,15 @@ Configure an MCP client to spawn it with this generic configuration:
 GUI-launched MCP clients may not inherit your shell `PATH`; in that case,
 replace `pitlane` with its absolute path.
 
-The server provides exactly three tools:
+`PITLANE_AGENT_ID` sets this server's stable requester identity — Pitlane
+allows at most one active lease per identity, so **give each agent session a
+distinct, stable id** (falling back to a pid-derived value otherwise, which
+does not survive a process restart). This is also the id shown as the
+requester in `pitlane status` / `pitlane list --leases`; see
+[docs/CLI.md](docs/CLI.md#agent-identity) for the full precedence, including
+the CLI's `--agent-id` flag.
+
+The server provides exactly four tools:
 
 - `list_devices` returns, per available platform, the resolvable device
   models, the runtimes / system images already installed, and which
@@ -102,13 +113,28 @@ The server provides exactly three tools:
   before a missing runtime or system image may be downloaded.
 - `release_simulator` requires the `lease_id` returned by the lease tool and
   releases only that MCP session's lease.
+- `lease_status` is read-only and takes no input. It reports this session's
+  current lease (`lease_id`, `device`, `os`, `platform`, `device_id`,
+  `expires_at_ms`, `state`), or `{ "held": false }` if the session holds
+  nothing. It is cheap, local, and safe to call repeatedly — e.g. after a
+  context compaction, to check whether a device is still held.
 
-All three tools return structured results as well as JSON text content, so
+All four tools return structured results as well as JSON text content, so
 MCP clients can reliably consume the device catalog, leased device details,
-or release confirmation. An MCP lease is held by the server process's daemon
-connection: release it explicitly when work is done; it is also released
-when that MCP process disconnects. Run one MCP server process per agent
-session.
+release confirmation, or status. An MCP lease is held by the server process's
+daemon connection: release it explicitly when work is done; it is also
+released when that MCP process disconnects. Run one MCP server process per
+agent session, each with its own `PITLANE_AGENT_ID`.
+
+If a held lease ends elsewhere — it expires, or is force-released by
+`pitlane release --all`, `pitlane nuke`, or doctor expiry — the daemon pushes
+a lease-ended fact to this session, which forgets that lease and relays it to
+the MCP client as a `notifications/message` logging notification (level
+`warning`, `logger: "pitlane"`) carrying `lease_id`, `device_id`, and
+`reason`. A well-behaved agent should treat this as "the device is gone" and
+call `lease_simulator` again rather than keep operating on it; a subsequent
+`release_simulator` for that lease id fails with `LEASE_NOT_OWNED` instead of
+succeeding.
 
 ## Configuration
 
