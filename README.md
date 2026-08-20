@@ -78,7 +78,10 @@ Configure an MCP client to spawn it with this generic configuration:
   "mcpServers": {
     "pitlane": {
       "command": "pitlane",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "env": {
+        "PITLANE_AGENT_ID": "agent-1"
+      }
     }
   }
 }
@@ -86,6 +89,14 @@ Configure an MCP client to spawn it with this generic configuration:
 
 GUI-launched MCP clients may not inherit your shell `PATH`; in that case,
 replace `pitlane` with its absolute path.
+
+`PITLANE_AGENT_ID` sets this server's stable requester identity — Pitlane
+allows at most one active lease per identity, so **give each agent session a
+distinct, stable id** (falling back to a pid-derived value otherwise, which
+does not survive a process restart). This is also the id shown as the
+requester in `pitlane status` / `pitlane list --leases`; see
+[docs/CLI.md](docs/CLI.md#agent-identity) for the full precedence, including
+the CLI's `--agent-id` flag.
 
 The server provides exactly three tools:
 
@@ -106,7 +117,8 @@ All three tools return structured results as well as JSON text content, so
 MCP clients can reliably consume the leased device details, release
 confirmation, or status. An MCP lease is held by the server process's daemon
 connection: release it explicitly when work is done; it is also released when
-that MCP process disconnects. Run one MCP server process per agent session.
+that MCP process disconnects. Run one MCP server process per agent session,
+each with its own `PITLANE_AGENT_ID`.
 
 If a held lease ends elsewhere — it expires, or is force-released by
 `pitlane release --all`, `pitlane nuke`, or doctor expiry — the daemon pushes
