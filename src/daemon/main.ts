@@ -97,9 +97,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   await leaseEngine.convergeRunningCapacity();
   const daemon = new DaemonServer({
     capacity: leaseEngine,
+    catalog: leaseEngine,
     config,
     doctor,
-    defaultRequesterId: options.defaultRequesterId ?? String(process.pid),
+    defaultRequesterId:
+      options.defaultRequesterId ?? process.env.PITLANE_AGENT_ID ?? String(process.pid),
     eventBus,
     host: new DaemonEndpointHost({
       connector: ipc,

@@ -315,12 +315,180 @@ describe("McpSession", () => {
       code: "LEASE_NOT_OWNED",
     });
   });
+
+  it("maps the daemon catalog to snake_case tool output", async () => {
+    const connection = new StubConnection();
+    connection.responses.push({
+      platforms: [
+        {
+          defaultRuntime: "26.5",
+          models: ["iPhone 16"],
+          platform: "ios",
+          runtimes: ["18.4", "26.5"],
+        },
+        { defaultRuntime: undefined, models: ["Pixel 8"], platform: "android", runtimes: [] },
+      ],
+    });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(session.listDevices({})).resolves.toEqual({
+      platforms: [
+        {
+          default_runtime: "26.5",
+          models: ["iPhone 16"],
+          platform: "ios",
+          runtimes: ["18.4", "26.5"],
+        },
+        { default_runtime: undefined, models: ["Pixel 8"], platform: "android", runtimes: [] },
+      ],
+    });
+    expect(connection.requests).toEqual([{ payload: {}, type: "catalog.get" }]);
+  });
+
+  it("forwards the platform filter without leasing or releasing anything", async () => {
+    const connection = new StubConnection();
+    connection.responses.push({ platforms: [] });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(session.listDevices({ platform: "android" })).resolves.toEqual({ platforms: [] });
+    expect(connection.requests).toEqual([
+      { payload: { platform: "android" }, type: "catalog.get" },
+    ]);
+  });
+
+  it("rejects listDevices after the session is closed without contacting the daemon", async () => {
+    const connection = new StubConnection();
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.close();
+
+    await expect(session.listDevices({})).rejects.toMatchObject({ code: "SESSION_CLOSED" });
+    expect(connection.requests).toEqual([]);
+  });
+
+  it("reports no lease held until a lease is granted, and the held lease's details after", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant, { leaseId: "lse_9f2c" });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    expect(session.status()).toEqual({ held: false });
+
+    await session.lease(input);
+    expect(session.status()).toEqual({
+      device: "iPhone 17 Pro",
+      device_id: "ABCD",
+      expires_at_ms: 61_000,
+      held: true,
+      lease_id: "lse_9f2c",
+      os: "26.5",
+      platform: "ios",
+      state: "leased",
+    });
+
+    await session.release({ lease_id: "lse_9f2c" });
+    expect(session.status()).toEqual({ held: false });
+  });
+
+  it("throws when status is queried on a closed session", async () => {
+    const connection = new StubConnection();
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.close();
+    expect(() => session.status()).toThrowError(
+      expect.objectContaining({ code: "SESSION_CLOSED" }),
+    );
+  });
+
+  it("clears ownership and notifies listeners when the daemon pushes a lease-lost fact", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    connection.pushLeaseLost({ deviceId: "ABCD", leaseId: "lse_9f2c", reason: "expired" });
+
+    expect(session.status()).toEqual({ held: false });
+    expect(notices).toEqual([{ deviceId: "ABCD", leaseId: "lse_9f2c", reason: "expired" }]);
+    await expect(session.release({ lease_id: "lse_9f2c" })).rejects.toMatchObject({
+      code: "LEASE_NOT_OWNED",
+    });
+  });
+
+  it("ignores a lease-lost push for a lease id this session does not currently own", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    connection.pushLeaseLost({ deviceId: "other", leaseId: "some-other-lease", reason: "killed" });
+
+    expect(notices).toEqual([]);
+    expect(session.status()).toMatchObject({ held: true, lease_id: "lse_9f2c" });
+  });
+
+  it("ignores malformed lease-lost pushes without throwing", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    expect(() => connection.pushLeaseLost({} as never)).not.toThrow();
+
+    expect(notices).toEqual([]);
+    expect(session.status()).toMatchObject({ held: true, lease_id: "lse_9f2c" });
+  });
+
+  it("ignores a lease-lost push that arrives for a lease this session already released itself", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant, { leaseId: "lse_9f2c" });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+    await session.release({ lease_id: "lse_9f2c" });
+
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    // The daemon suppresses this in practice (issue #15), but the client stays
+    // defensive: a stale push for an id this session no longer owns is a no-op.
+    connection.pushLeaseLost({ deviceId: "ABCD", leaseId: "lse_9f2c", reason: "expired" });
+    expect(notices).toEqual([]);
+  });
 });
 
 class StubConnection implements DaemonConnection {
   readonly requests: Array<{ readonly payload: unknown; readonly type: string }> = [];
   readonly responses: unknown[] = [];
   closeCalls = 0;
+  readonly #listeners = new Set<(kind: string, payload: unknown) => void>();
 
   async request(type: string, payload: unknown): Promise<unknown> {
     this.requests.push({ payload, type });
@@ -329,8 +497,17 @@ class StubConnection implements DaemonConnection {
     return response instanceof Promise ? response : response;
   }
 
-  onPush(): () => void {
-    return () => undefined;
+  onPush(listener: (kind: string, payload: unknown) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  pushLeaseLost(payload: {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly reason: string;
+  }): void {
+    for (const listener of this.#listeners) listener("lease-lost", payload);
   }
 
   async close(): Promise<void> {

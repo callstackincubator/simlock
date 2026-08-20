@@ -3,12 +3,13 @@
 Part of the user manual: every command the pitlane CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
-agents are the primary audience. `status` and `daemon <start|stop|status|logs>`
-are the exception: they default to a human-oriented view for interactive/
-operator use and accept `--json` to switch to the structured form. Every
-other command's output is already unconditionally JSON, so passing `--json`
-to it is a usage error (exit 2) rather than a silent no-op. `pitlane mcp`
-reserves stdout for MCP JSON-RPC framing and accepts no flags at all.
+agents are the primary audience. `status`, `catalog`, and
+`daemon <start|stop|status|logs>` are the exception: they default to a
+human-oriented view for interactive/operator use and accept `--json` to
+switch to the structured form. Every other command's output is already
+unconditionally JSON, so passing `--json` to it is a usage error (exit 2)
+rather than a silent no-op. `pitlane mcp` reserves stdout for MCP JSON-RPC
+framing and accepts no flags at all.
 
 On failure, every command writes one structured line to stderr:
 
@@ -18,7 +19,11 @@ On failure, every command writes one structured line to stderr:
 
 `code` is the daemon's own error code where the failure came from the
 daemon, or a stable CLI-level code otherwise: `USAGE` for bad flags/missing
-arguments/unknown commands, `INTERNAL` for anything unexpected.
+arguments/unknown commands, `INTERNAL` for anything unexpected. An unknown
+command or a missing required argument gets a `message` that ends with a
+pointer to `pitlane --help`, so a human hitting one from a terminal isn't
+stranded with only a JSON blob — the full command banner itself is no
+longer dumped to stderr on every failure, only on request via `--help`.
 
 ## Global exit codes
 
@@ -43,6 +48,26 @@ the structured stderr line still reports the specific code.
 
 ---
 
+## Agent identity
+
+Leases are keyed by requester: at most one active lease (held or detached)
+per agent id, enforced by the daemon. Give each agent session a **stable**
+id so this actually constrains anything — a fresh id on every CLI invocation
+(the default) makes the constraint a no-op, since every invocation looks
+like a different requester.
+
+Resolution order, first match wins:
+
+1. `--agent-id <id>` on `pitlane lease`.
+2. the `PITLANE_AGENT_ID` environment variable.
+3. a pid-derived value (today's behavior; not stable across invocations).
+
+Reuse the same id across an agent's own invocations (e.g. export
+`PITLANE_AGENT_ID` once per agent session) and use a distinct id per agent so
+they don't collide with each other. The id shows up as the requester in
+`pitlane status` and `pitlane list --leases`, so an operator can tell which
+agent holds what.
+
 ## `pitlane lease`
 
 Acquire a device. Blocks while waiting for capacity, then while provisioning
@@ -50,12 +75,15 @@ and booting, then — in held mode — keeps running to hold the lease.
 
 ```
 pitlane lease --platform <ios|android> --device <model> [--os <version>]
-              [--timeout <duration>] [--no-wait] [--detach]
+              [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
               [--allow-download]
 ```
 
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
   already installed for that platform.
+- `--agent-id` — this invocation's requester identity; see
+  [Agent identity](#agent-identity). Defaults to `PITLANE_AGENT_ID`, then a
+  pid-derived value.
 - `--timeout` — max time to wait in the queue (exit 10 on expiry).
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
@@ -105,7 +133,17 @@ unless `--yes`.
 Start Pitlane's local stdio MCP server. It accepts no flags. Standard output
 is reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The
 server auto-starts the daemon when needed and exposes the focused
-`lease_simulator` and `release_simulator` tool surface for one agent session.
+`list_devices`, `lease_simulator`, `release_simulator`, and `lease_status`
+tool surface for one agent session. If that session's held lease ends
+elsewhere (expiry or a force-release), the server relays it as an MCP logging
+notification. See [../README.md](../README.md#mcp-integration-optional) for
+details.
+
+The requester identity for leases made through this server is
+`PITLANE_AGENT_ID`, falling back to a pid-derived value — see
+[Agent identity](#agent-identity). Set a distinct `PITLANE_AGENT_ID` per MCP
+server process (one per agent session) so the one-lease-per-agent rule is
+meaningful.
 
 ## `pitlane status`
 
@@ -115,15 +153,35 @@ visible as busy running capacity and never contribute to warm inventory.
 
 Human-oriented overview: daemon health, managed capacity (used/limit per
 platform), running and reserved capacity (globally and per platform), every
-managed device with its state, current leases (who, since when), and queue
-depth. `--json` for the structured equivalent. `overLimit` is true when a
-lowered limit cannot yet be met, for example because active leases consume
-all running slots.
+managed device with its state, current leases (who — the agent id, see
+[Agent identity](#agent-identity) — since when), and queue depth. `--json`
+for the structured equivalent. `overLimit` is true when a lowered limit
+cannot yet be met, for example because active leases consume all running
+slots.
 
 ## `pitlane list [--devices|--leases|--rules]`
 
 Scriptable listings of managed devices, active leases, or registered cleanup
-rules. Defaults to `--devices`.
+rules. Defaults to `--devices`. Each lease record's `requesterId` is the
+agent id (see [Agent identity](#agent-identity)) that holds it.
+
+## `pitlane catalog [--platform <ios|android>] [--json]`
+
+Lists what can actually be leased, so an agent can pick a valid `--device`
+and `--os` without a failed round trip through `lease`. For each available
+platform: the resolvable device models, the runtimes / system images already
+installed, and which installed runtime is the default (the newest). A
+platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
+non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
+command. `--platform` narrows to one platform. Read-only: this never
+downloads a runtime or system image.
+
+Human-oriented by default (platform/model/runtime lines); `--json` for the
+structured equivalent:
+
+```json
+{"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone 16"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5"}]}
+```
 
 ## `pitlane cleanup [--dry-run] [--rule <name>]`
 

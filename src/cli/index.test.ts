@@ -20,6 +20,7 @@ import { connectExistingDaemon } from "../daemon-client/client.js";
 import {
   DaemonClientError,
   errorExitCode,
+  fallbackRequesterId,
   parseDuration,
   runCli,
   type CliEnvironment,
@@ -99,6 +100,11 @@ describe("CLI boundary", () => {
     expect(parseDuration("90s")).toBe(90_000);
     expect(parseDuration("10m")).toBe(600_000);
     expect(parseDuration("250")).toBe(250);
+  });
+
+  it("resolves the fallback requester id from PITLANE_AGENT_ID, else the process pid", () => {
+    expect(fallbackRequesterId({ PITLANE_AGENT_ID: "agent-from-env" })).toBe("agent-from-env");
+    expect(fallbackRequesterId({})).toBe(String(process.pid));
   });
 
   it("reports missing lease arguments as a structured USAGE error", async () => {
@@ -241,6 +247,40 @@ describe("CLI boundary", () => {
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
   });
 
+  it("reports a post-signal release failure as a structured stderr line, not prose", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_release_fail", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    connection.response("lease.release", new Error("release failed"));
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    signals.emit("SIGTERM");
+
+    await expect(run).resolves.toBe(0);
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "INTERNAL", message: "release failed" },
+    });
+  });
+
   it("flagship e2e: queues a second CLI holder until the first connection drops", async () => {
     const harness = await createHarness();
     const first = outputCapture();
@@ -286,6 +326,161 @@ describe("CLI boundary", () => {
         .split("\n")
         .map((line) => JSON.parse(line)),
     ).toEqual([{ event: "queued", queue_position: 1 }]);
+  });
+
+  it("--agent-id overrides the environment's fallback requester id", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_1", mode: "detached", ttlDeadline: 1_000 },
+      timing: {
+        estimatedBootMs: 1,
+        estimatedProvisionMs: 1,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 2,
+      },
+    });
+
+    await expect(
+      runCli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 17 Pro",
+          "--detach",
+          "--agent-id",
+          "agent-x",
+        ],
+        output.environmentWith({ connect: async () => connection, requesterId: "fallback-id" }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(connection.calls).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ requesterId: "agent-x" }),
+        type: "lease.request",
+      }),
+    ]);
+  });
+
+  it("falls back to the environment's requester id when --agent-id is omitted", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_1", mode: "detached", ttlDeadline: 1_000 },
+      timing: {
+        estimatedBootMs: 1,
+        estimatedProvisionMs: 1,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 2,
+      },
+    });
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+        output.environmentWith({ connect: async () => connection, requesterId: "fallback-id" }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(connection.calls).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ requesterId: "fallback-id" }),
+        type: "lease.request",
+      }),
+    ]);
+  });
+
+  it("rejects an empty --agent-id as a usage error", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--agent-id", ""],
+        output.environment,
+      ),
+    ).resolves.toBe(2);
+    expect(output.stderr).toContain("--agent-id");
+  });
+
+  it("enforces one lease per --agent-id: same id collides, distinct ids do not", async () => {
+    const harness = await createHarness();
+    const first = outputCapture();
+
+    await expect(
+      runCli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16",
+          "--detach",
+          "--agent-id",
+          "dup-agent",
+        ],
+        first.environmentWith({
+          connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    const second = outputCapture();
+    await expect(
+      runCli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16",
+          "--detach",
+          "--agent-id",
+          "dup-agent",
+        ],
+        second.environmentWith({
+          connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
+        }),
+      ),
+    ).resolves.toBe(13);
+    expect(second.stderr).toContain("dup-agent");
+    expect(second.stderr).toContain("already");
+    expect(JSON.parse(second.stderr)).toMatchObject({
+      error: { code: "REQUESTER_ALREADY_LEASED" },
+    });
+
+    const third = outputCapture();
+    await expect(
+      runCli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 16",
+          "--detach",
+          "--agent-id",
+          "other-agent",
+          "--no-wait",
+        ],
+        third.environmentWith({
+          connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
+        }),
+      ),
+    ).resolves.toBe(11);
+    expect(third.stderr).not.toContain("already");
   });
 
   it("prints a detached token, exits, and renews it", async () => {
@@ -384,6 +579,74 @@ describe("CLI boundary", () => {
     expect(output.stdout).toContain("Running global: 1 + 1 reserved/3, warm 1");
     expect(output.stdout).toContain("Capacity ios: managed 3/4, running 1 + 1 reserved/2, warm 1");
   });
+
+  it("requests the full device catalog and prints it as JSON", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("catalog.get", {
+      platforms: [
+        { defaultRuntime: "26.5", models: ["iPhone 16"], platform: "ios", runtimes: ["26.5"] },
+      ],
+    });
+
+    await expect(
+      runCli(["catalog", "--json"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({ payload: {}, type: "catalog.get" });
+    expect(JSON.parse(output.stdout)).toEqual({
+      platforms: [
+        { defaultRuntime: "26.5", models: ["iPhone 16"], platform: "ios", runtimes: ["26.5"] },
+      ],
+    });
+  });
+
+  it("narrows the catalog request to the requested platform", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("catalog.get", { platforms: [] });
+
+    await expect(
+      runCli(
+        ["catalog", "--platform", "android", "--json"],
+        output.environmentWith({ connect: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({
+      payload: { platform: "android" },
+      type: "catalog.get",
+    });
+  });
+
+  it("renders the catalog as human-readable text, marking the default runtime", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("catalog.get", {
+      platforms: [
+        {
+          defaultRuntime: "26.5",
+          models: ["iPhone 16", "iPhone 17 Pro"],
+          platform: "ios",
+          runtimes: ["18.4", "26.5"],
+        },
+      ],
+    });
+
+    await expect(
+      runCli(["catalog"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(
+      "Platform: ios\n" +
+        "  Models: iPhone 16, iPhone 17 Pro\n" +
+        "  Runtimes: 18.4, 26.5 (default: 26.5)\n",
+    );
+  });
+
+  it("rejects an invalid --platform without contacting the daemon", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["catalog", "--platform", "windows"], output.environment)).resolves.toBe(2);
+    expect(output.stderr).toContain("--platform must be ios or android");
+  });
 });
 
 class StubConnection implements DaemonConnection {
@@ -451,6 +714,7 @@ async function createHarness() {
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    catalog: engine,
     config,
     defaultRequesterId: "test-process",
     eventBus,

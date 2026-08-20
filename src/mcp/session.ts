@@ -1,12 +1,26 @@
-import { parseRawLeaseGrant, type RawLeaseGrant } from "../daemon-client/contracts.js";
+import {
+  parseRawCatalog,
+  parseRawLeaseGrant,
+  parseRawLeaseLost,
+  type RawLeaseGrant,
+} from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 import type {
+  HeldLeaseStatus,
   LeaseSimulatorInput,
   LeaseSimulatorOutput,
+  LeaseStatusOutput,
+  ListDevicesInput,
+  ListDevicesOutput,
+  NoLeaseStatus,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
 } from "./contracts.js";
-import { leaseSimulatorOutputSchema, MAX_TIMEOUT_SECONDS } from "./contracts.js";
+import {
+  leaseSimulatorOutputSchema,
+  listDevicesOutputSchema,
+  MAX_TIMEOUT_SECONDS,
+} from "./contracts.js";
 
 export interface McpSessionOptions {
   readonly connect: () => Promise<DaemonConnection>;
@@ -16,6 +30,22 @@ export interface McpSessionOptions {
 export interface McpErrorResult {
   readonly code: string;
   readonly message: string;
+}
+
+/** Delivered to `onLeaseLost` listeners when this session's held lease ends elsewhere. */
+export interface LeaseLostNotice {
+  readonly deviceId: string;
+  readonly leaseId: string;
+  readonly reason: string;
+}
+
+interface OwnedLease {
+  readonly device: string;
+  readonly deviceId: string;
+  readonly expiresAtMs: number;
+  readonly leaseId: string;
+  readonly os: string;
+  readonly platform: "android" | "ios";
 }
 
 interface LeaseAbortWatch {
@@ -51,7 +81,9 @@ export class McpSession {
   #closePromise: Promise<void> | undefined;
   #rejectClosed!: (reason: McpSessionError) => void;
   #sessionClosed: Promise<never>;
-  #ownedLeaseId: string | undefined;
+  #ownedLease: OwnedLease | undefined;
+  #pushUnsubscribe: (() => void) | undefined;
+  readonly #leaseLostListeners = new Set<(notice: LeaseLostNotice) => void>();
   #mutations: Promise<void> = Promise.resolve();
 
   constructor(options: McpSessionOptions) {
@@ -73,7 +105,7 @@ export class McpSession {
   release(input: ReleaseSimulatorInput): Promise<ReleaseSimulatorOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
-      if (this.#ownedLeaseId !== input.lease_id) {
+      if (this.#ownedLease?.leaseId !== input.lease_id) {
         throw new McpSessionError("LEASE_NOT_OWNED", "This session does not own that lease");
       }
       const connection = await this.#connectionForUse();
@@ -83,18 +115,55 @@ export class McpSession {
           this.#sessionClosed,
         ]);
       } catch (error: unknown) {
-        if (isNoLongerActiveLease(error)) this.#ownedLeaseId = undefined;
+        if (isNoLongerActiveLease(error)) this.#ownedLease = undefined;
         throw error;
       }
-      this.#ownedLeaseId = undefined;
+      this.#ownedLease = undefined;
       return { lease_id: input.lease_id, released: true };
     });
+  }
+
+  listDevices(input: ListDevicesInput): Promise<ListDevicesOutput> {
+    return this.#mutate(async () => {
+      this.#throwIfClosed();
+      const connection = await this.#connectionForUse();
+      const response = await Promise.race([
+        connection.request(
+          "catalog.get",
+          input.platform === undefined ? {} : { platform: input.platform },
+        ),
+        this.#sessionClosed,
+      ]);
+      const catalog = parseRawCatalog(response);
+      return listDevicesOutputSchema.parse({
+        platforms: catalog.platforms.map((entry) => ({
+          default_runtime: entry.defaultRuntime,
+          models: entry.models,
+          platform: entry.platform,
+          runtimes: entry.runtimes,
+        })),
+      });
+    });
+  }
+
+  /** This session's current lease, or an explicit "no lease held" result. Cheap, local, and safe to poll. */
+  status(): LeaseStatusOutput {
+    this.#throwIfClosed();
+    return this.#ownedLease === undefined ? noLeaseStatus() : heldLeaseStatus(this.#ownedLease);
+  }
+
+  /** Notifies when this session's held lease ends elsewhere (expiry or a force-release). */
+  onLeaseLost(listener: (notice: LeaseLostNotice) => void): () => void {
+    this.#leaseLostListeners.add(listener);
+    return () => this.#leaseLostListeners.delete(listener);
   }
 
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    this.#ownedLeaseId = undefined;
+    this.#ownedLease = undefined;
+    this.#pushUnsubscribe?.();
+    this.#pushUnsubscribe = undefined;
     this.#rejectClosed(new McpSessionError("SESSION_CLOSED", "MCP session is closed"));
     const connection = this.#connection;
     this.#connection = undefined;
@@ -181,7 +250,14 @@ export class McpSession {
       throw new McpSessionError("INVALID_LEASE_GRANT", "Daemon returned a non-held lease grant");
     }
     const output = leaseSimulatorOutputSchema.parse(leaseSimulatorOutput(grant));
-    this.#ownedLeaseId = grant.lease.id;
+    this.#ownedLease = {
+      device: output.device,
+      deviceId: output.device_id,
+      expiresAtMs: output.expires_at_ms,
+      leaseId: output.lease_id,
+      os: output.os,
+      platform: output.platform,
+    };
     return output;
   }
 
@@ -214,6 +290,7 @@ export class McpSession {
         this.#throwIfClosed();
       }
       this.#connection = connection;
+      this.#pushUnsubscribe = connection.onPush((kind, payload) => this.#handlePush(kind, payload));
       return connection;
     } catch (error: unknown) {
       this.#throwIfClosed();
@@ -226,7 +303,23 @@ export class McpSession {
   async #closeConnection(): Promise<void> {
     const connection = this.#connection;
     this.#connection = undefined;
+    this.#pushUnsubscribe?.();
+    this.#pushUnsubscribe = undefined;
     if (connection !== undefined) await this.#closeDaemonConnection(connection);
+  }
+
+  /** Relays a daemon lease-lost push to this session's own listeners (e.g. an MCP logging notification). */
+  #handlePush(kind: string, payload: unknown): void {
+    if (kind !== "lease-lost") return;
+    let notice: LeaseLostNotice;
+    try {
+      notice = parseRawLeaseLost(payload);
+    } catch {
+      return;
+    }
+    if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== notice.leaseId) return;
+    this.#ownedLease = undefined;
+    for (const listener of this.#leaseLostListeners) listener(notice);
   }
 
   async #closeDaemonConnection(connection: DaemonConnection): Promise<void> {
@@ -294,6 +387,23 @@ function timeoutMilliseconds(timeoutSeconds: number): number {
     );
   }
   return timeoutSeconds * 1_000;
+}
+
+function noLeaseStatus(): NoLeaseStatus {
+  return { held: false };
+}
+
+function heldLeaseStatus(lease: OwnedLease): HeldLeaseStatus {
+  return {
+    device: lease.device,
+    device_id: lease.deviceId,
+    expires_at_ms: lease.expiresAtMs,
+    held: true,
+    lease_id: lease.leaseId,
+    os: lease.os,
+    platform: lease.platform,
+    state: "leased",
+  };
 }
 
 function leaseSimulatorOutput(grant: RawLeaseGrant): LeaseSimulatorOutput {

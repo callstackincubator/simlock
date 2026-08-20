@@ -42,7 +42,57 @@ export const releaseSimulatorOutputSchema = z.object({
   released: z.literal(true),
 });
 
+export const listDevicesInputSchema = z.object({
+  platform: z.enum(["ios", "android"]).optional(),
+});
+
+export const listDevicesOutputSchema = z.object({
+  platforms: z.array(
+    z.object({
+      default_runtime: nonEmptyString.optional(),
+      models: z.array(nonEmptyString),
+      platform: z.enum(["ios", "android"]),
+      runtimes: z.array(nonEmptyString),
+    }),
+  ),
+});
+
+export const leaseStatusInputSchema = z.object({});
+
+// Flat and all-optional (rather than a discriminated union) because the MCP SDK
+// validates structuredContent against outputSchema as a plain object shape.
+export const leaseStatusOutputSchema = z.object({
+  device: nonEmptyString.optional(),
+  device_id: nonEmptyString.optional(),
+  expires_at_ms: finiteNumber.optional(),
+  held: z.boolean(),
+  lease_id: nonEmptyString.optional(),
+  os: nonEmptyString.optional(),
+  platform: z.enum(["ios", "android"]).optional(),
+  state: z.literal("leased").optional(),
+});
+
 export type LeaseSimulatorInput = z.infer<typeof leaseSimulatorInputSchema>;
 export type LeaseSimulatorOutput = z.infer<typeof leaseSimulatorOutputSchema>;
 export type ReleaseSimulatorInput = z.infer<typeof releaseSimulatorInputSchema>;
 export type ReleaseSimulatorOutput = z.infer<typeof releaseSimulatorOutputSchema>;
+export type ListDevicesInput = z.infer<typeof listDevicesInputSchema>;
+export type ListDevicesOutput = z.infer<typeof listDevicesOutputSchema>;
+export type LeaseStatusOutput = z.infer<typeof leaseStatusOutputSchema>;
+
+/** The `lease_status` result when this session currently holds a lease. */
+export interface HeldLeaseStatus {
+  readonly device: string;
+  readonly device_id: string;
+  readonly expires_at_ms: number;
+  readonly held: true;
+  readonly lease_id: string;
+  readonly os: string;
+  readonly platform: "android" | "ios";
+  readonly state: "leased";
+}
+
+/** The `lease_status` result when this session holds nothing. */
+export interface NoLeaseStatus {
+  readonly held: false;
+}

@@ -16,7 +16,12 @@ import {
   type Nuke,
   UnknownLeaseError,
 } from "../core/index.js";
-import type { CapacityReader, LeaseCommands, QueueControl } from "../core/lease-ports.js";
+import type {
+  CapacityReader,
+  CatalogReader,
+  LeaseCommands,
+  QueueControl,
+} from "../core/lease-ports.js";
 import type { IpcConnection } from "../ports/index.js";
 import {
   DAEMON_PROTOCOL_VERSION,
@@ -41,12 +46,13 @@ interface Connection {
 }
 
 export interface DaemonServerOptions {
+  readonly capacity: CapacityReader;
+  readonly catalog: CatalogReader;
   readonly config: Config;
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
-  readonly capacity: CapacityReader;
   readonly leases: LeaseCommands;
   readonly protocolVersion?: number;
   readonly queue: QueueControl;
@@ -59,6 +65,7 @@ export interface DaemonServerOptions {
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
   readonly #protocolVersion: number;
+  readonly #unsubscribeLeaseLost: Array<() => void> = [];
   #stopping = false;
   #stopPromise: Promise<void> | undefined;
 
@@ -73,6 +80,18 @@ export class DaemonServer {
 
   async start(): Promise<void> {
     await this.options.host.start((connection) => this.#accept(connection));
+    this.#unsubscribeLeaseLost.push(
+      this.options.eventBus.subscribe("lease.expired", (envelope) =>
+        this.#notifyLeaseLost(envelope.payload.leaseId, envelope.payload.deviceId, "expired"),
+      ),
+      this.options.eventBus.subscribe("lease.released", (envelope) =>
+        this.#notifyLeaseLost(
+          envelope.payload.leaseId,
+          envelope.payload.deviceId,
+          envelope.payload.reason,
+        ),
+      ),
+    );
 
     this.options.eventBus.emit(
       "daemon.started",
@@ -92,6 +111,7 @@ export class DaemonServer {
 
   async #stop(reason: string): Promise<void> {
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
+    for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.options.reaper.dispose();
     await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
     for (const connection of this.#connections) {
@@ -232,14 +252,28 @@ export class DaemonServer {
         return this.#requestLease(connection, frame.payload);
       case "lease.release": {
         const leaseId = requiredString(objectPayload(frame.payload), "leaseId");
-        await this.options.leases.release(leaseId, "explicit");
-        connection.heldLeaseIds.delete(leaseId);
+        // Clear before the request commits so a lease-lost push (triggered by the
+        // resulting lease.released event) does not also fire back at this same
+        // connection for the release it just asked for itself.
+        const wasHeld = connection.heldLeaseIds.delete(leaseId);
+        try {
+          await this.options.leases.release(leaseId, "explicit");
+        } catch (error: unknown) {
+          if (wasHeld) connection.heldLeaseIds.add(leaseId);
+          throw error;
+        }
         return { leaseId };
       }
       case "lease.release-all": {
-        const leaseIds = await this.options.leases.releaseAll("explicit");
+        const previouslyHeld = [...connection.heldLeaseIds];
         connection.heldLeaseIds.clear();
-        return { leaseIds };
+        try {
+          const leaseIds = await this.options.leases.releaseAll("explicit");
+          return { leaseIds };
+        } catch (error: unknown) {
+          for (const leaseId of previouslyHeld) connection.heldLeaseIds.add(leaseId);
+          throw error;
+        }
       }
       case "lease.renew": {
         const payload = objectPayload(frame.payload);
@@ -254,6 +288,10 @@ export class DaemonServer {
         return this.#status();
       case "list.get":
         return this.#list(objectPayload(frame.payload));
+      case "catalog.get": {
+        const payload = objectPayload(frame.payload);
+        return { platforms: await this.options.catalog.listCatalog(optionalPlatform(payload)) };
+      }
       case "cleanup.run": {
         const payload = objectPayload(frame.payload);
         return this.options.reaper.run({
@@ -394,6 +432,27 @@ export class DaemonServer {
     await writeFrame(socket, { push: "event", payload: event });
   }
 
+  /**
+   * Pushes a lease-ended fact to the connection currently holding `leaseId`, if any,
+   * and stops tracking that lease as held so a later connection close does not try
+   * to release it again. Reacts to the existing post-commit lease.expired /
+   * lease.released facts (observer-only; no transaction waits on this).
+   */
+  #notifyLeaseLost(leaseId: string, deviceId: string, reason: string): void {
+    for (const connection of this.#connections) {
+      if (!connection.heldLeaseIds.delete(leaseId)) continue;
+      void this.#pushLeaseLost(connection.socket, { deviceId, leaseId, reason });
+      return;
+    }
+  }
+
+  async #pushLeaseLost(
+    socket: IpcConnection,
+    payload: { readonly deviceId: string; readonly leaseId: string; readonly reason: string },
+  ): Promise<void> {
+    await writeFrame(socket, { push: "lease-lost", payload });
+  }
+
   async #respondError(
     socket: IpcConnection,
     id: RequestId | null,
@@ -518,6 +577,13 @@ function requiredPlatform(payload: Record<string, unknown>): "ios" | "android" {
     throw new ProtocolError("BAD_REQUEST", "platform must be ios or android");
   }
   return platform;
+}
+
+function optionalPlatform(payload: Record<string, unknown>): "ios" | "android" | undefined {
+  if (payload.platform === undefined) {
+    return undefined;
+  }
+  return requiredPlatform(payload);
 }
 
 // fallow-ignore-next-line complexity -- preserves stable protocol error mapping.

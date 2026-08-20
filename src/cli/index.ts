@@ -18,7 +18,8 @@ export { DaemonClientError, type DaemonConnection } from "../daemon-client/proto
 const USAGE = `Usage: pitlane <command> [options]
 
 Commands:
-  lease, release, status, list, cleanup, doctor, nuke, events, daemon, config
+  lease, release, status, list, catalog, cleanup, doctor, nuke, events,
+  daemon, config
   mcp                         Start the stdio MCP server
 Run 'pitlane <command> --help' for command usage.`;
 
@@ -38,6 +39,16 @@ class UsageError extends Error {
     super(message);
     this.name = "UsageError";
   }
+}
+
+/**
+ * Points a human at `--help` from inside the single structured stderr line,
+ * for the two usage errors most likely to strand someone at a terminal: an
+ * unrecognized command and a missing required argument. The full command
+ * banner is no longer dumped to stderr on every failure; it is one flag away.
+ */
+function withHelpHint(message: string): string {
+  return `${message} (run \`pitlane --help\` for usage)`;
 }
 
 interface Output {
@@ -69,7 +80,17 @@ export interface CliEnvironment {
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
 }
 
-function defaultCliEnvironment(): CliEnvironment {
+/**
+ * Resolves the fallback requester identity from the environment: `PITLANE_AGENT_ID`
+ * when set, else a pid-derived value so callers that never configure a stable id
+ * keep today's behavior. The per-invocation `--agent-id` flag on `lease` (parsed at
+ * that command's own boundary) takes precedence over this default.
+ */
+export function fallbackRequesterId(env: NodeJS.ProcessEnv): string {
+  return env.PITLANE_AGENT_ID ?? String(process.pid);
+}
+
+function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
   const dataDirectory = join(homedir(), ".pitlane");
   const filesystem = new NodeFilesystem();
   const clock = new SystemClock();
@@ -92,7 +113,7 @@ function defaultCliEnvironment(): CliEnvironment {
       }),
     connectExisting: () => connectExistingDaemon(socketPath, ipc),
     now: () => clock.now(),
-    requesterId: String(process.pid),
+    requesterId: fallbackRequesterId(env),
     readConfigFile: async () => {
       if (!(await filesystem.exists(configPath))) return {};
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
@@ -131,6 +152,8 @@ export async function runCli(
         return await runStatus(argv.slice(1), environment);
       case "list":
         return await runList(argv.slice(1), environment);
+      case "catalog":
+        return await runCatalog(argv.slice(1), environment);
       case "cleanup":
         return await runCleanup(argv.slice(1), environment);
       case "doctor":
@@ -146,7 +169,7 @@ export async function runCli(
       case "mcp":
         return await runMcp(argv.slice(1), environment);
       default:
-        throw new UsageError(`Unknown command: ${argv[0]}`);
+        throw new UsageError(withHelpHint(`Unknown command: ${argv[0]}`));
     }
   } catch (error: unknown) {
     writeError(environment, error);
@@ -207,6 +230,7 @@ export function parseDuration(value: string): number {
 async function runLease(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   if (argv[0] === "renew") return runRenew(argv.slice(1), environment);
   const values = commandArgs(argv, {
+    "agent-id": { type: "string" },
     "allow-download": { type: "boolean" },
     detach: { type: "boolean" },
     device: { type: "string" },
@@ -218,14 +242,18 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   });
   if (values.help) {
     environment.stdout.write(
-      "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n",
+      "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n" +
+        "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
+        "                     [--allow-download]\n",
     );
     return 0;
   }
   if (values.platform !== "ios" && values.platform !== "android")
-    throw new UsageError("lease requires --platform <ios|android>");
+    throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   if (typeof values.device !== "string" || values.device === "")
-    throw new UsageError("lease requires --device <model>");
+    throw new UsageError(withHelpHint("lease requires --device <model>"));
+  if (values["agent-id"] === "") throw new UsageError("lease --agent-id must not be empty");
+  const requesterId = values["agent-id"] ?? environment.requesterId;
   const detached = values.detach ?? false;
   const timeoutMs = typeof values.timeout === "string" ? parseDuration(values.timeout) : undefined;
   const termination = detached ? undefined : waitForTermination(environment.signals);
@@ -238,7 +266,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
       allowDownload: values["allow-download"] ?? false,
       mode: detached ? "detached" : "held",
       noWait: values["no-wait"] ?? false,
-      requesterId: environment.requesterId,
+      requesterId,
       request: {
         model: values.device,
         ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
@@ -253,7 +281,10 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     try {
       await connection.request("lease.release", { leaseId: result.lease });
     } catch (error: unknown) {
-      environment.stderr.write(`Lease release failed after signal: ${errorMessage(error)}\n`);
+      // Non-fatal: the process still exits 0 after a signal, but the release
+      // failure is still diagnostic output, so it stays a structured stderr
+      // line rather than reverting to prose.
+      writeError(environment, error);
     }
     return 0;
   } finally {
@@ -341,6 +372,28 @@ async function runList(argv: readonly string[], environment: CliEnvironment): Pr
     throw new UsageError("list accepts only one of --devices, --leases, or --rules");
   const kind = values.leases ? "leases" : values.rules ? "rules" : "devices";
   writeResult(environment, await requestOnce(environment, "list.get", { kind }));
+  return 0;
+}
+
+async function runCatalog(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+    platform: { type: "string" },
+  });
+  if (values.help) {
+    environment.stdout.write("Usage: pitlane catalog [--platform <ios|android>] [--json]\n");
+    return 0;
+  }
+  if (values.platform !== undefined && values.platform !== "ios" && values.platform !== "android")
+    throw new UsageError("catalog --platform must be ios or android");
+  const response = await requestOnce(
+    environment,
+    "catalog.get",
+    values.platform === undefined ? {} : { platform: values.platform },
+  );
+  if (values.json) writeResult(environment, response);
+  else environment.stdout.write(`${formatCatalog(requireObject(response))}\n`);
   return 0;
 }
 
@@ -615,9 +668,28 @@ function formatStatus(status: Record<string, unknown>): string {
   ].join("\n");
 }
 
+function formatCatalog(response: Record<string, unknown>): string {
+  const platforms = requireArray(response.platforms);
+  if (platforms.length === 0) return "No platforms available.";
+  return platforms
+    .map((entry) => {
+      const record = requireObject(entry);
+      const models = requireArray(record.models).map(String);
+      const runtimes = requireArray(record.runtimes).map(String);
+      const defaultRuntime =
+        typeof record.defaultRuntime === "string" ? record.defaultRuntime : "(none)";
+      return [
+        `Platform: ${String(record.platform)}`,
+        `  Models: ${models.length > 0 ? models.join(", ") : "(none)"}`,
+        `  Runtimes: ${runtimes.length > 0 ? runtimes.join(", ") : "(none)"} (default: ${defaultRuntime})`,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
 function requiredPositional(positionals: readonly string[], label: string): string {
   if (positionals.length !== 1 || positionals[0] === undefined)
-    throw new UsageError(`Expected ${label}`);
+    throw new UsageError(withHelpHint(`Expected ${label}`));
   return positionals[0];
 }
 

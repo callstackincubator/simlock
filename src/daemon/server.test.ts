@@ -32,7 +32,7 @@ interface ServerFrame {
   readonly id?: string | null;
   readonly ok?: boolean;
   readonly payload?: unknown;
-  readonly push?: "event" | "progress";
+  readonly push?: "event" | "lease-lost" | "progress";
 }
 
 const runningDaemons: DaemonServer[] = [];
@@ -282,6 +282,31 @@ describe("DaemonServer", () => {
     expect(harness.registry.snapshot.leases).toEqual([]);
   });
 
+  it("serves the device catalog, omitting platforms with no registered driver", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(client.request("catalog.get", {})).resolves.toMatchObject({
+      ok: true,
+      payload: {
+        platforms: [{ defaultRuntime: "26.5", models: [], platform: "ios", runtimes: ["26.5"] }],
+      },
+    });
+    await expect(client.request("catalog.get", { platform: "ios" })).resolves.toMatchObject({
+      ok: true,
+      payload: { platforms: [{ platform: "ios" }] },
+    });
+    await expect(client.request("catalog.get", { platform: "android" })).resolves.toMatchObject({
+      ok: true,
+      payload: { platforms: [] },
+    });
+    await expect(client.request("catalog.get", { platform: "foo" })).resolves.toMatchObject({
+      error: { code: "BAD_REQUEST" },
+      ok: false,
+    });
+  });
+
   it("recovers a stale socket file and refuses a second live daemon", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pitlane-stale-"));
     temporaryDirectories.push(directory);
@@ -316,6 +341,103 @@ describe("DaemonServer", () => {
     expect(harness.registry.snapshot.leases).toEqual([]);
     await expect(harness.stateFilesystem.readFile("/state.json")).resolves.toContain('"leases":[]');
     expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping");
+  });
+
+  it("pushes a lease-lost notification to the holding connection when its lease's TTL backstop expires", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+    const deviceId = harness.registry.snapshot.leases.find(
+      (lease) => lease.id === leaseId,
+    )?.deviceId;
+
+    harness.clock.advance(60_000);
+    await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { deviceId, leaseId, reason: "expired" },
+      push: "lease-lost",
+    });
+    await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
+
+    // The connection no longer believes it holds the expired lease, so closing it
+    // (which releases any still-held leases) must not error or hang the daemon.
+    await holder.close();
+    const observer = await createClient(harness.socketPath);
+    await hello(observer);
+    await expect(observer.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    await observer.close();
+  });
+
+  it("pushes a lease-lost notification to the actual holding connection when another connection force-releases its lease", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    const releaser = await createClient(harness.socketPath);
+    await Promise.all([hello(holder), hello(releaser)]);
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+
+    await expect(releaser.request("lease.release", { leaseId })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { leaseId, reason: "explicit" },
+      push: "lease-lost",
+    });
+
+    // Acceptance criterion: the (now stale) holder's own release attempt is rejected
+    // by the daemon rather than causing a transport error; the MCP layer maps this
+    // local-ownership loss to LEASE_NOT_OWNED without even asking the daemon.
+    await expect(holder.request("lease.release", { leaseId })).resolves.toMatchObject({
+      error: { code: "UNKNOWN_LEASE" },
+      ok: false,
+    });
+    await holder.close();
+    await releaser.close();
+  });
+
+  it("does not push a redundant lease-lost notification back to a connection that explicitly released its own lease", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+
+    await expect(holder.request("lease.release", { leaseId })).resolves.toMatchObject({
+      ok: true,
+    });
+    // A subsequent request on the same connection lets us assert, by frame order, that
+    // no lease-lost push arrived for the release this connection asked for itself.
+    await expect(holder.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    expect(holder.frames().filter((frame) => frame.push === "lease-lost")).toEqual([]);
+    await holder.close();
+  });
+
+  it("ignores lease-lost facts for leases with no currently connected holder without breaking the daemon", async () => {
+    const harness = await createHarness();
+    harness.eventBus.emit("lease.expired", { deviceId: "device-x", leaseId: "lease-x" }, "test");
+    harness.eventBus.emit(
+      "lease.released",
+      { deviceId: "device-y", leaseId: "lease-y", reason: "killed" },
+      "test",
+    );
+
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    await client.close();
   });
 });
 
@@ -374,6 +496,7 @@ async function createHarness(
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    catalog: engine,
     config,
     defaultRequesterId: "test-process",
     eventBus,
@@ -469,6 +592,10 @@ async function hello(client: Client): Promise<void> {
   ).resolves.toMatchObject({
     ok: true,
   });
+}
+
+function leaseIdOf(frame: ServerFrame): string {
+  return (frame.payload as { readonly lease: { readonly id: string } }).lease.id;
 }
 
 async function flush(): Promise<void> {
