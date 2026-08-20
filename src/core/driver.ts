@@ -11,10 +11,22 @@ export interface DriverDevice {
   readonly driverData: unknown;
 }
 
+/**
+ * Observed boot state of a managed device. `transitioning` covers states a
+ * driver cannot settle into `running` or `stopped` yet -- simulators report
+ * `Booting` / `Shutting Down`, emulators appear `offline` in `adb devices`
+ * before they answer `getprop` -- and must never produce a drift finding.
+ */
+export type ObservedRunState = "running" | "stopped" | "transitioning";
+
+export interface ObservedDevice extends DriverDevice {
+  readonly runState: ObservedRunState;
+}
+
 /** Reality observable by a driver without trusting the registry. */
 export interface DriverReality {
   /** Devices whose platform-owned name proves that Pitlane created them. */
-  readonly devices: readonly DriverDevice[];
+  readonly devices: readonly ObservedDevice[];
   /** Running, Pitlane-attributable device processes not necessarily in the registry. */
   readonly processes: readonly DriverDevice[];
 }

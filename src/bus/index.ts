@@ -55,6 +55,12 @@ export interface EventMap {
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };
+  "device.foreign-state-detected": {
+    readonly deviceId: string;
+    readonly platform: string;
+    readonly expected: string;
+    readonly observed: string;
+  };
   "cleanup.executed": {
     readonly ruleName: string;
     readonly action: string;

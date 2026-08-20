@@ -505,6 +505,70 @@ describe("AndroidDriver", () => {
 
     expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
   });
+
+  it("joins adb devices with getprop to compute runState per AVD: running, stopped, transitioning", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/pitlane_running.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/pitlane_stopped.avd`);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5554", "shell", "getprop", "ro.boot.qemu.avd_name"],
+        "pitlane_running\n",
+      ),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    expect(
+      [...reality.devices]
+        .map((device) => ({ deviceId: device.deviceId, runState: device.runState }))
+        .sort((left, right) => left.deviceId.localeCompare(right.deviceId)),
+    ).toEqual([
+      { deviceId: "pitlane_running", runState: "running" },
+      { deviceId: "pitlane_stopped", runState: "stopped" },
+    ]);
+    expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "pitlane_running" })]);
+  });
+
+  it("treats an otherwise-stopped AVD as transitioning when an unattributable transitional serial is present", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/pitlane_idle.avd`);
+    const runner = new ScriptedProcessRunner([
+      processResult(
+        binaries.adb,
+        ["devices"],
+        "List of devices attached\nemulator-5556\toffline\n",
+      ),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    expect(reality.devices).toEqual([
+      expect.objectContaining({ deviceId: "pitlane_idle", runState: "transitioning" }),
+    ]);
+    // Only settled `device`-state serials are counted as running processes; the
+    // unattributable offline serial never appears here regardless of the AVD fallback above.
+    expect(reality.processes).toEqual([]);
+  });
+
+  it("still resolves a stopped AVD as stopped when adb reports no serials at all", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/pitlane_idle.avd`);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    expect(reality.devices).toEqual([
+      expect.objectContaining({ deviceId: "pitlane_idle", runState: "stopped" }),
+    ]);
+  });
 });
 
 const live = process.env.PITLANE_LIVE_ANDROID === "1" ? it : it.skip;

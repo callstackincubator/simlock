@@ -17,9 +17,17 @@ import {
 import { IosSimctlDriver } from "./index.js";
 
 const listFixture = readFileSync(new URL("./fixtures/simctl-list.json", import.meta.url), "utf8");
+const listDevicesFixture = readFileSync(
+  new URL("./fixtures/simctl-list-devices.json", import.meta.url),
+  "utf8",
+);
 const listInvocation = {
   command: "xcrun",
   args: ["simctl", "list", "-j", "devicetypes", "runtimes"],
+} as const;
+const listDevicesInvocation = {
+  command: "xcrun",
+  args: ["simctl", "list", "-j", "devices"],
 } as const;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 const driverData = {
@@ -284,6 +292,40 @@ describe("IosSimctlDriver", () => {
     await driver.listCatalog();
 
     expect(runner.calls).toEqual([{ ...listInvocation, options: { timeoutMs: 30_000 } }]);
+  });
+
+  it("maps simctl device state to runState and filters to pitlane- devices", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listDevicesInvocation, result: { code: 0, stderr: "", stdout: listDevicesFixture } },
+    ]);
+    const driver = createDriver(runner);
+
+    const reality = await driver.listManaged();
+
+    expect(
+      reality.devices.map((device) => ({ deviceId: device.deviceId, runState: device.runState })),
+    ).toEqual([
+      { deviceId: "00000000-0000-0000-0000-000000000101", runState: "running" },
+      { deviceId: "00000000-0000-0000-0000-000000000102", runState: "stopped" },
+      { deviceId: "00000000-0000-0000-0000-000000000103", runState: "transitioning" },
+      { deviceId: "00000000-0000-0000-0000-000000000104", runState: "transitioning" },
+    ]);
+  });
+
+  it("populates processes from booted managed devices only", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listDevicesInvocation, result: { code: 0, stderr: "", stdout: listDevicesFixture } },
+    ]);
+    const driver = createDriver(runner);
+
+    const reality = await driver.listManaged();
+
+    expect(reality.processes).toEqual([
+      expect.objectContaining({
+        deviceId: "00000000-0000-0000-0000-000000000101",
+        runState: "running",
+      }),
+    ]);
   });
 
   it.skipIf(process.env.PITLANE_LIVE_IOS !== "1")(

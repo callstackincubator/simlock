@@ -6,6 +6,8 @@ import {
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
+  type DriverReality,
+  type ObservedDevice,
   type ReclaimResult,
   RuntimeMissingError,
   UnknownModelError,
@@ -303,34 +305,63 @@ export class AndroidDriver implements Driver {
     });
   }
 
-  async listManaged(): Promise<{
-    readonly devices: readonly DriverDevice[];
-    readonly processes: readonly DriverDevice[];
-  }> {
-    const devices: DriverDevice[] = [];
+  async listManaged(): Promise<DriverReality> {
+    const avdNames = await this.#listAvdNames();
+    const { settledSerials, unattributableTransitionalSerial } = await this.#scanAdbSerials();
+    const { processes, runningByAvdName } = await this.#resolveRunningAvds(settledSerials);
+
+    const devices: ObservedDevice[] = avdNames.map((avdName) =>
+      observedAndroidDevice(avdName, runningByAvdName, unattributableTransitionalSerial),
+    );
+
+    return { devices, processes };
+  }
+
+  async #listAvdNames(): Promise<string[]> {
+    const avdNames: string[] = [];
     if (await this.#filesystem.exists(this.#avdDirectory)) {
       for (const entry of await this.#filesystem.readdir(this.#avdDirectory)) {
         const match = /^(pitlane_.+)\.avd$/.exec(entry);
         if (match?.[1] === undefined) continue;
-        const avdName = match[1];
-        devices.push({
-          deviceId: avdName,
-          driverData: {
-            avdName,
-            configHash: "recovered",
-            imageIdentity: "",
-            port: 0,
-            serial: "",
-          } satisfies AndroidDriverData,
-        });
+        avdNames.push(match[1]);
       }
     }
+    return avdNames;
+  }
 
-    const processes: DriverDevice[] = [];
+  /**
+   * Serials attached in a settled `device` state can answer `getprop`, so they can be
+   * attributed to an AVD by name. A serial in any other adb state (offline, unauthorized,
+   * booting, ...) cannot answer `getprop` yet, so it cannot be attributed to an AVD name --
+   * `unattributableTransitionalSerial` records that this tick saw at least one such serial.
+   */
+  async #scanAdbSerials(): Promise<{
+    readonly settledSerials: readonly string[];
+    readonly unattributableTransitionalSerial: boolean;
+  }> {
     const attached = await this.#runOrThrow(this.#sdk.adb, ["devices"]);
-    for (const serial of attached.stdout.matchAll(/^((?:emulator)-\d+)\s+device$/gm)) {
-      const candidate = serial[1];
-      if (candidate === undefined) continue;
+    const settledSerials: string[] = [];
+    let unattributableTransitionalSerial = false;
+    for (const match of attached.stdout.matchAll(/^((?:emulator)-\d+)\s+(\S+)$/gm)) {
+      const candidate = match[1];
+      const state = match[2];
+      if (candidate === undefined || state === undefined) continue;
+      if (state === "device") {
+        settledSerials.push(candidate);
+      } else {
+        unattributableTransitionalSerial = true;
+      }
+    }
+    return { settledSerials, unattributableTransitionalSerial };
+  }
+
+  async #resolveRunningAvds(settledSerials: readonly string[]): Promise<{
+    readonly processes: readonly DriverDevice[];
+    readonly runningByAvdName: ReadonlySet<string>;
+  }> {
+    const processes: DriverDevice[] = [];
+    const runningByAvdName = new Set<string>();
+    for (const candidate of settledSerials) {
       const name = await this.#runOrThrow(this.#sdk.adb, [
         "-s",
         candidate,
@@ -340,6 +371,7 @@ export class AndroidDriver implements Driver {
       ]);
       const avdName = name.stdout.trim();
       if (!avdName.startsWith("pitlane_")) continue;
+      runningByAvdName.add(avdName);
       const port = Number(candidate.slice("emulator-".length));
       processes.push({
         deviceId: avdName,
@@ -352,7 +384,7 @@ export class AndroidDriver implements Driver {
         } satisfies AndroidDriverData,
       });
     }
-    return { devices, processes };
+    return { processes, runningByAvdName };
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
@@ -899,6 +931,31 @@ async function systemImageVersion(filesystem: Filesystem, imagePath: string): Pr
 
 function serialFor(port: number): string {
   return `emulator-${port}`;
+}
+
+function observedAndroidDevice(
+  avdName: string,
+  runningByAvdName: ReadonlySet<string>,
+  unattributableTransitionalSerial: boolean,
+): ObservedDevice {
+  return {
+    deviceId: avdName,
+    driverData: {
+      avdName,
+      configHash: "recovered",
+      imageIdentity: "",
+      port: 0,
+      serial: "",
+    } satisfies AndroidDriverData,
+    // Conservative: an emulator serial we can't attribute (transitional adb state) might
+    // belong to any AVD that otherwise looks stopped, so treat all of them as transitioning
+    // for this tick rather than risk a false-positive foreign-state-change finding.
+    runState: runningByAvdName.has(avdName)
+      ? "running"
+      : unattributableTransitionalSerial
+        ? "transitioning"
+        : "stopped",
+  };
 }
 
 function portsFromAdbDevices(output: string): number[] {

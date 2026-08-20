@@ -29,6 +29,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.purge-failed` | device id, lease id, attempted strategy, duration, stable error summary | release-time purge failed after the resulting state committed; the first version may still reuse a readiness-checked device | WarmPoolCoordinator | implemented |
 | `device.shutdown` | device id, initiator (rule/command) | device stopped, still on disk | Registry; WarmPoolCoordinator for interrupted reclaim recovery | implemented |
 | `device.deleted` | device id, initiator | device removed from disk and registry | Registry | implemented |
+| `device.foreign-state-detected` | device id, platform, expected (running/stopped), observed (running/stopped) | doctor reconcile found a managed device's observed boot state disagreeing with the committed registry state | Doctor | implemented |
 | `runtime.deleted` | runtime id, initiator | runtime / system image GC'd | — | planned |
 
 ## System

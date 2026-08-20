@@ -1,0 +1,31 @@
+{
+  "devices": {
+    "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+      {
+        "name": "pitlane-booted",
+        "udid": "00000000-0000-0000-0000-000000000101",
+        "state": "Booted"
+      },
+      {
+        "name": "pitlane-shutdown",
+        "udid": "00000000-0000-0000-0000-000000000102",
+        "state": "Shutdown"
+      },
+      {
+        "name": "pitlane-booting",
+        "udid": "00000000-0000-0000-0000-000000000103",
+        "state": "Booting"
+      },
+      {
+        "name": "pitlane-shutting-down",
+        "udid": "00000000-0000-0000-0000-000000000104",
+        "state": "Shutting Down"
+      },
+      {
+        "name": "Not Pitlane",
+        "udid": "00000000-0000-0000-0000-000000000105",
+        "state": "Booted"
+      }
+    ]
+  }
+}
