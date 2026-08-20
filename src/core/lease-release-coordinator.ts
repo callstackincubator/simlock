@@ -8,7 +8,7 @@ export type LeaseReleaseReason = "closed" | "explicit" | "killed" | "orphaned";
 export interface LeaseReleaseCommands {
   release(leaseId: string, reason: LeaseReleaseReason): Promise<void>;
   releaseAll(reason: Exclude<LeaseReleaseReason, "closed">): Promise<readonly string[]>;
-  renew(leaseId: string, ttlMs: number): Promise<LeaseRecord>;
+  renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
   heartbeat(leaseId: string): Promise<LeaseRecord>;
 }
 
@@ -25,7 +25,7 @@ export interface LeaseReleaseMaintenance {
 
 export interface LeaseReleaseLifecycle {
   beginRelease(leaseId: string, reason: LeaseReleaseReason | "expired"): Promise<ReleasedLease>;
-  renew(leaseId: string, ttlMs: number): Promise<LeaseRecord>;
+  renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
   heartbeat(leaseId: string): Promise<LeaseRecord>;
 }
 
@@ -68,7 +68,7 @@ export class LeaseReleaseCoordinator
     await this.#runNormal(() => this.#release(leaseId, "expired", expectedDeadline));
   }
 
-  async renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
+  async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     return this.#runNormal(() =>
       this.options.decisions.run(() => this.options.lifecycle.renew(leaseId, ttlMs)),
     );

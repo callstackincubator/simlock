@@ -32,13 +32,6 @@ export interface LeaseLifecycleGrant {
   readonly lease: LeaseRecord;
 }
 
-export class HeldLeaseRenewalError extends Error {
-  constructor(readonly leaseId: string) {
-    super(`Held lease cannot be renewed: ${leaseId}`);
-    this.name = "HeldLeaseRenewalError";
-  }
-}
-
 /** A heartbeat slides to the *held* backstop, so it must never be applied to a detached lease. */
 export class DetachedLeaseHeartbeatError extends Error {
   constructor(readonly leaseId: string) {
@@ -80,13 +73,13 @@ export class LeaseLifecycle {
     return { device, lease };
   }
 
-  async renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
+  async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
-    if (current?.mode === "held") throw new HeldLeaseRenewalError(leaseId);
+    const effectiveTtlMs = ttlMs ?? this.#ttlFor(current?.mode ?? "detached");
 
     const renewed = await this.options.registry.renewLease(
       leaseId,
-      this.options.clock.now() + ttlMs,
+      this.options.clock.now() + effectiveTtlMs,
     );
     this.options.eventBus.emit(
       "lease.renewed",

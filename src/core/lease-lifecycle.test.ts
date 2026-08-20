@@ -3,11 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem, type Filesystem } from "../ports/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
-import {
-  DetachedLeaseHeartbeatError,
-  HeldLeaseRenewalError,
-  LeaseLifecycle,
-} from "./lease-lifecycle.js";
+import { DetachedLeaseHeartbeatError, LeaseLifecycle } from "./lease-lifecycle.js";
 import { Registry } from "./registry.js";
 
 const statePath = "/home/agent/.pitlane/state.json";
@@ -74,7 +70,7 @@ describe("LeaseLifecycle", () => {
     expect(detachedGrant.lease.ttlDeadline).toBe(1_020);
   });
 
-  it("renews detached leases, replaces their timer, and rejects held renewal", async () => {
+  it("renews detached leases and replaces their timer", async () => {
     const harness = await createHarness();
     const detached = await harness.lifecycle.grant({
       deviceId: harness.device.id,
@@ -92,16 +88,53 @@ describe("LeaseLifecycle", () => {
         payload: { leaseId: detached.lease.id, newDeadline: 1_030 },
       }),
     );
+  });
 
+  it("renews a held lease, extending its deadline and re-arming the expiry timer", async () => {
     const held = await createHarness();
-    const heldLease = await held.lifecycle.grant({
+    const grant = await held.lifecycle.grant({
       deviceId: held.device.id,
       mode: "held",
       requesterId: "agent",
     });
-    await expect(held.lifecycle.renew(heldLease.lease.id, 30)).rejects.toBeInstanceOf(
-      HeldLeaseRenewalError,
+    expect(grant.lease.ttlDeadline).toBe(1_010);
+
+    // Renew with an explicit TTL just before the original (grant-time) deadline would fire.
+    held.clock.advance(8);
+    const renewed = await held.lifecycle.renew(grant.lease.id, 30);
+    expect(renewed.ttlDeadline).toBe(1_038);
+    expect(held.eventBus.replay()).toContainEqual(
+      expect.objectContaining({
+        event: "lease.renewed",
+        payload: { leaseId: grant.lease.id, newDeadline: 1_038 },
+      }),
     );
+
+    // The original deadline has now passed, but the timer was re-armed at the new
+    // deadline, so the lease must not have expired.
+    held.clock.advance(2);
+    await Promise.resolve();
+    expect(held.registry.snapshot.leases).toHaveLength(1);
+
+    // The new deadline still fires.
+    held.clock.advance(28);
+    await vi.waitFor(() => expect(held.registry.snapshot.leases).toEqual([]));
+  });
+
+  it("renews a held lease with no explicit ttlMs using the held backstop, not the detached TTL", async () => {
+    const harness = await createHarness();
+    const grant = await harness.lifecycle.grant({
+      deviceId: harness.device.id,
+      mode: "held",
+      requesterId: "agent",
+    });
+    expect(grant.lease.ttlDeadline).toBe(1_010);
+
+    harness.clock.advance(5);
+    const renewed = await harness.lifecycle.renew(grant.lease.id);
+    // heldBackstopMs is 10 in this harness, detachedMs is 20 -- a deadline of 1_025 would
+    // mean the (wrong) detached default was used instead of the held backstop.
+    expect(renewed.ttlDeadline).toBe(1_015);
   });
 
   it("emits release and expiry facts only after a registry release commit", async () => {

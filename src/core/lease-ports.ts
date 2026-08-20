@@ -13,7 +13,7 @@ export interface LeaseCommands {
   request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant>;
   release(leaseId: string, reason: LeaseReleaseReason): Promise<void>;
   releaseAll(reason: Exclude<LeaseReleaseReason, "closed">): Promise<readonly string[]>;
-  renew(leaseId: string, ttlMs: number): Promise<LeaseRecord>;
+  renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
   heartbeat(leaseId: string): Promise<LeaseRecord>;
 }
 

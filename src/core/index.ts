@@ -30,7 +30,6 @@ export {
 } from "./driver.js";
 export { Doctor } from "./doctor.js";
 export {
-  HeldLeaseRenewalError,
   LeaseEngine,
   type LeaseProgress,
   NoCapacityError,

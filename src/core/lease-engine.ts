@@ -46,8 +46,6 @@ export {
   RequesterAlreadyLeasedError,
 } from "./lease-acquisition-coordinator.js";
 
-export { HeldLeaseRenewalError } from "./lease-lifecycle.js";
-
 /** Composition root and compatibility facade for the daemon's lease subsystem. */
 export class LeaseEngine {
   readonly cleanup: CleanupActionExecutor;
@@ -219,7 +217,7 @@ export class LeaseEngine {
     await this.#acquisition.detachQueuedProgress(requesterId);
   }
 
-  async renew(leaseId: string, ttlMs: number): Promise<LeaseRecord> {
+  async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     return this.#releaseCoordinator.renew(leaseId, ttlMs);
   }
 
