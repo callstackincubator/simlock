@@ -1,6 +1,5 @@
 import { type EventBus, type EventEnvelope } from "../bus/index.js";
 import {
-  HeldLeaseRenewalError,
   type Config,
   type DeviceRequest,
   type LeaseProgress,
@@ -426,10 +425,10 @@ export class DaemonServer {
       case "lease.renew": {
         const payload = objectPayload(frame.payload);
         const leaseId = requiredString(payload, "leaseId");
-        const ttlMs =
-          payload.ttlMs === undefined
-            ? this.options.config.lease.detachedTtlMs
-            : requiredNumber(payload, "ttlMs");
+        // Omitted ttlMs falls back to the lease's own mode-aware default (core's
+        // `#ttlFor`) rather than always assuming detached -- substituting the detached
+        // TTL here would silently shorten a held lease's hour-long backstop to 15m.
+        const ttlMs = payload.ttlMs === undefined ? undefined : requiredNumber(payload, "ttlMs");
         return this.options.leases.renew(leaseId, ttlMs);
       }
       case "lease.heartbeat": {
@@ -828,9 +827,6 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof RequesterAlreadyLeasedError) {
     return "REQUESTER_ALREADY_LEASED";
-  }
-  if (error instanceof HeldLeaseRenewalError) {
-    return "HELD_LEASE_RENEWAL";
   }
   if (error instanceof NoDriverError) {
     return "NO_DRIVER";

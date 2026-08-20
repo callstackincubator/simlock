@@ -42,9 +42,9 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 
 This table matches `DAEMON_ERROR_EXIT_CODES` in `src/cli/index.ts` exactly.
-A daemon error code with no entry here (for example `UNKNOWN_LEASE` or
-`HELD_LEASE_RENEWAL`, both surfaced by `lease renew`) falls back to exit 1;
-the structured stderr line still reports the specific code.
+A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
+surfaced by `lease renew`) falls back to exit 1; the structured stderr line
+still reports the specific code.
 
 ---
 
@@ -118,9 +118,16 @@ work stages; reclaiming work is reported separately:
 
 ### `pitlane lease renew <lease-id> [--ttl <duration>]`
 
-Detached mode only: extend the lease TTL. Exit 1 if the lease is unknown or
-already expired (error code `UNKNOWN_LEASE`), or if it is a held-mode lease,
-which cannot be renewed (error code `HELD_LEASE_RENEWAL`).
+Extend a lease's TTL — works for both detached and held-mode leases. A held
+CLI lease has no automatic keep-alive, so this is how a long-running held
+lease survives past its backstop: hand-renew it (e.g. from a cron job or a
+wrapper script) before the deadline. Renewal always resets the deadline to
+now plus the TTL, regardless of how much time was left.
+
+Without `--ttl`, the new deadline uses the lease's own mode-aware default:
+`lease.detachedTtlMs` (15m) for a detached lease, `lease.heldTtlBackstopMs`
+(1h) for a held one — never the other mode's default. Exit 1 if the lease is
+unknown or already expired (error code `UNKNOWN_LEASE`).
 
 ## `pitlane release <lease-id> | --all`
 

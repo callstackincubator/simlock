@@ -7,7 +7,6 @@ import {
   type Config,
   DriverCrashError,
   FakeDriver,
-  HeldLeaseRenewalError,
   LeaseEngine,
   NoCapacityError,
   QueueTimeoutError,
@@ -741,12 +740,9 @@ describe("LeaseEngine", () => {
     await expect(next).resolves.toMatchObject({ lease: { requesterId: "agent-3" } });
   });
 
-  it("expires held leases, serves the queue, extends detached leases, and rejects held renewal", async () => {
+  it("expires an un-renewed held lease, serves the queue, and extends detached leases", async () => {
     const harness = await createHarness({ lease: { detachedTtlMs: 20, heldTtlBackstopMs: 10 } });
-    const held = await harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
-    await expect(harness.engine.renew(held.lease.id, 20)).rejects.toBeInstanceOf(
-      HeldLeaseRenewalError,
-    );
+    await harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
     const queued = harness.engine.request(request, { mode: "held", requesterId: "agent-2" });
     await flush();
 
@@ -765,6 +761,25 @@ describe("LeaseEngine", () => {
 
     expect(renewed.ttlDeadline).toBe(1_030);
     expect(detachedHarness.registry.snapshot.leases).toHaveLength(1);
+  });
+
+  it("renews a held lease via the engine, keeping it alive past its original backstop", async () => {
+    const harness = await createHarness({ lease: { detachedTtlMs: 20, heldTtlBackstopMs: 10 } });
+    const held = await harness.engine.request(request, { mode: "held", requesterId: "agent-1" });
+
+    harness.clock.advance(6);
+    const renewed = await harness.engine.renew(held.lease.id, 20);
+    expect(renewed.ttlDeadline).toBe(1_026);
+
+    // The original backstop deadline (1_010) has now passed, but the renewal re-armed
+    // the expiry timer at the new deadline, so the lease must still be alive.
+    harness.clock.advance(4);
+    await flush();
+    expect(harness.registry.snapshot.leases).toHaveLength(1);
+
+    harness.clock.advance(16);
+    await flush();
+    expect(harness.registry.snapshot.leases).toHaveLength(0);
   });
 
   it("enforces one active request or lease per requester, then permits another after release", async () => {

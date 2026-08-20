@@ -4,7 +4,7 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import type { DeviceRecord, LeaseRecord } from "./domain.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
-import { HeldLeaseRenewalError, LeaseLifecycle } from "./lease-lifecycle.js";
+import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 import { Registry, UnknownLeaseError, type ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
@@ -107,7 +107,7 @@ describe("LeaseReleaseCoordinator", () => {
     );
   });
 
-  it("delegates detached renewal and preserves held-renewal rejection", async () => {
+  it("delegates renewal to the lifecycle for both detached and held leases", async () => {
     const harness = await createHarness();
     const detached = await grant(harness, "detached");
     await expect(harness.coordinator.renew(detached.lease.id, 30)).resolves.toMatchObject({
@@ -116,9 +116,9 @@ describe("LeaseReleaseCoordinator", () => {
 
     const heldHarness = await createHarness();
     const held = await grant(heldHarness, "held");
-    await expect(heldHarness.coordinator.renew(held.lease.id, 30)).rejects.toBeInstanceOf(
-      HeldLeaseRenewalError,
-    );
+    await expect(heldHarness.coordinator.renew(held.lease.id, 30)).resolves.toMatchObject({
+      ttlDeadline: 1_030,
+    });
   });
 
   it("delegates heartbeat to the lifecycle and slides the held lease's deadline", async () => {

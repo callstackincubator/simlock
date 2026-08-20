@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { withDaemon, type CliResult } from "./helpers/index.js";
+import { waitForLeaseCount, withDaemon, type CliResult } from "./helpers/index.js";
 
 /**
  * Asserts the documented failure contract from docs/CLI.md#global-exit-codes: exit
@@ -84,7 +84,7 @@ describe("error and exit-code table", () => {
     expectStructuredFailure(result, 1, "UNKNOWN_LEASE");
   });
 
-  it("HELD_LEASE_RENEWAL (renewing a held-mode lease) -> falls back to exit 1", async () => {
+  it("lease renew on a held-mode lease -> exit 0 with a later deadline", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
@@ -104,8 +104,20 @@ describe("error and exit-code table", () => {
     const grant = JSON.parse(await held.firstStdoutLine()) as { lease: string };
 
     try {
+      const rows = await waitForLeaseCount(env, 1);
+      const before = rows.find((row) => row.id === grant.lease);
+      if (before === undefined) throw new Error(`lease ${grant.lease} not found before renew`);
+      const beforeDeadline = before.ttlDeadline as number;
+
       const result = await env.cli(["lease", "renew", grant.lease]);
-      expectStructuredFailure(result, 1, "HELD_LEASE_RENEWAL");
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      const renewed = result.json as { id: string; mode: string; ttlDeadline: number };
+      expect(renewed.id).toBe(grant.lease);
+      expect(renewed.mode).toBe("held");
+      // A held-mode lease used to have no escape hatch: renewal now resets its
+      // backstop deadline exactly like a detached lease's, instead of rejecting.
+      expect(renewed.ttlDeadline).toBeGreaterThan(beforeDeadline);
     } finally {
       held.kill("SIGTERM");
       await held.waitForExit(15_000);
