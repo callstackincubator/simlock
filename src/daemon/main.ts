@@ -131,6 +131,7 @@ async function discoverDrivers(options: {
     drivers.push(
       new IosSimctlDriver({
         clock: options.clock,
+        filesystem: options.filesystem,
         idGenerator: options.idGenerator,
         processRunner: options.processRunner,
       }),
