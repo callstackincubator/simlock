@@ -291,6 +291,26 @@ describe("CleanupReaper", () => {
     harness.reaper.dispose();
   });
 
+  it("stays side-effect free on a dry run under pressure, emitting nothing and running once", async () => {
+    const filesystem = new MutableFreeDiskFilesystem();
+    filesystem.setFreeDiskBytes(2 * gibibyte);
+    const evaluate = vi.fn(() => []);
+    const harness = await createHarness([{ evaluate, name: "test-rule" }], {}, { filesystem });
+
+    await harness.reaper.run({ dryRun: true });
+    await flush();
+
+    // Emitting the fact from a preview would wake this reaper through its own
+    // disk.pressure-detected subscription, so `cleanup --dry-run` would quietly
+    // schedule a real cleanup run -- visible here as a second rule evaluation.
+    expect(
+      harness.eventBus.replay().filter((event) => event.event === "disk.pressure-detected"),
+    ).toHaveLength(0);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+
+    harness.reaper.dispose();
+  });
+
   it("coalesces five trigger events during a run into one follow-up run", async () => {
     const evaluate = vi.fn(() => [
       { action: "shutdown" as const, reason: "test cleanup", rule: "test-rule", target: "dev_1" },

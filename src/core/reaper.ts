@@ -77,7 +77,10 @@ export class CleanupReaper {
   }
 
   async #runOnce({ dryRun = false, rule }: CleanupRunOptions = {}): Promise<readonly Proposal[]> {
-    const view = await this.#view();
+    // A dry run is a preview and must stay free of side effects: emitting the
+    // pressure fact from one would wake this reaper through its own subscription
+    // and turn `cleanup --dry-run` into a real cleanup.
+    const view = await this.#view({ observePressure: !dryRun });
     const proposals = filterProposals(this.#rulesFor(rule), view);
     if (dryRun) {
       return proposals;
@@ -150,10 +153,10 @@ export class CleanupReaper {
     return this.#automaticRules.filter((rule) => rule.name === name);
   }
 
-  async #view(): Promise<RegistryView> {
+  async #view({ observePressure }: { readonly observePressure: boolean }): Promise<RegistryView> {
     const snapshot = this.options.registry.snapshot;
     const diskFreeBytes = await this.options.filesystem.diskFree(this.options.diskPath ?? ".");
-    this.#notePressureCrossing(diskFreeBytes);
+    if (observePressure) this.#notePressureCrossing(diskFreeBytes);
     return {
       config: this.options.config,
       devices: snapshot.devices,
