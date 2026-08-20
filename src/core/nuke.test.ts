@@ -138,7 +138,7 @@ function config(): Config {
     diskPressure: { freeBytesThreshold: 1 },
     eventBuffer: { capacity: 10 },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000 },
+    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     limits: {
       android: { maxDevices: 1, maxRunning: 1 },
       ios: { maxDevices: 1, maxRunning: 1 },

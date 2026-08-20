@@ -4,6 +4,7 @@ import {
   type Config,
   type DeviceRequest,
   type LeaseProgress,
+  type LeaseRecord,
   NoCapacityError,
   NoDriverError,
   QueueTimeoutError,
@@ -22,7 +23,7 @@ import type {
   LeaseCommands,
   QueueControl,
 } from "../core/lease-ports.js";
-import type { IpcConnection } from "../ports/index.js";
+import type { Clock, IpcConnection, TimerHandle } from "../ports/index.js";
 import {
   DAEMON_PROTOCOL_VERSION,
   parseRequestFrame,
@@ -40,6 +41,7 @@ interface Connection {
   readonly progressRequesters: Set<string>;
   buffer: string;
   helloReceived: boolean;
+  heartbeatCapability: boolean;
   closed: boolean;
   unsubscribeEvents: (() => void) | undefined;
   releasing: Promise<void> | undefined;
@@ -48,6 +50,7 @@ interface Connection {
 export interface DaemonServerOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
+  readonly clock: Clock;
   readonly config: Config;
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
@@ -66,6 +69,8 @@ export class DaemonServer {
   readonly #connections = new Set<Connection>();
   readonly #protocolVersion: number;
   readonly #unsubscribeLeaseLost: Array<() => void> = [];
+  #heartbeatTimer: TimerHandle | undefined;
+  #heartbeatNonce = 0;
   #stopping = false;
   #stopPromise: Promise<void> | undefined;
 
@@ -98,6 +103,7 @@ export class DaemonServer {
       { configSnapshot: this.options.config, version: this.options.version },
       "daemon",
     );
+    this.#scheduleHeartbeatTick();
   }
 
   stop(reason = "requested"): Promise<void> {
@@ -111,6 +117,10 @@ export class DaemonServer {
 
   async #stop(reason: string): Promise<void> {
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
+    if (this.#heartbeatTimer !== undefined) {
+      this.options.clock.cancel(this.#heartbeatTimer);
+      this.#heartbeatTimer = undefined;
+    }
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.options.reaper.dispose();
     await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
@@ -129,6 +139,7 @@ export class DaemonServer {
       buffer: "",
       closed: false,
       helloReceived: false,
+      heartbeatCapability: false,
       heldLeaseIds: new Set(),
       progressDisposers: new Set(),
       progressRequesters: new Set(),
@@ -238,6 +249,9 @@ export class DaemonServer {
       return;
     }
     connection.helloReceived = true;
+    connection.heartbeatCapability = isObject(payload.capabilities)
+      ? payload.capabilities.heartbeat === true
+      : false;
     await writeFrame(connection.socket, {
       id: frame.id,
       ok: true,
@@ -283,6 +297,15 @@ export class DaemonServer {
             ? this.options.config.lease.detachedTtlMs
             : requiredNumber(payload, "ttlMs");
         return this.options.leases.renew(leaseId, ttlMs);
+      }
+      case "lease.heartbeat": {
+        if (!connection.heartbeatCapability) {
+          throw new ProtocolError(
+            "BAD_REQUEST",
+            "Connection did not declare the heartbeat capability",
+          );
+        }
+        return { leases: await this.#heartbeatHeldLeases(connection) };
       }
       case "status.get":
         return this.#status();
@@ -385,7 +408,7 @@ export class DaemonServer {
     const snapshot = this.options.registry.snapshot;
     switch (payload.kind) {
       case "leases":
-        return snapshot.leases;
+        return snapshot.leases.map((lease) => this.#decorateLease(lease));
       case "rules":
         return this.options.reaper.manualRules;
       case "devices":
@@ -415,9 +438,23 @@ export class DaemonServer {
     );
     return {
       ...snapshot,
+      leases: snapshot.leases.map((lease) => this.#decorateLease(lease)),
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
       health: "running",
       queueDepth: this.options.queue.queueDepth,
+    };
+  }
+
+  /**
+   * Adds a derived `lastHeartbeatAt` for held leases, without a new `LeaseRecord` field:
+   * since `heartbeat()` writes through the registry, `ttlDeadline - heldTtlBackstopMs` is
+   * exactly the moment of the most recent slide (or grant, if there hasn't been one yet).
+   */
+  #decorateLease(lease: LeaseRecord): LeaseRecord & { readonly lastHeartbeatAt?: number } {
+    if (lease.mode !== "held") return lease;
+    return {
+      ...lease,
+      lastHeartbeatAt: lease.ttlDeadline - this.options.config.lease.heldTtlBackstopMs,
     };
   }
 
@@ -430,6 +467,53 @@ export class DaemonServer {
 
   async #pushEvent(socket: IpcConnection, event: EventEnvelope): Promise<void> {
     await writeFrame(socket, { push: "event", payload: event });
+  }
+
+  /**
+   * Pushes `lease.heartbeat` every `lease.heartbeatIntervalMs` to every connection that
+   * both declared the capability at `hello` and currently holds at least one lease.
+   * Reschedules itself each tick since `Clock` has no `setInterval`.
+   */
+  #scheduleHeartbeatTick(): void {
+    if (this.#stopping) return;
+    this.#heartbeatTimer = this.options.clock.setTimer(
+      this.options.config.lease.heartbeatIntervalMs,
+      () => {
+        this.#sendHeartbeatPushes();
+        this.#scheduleHeartbeatTick();
+      },
+    );
+  }
+
+  #sendHeartbeatPushes(): void {
+    for (const connection of this.#connections) {
+      if (!connection.heartbeatCapability || connection.heldLeaseIds.size === 0) continue;
+      this.#heartbeatNonce += 1;
+      void this.#pushHeartbeat(connection.socket, this.#heartbeatNonce);
+    }
+  }
+
+  async #pushHeartbeat(socket: IpcConnection, nonce: number): Promise<void> {
+    await writeFrame(socket, { push: "lease.heartbeat", payload: { nonce } });
+  }
+
+  /**
+   * Slides every lease this connection holds. A lease that raced to expiry or release
+   * between the push and this pong is skipped rather than failing the whole heartbeat.
+   */
+  async #heartbeatHeldLeases(
+    connection: Connection,
+  ): Promise<Array<{ readonly leaseId: string; readonly ttlDeadline: number }>> {
+    const acked: Array<{ readonly leaseId: string; readonly ttlDeadline: number }> = [];
+    for (const leaseId of connection.heldLeaseIds) {
+      try {
+        const renewed = await this.options.leases.heartbeat(leaseId);
+        acked.push({ leaseId: renewed.id, ttlDeadline: renewed.ttlDeadline });
+      } catch (error: unknown) {
+        if (!(error instanceof UnknownLeaseError)) throw error;
+      }
+    }
+    return acked;
   }
 
   /**

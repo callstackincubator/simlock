@@ -5,7 +5,13 @@ export {
   type CapacityDevice,
   runningCapacity,
 } from "./capacity.js";
-export { type DeviceRecord, type DeviceSpec, IllegalTransition, transition } from "./domain.js";
+export {
+  type DeviceRecord,
+  type DeviceSpec,
+  type LeaseRecord,
+  IllegalTransition,
+  transition,
+} from "./domain.js";
 export { type CleanupRule, type RegistryView } from "./cleanup/types.js";
 export { automaticCleanupRules } from "./cleanup/rules.js";
 export { CleanupReaper } from "./reaper.js";

@@ -70,6 +70,10 @@ export class IpcDaemonConnection implements DaemonConnection {
       return;
     }
     if (frame.kind === "push") {
+      if (frame.push === "lease.heartbeat") {
+        this.#respondToHeartbeat(frame.payload);
+        return;
+      }
       for (const listener of this.#listeners) listener(frame.push, frame.payload);
       return;
     }
@@ -91,6 +95,22 @@ export class IpcDaemonConnection implements DaemonConnection {
   #failPending(error: Error): void {
     for (const pending of this.#pending.values()) pending.reject(error);
     this.#pending.clear();
+  }
+
+  /**
+   * Answers a server-pushed `lease.heartbeat` with an ordinary request frame carrying the
+   * same nonce, then re-surfaces the ack (the slid deadlines) to this connection's own push
+   * listeners under the same push kind. This is where the capability actually lives: any
+   * frontend that declares it at `hello` inherits ponging for free, with no MCP-specific code.
+   * A connection that never declared the capability never receives this push in the first
+   * place, so this handler is otherwise inert.
+   */
+  #respondToHeartbeat(payload: unknown): void {
+    void this.request("lease.heartbeat", payload)
+      .then((ack) => {
+        for (const listener of this.#listeners) listener("lease.heartbeat", ack);
+      })
+      .catch(() => undefined);
   }
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { MemoryIpcTransport, type IpcConnection } from "../ports/index.js";
 import { IpcDaemonConnection } from "./connection.js";
@@ -18,6 +18,66 @@ describe("IpcDaemonConnection", () => {
     await server?.write('true,"payload":{"ok":true}}\n');
     await expect(response).resolves.toEqual({ ok: true });
     expect(pushes).toEqual([{ id: 1 }]);
+  });
+
+  it("auto-answers a lease.heartbeat push with a request frame, and re-surfaces the ack as a push", async () => {
+    const ipc = new MemoryIpcTransport();
+    const serverRequests: Array<{
+      readonly id: number;
+      readonly type: string;
+      readonly payload: unknown;
+    }> = [];
+    let server: Awaited<ReturnType<typeof ipc.connect>> | undefined;
+    await ipc.listen("/daemon.sock", (connection) => {
+      server = connection;
+      connection.onData((contents) => {
+        const frame = JSON.parse(contents) as {
+          readonly id: number;
+          readonly type: string;
+          readonly payload: unknown;
+        };
+        serverRequests.push(frame);
+        if (frame.type === "lease.heartbeat") {
+          void connection.write(
+            `${JSON.stringify({
+              id: frame.id,
+              ok: true,
+              payload: { leases: [{ leaseId: "lse_1", ttlDeadline: 5_000 }] },
+            })}\n`,
+          );
+        }
+      });
+    });
+    const client = new IpcDaemonConnection(await ipc.connect("/daemon.sock"));
+    const pushes: Array<{ readonly kind: string; readonly payload: unknown }> = [];
+    client.onPush((kind, payload) => pushes.push({ kind, payload }));
+
+    await server?.write('{"push":"lease.heartbeat","payload":{"nonce":7}}\n');
+    await vi.waitFor(() => expect(pushes).toHaveLength(1));
+
+    // The client never surfaces the raw server push (nonce) to its own listeners...
+    expect(serverRequests).toEqual([{ id: 1, payload: { nonce: 7 }, type: "lease.heartbeat" }]);
+    // ...only the ack it got back, under the same push kind.
+    expect(pushes).toEqual([
+      { kind: "lease.heartbeat", payload: { leases: [{ leaseId: "lse_1", ttlDeadline: 5_000 }] } },
+    ]);
+  });
+
+  it("swallows a lease.heartbeat push it cannot answer (connection already closed)", async () => {
+    const ipc = new MemoryIpcTransport();
+    let server: Awaited<ReturnType<typeof ipc.connect>> | undefined;
+    await ipc.listen("/daemon.sock", (connection) => {
+      server = connection;
+    });
+    const client = new IpcDaemonConnection(await ipc.connect("/daemon.sock"));
+    const pushes: unknown[] = [];
+    client.onPush((kind, payload) => pushes.push({ kind, payload }));
+    await client.close();
+
+    await expect(
+      server?.write('{"push":"lease.heartbeat","payload":{"nonce":1}}\n'),
+    ).resolves.toBeUndefined();
+    expect(pushes).toEqual([]);
   });
 
   it("multiplexes concurrent ids and preserves daemon errors", async () => {

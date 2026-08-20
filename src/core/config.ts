@@ -21,6 +21,7 @@ export interface Config {
   readonly lease: {
     readonly heldTtlBackstopMs: number;
     readonly detachedTtlMs: number;
+    readonly heartbeatIntervalMs: number;
   };
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
@@ -55,7 +56,20 @@ export async function loadConfig({
   const fileConfig = validateConfigLayer(fromFile, "", warn);
   const overrideConfig = validateConfigLayer(overrides ?? {}, "", warn);
 
-  return deepFreeze(mergeConfig(mergeConfig(defaults, fileConfig), overrideConfig));
+  const merged = mergeConfig(mergeConfig(defaults, fileConfig), overrideConfig);
+  validateHeartbeatInterval(merged);
+  return deepFreeze(merged);
+}
+
+/**
+ * Cross-field check: the heartbeat cadence must be frequent enough, relative to the
+ * backstop, that a few missed beats (context compaction, a slow tick) still land well
+ * before the backstop deadline rather than racing it.
+ */
+function validateHeartbeatInterval(config: Config): void {
+  if (config.lease.heartbeatIntervalMs > config.lease.heldTtlBackstopMs / 4) {
+    throw invalidValue("lease.heartbeatIntervalMs", "at most lease.heldTtlBackstopMs / 4");
+  }
 }
 
 function defaultConfig(systemStats: SystemStats): Config {
@@ -85,6 +99,7 @@ function defaultConfig(systemStats: SystemStats): Config {
     lease: {
       heldTtlBackstopMs: 60 * 60_000,
       detachedTtlMs: 15 * 60_000,
+      heartbeatIntervalMs: 5 * 60_000,
     },
     diskPressure: { freeBytesThreshold: 10 * GIBIBYTE },
     eventBuffer: { capacity: 1_000 },
@@ -146,6 +161,7 @@ const validators = {
   lease: objectValidator({
     heldTtlBackstopMs: nonNegativeNumber,
     detachedTtlMs: nonNegativeNumber,
+    heartbeatIntervalMs: positiveInteger,
   }),
   diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
   eventBuffer: objectValidator({ capacity: positiveInteger }),

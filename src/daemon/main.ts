@@ -98,6 +98,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const daemon = new DaemonServer({
     capacity: leaseEngine,
     catalog: leaseEngine,
+    clock,
     config,
     doctor,
     defaultRequesterId:

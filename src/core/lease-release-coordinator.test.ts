@@ -42,7 +42,7 @@ async function createHarness() {
     registry,
     warmPool,
   });
-  return { coordinator, eventBus, lifecycle, reclaims, registry, warmPool };
+  return { clock, coordinator, eventBus, lifecycle, reclaims, registry, warmPool };
 }
 
 async function grant(
@@ -119,6 +119,18 @@ describe("LeaseReleaseCoordinator", () => {
     await expect(heldHarness.coordinator.renew(held.lease.id, 30)).rejects.toBeInstanceOf(
       HeldLeaseRenewalError,
     );
+  });
+
+  it("delegates heartbeat to the lifecycle and slides the held lease's deadline", async () => {
+    const harness = await createHarness();
+    const held = await grant(harness, "held");
+    expect(held.lease.ttlDeadline).toBe(1_010);
+
+    harness.clock.advance(3);
+    await expect(harness.coordinator.heartbeat(held.lease.id)).resolves.toMatchObject({
+      ttlDeadline: 1_013,
+    });
+    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_013 }]);
   });
 
   it("ignores an expiry delivery for a deadline replaced by renewal", async () => {

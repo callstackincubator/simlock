@@ -39,6 +39,14 @@ export class HeldLeaseRenewalError extends Error {
   }
 }
 
+/** A heartbeat slides to the *held* backstop, so it must never be applied to a detached lease. */
+export class DetachedLeaseHeartbeatError extends Error {
+  constructor(readonly leaseId: string) {
+    super(`Detached lease cannot be heartbeated: ${leaseId}`);
+    this.name = "DetachedLeaseHeartbeatError";
+  }
+}
+
 /** Registry-backed lease state changes, deliberately excluding reclaiming and queue wakeups. */
 export class LeaseLifecycle {
   constructor(private readonly options: LeaseLifecycleOptions) {}
@@ -79,6 +87,31 @@ export class LeaseLifecycle {
     const renewed = await this.options.registry.renewLease(
       leaseId,
       this.options.clock.now() + ttlMs,
+    );
+    this.options.eventBus.emit(
+      "lease.renewed",
+      { leaseId: renewed.id, newDeadline: renewed.ttlDeadline },
+      "lease-lifecycle",
+    );
+    this.options.expiryScheduler.replace(renewed);
+    return renewed;
+  }
+
+  /**
+   * Slides a held lease's deadline back out to a full backstop from now, driven by an
+   * application-level heartbeat from its holder. Goes through the registry (not a direct
+   * `expiryScheduler.replace`) so the persisted `ttlDeadline` never goes stale: a daemon
+   * restart mid-lease must restore the slid deadline, not the grant-time one.
+   */
+  // fallow-ignore-next-line unused-class-member -- called by LeaseReleaseCoordinator through the lifecycle port (same as the sibling renew).
+  async heartbeat(leaseId: string): Promise<LeaseRecord> {
+    const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
+    if (current !== undefined && current.mode !== "held")
+      throw new DetachedLeaseHeartbeatError(leaseId);
+
+    const renewed = await this.options.registry.renewLease(
+      leaseId,
+      this.options.clock.now() + this.options.ttl.heldBackstopMs,
     );
     this.options.eventBus.emit(
       "lease.renewed",

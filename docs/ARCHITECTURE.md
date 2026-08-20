@@ -139,6 +139,26 @@ Conclusions baked into the drivers:
   agent must `pitlane renew` periodically.
 - **TTL backstop**: even held leases have a long daemon-side TTL for zombie
   sockets, machine sleep, etc.
+- **Heartbeat-driven sliding TTL, capability-gated**: a held lease's backstop
+  deadline is set once at grant and never moves unless its holder proves it is
+  still alive. The daemon pushes `lease.heartbeat` every
+  `lease.heartbeatIntervalMs` to a connection only if it (a) holds at least one
+  lease and (b) declared `capabilities: { heartbeat: true }` at `hello`
+  (`src/daemon/server.ts`). `IpcDaemonConnection` answers automatically with a
+  `lease.heartbeat` request (`src/daemon-client/connection.ts`), so any
+  frontend inherits ponging for free just by declaring the capability — no
+  frontend-specific pong code. The daemon slides every lease the connection
+  holds through `LeaseLifecycle.heartbeat()`, which goes through
+  `registry.renewLease()` (not a direct `expiryScheduler.replace()`) so the
+  persisted deadline never goes stale and a daemon restart mid-lease restores
+  the slid deadline, not the grant-time one. It is a pure sliding window: a
+  holder that stops ponging simply reaches its existing backstop deadline and
+  expires exactly as before — no missed-pong counter, no extra expiry reason.
+  MCP declares the capability because its holder process dies with its agent
+  (stdin EOF); the CLI deliberately does not, because a backgrounded `pitlane
+  lease` gets reparented on the holder's death (see
+  [known-pitfalls.md](known-pitfalls.md)) and would otherwise pong forever,
+  turning a bounded leak into an unbounded one.
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).
 

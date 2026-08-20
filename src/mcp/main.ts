@@ -130,6 +130,10 @@ function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "c
   return {
     connect: () =>
       connectDaemon({
+        // MCP's holder process dies with its agent (stdin EOF -> session.close()), so a
+        // sliding TTL is safe here. The CLI deliberately does not declare this — see
+        // docs/known-pitfalls.md on reparented CLI holders.
+        capabilities: { heartbeat: true },
         clock,
         ipc,
         launcher: new NodeDaemonLauncher({
