@@ -111,9 +111,60 @@ describe("IpcDaemonConnection", () => {
     const client = new IpcDaemonConnection(await ipc.connect("/daemon.sock"));
     const pending = client.request("wait", {});
     await server?.close();
-    await expect(pending).rejects.toThrow("Daemon connection closed");
+    await expect(pending).rejects.toMatchObject({
+      code: "DAEMON_CONNECTION_LOST",
+      message: "Daemon connection closed",
+    });
     await client.close();
     await client.close();
+  });
+
+  it("notifies onClose exactly once when the underlying socket dies", async () => {
+    const ipc = new MemoryIpcTransport();
+    let server: Awaited<ReturnType<typeof ipc.connect>> | undefined;
+    await ipc.listen("/daemon.sock", (connection) => {
+      server = connection;
+    });
+    const client = new IpcDaemonConnection(await ipc.connect("/daemon.sock"));
+    let closeCount = 0;
+    client.onClose(() => (closeCount += 1));
+
+    await server?.close();
+    expect(closeCount).toBe(1);
+
+    // The socket is already gone; explicitly closing on top must not fire onClose again.
+    await client.close();
+    expect(closeCount).toBe(1);
+  });
+
+  it("notifies onClose exactly once when closed explicitly, and a later socket death is a no-op", async () => {
+    const ipc = new MemoryIpcTransport();
+    let server: Awaited<ReturnType<typeof ipc.connect>> | undefined;
+    await ipc.listen("/daemon.sock", (connection) => {
+      server = connection;
+    });
+    const client = new IpcDaemonConnection(await ipc.connect("/daemon.sock"));
+    let closeCount = 0;
+    client.onClose(() => (closeCount += 1));
+
+    await client.close();
+    expect(closeCount).toBe(1);
+    await server?.close();
+    expect(closeCount).toBe(1);
+  });
+
+  it("rejects a request made after the socket has already closed with DAEMON_CONNECTION_LOST", async () => {
+    const ipc = new MemoryIpcTransport();
+    let server: Awaited<ReturnType<typeof ipc.connect>> | undefined;
+    await ipc.listen("/daemon.sock", (connection) => {
+      server = connection;
+    });
+    const client = new IpcDaemonConnection(await ipc.connect("/daemon.sock"));
+    await server?.close();
+
+    await expect(client.request("status.get", {})).rejects.toMatchObject({
+      code: "DAEMON_CONNECTION_LOST",
+    });
   });
 
   it("rejects pending work when the daemon sends malformed JSON", async () => {

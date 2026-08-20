@@ -120,6 +120,7 @@ describe("DaemonStartupCoordinator", () => {
 function stubConnection(): DaemonConnection {
   return {
     close: async () => undefined,
+    onClose: () => () => undefined,
     onPush: () => () => undefined,
     request: async () => undefined,
   };

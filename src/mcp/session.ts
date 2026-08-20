@@ -89,6 +89,7 @@ export class McpSession {
   #sessionClosed: Promise<never>;
   #ownedLease: OwnedLease | undefined;
   #pushUnsubscribe: (() => void) | undefined;
+  #closeUnsubscribe: (() => void) | undefined;
   /** Scoped to the in-flight `lease()` call; cleared once that call settles or the session closes. */
   #leaseProgressListener: ((progress: LeaseProgressNotice) => void) | undefined;
   readonly #leaseLostListeners = new Set<(notice: LeaseLostNotice) => void>();
@@ -143,14 +144,10 @@ export class McpSession {
   listDevices(input: ListDevicesInput): Promise<ListDevicesOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
-      const connection = await this.#connectionForUse();
-      const response = await Promise.race([
-        connection.request(
-          "catalog.get",
-          input.platform === undefined ? {} : { platform: input.platform },
-        ),
-        this.#sessionClosed,
-      ]);
+      const response = await this.#requestReadOnly(
+        "catalog.get",
+        input.platform === undefined ? {} : { platform: input.platform },
+      );
       const catalog = parseRawCatalog(response);
       return listDevicesOutputSchema.parse({
         platforms: catalog.platforms.map((entry) => ({
@@ -182,6 +179,8 @@ export class McpSession {
     this.#leaseProgressListener = undefined;
     this.#pushUnsubscribe?.();
     this.#pushUnsubscribe = undefined;
+    this.#closeUnsubscribe?.();
+    this.#closeUnsubscribe = undefined;
     this.#rejectClosed(new McpSessionError("SESSION_CLOSED", "MCP session is closed"));
     const connection = this.#connection;
     this.#connection = undefined;
@@ -303,6 +302,11 @@ export class McpSession {
     else if (responseReceived) await this.#closeConnection().catch(() => undefined);
   }
 
+  /**
+   * Reconnects lazily: a dead `#connection` (cleared by `#handleConnectionClosed`, below) makes
+   * the next call re-run `#connect()`, which auto-starts the daemon exactly as the CLI does and
+   * re-negotiates capabilities (e.g. the heartbeat) at `hello`, free of charge.
+   */
   async #connectionForUse(): Promise<DaemonConnection> {
     if (this.#connection !== undefined) return this.#connection;
     this.#connecting ??= this.#connect();
@@ -315,10 +319,12 @@ export class McpSession {
       }
       this.#connection = connection;
       this.#pushUnsubscribe = connection.onPush((kind, payload) => this.#handlePush(kind, payload));
+      this.#closeUnsubscribe = connection.onClose(() => this.#handleConnectionClosed(connection));
       return connection;
     } catch (error: unknown) {
       this.#throwIfClosed();
-      throw error;
+      if (error instanceof DaemonClientError || error instanceof McpSessionError) throw error;
+      throw new DaemonClientError("DAEMON_UNAVAILABLE", errorMessage(error));
     } finally {
       if (this.#connecting === connecting) this.#connecting = undefined;
     }
@@ -329,7 +335,60 @@ export class McpSession {
     this.#connection = undefined;
     this.#pushUnsubscribe?.();
     this.#pushUnsubscribe = undefined;
+    this.#closeUnsubscribe?.();
+    this.#closeUnsubscribe = undefined;
     if (connection !== undefined) await this.#closeDaemonConnection(connection);
+  }
+
+  /**
+   * The invariant this relies on: a dead connection means the held lease is already gone
+   * daemon-side, by one of three paths — a graceful `daemon stop` releases held leases before
+   * exiting, an ordinary connection close releases that connection's held leases the same way,
+   * and an ungraceful death leaves the lease persisted for the startup path to release as
+   * `orphaned`. So this never asks the daemon; it just stops believing the lease is ours and
+   * tells the agent (#15's `onLeaseLost` channel) so it can decide whether to re-lease.
+   */
+  #handleConnectionClosed(connection: DaemonConnection): void {
+    if (this.#connection !== connection) return;
+    this.#connection = undefined;
+    this.#pushUnsubscribe?.();
+    this.#pushUnsubscribe = undefined;
+    this.#closeUnsubscribe = undefined;
+    if (this.#ownedLease === undefined) return;
+    const lease = this.#ownedLease;
+    this.#ownedLease = undefined;
+    for (const listener of this.#leaseLostListeners) {
+      listener({
+        deviceId: lease.deviceId,
+        leaseId: lease.leaseId,
+        reason: "daemon-connection-lost",
+      });
+    }
+  }
+
+  /**
+   * Retries at most once, and only for idempotent, read-only requests. A `lease.request` must
+   * never go through here: retrying it after a mid-request connection death could provision and
+   * grant a *second* device, which would violate "reconnecting never implicitly acquires one".
+   */
+  async #requestReadOnly(type: string, payload: unknown): Promise<unknown> {
+    const connection = await this.#connectionForUse();
+    try {
+      return await Promise.race([connection.request(type, payload), this.#sessionClosed]);
+    } catch (error: unknown) {
+      if (!(error instanceof DaemonClientError) || error.code !== "DAEMON_CONNECTION_LOST") {
+        throw error;
+      }
+      // The close listener may not have run yet -- `IpcDaemonConnection.request()` also
+      // rejects synchronously once it observes the transport already closed, ahead of the
+      // underlying `onClose` propagating back to `#handleConnectionClosed`. Don't trust that
+      // ordering: if this is still the connection that just failed, drop it explicitly so
+      // `#connectionForUse()` is forced to build a fresh one instead of handing back the same
+      // dead connection.
+      if (this.#connection === connection) await this.#closeConnection().catch(() => undefined);
+      const retryConnection = await this.#connectionForUse();
+      return await Promise.race([retryConnection.request(type, payload), this.#sessionClosed]);
+    }
   }
 
   /**
@@ -422,6 +481,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 function noop(): void {}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function daemonLeaseRequest(
   input: LeaseSimulatorInput,

@@ -212,6 +212,10 @@ class LeaseConnection implements DaemonConnection {
   onPush(): () => void {
     return () => undefined;
   }
+
+  onClose(): () => void {
+    return () => undefined;
+  }
   async request(_type: string, payload: unknown): Promise<unknown> {
     this.lastRequesterId = (payload as { readonly requesterId?: unknown }).requesterId;
     return {

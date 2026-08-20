@@ -340,6 +340,10 @@ class StubConnection implements DaemonConnection {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
+
+  onClose(): () => void {
+    return () => undefined;
+  }
   pushLeaseLost(payload: {
     readonly deviceId: string;
     readonly leaseId: string;
