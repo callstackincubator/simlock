@@ -198,6 +198,19 @@ export class Registry {
     return cloneDevice(updated);
   }
 
+  /** Flags a device whose provenance marks no longer prove Pitlane owns it. */
+  async markForeignProvenanceDetected(deviceId: string, at: number): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.foreignProvenanceDetectedAt !== undefined) {
+      return cloneDevice(device);
+    }
+    const updated = { ...device, foreignProvenanceDetectedAt: at };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
   /** Clears the foreign-state flag once `doctor --fix` has reconciled the device. */
   async clearForeignStateDetected(deviceId: string): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
@@ -386,6 +399,7 @@ const deviceRecordKeys = [
   "createdAt",
   "lastLeaseEndedAt",
   "foreignStateDetectedAt",
+  "foreignProvenanceDetectedAt",
 ] as const;
 const leaseRecordKeys = [
   "id",
@@ -437,6 +451,7 @@ function parseDevice(value: unknown): DeviceRecord {
     createdAt,
     driverData,
     driverDeviceId,
+    foreignProvenanceDetectedAt,
     foreignStateDetectedAt,
     id,
     lastLeaseEndedAt,
@@ -451,7 +466,8 @@ function parseDevice(value: unknown): DeviceRecord {
     !isDeviceSpec(spec) ||
     !("driverData" in value) ||
     (lastLeaseEndedAt !== undefined && typeof lastLeaseEndedAt !== "number") ||
-    (foreignStateDetectedAt !== undefined && typeof foreignStateDetectedAt !== "number")
+    (foreignStateDetectedAt !== undefined && typeof foreignStateDetectedAt !== "number") ||
+    (foreignProvenanceDetectedAt !== undefined && typeof foreignProvenanceDetectedAt !== "number")
   ) {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
@@ -459,6 +475,7 @@ function parseDevice(value: unknown): DeviceRecord {
   return {
     ...(lastLeaseEndedAt === undefined ? {} : { lastLeaseEndedAt }),
     ...(foreignStateDetectedAt === undefined ? {} : { foreignStateDetectedAt }),
+    ...(foreignProvenanceDetectedAt === undefined ? {} : { foreignProvenanceDetectedAt }),
     createdAt,
     driverData,
     driverDeviceId,

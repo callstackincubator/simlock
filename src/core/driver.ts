@@ -19,8 +19,33 @@ export interface DriverDevice {
  */
 export type ObservedRunState = "running" | "stopped" | "transitioning";
 
+/**
+ * Provenance-mark readings for one managed device. Pitlane writes the same
+ * token into two regions of a device it owns: one that survives a fresh-state
+ * erase and one the erase destroys. Comparing the pair is what makes a foreign
+ * erase visible -- an erased device still exists and still boots, so run-state
+ * comparison alone can never see it.
+ *
+ * Where each region lives is the driver's business; the core only compares.
+ */
+export interface ObservedMark {
+  /** Token in the region that survives an erase, or undefined when absent. */
+  readonly durable: string | undefined;
+  /** Token in the region an erase destroys, or undefined when absent. */
+  readonly erasable: string | undefined;
+  /**
+   * False when the erasable region could not be read at all this tick -- an
+   * Android mark lives on the userdata partition and is only reachable over
+   * `adb` while the emulator runs. Unreadable is not the same as absent and
+   * must never be reported as an erase.
+   */
+  readonly erasableReadable: boolean;
+}
+
 export interface ObservedDevice extends DriverDevice {
   readonly runState: ObservedRunState;
+  /** Undefined from drivers that do not implement provenance marks. */
+  readonly mark?: ObservedMark;
 }
 
 /** Reality observable by a driver without trusting the registry. */

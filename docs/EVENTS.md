@@ -30,6 +30,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.shutdown` | device id, initiator (rule/command) | device stopped, still on disk | Registry; WarmPoolCoordinator for interrupted reclaim recovery | implemented |
 | `device.deleted` | device id, initiator | device removed from disk and registry | Registry | implemented |
 | `device.foreign-state-detected` | device id, platform, expected (running/stopped), observed (running/stopped) | doctor reconcile found a managed device's observed boot state disagreeing with the committed registry state | Doctor | implemented |
+| `device.foreign-provenance-detected` | device id, platform, detail (erased/mark-mismatch/durable-mark-missing) | doctor reconcile found a managed device's provenance marks no longer proving Pitlane owns it | Doctor | implemented |
 | `runtime.deleted` | runtime id, initiator | runtime / system image GC'd | — | planned |
 
 ## System

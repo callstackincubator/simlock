@@ -1,7 +1,7 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
 import type { DeviceRecord, DeviceState, Platform } from "./domain.js";
-import type { Driver, DriverDevice, ObservedDevice } from "./driver.js";
+import type { Driver, DriverDevice, ObservedDevice, ObservedMark } from "./driver.js";
 import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
 
@@ -20,7 +20,25 @@ export type DoctorFinding =
       readonly platform: Platform;
       readonly expected: "running" | "stopped";
       readonly observed: "running" | "stopped";
+    }
+  | {
+      readonly kind: "foreign-provenance-change";
+      readonly deviceId: string;
+      readonly platform: Platform;
+      readonly detail: ProvenanceDrift;
     };
+
+/**
+ * `erased` -- the durable mark stands but the erasable one is gone: the device
+ * was erased or wiped outside Pitlane.
+ * `mark-mismatch` -- both regions carry a token but they disagree, so
+ * something re-marked one region independently.
+ * `durable-mark-missing` -- the durable region carries no token at all: the
+ * device definition was recreated, or foreign tooling rewrote it. On Android
+ * that also catches an `avdmanager create` reusing a `pitlane_` name, which
+ * the prefix match in `listManaged` would otherwise adopt silently.
+ */
+export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
 
 export interface DoctorReport {
   readonly findings: readonly DoctorFinding[];
@@ -67,6 +85,12 @@ export class Doctor {
       if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
         await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
       }
+      if (deviceFindings.some((finding) => finding.kind === "foreign-provenance-change")) {
+        await this.options.registry.markForeignProvenanceDetected(
+          device.id,
+          this.options.clock.now(),
+        );
+      }
     }
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
@@ -82,17 +106,25 @@ export class Doctor {
 
   #emitForeignStateEvents(findings: readonly DoctorFinding[]): void {
     for (const finding of findings) {
-      if (finding.kind !== "foreign-state-change") continue;
-      this.options.eventBus.emit(
-        "device.foreign-state-detected",
-        {
-          deviceId: finding.deviceId,
-          expected: finding.expected,
-          observed: finding.observed,
-          platform: finding.platform,
-        },
-        "doctor",
-      );
+      if (finding.kind === "foreign-state-change") {
+        this.options.eventBus.emit(
+          "device.foreign-state-detected",
+          {
+            deviceId: finding.deviceId,
+            expected: finding.expected,
+            observed: finding.observed,
+            platform: finding.platform,
+          },
+          "doctor",
+        );
+      }
+      if (finding.kind === "foreign-provenance-change") {
+        this.options.eventBus.emit(
+          "device.foreign-provenance-detected",
+          { detail: finding.detail, deviceId: finding.deviceId, platform: finding.platform },
+          "doctor",
+        );
+      }
     }
   }
 
@@ -113,6 +145,9 @@ export class Doctor {
           break;
         case "foreign-state-change":
           await this.#fixForeignStateChange(finding);
+          break;
+        case "foreign-provenance-change":
+          // Report-only: re-marking destroys the evidence, and the device may be leased.
           break;
       }
     }
@@ -178,14 +213,16 @@ function registryDriftFindings(
     });
   }
 
+  // `expected === undefined` means the registry is mid-transition (provisioning,
+  // reclaiming, deleted). Pitlane is acting on the device itself in those states,
+  // including erasing it, so neither run state nor marks are compared.
   const expected = expectedRunState(device.state);
-  const observed = expected === undefined ? undefined : observedDevices.get(deviceKey);
-  if (
-    expected !== undefined &&
-    observed !== undefined &&
-    observed.runState !== "transitioning" &&
-    observed.runState !== expected
-  ) {
+  const observed = observedDevices.get(deviceKey);
+  if (expected === undefined || observed === undefined) {
+    return findings;
+  }
+
+  if (observed.runState !== "transitioning" && observed.runState !== expected) {
     findings.push({
       deviceId: device.id,
       expected,
@@ -195,7 +232,35 @@ function registryDriftFindings(
     });
   }
 
+  const detail = observed.mark === undefined ? undefined : provenanceDrift(observed.mark);
+  if (detail !== undefined) {
+    findings.push({
+      detail,
+      deviceId: device.id,
+      kind: "foreign-provenance-change",
+      platform: device.spec.platform,
+    });
+  }
+
   return findings;
+}
+
+/**
+ * Report-only by design. Re-marking would overwrite the only evidence that the
+ * device was tampered with, and a fresh mark cannot be written to a leased
+ * device without disturbing its holder -- so the core never repairs a mark.
+ */
+function provenanceDrift(mark: ObservedMark): ProvenanceDrift | undefined {
+  if (mark.durable === undefined) {
+    return "durable-mark-missing";
+  }
+  if (!mark.erasableReadable) {
+    return undefined;
+  }
+  if (mark.erasable === undefined) {
+    return "erased";
+  }
+  return mark.erasable === mark.durable ? undefined : "mark-mismatch";
 }
 
 function orphanFindings(

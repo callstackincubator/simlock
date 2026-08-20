@@ -55,6 +55,11 @@ export interface EventMap {
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };
+  "device.foreign-provenance-detected": {
+    readonly deviceId: string;
+    readonly platform: string;
+    readonly detail: string;
+  };
   "device.foreign-state-detected": {
     readonly deviceId: string;
     readonly platform: string;
