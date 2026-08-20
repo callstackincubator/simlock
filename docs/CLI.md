@@ -99,7 +99,10 @@ unless `--yes`.
 Start Pitlane's local stdio MCP server. It accepts no flags. Standard output
 is reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The
 server auto-starts the daemon when needed and exposes the focused
-`lease_simulator` and `release_simulator` tool surface for one agent session.
+`lease_simulator`, `release_simulator`, and `lease_status` tool surface for
+one agent session. If that session's held lease ends elsewhere (expiry or a
+force-release), the server relays it as an MCP logging notification. See
+[../README.md](../README.md#mcp-integration-optional) for details.
 
 The requester identity for leases made through this server is
 `PITLANE_AGENT_ID`, falling back to a pid-derived value — see
