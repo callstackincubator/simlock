@@ -5,6 +5,8 @@ import {
   leaseSimulatorOutputSchema,
   leaseStatusInputSchema,
   leaseStatusOutputSchema,
+  listDevicesInputSchema,
+  listDevicesOutputSchema,
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
 } from "./contracts.js";
@@ -28,6 +30,25 @@ export function createMcpServer(session: McpSession): McpServer {
     async (input, extra) => {
       try {
         const output = await session.lease(input, extra.signal);
+        return success(output);
+      } catch (error: unknown) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_devices",
+    {
+      title: "List devices",
+      description:
+        "List resolvable device models and installed runtimes per available platform, marking each platform's default runtime (the newest installed). Read-only: never downloads a runtime or system image. Call this once to pick a valid device/os combination before lease_simulator, instead of guessing.",
+      inputSchema: listDevicesInputSchema,
+      outputSchema: listDevicesOutputSchema,
+    },
+    async (input) => {
+      try {
+        const output = await session.listDevices(input);
         return success(output);
       } catch (error: unknown) {
         return failure(error);

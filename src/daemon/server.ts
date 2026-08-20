@@ -16,7 +16,12 @@ import {
   type Nuke,
   UnknownLeaseError,
 } from "../core/index.js";
-import type { CapacityReader, LeaseCommands, QueueControl } from "../core/lease-ports.js";
+import type {
+  CapacityReader,
+  CatalogReader,
+  LeaseCommands,
+  QueueControl,
+} from "../core/lease-ports.js";
 import type { IpcConnection } from "../ports/index.js";
 import {
   DAEMON_PROTOCOL_VERSION,
@@ -41,12 +46,13 @@ interface Connection {
 }
 
 export interface DaemonServerOptions {
+  readonly capacity: CapacityReader;
+  readonly catalog: CatalogReader;
   readonly config: Config;
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
-  readonly capacity: CapacityReader;
   readonly leases: LeaseCommands;
   readonly protocolVersion?: number;
   readonly queue: QueueControl;
@@ -282,6 +288,10 @@ export class DaemonServer {
         return this.#status();
       case "list.get":
         return this.#list(objectPayload(frame.payload));
+      case "catalog.get": {
+        const payload = objectPayload(frame.payload);
+        return { platforms: await this.options.catalog.listCatalog(optionalPlatform(payload)) };
+      }
       case "cleanup.run": {
         const payload = objectPayload(frame.payload);
         return this.options.reaper.run({
@@ -567,6 +577,13 @@ function requiredPlatform(payload: Record<string, unknown>): "ios" | "android" {
     throw new ProtocolError("BAD_REQUEST", "platform must be ios or android");
   }
   return platform;
+}
+
+function optionalPlatform(payload: Record<string, unknown>): "ios" | "android" | undefined {
+  if (payload.platform === undefined) {
+    return undefined;
+  }
+  return requiredPlatform(payload);
 }
 
 // fallow-ignore-next-line complexity -- preserves stable protocol error mapping.

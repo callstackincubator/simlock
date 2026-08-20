@@ -282,6 +282,31 @@ describe("DaemonServer", () => {
     expect(harness.registry.snapshot.leases).toEqual([]);
   });
 
+  it("serves the device catalog, omitting platforms with no registered driver", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(client.request("catalog.get", {})).resolves.toMatchObject({
+      ok: true,
+      payload: {
+        platforms: [{ defaultRuntime: "26.5", models: [], platform: "ios", runtimes: ["26.5"] }],
+      },
+    });
+    await expect(client.request("catalog.get", { platform: "ios" })).resolves.toMatchObject({
+      ok: true,
+      payload: { platforms: [{ platform: "ios" }] },
+    });
+    await expect(client.request("catalog.get", { platform: "android" })).resolves.toMatchObject({
+      ok: true,
+      payload: { platforms: [] },
+    });
+    await expect(client.request("catalog.get", { platform: "foo" })).resolves.toMatchObject({
+      error: { code: "BAD_REQUEST" },
+      ok: false,
+    });
+  });
+
   it("recovers a stale socket file and refuses a second live daemon", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pitlane-stale-"));
     temporaryDirectories.push(directory);
@@ -471,6 +496,7 @@ async function createHarness(
   });
   const daemon = new DaemonServer({
     capacity: engine,
+    catalog: engine,
     config,
     defaultRequesterId: "test-process",
     eventBus,

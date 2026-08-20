@@ -97,6 +97,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   await leaseEngine.convergeRunningCapacity();
   const daemon = new DaemonServer({
     capacity: leaseEngine,
+    catalog: leaseEngine,
     config,
     doctor,
     defaultRequesterId:

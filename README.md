@@ -98,8 +98,14 @@ requester in `pitlane status` / `pitlane list --leases`; see
 [docs/CLI.md](docs/CLI.md#agent-identity) for the full precedence, including
 the CLI's `--agent-id` flag.
 
-The server provides exactly three tools:
+The server provides exactly four tools:
 
+- `list_devices` returns, per available platform, the resolvable device
+  models, the runtimes / system images already installed, and which
+  installed runtime is the default (the newest). An optional `platform`
+  (`ios` or `android`) narrows the result. It is read-only — it never
+  downloads a runtime or system image — so call it once to pick a valid
+  `device`/`os` before `lease_simulator` instead of guessing.
 - `lease_simulator` requires `platform` (`ios` or `android`) and `device`.
   `os` is optional and otherwise selects the newest installed runtime.
   `no_wait` defaults to `false`; `timeout_seconds` optionally limits queue
@@ -113,12 +119,12 @@ The server provides exactly three tools:
   nothing. It is cheap, local, and safe to call repeatedly — e.g. after a
   context compaction, to check whether a device is still held.
 
-All three tools return structured results as well as JSON text content, so
-MCP clients can reliably consume the leased device details, release
-confirmation, or status. An MCP lease is held by the server process's daemon
-connection: release it explicitly when work is done; it is also released when
-that MCP process disconnects. Run one MCP server process per agent session,
-each with its own `PITLANE_AGENT_ID`.
+All four tools return structured results as well as JSON text content, so
+MCP clients can reliably consume the device catalog, leased device details,
+release confirmation, or status. An MCP lease is held by the server process's
+daemon connection: release it explicitly when work is done; it is also
+released when that MCP process disconnects. Run one MCP server process per
+agent session, each with its own `PITLANE_AGENT_ID`.
 
 If a held lease ends elsewhere — it expires, or is force-released by
 `pitlane release --all`, `pitlane nuke`, or doctor expiry — the daemon pushes

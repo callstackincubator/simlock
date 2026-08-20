@@ -99,10 +99,11 @@ unless `--yes`.
 Start Pitlane's local stdio MCP server. It accepts no flags. Standard output
 is reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The
 server auto-starts the daemon when needed and exposes the focused
-`lease_simulator`, `release_simulator`, and `lease_status` tool surface for
-one agent session. If that session's held lease ends elsewhere (expiry or a
-force-release), the server relays it as an MCP logging notification. See
-[../README.md](../README.md#mcp-integration-optional) for details.
+`list_devices`, `lease_simulator`, `release_simulator`, and `lease_status`
+tool surface for one agent session. If that session's held lease ends
+elsewhere (expiry or a force-release), the server relays it as an MCP logging
+notification. See [../README.md](../README.md#mcp-integration-optional) for
+details.
 
 The requester identity for leases made through this server is
 `PITLANE_AGENT_ID`, falling back to a pid-derived value — see
@@ -129,6 +130,21 @@ slots.
 Scriptable listings of managed devices, active leases, or registered cleanup
 rules. Defaults to `--devices`. Each lease record's `requesterId` is the
 agent id (see [Agent identity](#agent-identity)) that holds it.
+
+## `pitlane catalog [--platform <ios|android>] [--json]`
+
+Lists what can actually be leased, so an agent can pick a valid `--device`
+and `--os` without a failed round trip through `lease`. For each available
+platform: the resolvable device models, the runtimes / system images already
+installed, and which installed runtime is the default (the newest). A
+platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
+non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
+command. `--platform` narrows to one platform. Read-only: this never
+downloads a runtime or system image.
+
+```json
+{"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone 16"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5"}]}
+```
 
 ## `pitlane cleanup [--dry-run] [--rule <name>]`
 

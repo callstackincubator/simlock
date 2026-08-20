@@ -81,3 +81,51 @@ function requireObject(value: unknown, message: string): Record<string, unknown>
   }
   return value as Record<string, unknown>;
 }
+
+export interface RawCatalogEntry {
+  readonly platform: "android" | "ios";
+  readonly models: readonly string[];
+  readonly runtimes: readonly string[];
+  readonly defaultRuntime: string | undefined;
+}
+
+export interface RawCatalog {
+  readonly platforms: readonly RawCatalogEntry[];
+}
+
+export function parseRawCatalog(value: unknown): RawCatalog {
+  const root = requireCatalogObject(value);
+  if (!Array.isArray(root.platforms)) {
+    throw new Error("Daemon returned an invalid device catalog");
+  }
+  return { platforms: root.platforms.map(parseRawCatalogEntry) };
+}
+
+function parseRawCatalogEntry(value: unknown): RawCatalogEntry {
+  const entry = requireCatalogObject(value);
+  if (
+    (entry.platform !== "ios" && entry.platform !== "android") ||
+    !isStringArray(entry.models) ||
+    !isStringArray(entry.runtimes) ||
+    (entry.defaultRuntime !== undefined && typeof entry.defaultRuntime !== "string")
+  ) {
+    throw new Error("Daemon returned an invalid device catalog");
+  }
+  return {
+    defaultRuntime: entry.defaultRuntime,
+    models: entry.models,
+    platform: entry.platform,
+    runtimes: entry.runtimes,
+  };
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function requireCatalogObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Daemon returned an invalid device catalog");
+  }
+  return value as Record<string, unknown>;
+}

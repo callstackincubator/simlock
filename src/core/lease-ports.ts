@@ -1,6 +1,7 @@
 import type { RunningCapacity } from "./capacity.js";
-import type { LeaseRecord } from "./domain.js";
+import type { LeaseRecord, Platform } from "./domain.js";
 import type { DeviceRequest } from "./driver.js";
+import type { PlatformCatalog } from "./driver-catalog.js";
 import type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
 
 export type LeaseReleaseReason = "closed" | "explicit" | "killed";
@@ -27,6 +28,11 @@ export interface CapacityReader {
 /** Administrative lease expiry used by doctor reconciliation. */
 export interface LeaseExpirer {
   expire(leaseId: string): Promise<void>;
+}
+
+/** Read-only device catalog used by the `pitlane catalog` command and MCP tool. */
+export interface CatalogReader {
+  listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]>;
 }
 
 /** Operator reset capability used by the nuke command facade. */

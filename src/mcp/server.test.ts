@@ -11,6 +11,7 @@ import { DaemonClientError, type DaemonConnection } from "../daemon-client/proto
 import {
   leaseSimulatorOutputSchema,
   leaseStatusOutputSchema,
+  listDevicesOutputSchema,
   releaseSimulatorOutputSchema,
 } from "./contracts.js";
 import { McpSession } from "./session.js";
@@ -30,14 +31,26 @@ const grant = {
   },
 };
 
+const catalog = {
+  platforms: [
+    {
+      defaultRuntime: "26.5",
+      models: ["iPhone 17 Pro"],
+      platform: "ios" as const,
+      runtimes: ["26.5"],
+    },
+  ],
+};
+
 describe("MCP server", () => {
-  it("advertises exactly the lease tools and returns dual schema-valid results", async () => {
-    const connection = new StubConnection([grant, { leaseId: "lease-1" }]);
+  it("advertises exactly the lease, catalog, and status tools and returns dual schema-valid results", async () => {
+    const connection = new StubConnection([grant, catalog, { leaseId: "lease-1" }]);
     const { client, close } = await connectedServer(connection);
     try {
       const listed = await client.request({ method: "tools/list" }, ListToolsResultSchema);
       expect(listed.tools.map((tool) => tool.name)).toEqual([
         "lease_simulator",
+        "list_devices",
         "release_simulator",
         "lease_status",
       ]);
@@ -61,6 +74,21 @@ describe("MCP server", () => {
       leaseSimulatorOutputSchema.parse(lease.structuredContent);
       expect(lease.structuredContent).toMatchObject({ lease_id: "lease-1", mode: "held" });
       expect(JSON.parse(text(lease))).toEqual(lease.structuredContent);
+
+      const devices = await call(client, "list_devices", {});
+      expect(devices.isError).not.toBe(true);
+      listDevicesOutputSchema.parse(devices.structuredContent);
+      expect(devices.structuredContent).toEqual({
+        platforms: [
+          {
+            default_runtime: "26.5",
+            models: ["iPhone 17 Pro"],
+            platform: "ios",
+            runtimes: ["26.5"],
+          },
+        ],
+      });
+      expect(JSON.parse(text(devices))).toEqual(devices.structuredContent);
 
       const held = await call(client, "lease_status", {});
       expect(held.isError).not.toBe(true);
@@ -127,6 +155,18 @@ describe("MCP server", () => {
         code: "LEASE_NOT_OWNED",
         message: "This session does not own that lease",
       });
+    } finally {
+      await close();
+    }
+  });
+
+  it("forwards the platform filter for list_devices and never triggers a lease request", async () => {
+    const connection = new StubConnection([catalog]);
+    const { client, close } = await connectedServer(connection);
+    try {
+      const devices = await call(client, "list_devices", { platform: "ios" });
+      expect(devices.isError).not.toBe(true);
+      expect(connection.calls).toEqual([{ payload: { platform: "ios" }, type: "catalog.get" }]);
     } finally {
       await close();
     }
@@ -206,6 +246,7 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 
 class StubConnection implements DaemonConnection {
   closeCalls = 0;
+  readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
   readonly #listeners = new Set<(kind: string, payload: unknown) => void>();
   constructor(private readonly responses: unknown[]) {}
   async close(): Promise<void> {
@@ -222,7 +263,8 @@ class StubConnection implements DaemonConnection {
   }): void {
     for (const listener of this.#listeners) listener("lease-lost", payload);
   }
-  async request(): Promise<unknown> {
+  async request(type: string, payload: unknown): Promise<unknown> {
+    this.calls.push({ payload, type });
     const response = this.responses.shift();
     if (response instanceof Error) throw response;
     return response;

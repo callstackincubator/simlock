@@ -3,6 +3,7 @@ import {
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
+  type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
   type ReclaimResult,
@@ -354,6 +355,18 @@ export class AndroidDriver implements Driver {
     return { devices, processes };
   }
 
+  async listCatalog(): Promise<DriverCatalogEntry> {
+    const [profiles, images] = await Promise.all([
+      this.#listDeviceProfiles(),
+      this.#installedImages(),
+    ]);
+    return {
+      defaultRuntime: newestApiLevel(images),
+      models: profiles.map((profile) => profile.name),
+      runtimes: [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels),
+    };
+  }
+
   estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {
     switch (operation) {
       case "provision":
@@ -369,9 +382,13 @@ export class AndroidDriver implements Driver {
     return this.#profiles.get(model.toLocaleLowerCase()) ?? this.#resolveProfile(model);
   }
 
-  async #resolveProfile(model: string): Promise<DeviceProfile> {
+  async #listDeviceProfiles(): Promise<readonly DeviceProfile[]> {
     const result = await this.#runOrThrow(this.#sdk.avdmanager, ["list", "device"]);
-    const profiles = parseDeviceProfiles(result.stdout);
+    return parseDeviceProfiles(result.stdout);
+  }
+
+  async #resolveProfile(model: string): Promise<DeviceProfile> {
+    const profiles = await this.#listDeviceProfiles();
     const normalized = model.toLocaleLowerCase();
     const profile = profiles.find(
       (candidate) =>
