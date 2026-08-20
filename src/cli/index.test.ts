@@ -45,6 +45,7 @@ describe("CLI boundary", () => {
     ["RUNTIME_MISSING", 12],
     ["UNKNOWN_MODEL", 12],
     ["BAD_REQUEST", 2],
+    ["REQUESTER_ALREADY_LEASED", 13],
   ] as const)("maps %s daemon errors to exit %d", async (code, expected) => {
     const output = outputCapture();
     const connection = new StubConnection();
@@ -54,6 +55,45 @@ describe("CLI boundary", () => {
       runCli(["status"], output.environmentWith({ connect: async () => connection })),
     ).resolves.toBe(expected);
     expect(errorExitCode(new DaemonClientError(code, "failed"))).toBe(expected);
+  });
+
+  it("writes a single structured JSON error line to stderr for a daemon error", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("status.get", new DaemonClientError("NO_CAPACITY", "No capacity"));
+
+    await expect(
+      runCli(["status"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(11);
+    expect(output.stdout).toBe("");
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "NO_CAPACITY", message: "No capacity" },
+    });
+  });
+
+  it("gives REQUESTER_ALREADY_LEASED its own exit code and an actionable message", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response(
+      "lease.request",
+      new DaemonClientError(
+        "REQUESTER_ALREADY_LEASED",
+        "Requester test-requester already holds lease lse_1; release it (`pitlane release lse_1`) before requesting another device",
+      ),
+    );
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 16", "--detach"],
+        output.environmentWith({ connect: async () => connection }),
+      ),
+    ).resolves.toBe(13);
+    expect(output.stdout).toBe("");
+    const parsed = JSON.parse(output.stderr) as { error: { code: string; message: string } };
+    expect(parsed.error.code).toBe("REQUESTER_ALREADY_LEASED");
+    expect(parsed.error.message).toContain("lse_1");
+    expect(parsed.error.message).toContain("pitlane release lse_1");
   });
 
   it("parses human durations and bare milliseconds", () => {
@@ -67,13 +107,23 @@ describe("CLI boundary", () => {
     expect(fallbackRequesterId({})).toBe(String(process.pid));
   });
 
-  it("reports missing lease arguments as usage errors", async () => {
+  it("reports missing lease arguments as a structured USAGE error", async () => {
     const output = outputCapture();
 
     await expect(runCli(["lease"], output.environment)).resolves.toBe(2);
     expect(output.stdout).toBe("");
-    expect(output.stderr).toContain("--platform");
-    expect(output.stderr).toContain("Usage:");
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "USAGE", message: expect.stringContaining("--platform") },
+    });
+  });
+
+  it("rejects --json on a command whose output is already unconditionally JSON", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["list", "--json"], output.environment)).resolves.toBe(2);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
   });
 
   it("lists the MCP server in root help", async () => {
@@ -141,12 +191,12 @@ describe("CLI boundary", () => {
         runCli(["mcp", argument], output.environmentWith({ runMcpStdio: runner })),
       ).resolves.toBe(2);
       expect(output.stdout).toBe("");
-      expect(output.stderr).toContain("Usage:");
+      expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
       expect(runner).not.toHaveBeenCalled();
     },
   );
 
-  it("reports MCP startup failures safely on stderr", async () => {
+  it("reports MCP startup failures as a structured INTERNAL error on stderr", async () => {
     const output = outputCapture();
     const runner = vi.fn(async () => {
       throw new Error("MCP startup failed");
@@ -154,7 +204,9 @@ describe("CLI boundary", () => {
 
     await expect(runCli(["mcp"], output.environmentWith({ runMcpStdio: runner }))).resolves.toBe(1);
     expect(output.stdout).toBe("");
-    expect(output.stderr).toBe("MCP startup failed\n");
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "INTERNAL", message: "MCP startup failed" },
+    });
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
@@ -193,6 +245,40 @@ describe("CLI boundary", () => {
       ]),
     );
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
+  });
+
+  it("reports a post-signal release failure as a structured stderr line, not prose", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_release_fail", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    connection.response("lease.release", new Error("release failed"));
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    signals.emit("SIGTERM");
+
+    await expect(run).resolves.toBe(0);
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "INTERNAL", message: "release failed" },
+    });
   });
 
   it("flagship e2e: queues a second CLI holder until the first connection drops", async () => {
@@ -368,9 +454,12 @@ describe("CLI boundary", () => {
           connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
         }),
       ),
-    ).resolves.toBe(1);
+    ).resolves.toBe(13);
     expect(second.stderr).toContain("dup-agent");
     expect(second.stderr).toContain("already");
+    expect(JSON.parse(second.stderr)).toMatchObject({
+      error: { code: "REQUESTER_ALREADY_LEASED" },
+    });
 
     const third = outputCapture();
     await expect(

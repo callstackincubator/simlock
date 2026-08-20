@@ -29,6 +29,7 @@ const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   NO_CAPACITY: 11,
   NO_DRIVER: 12,
   QUEUE_TIMEOUT: 10,
+  REQUESTER_ALREADY_LEASED: 13,
   RUNTIME_MISSING: 12,
   UNKNOWN_MODEL: 12,
 };
@@ -38,6 +39,16 @@ class UsageError extends Error {
     super(message);
     this.name = "UsageError";
   }
+}
+
+/**
+ * Points a human at `--help` from inside the single structured stderr line,
+ * for the two usage errors most likely to strand someone at a terminal: an
+ * unrecognized command and a missing required argument. The full command
+ * banner is no longer dumped to stderr on every failure; it is one flag away.
+ */
+function withHelpHint(message: string): string {
+  return `${message} (run \`pitlane --help\` for usage)`;
 }
 
 interface Output {
@@ -158,13 +169,31 @@ export async function runCli(
       case "mcp":
         return await runMcp(argv.slice(1), environment);
       default:
-        throw new UsageError(`Unknown command: ${argv[0]}`);
+        throw new UsageError(withHelpHint(`Unknown command: ${argv[0]}`));
     }
   } catch (error: unknown) {
-    environment.stderr.write(`${errorMessage(error)}\n`);
-    if (error instanceof UsageError) environment.stderr.write(`${USAGE}\n`);
+    writeError(environment, error);
     return errorExitCode(error);
   }
+}
+
+/**
+ * Every CLI failure writes exactly one structured line to stderr so agents
+ * can branch on `error.code` instead of parsing prose. `code` is the
+ * daemon's own error code where the failure came from the daemon, and a
+ * stable CLI-level code otherwise (`USAGE` for bad flags/arguments,
+ * `INTERNAL` for anything unexpected).
+ */
+function writeError(environment: CliEnvironment, error: unknown): void {
+  environment.stderr.write(
+    `${JSON.stringify({ error: { code: cliErrorCode(error), message: errorMessage(error) } })}\n`,
+  );
+}
+
+function cliErrorCode(error: unknown): string {
+  if (error instanceof UsageError) return "USAGE";
+  if (error instanceof DaemonClientError) return error.code;
+  return "INTERNAL";
 }
 
 async function runMcp(argv: readonly string[], environment: CliEnvironment): Promise<number> {
@@ -209,21 +238,20 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     "no-wait": { type: "boolean" },
     os: { type: "string" },
     platform: { type: "string" },
-    json: { type: "boolean" },
     timeout: { type: "string" },
   });
   if (values.help) {
     environment.stdout.write(
       "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--allow-download] [--json]\n",
+        "                     [--allow-download]\n",
     );
     return 0;
   }
   if (values.platform !== "ios" && values.platform !== "android")
-    throw new UsageError("lease requires --platform <ios|android>");
+    throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   if (typeof values.device !== "string" || values.device === "")
-    throw new UsageError("lease requires --device <model>");
+    throw new UsageError(withHelpHint("lease requires --device <model>"));
   if (values["agent-id"] === "") throw new UsageError("lease --agent-id must not be empty");
   const requesterId = values["agent-id"] ?? environment.requesterId;
   const detached = values.detach ?? false;
@@ -253,7 +281,10 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     try {
       await connection.request("lease.release", { leaseId: result.lease });
     } catch (error: unknown) {
-      environment.stderr.write(`Lease release failed after signal: ${errorMessage(error)}\n`);
+      // Non-fatal: the process still exits 0 after a signal, but the release
+      // failure is still diagnostic output, so it stays a structured stderr
+      // line rather than reverting to prose.
+      writeError(environment, error);
     }
     return 0;
   } finally {
@@ -265,7 +296,6 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
 async function runRenew(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   const values = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
-    json: { type: "boolean" },
     ttl: { type: "string" },
   });
   const { positionals } = values;
@@ -288,7 +318,6 @@ async function runRelease(argv: readonly string[], environment: CliEnvironment):
   const values = commandArgs(argv, {
     all: { type: "boolean" },
     help: { type: "boolean", short: "h" },
-    json: { type: "boolean" },
     yes: { type: "boolean" },
   });
   const { positionals } = values;
@@ -332,12 +361,11 @@ async function runList(argv: readonly string[], environment: CliEnvironment): Pr
   const values = commandArgs(argv, {
     devices: { type: "boolean" },
     help: { type: "boolean", short: "h" },
-    json: { type: "boolean" },
     leases: { type: "boolean" },
     rules: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane list [--devices|--leases|--rules] [--json]\n");
+    environment.stdout.write("Usage: pitlane list [--devices|--leases|--rules]\n");
     return 0;
   }
   if ([values.devices, values.leases, values.rules].filter(Boolean).length > 1)
@@ -373,11 +401,10 @@ async function runCleanup(argv: readonly string[], environment: CliEnvironment):
   const values = commandArgs(argv, {
     "dry-run": { type: "boolean" },
     help: { type: "boolean", short: "h" },
-    json: { type: "boolean" },
     rule: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane cleanup [--dry-run] [--rule <name>] [--json]\n");
+    environment.stdout.write("Usage: pitlane cleanup [--dry-run] [--rule <name>]\n");
     return 0;
   }
   writeResult(
@@ -394,10 +421,9 @@ async function runDoctor(argv: readonly string[], environment: CliEnvironment): 
   const values = commandArgs(argv, {
     fix: { type: "boolean" },
     help: { type: "boolean", short: "h" },
-    json: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane doctor [--fix] [--json]\n");
+    environment.stdout.write("Usage: pitlane doctor [--fix]\n");
     return 0;
   }
   writeResult(
@@ -411,11 +437,10 @@ async function runNuke(argv: readonly string[], environment: CliEnvironment): Pr
   const values = commandArgs(argv, {
     "delete-devices": { type: "boolean" },
     help: { type: "boolean", short: "h" },
-    json: { type: "boolean" },
     yes: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane nuke [--delete-devices] [--yes] [--json]\n");
+    environment.stdout.write("Usage: pitlane nuke [--delete-devices] [--yes]\n");
     return 0;
   }
   const confirmed =
@@ -434,11 +459,10 @@ async function runEvents(argv: readonly string[], environment: CliEnvironment): 
   const values = commandArgs(argv, {
     follow: { type: "boolean" },
     help: { type: "boolean", short: "h" },
-    json: { type: "boolean" },
     since: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane events [--follow] [--since <duration>] [--json]\n");
+    environment.stdout.write("Usage: pitlane events [--follow] [--since <duration>]\n");
     return 0;
   }
   const connection = await environment.connect();
@@ -522,12 +546,12 @@ async function runDaemon(argv: readonly string[], environment: CliEnvironment): 
 // fallow-ignore-next-line complexity -- config subcommand parsing is a single CLI boundary.
 async function runConfig(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   const command = argv[0];
-  if (command === undefined || command === "--json") {
+  if (command === undefined) {
     writeResult(environment, await requestOnce(environment, "config.get", {}));
     return 0;
   }
   if (command === "get") {
-    const values = commandArgs(argv.slice(1), { json: { type: "boolean" } });
+    const values = commandArgs(argv.slice(1), {});
     const key = requiredPositional(values.positionals, "key");
     const value = readConfigValue(
       requireObject(await requestOnce(environment, "config.get", {})),
@@ -538,7 +562,7 @@ async function runConfig(argv: readonly string[], environment: CliEnvironment): 
     return 0;
   }
   if (command === "set") {
-    const values = commandArgs(argv.slice(1), { json: { type: "boolean" } });
+    const values = commandArgs(argv.slice(1), {});
     const [key, rawValue, ...extra] = values.positionals;
     if (key === undefined || rawValue === undefined || extra.length > 0)
       throw new UsageError("Usage: pitlane config set <key> <value>");
@@ -665,7 +689,7 @@ function formatCatalog(response: Record<string, unknown>): string {
 
 function requiredPositional(positionals: readonly string[], label: string): string {
   if (positionals.length !== 1 || positionals[0] === undefined)
-    throw new UsageError(`Expected ${label}`);
+    throw new UsageError(withHelpHint(`Expected ${label}`));
   return positionals[0];
 }
 

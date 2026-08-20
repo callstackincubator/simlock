@@ -1,21 +1,50 @@
 # CLI reference
 
 Part of the user manual: every command the pitlane CLI is expected to
-implement. Except for `pitlane mcp`, commands accept `--json` for
-machine-readable output (agents are the primary audience). Their
-progress/diagnostics go to **stderr** as JSON lines; results go to **stdout**.
-`pitlane mcp` instead reserves stdout for MCP JSON-RPC framing.
+implement. Results are JSON on **stdout**; progress/diagnostics are JSON
+lines on **stderr** — this is the default output, not an opt-in, because
+agents are the primary audience. `status`, `catalog`, and
+`daemon <start|stop|status|logs>` are the exception: they default to a
+human-oriented view for interactive/operator use and accept `--json` to
+switch to the structured form. Every other command's output is already
+unconditionally JSON, so passing `--json` to it is a usage error (exit 2)
+rather than a silent no-op. `pitlane mcp` reserves stdout for MCP JSON-RPC
+framing and accepts no flags at all.
+
+On failure, every command writes one structured line to stderr:
+
+```json
+{"error":{"code":"NO_CAPACITY","message":"No device capacity is currently available"}}
+```
+
+`code` is the daemon's own error code where the failure came from the
+daemon, or a stable CLI-level code otherwise: `USAGE` for bad flags/missing
+arguments/unknown commands, `INTERNAL` for anything unexpected. An unknown
+command or a missing required argument gets a `message` that ends with a
+pointer to `pitlane --help`, so a human hitting one from a terminal isn't
+stranded with only a JSON blob — the full command banner itself is no
+longer dumped to stderr on every failure, only on request via `--help`.
 
 ## Global exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | success (for `lease` held mode: lease ended normally) |
-| 1 | internal / unexpected error |
-| 2 | usage error (bad flags, missing required args) |
-| 10 | timed out waiting for a device (`--timeout` elapsed) |
-| 11 | capacity reached and `--no-wait` was set |
-| 12 | spec unresolvable (unknown model, or runtime not installed and no `--allow-download`) |
+| Exit | Error code | Meaning |
+|---|---|---|
+| 0 | — | success (for `lease` held mode: lease ended normally) |
+| 1 | `INTERNAL` | internal / unexpected error |
+| 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
+| 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
+| 2 | `BAD_REQUEST` | request payload failed validation |
+| 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
+| 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
+| 12 | `NO_DRIVER` | no driver registered for the requested platform |
+| 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
+| 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
+| 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
+
+This table matches `DAEMON_ERROR_EXIT_CODES` in `src/cli/index.ts` exactly.
+A daemon error code with no entry here (for example `UNKNOWN_LEASE` or
+`HELD_LEASE_RENEWAL`, both surfaced by `lease renew`) falls back to exit 1;
+the structured stderr line still reports the specific code.
 
 ---
 
@@ -47,7 +76,7 @@ and booting, then — in held mode — keeps running to hold the lease.
 ```
 pitlane lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
-              [--allow-download] [--json]
+              [--allow-download]
 ```
 
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
@@ -63,6 +92,10 @@ pitlane lease --platform <ios|android> --device <model> [--os <version>]
   them; install the runtime through Xcode first.
 - `--detach` — detached mode: print the lease result and exit; the lease is
   TTL-bound and must be renewed with `pitlane lease renew`.
+
+One lease per requester in v1: leasing while you already hold a lease or
+have a request queued fails with `REQUESTER_ALREADY_LEASED` (exit 13); the
+error message names the existing lease id to release first.
 
 **Held mode (default):** intended to be run in the background by the agent.
 As soon as the device is ready, one JSON line is printed on stdout:
@@ -86,7 +119,8 @@ work stages; reclaiming work is reported separately:
 ### `pitlane lease renew <lease-id> [--ttl <duration>]`
 
 Detached mode only: extend the lease TTL. Exit 1 if the lease is unknown or
-already expired.
+already expired (error code `UNKNOWN_LEASE`), or if it is a held-mode lease,
+which cannot be renewed (error code `HELD_LEASE_RENEWAL`).
 
 ## `pitlane release <lease-id> | --all`
 
@@ -141,6 +175,9 @@ platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
 non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
 command. `--platform` narrows to one platform. Read-only: this never
 downloads a runtime or system image.
+
+Human-oriented by default (platform/model/runtime lines); `--json` for the
+structured equivalent:
 
 ```json
 {"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone 16"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5"}]}

@@ -128,7 +128,11 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     await expect(
       harness.coordinator.request(request, { mode: "held", requesterId: "agent" }),
-    ).rejects.toThrow("Requester already has a lease");
+    ).rejects.toMatchObject({
+      existingLeaseId: granted.lease.id,
+      message: expect.stringContaining(granted.lease.id),
+      name: "RequesterAlreadyLeasedError",
+    });
     expect(granted.lease.requesterId).toBe("agent");
   });
 

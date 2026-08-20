@@ -48,7 +48,7 @@ same lease workflow through a local stdio server.
 ```sh
 pnpm install
 pnpm build
-pitlane lease --platform ios --device "iPhone 16" --detach --json
+pitlane lease --platform ios --device "iPhone 16" --detach
 pitlane status --json
 ```
 
