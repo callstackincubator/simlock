@@ -100,8 +100,13 @@ export class LeaseLifecycle {
   /**
    * Slides a held lease's deadline back out to a full backstop from now, driven by an
    * application-level heartbeat from its holder. Goes through the registry (not a direct
-   * `expiryScheduler.replace`) so the persisted `ttlDeadline` never goes stale: a daemon
-   * restart mid-lease must restore the slid deadline, not the grant-time one.
+   * `expiryScheduler.replace`) so the persisted `ttlDeadline` stays truthful for readers within
+   * this daemon's lifetime: `status` / `list --leases` derive `lastHeartbeatAt` from it
+   * (`DaemonServer#decorateLease`), and a stale in-memory-only slide would make that reading
+   * wrong immediately, not just after a restart. It does *not* mean the slid deadline survives
+   * a restart -- a held lease's liveness is its daemon connection, so `StartupConverger`
+   * releases every held lease as orphaned on startup regardless of how recently it was slid;
+   * see `startup-converger.ts`.
    */
   // fallow-ignore-next-line unused-class-member -- called by LeaseReleaseCoordinator through the lifecycle port (same as the sibling renew).
   async heartbeat(leaseId: string): Promise<LeaseRecord> {
@@ -124,7 +129,7 @@ export class LeaseLifecycle {
 
   async beginRelease(
     leaseId: string,
-    reason: "closed" | "explicit" | "killed" | "expired",
+    reason: "closed" | "explicit" | "killed" | "orphaned" | "expired",
   ): Promise<ReleasedLease> {
     const released = await this.options.registry.beginRelease(leaseId);
     this.options.expiryScheduler.cancel(leaseId);

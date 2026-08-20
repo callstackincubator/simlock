@@ -353,7 +353,7 @@ describe("LeaseEngine", () => {
     const unleasedDevice = await seedReady(harness);
     await harness.registry.createLease({
       deviceId: leasedDevice.id,
-      mode: "held",
+      mode: "detached",
       requesterId: "active",
       ttlDeadline: 2_000,
     });
@@ -425,7 +425,7 @@ describe("LeaseEngine", () => {
       const device = await seedReady(harness);
       await harness.registry.createLease({
         deviceId: device.id,
-        mode: "held",
+        mode: "detached",
         requesterId,
         ttlDeadline: 2_000,
       });

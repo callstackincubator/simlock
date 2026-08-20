@@ -543,7 +543,7 @@ describe("DaemonServer lease heartbeat", () => {
     await client.close();
   });
 
-  it("restores the heartbeat-slid deadline (not the grant-time one) across a daemon restart", async () => {
+  it("releases a held lease as orphaned across a daemon restart, even with a heartbeat-slid deadline", async () => {
     const leaseOverrides = { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 };
     const first = await createHarness({ lease: leaseOverrides });
     const holder = await createClient(first.socketPath);
@@ -554,6 +554,7 @@ describe("DaemonServer lease heartbeat", () => {
       request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
     });
     const leaseId = leaseIdOf(grant);
+    const deviceId = (grant.payload as { device: { id: string } }).device.id;
 
     first.clock.advance(10);
     const push = await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
@@ -568,24 +569,23 @@ describe("DaemonServer lease heartbeat", () => {
     // leaving the last persisted registry state — the post-heartbeat slid deadline —
     // on disk. It is intentionally left running here; the afterEach hook tears it down.
 
-    // "Restart": a fresh daemon reloads that persisted registry state and, like the real
-    // startup path (src/daemon/main.ts), restores expiry timers via convergence.
+    // "Restart": a fresh daemon reloads that persisted registry state. A held lease's
+    // liveness is its daemon connection, so it cannot have survived the restart regardless
+    // of how recently its deadline was slid — the real startup path (src/daemon/main.ts)
+    // releases it as orphaned before any timer would otherwise be restored.
+    // The underlying device itself (unlike the daemon process) survives a restart, so the
+    // "restarted" harness is wired to the same fake driver instance as the crashed one.
     const second = await createHarness({
       clock: new FakeClock(1_010),
+      driver: first.driver,
       lease: leaseOverrides,
       stateFilesystem: first.stateFilesystem,
     });
     await second.engine.convergeRunningCapacity();
 
-    // The original grant-time deadline (1_040) elapses; a restore that used it instead of
-    // the slid one (1_050) would have expired the lease here.
-    second.clock.advance(30);
-    await Promise.resolve();
-    expect(second.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
-
-    // The slid deadline still fires.
-    second.clock.advance(10);
-    await expect.poll(() => second.registry.snapshot.leases).toEqual([]);
+    expect(second.registry.snapshot.leases).toEqual([]);
+    // The freed device is reclaimed and available to the next requester, not left shutdown.
+    expect(second.registry.snapshot.devices).toMatchObject([{ id: deviceId, state: "ready" }]);
     await holder.close();
   });
 
@@ -628,6 +628,7 @@ async function createHarness(
     readonly socketPath?: string;
     readonly start?: boolean;
     readonly clock?: FakeClock;
+    readonly driver?: FakeDriver;
     readonly stateFilesystem?: MemoryFilesystem;
   } = {},
 ) {
@@ -647,13 +648,15 @@ async function createHarness(
     idGenerator: sequence(),
     statePath: "/state.json",
   });
-  const driver = new FakeDriver({
-    availableOsVersions: ["26.5"],
-    clock,
-    ...(options.estimateMs === undefined ? {} : { estimateMs: options.estimateMs }),
-    ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
-    platform: "ios",
-  });
+  const driver =
+    options.driver ??
+    new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      ...(options.estimateMs === undefined ? {} : { estimateMs: options.estimateMs }),
+      ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
+      platform: "ios",
+    });
   const config = testConfig(options.lease);
   const engine = new LeaseEngine({
     clock,
@@ -700,7 +703,7 @@ async function createHarness(
     await daemon.start();
   }
 
-  return { clock, config, daemon, engine, eventBus, registry, socketPath, stateFilesystem };
+  return { clock, config, daemon, driver, engine, eventBus, registry, socketPath, stateFilesystem };
 }
 
 async function createClient(socketPath: string): Promise<Client> {

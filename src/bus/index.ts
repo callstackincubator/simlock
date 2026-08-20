@@ -17,7 +17,7 @@ export interface EventMap {
   "lease.released": {
     readonly leaseId: string;
     readonly deviceId: string;
-    readonly reason: "closed" | "explicit" | "killed";
+    readonly reason: "closed" | "explicit" | "killed" | "orphaned";
   };
   "lease.expired": { readonly leaseId: string; readonly deviceId: string };
   "lease.rejected": {

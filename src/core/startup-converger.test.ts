@@ -54,9 +54,12 @@ function createHarness(
   const order: string[] = [];
   const claimed = new Set<string>();
   const cleanupCalls: string[] = [];
+  const releasedLeaseIds: string[] = [];
+  let leaseIdsAtTimerRestore: string[] | undefined;
   const timers = {
     restoreExpiryTimers: vi.fn(async () => {
       order.push("timers");
+      leaseIdsAtTimerRestore = leases.map((lease) => lease.id);
     }),
   };
   const recovery = {
@@ -75,6 +78,17 @@ function createHarness(
       return true;
     }),
   };
+  const releases = {
+    releaseOrphaned: vi.fn(async (leaseId: string) => {
+      order.push(`release:${leaseId}`);
+      releasedLeaseIds.push(leaseId);
+      const leaseIndex = leases.findIndex((lease) => lease.id === leaseId);
+      const lease = leases[leaseIndex];
+      if (lease === undefined) return;
+      leases.splice(leaseIndex, 1);
+      updateState(lease.deviceId, "ready");
+    }),
+  };
   const converger = new StartupConverger({
     capacity: {
       get runningCapacity() {
@@ -90,6 +104,7 @@ function createHarness(
         return { devices, leases };
       },
     },
+    releases,
     timers,
   });
 
@@ -99,7 +114,22 @@ function createHarness(
     if (current !== undefined) devices[index] = { ...current, state };
   }
 
-  return { claimed, cleanup, cleanupCalls, converger, devices, order, recovery, timers };
+  return {
+    claimed,
+    cleanup,
+    cleanupCalls,
+    converger,
+    devices,
+    get leaseIdsAtTimerRestore() {
+      return leaseIdsAtTimerRestore;
+    },
+    leases,
+    order,
+    recovery,
+    releasedLeaseIds,
+    releases,
+    timers,
+  };
 }
 
 describe("StartupConverger", () => {
@@ -151,7 +181,7 @@ describe("StartupConverger", () => {
         deviceId: first.id,
         grantedAt: 0,
         id: "lease-1",
-        mode: "held" as const,
+        mode: "detached" as const,
         requesterId: "a",
         ttlDeadline: 10,
       },
@@ -159,7 +189,7 @@ describe("StartupConverger", () => {
         deviceId: second.id,
         grantedAt: 0,
         id: "lease-2",
-        mode: "held" as const,
+        mode: "detached" as const,
         requesterId: "b",
         ttlDeadline: 10,
       },
@@ -200,5 +230,78 @@ describe("StartupConverger", () => {
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
     expect(harness.cleanupCalls).toEqual(["ready"]);
     expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases an orphaned held lease before timers are restored, freeing its device", async () => {
+    const held = device("held-device", "ios", "leased", 1);
+    const leases = [
+      {
+        deviceId: held.id,
+        grantedAt: 0,
+        id: "lease-held",
+        mode: "held" as const,
+        requesterId: "a",
+        ttlDeadline: 1000,
+      },
+    ];
+    const harness = createHarness([held], leases, { android: 1, global: 1, ios: 1 });
+
+    await harness.converger.converge();
+
+    expect(harness.releases.releaseOrphaned).toHaveBeenCalledTimes(1);
+    expect(harness.releases.releaseOrphaned).toHaveBeenCalledWith("lease-held");
+    expect(harness.order.indexOf("release:lease-held")).toBeLessThan(
+      harness.order.indexOf("timers"),
+    );
+    // The orphaned lease is gone from the registry by the time timers are restored, so its
+    // timer is never re-armed.
+    expect(harness.leaseIdsAtTimerRestore).toEqual([]);
+    expect(harness.devices.find((item) => item.id === held.id)?.state).toBe("ready");
+  });
+
+  it("keeps a detached lease's timer restoration untouched", async () => {
+    const detachedDevice = device("detached-device", "ios", "leased", 1);
+    const leases = [
+      {
+        deviceId: detachedDevice.id,
+        grantedAt: 0,
+        id: "lease-detached",
+        mode: "detached" as const,
+        requesterId: "a",
+        ttlDeadline: 1000,
+      },
+    ];
+    const harness = createHarness([detachedDevice], leases, { android: 1, global: 1, ios: 1 });
+
+    await harness.converger.converge();
+
+    expect(harness.releases.releaseOrphaned).not.toHaveBeenCalled();
+    expect(harness.leaseIdsAtTimerRestore).toEqual(["lease-detached"]);
+    expect(harness.devices.find((item) => item.id === detachedDevice.id)?.state).toBe("leased");
+  });
+
+  it("frees the orphaned lease's device before running-capacity convergence, making it a shutdown candidate", async () => {
+    const held = device("held-device", "ios", "leased", 1);
+    const leases = [
+      {
+        deviceId: held.id,
+        grantedAt: 0,
+        id: "lease-held",
+        mode: "held" as const,
+        requesterId: "a",
+        ttlDeadline: 1000,
+      },
+    ];
+    // maxRunning for ios is 0, so once the device is freed to "ready" it is over capacity
+    // and must be visible to the excess-capacity sweep that follows.
+    const harness = createHarness([held], leases, { android: 1, global: 0, ios: 0 });
+
+    await harness.converger.converge();
+
+    const releaseIndex = harness.order.indexOf("release:lease-held");
+    const cleanupIndex = harness.order.indexOf("cleanup:held-device");
+    expect(releaseIndex).toBeGreaterThanOrEqual(0);
+    expect(cleanupIndex).toBeGreaterThan(releaseIndex);
+    expect(harness.cleanupCalls).toEqual(["held-device"]);
   });
 });
