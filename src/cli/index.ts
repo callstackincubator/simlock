@@ -8,6 +8,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   SystemClock,
+  type Filesystem,
 } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
 import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
@@ -118,7 +119,7 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
       if (!(await filesystem.exists(configPath))) return {};
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
     },
-    readLogFile: async () => filesystem.readFile(logPath),
+    readLogFile: async () => readLogFile(filesystem, logPath),
     signals: process,
     stderr: process.stderr,
     stdout: process.stdout,
@@ -731,6 +732,21 @@ function parseConfigValue(value: string): unknown {
     return value;
   }
 }
+/**
+ * Reads the rotated generation (if present) followed by the current log, so a fatal
+ * crash written just before rotation is never silently lost. `NodeFileLogSink` keeps
+ * at most one rotated generation at `<logPath>.1`.
+ */
+export async function readLogFile(filesystem: Filesystem, logPath: string): Promise<string> {
+  const rotatedPath = `${logPath}.1`;
+  const segments: string[] = [];
+  if (await filesystem.exists(rotatedPath)) {
+    segments.push(await filesystem.readFile(rotatedPath));
+  }
+  segments.push(await filesystem.readFile(logPath));
+  return segments.join("");
+}
+
 function requireObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error("Daemon returned an invalid response");

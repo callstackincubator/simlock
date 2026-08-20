@@ -20,6 +20,7 @@ const config: Config = {
     maxRunning: 2,
   },
   ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
+  log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
 };
 
 function coordinator(): CapacityCoordinator {

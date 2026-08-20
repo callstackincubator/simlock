@@ -1,4 +1,4 @@
-import type { Filesystem, SystemStats } from "../ports/index.js";
+import type { Filesystem, LogLevel, SystemStats } from "../ports/index.js";
 
 const GIBIBYTE = 1024 ** 3;
 
@@ -25,6 +25,7 @@ export interface Config {
   };
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
+  readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
 }
 
 export type ConfigOverrides = DeepPartial<Config>;
@@ -103,6 +104,7 @@ function defaultConfig(systemStats: SystemStats): Config {
     },
     diskPressure: { freeBytesThreshold: 10 * GIBIBYTE },
     eventBuffer: { capacity: 1_000 },
+    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
   };
 }
 
@@ -165,6 +167,7 @@ const validators = {
   }),
   diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
   eventBuffer: objectValidator({ capacity: positiveInteger }),
+  log: objectValidator({ level: logLevel, rotateBytes: positiveInteger }),
 } satisfies Record<string, Validator>;
 
 function objectValidator(shape: Record<string, Validator>): Validator {
@@ -194,6 +197,16 @@ function positiveInteger(value: unknown, path: string): number {
   }
 
   return value;
+}
+
+const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
+
+function logLevel(value: unknown, path: string): LogLevel {
+  if (typeof value !== "string" || !LOG_LEVELS.includes(value as LogLevel)) {
+    throw invalidValue(path, `one of ${LOG_LEVELS.map((level) => `"${level}"`).join(", ")}`);
+  }
+
+  return value as LogLevel;
 }
 
 function nonNegativeNumber(value: unknown, path: string): number {

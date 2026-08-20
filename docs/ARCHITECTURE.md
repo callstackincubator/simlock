@@ -261,6 +261,7 @@ Clock        — now(), timers (no direct Date/setTimeout in logic)
 SystemStats  — cpu count, total/free RAM, disk free
 IpcConnector / IpcListenerFactory — connect to and host daemon IPC endpoints
 DaemonLauncher — detached daemon startup with append-only combined logs
+Logger       — debug/info/warn/error(message, fields) plus child(module) scoping
 ```
 
 Real implementations are thin adapters wired up once at daemon startup;
@@ -283,6 +284,23 @@ request multiplexing, `IpcDaemonConnector` performs the hello handshake, and
 `DaemonStartupCoordinator` uses `Clock` plus `DaemonLauncher` to retry a missing
 or refused daemon. This keeps transport, detached-process logging, and startup
 policies replaceable without introducing an ambient dependency container.
+
+Operational logging is a separate concern from the event bus: `pitlane events`
+carries business facts (lease granted, device cleaned up, …) in an in-memory
+ring buffer that resets on restart, while the `Logger` port writes durable,
+structured JSON lines — one per record — for startup, socket claim/recovery,
+driver discovery, connection lifecycle, shutdown, and unexpected/handled
+errors. `startDaemon` builds the production `Logger` (`JsonLinesLogger` over a
+`NodeFileLogSink`) from `config.log` right after config loads, then hands
+module-scoped children (`logger.child("server")`, `.child("connection-host")`,
+`.child("driver-discovery")`) to each component so every line is attributable.
+The sink tracks bytes written and rotates `daemon.log` to `daemon.log.1`
+(replacing any previous generation) once `config.log.rotateBytes` is exceeded,
+so growth is bounded and `pitlane daemon logs` reads the rotated generation
+before the current file. The one exception is the fatal top-level handler: it
+cannot depend on `config.log` having loaded successfully, so it builds its own
+logger straight from the default log path at a fixed level, falling back to
+`console.error` only if that itself fails.
 
 ## Device requests
 

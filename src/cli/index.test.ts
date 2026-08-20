@@ -22,6 +22,7 @@ import {
   errorExitCode,
   fallbackRequesterId,
   parseDuration,
+  readLogFile,
   runCli,
   type CliEnvironment,
   type DaemonConnection,
@@ -36,6 +37,33 @@ afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
   );
+});
+
+describe("readLogFile", () => {
+  it("returns just the current log when there is no rotated generation", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/pitlane");
+    await filesystem.writeFileAtomic("/pitlane/daemon.log", "current\n");
+
+    await expect(readLogFile(filesystem, "/pitlane/daemon.log")).resolves.toBe("current\n");
+  });
+
+  it("prepends the rotated generation so a pre-rotation crash is not lost", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/pitlane");
+    await filesystem.writeFileAtomic("/pitlane/daemon.log.1", "rotated\n");
+    await filesystem.writeFileAtomic("/pitlane/daemon.log", "current\n");
+
+    await expect(readLogFile(filesystem, "/pitlane/daemon.log")).resolves.toBe(
+      "rotated\ncurrent\n",
+    );
+  });
+
+  it("propagates the read failure when neither file exists", async () => {
+    const filesystem = new MemoryFilesystem();
+
+    await expect(readLogFile(filesystem, "/pitlane/daemon.log")).rejects.toThrow();
+  });
 });
 
 describe("CLI boundary", () => {
@@ -759,6 +787,7 @@ function testConfig(): Config {
       ios: { maxDevices: 1, maxRunning: 1 },
       maxRunning: 1 + 1,
     },
+    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
   };
 }

@@ -214,10 +214,19 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 Manage the daemon explicitly. Other commands auto-start it on demand;
 `daemon` exists for operators and debugging. `logs` tails daemon logs.
 
+The daemon writes one structured JSON line per record to `~/.pitlane/daemon.log`
+(timestamp, level, module, message, and any fields) covering startup (version,
+protocol version, socket path, effective config), socket claim/stale-endpoint
+recovery, driver discovery, connection open/close, shutdown, and unexpected or
+handled errors. Growth is bounded: once the file passes `log.rotateBytes` it is
+rotated to `daemon.log.1` (replacing any previous generation), so `logs` always
+shows the current file with the immediately preceding one prepended.
+
 ## `pitlane config [get <key>|set <key> <value>]`
 
 Show the effective configuration (defaults + config file + overrides):
 managed and running capacity limits, idle tiers T1/T2/T3, TTLs, disk-pressure
-threshold. With no args, prints everything. Running capacity
+threshold, and the daemon's log level/rotation cap (`log.level`,
+`log.rotateBytes`). With no args, prints everything. Running capacity
 uses `limits.maxRunning` globally and `limits.<platform>.maxRunning` for each
 driver; both must have room before provisioning or booting a shutdown device.

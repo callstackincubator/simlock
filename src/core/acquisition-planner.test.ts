@@ -20,6 +20,7 @@ const config: Config = {
     maxRunning: 1,
   },
   ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+  log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
 };
 
 function device(

@@ -23,7 +23,8 @@ import type {
   LeaseCommands,
   QueueControl,
 } from "../core/lease-ports.js";
-import type { Clock, IpcConnection, TimerHandle } from "../ports/index.js";
+import type { Clock, IpcConnection, Logger, TimerHandle } from "../ports/index.js";
+import { NoopLogger } from "../ports/index.js";
 import {
   DAEMON_PROTOCOL_VERSION,
   parseRequestFrame,
@@ -57,6 +58,7 @@ export interface DaemonServerOptions {
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
   readonly leases: LeaseCommands;
+  readonly logger?: Logger;
   readonly protocolVersion?: number;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
@@ -69,6 +71,7 @@ export class DaemonServer {
   readonly #connections = new Set<Connection>();
   readonly #protocolVersion: number;
   readonly #unsubscribeLeaseLost: Array<() => void> = [];
+  readonly #logger: Logger;
   #heartbeatTimer: TimerHandle | undefined;
   #heartbeatNonce = 0;
   #stopping = false;
@@ -76,6 +79,7 @@ export class DaemonServer {
 
   constructor(private readonly options: DaemonServerOptions) {
     this.#protocolVersion = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION;
+    this.#logger = options.logger ?? new NoopLogger();
   }
 
   // fallow-ignore-next-line unused-class-member -- retained as a daemon compatibility facade.
@@ -103,6 +107,12 @@ export class DaemonServer {
       { configSnapshot: this.options.config, version: this.options.version },
       "daemon",
     );
+    this.#logger.info("Daemon started", {
+      config: this.options.config,
+      protocolVersion: this.#protocolVersion,
+      socketPath: this.options.host.endpoint,
+      version: this.options.version,
+    });
     this.#scheduleHeartbeatTick();
   }
 
@@ -116,6 +126,7 @@ export class DaemonServer {
   }
 
   async #stop(reason: string): Promise<void> {
+    this.#logger.info("Daemon stopping", { reason });
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
     if (this.#heartbeatTimer !== undefined) {
       this.options.clock.cancel(this.#heartbeatTimer);
@@ -128,6 +139,7 @@ export class DaemonServer {
       await connection.socket.close();
     }
     await this.options.host.stop();
+    this.#logger.info("Daemon stopped", { reason });
   }
 
   #accept(socket: IpcConnection): void {
@@ -212,7 +224,17 @@ export class DaemonServer {
         void this.stop("requested");
       }
     } catch (error: unknown) {
-      await this.#respondError(connection.socket, frame.id, errorCode(error), errorMessage(error));
+      const code = errorCode(error);
+      if (code === "INTERNAL") {
+        this.#logger.error("Unhandled request error", {
+          message: errorMessage(error),
+          stack: errorStack(error),
+          type: frame.type,
+        });
+      } else {
+        this.#logger.debug("Handled request error", { code, type: frame.type });
+      }
+      await this.#respondError(connection.socket, frame.id, code, errorMessage(error));
     }
   }
 
@@ -252,6 +274,10 @@ export class DaemonServer {
     connection.heartbeatCapability = isObject(payload.capabilities)
       ? payload.capabilities.heartbeat === true
       : false;
+    this.#logger.info("Connection opened", {
+      clientVersion: payload.clientVersion,
+      heartbeatCapability: connection.heartbeatCapability,
+    });
     await writeFrame(connection.socket, {
       id: frame.id,
       ok: true,
@@ -551,6 +577,9 @@ export class DaemonServer {
       return;
     }
     connection.closed = true;
+    if (connection.helloReceived) {
+      this.#logger.info("Connection closed", { heldLeaseCount: connection.heldLeaseIds.size });
+    }
     for (const disposeProgress of connection.progressDisposers) {
       disposeProgress();
     }
@@ -704,6 +733,10 @@ function errorCode(error: unknown): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errorStack(error: unknown): string | undefined {
+  return error instanceof Error ? error.stack : undefined;
 }
 
 function writeFrame(socket: IpcConnection, frame: unknown): Promise<void> {
