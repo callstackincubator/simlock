@@ -64,6 +64,31 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Capacity inputs the fake-driver lane pins so a flow's device budget comes from the
+ * flow, never from the machine running it. `defaultConfig` derives the per-platform
+ * device limits from `availableParallelism()` (a 2-core runner yields exactly one iOS
+ * device), and `capacity.ts` independently gates on `totalmem()` minus a 4 GiB OS
+ * reserve at 1.5 GiB per iOS device (a 7 GiB runner therefore admits two, whatever
+ * `limits` says). A flow needing more concurrent devices than that passes on a dev
+ * machine and wedges on a small CI runner -- the extra lease simply queues until the
+ * test's own timeout, which reads as a hang rather than as "capacity refused".
+ *
+ * Fake devices are JSON in a file and consume no real RAM, so the per-device budget is
+ * pinned to a nominal 1 MiB, which keeps the RAM gate from binding while leaving it
+ * wired. Flows that exercise capacity itself override `limits` on top of this. The real
+ * -SDK lane deliberately does not get this treatment: there the host's RAM is a real
+ * constraint and the production defaults are what should apply.
+ */
+const FAKE_LANE_BASE_CONFIG: Record<string, unknown> = {
+  limits: {
+    maxRunning: 8,
+    ios: { maxDevices: 8, maxRunning: 8 },
+    android: { maxDevices: 8, maxRunning: 8 },
+  },
+  ramBudget: { iosBytesPerDevice: 1024 * 1024, androidBytesPerDevice: 1024 * 1024 },
+};
+
 export interface WithDaemonOptions {
   /**
    * "running" (default) starts the daemon explicitly before returning, so the
@@ -146,8 +171,11 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
     ...(options.agentId === undefined ? {} : { PITLANE_AGENT_ID: options.agentId }),
   };
 
-  if (options.configOverrides !== undefined) {
-    await writeFile(configPath, `${JSON.stringify(options.configOverrides, null, 2)}\n`, "utf8");
+  const seededConfig = useFakeDriver
+    ? mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {})
+    : options.configOverrides;
+  if (seededConfig !== undefined) {
+    await writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
   }
 
   const backgroundProcesses = new Set<CliBackgroundHandle>();
