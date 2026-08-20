@@ -21,6 +21,16 @@ export interface InterruptedReclaimRecovery {
   recoverInterruptedReclaim(device: DeviceRecord): Promise<void>;
 }
 
+/**
+ * Releases a lease orphaned by a daemon restart. A held lease's liveness is
+ * its daemon connection, so any held lease found at startup has no holder by
+ * definition; this port drives it through the normal release path (reason
+ * `orphaned`) so the device is reclaimed and `lease.released` is emitted.
+ */
+export interface OrphanedLeaseRelease {
+  releaseOrphaned(leaseId: string): Promise<void>;
+}
+
 /** Read-only operation claim view used to avoid an in-flight device operation. */
 export interface DeviceClaimReader {
   isClaimed(deviceId: string): boolean;
@@ -33,6 +43,7 @@ export interface StartupConvergerOptions {
   readonly decisions: SerializedDecision;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly registry: StartupRegistry;
+  readonly releases: OrphanedLeaseRelease;
   readonly timers: LeaseTimerRestorer;
 }
 
@@ -44,6 +55,7 @@ export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
 
   async converge(): Promise<void> {
+    await this.#releaseOrphanedHeldLeases();
     await this.options.timers.restoreExpiryTimers();
     await this.#recoverInterruptedReclaims();
 
@@ -59,6 +71,25 @@ export class StartupConverger {
         target: candidate.id,
       });
       if (!executed) refused.add(candidate.id);
+    }
+  }
+
+  /**
+   * A held lease's liveness is its daemon connection, so any lease still in
+   * `held` mode at startup is orphaned by definition — it cannot have a live
+   * holder across a restart. Release it (reason `orphaned`) before timers are
+   * restored, so its timer is never re-armed, and before capacity
+   * convergence, so the freed device is visible to it. Detached leases are
+   * untouched here; their liveness is the TTL, not a connection.
+   */
+  async #releaseOrphanedHeldLeases(): Promise<void> {
+    const orphanedLeaseIds = await this.options.decisions.run(() =>
+      this.options.registry.snapshot.leases
+        .filter((lease) => lease.mode === "held")
+        .map((lease) => lease.id),
+    );
+    for (const leaseId of orphanedLeaseIds) {
+      await this.options.releases.releaseOrphaned(leaseId);
     }
   }
 

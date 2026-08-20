@@ -4,6 +4,8 @@ import type { DeviceRequest } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
 import type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
 
+/** Client-requestable subset only -- deliberately excludes internally-originated reasons
+ * like `orphaned` (startup orphan cleanup), which no client can ask for. */
 export type LeaseReleaseReason = "closed" | "explicit" | "killed";
 
 /** Lease commands used by daemon request handlers. */

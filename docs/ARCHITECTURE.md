@@ -75,11 +75,19 @@ commits the resulting running or non-running state. Global and platform limits
 are checked atomically; no driver-specific runtime details participate in this
 decision.
 
-At startup, `StartupConverger` restores persisted lease TTL timers, recovers
-unleased interrupted reclaims through the warm-pool recovery port, then
-deterministically shuts down excess unleased, unclaimed `ready` registry
-devices through `CleanupActionExecutor`. Leased devices are never touched, so
-a lowered limit may remain visibly over-limit until leases naturally release.
+At startup, `StartupConverger` first releases every persisted `held` lease
+(reason `orphaned`) through the normal release path — a held lease's liveness
+is its daemon connection, so it cannot have a live holder across a restart,
+and this runs before timers are restored so an orphaned lease's timer is
+never re-armed. It then restores persisted TTL timers for the remaining
+(`detached`) leases, whose liveness is the TTL rather than a connection,
+recovers unleased interrupted reclaims through the warm-pool recovery port,
+and finally deterministically shuts down excess unleased, unclaimed `ready`
+registry devices through `CleanupActionExecutor`. Running this release step
+before timer restoration and capacity convergence means the devices it frees
+are visible to both. Leased devices that survive the orphan sweep are never
+touched, so a lowered limit may remain visibly over-limit until leases
+naturally release.
 
 ## Device state machine
 
@@ -183,9 +191,10 @@ capacity coordinator into these direct transactional call chains:
   `CleanupActionExecutor`; the executor revalidates registry ownership,
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
-- `StartupConverger` runs timer restoration, interrupted-reclaim recovery, and
-  running-capacity convergence in that order. `NukeService` coordinates lease
-  release, pending-request cancellation, and registry-scoped reset operations.
+- `StartupConverger` runs orphaned held-lease release, timer restoration,
+  interrupted-reclaim recovery, and running-capacity convergence in that
+  order. `NukeService` coordinates lease release, pending-request
+  cancellation, and registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
 Driver work remains outside it. Component boundaries use direct calls for

@@ -164,6 +164,11 @@ export class LeaseEngine {
         },
       },
       registry: options.registry,
+      releases: {
+        releaseOrphaned: async (leaseId) => {
+          await this.#releaseCoordinator.release(leaseId, "orphaned");
+        },
+      },
       timers: this.#leases,
     });
   }

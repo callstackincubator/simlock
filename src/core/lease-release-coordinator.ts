@@ -3,7 +3,7 @@ import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import type { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
 
-export type LeaseReleaseReason = "closed" | "explicit" | "killed";
+export type LeaseReleaseReason = "closed" | "explicit" | "killed" | "orphaned";
 
 export interface LeaseReleaseCommands {
   release(leaseId: string, reason: LeaseReleaseReason): Promise<void>;
