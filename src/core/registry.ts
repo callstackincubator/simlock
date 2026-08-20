@@ -142,15 +142,7 @@ export class Registry {
     to: DeviceState,
     event?: RegistryDeviceEvent,
   ): Promise<DeviceRecord> {
-    const index = this.#devices.findIndex((device) => device.id === deviceId);
-    if (index === -1) {
-      throw new UnknownDeviceError(deviceId);
-    }
-
-    const device = this.#devices[index];
-    if (device === undefined) {
-      throw new UnknownDeviceError(deviceId);
-    }
+    const { device, index } = this.#requireDeviceRecord(deviceId);
     if (to === "deleted" && this.#leases.some((lease) => lease.deviceId === deviceId)) {
       throw new RegistryEventError(`Cannot delete device with an active lease: ${deviceId}`);
     }
@@ -178,10 +170,9 @@ export class Registry {
   }
 
   /** Commits accepted first-version purge-failure disposition without a success fact. */
+  // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's registry port.
   async completeFailedPurge(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord> {
-    const index = this.#devices.findIndex((device) => device.id === deviceId);
-    const device = this.#devices[index];
-    if (index === -1 || device === undefined) throw new UnknownDeviceError(deviceId);
+    const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.state !== "reclaiming") {
       throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
     }
@@ -192,13 +183,38 @@ export class Registry {
     return cloneDevice(updated);
   }
 
+  /** Flags a device whose observed boot state disagrees with the committed registry state. */
+  async markForeignStateDetected(deviceId: string, at: number): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    // Doctor re-reports persistent drift on every reaper tick; keep the first-detected
+    // timestamp and skip the commit so a flagged device stops rewriting state.json.
+    if (device.foreignStateDetectedAt !== undefined) {
+      return cloneDevice(device);
+    }
+    const updated = { ...device, foreignStateDetectedAt: at };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
+  /** Clears the foreign-state flag once `doctor --fix` has reconciled the device. */
+  async clearForeignStateDetected(deviceId: string): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.foreignStateDetectedAt === undefined) {
+      return cloneDevice(device);
+    }
+    const { foreignStateDetectedAt: _foreignStateDetectedAt, ...rest } = device;
+    const updated = rest as DeviceRecord;
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
   /** Records externally verified disappearance; no driver verb is invoked. */
   async markDeviceMissing(deviceId: string, initiator: string): Promise<DeviceRecord> {
-    const index = this.#devices.findIndex((device) => device.id === deviceId);
-    const device = this.#devices[index];
-    if (index === -1 || device === undefined) {
-      throw new UnknownDeviceError(deviceId);
-    }
+    const { device, index } = this.#requireDeviceRecord(deviceId);
     if (this.#leases.some((lease) => lease.deviceId === deviceId)) {
       throw new RegistryEventError(`Cannot mark leased device missing: ${deviceId}`);
     }
@@ -272,6 +288,7 @@ export class Registry {
     return { device: cloneDevice(reclaiming), lease: cloneLease(lease) };
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through LeaseLifecycle's registry port.
   async renewLease(leaseId: string, ttlDeadline: number): Promise<LeaseRecord> {
     const index = this.#leases.findIndex((lease) => lease.id === leaseId);
     const lease = this.#leases[index];
@@ -284,6 +301,18 @@ export class Registry {
     leases[index] = renewed;
     await this.#commit(this.#devices, leases);
     return cloneLease(renewed);
+  }
+
+  #requireDeviceRecord(deviceId: string): {
+    readonly device: DeviceRecord;
+    readonly index: number;
+  } {
+    const index = this.#devices.findIndex((device) => device.id === deviceId);
+    const device = this.#devices[index];
+    if (index === -1 || device === undefined) {
+      throw new UnknownDeviceError(deviceId);
+    }
+    return { device, index };
   }
 
   async #commit(devices: DeviceRecord[], leases: LeaseRecord[]): Promise<void> {
@@ -356,6 +385,7 @@ const deviceRecordKeys = [
   "driverData",
   "createdAt",
   "lastLeaseEndedAt",
+  "foreignStateDetectedAt",
 ] as const;
 const leaseRecordKeys = [
   "id",
@@ -403,7 +433,16 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const { createdAt, driverData, driverDeviceId, id, lastLeaseEndedAt, spec, state } = value;
+  const {
+    createdAt,
+    driverData,
+    driverDeviceId,
+    foreignStateDetectedAt,
+    id,
+    lastLeaseEndedAt,
+    spec,
+    state,
+  } = value;
   if (
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
@@ -411,13 +450,15 @@ function parseDevice(value: unknown): DeviceRecord {
     !(isDeviceState(state) || state === "warm") ||
     !isDeviceSpec(spec) ||
     !("driverData" in value) ||
-    (lastLeaseEndedAt !== undefined && typeof lastLeaseEndedAt !== "number")
+    (lastLeaseEndedAt !== undefined && typeof lastLeaseEndedAt !== "number") ||
+    (foreignStateDetectedAt !== undefined && typeof foreignStateDetectedAt !== "number")
   ) {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
   return {
     ...(lastLeaseEndedAt === undefined ? {} : { lastLeaseEndedAt }),
+    ...(foreignStateDetectedAt === undefined ? {} : { foreignStateDetectedAt }),
     createdAt,
     driverData,
     driverDeviceId,

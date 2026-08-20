@@ -16,6 +16,9 @@ export {
   type DriverCatalogEntry,
   DriverCrashError,
   type DriverDevice,
+  type DriverReality,
+  type ObservedDevice,
+  type ObservedRunState,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";

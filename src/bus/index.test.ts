@@ -126,6 +126,7 @@ describe("EventBus", () => {
       | "device.purge-failed"
       | "device.shutdown"
       | "device.deleted"
+      | "device.foreign-state-detected"
       | "runtime.deleted"
       | "daemon.started"
       | "daemon.stopping"

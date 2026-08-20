@@ -22,6 +22,7 @@ export interface DeviceRecord {
   readonly driverData: unknown;
   readonly createdAt: number;
   readonly lastLeaseEndedAt?: number;
+  readonly foreignStateDetectedAt?: number;
 }
 
 export interface LeaseRecord {

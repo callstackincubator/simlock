@@ -5,6 +5,8 @@ import {
   type Driver,
   type DriverCatalogEntry,
   type DriverDevice,
+  type DriverReality,
+  type ObservedRunState,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
@@ -60,9 +62,7 @@ export class FakeDriver implements Driver {
   readonly #reclaimResult: "ready" | "shutdown";
   readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
-  #managedReality:
-    | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
-    | undefined;
+  #managedReality: DriverReality | undefined;
 
   constructor(options: FakeDriverOptions) {
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
@@ -162,18 +162,16 @@ export class FakeDriver implements Driver {
     this.#managedReality = removeManagedDevice(this.#managedReality, device.deviceId);
   }
 
-  async listManaged(): Promise<{
-    readonly devices: readonly DriverDevice[];
-    readonly processes: readonly DriverDevice[];
-  }> {
+  async listManaged(): Promise<DriverReality> {
     await this.#beforeCall("listManaged");
     if (this.#managedReality !== undefined) {
       return cloneReality(this.#managedReality);
     }
     return {
-      devices: [...this.#devices.keys()].map((deviceId) => ({
+      devices: [...this.#devices.entries()].map(([deviceId, status]) => ({
         deviceId,
         driverData: { fakeDeviceId: deviceId },
+        runState: runStateFor(status),
       })),
       processes: [],
     };
@@ -208,17 +206,19 @@ export class FakeDriver implements Driver {
     }
   }
 
-  setManagedReality(reality: {
-    readonly devices: readonly DriverDevice[];
-    readonly processes: readonly DriverDevice[];
-  }): void {
+  setManagedReality(reality: DriverReality): void {
     const managed = {
       devices: reality.devices.filter(isPitlaneManaged),
       processes: reality.processes.filter(isPitlaneManaged),
     };
     this.#managedReality = cloneReality(managed);
-    for (const device of [...reality.devices, ...reality.processes]) {
-      this.#devices.set(device.deviceId, "shutdown");
+    for (const device of reality.devices) {
+      this.#devices.set(device.deviceId, statusFor(device.runState));
+    }
+    for (const device of reality.processes) {
+      if (!this.#devices.has(device.deviceId)) {
+        this.#devices.set(device.deviceId, "ready");
+      }
     }
   }
 
@@ -261,10 +261,29 @@ function isPitlaneManaged(device: DriverDevice): boolean {
   return device.deviceId.startsWith("pitlane-") || device.deviceId.startsWith("pitlane_");
 }
 
-function cloneReality(reality: {
-  readonly devices: readonly DriverDevice[];
-  readonly processes: readonly DriverDevice[];
-}): { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] } {
+function runStateFor(status: "provisioned" | "ready" | "shutdown"): ObservedRunState {
+  switch (status) {
+    case "ready":
+      return "running";
+    case "shutdown":
+      return "stopped";
+    case "provisioned":
+      return "transitioning";
+  }
+}
+
+function statusFor(runState: ObservedRunState): "provisioned" | "ready" | "shutdown" {
+  switch (runState) {
+    case "running":
+      return "ready";
+    case "stopped":
+      return "shutdown";
+    case "transitioning":
+      return "provisioned";
+  }
+}
+
+function cloneReality(reality: DriverReality): DriverReality {
   return {
     devices: reality.devices.map((device) => ({ ...device })),
     processes: reality.processes.map((device) => ({ ...device })),
@@ -272,25 +291,17 @@ function cloneReality(reality: {
 }
 
 function removeManagedDevice(
-  reality:
-    | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
-    | undefined,
+  reality: DriverReality | undefined,
   deviceId: string,
-):
-  | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
-  | undefined {
+): DriverReality | undefined {
   if (reality === undefined) return undefined;
   return { ...reality, devices: reality.devices.filter((device) => device.deviceId !== deviceId) };
 }
 
 function removeManagedProcess(
-  reality:
-    | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
-    | undefined,
+  reality: DriverReality | undefined,
   deviceId: string,
-):
-  | { readonly devices: readonly DriverDevice[]; readonly processes: readonly DriverDevice[] }
-  | undefined {
+): DriverReality | undefined {
   if (reality === undefined) return undefined;
   return {
     ...reality,

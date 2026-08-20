@@ -5,6 +5,9 @@ import {
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
+  type DriverReality,
+  type ObservedDevice,
+  type ObservedRunState,
   RuntimeMissingError,
   UnknownModelError,
 } from "../../core/index.js";
@@ -172,12 +175,11 @@ export class IosSimctlDriver implements Driver {
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
   }
 
-  async listManaged(): Promise<{
-    readonly devices: readonly DriverDevice[];
-    readonly processes: readonly DriverDevice[];
-  }> {
+  async listManaged(): Promise<DriverReality> {
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
-    return { devices: parseManagedDevices(JSON.parse(result.stdout) as unknown), processes: [] };
+    const devices = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    const processes = devices.filter((device) => device.runState === "running");
+    return { devices, processes };
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
@@ -323,11 +325,11 @@ class IosRuntimeMissingError extends RuntimeMissingError {
 }
 
 // fallow-ignore-next-line complexity -- runtime-keyed device JSON is walked and filtered in one pass by design.
-function parseManagedDevices(value: unknown): DriverDevice[] {
+function parseManagedDevices(value: unknown): ObservedDevice[] {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");
   }
-  const devices: DriverDevice[] = [];
+  const devices: ObservedDevice[] = [];
   for (const runtimeDevices of Object.values(value.devices)) {
     if (!Array.isArray(runtimeDevices)) continue;
     for (const device of runtimeDevices) {
@@ -343,10 +345,18 @@ function parseManagedDevices(value: unknown): DriverDevice[] {
           runtimeId: "",
           udid: device.udid,
         } satisfies IosDriverData,
+        runState: simctlRunState(device.state),
       });
     }
   }
   return devices;
+}
+
+/** `simctl` reports `Booting` / `Shutting Down` mid-transition; both must read as `transitioning`, never as drift. */
+function simctlRunState(state: unknown): ObservedRunState {
+  if (state === "Booted") return "running";
+  if (state === "Shutdown") return "stopped";
+  return "transitioning";
 }
 
 function parseCatalog(value: unknown): SimctlCatalog {
