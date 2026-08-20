@@ -29,6 +29,10 @@ const PORT_MAX = 5682;
 const PORT_MIN = 5554;
 const PORT_POLL_INTERVAL_MS = 2_000;
 const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
+// A defense-in-depth bound on the wait that follows a SIGKILL: NodeProcessHandle#wait
+// already settles shortly after `exit`, but this keeps a pathologically slow reap
+// from ever turning a "we already killed it" cleanup into an unbounded await.
+const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 const CLEAN_BASELINE = "pitlane_clean_baseline";
 const DURABLE_MARK_KEY = "pitlane.mark";
@@ -705,7 +709,7 @@ export class AndroidDriver implements Driver {
       await this.#waitForReadiness(data, startedAt);
     } catch (error: unknown) {
       handle.kill("SIGKILL");
-      await handle.wait();
+      await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
       state.handle = undefined;
       throw error;
     }
@@ -775,7 +779,7 @@ export class AndroidDriver implements Driver {
     const exited = await this.#waitForExit(handle, this.#readinessTimeoutMs);
     if (!exited) {
       handle.kill("SIGKILL");
-      await handle.wait();
+      await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
     }
     state.handle = undefined;
   }

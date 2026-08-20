@@ -1,5 +1,16 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 
+// `close` normally follows `exit` within the same tick, once the child's own stdio
+// pipes report EOF. But children are spawned `detached: true`, so a process that
+// forks a grandchild before it dies can leave that grandchild holding the inherited
+// write end of our pipe open -- `close` then never fires even though the process we
+// actually care about is long gone. This grace window bounds how long `wait()` keeps
+// deferring to `close` for the fully-flushed output before it settles from `exit`
+// with whatever was captured so far. It only needs to cover ordinary EOF propagation
+// latency (effectively instant), not an orphaned grandchild's lifetime, so it is kept
+// short rather than sized like a real operation timeout.
+const EXIT_TO_CLOSE_GRACE_MS = 1_000;
+
 export interface ProcessRunOptions {
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
@@ -90,8 +101,23 @@ class NodeProcessHandle implements ProcessHandle {
     captureLines(child.stderr, this.stderr, this.#stderrChunks);
     this.#result = new Promise<ProcessResult>((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code) => {
+
+      let settled = false;
+      const settle = (code: number | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         resolve({ code, stderr: this.#stderrChunks.join(""), stdout: this.#stdoutChunks.join("") });
+      };
+
+      child.once("close", (code) => {
+        settle(code);
+      });
+      child.once("exit", (code) => {
+        const timer = setTimeout(() => settle(code), EXIT_TO_CLOSE_GRACE_MS);
+        // A pending grace timer must never keep the Node process alive on its own.
+        timer.unref();
       });
     });
   }

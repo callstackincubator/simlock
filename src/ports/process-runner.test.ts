@@ -96,4 +96,53 @@ describe("NodeProcessRunner", () => {
       }),
     ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
   });
+
+  it("settles wait() when a detached grandchild keeps the stdio pipe open after the process exits", async () => {
+    const runner = new NodeProcessRunner();
+    // The child forks its own detached grandchild that inherits our pipe's write
+    // end, prints the grandchild's pid, then exits immediately -- reproducing the
+    // real defect, where a surviving grandchild silences `close` even though the
+    // process wait() is meant to be waiting for is already gone.
+    const handle = runner.spawn(process.execPath, [
+      "-e",
+      `
+          const { spawn } = require("node:child_process");
+          const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+            detached: true,
+            stdio: "inherit",
+          });
+          grandchild.unref();
+          require("node:fs").writeSync(1, String(grandchild.pid) + "\\n");
+          process.exit(3);
+        `,
+    ]);
+
+    let grandchildPid: number | undefined;
+    try {
+      const lines = handle.stdout[Symbol.asyncIterator]();
+      grandchildPid = Number((await lines.next()).value);
+
+      // Race a generous but bounded timeout so a regression here fails as a clear
+      // assertion instead of vitest's own suite-wide test timeout.
+      const result = await Promise.race([
+        handle.wait(),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error("wait() did not settle while a grandchild held stdio open")),
+            2_000,
+          ).unref();
+        }),
+      ]);
+
+      expect(result.code).toBe(3);
+    } finally {
+      if (grandchildPid !== undefined) {
+        try {
+          process.kill(grandchildPid, "SIGKILL");
+        } catch {
+          // Already gone by the time we get here.
+        }
+      }
+    }
+  }, 4_000);
 });
