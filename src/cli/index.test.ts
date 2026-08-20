@@ -675,6 +675,82 @@ describe("CLI boundary", () => {
     await expect(runCli(["catalog", "--platform", "windows"], output.environment)).resolves.toBe(2);
     expect(output.stderr).toContain("--platform must be ios or android");
   });
+
+  it("prints top help without connecting to the daemon", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["top", "--help"], output.environment)).resolves.toBe(0);
+    expect(output.stdout).toBe("Usage: pitlane top\n");
+    expect(output.stderr).toBe("");
+  });
+
+  it("dispatches pitlane top to the injected loadTopUi frontend, connecting with connectExisting", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const runTopUi = vi.fn(async (_options: { readonly connection: DaemonConnection }) => 0);
+    const loadTopUi = vi.fn(async () => runTopUi);
+
+    await expect(
+      runCli(
+        ["top"],
+        output.environmentWith({
+          connect: async () => {
+            throw new Error("must not fall back to connect when connectExisting is provided");
+          },
+          connectExisting: async () => connection,
+          loadTopUi,
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(loadTopUi).toHaveBeenCalledTimes(1);
+    expect(runTopUi).toHaveBeenCalledTimes(1);
+    expect(runTopUi.mock.calls[0]?.[0]).toMatchObject({ connection });
+  });
+
+  it("falls back to connect for pitlane top when connectExisting is not provided", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    const runTopUi = vi.fn(async () => 0);
+
+    await expect(
+      runCli(
+        ["top"],
+        output.environmentWith({
+          connect: async () => connection,
+          loadTopUi: async () => runTopUi,
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(runTopUi).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates a connection failure through the standard daemon-error stderr path, never loading the Ink frontend", async () => {
+    const output = outputCapture();
+    const loadTopUi = vi.fn(async () => vi.fn(async () => 0));
+
+    await expect(
+      runCli(
+        ["top"],
+        output.environmentWith({
+          connectExisting: async () => {
+            throw new DaemonClientError("DAEMON_UNAVAILABLE", "Daemon is not running");
+          },
+          loadTopUi,
+        }),
+      ),
+    ).resolves.toBe(1);
+    expect(loadTopUi).not.toHaveBeenCalled();
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "DAEMON_UNAVAILABLE", message: "Daemon is not running" },
+    });
+  });
+
+  it("rejects unexpected top input", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["top", "unexpected"], output.environment)).resolves.toBe(2);
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
+  });
 });
 
 class StubConnection implements DaemonConnection {

@@ -13,6 +13,8 @@ import {
 import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
 import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
+// Type-only: erased at compile time, so this never triggers Ink's real (eager) module load.
+import type { TopUiRunner } from "./top/ui.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
@@ -21,6 +23,7 @@ const USAGE = `Usage: pitlane <command> [options]
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config
+  top                         Live read-only terminal dashboard
   mcp                         Start the stdio MCP server
 Run 'pitlane <command> --help' for command usage.`;
 
@@ -74,6 +77,8 @@ export interface CliEnvironment {
   /** Loads the MCP frontend only when the `mcp` command is dispatched. */
   readonly loadMcpStdio?: () => Promise<McpStdioRunner>;
   readonly runMcpStdio?: () => Promise<void>;
+  /** Loads the Ink dashboard frontend only when the `top` command is dispatched. */
+  readonly loadTopUi?: () => Promise<TopUiRunner>;
   readonly signals: Signals;
   readonly stderr: Output;
   readonly stdout: Output;
@@ -135,6 +140,10 @@ async function loadDefaultMcpStdio(): Promise<McpStdioRunner> {
   return (await import("../mcp/main.js")).runMcpStdio;
 }
 
+async function loadDefaultTopUi(): Promise<TopUiRunner> {
+  return (await import("./top/ui.js")).runTopUi;
+}
+
 export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment = defaultCliEnvironment(),
@@ -167,6 +176,8 @@ export async function runCli(
         return await runDaemon(argv.slice(1), environment);
       case "config":
         return await runConfig(argv.slice(1), environment);
+      case "top":
+        return await runTop(argv.slice(1), environment);
       case "mcp":
         return await runMcp(argv.slice(1), environment);
       default:
@@ -195,6 +206,28 @@ function cliErrorCode(error: unknown): string {
   if (error instanceof UsageError) return "USAGE";
   if (error instanceof DaemonClientError) return error.code;
   return "INTERNAL";
+}
+
+/**
+ * Live read-only dashboard. Connects with `connectExisting` (never
+ * `connect`) so a dashboard can never silently boot the daemon — if it
+ * isn't running, `connectExisting` throws and the usual `DaemonClientError`
+ * path in `runCli`'s catch reports it; there is no special-casing here.
+ */
+async function runTop(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  const values = commandArgs(argv, { help: { type: "boolean", short: "h" } });
+  if (values.help) {
+    environment.stdout.write("Usage: pitlane top\n");
+    return 0;
+  }
+  if (values.positionals.length > 0) throw new UsageError("top accepts no arguments");
+  const connection = await (environment.connectExisting ?? environment.connect)();
+  const runTopUi = await (environment.loadTopUi ?? loadDefaultTopUi)();
+  return await runTopUi({
+    connection,
+    now: environment.now ?? Date.now,
+    signals: environment.signals,
+  });
 }
 
 async function runMcp(argv: readonly string[], environment: CliEnvironment): Promise<number> {

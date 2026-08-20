@@ -209,6 +209,19 @@ registry-managed device. Never touches devices outside the registry.
 Stream the business-event ring buffer (see [EVENTS.md](EVENTS.md)) as JSON
 lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 
+## `pitlane top`
+
+Live, read-only, full-screen terminal dashboard of daemon state: every
+managed device with its state/OS/agent/duration, a capacity meter, queue
+depth, and the most recent business event. Connects with the daemon's
+existing-connection path only — **it never auto-starts the daemon**; if it
+isn't running, `top` fails the same way every other command does (a
+structured stderr error line, non-zero exit). The view refreshes on every
+pushed event (debounced ~150ms) and on a 5s safety-net poll, so it stays
+correct without polling aggressively. `q`, `Esc`, or Ctrl+C quits cleanly.
+Exposes no destructive actions — no release/cleanup/doctor/nuke surface —
+by design; use the dedicated commands for those.
+
 ## `pitlane daemon <start|stop|status|logs>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand;
