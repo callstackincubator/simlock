@@ -57,8 +57,8 @@ function leaseProgressParams(progress: LeaseProgressNotice): {
 }
 
 /**
- * Converges toward (but never reaches) 1000 as `remaining` (a queue position or an ETA in
- * seconds) shrinks toward 0, so it never collides with the next stage's base.
+ * Climbs toward 1000 as `remaining` (a queue position or an ETA in seconds) shrinks toward 0,
+ * staying at or below the next stage's base so stages never overlap.
  */
 function withinStageProgress(remaining: number): number {
   return Math.round(1_000 / (Math.max(remaining, 0) + 1));
@@ -77,10 +77,12 @@ function createLeaseProgressReporter(
   return (progress) => {
     const { message, progress: rawProgress } = leaseProgressParams(progress);
     lastProgress = Math.max(rawProgress, lastProgress + 1);
+    // Progress is advisory: a transport that went away mid-lease must not surface here as an
+    // unhandled rejection and take the server down with it.
     void sendNotification({
       method: "notifications/progress",
       params: { message, progress: lastProgress, progressToken, total: TOTAL_PROGRESS },
-    });
+    }).catch(() => undefined);
   };
 }
 
