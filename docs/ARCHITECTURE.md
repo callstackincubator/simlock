@@ -35,7 +35,10 @@ MCP client ──spawns──> stdio MCP ┘                                    
 - **stdio MCP server**: its process owns one agent session and exposes MCP over
   stdin/stdout. A lease is held by that process's daemon connection until the
   session explicitly releases it or the MCP transport disconnects, at which
-  point the connection closes and releases the lease.
+  point the connection closes and releases the lease. Like the CLI, it relays
+  the daemon's progress pushes for the in-flight `lease_simulator` request —
+  as MCP `notifications/progress` instead of stderr JSON lines, and only when
+  the client supplied a progress token.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 

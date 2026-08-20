@@ -136,6 +136,14 @@ call `lease_simulator` again rather than keep operating on it; a subsequent
 `release_simulator` for that lease id fails with `LEASE_NOT_OWNED` instead of
 succeeding.
 
+If the `lease_simulator` call's request carries a `_meta.progressToken`, a
+cold provision — waiting in the queue, provisioning, booting, or reclaiming a
+device — is reported as MCP `notifications/progress` for that request, each
+carrying a human-readable `message` (e.g. queue position, or an ETA in
+seconds) and a `progress` value that only increases. Clients that don't
+supply a progress token see no change: the tool call behaves exactly as
+before, just blocking until it resolves.
+
 ## Configuration
 
 Pitlane reads `~/.pitlane/config.json` and merges it over built-in

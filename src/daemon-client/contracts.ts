@@ -75,6 +75,30 @@ export function parseRawLeaseLost(value: unknown): RawLeaseLost {
   return { deviceId: payload.deviceId, leaseId: payload.leaseId, reason: payload.reason };
 }
 
+export type RawLeaseProgress =
+  | { readonly stage: "queued"; readonly queuePosition: number }
+  | { readonly stage: "provisioning" | "booting" | "reclaiming"; readonly etaMs: number };
+
+/** Parses a "progress" push frame delivered to the requesting connection while a lease is in flight. */
+export function parseRawLeaseProgress(value: unknown): RawLeaseProgress {
+  const payload = requireObject(value, "Daemon sent an invalid progress notification");
+  if (payload.stage === "queued") {
+    if (typeof payload.queuePosition !== "number") {
+      throw new Error("Daemon sent an invalid progress notification");
+    }
+    return { queuePosition: payload.queuePosition, stage: "queued" };
+  }
+  if (
+    (payload.stage === "provisioning" ||
+      payload.stage === "booting" ||
+      payload.stage === "reclaiming") &&
+    typeof payload.etaMs === "number"
+  ) {
+    return { etaMs: payload.etaMs, stage: payload.stage };
+  }
+  throw new Error("Daemon sent an invalid progress notification");
+}
+
 function requireObject(value: unknown, message: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(message);

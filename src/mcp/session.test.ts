@@ -482,6 +482,160 @@ describe("McpSession", () => {
     connection.pushLeaseLost({ deviceId: "ABCD", leaseId: "lse_9f2c", reason: "expired" });
     expect(notices).toEqual([]);
   });
+
+  it("relays progress pushes to the in-flight lease request's onProgress callback", async () => {
+    const connection = new StubConnection();
+    const grant = deferred<unknown>();
+    connection.responses.push(grant.promise);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    const progressEvents: unknown[] = [];
+    const lease = session.lease(input, undefined, (progress) => progressEvents.push(progress));
+    await waitFor(() => connection.requests.length === 1);
+
+    connection.pushProgress({ queuePosition: 2, stage: "queued" });
+    connection.pushProgress({ etaMs: 9_000, stage: "provisioning" });
+
+    expect(progressEvents).toEqual([
+      { queuePosition: 2, stage: "queued" },
+      { etaMs: 9_000, stage: "provisioning" },
+    ]);
+
+    grant.resolve(rawGrant);
+    await lease;
+  });
+
+  it("does nothing when a lease request has no onProgress callback", async () => {
+    const connection = new StubConnection();
+    const grant = deferred<unknown>();
+    connection.responses.push(grant.promise);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    const lease = session.lease(input);
+    await waitFor(() => connection.requests.length === 1);
+    expect(() => connection.pushProgress({ queuePosition: 3, stage: "queued" })).not.toThrow();
+
+    grant.resolve(rawGrant);
+    await lease;
+  });
+
+  it("stops relaying progress once the lease request has settled", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    const progressEvents: unknown[] = [];
+    await session.lease(input, undefined, (progress) => progressEvents.push(progress));
+    connection.pushProgress({ etaMs: 5_000, stage: "booting" });
+
+    expect(progressEvents).toEqual([]);
+  });
+
+  it("scopes the progress listener to one request: no leakage across sequential lease calls", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant, { leaseId: "lse_9f2c" });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    const firstProgress: unknown[] = [];
+    await session.lease(input, undefined, (progress) => firstProgress.push(progress));
+    await session.release({ lease_id: "lse_9f2c" });
+
+    const secondGrant = deferred<unknown>();
+    connection.responses.push(secondGrant.promise);
+    const secondProgress: unknown[] = [];
+    const secondLease = session.lease(input, undefined, (progress) =>
+      secondProgress.push(progress),
+    );
+    await waitFor(() => connection.requests.length === 3);
+
+    connection.pushProgress({ etaMs: 1_000, stage: "booting" });
+
+    expect(firstProgress).toEqual([]);
+    expect(secondProgress).toEqual([{ etaMs: 1_000, stage: "booting" }]);
+
+    secondGrant.resolve({ ...rawGrant, lease: { ...rawGrant.lease, id: "lse_second" } });
+    await secondLease;
+  });
+
+  it("stops relaying progress once a cancelled lease request tears down", async () => {
+    const connection = new StubConnection();
+    const grant = deferred<unknown>();
+    connection.responses.push(grant.promise);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    const controller = new AbortController();
+    const progressEvents: unknown[] = [];
+    const lease = session.lease(input, controller.signal, (progress) =>
+      progressEvents.push(progress),
+    );
+    await waitFor(() => connection.requests.length === 1);
+
+    controller.abort();
+    await expect(lease).rejects.toMatchObject({ code: "CANCELLED" });
+    connection.pushProgress({ etaMs: 1_000, stage: "booting" });
+
+    expect(progressEvents).toEqual([]);
+    grant.resolve(rawGrant);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it("stops relaying progress once the session closes", async () => {
+    const connection = new StubConnection();
+    const grant = deferred<unknown>();
+    connection.responses.push(grant.promise);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    const progressEvents: unknown[] = [];
+    const lease = session.lease(input, undefined, (progress) => progressEvents.push(progress));
+    await waitFor(() => connection.requests.length === 1);
+
+    await session.close();
+    connection.pushProgress({ queuePosition: 1, stage: "queued" });
+
+    expect(progressEvents).toEqual([]);
+    await expect(lease).rejects.toMatchObject({ code: "SESSION_CLOSED" });
+    grant.resolve(rawGrant);
+  });
+
+  it("ignores malformed progress pushes without throwing", async () => {
+    const connection = new StubConnection();
+    const grant = deferred<unknown>();
+    connection.responses.push(grant.promise);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    const progressEvents: unknown[] = [];
+    const lease = session.lease(input, undefined, (progress) => progressEvents.push(progress));
+    await waitFor(() => connection.requests.length === 1);
+
+    expect(() => connection.pushProgress({ stage: "not-a-stage" })).not.toThrow();
+    expect(() => connection.pushProgress({ stage: "queued" })).not.toThrow();
+    expect(() => connection.pushProgress({ stage: "provisioning" })).not.toThrow();
+    expect(() => connection.pushProgress(null)).not.toThrow();
+
+    expect(progressEvents).toEqual([]);
+    grant.resolve(rawGrant);
+    await lease;
+  });
 });
 
 class StubConnection implements DaemonConnection {
@@ -508,6 +662,10 @@ class StubConnection implements DaemonConnection {
     readonly reason: string;
   }): void {
     for (const listener of this.#listeners) listener("lease-lost", payload);
+  }
+
+  pushProgress(payload: unknown): void {
+    for (const listener of this.#listeners) listener("progress", payload);
   }
 
   async close(): Promise<void> {

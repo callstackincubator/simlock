@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ProgressNotification } from "@modelcontextprotocol/sdk/types.js";
 
 import {
   leaseSimulatorInputSchema,
@@ -10,9 +11,78 @@ import {
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
 } from "./contracts.js";
-import { McpSession, toMcpErrorResult } from "./session.js";
+import { McpSession, type LeaseProgressNotice, toMcpErrorResult } from "./session.js";
 
 const SERVER_INFO = { name: "pitlane", version: "1.0.0" };
+
+/**
+ * Progress is reported on a 3-stage scale (queued / provisioning-or-reclaiming / booting), each
+ * worth 1000 units, so a fresh stage's base always exceeds the previous stage's maximum.
+ */
+const STAGE_BASE_PROGRESS: Record<LeaseProgressNotice["stage"], number> = {
+  booting: 2_000,
+  provisioning: 1_000,
+  queued: 0,
+  reclaiming: 1_000,
+};
+const TOTAL_PROGRESS = 3_000;
+
+/** Maps a lease progress push onto an MCP progress notification's `params`. */
+function leaseProgressParams(progress: LeaseProgressNotice): {
+  readonly message: string;
+  readonly progress: number;
+} {
+  const base = STAGE_BASE_PROGRESS[progress.stage];
+  if (progress.stage === "queued") {
+    const position = Math.max(progress.queuePosition, 0);
+    return {
+      message:
+        position === 0
+          ? "Next in queue"
+          : `Queued behind ${position} other request${position === 1 ? "" : "s"}`,
+      progress: base + withinStageProgress(position),
+    };
+  }
+  const etaSeconds = Math.max(0, Math.ceil(progress.etaMs / 1_000));
+  const verb =
+    progress.stage === "provisioning"
+      ? "Provisioning"
+      : progress.stage === "booting"
+        ? "Booting"
+        : "Reclaiming";
+  return {
+    message: `${verb} device (~${etaSeconds}s remaining)`,
+    progress: base + withinStageProgress(etaSeconds),
+  };
+}
+
+/**
+ * Converges toward (but never reaches) 1000 as `remaining` (a queue position or an ETA in
+ * seconds) shrinks toward 0, so it never collides with the next stage's base.
+ */
+function withinStageProgress(remaining: number): number {
+  return Math.round(1_000 / (Math.max(remaining, 0) + 1));
+}
+
+/**
+ * Builds a per-lease-request `onProgress` callback that relays daemon progress as
+ * `notifications/progress`, clamping so the value MCP requires to increase monotonically never
+ * goes backwards even though queue position and ETAs can.
+ */
+function createLeaseProgressReporter(
+  progressToken: string | number,
+  sendNotification: (notification: ProgressNotification) => Promise<void>,
+): (progress: LeaseProgressNotice) => void {
+  let lastProgress = 0;
+  return (progress) => {
+    const { message, progress: rawProgress } = leaseProgressParams(progress);
+    lastProgress = Math.max(rawProgress, lastProgress + 1);
+    void sendNotification({
+      method: "notifications/progress",
+      params: { message, progress: lastProgress, progressToken, total: TOTAL_PROGRESS },
+    });
+  };
+}
 
 /** Creates the MCP tool surface for one lease-owning session. */
 export function createMcpServer(session: McpSession): McpServer {
@@ -29,7 +99,12 @@ export function createMcpServer(session: McpSession): McpServer {
     },
     async (input, extra) => {
       try {
-        const output = await session.lease(input, extra.signal);
+        const progressToken = extra._meta?.progressToken;
+        const onProgress =
+          progressToken === undefined
+            ? undefined
+            : createLeaseProgressReporter(progressToken, extra.sendNotification);
+        const output = await session.lease(input, extra.signal, onProgress);
         return success(output);
       } catch (error: unknown) {
         return failure(error);

@@ -2,7 +2,9 @@ import {
   parseRawCatalog,
   parseRawLeaseGrant,
   parseRawLeaseLost,
+  parseRawLeaseProgress,
   type RawLeaseGrant,
+  type RawLeaseProgress,
 } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 import type {
@@ -38,6 +40,9 @@ export interface LeaseLostNotice {
   readonly leaseId: string;
   readonly reason: string;
 }
+
+/** Delivered to a `lease()` call's own `onProgress` callback while that request is in flight. */
+export type LeaseProgressNotice = RawLeaseProgress;
 
 interface OwnedLease {
   readonly device: string;
@@ -83,6 +88,8 @@ export class McpSession {
   #sessionClosed: Promise<never>;
   #ownedLease: OwnedLease | undefined;
   #pushUnsubscribe: (() => void) | undefined;
+  /** Scoped to the in-flight `lease()` call; cleared once that call settles or the session closes. */
+  #leaseProgressListener: ((progress: LeaseProgressNotice) => void) | undefined;
   readonly #leaseLostListeners = new Set<(notice: LeaseLostNotice) => void>();
   #mutations: Promise<void> = Promise.resolve();
 
@@ -95,10 +102,19 @@ export class McpSession {
     void this.#sessionClosed.catch(() => undefined);
   }
 
-  lease(input: LeaseSimulatorInput, signal?: AbortSignal): Promise<LeaseSimulatorOutput> {
+  /**
+   * `onProgress` is scoped to this call only: it receives queue/provisioning/boot updates for
+   * this request while it is in flight, and is torn down on completion, error, cancellation, or
+   * session close. It never leaks across sequential lease requests.
+   */
+  lease(
+    input: LeaseSimulatorInput,
+    signal?: AbortSignal,
+    onProgress?: (progress: LeaseProgressNotice) => void,
+  ): Promise<LeaseSimulatorOutput> {
     return this.#mutate(() => {
       this.#throwIfClosed();
-      return this.#lease(input, signal);
+      return this.#lease(input, signal, onProgress);
     });
   }
 
@@ -162,6 +178,7 @@ export class McpSession {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
     this.#ownedLease = undefined;
+    this.#leaseProgressListener = undefined;
     this.#pushUnsubscribe?.();
     this.#pushUnsubscribe = undefined;
     this.#rejectClosed(new McpSessionError("SESSION_CLOSED", "MCP session is closed"));
@@ -177,10 +194,15 @@ export class McpSession {
     return this.#closePromise;
   }
 
-  async #lease(input: LeaseSimulatorInput, signal?: AbortSignal): Promise<LeaseSimulatorOutput> {
+  async #lease(
+    input: LeaseSimulatorInput,
+    signal?: AbortSignal,
+    onProgress?: (progress: LeaseProgressNotice) => void,
+  ): Promise<LeaseSimulatorOutput> {
     throwIfAborted(signal);
 
     const abortWatch = this.#watchLeaseAbort(signal);
+    this.#leaseProgressListener = onProgress;
     let responseReceived = false;
     try {
       const connection = await this.#connectionForUse();
@@ -192,6 +214,7 @@ export class McpSession {
       await this.#cleanupFailedLease(responseReceived, abortWatch.cleanup());
       throw error;
     } finally {
+      this.#leaseProgressListener = undefined;
       abortWatch.dispose();
     }
   }
@@ -308,8 +331,12 @@ export class McpSession {
     if (connection !== undefined) await this.#closeDaemonConnection(connection);
   }
 
-  /** Relays a daemon lease-lost push to this session's own listeners (e.g. an MCP logging notification). */
+  /** Relays a daemon push to this session's own listeners (lease-lost facts, in-flight lease progress). */
   #handlePush(kind: string, payload: unknown): void {
+    if (kind === "progress") {
+      this.#handleLeaseProgress(payload);
+      return;
+    }
     if (kind !== "lease-lost") return;
     let notice: LeaseLostNotice;
     try {
@@ -320,6 +347,18 @@ export class McpSession {
     if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== notice.leaseId) return;
     this.#ownedLease = undefined;
     for (const listener of this.#leaseLostListeners) listener(notice);
+  }
+
+  /** Relays a daemon progress push to the in-flight `lease()` call's own `onProgress`, if any. */
+  #handleLeaseProgress(payload: unknown): void {
+    if (this.#leaseProgressListener === undefined) return;
+    let progress: LeaseProgressNotice;
+    try {
+      progress = parseRawLeaseProgress(payload);
+    } catch {
+      return;
+    }
+    this.#leaseProgressListener(progress);
   }
 
   async #closeDaemonConnection(connection: DaemonConnection): Promise<void> {
