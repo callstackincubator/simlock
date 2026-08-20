@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { EventBus } from "../bus/index.js";
@@ -29,6 +29,7 @@ import {
   NodeIpcTransport,
   NodeProcessRunner,
   NodeSystemStats,
+  resolvePitlaneHome,
   SystemClock,
   type SystemStats,
   type ProcessRunner,
@@ -57,7 +58,7 @@ export interface StartDaemonOptions {
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
 // fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
-  const dataDirectory = options.dataDirectory ?? join(homedir(), ".pitlane");
+  const dataDirectory = options.dataDirectory ?? resolvePitlaneHome();
   const filesystem = options.filesystem ?? new NodeFilesystem();
   const clock = options.clock ?? new SystemClock();
   const systemStats = options.systemStats ?? new NodeSystemStats();
@@ -145,15 +146,22 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   return daemon;
 }
 
-export async function discoverDrivers(options: {
+export interface DriverDiscoveryContext {
   readonly clock: Clock;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
   readonly processRunner: ProcessRunner;
-}): Promise<Driver[]> {
-  const drivers: Driver[] = [];
+}
+
+export async function discoverDrivers(options: DriverDiscoveryContext): Promise<Driver[]> {
   const logger = options.logger.child("driver-discovery");
+  const driversModule = process.env.PITLANE_DRIVERS_MODULE;
+  if (driversModule !== undefined) {
+    return loadDriversModule(driversModule, options, logger);
+  }
+
+  const drivers: Driver[] = [];
   if (process.platform === "darwin") {
     drivers.push(
       new IosSimctlDriver({
@@ -188,16 +196,51 @@ export async function discoverDrivers(options: {
 }
 
 /**
+ * Testing/advanced hook: substitutes real driver discovery with a module supplied via
+ * `PITLANE_DRIVERS_MODULE`. The daemon always runs as a separately spawned process, so
+ * the module is resolved as a file path (relative to `process.cwd()`) and dynamically
+ * imported -- this is how the e2e suite injects a scriptable fake driver without the
+ * daemon ever knowing it isn't talking to real hardware. A missing module, an import
+ * error, or a module without a `createDrivers` export fails daemon startup loudly
+ * rather than silently falling back to real discovery.
+ */
+async function loadDriversModule(
+  modulePath: string,
+  context: DriverDiscoveryContext,
+  logger: Logger,
+): Promise<Driver[]> {
+  logger.info("Substituting driver discovery via PITLANE_DRIVERS_MODULE", {
+    module: modulePath,
+  });
+  const moduleUrl = pathToFileURL(resolve(modulePath)).href;
+  const imported = (await import(moduleUrl)) as {
+    createDrivers?: (context: DriverDiscoveryContext) => Promise<Driver[]> | Driver[];
+  };
+  if (typeof imported.createDrivers !== "function") {
+    throw new Error(
+      `PITLANE_DRIVERS_MODULE ${modulePath} does not export a createDrivers(context) function`,
+    );
+  }
+  const drivers = await imported.createDrivers(context);
+  logger.info("Loaded drivers from PITLANE_DRIVERS_MODULE", {
+    count: drivers.length,
+    module: modulePath,
+    platforms: drivers.map((driver) => driver.platform),
+  });
+  return drivers;
+}
+
+/**
  * Best-effort logger for the fatal startup handler below. It cannot depend on the
  * daemon's own `Config` — that is exactly what may have failed to load — so it always
  * writes to the default log location at a fixed level.
  */
-export function createFatalLogger(): Logger {
+function createFatalLogger(): Logger {
   return new JsonLinesLogger({
     clock: new SystemClock(),
     level: "error",
     module: "daemon",
-    sink: new NodeFileLogSink({ path: join(homedir(), ".pitlane", "daemon.log") }),
+    sink: new NodeFileLogSink({ path: join(resolvePitlaneHome(), "daemon.log") }),
   });
 }
 

@@ -28,6 +28,31 @@ describe("MCP stdio lifecycle", () => {
     expect(signals.listeners.size).toBe(0);
   });
 
+  // Regression for a real reentrancy bug: the SDK's transport.close() can invoke
+  // `onclose` *synchronously*, inside the same call stack `shutdown()` is already
+  // running in (via `server.close()` -> `transport.close()`). A `shutdownPromise ??=
+  // (async () => {...})()` guard alone does not close that window -- the assignment
+  // to `shutdownPromise` only happens after the async IIFE returns a promise, so a
+  // synchronous re-entrant call still sees it as `undefined` and recurses. Left
+  // unfixed this recurses until the stack overflows (observed via a real MCP client
+  // round trip through @modelcontextprotocol/sdk's stdio transport).
+  it("does not recurse when the transport's close() synchronously re-triggers onclose", async () => {
+    const transport = new SynchronouslyReentrantTransport();
+    const server = new FakeServer();
+    const runner = await startMcpStdio({
+      createServer: () => server as unknown as McpServer,
+      createTransport: () => transport,
+      signals: new FakeSignals(),
+    });
+
+    // This must not throw RangeError: Maximum call stack size exceeded.
+    transport.onclose?.();
+    await runner.finished;
+
+    expect(server.closeCalls).toBe(1);
+    expect(transport.closeCalls).toBe(1);
+  });
+
   it("cleans up after startup failure", async () => {
     const transport = new FakeTransport();
     const server = new FakeServer(new Error("startup failed"));
@@ -187,6 +212,20 @@ class FakeTransport implements McpTransport {
   onclose?: () => void;
   async close(): Promise<void> {
     this.closeCalls += 1;
+  }
+}
+
+/**
+ * Mirrors the real @modelcontextprotocol/sdk stdio transport's observed shutdown
+ * behaviour: `close()` invokes `onclose` synchronously (before its own first await),
+ * from inside the same call stack a caller's `await transport.close()` is in.
+ */
+class SynchronouslyReentrantTransport implements McpTransport {
+  closeCalls = 0;
+  onclose?: () => void;
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+    this.onclose?.();
   }
 }
 

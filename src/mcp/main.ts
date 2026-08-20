@@ -1,10 +1,14 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { NodeDaemonLauncher, NodeIpcTransport, SystemClock } from "../ports/index.js";
+import {
+  NodeDaemonLauncher,
+  NodeIpcTransport,
+  resolvePitlaneHome,
+  SystemClock,
+} from "../ports/index.js";
 import { connectDaemon } from "../daemon-client/client.js";
 import type { DaemonConnection } from "../daemon-client/protocol.js";
 import { McpSession } from "./session.js";
@@ -73,6 +77,16 @@ export async function startMcpStdio(
     resolveFinished = resolve;
   });
   let shutdownPromise: Promise<void> | undefined;
+  // Guards synchronous re-entrancy, not just repeated calls after the fact: the SDK's
+  // own transport.close() can invoke `onclose` synchronously, inside the same call
+  // stack that reaches it via `server.close()` below -- at that point `shutdownPromise
+  // ??= ...` has not finished assigning yet (the assignment happens only after the IIFE
+  // it calls returns a promise), so a plain `??=` guard re-enters and recurses until the
+  // stack overflows. Setting this flag as the very first synchronous statement closes
+  // that window: a re-entrant call sees it immediately and returns `shutdownPromise` as
+  // it stands (possibly still `undefined` at that exact instant, which is fine -- the
+  // caller that reached us via `onclose` doesn't await the result).
+  let shuttingDown = false;
   let serverConnectStarted = false;
 
   const onSignal = () => {
@@ -87,7 +101,9 @@ export async function startMcpStdio(
     void shutdown();
   };
   const shutdown = (): Promise<void> => {
-    shutdownPromise ??= (async () => {
+    if (shuttingDown) return shutdownPromise ?? Promise.resolve();
+    shuttingDown = true;
+    shutdownPromise = (async () => {
       signals.off("SIGINT", onSignal);
       signals.off("SIGTERM", onSignal);
       stdin.off("end", onStdinEnd);
@@ -122,7 +138,7 @@ export async function startMcpStdio(
 }
 
 function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "createTransport">> {
-  const dataDirectory = join(homedir(), ".pitlane");
+  const dataDirectory = resolvePitlaneHome();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
   const socketPath = join(dataDirectory, "daemon.sock");

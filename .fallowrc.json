@@ -1,7 +1,12 @@
 {
   // This file is JSONC: fallow reads these comments; generic JSON tools may not.
   "$schema": "./node_modules/fallow/schema.json",
-  "entry": ["src/index.ts", "src/cli/main.ts", "src/daemon/main.ts"],
+  // e2e/*.test.ts files are vitest entry points (not reached by static import from any
+  // other source file), and e2e/fake-driver/index.ts is loaded dynamically by the
+  // daemon via PITLANE_DRIVERS_MODULE (see docs/CLI.md) -- neither is visible to
+  // fallow's static reachability graph without being declared explicitly.
+  "entry": ["src/index.ts", "src/cli/main.ts", "src/daemon/main.ts", "e2e/**/*.test.ts"],
+  "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],
   "ignoreDependencyOverrides": [
     // MCP SDK 1.29 transitively requires vulnerable node-server 1.x; lockfile/audit verify this patched override.
     { "package": "@hono/node-server", "source": "pnpm-workspace.yaml" },
@@ -11,7 +16,16 @@
   "duplicates": {
     // Hide pair-only clones; focus on widespread copy-paste
     // worth refactoring. Lower to 2 to report every duplicate pair.
-    "minOccurrences": 3
+    "minOccurrences": 3,
+    // e2e/fake-driver/fake-driver.ts intentionally parallels src/core/fake-driver.ts
+    // in shape (same Driver interface, same kind of scripted/latency/failure
+    // bookkeeping) but serves a different purpose: it runs out-of-process in a daemon
+    // spawned by the e2e suite, reads its script from a file re-read per call, and
+    // appends a call log -- src/core/fake-driver.ts is in-process only and has none
+    // of that. The two are expected to diverge, not be merged; see fallow's own
+    // guidance for code-duplication ("leave it duplicated when the similarity is
+    // accidental and likely to diverge").
+    "ignore": ["e2e/fake-driver/fake-driver.ts"]
     // Common additions (uncomment to enable):
     // "ignore": [
     //   "**/lib/**",          // for repos that publish transpiled output to lib/
@@ -22,5 +36,14 @@
   },
   "rules": {
     "unused-dependencies": "warn"
+  },
+  "health": {
+    "thresholdOverrides": [
+      {
+        "files": ["e2e/fake-driver/fake-driver.ts"],
+        "maxCrap": 45,
+        "reason": "This file has no wired coverage pipeline (fallow estimates 0% here), so CRAP is complexity-squared alone. The three flagged functions (#resolveOsVersion/#assertOsVersionAvailable, #beforeCall, compareVersions) are simple, deterministic script-interpretation/comparison helpers already reduced from a critical/high toError+resolveSpec pair (cyclomatic 11 and 9) down to cyclomatic 5-6 moderate; the daemon-level e2e flows exercise them on every run but that coverage isn't visible to this metric."
+      }
+    ]
   }
 }

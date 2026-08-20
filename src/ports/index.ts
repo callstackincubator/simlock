@@ -1,4 +1,5 @@
 export { type Filesystem, MemoryFilesystem, NodeFilesystem } from "./filesystem.js";
+export { resolvePitlaneHome } from "./paths.js";
 export { type DaemonLauncher, FakeDaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
 export {
   type IpcConnection,

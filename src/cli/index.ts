@@ -1,4 +1,3 @@
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -7,6 +6,7 @@ import {
   NodeDaemonLauncher,
   NodeFilesystem,
   NodeIpcTransport,
+  resolvePitlaneHome,
   SystemClock,
   type Filesystem,
 } from "../ports/index.js";
@@ -92,7 +92,7 @@ export function fallbackRequesterId(env: NodeJS.ProcessEnv): string {
 }
 
 function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
-  const dataDirectory = join(homedir(), ".pitlane");
+  const dataDirectory = resolvePitlaneHome(env);
   const filesystem = new NodeFilesystem();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
