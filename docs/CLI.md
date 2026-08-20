@@ -136,8 +136,10 @@ server auto-starts the daemon when needed and exposes the focused
 `list_devices`, `lease_simulator`, `release_simulator`, and `lease_status`
 tool surface for one agent session. If that session's held lease ends
 elsewhere (expiry or a force-release), the server relays it as an MCP logging
-notification. See [../README.md](../README.md#mcp-integration-optional) for
-details.
+notification. A `lease_simulator` call that carries a `_meta.progressToken`
+gets queue/provisioning/boot progress relayed as MCP `notifications/progress`
+for that request. See [../README.md](../README.md#mcp-integration-optional)
+for details.
 
 The requester identity for leases made through this server is
 `PITLANE_AGENT_ID`, falling back to a pid-derived value — see

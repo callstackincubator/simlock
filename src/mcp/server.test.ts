@@ -4,6 +4,7 @@ import {
   CallToolResultSchema,
   ListToolsResultSchema,
   LoggingMessageNotificationSchema,
+  ProgressNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 
@@ -160,6 +161,77 @@ describe("MCP server", () => {
     }
   });
 
+  it("relays queued/provisioning/booting/reclaiming progress as notifications/progress when a token is supplied", async () => {
+    const deferredGrant = deferredResponse();
+    const connection = new StubConnection([deferredGrant.promise]);
+    const { client, close } = await connectedServer(connection);
+    try {
+      const progressEvents: unknown[] = [];
+      const leaseCall = client.request(
+        {
+          method: "tools/call",
+          params: {
+            arguments: { device: "iPhone 17 Pro", platform: "ios" },
+            name: "lease_simulator",
+          },
+        },
+        CallToolResultSchema,
+        { onprogress: (progress) => progressEvents.push(progress) },
+      );
+      await waitFor(() => connection.calls.length === 1);
+
+      connection.pushProgress({ queuePosition: 2, stage: "queued" });
+      connection.pushProgress({ etaMs: 9_000, stage: "provisioning" });
+      connection.pushProgress({ etaMs: 4_000, stage: "booting" });
+      connection.pushProgress({ etaMs: 1_000, stage: "reclaiming" });
+      await waitFor(() => progressEvents.length === 4);
+
+      expect(progressEvents).toEqual([
+        expect.objectContaining({ message: "Queued behind 2 other requests" }),
+        expect.objectContaining({ message: "Provisioning device (~9s remaining)" }),
+        expect.objectContaining({ message: "Booting device (~4s remaining)" }),
+        expect.objectContaining({ message: "Reclaiming device (~1s remaining)" }),
+      ]);
+      const values = progressEvents.map((event) => (event as { progress: number }).progress);
+      expect(values).toEqual([...values].sort((a, b) => a - b));
+      expect(new Set(values).size).toBe(values.length);
+
+      deferredGrant.resolve(grant);
+      const lease = await leaseCall;
+      expect(lease.isError).not.toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  it("emits nothing when the client supplied no progress token", async () => {
+    const deferredGrant = deferredResponse();
+    const connection = new StubConnection([deferredGrant.promise]);
+    const { client, close } = await connectedServer(connection);
+    try {
+      const progressEvents: unknown[] = [];
+      client.setNotificationHandler(ProgressNotificationSchema, (notification) => {
+        progressEvents.push(notification.params);
+      });
+
+      const leaseCall = call(client, "lease_simulator", {
+        device: "iPhone 17 Pro",
+        platform: "ios",
+      });
+      await waitFor(() => connection.calls.length === 1);
+
+      connection.pushProgress({ queuePosition: 1, stage: "queued" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(progressEvents).toEqual([]);
+
+      deferredGrant.resolve(grant);
+      await leaseCall;
+      expect(progressEvents).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
   it("forwards the platform filter for list_devices and never triggers a lease request", async () => {
     const connection = new StubConnection([catalog]);
     const { client, close } = await connectedServer(connection);
@@ -244,6 +316,18 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
   return first.text;
 }
 
+function deferredResponse(): { promise: Promise<unknown>; resolve: (value: unknown) => void } {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise<unknown>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  while (!predicate()) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 class StubConnection implements DaemonConnection {
   closeCalls = 0;
   readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
@@ -262,6 +346,10 @@ class StubConnection implements DaemonConnection {
     readonly reason: string;
   }): void {
     for (const listener of this.#listeners) listener("lease-lost", payload);
+  }
+
+  pushProgress(payload: unknown): void {
+    for (const listener of this.#listeners) listener("progress", payload);
   }
   async request(type: string, payload: unknown): Promise<unknown> {
     this.calls.push({ payload, type });
