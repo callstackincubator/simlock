@@ -20,6 +20,28 @@ describe("IpcDaemonConnector", () => {
     expect(payload).toEqual({ clientVersion: "1.0.0", protocolVersion: DAEMON_PROTOCOL_VERSION });
   });
 
+  it("declares capabilities at hello only when given some, per capability negotiation rules", async () => {
+    const ipc = new MemoryIpcTransport();
+    const payloads: unknown[] = [];
+    await ipc.listen("/daemon.sock", (connection) => {
+      connection.onData((contents) => {
+        const frame = JSON.parse(contents) as { readonly id: number; readonly payload: unknown };
+        payloads.push(frame.payload);
+        void connection.write(`${JSON.stringify({ id: frame.id, ok: true, payload: {} })}\n`);
+      });
+    });
+
+    const withHeartbeat = await new IpcDaemonConnector(ipc, "/daemon.sock", {
+      heartbeat: true,
+    }).connect();
+    await withHeartbeat.close();
+    expect(payloads[0]).toMatchObject({ capabilities: { heartbeat: true } });
+
+    const withoutCapabilities = await new IpcDaemonConnector(ipc, "/daemon.sock").connect();
+    await withoutCapabilities.close();
+    expect(payloads[1]).not.toHaveProperty("capabilities");
+  });
+
   it("closes transport after a failed handshake", async () => {
     const ipc = new MemoryIpcTransport();
     let serverClosed = false;

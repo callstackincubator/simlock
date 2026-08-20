@@ -661,7 +661,11 @@ function formatStatus(status: Record<string, unknown>): string {
   });
   const leaseLines = leases.map((lease) => {
     const record = requireObject(lease);
-    return `Lease ${String(record.id)}: ${String(record.requesterId)} since ${String(record.grantedAt)}`;
+    const heartbeatSuffix =
+      typeof record.lastHeartbeatAt === "number"
+        ? `, last heartbeat ${String(record.lastHeartbeatAt)}`
+        : "";
+    return `Lease ${String(record.id)}: ${String(record.requesterId)} since ${String(record.grantedAt)}${heartbeatSuffix}`;
   });
   return [
     `Daemon: ${typeof status.health === "string" ? status.health : "running"}`,

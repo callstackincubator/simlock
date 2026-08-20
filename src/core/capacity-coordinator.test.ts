@@ -9,7 +9,11 @@ const config: Config = {
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   eventBuffer: { capacity: 1000 },
   idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
-  lease: { detachedTtlMs: 15 * 60_000, heldTtlBackstopMs: 60 * 60_000 },
+  lease: {
+    detachedTtlMs: 15 * 60_000,
+    heldTtlBackstopMs: 60 * 60_000,
+    heartbeatIntervalMs: 5 * 60_000,
+  },
   limits: {
     android: { maxDevices: 4, maxRunning: 2 },
     ios: { maxDevices: 1, maxRunning: 1 },

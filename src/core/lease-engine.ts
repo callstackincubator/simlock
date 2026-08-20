@@ -218,6 +218,12 @@ export class LeaseEngine {
     return this.#releaseCoordinator.renew(leaseId, ttlMs);
   }
 
+  /** Slides a held lease's TTL back out to a full backstop from now. */
+  // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port, which structural typing hides from the analyzer (same as the sibling renew).
+  async heartbeat(leaseId: string): Promise<LeaseRecord> {
+    return this.#releaseCoordinator.heartbeat(leaseId);
+  }
+
   /**
    * Runs one cleanup action through the same decision queue as leasing. The
    * reservation prevents a concurrent lease decision from selecting the

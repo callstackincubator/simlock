@@ -28,7 +28,7 @@ function config(maxDevices = 1): Config {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100 },
+    lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
     limits: {
       android: { maxDevices, maxRunning: 1 },
       ios: { maxDevices, maxRunning: 1 },

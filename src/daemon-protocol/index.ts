@@ -1,5 +1,5 @@
 /** The version of the newline-delimited JSON protocol spoken by daemon clients. */
-export const DAEMON_PROTOCOL_VERSION = 1;
+export const DAEMON_PROTOCOL_VERSION = 2;
 
 export type RequestId = string | number;
 

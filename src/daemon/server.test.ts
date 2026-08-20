@@ -32,7 +32,7 @@ interface ServerFrame {
   readonly id?: string | null;
   readonly ok?: boolean;
   readonly payload?: unknown;
-  readonly push?: "event" | "lease-lost" | "progress";
+  readonly push?: "event" | "lease-lost" | "lease.heartbeat" | "progress";
 }
 
 const runningDaemons: DaemonServer[] = [];
@@ -441,12 +441,170 @@ describe("DaemonServer", () => {
   });
 });
 
+describe("DaemonServer lease heartbeat", () => {
+  it("slides a held lease's deadline past the backstop while its holder keeps ponging, and stops sliding once it stops", async () => {
+    const harness = await createHarness({
+      lease: { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 },
+    });
+    const holder = await createClient(harness.socketPath);
+    await hello(holder, { heartbeat: true });
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+    expect((grant.payload as { lease: { ttlDeadline: number } }).lease.ttlDeadline).toBe(1_040);
+
+    // Pong every tick, well past the original backstop (40ms from grant).
+    let expectedDeadline = 1_040;
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      harness.clock.advance(10);
+      const push = await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
+      const nonce = (push.payload as { nonce: number }).nonce;
+      expectedDeadline += 10;
+      await expect(holder.request("lease.heartbeat", { nonce })).resolves.toMatchObject({
+        ok: true,
+        payload: { leases: [{ leaseId, ttlDeadline: expectedDeadline }] },
+      });
+    }
+    // 60ms have passed since grant, exceeding the 40ms backstop, yet the lease is alive.
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
+
+    // Now stop ponging: pure sliding window means no fail-fast, just the existing backstop
+    // eventually catching up from the last slid deadline.
+    harness.clock.advance(10); // one more push arrives, but is never answered
+    await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
+    harness.clock.advance(40); // the last slid deadline (expectedDeadline) elapses
+    await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
+    await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { leaseId, reason: "expired" },
+      push: "lease-lost",
+    });
+    await holder.close();
+  });
+
+  it("never pings a connection that did not declare the heartbeat capability, and it expires exactly as before", async () => {
+    const harness = await createHarness({
+      lease: { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 },
+    });
+    const holder = await createClient(harness.socketPath);
+    await hello(holder); // no capabilities declared
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+
+    harness.clock.advance(40);
+    await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
+    expect(holder.frames().filter((frame) => frame.push === "lease.heartbeat")).toEqual([]);
+    await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { leaseId, reason: "expired" },
+      push: "lease-lost",
+    });
+    await holder.close();
+  });
+
+  it("rejects a lease.heartbeat request from a connection that never declared the capability", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(client.request("lease.heartbeat", { nonce: 1 })).resolves.toMatchObject({
+      error: { code: "BAD_REQUEST" },
+      ok: false,
+    });
+    await client.close();
+  });
+
+  it("restores the heartbeat-slid deadline (not the grant-time one) across a daemon restart", async () => {
+    const leaseOverrides = { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 };
+    const first = await createHarness({ lease: leaseOverrides });
+    const holder = await createClient(first.socketPath);
+    await hello(holder, { heartbeat: true });
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+
+    first.clock.advance(10);
+    const push = await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
+    const nonce = (push.payload as { nonce: number }).nonce;
+    await expect(holder.request("lease.heartbeat", { nonce })).resolves.toMatchObject({
+      ok: true,
+      payload: { leases: [{ leaseId, ttlDeadline: 1_050 }] },
+    });
+
+    // Simulate an abrupt daemon crash (not a graceful `daemon stop`, which would itself
+    // release the held connection's leases): the first daemon's process just disappears,
+    // leaving the last persisted registry state — the post-heartbeat slid deadline —
+    // on disk. It is intentionally left running here; the afterEach hook tears it down.
+
+    // "Restart": a fresh daemon reloads that persisted registry state and, like the real
+    // startup path (src/daemon/main.ts), restores expiry timers via convergence.
+    const second = await createHarness({
+      clock: new FakeClock(1_010),
+      lease: leaseOverrides,
+      stateFilesystem: first.stateFilesystem,
+    });
+    await second.engine.convergeRunningCapacity();
+
+    // The original grant-time deadline (1_040) elapses; a restore that used it instead of
+    // the slid one (1_050) would have expired the lease here.
+    second.clock.advance(30);
+    await Promise.resolve();
+    expect(second.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
+
+    // The slid deadline still fires.
+    second.clock.advance(10);
+    await expect.poll(() => second.registry.snapshot.leases).toEqual([]);
+    await holder.close();
+  });
+
+  it("surfaces a derived lastHeartbeatAt for held leases in status and list --leases", async () => {
+    const harness = await createHarness({
+      lease: { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 },
+    });
+    const holder = await createClient(harness.socketPath);
+    await hello(holder, { heartbeat: true });
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+
+    harness.clock.advance(10);
+    const push = await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
+    const nonce = (push.payload as { nonce: number }).nonce;
+    await holder.request("lease.heartbeat", { nonce });
+
+    await expect(holder.request("status.get", {})).resolves.toMatchObject({
+      ok: true,
+      payload: { leases: [{ id: leaseId, lastHeartbeatAt: 1_010 }] },
+    });
+    await expect(holder.request("list.get", { kind: "leases" })).resolves.toMatchObject({
+      ok: true,
+      payload: [{ id: leaseId, lastHeartbeatAt: 1_010 }],
+    });
+    await holder.close();
+  });
+});
+
+// fallow-ignore-next-line complexity -- a test harness whose branches are all trivial optional-parameter defaulting.
 async function createHarness(
   options: {
     readonly estimateMs?: Partial<Record<"boot" | "provision", number>>;
     readonly latencyMs?: Partial<Record<"makeReady" | "provision", number>>;
+    readonly lease?: Partial<Config["lease"]>;
     readonly socketPath?: string;
     readonly start?: boolean;
+    readonly clock?: FakeClock;
+    readonly stateFilesystem?: MemoryFilesystem;
   } = {},
 ) {
   const directory =
@@ -455,9 +613,9 @@ async function createHarness(
     temporaryDirectories.push(directory);
   }
   const socketPath = options.socketPath ?? join(directory as string, "daemon.sock");
-  const clock = new FakeClock(1_000);
+  const clock = options.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const stateFilesystem = new MemoryFilesystem();
+  const stateFilesystem = options.stateFilesystem ?? new MemoryFilesystem();
   const registry = await Registry.load({
     clock,
     eventBus,
@@ -472,7 +630,7 @@ async function createHarness(
     ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
     platform: "ios",
   });
-  const config = testConfig();
+  const config = testConfig(options.lease);
   const engine = new LeaseEngine({
     clock,
     config,
@@ -497,6 +655,7 @@ async function createHarness(
   const daemon = new DaemonServer({
     capacity: engine,
     catalog: engine,
+    clock,
     config,
     defaultRequesterId: "test-process",
     eventBus,
@@ -518,7 +677,7 @@ async function createHarness(
     await daemon.start();
   }
 
-  return { clock, daemon, eventBus, registry, socketPath, stateFilesystem };
+  return { clock, config, daemon, engine, eventBus, registry, socketPath, stateFilesystem };
 }
 
 async function createClient(socketPath: string): Promise<Client> {
@@ -586,9 +745,13 @@ async function createClient(socketPath: string): Promise<Client> {
   };
 }
 
-async function hello(client: Client): Promise<void> {
+async function hello(client: Client, capabilities?: Record<string, unknown>): Promise<void> {
   await expect(
-    client.request("hello", { clientVersion: "test", protocolVersion: 1 }),
+    client.request("hello", {
+      clientVersion: "test",
+      protocolVersion: 1,
+      ...(capabilities === undefined ? {} : { capabilities }),
+    }),
   ).resolves.toMatchObject({
     ok: true,
   });
@@ -609,12 +772,17 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-function testConfig(): Config {
+function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000 },
+    lease: {
+      detachedTtlMs: 60_000,
+      heldTtlBackstopMs: 60_000,
+      heartbeatIntervalMs: 5_000,
+      ...leaseOverrides,
+    },
     limits: {
       android: { maxDevices: 1, maxRunning: 1 },
       ios: { maxDevices: 1, maxRunning: 1 },

@@ -715,6 +715,7 @@ async function createHarness() {
   const daemon = new DaemonServer({
     capacity: engine,
     catalog: engine,
+    clock,
     config,
     defaultRequesterId: "test-process",
     eventBus,
@@ -752,7 +753,7 @@ function testConfig(): Config {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000 },
+    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     limits: {
       android: { maxDevices: 1, maxRunning: 1 },
       ios: { maxDevices: 1, maxRunning: 1 },

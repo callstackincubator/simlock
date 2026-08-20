@@ -75,6 +75,27 @@ export function parseRawLeaseLost(value: unknown): RawLeaseLost {
   return { deviceId: payload.deviceId, leaseId: payload.leaseId, reason: payload.reason };
 }
 
+export interface RawLeaseHeartbeatAck {
+  readonly leases: readonly { readonly leaseId: string; readonly ttlDeadline: number }[];
+}
+
+/** Parses the `lease.heartbeat` ack re-surfaced by `IpcDaemonConnection` as a push. */
+export function parseRawLeaseHeartbeatAck(value: unknown): RawLeaseHeartbeatAck {
+  const payload = requireObject(value, "Daemon sent an invalid heartbeat ack");
+  if (!Array.isArray(payload.leases)) {
+    throw new Error("Daemon sent an invalid heartbeat ack");
+  }
+  return {
+    leases: payload.leases.map((entry: unknown) => {
+      const lease = requireObject(entry, "Daemon sent an invalid heartbeat ack");
+      if (typeof lease.leaseId !== "string" || typeof lease.ttlDeadline !== "number") {
+        throw new Error("Daemon sent an invalid heartbeat ack");
+      }
+      return { leaseId: lease.leaseId, ttlDeadline: lease.ttlDeadline };
+    }),
+  };
+}
+
 export type RawLeaseProgress =
   | { readonly stage: "queued"; readonly queuePosition: number }
   | { readonly stage: "provisioning" | "booting" | "reclaiming"; readonly etaMs: number };

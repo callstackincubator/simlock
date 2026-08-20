@@ -44,7 +44,11 @@ describe("loadConfig", () => {
       diskPressure: { freeBytesThreshold: 10 * gibibyte },
       eventBuffer: { capacity: 1000 },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
-      lease: { detachedTtlMs: 15 * 60_000, heldTtlBackstopMs: 60 * 60_000 },
+      lease: {
+        detachedTtlMs: 15 * 60_000,
+        heldTtlBackstopMs: 60 * 60_000,
+        heartbeatIntervalMs: 5 * 60_000,
+      },
       ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
     });
     expect(Object.isFrozen(config)).toBe(true);
@@ -127,6 +131,44 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow(path);
+  });
+
+  it("accepts a heartbeat interval at the boundary of a quarter of the backstop", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { heldTtlBackstopMs: 40_000, heartbeatIntervalMs: 10_000 } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.lease).toMatchObject({ heartbeatIntervalMs: 10_000, heldTtlBackstopMs: 40_000 });
+  });
+
+  it("rejects a non-positive-integer heartbeat interval", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { heartbeatIntervalMs: 0 } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("lease.heartbeatIntervalMs");
+  });
+
+  it("rejects a heartbeat interval that exceeds a quarter of the backstop", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { heldTtlBackstopMs: 40_000, heartbeatIntervalMs: 10_001 } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("lease.heartbeatIntervalMs");
   });
 
   it("warns about unknown keys without rejecting the file", async () => {

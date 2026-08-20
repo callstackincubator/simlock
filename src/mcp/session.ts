@@ -1,6 +1,7 @@
 import {
   parseRawCatalog,
   parseRawLeaseGrant,
+  parseRawLeaseHeartbeatAck,
   parseRawLeaseLost,
   parseRawLeaseProgress,
   type RawLeaseGrant,
@@ -331,10 +332,19 @@ export class McpSession {
     if (connection !== undefined) await this.#closeDaemonConnection(connection);
   }
 
-  /** Relays a daemon push to this session's own listeners (lease-lost facts, in-flight lease progress). */
+  /**
+   * Relays a daemon push to this session's own listeners (lease-lost facts, in-flight lease
+   * progress, and the heartbeat ack that keeps `#ownedLease.expiresAtMs` truthful under the
+   * sliding TTL — see `IpcDaemonConnection`, which turns the server's `lease.heartbeat` push
+   * into an answered request and re-surfaces its ack here under the same push kind).
+   */
   #handlePush(kind: string, payload: unknown): void {
     if (kind === "progress") {
       this.#handleLeaseProgress(payload);
+      return;
+    }
+    if (kind === "lease.heartbeat") {
+      this.#handleHeartbeatAck(payload);
       return;
     }
     if (kind !== "lease-lost") return;
@@ -347,6 +357,25 @@ export class McpSession {
     if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== notice.leaseId) return;
     this.#ownedLease = undefined;
     for (const listener of this.#leaseLostListeners) listener(notice);
+  }
+
+  /**
+   * `lease_status` reads `#ownedLease.expiresAtMs` locally, with no daemon round-trip
+   * (deliberate — see PR #25). Under a sliding TTL that cache would otherwise go stale the
+   * moment a heartbeat renews the lease elsewhere; this keeps it truthful without adding a
+   * round-trip to `status()` itself.
+   */
+  #handleHeartbeatAck(payload: unknown): void {
+    if (this.#ownedLease === undefined) return;
+    let ack: ReturnType<typeof parseRawLeaseHeartbeatAck>;
+    try {
+      ack = parseRawLeaseHeartbeatAck(payload);
+    } catch {
+      return;
+    }
+    const slid = ack.leases.find((lease) => lease.leaseId === this.#ownedLease?.leaseId);
+    if (slid === undefined) return;
+    this.#ownedLease = { ...this.#ownedLease, expiresAtMs: slid.ttlDeadline };
   }
 
   /** Relays a daemon progress push to the in-flight `lease()` call's own `onProgress`, if any. */

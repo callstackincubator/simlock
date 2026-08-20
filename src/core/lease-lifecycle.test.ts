@@ -1,21 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, MemoryFilesystem, type Filesystem } from "../ports/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
-import { HeldLeaseRenewalError, LeaseLifecycle } from "./lease-lifecycle.js";
+import {
+  DetachedLeaseHeartbeatError,
+  HeldLeaseRenewalError,
+  LeaseLifecycle,
+} from "./lease-lifecycle.js";
 import { Registry } from "./registry.js";
 
 const statePath = "/home/agent/.pitlane/state.json";
 
-async function createHarness() {
+async function createHarness(options: { readonly filesystem?: Filesystem } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   let nextId = 0;
   const registry = await Registry.load({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
+    filesystem: options.filesystem ?? new MemoryFilesystem(),
     idGenerator: { generate: () => `${nextId++}` },
     statePath,
   });
@@ -137,5 +141,103 @@ describe("LeaseLifecycle", () => {
     expect(expired.eventBus.replay()).toContainEqual(
       expect.objectContaining({ event: "lease.expired" }),
     );
+  });
+
+  it("slides a held lease's deadline on heartbeat, emits lease.renewed, and replaces its timer", async () => {
+    const harness = await createHarness();
+    const grant = await harness.lifecycle.grant({
+      deviceId: harness.device.id,
+      mode: "held",
+      requesterId: "agent",
+    });
+    expect(grant.lease.ttlDeadline).toBe(1_010);
+
+    harness.clock.advance(6);
+    const renewed = await harness.lifecycle.heartbeat(grant.lease.id);
+    expect(renewed.ttlDeadline).toBe(1_016);
+    expect(harness.registry.snapshot.leases).toEqual([
+      expect.objectContaining({ id: grant.lease.id, ttlDeadline: 1_016 }),
+    ]);
+    expect(harness.eventBus.replay()).toContainEqual(
+      expect.objectContaining({
+        event: "lease.renewed",
+        payload: { leaseId: grant.lease.id, newDeadline: 1_016 },
+      }),
+    );
+
+    // The original (un-slid) deadline has now passed, but the timer was replaced, so the
+    // lease must not have expired.
+    harness.clock.advance(4);
+    await Promise.resolve();
+    expect(harness.registry.snapshot.leases).toHaveLength(1);
+
+    // The slid deadline, however, still fires.
+    harness.clock.advance(6);
+    await vi.waitFor(() => expect(harness.registry.snapshot.leases).toEqual([]));
+  });
+
+  it("refuses to heartbeat a detached lease, whose TTL is not the held backstop", async () => {
+    const harness = await createHarness();
+    const grant = await harness.lifecycle.grant({
+      deviceId: harness.device.id,
+      mode: "detached",
+      requesterId: "agent",
+    });
+
+    await expect(harness.lifecycle.heartbeat(grant.lease.id)).rejects.toBeInstanceOf(
+      DetachedLeaseHeartbeatError,
+    );
+    expect(harness.registry.snapshot.leases).toEqual([
+      expect.objectContaining({ id: grant.lease.id, ttlDeadline: grant.lease.ttlDeadline }),
+    ]);
+  });
+
+  it("restores the heartbeat-slid deadline (not the grant-time one) after a restart", async () => {
+    const filesystem = new MemoryFilesystem();
+    const before = await createHarness({ filesystem });
+    const grant = await before.lifecycle.grant({
+      deviceId: before.device.id,
+      mode: "held",
+      requesterId: "agent",
+    });
+    expect(grant.lease.ttlDeadline).toBe(1_010);
+
+    before.clock.advance(5);
+    const renewed = await before.lifecycle.heartbeat(grant.lease.id);
+    expect(renewed.ttlDeadline).toBe(1_015);
+
+    // Simulate a daemon restart: a fresh clock/event bus/scheduler/lifecycle reload the
+    // same persisted registry state and restore timers from it.
+    const afterClock = new FakeClock(1_005);
+    const afterEventBus = new EventBus(afterClock);
+    const afterRegistry = await Registry.load({
+      clock: afterClock,
+      eventBus: afterEventBus,
+      filesystem,
+      idGenerator: { generate: () => "unused" },
+      statePath,
+    });
+    let afterLifecycle!: LeaseLifecycle;
+    const afterScheduler = new LeaseExpiryScheduler(afterClock, async (leaseId) => {
+      await afterLifecycle.beginRelease(leaseId, "expired");
+    });
+    afterLifecycle = new LeaseLifecycle({
+      clock: afterClock,
+      eventBus: afterEventBus,
+      expiryScheduler: afterScheduler,
+      registry: afterRegistry,
+      ttl: { detachedMs: 20, heldBackstopMs: 10 },
+    });
+    await afterLifecycle.restoreExpiryTimers();
+
+    // Advance to (and past) the original grant-time deadline: a restart that restored the
+    // stale grant-time deadline instead of the slid one would have expired the lease here.
+    afterClock.advance(5);
+    await Promise.resolve();
+    expect(afterRegistry.snapshot.leases).toHaveLength(1);
+
+    // The slid deadline still fires.
+    afterClock.advance(5);
+    await vi.waitFor(() => expect(afterRegistry.snapshot.leases).toEqual([]));
   });
 });

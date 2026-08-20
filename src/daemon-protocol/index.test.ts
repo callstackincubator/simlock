@@ -9,7 +9,7 @@ import {
 
 describe("daemon protocol", () => {
   it("keeps the current protocol version and newline framing", () => {
-    expect(DAEMON_PROTOCOL_VERSION).toBe(1);
+    expect(DAEMON_PROTOCOL_VERSION).toBe(2);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 

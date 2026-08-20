@@ -7,10 +7,16 @@ export interface DaemonConnector {
   connect(): Promise<DaemonConnection>;
 }
 
+/** Client capabilities negotiated at `hello`. A missing/false flag declares nothing. */
+export interface DaemonClientCapabilities {
+  readonly heartbeat?: boolean;
+}
+
 export class IpcDaemonConnector implements DaemonConnector {
   constructor(
     private readonly ipc: IpcConnector,
     private readonly endpoint: string,
+    private readonly capabilities?: DaemonClientCapabilities,
   ) {}
 
   async connect(): Promise<DaemonConnection> {
@@ -20,6 +26,7 @@ export class IpcDaemonConnector implements DaemonConnector {
       await connection.request("hello", {
         clientVersion: "1.0.0",
         protocolVersion: DAEMON_PROTOCOL_VERSION,
+        ...(this.capabilities === undefined ? {} : { capabilities: this.capabilities }),
       });
       return connection;
     } catch (error: unknown) {

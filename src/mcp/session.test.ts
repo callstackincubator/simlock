@@ -399,6 +399,51 @@ describe("McpSession", () => {
     expect(session.status()).toEqual({ held: false });
   });
 
+  it("reports the slid expiry after a heartbeat ack, with no daemon round-trip from status() itself", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+    expect(session.status()).toMatchObject({ expires_at_ms: 61_000, held: true });
+
+    const requestsBeforeStatus = connection.requests.length;
+    connection.pushHeartbeatAck({ leases: [{ leaseId: "lse_9f2c", ttlDeadline: 65_000 }] });
+
+    expect(session.status()).toMatchObject({ expires_at_ms: 65_000, held: true });
+    // status() is a synchronous local read; the ack refreshed the cache, not a round-trip.
+    expect(connection.requests).toHaveLength(requestsBeforeStatus);
+  });
+
+  it("ignores a heartbeat ack for a lease id this session does not currently own", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    connection.pushHeartbeatAck({ leases: [{ leaseId: "some-other-lease", ttlDeadline: 99_999 }] });
+    expect(session.status()).toMatchObject({ expires_at_ms: 61_000, held: true });
+  });
+
+  it("tolerates a malformed heartbeat ack without throwing", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    expect(() => connection.pushHeartbeatAck({ leases: "not-an-array" })).not.toThrow();
+    expect(() => connection.pushHeartbeatAck(null)).not.toThrow();
+    expect(session.status()).toMatchObject({ expires_at_ms: 61_000, held: true });
+  });
+
   it("throws when status is queried on a closed session", async () => {
     const connection = new StubConnection();
     const session = new McpSession({
@@ -666,6 +711,14 @@ class StubConnection implements DaemonConnection {
 
   pushProgress(payload: unknown): void {
     for (const listener of this.#listeners) listener("progress", payload);
+  }
+
+  /**
+   * Simulates the ack `IpcDaemonConnection` re-surfaces as a push after it auto-answers the
+   * server's `lease.heartbeat` push (see `src/daemon-client/connection.ts`).
+   */
+  pushHeartbeatAck(payload: unknown): void {
+    for (const listener of this.#listeners) listener("lease.heartbeat", payload);
   }
 
   async close(): Promise<void> {

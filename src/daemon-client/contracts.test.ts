@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRawCatalog, parseRawLeaseGrant } from "./contracts.js";
+import { parseRawCatalog, parseRawLeaseGrant, parseRawLeaseHeartbeatAck } from "./contracts.js";
 
 const leaseGrant = {
   device: {
@@ -59,5 +59,26 @@ describe("parseRawCatalog", () => {
     [null],
   ])("rejects malformed daemon payloads", (value) => {
     expect(() => parseRawCatalog(value)).toThrow("Daemon returned an invalid device catalog");
+  });
+});
+
+describe("parseRawLeaseHeartbeatAck", () => {
+  it("parses the slid deadlines from a heartbeat ack", () => {
+    const ack = { leases: [{ leaseId: "lse_1", ttlDeadline: 5_000 }] };
+    expect(parseRawLeaseHeartbeatAck(ack)).toEqual(ack);
+  });
+
+  it("parses an empty leases list", () => {
+    expect(parseRawLeaseHeartbeatAck({ leases: [] })).toEqual({ leases: [] });
+  });
+
+  it.each([
+    [{ leases: "not-an-array" }],
+    [{ leases: [{ leaseId: 1, ttlDeadline: 5_000 }] }],
+    [{ leases: [{ leaseId: "lse_1", ttlDeadline: "5000" }] }],
+    [{}],
+    [null],
+  ])("rejects malformed heartbeat acks", (value) => {
+    expect(() => parseRawLeaseHeartbeatAck(value)).toThrow("Daemon sent an invalid heartbeat ack");
   });
 });

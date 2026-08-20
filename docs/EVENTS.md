@@ -14,9 +14,9 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseAcquisitionCoordinator | implemented |
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator | implemented |
 | `lease.granted` | lease id, device id, requester, mode (held/detached) | a device was assigned and handed out | LeaseLifecycle | implemented |
-| `lease.renewed` | lease id, new deadline | detached-mode renew succeeded | LeaseLifecycle | implemented |
+| `lease.renewed` | lease id, new deadline | detached-mode renew succeeded, **or** a held-mode connection that declared the `heartbeat` capability answered a `lease.heartbeat` push (fires once per lease per `lease.heartbeatIntervalMs` while the holder stays alive) | LeaseLifecycle | implemented |
 | `lease.released` | lease id, device id, reason (closed/explicit/killed) | holder connection closed or explicit release | LeaseLifecycle | implemented |
-| `lease.expired` | lease id, device id | TTL backstop fired | LeaseLifecycle | implemented |
+| `lease.expired` | lease id, device id | TTL backstop fired without a heartbeat sliding it first — for a capability-declaring holder this means it stopped ponging (crashed, hung, or lost its socket); for one that never declared the capability it means the grant-time TTL (or the last explicit `pitlane lease renew`) simply ran out, exactly as before this change | LeaseLifecycle | implemented |
 | `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed) | a request ended without a grant | LeaseAcquisitionCoordinator / WaitQueue | implemented |
 
 ## Device lifecycle
