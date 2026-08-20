@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "../dist/e2e-typecheck-tmp",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

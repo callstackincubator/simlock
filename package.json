@@ -11,14 +11,18 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "vitest run src",
+    "build:e2e": "tsc -p e2e/fake-driver/tsconfig.json",
+    "test": "vitest run --project unit",
+    "test:e2e": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --tags-filter='!slow'",
+    "test:e2e:slow": "pnpm run build && pnpm run build:e2e && vitest run --project e2e",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint src",
+    "typecheck:e2e": "pnpm run build && tsc -p e2e/tsconfig.typecheck.json",
+    "lint": "oxlint src e2e",
     "fallow": "fallow",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "prepare": "lefthook install",
-    "check": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run test",
+    "check": "pnpm run typecheck && pnpm run typecheck:e2e && pnpm run lint && pnpm run format:check && pnpm run test && pnpm run test:e2e",
     "release": "release-it"
   },
   "dependencies": {
