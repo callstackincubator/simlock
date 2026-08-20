@@ -10,9 +10,12 @@ import {
 } from "../../core/index.js";
 import {
   FakeClock,
+  MemoryFilesystem,
+  NodeFilesystem,
   NodeProcessRunner,
   ScriptedProcessRunner,
   SystemClock,
+  type Filesystem,
 } from "../../ports/index.js";
 import { IosSimctlDriver } from "./index.js";
 
@@ -36,6 +39,19 @@ const driverData = {
   runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
   udid: "00000000-0000-0000-0000-000000000001",
 } as const;
+const dataPath = `/Devices/${driverData.udid}/data`;
+const durableMarkPath = `/Devices/${driverData.udid}/pitlane-mark.json`;
+const erasableMarkPath = `${dataPath}/pitlane-mark.json`;
+
+function deviceListResponse(state: string): string {
+  return JSON.stringify({
+    devices: {
+      "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+        { name: driverData.name, udid: driverData.udid, state, dataPath },
+      ],
+    },
+  });
+}
 
 describe("IosSimctlDriver", () => {
   it("resolves an exact model and requested installed runtime", async () => {
@@ -126,8 +142,14 @@ describe("IosSimctlDriver", () => {
         },
         result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
       },
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
     ]);
-    const driver = createDriver(runner);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
+    const driver = createDriver(runner, new FakeClock(), filesystem);
     await driver.resolveSpec(
       { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
       { allowDownload: false },
@@ -150,6 +172,7 @@ describe("IosSimctlDriver", () => {
         command: "xcrun",
         options: { timeoutMs: 30_000 },
       },
+      { ...listDevicesInvocation, options: { timeoutMs: 30_000 } },
     ]);
   });
 
@@ -246,15 +269,84 @@ describe("IosSimctlDriver", () => {
         },
       },
       { match: { command: "xcrun", args: ["simctl", "erase", driverData.udid] } },
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
     ]);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
 
     await expect(
-      createDriver(runner).reclaim({ deviceId: driverData.udid, driverData }, { clean: "full" }),
+      createDriver(runner, new FakeClock(), filesystem).reclaim(
+        { deviceId: driverData.udid, driverData },
+        { clean: "full" },
+      ),
     ).resolves.toEqual({ state: "shutdown", strategy: "erase" });
     expect(runner.calls.map((call) => call.args)).toEqual([
       ["simctl", "shutdown", driverData.udid],
       ["simctl", "erase", driverData.udid],
+      ["simctl", "list", "-j", "devices"],
     ]);
+  });
+
+  it("writes a fresh, different token on reclaim than the one written on provision", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
+    const runner = new ScriptedProcessRunner([
+      {
+        match: listInvocation,
+        result: { code: 0, stderr: "", stdout: listFixture },
+      },
+      {
+        match: {
+          command: "xcrun",
+          args: [
+            "simctl",
+            "create",
+            "pitlane-device-1",
+            driverData.deviceTypeId,
+            driverData.runtimeId,
+          ],
+        },
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
+      { match: { command: "xcrun", args: ["simctl", "shutdown", driverData.udid] } },
+      { match: { command: "xcrun", args: ["simctl", "erase", driverData.udid] } },
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
+    ]);
+    const driver = createTokenDriver(runner, filesystem);
+    await driver.resolveSpec(
+      { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      { allowDownload: false },
+    );
+    await driver.provision(spec);
+
+    const provisionedDurable = JSON.parse(await filesystem.readFile(durableMarkPath)) as {
+      token: string;
+    };
+    const provisionedErasable = JSON.parse(await filesystem.readFile(erasableMarkPath)) as {
+      token: string;
+    };
+    expect(provisionedDurable.token).toBe(provisionedErasable.token);
+
+    await driver.reclaim({ deviceId: driverData.udid, driverData }, { clean: "full" });
+
+    const reclaimedDurable = JSON.parse(await filesystem.readFile(durableMarkPath)) as {
+      token: string;
+    };
+    const reclaimedErasable = JSON.parse(await filesystem.readFile(erasableMarkPath)) as {
+      token: string;
+    };
+    expect(reclaimedDurable.token).toBe(reclaimedErasable.token);
+    expect(reclaimedDurable.token).not.toBe(provisionedDurable.token);
   });
 
   it("shuts down before deleting and uses benchmark estimates", async () => {
@@ -328,11 +420,85 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
+  it("reports matching provenance tokens for a healthy managed device", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
+    await filesystem.writeFileAtomic(durableMarkPath, JSON.stringify({ token: "tok-1" }));
+    await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-1" }));
+    const runner = new ScriptedProcessRunner([
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
+    ]);
+
+    const reality = await createDriver(runner, new FakeClock(), filesystem).listManaged();
+
+    expect(reality.devices).toEqual([
+      expect.objectContaining({
+        mark: { durable: "tok-1", erasable: "tok-1", erasableReadable: true },
+      }),
+    ]);
+  });
+
+  it("reports erasable undefined when the data-container mark is gone (foreign erase)", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
+    await filesystem.writeFileAtomic(durableMarkPath, JSON.stringify({ token: "tok-1" }));
+    const runner = new ScriptedProcessRunner([
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
+    ]);
+
+    const reality = await createDriver(runner, new FakeClock(), filesystem).listManaged();
+
+    expect(reality.devices).toEqual([
+      expect.objectContaining({
+        mark: { durable: "tok-1", erasable: undefined, erasableReadable: true },
+      }),
+    ]);
+  });
+
+  it("reports mark undefined when both provenance regions are absent (pre-upgrade device)", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
+    const runner = new ScriptedProcessRunner([
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
+    ]);
+
+    const reality = await createDriver(runner, new FakeClock(), filesystem).listManaged();
+
+    expect(reality.devices[0]?.mark).toBeUndefined();
+  });
+
+  it("reads a corrupt mark file as undefined without throwing", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
+    await filesystem.writeFileAtomic(durableMarkPath, "not json");
+    await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ notAToken: true }));
+    const runner = new ScriptedProcessRunner([
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
+    ]);
+
+    const reality = await createDriver(runner, new FakeClock(), filesystem).listManaged();
+
+    expect(reality.devices[0]?.mark).toBeUndefined();
+  });
+
   it.skipIf(process.env.PITLANE_LIVE_IOS !== "1")(
     "runs a provision-to-destroy smoke test against simctl",
     async () => {
       const driver = new IosSimctlDriver({
         clock: new SystemClock(),
+        filesystem: new NodeFilesystem(),
         idGenerator: { generate: () => `test-${process.pid}` },
         processRunner: new NodeProcessRunner(),
       });
@@ -356,10 +522,39 @@ describe("IosSimctlDriver", () => {
   );
 });
 
-function createDriver(runner: ScriptedProcessRunner, clock = new FakeClock()): IosSimctlDriver {
+function createDriver(
+  runner: ScriptedProcessRunner,
+  clock = new FakeClock(),
+  filesystem: Filesystem = new MemoryFilesystem(),
+): IosSimctlDriver {
   return new IosSimctlDriver({
     clock,
+    filesystem,
     idGenerator: { generate: () => "device-1" },
+    processRunner: runner,
+  });
+}
+
+/**
+ * `#idGenerator.generate()` names the device on its first call and mints
+ * mark tokens on every later call, so the first call must stay "device-1"
+ * to match `driverData.name` while later calls vary to prove the reclaim
+ * token differs from the provision token.
+ */
+function createTokenDriver(
+  runner: ScriptedProcessRunner,
+  filesystem: Filesystem = new MemoryFilesystem(),
+): IosSimctlDriver {
+  let calls = 0;
+  return new IosSimctlDriver({
+    clock: new FakeClock(),
+    filesystem,
+    idGenerator: {
+      generate: () => {
+        calls += 1;
+        return calls === 1 ? "device-1" : `tok-${String(calls)}`;
+      },
+    },
     processRunner: runner,
   });
 }

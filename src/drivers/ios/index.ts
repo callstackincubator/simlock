@@ -11,11 +11,19 @@ import {
   RuntimeMissingError,
   UnknownModelError,
 } from "../../core/index.js";
+import type { ObservedMark } from "../../core/driver.js";
 import type { DeviceSpec } from "../../core/index.js";
-import type { Clock, IdGenerator, ProcessResult, ProcessRunner } from "../../ports/index.js";
+import type {
+  Clock,
+  Filesystem,
+  IdGenerator,
+  ProcessResult,
+  ProcessRunner,
+} from "../../ports/index.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
+const MARK_FILE_NAME = "pitlane-mark.json";
 
 interface IosDriverData {
   readonly deviceTypeId: string;
@@ -26,6 +34,7 @@ interface IosDriverData {
 
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
+  readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly processRunner: ProcessRunner;
 }
@@ -61,12 +70,14 @@ type ProcessOutcome =
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
   readonly #clock: Clock;
+  readonly #filesystem: Filesystem;
   readonly #idGenerator: IdGenerator;
   readonly #processRunner: ProcessRunner;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
 
   constructor(options: IosSimctlDriverOptions) {
     this.#clock = options.clock;
+    this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
     this.#processRunner = options.processRunner;
   }
@@ -118,6 +129,11 @@ export class IosSimctlDriver implements Driver {
       throw new DriverCrashError("simctl create returned no device UDID");
     }
 
+    const dataPath = await this.#dataPathFor(udid);
+    if (dataPath !== undefined) {
+      await this.#writeMark(udid, dataPath);
+    }
+
     return {
       deviceId: udid,
       driverData: {
@@ -158,6 +174,12 @@ export class IosSimctlDriver implements Driver {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
     await this.#simctl(["erase", data.udid], COMMAND_TIMEOUT_MS);
+
+    const dataPath = await this.#dataPathFor(data.udid);
+    if (dataPath !== undefined) {
+      await this.#writeMark(data.udid, dataPath);
+    }
+
     return { state: "shutdown", strategy: "erase" };
   }
 
@@ -177,7 +199,23 @@ export class IosSimctlDriver implements Driver {
 
   async listManaged(): Promise<DriverReality> {
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
-    const devices = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    const devices: ObservedDevice[] = await Promise.all(
+      parsed.map(async (device) => {
+        const mark = await this.#readMark(device.dataPath);
+        return {
+          deviceId: device.udid,
+          driverData: {
+            deviceTypeId: "",
+            name: device.name,
+            runtimeId: "",
+            udid: device.udid,
+          } satisfies IosDriverData,
+          runState: device.runState,
+          ...(mark !== undefined ? { mark } : {}),
+        };
+      }),
+    );
     const processes = devices.filter((device) => device.runState === "running");
     return { devices, processes };
   }
@@ -200,6 +238,82 @@ export class IosSimctlDriver implements Driver {
         return 30_000;
       case "reclaim":
         return 1_000;
+    }
+  }
+
+  /**
+   * Looks up the data-container path simctl assigned a device. `simctl
+   * create` only returns the UDID, so this re-lists devices to find it --
+   * the same call `listManaged` makes, kept separate so provision/reclaim
+   * don't have to reach into listManaged's parsing for a single field.
+   */
+  async #dataPathFor(udid: string): Promise<string | undefined> {
+    const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
+    const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    return parsed.find((device) => device.udid === udid)?.dataPath;
+  }
+
+  /**
+   * Writes the same provenance token into both regions of a device: the
+   * device root (durable -- survives `simctl erase`) and the data container
+   * (erasable -- destroyed by it). Both halves are written together so a
+   * partial write never reads as drift.
+   */
+  async #writeMark(udid: string, dataPath: string): Promise<void> {
+    const token = this.#idGenerator.generate();
+    const contents = JSON.stringify({
+      token,
+      udid,
+      writtenAt: new Date(this.#clock.now()).toISOString(),
+    });
+    const durablePath = `${parentDirectory(dataPath)}/${MARK_FILE_NAME}`;
+    const erasablePath = `${dataPath}/${MARK_FILE_NAME}`;
+
+    await Promise.all([
+      this.#filesystem.writeFileAtomic(durablePath, contents),
+      this.#filesystem.writeFileAtomic(erasablePath, contents),
+    ]);
+  }
+
+  /**
+   * Reads both provenance regions for a managed device. Both regions are
+   * host-side files readable while the device is shut down, so
+   * `erasableReadable` is always `true` on iOS -- the field only ever goes
+   * `false` for Android, where the erasable mark lives on-device and is
+   * unreachable while the emulator isn't running. A device this driver never
+   * marked (both regions absent, e.g. provisioned before this feature
+   * shipped) reports `undefined` rather than a half-empty mark, so it stays
+   * quiet instead of classifying as tampered on every tick.
+   */
+  async #readMark(dataPath: string | undefined): Promise<ObservedMark | undefined> {
+    if (dataPath === undefined) {
+      return undefined;
+    }
+
+    const durable = await this.#readToken(`${parentDirectory(dataPath)}/${MARK_FILE_NAME}`);
+    const erasable = await this.#readToken(`${dataPath}/${MARK_FILE_NAME}`);
+
+    if (durable === undefined && erasable === undefined) {
+      return undefined;
+    }
+
+    return { durable, erasable, erasableReadable: true };
+  }
+
+  /**
+   * A missing file and a corrupt one both read as an absent mark -- the core
+   * classifies "absent" from "present but wrong" itself, and a read must
+   * never throw out of `listManaged`.
+   */
+  async #readToken(path: string): Promise<string | undefined> {
+    try {
+      const contents = await this.#filesystem.readFile(path);
+      const parsed = JSON.parse(contents) as unknown;
+      return isRecord(parsed) && typeof parsed.token === "string" && parsed.token !== ""
+        ? parsed.token
+        : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -324,12 +438,19 @@ class IosRuntimeMissingError extends RuntimeMissingError {
   }
 }
 
+interface ParsedManagedDevice {
+  readonly dataPath: string | undefined;
+  readonly name: string;
+  readonly runState: ObservedRunState;
+  readonly udid: string;
+}
+
 // fallow-ignore-next-line complexity -- runtime-keyed device JSON is walked and filtered in one pass by design.
-function parseManagedDevices(value: unknown): ObservedDevice[] {
+function parseManagedDevices(value: unknown): ParsedManagedDevice[] {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");
   }
-  const devices: ObservedDevice[] = [];
+  const devices: ParsedManagedDevice[] = [];
   for (const runtimeDevices of Object.values(value.devices)) {
     if (!Array.isArray(runtimeDevices)) continue;
     for (const device of runtimeDevices) {
@@ -338,18 +459,20 @@ function parseManagedDevices(value: unknown): ObservedDevice[] {
       }
       if (!device.name.startsWith("pitlane-")) continue;
       devices.push({
-        deviceId: device.udid,
-        driverData: {
-          deviceTypeId: "",
-          name: device.name,
-          runtimeId: "",
-          udid: device.udid,
-        } satisfies IosDriverData,
+        dataPath: typeof device.dataPath === "string" ? device.dataPath : undefined,
+        name: device.name,
         runState: simctlRunState(device.state),
+        udid: device.udid,
       });
     }
   }
   return devices;
+}
+
+/** Mirrors `parentPath` in the `Filesystem` port: the parent of a `dataPath` is the device root. */
+function parentDirectory(path: string): string {
+  const lastSeparator = path.lastIndexOf("/");
+  return lastSeparator <= 0 ? "/" : path.slice(0, lastSeparator);
 }
 
 /** `simctl` reports `Booting` / `Shutting Down` mid-transition; both must read as `transitioning`, never as drift. */
