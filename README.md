@@ -26,7 +26,7 @@ after a longer one to reclaim disk — automatically, in tiers.
 
 **It's advisory, not a sandbox.** Pitlane doesn't wrap or intercept
 `simctl` / `avdmanager` — it works because agents are instructed to only use
-devices handed to them by a lease. What it *does* enforce is its own blast
+devices handed to them by a lease. What it _does_ enforce is its own blast
 radius: Pitlane only ever shuts down, erases, or deletes devices it created
 itself. Everything else on the machine is read-only to it.
 
@@ -43,7 +43,14 @@ pitlane lease --platform ios --device "iPhone 16" --detach
 ```
 
 ```json
-{"lease":"lse_9f2c","platform":"ios","device":"iPhone 16","os":"18.4","udid":"ABCD-...","state":"leased"}
+{
+  "lease": "lse_9f2c",
+  "platform": "ios",
+  "device": "iPhone 16",
+  "os": "18.4",
+  "udid": "ABCD-...",
+  "state": "leased"
+}
 ```
 
 That's the whole interaction: ask for a platform and a device model, get
@@ -61,7 +68,14 @@ the lease result lands on stdout the moment the new device is ready:
 ```
 
 ```json
-{"lease":"lse_a731","platform":"ios","device":"iPhone 16","os":"18.4","udid":"EFGH-...","state":"leased"}
+{
+  "lease": "lse_a731",
+  "platform": "ios",
+  "device": "iPhone 16",
+  "os": "18.4",
+  "udid": "EFGH-...",
+  "state": "leased"
+}
 ```
 
 No manual bookkeeping, no "device busy" error to handle — just a second
