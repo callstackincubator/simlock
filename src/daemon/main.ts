@@ -109,8 +109,6 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   });
   const doctor = new Doctor({ clock, drivers, eventBus, leaseExpirer: leaseEngine, registry });
   const nuke = new Nuke({ executor: leaseEngine, registry });
-  await doctor.reconcile();
-  await leaseEngine.convergeRunningCapacity();
   const daemon = new DaemonServer({
     capacity: leaseEngine,
     catalog: leaseEngine,
@@ -134,6 +132,15 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     nuke,
     registry,
     version: options.version ?? "1.0.0",
+    // Runs after the socket is claimed (see DaemonServer#start): reachability no
+    // longer depends on doctor reconciliation or running-capacity convergence, which
+    // can shell out per driver/device and, since #38, await an orphaned lease's
+    // device reclaim (~34s for one simulator). Requests other than hello/status.get
+    // park until this resolves.
+    converge: async () => {
+      await doctor.reconcile();
+      await leaseEngine.convergeRunningCapacity();
+    },
   });
   await daemon.start();
   return daemon;

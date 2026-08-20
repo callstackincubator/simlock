@@ -65,7 +65,16 @@ export interface DaemonServerOptions {
   readonly nuke?: Nuke;
   readonly registry: Registry;
   readonly version: string;
+  /**
+   * Startup recovery work (doctor reconciliation, running-capacity convergence) run
+   * *after* the socket is claimed, so reachability never depends on it. `hello` and
+   * `status.get` answer immediately; every other request type parks on this promise.
+   * A rejection here stops the daemon rather than leaving it half-open — see `start()`.
+   */
+  readonly converge?: () => Promise<void>;
 }
+
+type DaemonHealth = "starting" | "running" | "failed";
 
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
@@ -76,6 +85,16 @@ export class DaemonServer {
   #heartbeatNonce = 0;
   #stopping = false;
   #stopPromise: Promise<void> | undefined;
+  #health: DaemonHealth = "starting";
+  #readyPromise: Promise<void> | undefined;
+  /**
+   * Every `#dispatchLine` call that starts while `#health` is still `"starting"`,
+   * tracked so a convergence failure can genuinely drain them -- await each one's
+   * own response actually being written -- before closing sockets, rather than
+   * hoping a `stop()` scheduling gap gives them time to run. See the catch in
+   * `start()`.
+   */
+  readonly #parkedDispatches = new Set<Promise<void>>();
 
   constructor(private readonly options: DaemonServerOptions) {
     this.#protocolVersion = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION;
@@ -87,8 +106,53 @@ export class DaemonServer {
     return this.options.host.endpoint;
   }
 
+  /**
+   * Claims the socket first so reachability never depends on startup recovery work:
+   * a lost startup race throws `DaemonAlreadyRunningError` here, before `converge()`
+   * runs any device work. Only after the claim does convergence run; `hello` and
+   * `status.get` answer throughout, every other request parks on `#readyPromise`
+   * (see `#awaitReady`). Node keeps servicing accepted connections while this
+   * function's own awaits are pending, so callers observe the socket as connectable
+   * well before this promise settles.
+   */
   async start(): Promise<void> {
     await this.options.host.start((connection) => this.#accept(connection));
+    const readyPromise = this.#converge();
+    this.#readyPromise = readyPromise;
+    try {
+      await readyPromise;
+    } catch (error: unknown) {
+      // Convergence failed after the socket was claimed: stop rather than sit there
+      // accepting connections we can never serve. Drain `#parkedDispatches` first --
+      // genuinely wait for each dispatch that started during the window to finish,
+      // not just for `#awaitReady()` to reject -- so a request already parked on
+      // `#readyPromise` gets its `DAEMON_STARTUP_FAILED` response actually written
+      // before `stop()` below closes its socket. This is not a hopeful scheduling
+      // gap: `#dispatchLine` awaits its own response write before returning, so
+      // draining the tracked promise really does wait for that write. A dispatch
+      // that hasn't reached the gate yet, or a brand-new connection that arrives in
+      // the narrow window between this drain and `stop()` flipping `#stopping`,
+      // still degrades safely -- the client sees the socket close, which since #40
+      // surfaces as typed `DAEMON_CONNECTION_LOST`, not a hang.
+      await Promise.allSettled(this.#parkedDispatches);
+      await this.stop("convergence-failed").catch(() => undefined);
+      throw error;
+    }
+
+    // Subscribed only now, after convergence, not before `start()` claimed the
+    // socket: the only thing that emits `lease.released` during convergence is
+    // `convergeRunningCapacity()`'s own orphaned-held-lease release, and by
+    // definition no live connection holds an orphaned lease on a daemon that has
+    // just started (a held lease's liveness is its daemon connection, which cannot
+    // have survived the restart). So nothing emitted during the window needs a
+    // `lease-lost` push. A parked `lease.request` is safe too: `start()`'s own
+    // continuation is registered on `#readyPromise` before any later request's (the
+    // client can only reach the gate after `host.start()`'s callback is wired, well
+    // after `start()` began awaiting), so on the shared microtask queue this
+    // subscribe runs before any parked request resumes past `#awaitReady()` -- see
+    // "answers hello and status.get..." / "parks a request type..." tests, and the
+    // dedicated ordering test below. The next event type added that can fire during
+    // convergence should re-check this invariant rather than assume it still holds.
     this.#unsubscribeLeaseLost.push(
       this.options.eventBus.subscribe("lease.expired", (envelope) =>
         this.#notifyLeaseLost(envelope.payload.leaseId, envelope.payload.deviceId, "expired"),
@@ -114,6 +178,30 @@ export class DaemonServer {
       version: this.options.version,
     });
     this.#scheduleHeartbeatTick();
+  }
+
+  async #converge(): Promise<void> {
+    try {
+      await this.options.converge?.();
+      this.#health = "running";
+    } catch (error: unknown) {
+      this.#health = "failed";
+      this.#logger.error("Daemon failed to converge at startup", {
+        message: errorMessage(error),
+        stack: errorStack(error),
+      });
+      throw error;
+    }
+  }
+
+  /** Every request type but `hello` (handled separately) and `status.get` parks here. */
+  async #awaitReady(): Promise<void> {
+    if (this.#readyPromise === undefined) return;
+    try {
+      await this.#readyPromise;
+    } catch {
+      throw new StartupFailedError();
+    }
   }
 
   stop(reason = "requested"): Promise<void> {
@@ -177,8 +265,25 @@ export class DaemonServer {
       if (line.trim() === "") {
         continue;
       }
-      void this.#dispatchLine(connection, line);
+      this.#dispatch(connection, line);
     }
+  }
+
+  /**
+   * Fires `#dispatchLine` without awaiting it, same as before, but while `#health` is
+   * still `"starting"` also tracks the call in `#parkedDispatches` so a convergence
+   * failure can drain it deterministically. Tracking every dispatch during the
+   * window (not just the ones that turn out to park) is simplest and harmless --
+   * `hello`/`status.get` calls just settle almost immediately and fall out of the set.
+   */
+  #dispatch(connection: Connection, line: string): void {
+    const dispatched = this.#dispatchLine(connection, line);
+    if (this.#health !== "starting") {
+      void dispatched;
+      return;
+    }
+    this.#parkedDispatches.add(dispatched);
+    void dispatched.finally(() => this.#parkedDispatches.delete(dispatched));
   }
 
   async #dispatchLine(connection: Connection, line: string): Promise<void> {
@@ -287,6 +392,9 @@ export class DaemonServer {
 
   // fallow-ignore-next-line complexity -- command dispatch is intentionally centralized at the protocol boundary.
   async #handleRequest(connection: Connection, frame: RequestFrame): Promise<unknown> {
+    if (frame.type !== "status.get") {
+      await this.#awaitReady();
+    }
     switch (frame.type) {
       case "lease.request":
         return this.#requestLease(connection, frame.payload);
@@ -466,7 +574,7 @@ export class DaemonServer {
       ...snapshot,
       leases: snapshot.leases.map((lease) => this.#decorateLease(lease)),
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
-      health: "running",
+      health: this.#health,
       queueDepth: this.options.queue.queueDepth,
     };
   }
@@ -636,6 +744,14 @@ class ProtocolError extends Error {
   }
 }
 
+/** Thrown to a parked request when startup convergence rejected; see `#awaitReady`. */
+class StartupFailedError extends Error {
+  constructor() {
+    super("Daemon failed to start");
+    this.name = "StartupFailedError";
+  }
+}
+
 function objectPayload(value: unknown): Record<string, unknown> {
   if (!isObject(value)) {
     throw new ProtocolError("BAD_REQUEST", "Payload must be an object");
@@ -727,6 +843,9 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";
+  }
+  if (error instanceof StartupFailedError) {
+    return "DAEMON_STARTUP_FAILED";
   }
   return "INTERNAL";
 }

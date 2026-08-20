@@ -334,17 +334,28 @@ describe("DaemonServer", () => {
     });
   });
 
-  it("recovers a stale socket file and refuses a second live daemon", async () => {
+  it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pitlane-stale-"));
     temporaryDirectories.push(directory);
     const socketPath = join(directory, "daemon.sock");
     await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
     const first = await createHarness({ socketPath });
-    const second = await createHarness({ socketPath, start: false });
+    let convergeCalls = 0;
+    const second = await createHarness({
+      converge: () => {
+        convergeCalls += 1;
+        return Promise.resolve();
+      },
+      socketPath,
+      start: false,
+    });
 
     await expect(second.daemon.start()).rejects.toMatchObject({
       name: "DaemonAlreadyRunningError",
     });
+    // The claim (and its DaemonAlreadyRunningError) happens before convergence:
+    // a lost startup race must not run device work at all.
+    expect(convergeCalls).toBe(0);
     await second.daemon.stop("failed-start");
     const client = await createClient(socketPath);
     await hello(client);
@@ -467,6 +478,158 @@ describe("DaemonServer", () => {
     await client.close();
   });
 });
+
+describe("DaemonServer startup readiness", () => {
+  it("claims a connectable socket before startup convergence finishes", async () => {
+    const converge = deferred<void>();
+    const harness = await createHarness({ converge: () => converge.promise, start: false });
+    const startPromise = harness.daemon.start();
+
+    const client = await createClientRetrying(harness.socketPath);
+    await hello(client);
+    await client.close();
+
+    converge.resolve();
+    await startPromise;
+  });
+
+  it("answers hello and status.get with health starting during convergence, then running once converged", async () => {
+    const converge = deferred<void>();
+    const harness = await createHarness({ converge: () => converge.promise, start: false });
+    const startPromise = harness.daemon.start();
+
+    const client = await createClientRetrying(harness.socketPath);
+    await hello(client);
+    await expect(client.request("status.get", {})).resolves.toMatchObject({
+      ok: true,
+      payload: { health: "starting" },
+    });
+
+    converge.resolve();
+    await startPromise;
+
+    await expect(client.request("status.get", {})).resolves.toMatchObject({
+      ok: true,
+      payload: { health: "running" },
+    });
+    await client.close();
+  });
+
+  it("parks a request type other than hello/status.get until convergence completes, then serves it", async () => {
+    const converge = deferred<void>();
+    const harness = await createHarness({ converge: () => converge.promise, start: false });
+    const startPromise = harness.daemon.start();
+
+    const client = await createClientRetrying(harness.socketPath);
+    await hello(client);
+
+    const parked = client.request("list.get", { kind: "devices" });
+    // Requests on one connection are dispatched in arrival order without waiting for
+    // the previous one to finish (`#read` fires `#dispatchLine` per line without
+    // awaiting), so once this status.get round-trips, the parked request's dispatch
+    // has already reached (and registered on) the readiness gate.
+    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+
+    converge.resolve();
+    await startPromise;
+
+    await expect(parked).resolves.toMatchObject({ ok: true, payload: [] });
+    await client.close();
+  });
+
+  it("rejects startup, and does not hang a parked request, when convergence fails", async () => {
+    const converge = deferred<void>();
+    const harness = await createHarness({ converge: () => converge.promise, start: false });
+    const startPromise = harness.daemon.start();
+
+    const client = await createClientRetrying(harness.socketPath);
+    await hello(client);
+    const parked = client.request("list.get", { kind: "devices" });
+    // Round-tripping status.get first proves this request's dispatch has already
+    // started (and so is already tracked in `#parkedDispatches`) before the failure
+    // below -- this is not a race the assertion happens to win: `start()`'s catch
+    // path explicitly drains `#parkedDispatches` (awaiting each dispatch's own
+    // response write) before it closes any socket, so a request tracked at this
+    // point is genuinely guaranteed a DAEMON_STARTUP_FAILED response, not merely
+    // likely to get one before the connection drops.
+    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+
+    converge.reject(new Error("boom"));
+
+    await expect(startPromise).rejects.toThrow("boom");
+    await expect(parked).resolves.toMatchObject({
+      error: { code: "DAEMON_STARTUP_FAILED" },
+      ok: false,
+    });
+  });
+
+  it("has lease-lost subscriptions wired before a lease.request parked on convergence proceeds", async () => {
+    // Guards the invariant documented in `start()`: subscriptions are set up only
+    // after convergence resolves, and a parked request must never observe a window
+    // where its own grant can be silently force-released without a `lease-lost`
+    // push. Grants the held lease while convergence is still pending, then --
+    // immediately once convergence resolves and the grant comes back -- force
+    // releases that very lease from a second connection and asserts the push
+    // arrives, proving the subscription was already active by the time the grant
+    // reached the client.
+    const converge = deferred<void>();
+    const harness = await createHarness({ converge: () => converge.promise, start: false });
+    const startPromise = harness.daemon.start();
+
+    const holder = await createClientRetrying(harness.socketPath);
+    await hello(holder);
+    const parkedGrant = holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    converge.resolve();
+    await startPromise;
+    const grant = await parkedGrant;
+    expect(grant.ok).toBe(true);
+    const leaseId = leaseIdOf(grant);
+
+    const evictor = await createClientRetrying(harness.socketPath);
+    await hello(evictor);
+    await evictor.request("lease.release", { leaseId });
+
+    await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { leaseId },
+    });
+  });
+});
+
+/**
+ * `daemon.start()` claims the socket well before its own promise settles (that promise
+ * also waits on convergence), so a test that connects while convergence is deliberately
+ * held open must poll for the listener rather than assume it exists synchronously.
+ */
+async function createClientRetrying(socketPath: string, timeoutMs = 2_000): Promise<Client> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return await createClient(socketPath);
+    } catch (error: unknown) {
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, reject, resolve };
+}
 
 describe("DaemonServer lease heartbeat", () => {
   it("slides a held lease's deadline past the backstop while its holder keeps ponging, and stops sliding once it stops", async () => {
@@ -742,6 +905,7 @@ async function createHarness(
     readonly socketPath?: string;
     readonly start?: boolean;
     readonly clock?: FakeClock;
+    readonly converge?: () => Promise<void>;
     readonly driver?: FakeDriver;
     readonly logger?: Logger;
     readonly stateFilesystem?: MemoryFilesystem;
@@ -799,6 +963,7 @@ async function createHarness(
     catalog: engine,
     clock,
     config,
+    ...(options.converge === undefined ? {} : { converge: options.converge }),
     defaultRequesterId: "test-process",
     eventBus,
     host: new DaemonEndpointHost({
