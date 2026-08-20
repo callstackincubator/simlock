@@ -1,5 +1,25 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 
+// `close` normally follows `exit` within the same tick, once the child's own stdio
+// pipes report EOF. But children are spawned `detached: true`, so a process that
+// forks a grandchild before it dies can leave that grandchild holding the inherited
+// write end of our pipe open -- `close` then never fires even though the process we
+// actually care about is long gone. After `exit`, `wait()` therefore stops waiting
+// for `close` once the pipes have gone quiet for this long.
+//
+// Quiet, not merely elapsed: settling on a bare timer would truncate the output of a
+// process that exited while its pipe was still draining (a large `simctl list --json`
+// under a loaded event loop), and a truncated capture surfaces as a parse error far
+// from its cause. So the window restarts whenever more output arrives, which
+// distinguishes "still draining" from "held open by something that has nothing to
+// say" -- the only case this needs to escape.
+const EXIT_TO_CLOSE_GRACE_MS = 1_000;
+
+// A grandchild that inherits the pipe *and* chatters on it would otherwise restart the
+// grace window forever, so the deferral is capped. Reaching this cap means the output
+// may be incomplete; nothing else is waiting on it by then.
+const EXIT_TO_CLOSE_MAX_DEFERRAL_MS = 5_000;
+
 export interface ProcessRunOptions {
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
@@ -90,8 +110,34 @@ class NodeProcessHandle implements ProcessHandle {
     captureLines(child.stderr, this.stderr, this.#stderrChunks);
     this.#result = new Promise<ProcessResult>((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code) => {
+
+      let settled = false;
+      const settle = (code: number | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         resolve({ code, stderr: this.#stderrChunks.join(""), stdout: this.#stdoutChunks.join("") });
+      };
+
+      child.once("close", (code) => {
+        settle(code);
+      });
+      child.once("exit", (code) => {
+        const deadline = Date.now() + EXIT_TO_CLOSE_MAX_DEFERRAL_MS;
+        const capturedSoFar = (): number => this.#stdoutChunks.length + this.#stderrChunks.length;
+        const armGrace = (chunksAtArm: number): void => {
+          const timer = setTimeout(() => {
+            if (capturedSoFar() !== chunksAtArm && Date.now() < deadline) {
+              armGrace(capturedSoFar());
+              return;
+            }
+            settle(code);
+          }, EXIT_TO_CLOSE_GRACE_MS);
+          // A pending grace timer must never keep the Node process alive on its own.
+          timer.unref();
+        };
+        armGrace(capturedSoFar());
       });
     });
   }
