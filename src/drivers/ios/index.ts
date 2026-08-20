@@ -74,6 +74,7 @@ export class IosSimctlDriver implements Driver {
   readonly #idGenerator: IdGenerator;
   readonly #processRunner: ProcessRunner;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
+  #devicesRoot: string | undefined;
 
   constructor(options: IosSimctlDriverOptions) {
     this.#clock = options.clock;
@@ -200,6 +201,7 @@ export class IosSimctlDriver implements Driver {
   async listManaged(): Promise<DriverReality> {
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
     const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    this.#rememberDevicesRoot(parsed);
     const devices: ObservedDevice[] = await Promise.all(
       parsed.map(async (device) => {
         const mark = await this.#readMark(device.dataPath);
@@ -242,15 +244,30 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
-   * Looks up the data-container path simctl assigned a device. `simctl
-   * create` only returns the UDID, so this re-lists devices to find it --
-   * the same call `listManaged` makes, kept separate so provision/reclaim
-   * don't have to reach into listManaged's parsing for a single field.
+   * Data-container path for a device. `simctl create` returns only the UDID,
+   * and a `simctl list` costs ~260ms -- enough to matter on `reclaim`, which
+   * runs on every release. So the devices root is learned once from simctl's
+   * own answer and every later lookup is derived from it, keeping the extra
+   * subprocess off the lease path. Falls back to listing until something has
+   * primed the root.
    */
   async #dataPathFor(udid: string): Promise<string | undefined> {
+    if (this.#devicesRoot !== undefined) {
+      return `${this.#devicesRoot}/${udid}/data`;
+    }
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
     const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    this.#rememberDevicesRoot(parsed);
     return parsed.find((device) => device.udid === udid)?.dataPath;
+  }
+
+  /** `<devicesRoot>/<UDID>/data` -- two levels up from any device's data container. */
+  #rememberDevicesRoot(devices: readonly ParsedManagedDevice[]): void {
+    if (this.#devicesRoot !== undefined) return;
+    const dataPath = devices.find((device) => device.dataPath !== undefined)?.dataPath;
+    if (dataPath === undefined) return;
+    const root = parentDirectory(parentDirectory(dataPath));
+    if (root !== "/") this.#devicesRoot = root;
   }
 
   /**

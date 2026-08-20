@@ -420,6 +420,33 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
+  it("derives the data path from the cached devices root instead of re-listing", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(dataPath);
+    const runner = new ScriptedProcessRunner([
+      {
+        match: listDevicesInvocation,
+        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
+      },
+      { match: { command: "xcrun", args: ["simctl", "shutdown", driverData.udid] } },
+      { match: { command: "xcrun", args: ["simctl", "erase", driverData.udid] } },
+    ]);
+    const driver = createDriver(runner, new FakeClock(), filesystem);
+
+    await driver.listManaged();
+    await driver.reclaim({ deviceId: driverData.udid, driverData }, { clean: "full" });
+
+    // `simctl list` costs ~260ms and reclaim runs on every release, so the
+    // devices root learned during listManaged must keep it off the lease path.
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      ["simctl", "list", "-j", "devices"],
+      ["simctl", "shutdown", driverData.udid],
+      ["simctl", "erase", driverData.udid],
+    ]);
+    expect(await filesystem.exists(erasableMarkPath)).toBe(true);
+    expect(await filesystem.exists(durableMarkPath)).toBe(true);
+  });
+
   it("reports matching provenance tokens for a healthy managed device", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp(dataPath);
