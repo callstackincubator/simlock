@@ -186,6 +186,11 @@ export class Registry {
   /** Flags a device whose observed boot state disagrees with the committed registry state. */
   async markForeignStateDetected(deviceId: string, at: number): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
+    // Doctor re-reports persistent drift on every reaper tick; keep the first-detected
+    // timestamp and skip the commit so a flagged device stops rewriting state.json.
+    if (device.foreignStateDetectedAt !== undefined) {
+      return cloneDevice(device);
+    }
     const updated = { ...device, foreignStateDetectedAt: at };
     const devices = [...this.#devices];
     devices[index] = updated;

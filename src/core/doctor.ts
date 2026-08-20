@@ -140,16 +140,22 @@ export class Doctor {
     if (device === undefined) {
       return;
     }
-    if (finding.expected === "running" && finding.observed === "stopped") {
+    // Only `ready` and `shutdown` have a legal transition to the opposite run state. A
+    // device recorded as `leased` with no lease record reaches here past the lease guard
+    // above; correcting it would throw IllegalTransition and abort the whole reconcile,
+    // so leave it to the report rather than crashing the reaper tick.
+    if (device.state === "ready" && finding.observed === "stopped") {
       await this.options.registry.transitionDevice(finding.deviceId, "shutdown", {
         event: "device.shutdown",
         payload: { deviceId: finding.deviceId, initiator: "doctor" },
       });
-    } else if (finding.expected === "stopped" && finding.observed === "running") {
+    } else if (device.state === "shutdown" && finding.observed === "running") {
       await this.options.registry.transitionDevice(finding.deviceId, "ready", {
         event: "device.ready",
         payload: { bootDuration: 0, deviceId: finding.deviceId },
       });
+    } else {
+      return;
     }
     await this.options.registry.clearForeignStateDetected(finding.deviceId);
   }

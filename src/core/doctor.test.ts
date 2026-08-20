@@ -60,6 +60,100 @@ describe("Doctor", () => {
     expect(eventBus.replay().at(-1)).toMatchObject({ event: "doctor.reconciled" });
   });
 
+  it("reports but does not correct a leased-state device with no lease record", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.writeFileAtomic(
+      "/state.json",
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 1,
+            driverData: { fakeDeviceId: "pitlane-stale" },
+            driverDeviceId: "pitlane-stale",
+            id: "dev_1",
+            spec: { model: "Phone", osVersion: "1", platform: "ios" },
+            state: "leased",
+          },
+        ],
+        leases: [],
+      }),
+    );
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem,
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setManagedReality({
+      devices: [
+        {
+          deviceId: "pitlane-stale",
+          driverData: { fakeDeviceId: "pitlane-stale" },
+          runState: "stopped",
+        },
+      ],
+      processes: [],
+    });
+
+    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile({
+      fix: true,
+    });
+
+    expect(report.findings.map((finding) => finding.kind)).toContain("foreign-state-change");
+    expect(registry.snapshot.devices[0]?.state).toBe("leased");
+    expect(registry.snapshot.devices[0]?.foreignStateDetectedAt).toBe(10_000);
+  });
+
+  it("keeps the first-detected timestamp when drift persists across ticks", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+    const device = await registry.registerDevice({
+      driverData: { fakeDeviceId: "pitlane-drift" },
+      driverDeviceId: "pitlane-drift",
+      provisionDuration: 0,
+      spec: { model: "Phone", osVersion: "1", platform: "ios" },
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    await registry.createLease({
+      deviceId: device.id,
+      mode: "held",
+      requesterId: "agent",
+      ttlDeadline: 99_000,
+    });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setManagedReality({
+      devices: [
+        {
+          deviceId: "pitlane-drift",
+          driverData: { fakeDeviceId: "pitlane-drift" },
+          runState: "stopped",
+        },
+      ],
+      processes: [],
+    });
+    const doctor = new Doctor({ clock, drivers: [driver], eventBus, registry });
+
+    await doctor.reconcile();
+    clock.advance(60_000);
+    await doctor.reconcile();
+
+    expect(registry.snapshot.devices[0]?.foreignStateDetectedAt).toBe(10_000);
+  });
+
   it("fixes registry-attributable drift and leaves unregistered reality report-only", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
