@@ -1,7 +1,13 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
 import type { CapacityDecision, CapacityDevice, RunningCapacity } from "./capacity.js";
-import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
+import type {
+  DeviceRecord,
+  DeviceSpec,
+  DeviceTransitionUpdate,
+  LeaseRecord,
+  Platform,
+} from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
 import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
@@ -26,8 +32,13 @@ export interface WarmPoolRegistry {
         readonly strategy: "erase" | "snapshot" | "wipe";
       };
     },
+    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord>;
-  completeFailedPurge(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord>;
+  completeFailedPurge(
+    deviceId: string,
+    to: "ready" | "shutdown",
+    update?: DeviceTransitionUpdate,
+  ): Promise<DeviceRecord>;
 }
 
 export interface WarmPoolCapacityReader {
@@ -68,16 +79,26 @@ export class WarmPoolCoordinator {
     const keepReady = await this.options.decisions.run(async () =>
       this.#mayRemainWarm(released.device),
     );
-    const finalState = await this.#disposition(driver, released.device, result.state, keepReady);
+    const disposition = await this.#disposition(driver, released.device, result.state, keepReady);
     await this.options.decisions.run(async () => {
-      await this.options.registry.transitionDevice(released.device.id, finalState, {
-        event: "device.reclaimed",
-        payload: {
-          deviceId: released.device.id,
-          duration: this.options.clock.now() - startedAt,
-          strategy: result.strategy,
+      await this.options.registry.transitionDevice(
+        released.device.id,
+        disposition.state,
+        {
+          event: "device.reclaimed",
+          payload: {
+            deviceId: released.device.id,
+            duration: this.options.clock.now() - startedAt,
+            strategy: result.strategy,
+          },
         },
-      });
+        disposition.readyDevice === undefined
+          ? undefined
+          : {
+              address: disposition.readyDevice.address,
+              driverData: disposition.readyDevice.driverData,
+            },
+      );
     });
     this.options.notifyAvailability();
   }
@@ -128,7 +149,8 @@ export class WarmPoolCoordinator {
     await this.options.decisions.run(async () => {
       await this.options.registry.completeFailedPurge(
         released.device.id,
-        ready ? "ready" : "shutdown",
+        ready === undefined ? "shutdown" : "ready",
+        ready === undefined ? undefined : { address: ready.address, driverData: ready.driverData },
       );
       this.options.eventBus.emit(
         "device.purge-failed",
@@ -150,27 +172,28 @@ export class WarmPoolCoordinator {
     device: DeviceRecord,
     reclaimedState: "ready" | "shutdown",
     keepReady: boolean,
-  ): Promise<"ready" | "shutdown"> {
+  ): Promise<{ readonly state: "ready" | "shutdown"; readonly readyDevice?: DriverDevice }> {
     if (keepReady && reclaimedState === "shutdown") {
-      return (await this.#tryMakeReady(driver, device)) ? "ready" : "shutdown";
+      const readyDevice = await this.#tryMakeReady(driver, device);
+      return readyDevice === undefined ? { state: "shutdown" } : { readyDevice, state: "ready" };
     }
     if (!keepReady && reclaimedState === "ready") {
       try {
         await driver.shutdown(toDriverDevice(device));
-        return "shutdown";
+        return { state: "shutdown" };
       } catch {
-        return "ready";
+        return { state: "ready" };
       }
     }
-    return reclaimedState;
+    return { state: reclaimedState };
   }
 
-  async #tryMakeReady(driver: Driver, device: DeviceRecord): Promise<boolean> {
+  /** Undefined on failure; otherwise the driver's freshly re-read device, address included. */
+  async #tryMakeReady(driver: Driver, device: DeviceRecord): Promise<DriverDevice | undefined> {
     try {
-      await driver.makeReady(toDriverDevice(device));
-      return true;
+      return await driver.makeReady(toDriverDevice(device));
     } catch {
-      return false;
+      return undefined;
     }
   }
 
@@ -206,6 +229,14 @@ function stableError(error: unknown): string {
   return `${value.name}: ${value.message}`;
 }
 
+/**
+ * `address` is never trusted by a driver's `shutdown` / `reclaim` / `makeReady` -- they derive
+ * whatever they need from `driverData` -- so a placeholder here is harmless.
+ */
 function toDriverDevice(device: DeviceRecord): DriverDevice {
-  return { deviceId: device.driverDeviceId, driverData: device.driverData };
+  return {
+    address: device.address ?? "",
+    deviceId: device.driverDeviceId,
+    driverData: device.driverData,
+  };
 }

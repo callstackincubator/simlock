@@ -1,5 +1,11 @@
 export interface RawLeaseGrant {
   readonly device: {
+    /**
+     * The driver-reported address (adb serial / simctl UDID), current as of the device's last
+     * boot. Undefined only for a device leased straight out of a pre-address `state.json`
+     * without ever rebooting under this daemon -- see `DeviceRecord.address` in domain.ts.
+     */
+    readonly address: string | undefined;
     readonly driverDeviceId: string;
     readonly spec: {
       readonly model: string;
@@ -34,6 +40,7 @@ export function parseRawLeaseGrant(value: unknown): RawLeaseGrant {
   const timing = requireObject(grant.timing, "Daemon returned an invalid lease grant");
   if (
     typeof device.driverDeviceId !== "string" ||
+    (device.address !== undefined && typeof device.address !== "string") ||
     typeof spec.model !== "string" ||
     typeof spec.osVersion !== "string" ||
     (spec.platform !== "ios" && spec.platform !== "android") ||
@@ -49,6 +56,7 @@ export function parseRawLeaseGrant(value: unknown): RawLeaseGrant {
   }
   return {
     device: {
+      address: device.address,
       driverDeviceId: device.driverDeviceId,
       spec: { model: spec.model, osVersion: spec.osVersion, platform: spec.platform },
     },

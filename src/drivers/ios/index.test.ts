@@ -156,6 +156,7 @@ describe("IosSimctlDriver", () => {
     );
 
     await expect(driver.provision(spec)).resolves.toEqual({
+      address: driverData.udid,
       deviceId: driverData.udid,
       driverData,
     });
@@ -217,8 +218,12 @@ describe("IosSimctlDriver", () => {
     ]);
 
     await expect(
-      createDriver(runner).makeReady({ deviceId: driverData.udid, driverData }),
-    ).resolves.toBeUndefined();
+      createDriver(runner).makeReady({
+        address: driverData.udid,
+        deviceId: driverData.udid,
+        driverData,
+      }),
+    ).resolves.toEqual({ address: driverData.udid, deviceId: driverData.udid, driverData });
     expect(runner.calls).toEqual([
       {
         args: ["simctl", "boot", driverData.udid],
@@ -243,7 +248,11 @@ describe("IosSimctlDriver", () => {
       },
       { match: { command: "xcrun", args: ["simctl", "shutdown", driverData.udid] } },
     ]);
-    const ready = createDriver(runner, clock).makeReady({ deviceId: driverData.udid, driverData });
+    const ready = createDriver(runner, clock).makeReady({
+      address: driverData.udid,
+      deviceId: driverData.udid,
+      driverData,
+    });
 
     while (runner.calls.length < 2) {
       await Promise.resolve();
@@ -279,7 +288,7 @@ describe("IosSimctlDriver", () => {
 
     await expect(
       createDriver(runner, new FakeClock(), filesystem).reclaim(
-        { deviceId: driverData.udid, driverData },
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
         { clean: "full" },
       ),
     ).resolves.toEqual({ state: "shutdown", strategy: "erase" });
@@ -337,7 +346,10 @@ describe("IosSimctlDriver", () => {
     };
     expect(provisionedDurable.token).toBe(provisionedErasable.token);
 
-    await driver.reclaim({ deviceId: driverData.udid, driverData }, { clean: "full" });
+    await driver.reclaim(
+      { address: driverData.udid, deviceId: driverData.udid, driverData },
+      { clean: "full" },
+    );
 
     const reclaimedDurable = JSON.parse(await filesystem.readFile(durableMarkPath)) as {
       token: string;
@@ -356,7 +368,7 @@ describe("IosSimctlDriver", () => {
     ]);
     const driver = createDriver(runner);
 
-    await driver.destroy({ deviceId: driverData.udid, driverData });
+    await driver.destroy({ address: driverData.udid, deviceId: driverData.udid, driverData });
 
     expect(runner.calls.map((call) => call.args)).toEqual([
       ["simctl", "shutdown", driverData.udid],
@@ -434,7 +446,10 @@ describe("IosSimctlDriver", () => {
     const driver = createDriver(runner, new FakeClock(), filesystem);
 
     await driver.listManaged();
-    await driver.reclaim({ deviceId: driverData.udid, driverData }, { clean: "full" });
+    await driver.reclaim(
+      { address: driverData.udid, deviceId: driverData.udid, driverData },
+      { clean: "full" },
+    );
 
     // `simctl list` costs ~260ms and reclaim runs on every release, so the
     // devices root learned during listManaged must keep it off the lease path.

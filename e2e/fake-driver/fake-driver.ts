@@ -112,12 +112,18 @@ export class OutOfProcessFakeDriver implements Driver {
     const deviceId = `fake-${this.platform}-${this.#nextDeviceNumber}`;
     this.#nextDeviceNumber += 1;
     this.#devices.set(deviceId, "provisioned");
-    return { deviceId, driverData: { fakeDeviceId: deviceId } };
+    return { address: defaultAddress(deviceId), deviceId, driverData: { fakeDeviceId: deviceId } };
   }
 
-  async makeReady(device: DriverDevice): Promise<void> {
-    await this.#beforeCall("makeReady", [device]);
+  /** Re-reads the script's `address` on every boot -- see `FakeDriverPlatformScript.address`. */
+  async makeReady(device: DriverDevice): Promise<DriverDevice> {
+    const script = await this.#beforeCall("makeReady", [device]);
     this.#devices.set(device.deviceId, "ready");
+    return {
+      address: script.address ?? defaultAddress(device.deviceId),
+      deviceId: device.deviceId,
+      driverData: device.driverData,
+    };
   }
 
   async reclaim(
@@ -162,6 +168,7 @@ export class OutOfProcessFakeDriver implements Driver {
 
     return {
       devices: [...this.#devices.entries()].map(([deviceId, status]) => ({
+        address: defaultAddress(deviceId),
         deviceId,
         driverData: { fakeDeviceId: deviceId },
         runState: runStateFor(status),
@@ -245,6 +252,7 @@ export class OutOfProcessFakeDriver implements Driver {
 
 function toObservedDevice(device: ScriptedObservedDevice): DriverReality["devices"][number] {
   return {
+    address: defaultAddress(device.deviceId),
     deviceId: device.deviceId,
     driverData: { fakeDeviceId: device.deviceId },
     runState: device.runState as ObservedRunState,
@@ -261,7 +269,15 @@ function toObservedMark(mark: NonNullable<ScriptedObservedDevice["mark"]>): Obse
 }
 
 function toManagedProcess(process: ScriptedProcessEntry): DriverDevice {
-  return { deviceId: process.deviceId, driverData: { fakeDeviceId: process.deviceId } };
+  return {
+    address: defaultAddress(process.deviceId),
+    deviceId: process.deviceId,
+    driverData: { fakeDeviceId: process.deviceId },
+  };
+}
+
+function defaultAddress(deviceId: string): string {
+  return `${deviceId}-address`;
 }
 
 function runStateFor(status: "provisioned" | "ready" | "shutdown"): ObservedRunState {
