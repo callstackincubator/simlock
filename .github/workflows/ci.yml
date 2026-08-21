@@ -5,8 +5,8 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: read
+# Deny by default; every job opts in to exactly what it needs.
+permissions: {}
 
 env:
   COREPACK_ENABLE_PROJECT_SPEC: "0"
@@ -19,16 +19,20 @@ jobs:
   quality:
     name: Quality
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Enable Corepack
         run: |
           corepack enable
-          corepack prepare pnpm@11.9.0 --activate
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Quality checks
@@ -37,16 +41,20 @@ jobs:
   fallow:
     name: Fallow
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Enable Corepack
         run: |
           corepack enable
-          corepack prepare pnpm@11.9.0 --activate
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Fallow analysis
