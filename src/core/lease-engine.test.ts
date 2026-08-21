@@ -115,7 +115,7 @@ async function flush(): Promise<void> {
 }
 
 describe("LeaseEngine", () => {
-  it("keeps a released device reclaiming until purge completes, then re-leases it without another boot", async () => {
+  it("hands the caller back before the purge, keeps the device reclaiming, then re-leases it without another boot", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
@@ -131,10 +131,13 @@ describe("LeaseEngine", () => {
     const second = harness.engine.request(request, { mode: "held", requesterId: "second" });
     await flush();
 
+    // The releasing caller (an agent's MCP/CLI release) is already free to move on
+    // while the erase still has its full 20ms of driver latency ahead of it.
+    await expect(release).resolves.toBeUndefined();
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
     expect(harness.engine.queueDepth).toBe(1);
     clock.advance(20);
-    await release;
+    await harness.engine.settle();
     await expect(second).resolves.toMatchObject({ device: { id: first.device.id } });
     expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
@@ -152,6 +155,9 @@ describe("LeaseEngine", () => {
     const excess = await seedReady(harness);
 
     await harness.engine.release(first.lease.id, "explicit");
+    // Release commits registry-only and hands the purge off; settle() is the test's
+    // stand-in for the graceful-shutdown drain that waits on it in production.
+    await harness.engine.settle();
 
     expect(harness.driver.calls.map((call) => call.operation)).toContain("reclaim");
     expect(
@@ -282,6 +288,7 @@ describe("LeaseEngine", () => {
     const first = await harness.engine.request(request, { mode: "held", requesterId: "first" });
 
     await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
 
     expect(harness.registry.snapshot.devices[0]?.state).toBe("quarantined");
     expect(
@@ -322,6 +329,7 @@ describe("LeaseEngine", () => {
     const first = await harness.engine.request(request, { mode: "held", requesterId: "first" });
 
     await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
 
     expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
   });
@@ -600,6 +608,7 @@ describe("LeaseEngine", () => {
     });
     expect(provisioned).toEqual(["provisioning", "booting"]);
     await harness.engine.release(provisionedGrant.lease.id, "explicit");
+    await harness.engine.settle();
 
     const shutdown = harness.registry.snapshot.devices[0];
     if (shutdown === undefined) throw new Error("Expected provisioned device");
@@ -818,6 +827,7 @@ describe("LeaseEngine", () => {
       name: "RequesterAlreadyLeasedError",
     });
     await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
     expect(harness.clock.pendingTimerCount).toBe(0);
     await expect(
       harness.engine.request(request, { mode: "held", requesterId: "agent-1" }),

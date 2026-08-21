@@ -143,7 +143,7 @@ export function createMcpServer(session: McpSession): McpServer {
     {
       title: "Release simulator",
       description:
-        "Release the simulator lease owned by this MCP session. A session can release only its own held lease.",
+        "Release the simulator lease owned by this MCP session. A session can release only its own held lease. Returns as soon as the lease is given up: wiping the device runs in the background afterwards, so there is nothing to wait for and you can move straight on to other work. The device is not leasable again until that wipe finishes.",
       inputSchema: releaseSimulatorInputSchema,
       outputSchema: releaseSimulatorOutputSchema,
     },

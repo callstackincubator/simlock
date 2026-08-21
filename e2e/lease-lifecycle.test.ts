@@ -99,6 +99,11 @@ describe("lease lifecycle across both frontends", () => {
         ]),
       );
 
+      // A slow purge is the realistic case (an iOS erase runs tens of seconds), and
+      // the agent must not be made to sit through it: release_simulator returns on
+      // the registry commit and the wipe finishes behind it.
+      await env.driverScript.merge({ ios: { latencyMs: { reclaim: 5_000 } } });
+
       const releaseResult = await mcp.client.callTool({
         name: "release_simulator",
         arguments: { lease_id: leased.lease_id },
@@ -108,10 +113,16 @@ describe("lease lifecycle across both frontends", () => {
         released: true,
       });
 
-      await waitForDeviceState(env, leased.device_id, "ready");
-
+      // Already answered, while the erase it handed off is still running: the lease is
+      // gone from the CLI's view and the device is `reclaiming`, not yet `ready`.
       const cliLeasesAfter = await env.cli(["list", "--leases"]);
       expect(cliLeasesAfter.json).toEqual([]);
+      const midPurge = await env.cli(["list", "--devices"]);
+      expect(midPurge.json).toEqual([
+        expect.objectContaining({ driverDeviceId: leased.device_id, state: "reclaiming" }),
+      ]);
+
+      await waitForDeviceState(env, leased.device_id, "ready");
     } finally {
       await mcp.close();
     }

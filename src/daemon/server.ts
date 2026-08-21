@@ -75,6 +75,13 @@ export interface DaemonServerOptions {
    * A rejection here stops the daemon rather than leaving it half-open — see `start()`.
    */
   readonly converge?: () => Promise<void>;
+  /**
+   * Awaits lease work the subsystem is finishing off its callers' paths — today the
+   * backgrounded device reclaims a release hands off (see `LeaseReleaseCoordinator`).
+   * A graceful stop drains it so the pool is left settled; an ungraceful death leaves
+   * it for startup recovery. Runs after held leases are released and before `dispose`.
+   */
+  readonly settle?: () => Promise<void>;
   /** Cancels any timers the lease subsystem armed (e.g. quarantine retries) on shutdown. */
   readonly dispose?: () => void;
 }
@@ -249,8 +256,13 @@ export class DaemonServer {
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.options.reaper.dispose();
     this.options.healthMonitor?.dispose();
-    this.options.dispose?.();
     await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
+    // Those releases only commit the registry half and hand the purge off; draining it
+    // here keeps `daemon stop` finishing on a settled pool, as it did when the reclaim
+    // was inline. Disposal follows rather than precedes it, so a retry timer armed by a
+    // reclaim that settles into quarantine is still cancelled.
+    await this.options.settle?.();
+    this.options.dispose?.();
     for (const connection of this.#connections) {
       await connection.socket.close();
     }
