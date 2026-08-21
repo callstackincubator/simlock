@@ -95,6 +95,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     drivers,
     eventBus,
     idGenerator,
+    logger,
     registry,
     systemStats,
   });
@@ -108,8 +109,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     diskPath: dataDirectory,
   });
   const doctor = new Doctor({
-    // Without this, a backgrounded orphaned-lease reclaim (#43) -- which holds its
-    // device in `reclaiming` for a full erase -- reads as a stalled transition.
+    // Without this, a backgrounded reclaim -- which holds its device in `reclaiming`
+    // for a full erase, and is now how every release purges -- reads as a stalled
+    // transition.
     claims: leaseEngine.claimReader,
     clock,
     config,
@@ -158,6 +160,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     converge: async () => {
       await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
     },
+    settle: async () => leaseEngine.settle(),
     dispose: () => leaseEngine.dispose(),
   });
   await daemon.start();

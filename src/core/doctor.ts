@@ -347,7 +347,7 @@ function registryDriftFindings(
  * live operation can never be read as a stall no matter how long it legitimately
  * runs. This is the same live-versus-orphaned test `StartupConverger
  * #recoverInterruptedReclaims` already makes, and it is load-bearing rather than
- * belt-and-braces -- a backgrounded orphaned-lease reclaim (#43) holds its device in
+ * belt-and-braces -- every release now backgrounds its reclaim, holding the device in
  * `reclaiming` for a full erase, measured at ~34s against a threshold that floors at
  * 60s for both drivers, and several such erases run at once and contend for the same
  * disk. Tuning the threshold against that would be guessing at disk speed; the claim

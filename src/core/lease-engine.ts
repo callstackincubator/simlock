@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, IdGenerator, SystemStats } from "../ports/index.js";
+import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
 import type { RunningCapacity } from "./capacity.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { CapacityCoordinator } from "./capacity-coordinator.js";
@@ -37,6 +37,12 @@ export interface LeaseEngineOptions {
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
+  /**
+   * Where work the engine finishes off its callers' paths reports its failures.
+   * A backgrounded reclaim has no caller left to reject to, so without this its
+   * only trace is the device's own registry state.
+   */
+  readonly logger?: Logger;
   readonly registry: Registry;
   readonly systemStats: SystemStats;
 }
@@ -164,6 +170,8 @@ export class LeaseEngine {
       claims: this.#claims,
       decisions: this.#decisions,
       lifecycle: this.#leases,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      notifyAvailability: () => this.#acquisition.kick(),
       registry: options.registry,
       warmPool: this.#warmPool,
     });
@@ -240,6 +248,16 @@ export class LeaseEngine {
   /** Operator-only reset; targets device records from this registry exclusively. */
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
     return this.#nuke.nuke(deleteDevices);
+  }
+
+  /**
+   * Awaits the reclaims release left running in the background, so a graceful
+   * shutdown hands back the same settled pool an inline reclaim used to. Runs
+   * before `dispose`: a reclaim that settles into a purge failure arms a
+   * quarantine retry timer, and cancelling those first would strand it armed.
+   */
+  async settle(): Promise<void> {
+    await this.#releaseCoordinator.settleBackgroundReclaims();
   }
 
   /** Cancels the quarantine coordinator's armed retry timers on daemon shutdown. */

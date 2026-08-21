@@ -96,11 +96,11 @@ At startup, `StartupConverger` first releases every persisted `held` lease
 (reason `orphaned`) through the normal release path — a held lease's liveness
 is its daemon connection, so it cannot have a live holder across a restart,
 and this runs before timers are restored so an orphaned lease's timer is
-never re-armed. This release step is registry-only: the device commits
-straight to `reclaiming` and the lease record is gone, but the driver-side
-reclaim itself (an erase can run tens of seconds) is kicked off in the
-background instead of awaited inline (#43), one per device rather than
-queued, so N orphaned leases no longer cost N serial erases on this path. It
+never re-armed. Like every release (see "Release hands the purge off" below),
+this step is registry-only: the device commits straight to `reclaiming` and
+the lease record is gone, while the driver-side reclaim is kicked off in the
+background, one per device rather than queued, so N orphaned leases no longer
+cost N serial erases on this path. It
 then restores persisted TTL timers for the remaining (`detached`) leases,
 whose liveness is the TTL rather than a connection, and re-arms retry timers
 for devices still `quarantined` (see below) from their persisted next-retry
@@ -243,6 +243,49 @@ Conclusions baked into the drivers:
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).
 
+### Release hands the purge off
+
+A release is two halves with very different costs. The first is a registry
+commit inside the serialized decision section: the lease record is gone,
+`lease.released` is emitted, and the device is `reclaiming`. The second is the
+driver-side purge — an iOS `simctl erase` runs tens of seconds, an Android
+snapshot restore comparably — and it carries no information the releasing
+caller can act on. So `LeaseReleaseCoordinator` commits the first half, hands
+the second to `WarmPoolCoordinator` without awaiting it, and returns. An agent
+releasing over MCP or the CLI gets its turn back immediately instead of
+blocking on a device it has already given up; startup's orphan sweep gets the
+same treatment (see "Running capacity"), which is where the pattern started.
+
+The device is not lost track of while that runs. It is `reclaiming`, so it
+still counts as running capacity and is invisible to every grant path
+(`AcquisitionPlanner` selects by exact state), and the reclaim holds a
+`reclaim` operation claim for its whole duration — which is how
+`StartupConverger#recoverInterruptedReclaims` and `pitlane doctor`'s
+stalled-transition finding both tell a live purge from an abandoned one. A
+waiter queued for exactly that device is granted the moment the purge settles:
+the coordinator re-notifies acquisition *after* releasing the claim, because
+the warm pool's own notification fires while the device is still claimed and
+therefore still unselectable.
+
+Three things still wait for the purge, deliberately:
+
+- **An operator reset.** `NukeService` only acts on `ready`/`shutdown`
+  records, so a device left mid-reclaim would be skipped by the very reset
+  meant to take it down. `beginMaintenance` drains in-flight background
+  reclaims, and the maintenance-authorized release awaits its own inline.
+- **A graceful `pitlane daemon stop`.** It drains the in-flight reclaims
+  (before disposing timers, so a purge that settles into quarantine still gets
+  its retry cancelled), leaving the pool in the same settled shape an inline
+  reclaim used to.
+- **The next start, if the daemon died instead.** Interrupted reclaims are
+  recovered from the registry as before.
+
+The trade the backgrounding makes is where a purge failure surfaces: the
+caller is gone, so it cannot be rejected to. It does not go missing — a driver
+purge failure is already `QuarantineCoordinator`'s job and stays visible as
+`device.purge-failed` plus a `quarantined` device — and anything unexpected
+beyond that is logged by the coordinator rather than left unhandled.
+
 ### Lease subsystem boundaries and wiring
 
 The lease subsystem is assembled from focused modules. `LeaseEngine` is the
@@ -256,7 +299,8 @@ capacity coordinator into these direct transactional call chains:
   work and registry transitions.
 - `LeaseLifecycle` owns grant, renewal, release commits, and expiry scheduling.
   A release passes its committed result directly to `WarmPoolCoordinator`,
-  which performs reclaim and warm-pool disposition.
+  which performs reclaim and warm-pool disposition — without the releasing
+  caller waiting on it (see "Release hands the purge off").
 - `CapacityCoordinator` owns provisioning and running reservations while pure
   capacity functions calculate limits. `DeviceOperationClaims` excludes
   overlapping boot, eviction, cleanup, and nuke operations per device.

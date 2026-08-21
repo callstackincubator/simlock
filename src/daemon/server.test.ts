@@ -973,6 +973,43 @@ describe("DaemonServer lease heartbeat", () => {
         .toBe(true);
     });
 
+    it("drains the backgrounded reclaims before disposing, on a graceful stop", async () => {
+      const order: string[] = [];
+      let finishSettle!: () => void;
+      const settling = new Promise<void>((resolve) => {
+        finishSettle = resolve;
+      });
+      const harness = await createHarness({
+        dispose: () => order.push("dispose"),
+        settle: async () => {
+          order.push("settle-start");
+          await settling;
+          order.push("settle-end");
+        },
+      });
+      const holder = await createClient(harness.socketPath);
+      await hello(holder);
+      await holder.request("lease.request", {
+        mode: "held",
+        requesterId: "holder",
+        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      });
+
+      const stopping = harness.daemon.stop("test-drain");
+      await expect.poll(() => order).toEqual(["settle-start"]);
+
+      // The held lease is already gone -- that half of the release is synchronous --
+      // but the purge it handed off is not, and `stop` waits for it so the pool is
+      // left settled rather than `reclaiming` for the next startup to recover.
+      expect(harness.registry.snapshot.leases).toHaveLength(0);
+
+      finishSettle();
+      await stopping;
+      // Disposal last: a reclaim that settles into a purge failure arms a quarantine
+      // retry timer, and cancelling before the drain would strand it armed.
+      expect(order).toEqual(["settle-start", "settle-end", "dispose"]);
+    });
+
     it("logs a clean shutdown", async () => {
       const { logger: log, sink } = logger();
       const harness = await createHarness({ logger: log });
@@ -1046,8 +1083,10 @@ async function createHarness(
     readonly start?: boolean;
     readonly clock?: FakeClock;
     readonly converge?: () => Promise<void>;
+    readonly dispose?: () => void;
     readonly driver?: FakeDriver;
     readonly logger?: Logger;
+    readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
   } = {},
 ) {
@@ -1117,6 +1156,8 @@ async function createHarness(
     queue: engine,
     reaper,
     registry,
+    settle: options.settle ?? (async () => engine.settle()),
+    ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
     version: "test",
   });
   runningDaemons.push(daemon);

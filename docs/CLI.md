@@ -181,6 +181,23 @@ Explicitly release a lease (primarily for detached mode or operator
 intervention). `--all` force-releases every lease — confirmation required
 unless `--yes`.
 
+Release returns as soon as the lease is gone, not when the device is clean.
+Giving up the lease is a registry commit; wiping the device behind it is a
+driver operation that can run tens of seconds (an iOS `simctl erase`), and it
+proceeds in the background once the command has already exited. The same holds
+for a held lease released by its holder exiting, and for `release_simulator`
+over MCP — an agent gets its turn back immediately instead of waiting on a
+device it has already given up.
+
+What that means for the next command: the device is `reclaiming` for a moment
+after `release` returns, so it still counts as running capacity and is not
+grantable yet. A `lease` request that wants it simply queues and is granted the
+instant the purge finishes; nothing is lost, but `status` right after a release
+will show `reclaiming` rather than `ready`. `pitlane daemon stop` waits for
+in-flight purges before exiting, so a graceful shutdown still leaves the pool
+settled; a daemon killed mid-purge leaves its devices `reclaiming` for the next
+startup to recover.
+
 ## `pitlane mcp`
 
 Start Pitlane's local stdio MCP server. It accepts no flags. Standard output
