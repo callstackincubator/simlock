@@ -901,6 +901,29 @@ describe("DaemonServer lease heartbeat", () => {
     await holder.close();
   });
 
+  it("surfaces a derived transitionAgeMs for a mid-transition device in status and list --devices", async () => {
+    const harness = await createHarness();
+    const device = await harness.registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_provisioning",
+      provisionDuration: 0,
+      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    harness.clock.advance(5_000);
+
+    const observer = await createClient(harness.socketPath);
+    await hello(observer);
+    await expect(observer.request("status.get", {})).resolves.toMatchObject({
+      ok: true,
+      payload: { devices: [{ id: device.id, transitionAgeMs: 5_000 }] },
+    });
+    await expect(observer.request("list.get", { kind: "devices" })).resolves.toMatchObject({
+      ok: true,
+      payload: [{ id: device.id, transitionAgeMs: 5_000 }],
+    });
+    await observer.close();
+  });
+
   describe("operational logging", () => {
     function logger(): { logger: Logger; sink: MemoryLogSink } {
       const sink = new MemoryLogSink();
@@ -1208,6 +1231,7 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       recoveryBackoffMs: 5_000,
       stableObservations: 2,
     },
+    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       detachedTtlMs: 60_000,

@@ -44,6 +44,18 @@ export interface Config {
     readonly recoveryBackoffMs: number;
     readonly maxConcurrentRecoveries: number;
   };
+  readonly stalledTransition: {
+    /**
+     * Applied to the driver's own estimate (`provision + boot` for `provisioning`,
+     * `reclaim` for `reclaiming`) to get the stall threshold. Deliberately generous:
+     * the estimate itself is already tuned for a routine run, so the threshold has to
+     * clear real-world variance on top of it, not just match it -- a cold Android
+     * provision-plus-boot can legitimately run well past the raw estimate.
+     */
+    readonly thresholdMultiplier: number;
+    /** Floor under the multiplied estimate, for a driver whose estimate is near zero. */
+    readonly minimumThresholdMs: number;
+  };
 }
 
 export type ConfigOverrides = DeepPartial<Config>;
@@ -139,6 +151,10 @@ function defaultConfig(systemStats: SystemStats): Config {
       recoveryBackoffMs: 5_000,
       maxConcurrentRecoveries: 1,
     },
+    stalledTransition: {
+      thresholdMultiplier: 3,
+      minimumThresholdMs: 60_000,
+    },
   };
 }
 
@@ -217,6 +233,10 @@ const validators = {
     maxRecoveryAttempts: positiveInteger,
     recoveryBackoffMs: positiveNumber,
     maxConcurrentRecoveries: positiveInteger,
+  }),
+  stalledTransition: objectValidator({
+    thresholdMultiplier: numberAtLeast(1),
+    minimumThresholdMs: nonNegativeNumber,
   }),
 } satisfies Record<string, Validator>;
 

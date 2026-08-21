@@ -48,11 +48,13 @@ export interface QuarantineCoordinatorOptions {
 }
 
 /**
- * Owns the release-time purge-failure recovery lifecycle. `quarantined` is the
- * shared "present in the registry, counts against running capacity, but not
- * grantable" disposition (see domain.ts): AcquisitionPlanner and the warm-pool
- * eviction helpers already select targets by exact state, so a quarantined
- * device is invisible to every one of them with no special-casing required.
+ * Owns the quarantine lifecycle: entry (release-time purge failure via `enter()`,
+ * stalled-transition timeout via `enterFromStalledTransition()`), retry, and give-up.
+ * `quarantined` is the shared "present in the registry, counts against running
+ * capacity, but not grantable" disposition (see domain.ts): AcquisitionPlanner and
+ * the warm-pool eviction helpers already select targets by exact state, so a
+ * quarantined device is invisible to every one of them with no special-casing
+ * required.
  *
  * A quarantined device retries its purge on a Clock-driven backoff until it
  * either succeeds (the device rejoins the warm pool) or exhausts
@@ -97,6 +99,28 @@ export class QuarantineCoordinator {
       );
     });
     this.#arm(failure.deviceId, nextRetryAt);
+  }
+
+  /**
+   * Commits quarantine entry for a device Doctor found stuck mid-transition past its
+   * driver-derived stall threshold (`provisioning -> quarantined`; see domain.ts and
+   * doctor.ts). Distinct from `enter()`: there is no purge failure, no lease, and no
+   * `attemptedStrategy` to report, so only `device.quarantined` fires here --
+   * `device.purge-failed` stays specific to the release-time path. Retry/give-up
+   * thereafter is identical: `#retry` treats every quarantined device the same
+   * regardless of how it arrived.
+   */
+  async enterFromStalledTransition(deviceId: string): Promise<void> {
+    const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
+    await this.options.decisions.run(async () => {
+      await this.options.registry.enterQuarantine(deviceId, nextRetryAt);
+      this.options.eventBus.emit(
+        "device.quarantined",
+        { deviceId, maxRetries: this.options.config.maxRetries, nextRetryAt },
+        "quarantine-coordinator",
+      );
+    });
+    this.#arm(deviceId, nextRetryAt);
   }
 
   /**

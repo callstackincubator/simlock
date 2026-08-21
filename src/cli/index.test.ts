@@ -1045,6 +1045,7 @@ function testConfig(): Config {
       recoveryBackoffMs: 5_000,
       stableObservations: 2,
     },
+    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     limits: {

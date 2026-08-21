@@ -304,6 +304,32 @@ describe("Registry", () => {
     await expect(registry.enterQuarantine(device.id, 6_000)).rejects.toThrow(RegistryEventError);
   });
 
+  it("enters quarantine from provisioning, its stalled-transition entry point", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+
+    const quarantined = await registry.enterQuarantine(device.id, 5_000);
+
+    expect(quarantined).toMatchObject({
+      quarantineAttempts: 0,
+      quarantineNextRetryAt: 5_000,
+      quarantinedAt: 1_000,
+      state: "quarantined",
+    });
+  });
+
   it("refuses to quarantine a device that is still leased", async () => {
     // Quarantine is a post-release disposition: it is only ever entered from `reclaiming`, which
     // a device reaches by having its lease released. A leased device reaching it would mean

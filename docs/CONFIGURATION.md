@@ -31,6 +31,8 @@ a warning. Inspect the effective, merged configuration at any time with
 | `health.maxRecoveryAttempts`      | Reboot attempts for one lease before the lease is given up as lost.                                                                                                                                                          | `3`                                                               |
 | `health.recoveryBackoffMs`        | Base delay between reboot attempts; the monitor applies exponential backoff over it.                                                                                                                                        | `5 seconds`                                                      |
 | `health.maxConcurrentRecoveries`  | Cap on simultaneous recovery reboots, so a machine wake (every device reads `stopped` at once) cannot start a boot storm.                                                                                                   | `1`                                                               |
+| `stalledTransition.thresholdMultiplier` | Factor applied to a driver's own `provision + boot` (for `provisioning`) or `reclaim` (for `reclaiming`) estimate to get the stall threshold for `pitlane doctor`'s `stalled-transition` finding. | `3`                                                               |
+| `stalledTransition.minimumThresholdMs` | Floor under the multiplied estimate, for a driver whose estimate is near zero.                                                                                                                                | `1 minute`                                                        |
 
 All limit values must be positive integers; all durations and byte sizes
 must be non-negative numbers (milliseconds and bytes, respectively).
@@ -38,6 +40,8 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `health.recoveryBackoffMs` must be positive numbers; and
 `health.stableObservations`, `health.maxRecoveryAttempts`, and
 `health.maxConcurrentRecoveries` must be positive integers.
+`stalledTransition.thresholdMultiplier` must be a number `>= 1`;
+`stalledTransition.minimumThresholdMs` must be a non-negative number.
 Running limits are independent of managed-device limits — an omitted
 `maxRunning` defaults to its corresponding `maxDevices` value (and, at the
 global level, to their sum):
