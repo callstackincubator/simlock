@@ -48,6 +48,7 @@ async function createHarness() {
 
 async function readyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
   await harness.driver.makeReady({
+    address: harness.device.address ?? "",
     deviceId: harness.device.driverDeviceId,
     driverData: harness.device.driverData,
   });
@@ -61,7 +62,11 @@ describe("ManagedDeviceLifecycle", () => {
   it("boots a registered shutdown device and emits device.ready after its commit", async () => {
     const harness = await createHarness();
     const ready = await readyDevice(harness);
-    await harness.driver.shutdown({ deviceId: ready.driverDeviceId, driverData: ready.driverData });
+    await harness.driver.shutdown({
+      address: ready.address ?? "",
+      deviceId: ready.driverDeviceId,
+      driverData: ready.driverData,
+    });
     const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: ready.id, initiator: "test" },
@@ -75,6 +80,33 @@ describe("ManagedDeviceLifecycle", () => {
 
     expect(booted).toMatchObject({ id: shutdown.id, state: "ready" });
     expect(stateAtEvent).toBe("ready");
+  });
+
+  it("replaces the stored address with the one makeReady re-read on the new boot", async () => {
+    // The address a device is reachable at is a property of its current boot, not of the device:
+    // an Android console port is assigned per boot, so a serial captured at provision goes stale
+    // exactly in the warm-pool path (shutdown -> boot -> lease) that matters most. FakeDriver
+    // returns a fresh address per boot for this reason; the registry must follow it.
+    const harness = await createHarness();
+    const ready = await readyDevice(harness);
+    const firstAddress = harness.registry.snapshot.devices[0]?.address;
+    await harness.driver.shutdown({
+      address: ready.address ?? "",
+      deviceId: ready.driverDeviceId,
+      driverData: ready.driverData,
+    });
+    const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: ready.id, initiator: "test" },
+    });
+
+    const booted = await harness.lifecycle.boot(shutdown);
+
+    expect(booted?.address).toBeDefined();
+    expect(booted?.address).not.toBe(firstAddress);
+    expect(harness.registry.snapshot.devices[0]?.address).toBe(booted?.address);
+    // The ownership identity is not a per-boot fact and must not drift with the address.
+    expect(booted?.driverDeviceId).toBe(ready.driverDeviceId);
   });
 
   it("shuts down and destroys only registry-owned, unleased devices in expected states", async () => {
@@ -123,7 +155,11 @@ describe("ManagedDeviceLifecycle", () => {
   it("holds an exclusive claim while a boot driver call is in flight", async () => {
     const harness = await createHarness();
     const ready = await readyDevice(harness);
-    await harness.driver.shutdown({ deviceId: ready.driverDeviceId, driverData: ready.driverData });
+    await harness.driver.shutdown({
+      address: ready.address ?? "",
+      deviceId: ready.driverDeviceId,
+      driverData: ready.driverData,
+    });
     const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: ready.id, initiator: "test" },
@@ -143,7 +179,11 @@ describe("ManagedDeviceLifecycle", () => {
   it("retains a boot claim after readiness for the immediate lease handoff", async () => {
     const harness = await createHarness();
     const ready = await readyDevice(harness);
-    await harness.driver.shutdown({ deviceId: ready.driverDeviceId, driverData: ready.driverData });
+    await harness.driver.shutdown({
+      address: ready.address ?? "",
+      deviceId: ready.driverDeviceId,
+      driverData: ready.driverData,
+    });
     const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: ready.id, initiator: "test" },

@@ -171,7 +171,10 @@ describe("AndroidDriver", () => {
   it("cold boots without loading or automatically saving snapshots", async () => {
     const harness = await provisionedHarness();
 
-    await expect(harness.driver.makeReady(harness.device)).resolves.toBeUndefined();
+    await expect(harness.driver.makeReady(harness.device)).resolves.toMatchObject({
+      address: "emulator-5554",
+      deviceId: "pitlane_one",
+    });
     expect(harness.runner.calls).toContainEqual({
       args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save", "-no-snapshot-load"],
       command: binaries.emulator,
@@ -182,7 +185,10 @@ describe("AndroidDriver", () => {
   it("validates a new clean baseline by restarting from it before becoming ready", async () => {
     const harness = await provisionedHarness();
 
-    await expect(harness.driver.makeReady(harness.device)).resolves.toBeUndefined();
+    await expect(harness.driver.makeReady(harness.device)).resolves.toMatchObject({
+      address: "emulator-5554",
+      deviceId: "pitlane_one",
+    });
 
     expect(harness.runner.calls).toContainEqual({
       args: [
@@ -245,7 +251,7 @@ describe("AndroidDriver", () => {
     );
     harness.clock.advance(2_000);
 
-    await expect(ready).resolves.toBeUndefined();
+    await expect(ready).resolves.toMatchObject({ address: "emulator-5554" });
   });
 
   it("invalidates stale quickboot snapshots and flags the next boot to wipe data", async () => {
@@ -399,7 +405,9 @@ describe("AndroidDriver", () => {
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
 
-    await expect(restartedDriver.makeReady(harness.device)).resolves.toBeUndefined();
+    await expect(restartedDriver.makeReady(harness.device)).resolves.toMatchObject({
+      address: "emulator-5554",
+    });
     expect(restartedRunner.calls[1]).toMatchObject({
       args: [
         "-avd",

@@ -165,7 +165,11 @@ async function seedLeased(harness: Awaited<ReturnType<typeof createHarness>>) {
 
 async function seedShutdown(harness: Awaited<ReturnType<typeof createHarness>>) {
   const device = await seedReady(harness);
-  await harness.driver.shutdown({ deviceId: device.driverDeviceId, driverData: device.driverData });
+  await harness.driver.shutdown({
+    address: device.address ?? "",
+    deviceId: device.driverDeviceId,
+    driverData: device.driverData,
+  });
   await harness.registry.transitionDevice(device.id, "shutdown", {
     event: "device.shutdown",
     payload: { deviceId: device.id, initiator: "test" },

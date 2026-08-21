@@ -4,6 +4,7 @@ import {
   type DeviceRecord,
   type DeviceSpec,
   type DeviceState,
+  type DeviceTransitionUpdate,
   type LeaseRecord,
   type Platform,
   transition,
@@ -141,6 +142,8 @@ export class Registry {
     deviceId: string,
     to: DeviceState,
     event?: RegistryDeviceEvent,
+    /** Fields a driver call resolved alongside this transition -- currently a fresh `makeReady` address. */
+    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (to === "deleted" && this.#leases.some((lease) => lease.deviceId === deviceId)) {
@@ -157,7 +160,7 @@ export class Registry {
       throw new RegistryEventError(`Device event payload does not match device: ${deviceId}`);
     }
 
-    const updated = transition(device, to);
+    const updated = transition(device, to, update);
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -513,6 +516,7 @@ const deviceRecordKeys = [
   "quarantinedAt",
   "quarantineAttempts",
   "quarantineNextRetryAt",
+  "address",
 ] as const;
 const leaseRecordKeys = [
   "id",
@@ -561,6 +565,7 @@ function parseDevice(value: unknown): DeviceRecord {
   }
 
   const {
+    address,
     createdAt,
     driverData,
     driverDeviceId,
@@ -587,12 +592,16 @@ function parseDevice(value: unknown): DeviceRecord {
       typeof foreignProvenanceDetectedAt !== "number") ||
     (quarantinedAt !== undefined && typeof quarantinedAt !== "number") ||
     (quarantineAttempts !== undefined && typeof quarantineAttempts !== "number") ||
-    (quarantineNextRetryAt !== undefined && typeof quarantineNextRetryAt !== "number")
+    (quarantineNextRetryAt !== undefined && typeof quarantineNextRetryAt !== "number") ||
+    // `address` is the one field an older daemon's state.json never wrote (see DeviceRecord's
+    // doc comment) -- missing is expected and loads fine; present-but-wrong-typed is corrupt.
+    (address !== undefined && typeof address !== "string")
   ) {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
   return {
+    ...(address === undefined ? {} : { address }),
     ...(lastLeaseEndedAt === undefined ? {} : { lastLeaseEndedAt }),
     ...(foreignStateDetectedAt === undefined ? {} : { foreignStateDetectedAt }),
     ...(foreignProvenanceDetectedAt === undefined ? {} : { foreignProvenanceDetectedAt }),

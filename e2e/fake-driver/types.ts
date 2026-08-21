@@ -60,6 +60,13 @@ export interface FakeDriverPlatformScript {
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly failures?: Partial<Record<FakeDriverOperation, FakeDriverErrorSpec>>;
   readonly managedReality?: ScriptedManagedReality;
+  /**
+   * Overrides the `address` a `makeReady` boot returns (the script is re-read fresh on every
+   * call, so a test can change this between two boots of the same device to simulate the real
+   * drivers reassigning it -- e.g. Android's console port on a `shutdown` -> boot cycle).
+   * Defaults to `<deviceId>-address`.
+   */
+  readonly address?: string;
 }
 
 /** Top-level script file shape, read fresh on every driver operation. */

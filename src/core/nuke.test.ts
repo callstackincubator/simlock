@@ -22,8 +22,18 @@ describe("Nuke", () => {
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
-        { deviceId: "managed", driverData: { fakeDeviceId: "managed" }, runState: "running" },
-        { deviceId: "foreign", driverData: { fakeDeviceId: "foreign" }, runState: "running" },
+        {
+          address: "managed-address",
+          deviceId: "managed",
+          driverData: { fakeDeviceId: "managed" },
+          runState: "running",
+        },
+        {
+          address: "foreign-address",
+          deviceId: "foreign",
+          driverData: { fakeDeviceId: "foreign" },
+          runState: "running",
+        },
       ],
       processes: [],
     });

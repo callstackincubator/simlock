@@ -610,11 +610,21 @@ function commandArgs(
 function leaseResult(value: unknown): Record<string, unknown> & { readonly lease: string } {
   const grant = parseRawLeaseGrant(value);
   return {
+    // Optional: undefined only for a device leased straight out of a pre-address `state.json`
+    // without ever rebooting under this daemon -- see `DeviceRecord.address` in domain.ts.
+    ...(grant.device.address === undefined ? {} : { address: grant.device.address }),
     device: grant.device.spec.model,
+    expires_at_ms: grant.lease.ttlDeadline,
     lease: grant.lease.id,
     os: grant.device.spec.osVersion,
     platform: grant.device.spec.platform,
     state: "leased",
+    timing: {
+      estimated_boot_ms: grant.timing.estimatedBootMs,
+      estimated_provision_ms: grant.timing.estimatedProvisionMs,
+      estimated_reclaim_ms: grant.timing.estimatedReclaimMs,
+      estimated_ready_ms: grant.timing.estimatedReadyMs,
+    },
     udid: grant.device.driverDeviceId,
   };
 }

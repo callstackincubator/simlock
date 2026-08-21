@@ -219,6 +219,15 @@ function stableError(error: unknown): string {
   return `${value.name}: ${value.message}`;
 }
 
+/**
+ * `address` is never trusted by a driver's `reclaim` / `destroy` -- they derive what they need
+ * from `driverData` -- so a quarantined device that has no address yet is not a lie a driver
+ * could act on.
+ */
 function toDriverDevice(device: DeviceRecord): DriverDevice {
-  return { deviceId: device.driverDeviceId, driverData: device.driverData };
+  return {
+    address: device.address ?? "",
+    deviceId: device.driverDeviceId,
+    driverData: device.driverData,
+  };
 }

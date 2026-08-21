@@ -9,6 +9,14 @@ export interface DeviceRequest {
 export interface DriverDevice {
   readonly deviceId: string;
   readonly driverData: unknown;
+  /**
+   * The opaque string platform tooling accepts right now -- a simctl UDID for iOS, an adb
+   * serial (`emulator-<port>`) for Android. The core carries it without interpreting it; only
+   * the owning driver module knows what it means. Unlike `deviceId` (Pitlane's own, stable
+   * `pitlane-`/`pitlane_`-prefixed name proving Pitlane created the device), this can change
+   * across a boot -- see `Driver.makeReady`.
+   */
+  readonly address: string;
 }
 
 /**
@@ -82,7 +90,13 @@ export interface Driver {
     options: { readonly allowDownload: boolean },
   ): Promise<DeviceSpec>;
   provision(spec: DeviceSpec): Promise<DriverDevice>;
-  makeReady(device: DriverDevice): Promise<void>;
+  /**
+   * Boots the device and returns it with a freshly read `address`. Never trust the address a
+   * caller passed in or one captured at `provision` -- an Android console port is assigned per
+   * boot, so a device coming back from `shutdown` (or a driver restart) can land on a different
+   * one. `deviceId` and the registry-relevant parts of `driverData` do not change.
+   */
+  makeReady(device: DriverDevice): Promise<DriverDevice>;
   reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },

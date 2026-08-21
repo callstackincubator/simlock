@@ -228,6 +228,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const bootHarness = await createHarness();
     const ready = await seedReady(bootHarness);
     await bootHarness.driver.shutdown({
+      address: ready.address ?? "",
       deviceId: ready.driverDeviceId,
       driverData: ready.driverData,
     });
@@ -259,6 +260,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness();
     const shutdown = await seedReady(harness);
     await harness.driver.shutdown({
+      address: shutdown.address ?? "",
       deviceId: shutdown.driverDeviceId,
       driverData: shutdown.driverData,
     });
@@ -307,6 +309,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
     const shutdown = await seedReady(harness);
     await harness.driver.shutdown({
+      address: shutdown.address ?? "",
       deviceId: shutdown.driverDeviceId,
       driverData: shutdown.driverData,
     });
