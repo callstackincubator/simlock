@@ -20,9 +20,15 @@
   "bin": {
     "simlock": "dist/cli/main.js"
   },
+  "files": [
+    "dist",
+    "!dist/e2e",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts"
+  ],
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "build:e2e": "tsc -p e2e/fake-driver/tsconfig.json",
     "test": "vitest run --project unit",
     "test:e2e": "pnpm run build && pnpm run build:e2e && vitest run --project e2e --tags-filter='!slow'",
