@@ -1,0 +1,15 @@
+version: 2
+
+updates:
+  # Actions are pinned to commit SHAs, which never move on their own — without
+  # this they silently go stale, including past security advisories. Dependabot
+  # rewrites both the pin and the `# vX.Y.Z` comment next to it.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(ci)
+    groups:
+      github-actions:
+        patterns: ["*"]
