@@ -20,12 +20,14 @@ also does not provision devices solely to fill the warm pool. Warm devices
 still shut down after the existing T1 idle timeout; the pool is not refilled
 afterward until real lease activity releases another device.
 
-## Orphaned-holder fix
+## Orphaned-holder fix (shipped)
 
-Parent-death watch in the holder process (`kqueue`/`EVFILT_PROC` on macOS,
-`prctl(PR_SET_PDEATHSIG)` on Linux) so a crashed agent's backgrounded lease
-holder self-terminates. Includes the `--bind-pid` escape hatch for
-subshell-spawned holders. Details in [known-pitfalls.md](known-pitfalls.md).
+Parent-death watch in the holder process, behind a `ParentWatch` port, so a
+crashed agent's backgrounded lease holder self-terminates, plus the
+`--bind-pid` escape hatch for subshell-spawned holders. The plan called for
+`kqueue`/`EVFILT_PROC` on macOS and `prctl(PR_SET_PDEATHSIG)` on Linux;
+neither is reachable from plain Node without a native addon, so the shipped
+adapter polls instead. Details in [known-pitfalls.md](known-pitfalls.md).
 
 ## MCP server
 
