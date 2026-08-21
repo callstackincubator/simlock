@@ -17,6 +17,9 @@ export const leaseSimulatorInputSchema = z.object({
 });
 
 export const leaseSimulatorOutputSchema = z.object({
+  // Optional: undefined only for a device leased straight out of a pre-address `state.json`
+  // without ever rebooting under this daemon -- see `DeviceRecord.address` in domain.ts.
+  address: nonEmptyString.optional(),
   device: nonEmptyString,
   device_id: nonEmptyString,
   expires_at_ms: finiteNumber,

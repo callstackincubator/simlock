@@ -34,6 +34,7 @@ describe("FakeDriver", () => {
     clock.advance(1);
     await provision;
     expect(result).toEqual({
+      address: "fake-ios-1-addr-0",
       deviceId: "fake-ios-1",
       driverData: { fakeDeviceId: "fake-ios-1" },
     });

@@ -26,7 +26,11 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.provisioned` | device id, spec, driver, duration | driver `provision` committed to registry | Registry | implemented |
 | `device.ready` | device id, boot duration | readiness probe passed | Registry | implemented |
 | `device.reclaimed` | device id, strategy (erase/snapshot/wipe), duration | fresh-state reclaim finished | Registry | implemented |
-| `device.purge-failed` | device id, lease id, attempted strategy, duration, stable error summary | release-time purge failed after the resulting state committed; the first version may still reuse a readiness-checked device | WarmPoolCoordinator | implemented |
+| `device.purge-failed` | device id, lease id, attempted strategy, duration, stable error summary | release-time purge failed; the device enters `quarantined` (see below) rather than rejoining the pool | WarmPoolCoordinator | implemented |
+| `device.quarantined` | device id, max retries, next retry deadline | a device committed to `quarantined` — present in the registry, still counted as running, not eligible for a grant; fires immediately after `device.purge-failed` | QuarantineCoordinator | implemented |
+| `device.quarantine-recovered` | device id, attempts, reclaim strategy | a quarantined device's retried purge succeeded; it returned to `ready`/`shutdown` and rejoined the warm pool | QuarantineCoordinator | implemented |
+| `device.quarantine-abandoned` | device id, attempts | a quarantined device exhausted its configured retry budget (`warmPool.quarantine.maxRetries`) and was destroyed | QuarantineCoordinator | implemented |
+| `device.quarantine-stranded` | device id, attempts, stable error summary | a quarantined device exhausted its retry budget and the destroy that should have retired it also failed; it stays `quarantined` with no further retry until an operator intervenes | QuarantineCoordinator | implemented |
 | `device.shutdown` | device id, initiator (rule/command) | device stopped, still on disk | Registry; WarmPoolCoordinator for interrupted reclaim recovery | implemented |
 | `device.deleted` | device id, initiator | device removed from disk and registry | Registry | implemented |
 | `device.foreign-state-detected` | device id, platform, expected (running/stopped), observed (running/stopped) | doctor reconcile found a managed device's observed boot state disagreeing with the committed registry state | Doctor | implemented |

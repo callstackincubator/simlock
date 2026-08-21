@@ -4,7 +4,7 @@ import {
   type DeviceOperation,
   type DeviceOperationClaim,
 } from "./device-operation-claims.js";
-import type { DeviceRecord, DeviceState, LeaseRecord } from "./domain.js";
+import type { DeviceRecord, DeviceState, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
 import type { DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { SerializedDecision } from "./serialized-decision.js";
@@ -30,6 +30,7 @@ export interface ManagedDeviceRegistry {
           readonly event: "device.deleted";
           readonly payload: { readonly deviceId: string; readonly initiator: string };
         },
+    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord>;
 }
 
@@ -211,8 +212,9 @@ export class ManagedDeviceLifecycle {
     if (claimed === undefined) return undefined;
     const startedAt = this.clock.now();
 
+    let ready: DriverDevice;
     try {
-      await this.catalog
+      ready = await this.catalog
         .get(claimed.device.spec.platform)
         .makeReady(toDriverDevice(claimed.device));
     } catch (error: unknown) {
@@ -220,10 +222,16 @@ export class ManagedDeviceLifecycle {
       throw error;
     }
 
-    return this.#commit(claimed, [expectedState], "ready", {
-      event: "device.ready",
-      payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
-    });
+    return this.#commit(
+      claimed,
+      [expectedState],
+      "ready",
+      {
+        event: "device.ready",
+        payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
+      },
+      { address: ready.address, driverData: ready.driverData },
+    );
   }
 
   async #makeReadyForLease(
@@ -234,8 +242,9 @@ export class ManagedDeviceLifecycle {
     const claimed = await this.#claim(target, [expectedState], "boot", existingClaim);
     if (claimed === undefined) return undefined;
     const startedAt = this.clock.now();
+    let ready: DriverDevice;
     try {
-      await this.catalog
+      ready = await this.catalog
         .get(claimed.device.spec.platform)
         .makeReady(toDriverDevice(claimed.device));
     } catch (error: unknown) {
@@ -244,10 +253,16 @@ export class ManagedDeviceLifecycle {
     }
 
     try {
-      const device = await this.#commitWithoutRelease(claimed, [expectedState], "ready", {
-        event: "device.ready",
-        payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
-      });
+      const device = await this.#commitWithoutRelease(
+        claimed,
+        [expectedState],
+        "ready",
+        {
+          event: "device.ready",
+          payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
+        },
+        { address: ready.address, driverData: ready.driverData },
+      );
       if (device === undefined) {
         await this.#release(claimed);
         return undefined;
@@ -297,12 +312,13 @@ export class ManagedDeviceLifecycle {
     expectedStates: readonly DeviceState[],
     to: DeviceState,
     event: Parameters<ManagedDeviceRegistry["transitionDevice"]>[2],
+    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord | undefined> {
     return this.decisions.run(async () => {
       try {
         const device = this.#registeredTarget(claimed.device, expectedStates);
         if (device === undefined) return undefined;
-        return await this.registry.transitionDevice(device.id, to, event);
+        return await this.registry.transitionDevice(device.id, to, event, update);
       } finally {
         claimed.release();
       }
@@ -314,11 +330,12 @@ export class ManagedDeviceLifecycle {
     expectedStates: readonly DeviceState[],
     to: DeviceState,
     event: Parameters<ManagedDeviceRegistry["transitionDevice"]>[2],
+    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord | undefined> {
     return this.decisions.run(async () => {
       const device = this.#registeredTarget(claimed.device, expectedStates);
       if (device === undefined) return undefined;
-      return this.registry.transitionDevice(device.id, to, event);
+      return this.registry.transitionDevice(device.id, to, event, update);
     });
   }
 
@@ -361,6 +378,15 @@ export class ManagedDeviceLifecycle {
   }
 }
 
+/**
+ * `address` is never trusted by a driver's `shutdown` / `destroy` / `reclaim` / `makeReady` --
+ * they derive whatever they need from `driverData` -- so a not-yet-booted device's absent
+ * address is a harmless placeholder here, not a lie a driver could act on.
+ */
 function toDriverDevice(device: DeviceRecord): DriverDevice {
-  return { deviceId: device.driverDeviceId, driverData: device.driverData };
+  return {
+    address: device.address ?? "",
+    deviceId: device.driverDeviceId,
+    driverData: device.driverData,
+  };
 }

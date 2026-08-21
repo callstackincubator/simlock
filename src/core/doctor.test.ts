@@ -40,12 +40,19 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
+          address: "pitlane-orphan-address",
           deviceId: "pitlane-orphan",
           driverData: { fakeDeviceId: "pitlane-orphan" },
           runState: "running",
         },
       ],
-      processes: [{ deviceId: "pitlane-process", driverData: { fakeDeviceId: "pitlane-process" } }],
+      processes: [
+        {
+          address: "pitlane-process-address",
+          deviceId: "pitlane-process",
+          driverData: { fakeDeviceId: "pitlane-process" },
+        },
+      ],
     });
 
     const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile();
@@ -91,6 +98,7 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
+          address: "pitlane-stale-address",
           deviceId: "pitlane-stale",
           driverData: { fakeDeviceId: "pitlane-stale" },
           runState: "stopped",
@@ -138,6 +146,7 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
+          address: "pitlane-drift-address",
           deviceId: "pitlane-drift",
           driverData: { fakeDeviceId: "pitlane-drift" },
           runState: "stopped",
@@ -193,7 +202,15 @@ describe("Doctor", () => {
       });
       const driver = new FakeDriver({ clock, platform: "ios" });
       driver.setManagedReality({
-        devices: [{ deviceId: "pitlane-marked", driverData: {}, mark, runState: "running" }],
+        devices: [
+          {
+            address: "pitlane-marked-address",
+            deviceId: "pitlane-marked",
+            driverData: {},
+            mark,
+            runState: "running",
+          },
+        ],
         processes: [],
       });
 
@@ -252,6 +269,7 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
+          address: "pitlane-reclaiming-address",
           deviceId: "pitlane-reclaiming",
           driverData: {},
           mark: { durable: "tok", erasable: undefined, erasableReadable: true },
@@ -292,12 +310,19 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
+          address: "pitlane-orphan-address",
           deviceId: "pitlane-orphan",
           driverData: { fakeDeviceId: "pitlane-orphan" },
           runState: "running",
         },
       ],
-      processes: [{ deviceId: "pitlane-process", driverData: { fakeDeviceId: "pitlane-process" } }],
+      processes: [
+        {
+          address: "pitlane-process-address",
+          deviceId: "pitlane-process",
+          driverData: { fakeDeviceId: "pitlane-process" },
+        },
+      ],
     });
     const doctor = new Doctor({ clock, drivers: [driver], eventBus, registry });
 
@@ -350,7 +375,14 @@ describe("Doctor", () => {
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
-      devices: [{ deviceId: "live", driverData: { fakeDeviceId: "live" }, runState: "running" }],
+      devices: [
+        {
+          address: "live-address",
+          deviceId: "live",
+          driverData: { fakeDeviceId: "live" },
+          runState: "running",
+        },
+      ],
       processes: [],
     });
     const leaseEngine = new LeaseEngine({
@@ -390,12 +422,26 @@ describe("Doctor", () => {
 
     const iosDriver = new FakeDriver({ clock, platform: "ios" });
     iosDriver.setManagedReality({
-      devices: [{ deviceId: "pitlane-ios-1", driverData: {}, runState: "running" }],
+      devices: [
+        {
+          address: "pitlane-ios-1-address",
+          deviceId: "pitlane-ios-1",
+          driverData: {},
+          runState: "running",
+        },
+      ],
       processes: [],
     });
     const androidDriver = new FakeDriver({ clock, platform: "android" });
     androidDriver.setManagedReality({
-      devices: [{ deviceId: "pitlane_android-1", driverData: {}, runState: "running" }],
+      devices: [
+        {
+          address: "pitlane_android-1-address",
+          deviceId: "pitlane_android-1",
+          driverData: {},
+          runState: "running",
+        },
+      ],
       processes: [],
     });
 
@@ -439,12 +485,26 @@ describe("Doctor", () => {
 
     const iosDriver = new FakeDriver({ clock, platform: "ios" });
     iosDriver.setManagedReality({
-      devices: [{ deviceId: "pitlane-ios-2", driverData: {}, runState: "stopped" }],
+      devices: [
+        {
+          address: "pitlane-ios-2-address",
+          deviceId: "pitlane-ios-2",
+          driverData: {},
+          runState: "stopped",
+        },
+      ],
       processes: [],
     });
     const androidDriver = new FakeDriver({ clock, platform: "android" });
     androidDriver.setManagedReality({
-      devices: [{ deviceId: "pitlane_android-2", driverData: {}, runState: "stopped" }],
+      devices: [
+        {
+          address: "pitlane_android-2-address",
+          deviceId: "pitlane_android-2",
+          driverData: {},
+          runState: "stopped",
+        },
+      ],
       processes: [],
     });
 
@@ -487,7 +547,14 @@ describe("Doctor", () => {
 
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
-      devices: [{ deviceId: "pitlane-transition", driverData: {}, runState: "transitioning" }],
+      devices: [
+        {
+          address: "pitlane-transition-address",
+          deviceId: "pitlane-transition",
+          driverData: {},
+          runState: "transitioning",
+        },
+      ],
       processes: [],
     });
 
@@ -526,8 +593,18 @@ describe("Doctor", () => {
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
-        { deviceId: "pitlane-provisioning", driverData: {}, runState: "stopped" },
-        { deviceId: "pitlane-reclaiming", driverData: {}, runState: "stopped" },
+        {
+          address: "pitlane-provisioning-address",
+          deviceId: "pitlane-provisioning",
+          driverData: {},
+          runState: "stopped",
+        },
+        {
+          address: "pitlane-reclaiming-address",
+          deviceId: "pitlane-reclaiming",
+          driverData: {},
+          runState: "stopped",
+        },
       ],
       processes: [],
     });
@@ -555,8 +632,18 @@ describe("Doctor", () => {
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
-        { deviceId: "pitlane-booted", driverData: {}, runState: "running" },
-        { deviceId: "pitlane-shutdown", driverData: {}, runState: "stopped" },
+        {
+          address: "pitlane-booted-address",
+          deviceId: "pitlane-booted",
+          driverData: {},
+          runState: "running",
+        },
+        {
+          address: "pitlane-shutdown-address",
+          deviceId: "pitlane-shutdown",
+          driverData: {},
+          runState: "stopped",
+        },
       ],
       processes: [],
     });
@@ -592,7 +679,14 @@ describe("Doctor", () => {
 
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
-      devices: [{ deviceId: "pitlane-leased", driverData: {}, runState: "stopped" }],
+      devices: [
+        {
+          address: "pitlane-leased-address",
+          deviceId: "pitlane-leased",
+          driverData: {},
+          runState: "stopped",
+        },
+      ],
       processes: [],
     });
 
@@ -631,8 +725,18 @@ describe("Doctor", () => {
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
-        { deviceId: "pitlane-booted", driverData: {}, runState: "running" },
-        { deviceId: "pitlane-shutdown", driverData: {}, runState: "stopped" },
+        {
+          address: "pitlane-booted-address",
+          deviceId: "pitlane-booted",
+          driverData: {},
+          runState: "running",
+        },
+        {
+          address: "pitlane-shutdown-address",
+          deviceId: "pitlane-shutdown",
+          driverData: {},
+          runState: "stopped",
+        },
       ],
       processes: [],
     });
@@ -735,5 +839,13 @@ function config(): Config {
     },
     ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    warmPool: {
+      quarantine: {
+        maxRetries: 3,
+        maxRetryBackoffMs: 300_000,
+        retryBackoffMs: 30_000,
+        retryBackoffMultiplier: 2,
+      },
+    },
   };
 }

@@ -68,6 +68,22 @@ export interface EventMap {
     readonly reason: string;
     readonly error: string;
   };
+  "device.quarantined": {
+    readonly deviceId: string;
+    readonly maxRetries: number;
+    readonly nextRetryAt: number;
+  };
+  "device.quarantine-recovered": {
+    readonly deviceId: string;
+    readonly attempts: number;
+    readonly strategy: "erase" | "snapshot" | "wipe";
+  };
+  "device.quarantine-abandoned": { readonly deviceId: string; readonly attempts: number };
+  "device.quarantine-stranded": {
+    readonly deviceId: string;
+    readonly attempts: number;
+    readonly error: string;
+  };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };

@@ -620,6 +620,7 @@ function heldLeaseStatus(lease: OwnedLease): HeldLeaseStatus {
 
 function leaseSimulatorOutput(grant: RawLeaseGrant): LeaseSimulatorOutput {
   return {
+    address: grant.device.address,
     device: grant.device.spec.model,
     device_id: grant.device.driverDeviceId,
     expires_at_ms: grant.lease.ttlDeadline,

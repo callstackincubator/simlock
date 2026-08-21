@@ -266,6 +266,198 @@ describe("Registry", () => {
     ).rejects.toThrow(RegistryEventError);
   });
 
+  it("enters quarantine from reclaiming, tracking attempts and the next retry deadline", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      mode: "detached",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+    });
+    await registry.beginRelease(lease.id);
+
+    const quarantined = await registry.enterQuarantine(device.id, 5_000);
+
+    expect(quarantined).toMatchObject({
+      quarantineAttempts: 0,
+      quarantineNextRetryAt: 5_000,
+      quarantinedAt: 1_000,
+      state: "quarantined",
+    });
+    await expect(registry.enterQuarantine(device.id, 6_000)).rejects.toThrow(RegistryEventError);
+  });
+
+  it("refuses to quarantine a device that is still leased", async () => {
+    // Quarantine is a post-release disposition: it is only ever entered from `reclaiming`, which
+    // a device reaches by having its lease released. A leased device reaching it would mean
+    // pulling a device out from under its holder -- the one thing safety rule 2 forbids outright.
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    await registry.createLease({
+      deviceId: device.id,
+      mode: "detached",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+    });
+
+    await expect(registry.enterQuarantine(device.id, 5_000)).rejects.toThrow(RegistryEventError);
+    expect(registry.snapshot.devices[0]?.state).toBe("leased");
+  });
+
+  it("records a quarantine retry failure without leaving quarantined", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      mode: "detached",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.enterQuarantine(device.id, 5_000);
+
+    const retried = await registry.recordQuarantineRetryFailure(device.id, 1, 15_000);
+
+    expect(retried).toMatchObject({
+      quarantineAttempts: 1,
+      quarantineNextRetryAt: 15_000,
+      state: "quarantined",
+    });
+    await expect(registry.recordQuarantineRetryFailure("dev_missing", 1, 15_000)).rejects.toThrow(
+      UnknownDeviceError,
+    );
+  });
+
+  it("recovers a quarantined device and clears its quarantine bookkeeping", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      mode: "detached",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.enterQuarantine(device.id, 5_000);
+
+    const recovered = await registry.recoverFromQuarantine(device.id, "ready");
+
+    expect(recovered).toEqual({
+      createdAt: 1_000,
+      driverData: {},
+      driverDeviceId: "driver_test",
+      id: device.id,
+      lastLeaseEndedAt: 1_000,
+      spec,
+      state: "ready",
+    });
+    await expect(registry.recoverFromQuarantine(device.id, "ready")).rejects.toThrow(
+      RegistryEventError,
+    );
+  });
+
+  it("abandons a quarantined device to deleted and emits device.deleted", async () => {
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    const events: string[] = [];
+    bus.subscribe("device.deleted", (envelope) => events.push(envelope.event));
+    const registry = await Registry.load({
+      clock,
+      eventBus: bus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      mode: "detached",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.enterQuarantine(device.id, 5_000);
+
+    const abandoned = await registry.abandonQuarantine(device.id);
+
+    expect(abandoned.state).toBe("deleted");
+    expect(events).toEqual(["device.deleted"]);
+  });
+
   it("rejects mutations for a device that is not registered", async () => {
     const clock = new FakeClock();
     const registry = await Registry.load({

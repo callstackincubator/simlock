@@ -18,6 +18,16 @@ export interface Config {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
   };
+  readonly warmPool: {
+    readonly quarantine: {
+      /** Failed retries allowed after the release-time purge that triggers quarantine. */
+      readonly maxRetries: number;
+      readonly retryBackoffMs: number;
+      /** Growth factor applied to the backoff after each failed retry. */
+      readonly retryBackoffMultiplier: number;
+      readonly maxRetryBackoffMs: number;
+    };
+  };
   readonly lease: {
     readonly heldTtlBackstopMs: number;
     readonly detachedTtlMs: number;
@@ -105,6 +115,14 @@ function defaultConfig(systemStats: SystemStats): Config {
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
     },
+    warmPool: {
+      quarantine: {
+        maxRetries: 3,
+        retryBackoffMs: 30_000,
+        retryBackoffMultiplier: 2,
+        maxRetryBackoffMs: 5 * 60_000,
+      },
+    },
     lease: {
       heldTtlBackstopMs: 60 * 60_000,
       detachedTtlMs: 15 * 60_000,
@@ -176,6 +194,14 @@ const validators = {
     androidBytesPerDevice: nonNegativeNumber,
   }),
   idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
+  warmPool: objectValidator({
+    quarantine: objectValidator({
+      maxRetries: positiveInteger,
+      retryBackoffMs: nonNegativeNumber,
+      retryBackoffMultiplier: numberAtLeast(1),
+      maxRetryBackoffMs: nonNegativeNumber,
+    }),
+  }),
   lease: objectValidator({
     heldTtlBackstopMs: nonNegativeNumber,
     detachedTtlMs: nonNegativeNumber,
@@ -255,6 +281,16 @@ function booleanValue(value: unknown, path: string): boolean {
   }
 
   return value;
+}
+
+function numberAtLeast(minimum: number): Validator {
+  return (value: unknown, path: string) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
+      throw invalidValue(path, `a number >= ${minimum}`);
+    }
+
+    return value;
+  };
 }
 
 function requireObject(value: unknown, path: string): Record<string, unknown> {

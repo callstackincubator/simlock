@@ -21,6 +21,14 @@ const config: Config = {
     stableObservations: 2,
   },
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+  warmPool: {
+    quarantine: {
+      maxRetries: 3,
+      maxRetryBackoffMs: 300_000,
+      retryBackoffMs: 30_000,
+      retryBackoffMultiplier: 2,
+    },
+  },
   lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
   limits: {
     android: { maxDevices: 2, maxRunning: 2 },
@@ -145,6 +153,22 @@ describe("AcquisitionPlanner", () => {
 
     expect(plan(acquisitionPlanner, [leased], { leases })).toEqual({ kind: "wait" });
     expect(plan(acquisitionPlanner, [leased], { leases, noWait: true })).toEqual({
+      kind: "no-capacity",
+    });
+  });
+
+  it("never grants a quarantined device -- it occupies capacity like a running device without being selectable", () => {
+    const { planner: acquisitionPlanner } = planner();
+    // ios.maxRunning is 1 in this fixture, and RUNNING_STATES (capacity.ts) counts
+    // `quarantined` as running, so this device alone exhausts the only iOS slot: no
+    // fresh device can be provisioned either. AcquisitionPlanner selects by exact
+    // state (`=== "ready"` / `=== "shutdown"`), never by excluding a known-bad
+    // state, so quarantined is invisible to every branch with no special-casing --
+    // exactly the design constraint from issue #21 / #37.
+    const quarantined = device("quarantined", "quarantined");
+
+    expect(plan(acquisitionPlanner, [quarantined])).toEqual({ kind: "wait" });
+    expect(plan(acquisitionPlanner, [quarantined], { noWait: true })).toEqual({
       kind: "no-capacity",
     });
   });

@@ -19,6 +19,14 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
+    warmPool: {
+      quarantine: {
+        maxRetries: 3,
+        retryBackoffMs: 30_000,
+        retryBackoffMultiplier: 2,
+        maxRetryBackoffMs: 5 * 60_000,
+      },
+    },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -124,6 +132,7 @@ function observedDevice(
   mark?: ObservedMark,
 ): ObservedDevice {
   return {
+    address: "",
     deviceId: driverDeviceId,
     driverData: { fakeDeviceId: driverDeviceId },
     runState,

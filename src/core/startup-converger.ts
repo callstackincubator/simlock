@@ -21,6 +21,11 @@ export interface InterruptedReclaimRecovery {
   recoverInterruptedReclaim(device: DeviceRecord): Promise<void>;
 }
 
+/** Re-arms retry timers for devices still `quarantined` at startup, from persisted state. */
+export interface QuarantineRestorer {
+  restore(): void;
+}
+
 /**
  * Releases a lease orphaned by a daemon restart. A held lease's liveness is
  * its daemon connection, so any held lease found at startup has no holder by
@@ -42,6 +47,7 @@ export interface StartupConvergerOptions {
   readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
+  readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
   readonly releases: OrphanedLeaseRelease;
   readonly timers: LeaseTimerRestorer;
@@ -57,6 +63,10 @@ export class StartupConverger {
   async converge(): Promise<void> {
     await this.#releaseOrphanedHeldLeases();
     await this.options.timers.restoreExpiryTimers();
+    // Independent of lease/reclaim recovery above: a `quarantined` device already
+    // finished its release-time reclaim, so re-arming its retry timer never races
+    // either step.
+    this.options.quarantineRestore.restore();
     await this.#recoverInterruptedReclaims();
 
     const refused = new Set<string>();

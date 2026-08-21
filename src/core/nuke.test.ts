@@ -22,8 +22,18 @@ describe("Nuke", () => {
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
-        { deviceId: "managed", driverData: { fakeDeviceId: "managed" }, runState: "running" },
-        { deviceId: "foreign", driverData: { fakeDeviceId: "foreign" }, runState: "running" },
+        {
+          address: "managed-address",
+          deviceId: "managed",
+          driverData: { fakeDeviceId: "managed" },
+          runState: "running",
+        },
+        {
+          address: "foreign-address",
+          deviceId: "foreign",
+          driverData: { fakeDeviceId: "foreign" },
+          runState: "running",
+        },
       ],
       processes: [],
     });
@@ -154,5 +164,13 @@ function config(): Config {
     },
     ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    warmPool: {
+      quarantine: {
+        maxRetries: 3,
+        maxRetryBackoffMs: 300_000,
+        retryBackoffMs: 30_000,
+        retryBackoffMultiplier: 2,
+      },
+    },
   };
 }

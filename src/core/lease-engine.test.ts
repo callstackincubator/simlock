@@ -38,6 +38,14 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    warmPool: {
+      quarantine: {
+        maxRetries: 3,
+        maxRetryBackoffMs: 300_000,
+        retryBackoffMs: 30_000,
+        retryBackoffMultiplier: 2,
+      },
+    },
   };
 }
 
@@ -265,7 +273,7 @@ describe("LeaseEngine", () => {
     expect(harness.driver.calls.map((call) => call.operation)).toContain("destroy");
   });
 
-  it("emits one post-commit purge failure fact and keeps a readiness-checked device eligible", async () => {
+  it("quarantines a release-time purge failure instead of keeping the device eligible", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
@@ -274,7 +282,7 @@ describe("LeaseEngine", () => {
 
     await harness.engine.release(first.lease.id, "explicit");
 
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("quarantined");
     expect(
       harness.bus.replay().filter((event) => event.event === "device.purge-failed"),
     ).toMatchObject([
@@ -287,10 +295,17 @@ describe("LeaseEngine", () => {
         },
       },
     ]);
+    expect(
+      harness.bus.replay().filter((event) => event.event === "device.quarantined"),
+    ).toHaveLength(1);
     expect(harness.bus.replay().filter((event) => event.event === "device.reclaimed")).toEqual([]);
+    // ios.maxDevices is 1 in this harness's config, and a quarantined device still
+    // counts against it (see capacity.ts), so a second requester cannot provision a
+    // fresh device either -- it must wait rather than silently inheriting the dirty
+    // one, which is exactly the bug quarantine exists to prevent (#21).
     await expect(
-      harness.engine.request(request, { mode: "held", requesterId: "second" }),
-    ).resolves.toMatchObject({ device: { id: first.device.id } });
+      harness.engine.request(request, { mode: "held", noWait: true, requesterId: "second" }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
   });
 
   it("never exposes a device as ready when post-purge readiness fails", async () => {

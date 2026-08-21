@@ -73,6 +73,8 @@ export interface DaemonServerOptions {
    * A rejection here stops the daemon rather than leaving it half-open — see `start()`.
    */
   readonly converge?: () => Promise<void>;
+  /** Cancels any timers the lease subsystem armed (e.g. quarantine retries) on shutdown. */
+  readonly dispose?: () => void;
 }
 
 type DaemonHealth = "starting" | "running" | "failed";
@@ -245,6 +247,7 @@ export class DaemonServer {
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.options.reaper.dispose();
     this.options.healthMonitor?.dispose();
+    this.options.dispose?.();
     await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
     for (const connection of this.#connections) {
       await connection.socket.close();

@@ -4,6 +4,7 @@ import {
   type DeviceRecord,
   type DeviceSpec,
   type DeviceState,
+  type DeviceTransitionUpdate,
   type LeaseRecord,
   type Platform,
   transition,
@@ -141,6 +142,8 @@ export class Registry {
     deviceId: string,
     to: DeviceState,
     event?: RegistryDeviceEvent,
+    /** Fields a driver call resolved alongside this transition -- currently a fresh `makeReady` address. */
+    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (to === "deleted" && this.#leases.some((lease) => lease.deviceId === deviceId)) {
@@ -157,7 +160,7 @@ export class Registry {
       throw new RegistryEventError(`Device event payload does not match device: ${deviceId}`);
     }
 
-    const updated = transition(device, to);
+    const updated = transition(device, to, update);
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
@@ -169,18 +172,128 @@ export class Registry {
     return cloneDevice(updated);
   }
 
-  /** Commits accepted first-version purge-failure disposition without a success fact. */
+  /** Commits an unleased reclaim interrupted by daemon shutdown, found still `reclaiming` at startup. */
   // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's registry port.
-  async completeFailedPurge(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord> {
+  async completeInterruptedReclaim(deviceId: string): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.state !== "reclaiming") {
       throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
     }
-    const updated = transition(device, to);
+    const updated = transition(device, "shutdown");
     const devices = [...this.#devices];
     devices[index] = updated;
     await this.#commit(devices, this.#leases);
     return cloneDevice(updated);
+  }
+
+  /**
+   * Commits the release-time purge-failure disposition: the device leaves
+   * `reclaiming` for `quarantined` instead of rejoining the warm pool dirty.
+   * The caller (WarmPoolCoordinator) emits `device.purge-failed` and
+   * `device.quarantined` after this commits.
+   */
+  // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's registry port.
+  async enterQuarantine(deviceId: string, nextRetryAt: number): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.state !== "reclaiming") {
+      throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
+    }
+    const updated: DeviceRecord = {
+      ...transition(device, "quarantined"),
+      quarantineAttempts: 0,
+      quarantineNextRetryAt: nextRetryAt,
+      quarantinedAt: this.options.clock.now(),
+    };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
+  /** Records a failed purge retry without leaving `quarantined`; the caller re-arms backoff. */
+  // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
+  async recordQuarantineRetryFailure(
+    deviceId: string,
+    attempts: number,
+    nextRetryAt: number,
+  ): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.state !== "quarantined") {
+      throw new RegistryEventError(`Device is not quarantined: ${deviceId}`);
+    }
+    const updated: DeviceRecord = {
+      ...device,
+      quarantineAttempts: attempts,
+      quarantineNextRetryAt: nextRetryAt,
+    };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
+  /** Commits a successful quarantine retry; the device rejoins the warm pool. */
+  // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
+  async recoverFromQuarantine(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.state !== "quarantined") {
+      throw new RegistryEventError(`Device is not quarantined: ${deviceId}`);
+    }
+    const {
+      quarantineAttempts: _quarantineAttempts,
+      quarantineNextRetryAt: _quarantineNextRetryAt,
+      quarantinedAt: _quarantinedAt,
+      ...updated
+    } = transition(device, to);
+    const devices = [...this.#devices];
+    devices[index] = updated as DeviceRecord;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated as DeviceRecord);
+  }
+
+  /** Commits giving up on a quarantined device once its driver `destroy` has already run. */
+  /**
+   * Records that a quarantined device exhausted its retries *and* could not be destroyed, so
+   * nothing is armed for it any more. Clears the retry deadline rather than leaving a stale one
+   * behind: readers (`status`) would otherwise report a retry that is never coming, and a
+   * restarting daemon re-arms from this field -- undefined makes it retry once promptly instead
+   * of at a timestamp that has long since passed.
+   */
+  // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
+  async strandQuarantine(deviceId: string, attempts: number): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.state !== "quarantined") {
+      throw new RegistryEventError(`Device is not quarantined: ${deviceId}`);
+    }
+    const { quarantineNextRetryAt: _quarantineNextRetryAt, ...rest } = device;
+    const updated: DeviceRecord = { ...rest, quarantineAttempts: attempts };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
+  // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
+  async abandonQuarantine(deviceId: string): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.state !== "quarantined") {
+      throw new RegistryEventError(`Device is not quarantined: ${deviceId}`);
+    }
+    const {
+      quarantineAttempts: _quarantineAttempts,
+      quarantineNextRetryAt: _quarantineNextRetryAt,
+      quarantinedAt: _quarantinedAt,
+      ...updated
+    } = transition(device, "deleted");
+    const devices = [...this.#devices];
+    devices[index] = updated as DeviceRecord;
+    await this.#commit(devices, this.#leases);
+    this.options.eventBus.emit(
+      "device.deleted",
+      { deviceId, initiator: "quarantine-coordinator" },
+      "registry",
+    );
+    return cloneDevice(updated as DeviceRecord);
   }
 
   /** Flags a device whose observed boot state disagrees with the committed registry state. */
@@ -441,6 +554,10 @@ const deviceRecordKeys = [
   "foreignProvenanceDetectedAt",
   "recoveringSince",
   "recoveryAttempts",
+  "quarantinedAt",
+  "quarantineAttempts",
+  "quarantineNextRetryAt",
+  "address",
 ] as const;
 const leaseRecordKeys = [
   "id",
@@ -495,6 +612,9 @@ const optionalDeviceNumberKeys = [
   "foreignProvenanceDetectedAt",
   "recoveringSince",
   "recoveryAttempts",
+  "quarantinedAt",
+  "quarantineAttempts",
+  "quarantineNextRetryAt",
 ] as const;
 
 type OptionalDeviceNumbers = Partial<Record<(typeof optionalDeviceNumberKeys)[number], number>>;
@@ -517,20 +637,25 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const { createdAt, driverData, driverDeviceId, id, spec, state } = value;
+  const { address, createdAt, driverData, driverDeviceId, id, spec, state } = value;
   if (
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
     typeof createdAt !== "number" ||
     !(isDeviceState(state) || state === "warm") ||
     !isDeviceSpec(spec) ||
-    !("driverData" in value)
+    !("driverData" in value) ||
+    // Every other optional field is a number and is swept by
+    // `parseOptionalDeviceNumbers`; `address` is the lone string. Missing is expected of a
+    // record written by a pre-address daemon; present-but-wrong-typed is corrupt.
+    (address !== undefined && typeof address !== "string")
   ) {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
   return {
     ...parseOptionalDeviceNumbers(value),
+    ...(address === undefined ? {} : { address }),
     createdAt,
     driverData,
     driverDeviceId,
@@ -579,6 +704,7 @@ function isDeviceState(value: unknown): value is DeviceState {
     value === "ready" ||
     value === "leased" ||
     value === "reclaiming" ||
+    value === "quarantined" ||
     value === "shutdown" ||
     value === "deleted"
   );

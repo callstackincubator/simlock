@@ -315,6 +315,7 @@ function expectedRunState(state: DeviceState): "running" | "stopped" | undefined
       return "stopped";
     case "provisioning":
     case "reclaiming":
+    case "quarantined":
     case "deleted":
       return undefined;
   }

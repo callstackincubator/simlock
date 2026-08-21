@@ -85,26 +85,27 @@ devices) must require **no core changes**. If it does, the interface leaked.
 ## Running capacity
 
 Managed-device limits govern provisioning, while running limits govern any
-operation that starts a device. The core accounts `ready`, `leased`, and
-`reclaiming` devices as running. A serialized, platform-agnostic
-reservation covers provisioning and boots from `shutdown` until the registry
-commits the resulting running or non-running state. Global and platform limits
-are checked atomically; no driver-specific runtime details participate in this
-decision.
+operation that starts a device. The core accounts `ready`, `leased`,
+`reclaiming`, and `quarantined` devices as running. A serialized,
+platform-agnostic reservation covers provisioning and boots from `shutdown`
+until the registry commits the resulting running or non-running state. Global
+and platform limits are checked atomically; no driver-specific runtime
+details participate in this decision.
 
 At startup, `StartupConverger` first releases every persisted `held` lease
 (reason `orphaned`) through the normal release path — a held lease's liveness
 is its daemon connection, so it cannot have a live holder across a restart,
 and this runs before timers are restored so an orphaned lease's timer is
 never re-armed. It then restores persisted TTL timers for the remaining
-(`detached`) leases, whose liveness is the TTL rather than a connection,
-recovers unleased interrupted reclaims through the warm-pool recovery port,
-and finally deterministically shuts down excess unleased, unclaimed `ready`
-registry devices through `CleanupActionExecutor`. Running this release step
-before timer restoration and capacity convergence means the devices it frees
-are visible to both. Leased devices that survive the orphan sweep are never
-touched, so a lowered limit may remain visibly over-limit until leases
-naturally release.
+(`detached`) leases, whose liveness is the TTL rather than a connection, and
+re-arms retry timers for devices still `quarantined` (see below) from their
+persisted next-retry deadline. It then recovers unleased interrupted reclaims
+through the warm-pool recovery port, and finally deterministically shuts down
+excess unleased, unclaimed `ready` registry devices through
+`CleanupActionExecutor`. Running this release step before timer restoration
+and capacity convergence means the devices it frees are visible to both.
+Leased devices that survive the orphan sweep are never touched, so a lowered
+limit may remain visibly over-limit until leases naturally release.
 
 ## Device state machine
 
@@ -112,6 +113,8 @@ One shared lifecycle for both platforms; drivers map onto it, never extend it:
 
 ```
 provisioning → ready → leased → reclaiming → ready/shutdown → deleted
+                                      ↓
+                                 quarantined → ready/shutdown/deleted
 ```
 
 All transitions go through the core. `pitlane status` reads identically for
@@ -120,8 +123,33 @@ iOS and Android because of this.
 A warm device is derived inventory, not a state: any registry-managed,
 unleased `ready` device is warm. Release always purges while the device is
 `reclaiming`; it returns to `ready` when capacity permits, otherwise it is
-shut down. Active demand may evict deterministic LRU warm inventory before
-starting requested work, without bypassing the FIFO head.
+shut down, or, if the purge itself failed, `quarantined`. Active demand may
+evict deterministic LRU warm inventory before starting requested work,
+without bypassing the FIFO head.
+
+### Quarantine: present but not grantable
+
+`quarantined` is the shared disposition for a device the core cannot vouch
+for right now: it stays in the registry and keeps counting against running
+capacity (so it is not silently over-provisioned away), but it is invisible
+to every grant path, because `AcquisitionPlanner` and the warm-pool eviction
+helpers select targets by exact state (`state === "ready"`), never by
+excluding known-bad states. Anything that needs "in the registry, counts
+against capacity, not grantable" is expressed by adding its own entry into
+`quarantined`, not by inventing a second state — the release-time purge
+failure this shipped with (`reclaiming → quarantined`, owned by
+`QuarantineCoordinator`) is one entry; a future stalled-transition timeout
+would be another.
+
+`QuarantineCoordinator` retries the triggering operation on a `Clock`-driven
+backoff (`warmPool.quarantine` config: retry count, backoff, multiplier, cap).
+A successful retry returns the device to `ready` (or `shutdown`) and it
+rejoins the warm pool; exhausting the retry budget destroys it
+(registry-only, never merely `shutdown`, since `shutdown` is reusable warm
+inventory to `AcquisitionPlanner` and would silently reintroduce a dirty
+device). `device.purge-failed` still fires as it always did; `device.quarantined`,
+`device.quarantine-recovered`, and `device.quarantine-abandoned` are the
+follow-up facts (see [EVENTS.md](EVENTS.md)).
 
 ## Fresh-state strategy (benchmarked 2026-07)
 

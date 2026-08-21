@@ -44,6 +44,14 @@ function config(maxDevices = 1): Config {
     },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    warmPool: {
+      quarantine: {
+        maxRetries: 3,
+        maxRetryBackoffMs: 300_000,
+        retryBackoffMs: 30_000,
+        retryBackoffMultiplier: 2,
+      },
+    },
   };
 }
 
@@ -228,6 +236,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const bootHarness = await createHarness();
     const ready = await seedReady(bootHarness);
     await bootHarness.driver.shutdown({
+      address: ready.address ?? "",
       deviceId: ready.driverDeviceId,
       driverData: ready.driverData,
     });
@@ -259,6 +268,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness();
     const shutdown = await seedReady(harness);
     await harness.driver.shutdown({
+      address: shutdown.address ?? "",
       deviceId: shutdown.driverDeviceId,
       driverData: shutdown.driverData,
     });
@@ -307,6 +317,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
     const shutdown = await seedReady(harness);
     await harness.driver.shutdown({
+      address: shutdown.address ?? "",
       deviceId: shutdown.driverDeviceId,
       driverData: shutdown.driverData,
     });

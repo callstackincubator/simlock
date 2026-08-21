@@ -663,11 +663,21 @@ function commandArgs(
 function leaseResult(value: unknown): Record<string, unknown> & { readonly lease: string } {
   const grant = parseRawLeaseGrant(value);
   return {
+    // Optional: undefined only for a device leased straight out of a pre-address `state.json`
+    // without ever rebooting under this daemon -- see `DeviceRecord.address` in domain.ts.
+    ...(grant.device.address === undefined ? {} : { address: grant.device.address }),
     device: grant.device.spec.model,
+    expires_at_ms: grant.lease.ttlDeadline,
     lease: grant.lease.id,
     os: grant.device.spec.osVersion,
     platform: grant.device.spec.platform,
     state: "leased",
+    timing: {
+      estimated_boot_ms: grant.timing.estimatedBootMs,
+      estimated_provision_ms: grant.timing.estimatedProvisionMs,
+      estimated_reclaim_ms: grant.timing.estimatedReclaimMs,
+      estimated_ready_ms: grant.timing.estimatedReadyMs,
+    },
     udid: grant.device.driverDeviceId,
   };
 }
@@ -765,6 +775,7 @@ function formatStatus(status: Record<string, unknown>): string {
     const markers = [
       record.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
       record.foreignProvenanceDetectedAt === undefined ? undefined : "foreign provenance change",
+      record.state === "quarantined" ? quarantineMarker(record) : undefined,
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     return `Device ${String(record.id)}: ${String(record.state)}${suffix}`;
@@ -785,6 +796,16 @@ function formatStatus(status: Record<string, unknown>): string {
     ...leaseLines,
     `Queue depth: ${queueDepth}`,
   ].join("\n");
+}
+
+/** Surfaces retry progress for a quarantined device instead of leaving it as a bare state name. */
+function quarantineMarker(record: Record<string, unknown>): string {
+  const attempts = typeof record.quarantineAttempts === "number" ? record.quarantineAttempts : 0;
+  const nextRetryAt =
+    typeof record.quarantineNextRetryAt === "number"
+      ? `, next retry at ${String(record.quarantineNextRetryAt)}`
+      : "";
+  return `purge retry ${attempts}${nextRetryAt}`;
 }
 
 function formatCatalog(response: Record<string, unknown>): string {

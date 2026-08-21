@@ -59,6 +59,14 @@ describe("loadConfig", () => {
       },
       ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+      warmPool: {
+        quarantine: {
+          maxRetries: 3,
+          retryBackoffMs: 30_000,
+          retryBackoffMultiplier: 2,
+          maxRetryBackoffMs: 5 * 60_000,
+        },
+      },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.limits)).toBe(true);
@@ -94,6 +102,49 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow("log.rotateBytes");
+  });
+
+  it("applies a file-level warm-pool quarantine override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ warmPool: { quarantine: { maxRetries: 1, retryBackoffMs: 1_000 } } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.warmPool.quarantine).toEqual({
+      maxRetries: 1,
+      retryBackoffMs: 1_000,
+      retryBackoffMultiplier: 2,
+      maxRetryBackoffMs: 5 * 60_000,
+    });
+  });
+
+  it("rejects a non-positive-integer quarantine retry count", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ warmPool: { quarantine: { maxRetries: 0 } } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("warmPool.quarantine.maxRetries");
+  });
+
+  it("rejects a quarantine backoff multiplier below 1", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ warmPool: { quarantine: { retryBackoffMultiplier: 0.5 } } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("warmPool.quarantine.retryBackoffMultiplier");
   });
 
   it("applies file values over defaults and explicit overrides over file values", async () => {

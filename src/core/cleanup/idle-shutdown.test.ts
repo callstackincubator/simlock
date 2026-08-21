@@ -15,6 +15,14 @@ const config: Config = {
     stableObservations: 2,
   },
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
+  warmPool: {
+    quarantine: {
+      maxRetries: 3,
+      maxRetryBackoffMs: 300_000,
+      retryBackoffMs: 30_000,
+      retryBackoffMultiplier: 2,
+    },
+  },
   lease: { detachedTtlMs: 1, heldTtlBackstopMs: 1, heartbeatIntervalMs: 1 },
   limits: {
     android: { maxDevices: 1, maxRunning: 1 },
