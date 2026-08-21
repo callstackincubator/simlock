@@ -219,7 +219,8 @@ function isSafeProposal(proposal: Proposal, view: RegistryView): boolean {
   if (
     device.state === "leased" ||
     device.state === "provisioning" ||
-    device.state === "reclaiming"
+    device.state === "reclaiming" ||
+    device.state === "quarantined"
   ) {
     return false;
   }

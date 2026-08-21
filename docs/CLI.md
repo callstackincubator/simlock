@@ -163,8 +163,12 @@ meaningful.
 ## `pitlane status`
 
 Human and JSON status include derived warm counts globally and per platform.
-`ready` devices contribute to those counts; `reclaiming` devices remain
-visible as busy running capacity and never contribute to warm inventory.
+`ready` devices contribute to those counts; `reclaiming` and `quarantined`
+devices remain visible as busy running capacity and never contribute to warm
+inventory. A `quarantined` device is one whose release-time purge failed: it
+stays visible in `status` and `list --devices` with that state while
+`QuarantineCoordinator` retries it in the background, and is never handed to
+a new requester.
 
 Human-oriented overview: daemon health, managed capacity (used/limit per
 platform), running and reserved capacity (globally and per platform), every
