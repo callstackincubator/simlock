@@ -4,6 +4,7 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
+import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { Doctor } from "./doctor.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -700,6 +701,66 @@ describe("Doctor", () => {
         state: "provisioning",
         thresholdMs: 9_000,
       });
+    });
+
+    it("does not report a stall for a device this daemon holds an operation claim on", async () => {
+      // A backgrounded orphaned-lease reclaim (#43) keeps its device in `reclaiming`
+      // for a full erase -- ~34s measured, against a threshold that floors at 60s for
+      // both real drivers, with several erases running at once contending for the same
+      // disk. The claim, not the clock, is what says work is in progress; without this
+      // exclusion a healthy reclaim is reported as a stall and `--fix` quarantines it.
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000 },
+        platform: "ios",
+      });
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "pitlane-claimed",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      const claims = new DeviceOperationClaims();
+      const claim = claims.tryClaim(device.id, "reclaim");
+      clock.advance(9_001);
+
+      const claimed = await new Doctor({
+        claims,
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(claimed.findings.filter((finding) => finding.kind === "stalled-transition")).toEqual(
+        [],
+      );
+
+      // Releasing the claim is what a crash cannot do: the same device, same age, is a
+      // stall once no live operation accounts for it.
+      claim?.release();
+      const unclaimed = await new Doctor({
+        claims,
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(unclaimed.findings).toContainEqual(
+        expect.objectContaining({ deviceId: device.id, kind: "stalled-transition" }),
+      );
     });
 
     it("does not report a stalled-transition finding for a device still legitimately in-flight", async () => {

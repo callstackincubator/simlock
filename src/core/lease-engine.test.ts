@@ -867,3 +867,226 @@ describe("LeaseEngine", () => {
     ]);
   });
 });
+
+// #43: startup convergence used to await each orphaned held lease's device reclaim
+// inline (an erase measured ~34s for one simulator), so N orphaned leases cost N
+// serial erases before any other request could be served. These cover the shape
+// that replaced it: the lease is released registry-only on the convergence path,
+// and its reclaim proceeds in the background.
+describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
+  it("converges without waiting for an orphaned held lease's reclaim, and a fresh request is served immediately after", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      // Matches the issue's measured single-simulator-erase cost -- the old inline
+      // await would have forced convergence to sit through this.
+      latencyMs: { reclaim: 34_000 },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 2 },
+        maxRunning: 2,
+      },
+    });
+    // A held lease with no live holder: exactly what an ungraceful restart leaves in
+    // the registry (nothing renews or releases it -- the daemon process it lived on
+    // is gone).
+    const orphan = await harness.engine.request(request, { mode: "held", requesterId: "orphan" });
+
+    const convergeStartedAt = harness.clock.now();
+    await harness.engine.convergeRunningCapacity();
+    // The clock never had to move for convergence to finish: it did not sit through
+    // the 34s reclaim above.
+    expect(harness.clock.now()).toBe(convergeStartedAt);
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === orphan.device.id)?.state,
+    ).toBe("reclaiming");
+    expect(harness.registry.snapshot.leases).toEqual([]);
+
+    // A fresh request is servable right away -- capacity allows a second device, and
+    // the orphaned one being mid-reclaim never blocks it. Still 0ms elapsed.
+    const granted = await harness.engine.request(request, {
+      mode: "held",
+      requesterId: "new-agent",
+    });
+    expect(granted.device.id).not.toBe(orphan.device.id);
+    expect(harness.clock.now()).toBe(convergeStartedAt);
+  });
+
+  it("never grants a device whose background reclaim is still in flight", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { reclaim: 34_000 },
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 1, maxRunning: 1 },
+        maxRunning: 1,
+      },
+    });
+    const orphan = await harness.engine.request(request, { mode: "held", requesterId: "orphan" });
+
+    await harness.engine.convergeRunningCapacity();
+    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+
+    // AcquisitionPlanner only ever grants a `ready` device (or reboots a `shutdown`
+    // one); `reclaiming` is neither. With maxDevices:1 there is also no room to
+    // provision a second device, so the request is refused rather than handed the
+    // one still mid-reclaim.
+    await expect(
+      harness.engine.request(request, { mode: "held", noWait: true, requesterId: "new-agent" }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    clock.advance(34_000);
+    await flush();
+    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "ready" }]);
+
+    // Once the reclaim genuinely finishes, the same device becomes grantable again.
+    await expect(
+      harness.engine.request(request, { mode: "held", requesterId: "new-agent" }),
+    ).resolves.toMatchObject({ device: { id: orphan.device.id } });
+  });
+
+  it("shuts down already-ready excess capacity during convergence without waiting on an in-flight reclaim, and the reclaim settles inside the same limit", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      latencyMs: { reclaim: 34_000 },
+      platform: "ios",
+      // The reclaim itself leaves the device booted off; whether it comes back
+      // `ready` is entirely up to WarmPoolCoordinator#mayRemainWarm's capacity
+      // check at settle time -- which is exactly what this test is about.
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 3, maxRunning: 1 },
+        maxRunning: 1,
+      },
+    });
+    const orphan = await harness.engine.request(request, { mode: "held", requesterId: "orphan" });
+    const extraReady = await seedReady(harness);
+
+    await harness.engine.convergeRunningCapacity();
+
+    // Decision (open question 1, #43): the running-capacity sweep tolerates an
+    // approximate, transient view rather than waiting for in-flight reclaims to
+    // settle or re-running afterward. It can afford to: RUNNING_STATES already
+    // counts `reclaiming` toward the running total, so the over-limit check itself
+    // is not blind to the in-flight reclaim -- only its candidate *selection* is
+    // (candidates must be `ready`), and that's fine because the already-ready
+    // excess device below is a perfectly valid, sufficient candidate on its own.
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === extraReady.id)?.state,
+    ).toBe("shutdown");
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === orphan.device.id)?.state,
+    ).toBe("reclaiming");
+
+    // The background reclaim settles afterward. Its own capacity check
+    // (#mayRemainWarm, serialized against the shutdown above) sees the slot the
+    // shutdown just freed and reboots the device back into the warm pool -- the
+    // transient view above never let the pool overshoot the limit.
+    clock.advance(34_000);
+    await flush();
+    expect(
+      harness.registry.snapshot.devices.find((device) => device.id === orphan.device.id)?.state,
+    ).toBe("ready");
+    expect(harness.engine.runningCapacity.ios.overLimit).toBe(false);
+  });
+
+  it("recovers a background reclaim interrupted by a daemon crash on the next start", async () => {
+    const filesystem = new MemoryFilesystem();
+    const restartStatePath = "/home/agent/.pitlane/restart-state.json";
+    let nextId = 1;
+    const idGenerator = { generate: () => `${nextId++}` };
+    const systemStats = () =>
+      new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      });
+    // The physical device survives a daemon restart even though the daemon's
+    // in-memory state does not -- represented here by one FakeDriver instance
+    // shared across both simulated processes below.
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      latencyMs: { reclaim: 34_000 },
+      platform: "ios",
+    });
+
+    const clock1 = new FakeClock(1_000);
+    const bus1 = new EventBus(clock1);
+    const registry1 = await Registry.load({
+      clock: clock1,
+      eventBus: bus1,
+      filesystem,
+      idGenerator,
+      statePath: restartStatePath,
+    });
+    const engine1 = new LeaseEngine({
+      clock: clock1,
+      config: config(),
+      drivers: [driver],
+      eventBus: bus1,
+      idGenerator,
+      registry: registry1,
+      systemStats: systemStats(),
+    });
+    const granted = await engine1.request(request, { mode: "held", requesterId: "orphan" });
+
+    // Ungraceful restart of the *same* process: convergence backgrounds the reclaim...
+    await engine1.convergeRunningCapacity();
+    expect(registry1.snapshot.devices).toMatchObject([
+      { id: granted.device.id, state: "reclaiming" },
+    ]);
+    // ...and the process is abandoned before the driver's 34s reclaim resolves --
+    // exactly like a crashed daemon. Nothing here ever settles that promise.
+
+    // Next start: a fresh process reads the same persisted registry (state.json
+    // survives the crash) and reconnects to the same physical driver, but its
+    // in-memory claim tracking starts empty -- there is no live claim for this
+    // device, because the process that held it is gone.
+    const clock2 = new FakeClock(clock1.now());
+    const bus2 = new EventBus(clock2);
+    const registry2 = await Registry.load({
+      clock: clock2,
+      eventBus: bus2,
+      filesystem,
+      idGenerator,
+      statePath: restartStatePath,
+    });
+    const engine2 = new LeaseEngine({
+      clock: clock2,
+      config: config(),
+      drivers: [driver],
+      eventBus: bus2,
+      idGenerator,
+      registry: registry2,
+      systemStats: systemStats(),
+    });
+
+    await engine2.convergeRunningCapacity();
+
+    // Recovered through the interrupted-reclaim path (a plain shutdown), not a
+    // second full reclaim.
+    expect(registry2.snapshot.devices).toMatchObject([
+      { id: granted.device.id, state: "shutdown" },
+    ]);
+    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+  });
+});

@@ -57,6 +57,13 @@ export class LeaseEngine {
    * still doing so itself. See `DaemonServer#start`.
    */
   readonly healthMonitor: LeaseHealthMonitor;
+  /**
+   * Read-only claim view for `Doctor`, which must not read a device this engine is
+   * actively operating on as a stalled transition. Exposed as a reader, not the
+   * `DeviceOperationClaims` itself, so nothing outside the engine can take or
+   * release a claim.
+   */
+  readonly claimReader: Pick<DeviceOperationClaims, "isClaimed">;
   readonly #acquisition: LeaseAcquisitionCoordinator;
   readonly #capacity: CapacityCoordinator;
   readonly #claims = new DeviceOperationClaims();
@@ -76,6 +83,7 @@ export class LeaseEngine {
 
   constructor(private readonly options: LeaseEngineOptions) {
     this.#capacity = new CapacityCoordinator(options.config, options.systemStats);
+    this.claimReader = this.#claims;
     this.#planner = new AcquisitionPlanner(this.#capacity, this.#claims);
     this.#drivers = new DriverCatalog(options.drivers);
     this.#deviceLifecycle = new ManagedDeviceLifecycle(
@@ -153,6 +161,7 @@ export class LeaseEngine {
       registry: options.registry,
     });
     this.#releaseCoordinator = new LeaseReleaseCoordinator({
+      claims: this.#claims,
       decisions: this.#decisions,
       lifecycle: this.#leases,
       registry: options.registry,

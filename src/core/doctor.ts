@@ -7,6 +7,7 @@ import {
   type Platform,
   transitionEnteredAt,
 } from "./domain.js";
+import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import type { Driver, DriverDevice, ObservedDevice, ObservedMark } from "./driver.js";
 import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
@@ -71,6 +72,12 @@ export interface DoctorOptions {
   readonly eventBus: EventBus;
   readonly leaseExpirer?: LeaseExpirer;
   readonly quarantine?: DoctorQuarantine;
+  /**
+   * Read-only view of the per-device operation claims. A device this daemon holds a
+   * claim on is work in progress by definition, which is what keeps a healthy
+   * backgrounded reclaim from being read as a stall -- see `stalledTransitionFinding`.
+   */
+  readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
   readonly registry: Registry;
 }
 
@@ -121,6 +128,7 @@ export class Doctor {
         driversByPlatform,
         this.options.config.stalledTransition,
         this.options.clock.now(),
+        this.options.claims,
       );
       if (stalled !== undefined) {
         findings.push(stalled);
@@ -333,14 +341,30 @@ function registryDriftFindings(
  * legitimately run well past it without anything having stalled. No driver for the
  * device's platform, or no recorded entry time (defensive; see `transitionEnteredAt`),
  * means there is nothing to compare against, so no finding rather than a guess.
+ *
+ * A device this daemon holds an operation claim on is excluded outright, before any
+ * of that arithmetic: the claim *is* the statement that work is in progress, so a
+ * live operation can never be read as a stall no matter how long it legitimately
+ * runs. This is the same live-versus-orphaned test `StartupConverger
+ * #recoverInterruptedReclaims` already makes, and it is load-bearing rather than
+ * belt-and-braces -- a backgrounded orphaned-lease reclaim (#43) holds its device in
+ * `reclaiming` for a full erase, measured at ~34s against a threshold that floors at
+ * 60s for both drivers, and several such erases run at once and contend for the same
+ * disk. Tuning the threshold against that would be guessing at disk speed; the claim
+ * answers it exactly. A reclaim orphaned by a crash has no claim in the new process,
+ * so the case this finding exists to catch is untouched.
  */
 function stalledTransitionFinding(
   device: DeviceRecord,
   driversByPlatform: ReadonlyMap<Platform, Driver>,
   config: Config["stalledTransition"],
   now: number,
+  claims?: Pick<DeviceOperationClaims, "isClaimed">,
 ): DoctorFinding | undefined {
   if (device.state !== "provisioning" && device.state !== "reclaiming") {
+    return undefined;
+  }
+  if (claims?.isClaimed(device.id) === true) {
     return undefined;
   }
   const enteredAt = transitionEnteredAt(device);
