@@ -224,6 +224,11 @@ export class LeaseEngine {
     await this.#releaseCoordinator.expire(leaseId);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the DoctorQuarantine port by Doctor.
+  async enterFromStalledTransition(deviceId: string): Promise<void> {
+    await this.#quarantine.enterFromStalledTransition(deviceId);
+  }
+
   /** Operator-only reset; targets device records from this registry exclusively. */
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
     return this.#nuke.nuke(deleteDevices);

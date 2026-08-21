@@ -1,6 +1,7 @@
 import { type EventBus, type EventEnvelope } from "../bus/index.js";
 import {
   type Config,
+  type DeviceRecord,
   type DeviceRequest,
   type LeaseProgress,
   type LeaseRecord,
@@ -10,6 +11,7 @@ import {
   type Registry,
   RequesterAlreadyLeasedError,
   RuntimeMissingError,
+  transitionEnteredAt,
   UnknownModelError,
   type CleanupReaper,
   type Doctor,
@@ -573,7 +575,7 @@ export class DaemonServer {
         return this.options.reaper.rules;
       case "devices":
       case undefined:
-        return snapshot.devices;
+        return snapshot.devices.map((device) => this.#decorateDevice(device));
       default:
         throw new ProtocolError("BAD_REQUEST", "list kind must be devices, leases, or rules");
     }
@@ -598,6 +600,7 @@ export class DaemonServer {
     );
     return {
       ...snapshot,
+      devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       leases: snapshot.leases.map((lease) => this.#decorateLease(lease)),
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
       health: this.#health,
@@ -616,6 +619,18 @@ export class DaemonServer {
       ...lease,
       lastHeartbeatAt: lease.ttlDeadline - this.options.config.lease.heldTtlBackstopMs,
     };
+  }
+
+  /**
+   * Adds a derived `transitionAgeMs` for a `provisioning`/`reclaiming` device -- how long
+   * it has been mid-transition, the same age Doctor compares against its stall threshold
+   * (see `stalledTransitionFinding` in doctor.ts) -- so `status`/`list --devices` can show
+   * it without the CLI needing its own notion of "now".
+   */
+  #decorateDevice(device: DeviceRecord): DeviceRecord & { readonly transitionAgeMs?: number } {
+    const enteredAt = transitionEnteredAt(device);
+    if (enteredAt === undefined) return device;
+    return { ...device, transitionAgeMs: this.options.clock.now() - enteredAt };
   }
 
   async #pushProgress(socket: IpcConnection, progress: LeaseProgress): Promise<void> {

@@ -132,8 +132,10 @@ One shared lifecycle for both platforms; drivers map onto it, never extend it:
 
 ```
 provisioning → ready → leased → reclaiming → ready/shutdown → deleted
-                                      ↓
-                                 quarantined → ready/shutdown/deleted
+      ↓                              ↓
+      └──────────→ quarantined ←─────┘
+                        ↓
+                 ready/shutdown/deleted
 ```
 
 All transitions go through the core. `pitlane status` reads identically for
@@ -155,10 +157,14 @@ to every grant path, because `AcquisitionPlanner` and the warm-pool eviction
 helpers select targets by exact state (`state === "ready"`), never by
 excluding known-bad states. Anything that needs "in the registry, counts
 against capacity, not grantable" is expressed by adding its own entry into
-`quarantined`, not by inventing a second state — the release-time purge
-failure this shipped with (`reclaiming → quarantined`, owned by
-`QuarantineCoordinator`) is one entry; a future stalled-transition timeout
-would be another.
+`quarantined`, not by inventing a second state: the release-time purge
+failure (`reclaiming → quarantined`) and the stalled-transition timeout
+(`provisioning → quarantined`, both owned by `QuarantineCoordinator`) are its
+two entries. The latter fires from `pitlane doctor`'s `stalled-transition`
+finding — a `provisioning`/`reclaiming` device whose time in that state has
+outrun a driver-derived threshold, meaning the driver call meant to resolve
+it never did and the registry's view has diverged from the driver's. Safer
+to quarantine than re-drive: the device may be mid-erase.
 
 `QuarantineCoordinator` retries the triggering operation on a `Clock`-driven
 backoff (`warmPool.quarantine` config: retry count, backoff, multiplier, cap).

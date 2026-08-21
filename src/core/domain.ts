@@ -58,14 +58,13 @@ export interface LeaseRecord {
  * capacity, but not grantable" disposition: a device the core cannot vouch for
  * right now, sitting outside the `ready`/`shutdown` states every grant and
  * eviction path already selects on. `reclaiming -> quarantined` is its release-time
- * purge-failure entry (see WarmPoolCoordinator); a future stalled-transition timeout
- * (e.g. `provisioning` that never finishes) would add `provisioning -> quarantined`
- * as its own entry into the same state rather than inventing a second one. Exits are
- * symmetric either way: `ready` on a successful retry, `shutdown`/`deleted` on giving
- * up.
+ * purge-failure entry (see WarmPoolCoordinator); `provisioning -> quarantined` is its
+ * stalled-transition entry (Doctor, for a `provisioning` that never finished) -- its
+ * own entry into the same state rather than a second one. Exits are symmetric either
+ * way: `ready` on a successful retry, `shutdown`/`deleted` on giving up.
  */
 const legalTransitions: Readonly<Record<DeviceState, readonly DeviceState[]>> = {
-  provisioning: ["ready", "deleted"],
+  provisioning: ["ready", "deleted", "quarantined"],
   ready: ["leased", "shutdown"],
   leased: ["reclaiming"],
   reclaiming: ["ready", "shutdown", "quarantined"],
@@ -100,4 +99,26 @@ export function transition(
   }
 
   return { ...record, ...update, state: to };
+}
+
+/**
+ * The wall-clock moment a `provisioning` or `reclaiming` device most recently entered
+ * that state -- `undefined` for every other state, which either isn't mid-transition
+ * or already has its own dedicated timestamp for the same purpose (`quarantinedAt`).
+ * No dedicated field was added for this: `createdAt` already doubles as provisioning's
+ * entry time, since nothing ever transitions back into `provisioning` (see
+ * `legalTransitions`), and `lastLeaseEndedAt` already doubles as reclaiming's, since
+ * `beginRelease` is reclaiming's only entry point and stamps it fresh on every entry.
+ * Used by Doctor to age a mid-transition device against a driver-derived stall
+ * threshold.
+ */
+export function transitionEnteredAt(record: DeviceRecord): number | undefined {
+  switch (record.state) {
+    case "provisioning":
+      return record.createdAt;
+    case "reclaiming":
+      return record.lastLeaseEndedAt;
+    default:
+      return undefined;
+  }
 }

@@ -107,7 +107,15 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
     diskPath: dataDirectory,
   });
-  const doctor = new Doctor({ clock, drivers, eventBus, leaseExpirer: leaseEngine, registry });
+  const doctor = new Doctor({
+    clock,
+    config,
+    drivers,
+    eventBus,
+    leaseExpirer: leaseEngine,
+    quarantine: leaseEngine,
+    registry,
+  });
   const nuke = new Nuke({ executor: leaseEngine, registry });
   const daemon = new DaemonServer({
     capacity: leaseEngine,

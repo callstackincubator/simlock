@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type DeviceRecord, IllegalTransition, transition } from "./index.js";
+import { type DeviceRecord, IllegalTransition, transition, transitionEnteredAt } from "./index.js";
 
 const baseDevice: Omit<DeviceRecord, "state"> = {
   createdAt: 1_000,
@@ -14,6 +14,7 @@ describe("transition", () => {
   it.each([
     ["provisioning", "ready"],
     ["provisioning", "deleted"],
+    ["provisioning", "quarantined"],
     ["ready", "leased"],
     ["ready", "shutdown"],
     ["leased", "reclaiming"],
@@ -35,7 +36,6 @@ describe("transition", () => {
     ["ready", "deleted"],
     ["leased", "shutdown"],
     ["deleted", "ready"],
-    ["provisioning", "quarantined"],
     // A leased device can only reach `quarantined` by first going through
     // `reclaiming` (i.e. after release) -- never directly. This is the structural
     // half of "never quarantine a leased device" (#21): even a caller bug can't
@@ -44,5 +44,27 @@ describe("transition", () => {
     ["quarantined", "leased"],
   ] as const)("rejects %s -> %s", (from, to) => {
     expect(() => transition({ ...baseDevice, state: from }, to)).toThrow(IllegalTransition);
+  });
+});
+
+describe("transitionEnteredAt", () => {
+  it("reads provisioning's entry time off createdAt", () => {
+    expect(transitionEnteredAt({ ...baseDevice, state: "provisioning" })).toBe(1_000);
+  });
+
+  it("reads reclaiming's entry time off lastLeaseEndedAt", () => {
+    expect(
+      transitionEnteredAt({ ...baseDevice, lastLeaseEndedAt: 2_000, state: "reclaiming" }),
+    ).toBe(2_000);
+  });
+
+  it("is undefined for reclaiming with no recorded release (defensive, should not occur)", () => {
+    expect(transitionEnteredAt({ ...baseDevice, state: "reclaiming" })).toBeUndefined();
+  });
+
+  it("is undefined for every other state", () => {
+    for (const state of ["ready", "leased", "quarantined", "shutdown", "deleted"] as const) {
+      expect(transitionEnteredAt({ ...baseDevice, state })).toBeUndefined();
+    }
   });
 });

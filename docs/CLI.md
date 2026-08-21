@@ -205,10 +205,16 @@ meaningful.
 Human and JSON status include derived warm counts globally and per platform.
 `ready` devices contribute to those counts; `reclaiming` and `quarantined`
 devices remain visible as busy running capacity and never contribute to warm
-inventory. A `quarantined` device is one whose release-time purge failed: it
-stays visible in `status` and `list --devices` with that state while
-`QuarantineCoordinator` retries it in the background, and is never handed to
-a new requester.
+inventory. A `quarantined` device is one whose release-time purge failed, or
+whose `provisioning`/`reclaiming` transition stalled past its driver-derived
+threshold (see `pitlane doctor` below): it stays visible in `status` and
+`list --devices` with that state while `QuarantineCoordinator` retries it in
+the background, and is never handed to a new requester.
+
+A device currently `provisioning` or `reclaiming` carries a derived
+`transitionAgeMs` — how long it has been in that state — visible in `status`
+and `list --devices` well before it crosses the threshold that would make
+`doctor` flag it as stalled.
 
 Human-oriented overview: daemon health, managed capacity (used/limit per
 platform), running and reserved capacity (globally and per platform), every
@@ -254,7 +260,21 @@ each rule *would* take (rule name, target, reason) without executing.
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries
 whose device vanished, devices booted outside pitlane, expired-but-held
-leases. `--fix` applies the safe corrections.
+leases, and devices stuck mid-transition. `--fix` applies the safe
+corrections.
+
+A `provisioning` or `reclaiming` device is normally in-flight work Pitlane
+itself is driving and is not reported — but only up to a driver-derived
+threshold (`Driver.estimate` for that operation, scaled by
+`stalledTransition.thresholdMultiplier` and floored at
+`stalledTransition.minimumThresholdMs`; see [CONFIGURATION.md](CONFIGURATION.md)).
+Past that threshold it becomes a `stalled-transition` finding: the driver
+call that was supposed to resolve the transition never did, and the
+registry's view of the device has diverged from the driver's. `--fix`
+responds the same way it does for a release-time purge failure — the device
+enters `quarantined` (see [#21](https://github.com/callstackincubator/pitlane/issues/21))
+rather than being re-driven, since it may be mid-erase. As with every other
+`--fix` correction, a leased device is never touched.
 
 ## `pitlane nuke [--delete-devices] [--yes]`
 
