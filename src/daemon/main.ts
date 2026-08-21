@@ -108,6 +108,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     diskPath: dataDirectory,
   });
   const doctor = new Doctor({
+    // Without this, a backgrounded orphaned-lease reclaim (#43) -- which holds its
+    // device in `reclaiming` for a full erase -- reads as a stalled transition.
+    claims: leaseEngine.claimReader,
     clock,
     config,
     drivers,
