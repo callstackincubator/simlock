@@ -36,7 +36,13 @@ interface ServerFrame {
   readonly id?: string | null;
   readonly ok?: boolean;
   readonly payload?: unknown;
-  readonly push?: "event" | "lease-lost" | "lease.heartbeat" | "progress";
+  readonly push?:
+    | "device-recovered"
+    | "device-unhealthy"
+    | "event"
+    | "lease-lost"
+    | "lease.heartbeat"
+    | "progress";
 }
 
 const runningDaemons: DaemonServer[] = [];
@@ -476,6 +482,117 @@ describe("DaemonServer", () => {
     await hello(client);
     await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
     await client.close();
+  });
+
+  it("pushes a device-unhealthy notification on device.crash-detected without releasing the lease", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+    const deviceId = harness.registry.snapshot.leases.find(
+      (lease) => lease.id === leaseId,
+    )?.deviceId;
+
+    harness.eventBus.emit(
+      "device.crash-detected",
+      { deviceId: deviceId as string, leaseId, observed: "stopped", platform: "ios" },
+      "test",
+    );
+    await expect(
+      holder.nextFrame((frame) => frame.push === "device-unhealthy"),
+    ).resolves.toMatchObject({
+      payload: { deviceId, leaseId, reason: "crashed" },
+      push: "device-unhealthy",
+    });
+
+    // The lease is still held after the notice: closing the connection still
+    // releases it, same as any other held lease, proving `heldLeaseIds` was never
+    // touched by the push (unlike `#notifyLeaseLost`).
+    await holder.close();
+    await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
+  });
+
+  it("pushes a device-recovered notification on device.recovered without releasing the lease", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+    const deviceId = harness.registry.snapshot.leases.find(
+      (lease) => lease.id === leaseId,
+    )?.deviceId;
+
+    harness.eventBus.emit(
+      "device.recovered",
+      { attempts: 2, deviceId: deviceId as string, duration: 30_000, leaseId },
+      "test",
+    );
+    await expect(
+      holder.nextFrame((frame) => frame.push === "device-recovered"),
+    ).resolves.toMatchObject({
+      payload: { attempts: 2, deviceId, leaseId },
+      push: "device-recovered",
+    });
+
+    await holder.close();
+    await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
+  });
+
+  it("ignores device-unhealthy/device-recovered facts for leases with no currently connected holder", async () => {
+    const harness = await createHarness();
+    harness.eventBus.emit(
+      "device.crash-detected",
+      { deviceId: "device-x", leaseId: "lease-x", observed: "stopped", platform: "ios" },
+      "test",
+    );
+    harness.eventBus.emit(
+      "device.recovered",
+      { attempts: 1, deviceId: "device-x", duration: 1_000, leaseId: "lease-x" },
+      "test",
+    );
+
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    await expect(client.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    await client.close();
+  });
+
+  it("pushes a lease-lost notification carrying reason device-lost when a leased device could not be recovered", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    const leaseId = leaseIdOf(grant);
+    const deviceId = harness.registry.snapshot.leases.find(
+      (lease) => lease.id === leaseId,
+    )?.deviceId;
+
+    // Simulates the health monitor giving up on recovery and releasing the lease as
+    // `device-lost` -- proves the *existing* `lease.released` subscription already
+    // reaches the holder with the reason verbatim, so the failure path needs no new
+    // push of its own.
+    harness.eventBus.emit(
+      "lease.released",
+      { deviceId: deviceId as string, leaseId, reason: "device-lost" },
+      "test",
+    );
+    await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
+      payload: { deviceId, leaseId, reason: "device-lost" },
+      push: "lease-lost",
+    });
   });
 });
 
@@ -1083,6 +1200,14 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
+    health: {
+      enabled: true,
+      maxConcurrentRecoveries: 1,
+      maxRecoveryAttempts: 3,
+      probeIntervalMs: 30_000,
+      recoveryBackoffMs: 5_000,
+      stableObservations: 2,
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       detachedTtlMs: 60_000,

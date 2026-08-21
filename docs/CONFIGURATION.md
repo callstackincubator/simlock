@@ -21,9 +21,19 @@ a warning. Inspect the effective, merged configuration at any time with
 | `lease.heartbeatIntervalMs`       | How often the daemon pings a held-mode connection that declared the `heartbeat` capability; each pong slides that connection's leases' TTL back out to a full `heldTtlBackstopMs`. Must be `<= lease.heldTtlBackstopMs / 4`. | `5 minutes`                                                     |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Pitlane treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of business events kept in the in-memory ring buffer (see `pitlane events`).                                                                                                                                          | `1000`                                                           |
+| `health.enabled`                  | Master switch for leased-device crash detection and recovery.                                                                                                                                                                | `true`                                                           |
+| `health.probeIntervalMs`          | How often the health monitor observes leased devices against driver reality.                                                                                                                                                | `30 seconds`                                                     |
+| `health.stableObservations`       | Consecutive `stopped` observations required before a leased device is treated as crashed; guards against transient `Booting`/`Shutting Down`/adb-offline readings.                                                         | `2`                                                               |
+| `health.maxRecoveryAttempts`      | Reboot attempts for one lease before the lease is given up as lost.                                                                                                                                                          | `3`                                                               |
+| `health.recoveryBackoffMs`        | Base delay between reboot attempts; the monitor applies exponential backoff over it.                                                                                                                                        | `5 seconds`                                                      |
+| `health.maxConcurrentRecoveries`  | Cap on simultaneous recovery reboots, so a machine wake (every device reads `stopped` at once) cannot start a boot storm.                                                                                                   | `1`                                                               |
 
 All limit values must be positive integers; all durations and byte sizes
 must be non-negative numbers (milliseconds and bytes, respectively).
+`health.enabled` is a boolean; `health.probeIntervalMs` and
+`health.recoveryBackoffMs` must be positive numbers; and
+`health.stableObservations`, `health.maxRecoveryAttempts`, and
+`health.maxConcurrentRecoveries` must be positive integers.
 Running limits are independent of managed-device limits — an omitted
 `maxRunning` defaults to its corresponding `maxDevices` value (and, at the
 global level, to their sum):

@@ -24,6 +24,8 @@ export interface DeviceRecord {
   readonly lastLeaseEndedAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
+  readonly recoveringSince?: number;
+  readonly recoveryAttempts?: number;
 }
 
 export interface LeaseRecord {

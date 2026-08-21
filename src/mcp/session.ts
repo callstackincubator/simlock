@@ -1,5 +1,7 @@
 import {
   parseRawCatalog,
+  parseRawDeviceRecovered,
+  parseRawDeviceUnhealthy,
   parseRawLeaseGrant,
   parseRawLeaseHeartbeatAck,
   parseRawLeaseLost,
@@ -41,6 +43,25 @@ export interface LeaseLostNotice {
   readonly leaseId: string;
   readonly reason: string;
 }
+
+/**
+ * Delivered to `onDeviceHealth` listeners when this session's held lease's device crashed and
+ * was rebooted under the same lease. Unlike `LeaseLostNotice`, the lease is NOT ended -- the
+ * session keeps owning it, but whatever it had running inside the device did not survive.
+ */
+export type DeviceHealthNotice =
+  | {
+      readonly deviceId: string;
+      readonly kind: "unhealthy";
+      readonly leaseId: string;
+      readonly reason: "crashed";
+    }
+  | {
+      readonly attempts: number;
+      readonly deviceId: string;
+      readonly kind: "recovered";
+      readonly leaseId: string;
+    };
 
 /** Delivered to a `lease()` call's own `onProgress` callback while that request is in flight. */
 export type LeaseProgressNotice = RawLeaseProgress;
@@ -93,6 +114,7 @@ export class McpSession {
   /** Scoped to the in-flight `lease()` call; cleared once that call settles or the session closes. */
   #leaseProgressListener: ((progress: LeaseProgressNotice) => void) | undefined;
   readonly #leaseLostListeners = new Set<(notice: LeaseLostNotice) => void>();
+  readonly #deviceHealthListeners = new Set<(notice: DeviceHealthNotice) => void>();
   #mutations: Promise<void> = Promise.resolve();
 
   constructor(options: McpSessionOptions) {
@@ -170,6 +192,15 @@ export class McpSession {
   onLeaseLost(listener: (notice: LeaseLostNotice) => void): () => void {
     this.#leaseLostListeners.add(listener);
     return () => this.#leaseLostListeners.delete(listener);
+  }
+
+  /**
+   * Notifies when this session's held lease's device crashed and was rebooted, or came back
+   * from that. The lease itself is unaffected -- see `DeviceHealthNotice`.
+   */
+  onDeviceHealth(listener: (notice: DeviceHealthNotice) => void): () => void {
+    this.#deviceHealthListeners.add(listener);
+    return () => this.#deviceHealthListeners.delete(listener);
   }
 
   close(): Promise<void> {
@@ -398,15 +429,27 @@ export class McpSession {
    * into an answered request and re-surfaces its ack here under the same push kind).
    */
   #handlePush(kind: string, payload: unknown): void {
-    if (kind === "progress") {
-      this.#handleLeaseProgress(payload);
-      return;
+    switch (kind) {
+      case "progress":
+        this.#handleLeaseProgress(payload);
+        return;
+      case "lease.heartbeat":
+        this.#handleHeartbeatAck(payload);
+        return;
+      case "lease-lost":
+        this.#handleLeaseLost(payload);
+        return;
+      case "device-unhealthy":
+        this.#handleDeviceUnhealthy(payload);
+        return;
+      case "device-recovered":
+        this.#handleDeviceRecovered(payload);
+        return;
     }
-    if (kind === "lease.heartbeat") {
-      this.#handleHeartbeatAck(payload);
-      return;
-    }
-    if (kind !== "lease-lost") return;
+  }
+
+  /** Relays a lease-lost push to `#leaseLostListeners`, if it names this session's own lease. */
+  #handleLeaseLost(payload: unknown): void {
     let notice: LeaseLostNotice;
     try {
       notice = parseRawLeaseLost(payload);
@@ -416,6 +459,44 @@ export class McpSession {
     if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== notice.leaseId) return;
     this.#ownedLease = undefined;
     for (const listener of this.#leaseLostListeners) listener(notice);
+  }
+
+  /** Relays a device-unhealthy push to `#deviceHealthListeners`, if it names this session's lease. */
+  #handleDeviceUnhealthy(payload: unknown): void {
+    let raw: ReturnType<typeof parseRawDeviceUnhealthy>;
+    try {
+      raw = parseRawDeviceUnhealthy(payload);
+    } catch {
+      return;
+    }
+    if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== raw.leaseId) return;
+    for (const listener of this.#deviceHealthListeners) {
+      listener({
+        deviceId: raw.deviceId,
+        kind: "unhealthy",
+        leaseId: raw.leaseId,
+        reason: "crashed",
+      });
+    }
+  }
+
+  /** Relays a device-recovered push to `#deviceHealthListeners`, if it names this session's lease. */
+  #handleDeviceRecovered(payload: unknown): void {
+    let raw: ReturnType<typeof parseRawDeviceRecovered>;
+    try {
+      raw = parseRawDeviceRecovered(payload);
+    } catch {
+      return;
+    }
+    if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== raw.leaseId) return;
+    for (const listener of this.#deviceHealthListeners) {
+      listener({
+        attempts: raw.attempts,
+        deviceId: raw.deviceId,
+        kind: "recovered",
+        leaseId: raw.leaseId,
+      });
+    }
   }
 
   /**

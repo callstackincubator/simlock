@@ -58,6 +58,7 @@ export class ManagedDeviceLifecycle {
     private readonly clock: Clock,
   ) {}
 
+  // fallow-ignore-next-line unused-class-member -- no production caller: superseded by bootForLease, still covered by its own tests.
   async boot(
     target: DeviceRecord,
     claim?: DeviceOperationClaim,
@@ -65,11 +66,13 @@ export class ManagedDeviceLifecycle {
     return this.#makeReady(target, "shutdown", claim);
   }
 
+  // fallow-ignore-next-line unused-class-member -- no production caller: superseded by readyProvisionedForLease, still covered by its own tests.
   async readyProvisioned(target: DeviceRecord): Promise<DeviceRecord | undefined> {
     return this.#makeReady(target, "provisioning");
   }
 
   /** Makes a device ready while retaining its claim for an immediate lease handoff. */
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's lifecycle port.
   async bootForLease(
     target: DeviceRecord,
     claim: DeviceOperationClaim,
@@ -78,10 +81,12 @@ export class ManagedDeviceLifecycle {
   }
 
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */
+  // fallow-ignore-next-line unused-class-member -- reached through DeviceProvisioner's lifecycle port.
   async readyProvisionedForLease(target: DeviceRecord): Promise<ReadyDeviceHandoff | undefined> {
     return this.#makeReadyForLease(target, "provisioning");
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the lifecycle/devices ports by cleanup, acquisition and nuke.
   async shutdown(
     target: DeviceRecord,
     initiator: string,
@@ -104,6 +109,7 @@ export class ManagedDeviceLifecycle {
     });
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the lifecycle/devices ports by provisioning, acquisition and nuke.
   async destroy(
     target: DeviceRecord,
     initiator: string,
@@ -126,7 +132,41 @@ export class ManagedDeviceLifecycle {
     });
   }
 
+  /**
+   * Reboots a device that is currently leased and whose underlying process
+   * died outside pitlane, so the lease can continue on the same device. The
+   * device stays `leased` throughout: this performs no registry transition
+   * and emits no event, deliberately -- the caller (a `LeaseHealthMonitor`)
+   * owns deciding what happened and telling the holder.
+   */
+  // fallow-ignore-next-line unused-class-member -- called through LeaseHealthMonitor's lifecycle port.
+  async recoverLeased(target: DeviceRecord, leaseId: string): Promise<DeviceRecord | undefined> {
+    const claimed = await this.#claimLeased(target, leaseId);
+    if (claimed === undefined) return undefined;
+
+    try {
+      await this.catalog
+        .get(claimed.device.spec.platform)
+        .makeReady(toDriverDevice(claimed.device));
+    } catch (error: unknown) {
+      await this.#release(claimed);
+      throw error;
+    }
+
+    return this.decisions.run(() => {
+      try {
+        // The ~30s boot ran outside the gate; the holder may have released the
+        // lease, or the TTL may have expired and moved the device on, while it
+        // was in flight. Re-verify before handing the device back as recovered.
+        return this.#leasedTarget(claimed.device, leaseId);
+      } finally {
+        claimed.release();
+      }
+    });
+  }
+
   /** Shuts down a ready device when needed, then destroys it under one claim. */
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's lifecycle port when an unusable device must go.
   async dispose(
     target: DeviceRecord,
     initiator: string,
@@ -243,6 +283,15 @@ export class ManagedDeviceLifecycle {
     });
   }
 
+  async #claimLeased(target: DeviceRecord, leaseId: string): Promise<ClaimedDevice | undefined> {
+    return this.decisions.run(() => {
+      const device = this.#leasedTarget(target, leaseId);
+      if (device === undefined) return undefined;
+      const claim = this.claims.tryClaim(device.id, "recovery");
+      return claim === undefined ? undefined : { claim, device, release: claim.release };
+    });
+  }
+
   async #commit(
     claimed: ClaimedDevice,
     expectedStates: readonly DeviceState[],
@@ -291,6 +340,24 @@ export class ManagedDeviceLifecycle {
       return undefined;
     }
     return device;
+  }
+
+  /**
+   * The single, deliberate exception to safety rule 2 ("never touch a leased
+   * device"). This is `#registeredTarget` inverted, not removed or
+   * parameterised away: normal operations require no lease on the device,
+   * this requires a lease with exactly the given id. A lease-id mismatch --
+   * someone else's lease, no lease at all, or the lease having moved on --
+   * always returns undefined, which is what stops recovery from ever acting
+   * on a device leased by someone else or on an unleased device.
+   */
+  #leasedTarget(target: DeviceRecord, leaseId: string): DeviceRecord | undefined {
+    const device = this.registry.snapshot.devices.find((candidate) => candidate.id === target.id);
+    if (device === undefined || device.driverDeviceId !== target.driverDeviceId) return undefined;
+    if (device.state !== "leased") return undefined;
+
+    const lease = this.registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
+    return lease === undefined || lease.deviceId !== device.id ? undefined : device;
   }
 }
 

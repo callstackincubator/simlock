@@ -43,6 +43,14 @@ describe("loadConfig", () => {
     expect(config).toMatchObject({
       diskPressure: { freeBytesThreshold: 10 * gibibyte },
       eventBuffer: { capacity: 1000 },
+      health: {
+        enabled: true,
+        probeIntervalMs: 30_000,
+        stableObservations: 2,
+        maxRecoveryAttempts: 3,
+        recoveryBackoffMs: 5_000,
+        maxConcurrentRecoveries: 1,
+      },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
       lease: {
         detachedTtlMs: 15 * 60_000,
@@ -214,5 +222,72 @@ describe("loadConfig", () => {
       loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
     ).resolves.toBeDefined();
     expect(warn).toHaveBeenCalledWith('Unknown config key: "limits.web"');
+  });
+
+  it("applies a file-level health override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        health: {
+          enabled: false,
+          probeIntervalMs: 60_000,
+          stableObservations: 3,
+          maxRecoveryAttempts: 5,
+          recoveryBackoffMs: 10_000,
+          maxConcurrentRecoveries: 2,
+        },
+      }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.health).toEqual({
+      enabled: false,
+      probeIntervalMs: 60_000,
+      stableObservations: 3,
+      maxRecoveryAttempts: 5,
+      recoveryBackoffMs: 10_000,
+      maxConcurrentRecoveries: 2,
+    });
+  });
+
+  it("rejects a non-boolean health.enabled", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ health: { enabled: "yes" } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("health.enabled");
+  });
+
+  it.each([
+    [{ health: { probeIntervalMs: 0 } }, "health.probeIntervalMs"],
+    [{ health: { recoveryBackoffMs: -1 } }, "health.recoveryBackoffMs"],
+    [{ health: { stableObservations: 0 } }, "health.stableObservations"],
+    [{ health: { stableObservations: 1.5 } }, "health.stableObservations"],
+    [{ health: { maxRecoveryAttempts: 0 } }, "health.maxRecoveryAttempts"],
+    [{ health: { maxConcurrentRecoveries: 0 } }, "health.maxConcurrentRecoveries"],
+  ])("rejects invalid health values in every field", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("warns about an unknown key nested under health without rejecting the file", async () => {
+    const filesystem = new MemoryFilesystem();
+    const warn = vi.fn();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ health: { maxBoltCount: 7 } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "health.maxBoltCount"');
   });
 });

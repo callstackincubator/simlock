@@ -17,7 +17,7 @@ export interface EventMap {
   "lease.released": {
     readonly leaseId: string;
     readonly deviceId: string;
-    readonly reason: "closed" | "explicit" | "killed" | "orphaned";
+    readonly reason: "closed" | "explicit" | "killed" | "orphaned" | "device-lost";
   };
   "lease.expired": { readonly leaseId: string; readonly deviceId: string };
   "lease.rejected": {
@@ -47,6 +47,25 @@ export interface EventMap {
     readonly leaseId: string;
     readonly attemptedStrategy: string;
     readonly duration: number;
+    readonly error: string;
+  };
+  "device.crash-detected": {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly platform: string;
+    readonly observed: string;
+  };
+  "device.recovered": {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly attempts: number;
+    readonly duration: number;
+  };
+  "device.recovery-failed": {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly attempts: number;
+    readonly reason: string;
     readonly error: string;
   };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };

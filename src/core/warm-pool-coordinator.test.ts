@@ -16,6 +16,14 @@ const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const
 const config: Config = {
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   eventBuffer: { capacity: 100 },
+  health: {
+    enabled: true,
+    maxConcurrentRecoveries: 1,
+    maxRecoveryAttempts: 3,
+    probeIntervalMs: 30_000,
+    recoveryBackoffMs: 5_000,
+    stableObservations: 2,
+  },
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
   lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
   limits: {

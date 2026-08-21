@@ -11,7 +11,11 @@ import {
   type Filesystem,
 } from "../ports/index.js";
 import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
-import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
+import {
+  parseRawDeviceRecovered,
+  parseRawDeviceUnhealthy,
+  parseRawLeaseGrant,
+} from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
@@ -260,7 +264,17 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   const termination = detached ? undefined : waitForTermination(environment.signals);
   const connection = await environment.connect();
   const unsubscribe = connection.onPush((kind, payload) => {
-    if (kind === "progress") environment.stderr.write(`${JSON.stringify(progressLine(payload))}\n`);
+    if (kind === "progress") {
+      environment.stderr.write(`${JSON.stringify(progressLine(payload))}\n`);
+      return;
+    }
+    if (kind === "device-unhealthy") {
+      writeDeviceHealthLine(environment, () => deviceUnhealthyLine(payload));
+      return;
+    }
+    if (kind === "device-recovered") {
+      writeDeviceHealthLine(environment, () => deviceRecoveredLine(payload));
+    }
   });
   try {
     const response = await connection.request("lease.request", {
@@ -637,6 +651,47 @@ function progressLine(value: unknown): {
     return { eta_seconds: Math.ceil(progress.etaMs / 1_000), event: progress.stage };
   }
   throw new Error("Daemon returned invalid progress");
+}
+
+/**
+ * Writes one structured diagnostic line for a device-unhealthy/device-recovered push, mirroring
+ * `progressLine`'s stderr shape. A malformed push is diagnostic noise, not fatal: the CLI's
+ * stdout contract (exactly one JSON result line) must survive it, so parse failures are dropped
+ * silently rather than thrown.
+ */
+function writeDeviceHealthLine(
+  environment: CliEnvironment,
+  build: () => Record<string, unknown>,
+): void {
+  try {
+    environment.stderr.write(`${JSON.stringify(build())}\n`);
+  } catch {
+    // Ignore a malformed push.
+  }
+}
+
+function deviceUnhealthyLine(value: unknown): {
+  readonly device_id: string;
+  readonly event: "device_unhealthy";
+  readonly lease: string;
+} {
+  const notice = parseRawDeviceUnhealthy(value);
+  return { device_id: notice.deviceId, event: "device_unhealthy", lease: notice.leaseId };
+}
+
+function deviceRecoveredLine(value: unknown): {
+  readonly attempts: number;
+  readonly device_id: string;
+  readonly event: "device_recovered";
+  readonly lease: string;
+} {
+  const notice = parseRawDeviceRecovered(value);
+  return {
+    attempts: notice.attempts,
+    device_id: notice.deviceId,
+    event: "device_recovered",
+    lease: notice.leaseId,
+  };
 }
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { parseRawCatalog, parseRawLeaseGrant, parseRawLeaseHeartbeatAck } from "./contracts.js";
+import {
+  parseRawCatalog,
+  parseRawDeviceRecovered,
+  parseRawDeviceUnhealthy,
+  parseRawLeaseGrant,
+  parseRawLeaseHeartbeatAck,
+} from "./contracts.js";
 
 const leaseGrant = {
   device: {
@@ -80,5 +86,43 @@ describe("parseRawLeaseHeartbeatAck", () => {
     [null],
   ])("rejects malformed heartbeat acks", (value) => {
     expect(() => parseRawLeaseHeartbeatAck(value)).toThrow("Daemon sent an invalid heartbeat ack");
+  });
+});
+
+describe("parseRawDeviceUnhealthy", () => {
+  it("parses the device-unhealthy push notified to a lease's holding connection", () => {
+    const notice = { deviceId: "ABCD", leaseId: "lse_9f2c", reason: "crashed" };
+    expect(parseRawDeviceUnhealthy(notice)).toEqual(notice);
+  });
+
+  it.each([
+    [{ deviceId: 42, leaseId: "lse_9f2c", reason: "crashed" }],
+    [{ deviceId: "ABCD", leaseId: 9, reason: "crashed" }],
+    [{ deviceId: "ABCD", leaseId: "lse_9f2c", reason: 1 }],
+    [{ deviceId: "ABCD", leaseId: "lse_9f2c" }],
+    [null],
+  ])("rejects malformed device-unhealthy notifications", (value) => {
+    expect(() => parseRawDeviceUnhealthy(value)).toThrow(
+      "Daemon sent an invalid device-unhealthy notification",
+    );
+  });
+});
+
+describe("parseRawDeviceRecovered", () => {
+  it("parses the device-recovered push notified to a lease's holding connection", () => {
+    const notice = { attempts: 2, deviceId: "ABCD", leaseId: "lse_9f2c" };
+    expect(parseRawDeviceRecovered(notice)).toEqual(notice);
+  });
+
+  it.each([
+    [{ attempts: "2", deviceId: "ABCD", leaseId: "lse_9f2c" }],
+    [{ attempts: 2, deviceId: 42, leaseId: "lse_9f2c" }],
+    [{ attempts: 2, deviceId: "ABCD", leaseId: 9 }],
+    [{ deviceId: "ABCD", leaseId: "lse_9f2c" }],
+    [null],
+  ])("rejects malformed device-recovered notifications", (value) => {
+    expect(() => parseRawDeviceRecovered(value)).toThrow(
+      "Daemon sent an invalid device-recovered notification",
+    );
   });
 });

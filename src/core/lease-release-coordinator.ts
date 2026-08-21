@@ -3,7 +3,7 @@ import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import type { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
 
-export type LeaseReleaseReason = "closed" | "explicit" | "killed" | "orphaned";
+export type LeaseReleaseReason = "closed" | "explicit" | "killed" | "orphaned" | "device-lost";
 
 export interface LeaseReleaseCommands {
   release(leaseId: string, reason: LeaseReleaseReason): Promise<void>;
@@ -62,6 +62,16 @@ export class LeaseReleaseCoordinator
 
   async releaseAll(reason: "explicit" | "killed"): Promise<readonly string[]> {
     return this.#runNormal(() => this.#releaseAll(reason));
+  }
+
+  /**
+   * Gives up a lease whose device could not be brought back. Internally
+   * originated only -- no client can ask for it -- but it is an ordinary
+   * release otherwise, so it takes the same maintenance admission and the same
+   * warm-pool reclaim as every other one.
+   */
+  async releaseDeviceLost(leaseId: string): Promise<void> {
+    await this.#runNormal(() => this.#release(leaseId, "device-lost"));
   }
 
   async expire(leaseId: string, expectedDeadline?: number): Promise<void> {

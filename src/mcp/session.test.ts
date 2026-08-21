@@ -528,6 +528,103 @@ describe("McpSession", () => {
     expect(notices).toEqual([]);
   });
 
+  it("notifies onDeviceHealth without ending the lease when the daemon pushes device-unhealthy", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onDeviceHealth((notice) => notices.push(notice));
+    connection.pushDeviceUnhealthy({ deviceId: "ABCD", leaseId: "lse_9f2c", reason: "crashed" });
+
+    expect(notices).toEqual([
+      { deviceId: "ABCD", kind: "unhealthy", leaseId: "lse_9f2c", reason: "crashed" },
+    ]);
+    // Still owned: unlike a lease-lost push, this does not end the lease.
+    expect(session.status()).toMatchObject({ held: true, lease_id: "lse_9f2c" });
+  });
+
+  it("notifies onDeviceHealth without ending the lease when the daemon pushes device-recovered", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onDeviceHealth((notice) => notices.push(notice));
+    connection.pushDeviceRecovered({ attempts: 2, deviceId: "ABCD", leaseId: "lse_9f2c" });
+
+    expect(notices).toEqual([
+      { attempts: 2, deviceId: "ABCD", kind: "recovered", leaseId: "lse_9f2c" },
+    ]);
+    expect(session.status()).toMatchObject({ held: true, lease_id: "lse_9f2c" });
+  });
+
+  it("ignores device-unhealthy/device-recovered pushes for a lease id this session does not currently own", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onDeviceHealth((notice) => notices.push(notice));
+    connection.pushDeviceUnhealthy({
+      deviceId: "other",
+      leaseId: "some-other-lease",
+      reason: "crashed",
+    });
+    connection.pushDeviceRecovered({ attempts: 1, deviceId: "other", leaseId: "some-other-lease" });
+
+    expect(notices).toEqual([]);
+  });
+
+  it("ignores malformed device-unhealthy/device-recovered pushes without throwing", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onDeviceHealth((notice) => notices.push(notice));
+    expect(() => connection.pushDeviceUnhealthy({} as never)).not.toThrow();
+    expect(() => connection.pushDeviceRecovered(null)).not.toThrow();
+
+    expect(notices).toEqual([]);
+    expect(session.status()).toMatchObject({ held: true, lease_id: "lse_9f2c" });
+  });
+
+  it("stops delivering onDeviceHealth notices once the session is closed", async () => {
+    const connection = new StubConnection();
+    connection.responses.push(rawGrant);
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onDeviceHealth((notice) => notices.push(notice));
+    await session.close();
+
+    // Closing unsubscribes the push listener, so a push arriving after close (a race
+    // between shutdown and an in-flight daemon message) is simply never delivered.
+    connection.pushDeviceUnhealthy({ deviceId: "ABCD", leaseId: "lse_9f2c", reason: "crashed" });
+    expect(notices).toEqual([]);
+  });
+
   it("relays progress pushes to the in-flight lease request's onProgress callback", async () => {
     const connection = new StubConnection();
     const grant = deferred<unknown>();
@@ -811,6 +908,46 @@ describe("McpSession", () => {
     expect(session.status()).toEqual({ held: false });
   });
 
+  it("keeps an onDeviceHealth listener registered across a reconnect after the connection dies", async () => {
+    const connectionA = new StubConnection();
+    connectionA.responses.push(rawGrant);
+    const connectionB = new StubConnection();
+    const connections = [connectionA, connectionB];
+    const session = new McpSession({
+      connect: async () => connections.shift()!,
+      requesterId: "mcp-session-1",
+    });
+    await session.lease(input);
+
+    const notices: unknown[] = [];
+    session.onDeviceHealth((notice) => notices.push(notice));
+
+    // The connection dies (daemon restart); `#handleConnectionClosed` drops the push
+    // subscription along with the owned lease, so a stale push on the dead connection
+    // must not reach the listener.
+    connectionA.emitClose();
+    connectionA.pushDeviceUnhealthy({ deviceId: "ABCD", leaseId: "lse_9f2c", reason: "crashed" });
+    expect(notices).toEqual([]);
+
+    // A fresh lease through the lazily-reconnected session (connectionB) is owned
+    // again, and the *same* onDeviceHealth listener -- never re-registered by this
+    // test -- still fires for it: registration survives the reconnect without leaking.
+    connectionB.responses.push({
+      ...rawGrant,
+      lease: { ...rawGrant.lease, id: "lse_after_reconnect" },
+    });
+    await session.lease(input);
+    connectionB.pushDeviceUnhealthy({
+      deviceId: "ABCD",
+      leaseId: "lse_after_reconnect",
+      reason: "crashed",
+    });
+
+    expect(notices).toEqual([
+      { deviceId: "ABCD", kind: "unhealthy", leaseId: "lse_after_reconnect", reason: "crashed" },
+    ]);
+  });
+
   it("surfaces DAEMON_UNAVAILABLE when reconnecting after a restart fails", async () => {
     const connection = new StubConnection();
     connection.responses.push({ platforms: [] });
@@ -872,6 +1009,14 @@ class StubConnection implements DaemonConnection {
     readonly reason: string;
   }): void {
     for (const listener of this.#listeners) listener("lease-lost", payload);
+  }
+
+  pushDeviceUnhealthy(payload: unknown): void {
+    for (const listener of this.#listeners) listener("device-unhealthy", payload);
+  }
+
+  pushDeviceRecovered(payload: unknown): void {
+    for (const listener of this.#listeners) listener("device-recovered", payload);
   }
 
   pushProgress(payload: unknown): void {
