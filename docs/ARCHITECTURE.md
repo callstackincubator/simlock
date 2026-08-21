@@ -233,18 +233,21 @@ shared managed-device lifecycle.
 v1 rules — the tiered cleanup:
 
 1. idle > T1 → `shutdown` (reclaim RAM)
-2. idle > T2 → `destroy` (reclaim disk)
-3. unreferenced runtime / system image > T3 (very long, or explicit command
-   only) → GC
-
-Runtime GC is explicit-only in v1 (`cleanup --rule runtime-gc`). iOS runtimes
-are Xcode-managed and are never deleted by Pitlane.
+2. idle > T2 → `destroy` (reclaim disk); under disk pressure (free space
+   below `diskPressure.freeBytesThreshold`) `idle-destroy` uses T1 instead of
+   T2, so a full disk shortens the wait to reclaim it — the rule reads
+   `diskFreeBytes` off the view itself rather than depending on the
+   `disk.pressure-detected` event.
 
 Rules are registered in a static in-code list; adding one is a new file plus
-one registration line. Reaper triggers are observer subscriptions to
-`lease.released`, `disk.pressure-detected`, and `daemon.started`, plus a
-periodic tick. Every successful action emits its rule and reason in
-`cleanup.executed`; `pitlane cleanup --dry-run` previews proposals.
+one registration line. `--rule <name>` selects a registered rule by name.
+Reaper triggers are observer subscriptions to `lease.released`,
+`disk.pressure-detected`, and `daemon.started`, plus a periodic tick. The
+reaper itself emits `disk.pressure-detected` (edge-triggered, once per
+crossing) as a post-commit fact for observers — never as the mechanism that
+drives `idle-destroy`'s own behavior. Every successful action emits its rule
+and reason in `cleanup.executed`; `pitlane cleanup --dry-run` previews
+proposals.
 
 ## Event bus
 

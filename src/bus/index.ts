@@ -51,7 +51,6 @@ export interface EventMap {
   };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
-  "runtime.deleted": { readonly runtimeId: string; readonly initiator: string };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };

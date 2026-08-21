@@ -128,7 +128,6 @@ describe("EventBus", () => {
       | "device.deleted"
       | "device.foreign-state-detected"
       | "device.foreign-provenance-detected"
-      | "runtime.deleted"
       | "daemon.started"
       | "daemon.stopping"
       | "disk.pressure-detected"

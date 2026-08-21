@@ -2,7 +2,7 @@ import type { EventBus } from "../bus/index.js";
 import type { Clock, Filesystem, TimerHandle } from "../ports/index.js";
 import type { Config } from "./config.js";
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
-import { automaticCleanupRules, manualCleanupRules } from "./cleanup/rules.js";
+import { automaticCleanupRules } from "./cleanup/rules.js";
 import type { CleanupRule, Proposal, RegistryView } from "./cleanup/types.js";
 import type { Registry } from "./registry.js";
 
@@ -28,26 +28,30 @@ export interface CleanupRunOptions {
  */
 export class CleanupReaper {
   readonly #automaticRules: readonly CleanupRule[];
-  readonly #manualRules: readonly CleanupRule[];
   readonly #unsubscribe: readonly (() => void)[];
   #followUpRequested = false;
   #running: Promise<readonly Proposal[]> | undefined;
   #tickTimer: TimerHandle | undefined;
   #disposed = false;
+  // Tracks the previous tick's pressure state so disk.pressure-detected fires
+  // only on the crossing edge, not once per tick while pressure persists.
+  #underPressure = false;
 
   constructor(private readonly options: CleanupReaperOptions) {
     this.#automaticRules = options.rules ?? automaticCleanupRules;
-    this.#manualRules = manualCleanupRules;
     this.#unsubscribe = [
       options.eventBus.subscribe("lease.released", () => this.#trigger()),
       options.eventBus.subscribe("daemon.started", () => this.#trigger()),
+      // An external emitter may exist later; the reaper reacts to the event
+      // but idle-destroy itself stays pure over diskFreeBytes (see idle-destroy.ts).
       options.eventBus.subscribe("disk.pressure-detected", () => this.#trigger()),
     ];
     this.#armTick();
   }
 
-  get manualRules(): readonly CleanupRule[] {
-    return this.#manualRules;
+  /** Rules currently registered, for `pitlane list --rules` and `--rule` selection. */
+  get rules(): readonly CleanupRule[] {
+    return this.#automaticRules;
   }
 
   async run({ dryRun = false, rule }: CleanupRunOptions = {}): Promise<readonly Proposal[]> {
@@ -73,7 +77,10 @@ export class CleanupReaper {
   }
 
   async #runOnce({ dryRun = false, rule }: CleanupRunOptions = {}): Promise<readonly Proposal[]> {
-    const view = await this.#view();
+    // A dry run is a preview and must stay free of side effects: emitting the
+    // pressure fact from one would wake this reaper through its own subscription
+    // and turn `cleanup --dry-run` into a real cleanup.
+    const view = await this.#view({ observePressure: !dryRun });
     const proposals = filterProposals(this.#rulesFor(rule), view);
     if (dryRun) {
       return proposals;
@@ -143,18 +150,39 @@ export class CleanupReaper {
       return this.#automaticRules;
     }
 
-    return this.#manualRules.filter((rule) => rule.name === name);
+    return this.#automaticRules.filter((rule) => rule.name === name);
   }
 
-  async #view(): Promise<RegistryView> {
+  async #view({ observePressure }: { readonly observePressure: boolean }): Promise<RegistryView> {
     const snapshot = this.options.registry.snapshot;
+    const diskFreeBytes = await this.options.filesystem.diskFree(this.options.diskPath ?? ".");
+    if (observePressure) this.#notePressureCrossing(diskFreeBytes);
     return {
       config: this.options.config,
       devices: snapshot.devices,
-      diskFreeBytes: await this.options.filesystem.diskFree(this.options.diskPath ?? "."),
+      diskFreeBytes,
       leases: snapshot.leases,
       now: this.options.clock.now(),
     };
+  }
+
+  /**
+   * disk.pressure-detected is a post-commit observer fact, not the trigger for
+   * idle-destroy's own behavior (that rule reads diskFreeBytes off the view
+   * directly). Edge-triggered so a sustained under-threshold condition emits
+   * once, not once per tick.
+   */
+  #notePressureCrossing(freeBytes: number): void {
+    const threshold = this.options.config.diskPressure.freeBytesThreshold;
+    const underPressure = freeBytes < threshold;
+    if (underPressure && !this.#underPressure) {
+      this.options.eventBus.emit(
+        "disk.pressure-detected",
+        { freeBytes, threshold },
+        "cleanup-reaper",
+      );
+    }
+    this.#underPressure = underPressure;
   }
 }
 
