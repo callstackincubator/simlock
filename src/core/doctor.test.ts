@@ -822,6 +822,14 @@ function config(): Config {
   return {
     diskPressure: { freeBytesThreshold: 1 },
     eventBuffer: { capacity: 10 },
+    health: {
+      enabled: true,
+      maxConcurrentRecoveries: 1,
+      maxRecoveryAttempts: 3,
+      probeIntervalMs: 30_000,
+      recoveryBackoffMs: 5_000,
+      stableObservations: 2,
+    },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     limits: {

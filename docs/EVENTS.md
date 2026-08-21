@@ -15,7 +15,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator | implemented |
 | `lease.granted` | lease id, device id, requester, mode (held/detached) | a device was assigned and handed out | LeaseLifecycle | implemented |
 | `lease.renewed` | lease id, new deadline | an explicit `pitlane lease renew` succeeded (either mode), **or** a held-mode connection that declared the `heartbeat` capability answered a `lease.heartbeat` push (fires once per lease per `lease.heartbeatIntervalMs` while the holder stays alive) | LeaseLifecycle | implemented |
-| `lease.released` | lease id, device id, reason (closed/explicit/killed/orphaned) | holder connection closed, explicit release, or (orphaned) a `held` lease found still persisted at daemon startup, which cannot have a live holder across a restart | LeaseLifecycle | implemented |
+| `lease.released` | lease id, device id, reason (closed/explicit/killed/orphaned/device-lost) | holder connection closed, explicit release, (orphaned) a `held` lease found still persisted at daemon startup, which cannot have a live holder across a restart, or (device-lost) a leased device could not be recovered after it stopped running outside pitlane | LeaseLifecycle | implemented |
 | `lease.expired` | lease id, device id | TTL backstop fired without a heartbeat sliding it first — for a capability-declaring holder this means it stopped ponging (crashed, hung, or lost its socket); for one that never declared the capability it means the grant-time TTL (or the last explicit `pitlane lease renew`) simply ran out, exactly as before this change | LeaseLifecycle | implemented |
 | `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed) | a request ended without a grant | LeaseAcquisitionCoordinator / WaitQueue | implemented |
 
@@ -35,6 +35,9 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.deleted` | device id, initiator | device removed from disk and registry | Registry | implemented |
 | `device.foreign-state-detected` | device id, platform, expected (running/stopped), observed (running/stopped) | doctor reconcile found a managed device's observed boot state disagreeing with the committed registry state | Doctor | implemented |
 | `device.foreign-provenance-detected` | device id, platform, detail (erased/mark-mismatch/durable-mark-missing) | doctor reconcile found a managed device's provenance marks no longer proving Pitlane owns it | Doctor | implemented |
+| `device.crash-detected` | device id, lease id, platform, observed | a leased device was observed `stopped` for `health.stableObservations` consecutive ticks | LeaseHealthMonitor | implemented |
+| `device.recovered` | device id, lease id, attempts, duration | a crashed leased device was rebooted under its existing lease and passed readiness | LeaseHealthMonitor | implemented |
+| `device.recovery-failed` | device id, lease id, attempts, reason, error | recovery could not restore a leased device (absent from driver reality, provenance drift, or attempts exhausted) and its lease was released | LeaseHealthMonitor | implemented |
 
 ## System
 

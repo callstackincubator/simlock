@@ -25,6 +25,8 @@ export interface DeviceRecord {
   readonly lastLeaseEndedAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
+  readonly recoveringSince?: number;
+  readonly recoveryAttempts?: number;
   /** Set on entry to `quarantined`; the wall-clock moment the first purge failed. */
   readonly quarantinedAt?: number;
   /** Failed retry count since entering quarantine (the triggering failure itself is not a retry). */

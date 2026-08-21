@@ -6,6 +6,14 @@ import { idleShutdownRule } from "./idle-shutdown.js";
 const config: Config = {
   diskPressure: { freeBytesThreshold: 0 },
   eventBuffer: { capacity: 1 },
+  health: {
+    enabled: true,
+    maxConcurrentRecoveries: 1,
+    maxRecoveryAttempts: 3,
+    probeIntervalMs: 30_000,
+    recoveryBackoffMs: 5_000,
+    stableObservations: 2,
+  },
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   warmPool: {
     quarantine: {

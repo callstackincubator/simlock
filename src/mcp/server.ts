@@ -11,7 +11,12 @@ import {
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
 } from "./contracts.js";
-import { McpSession, type LeaseProgressNotice, toMcpErrorResult } from "./session.js";
+import {
+  McpSession,
+  type DeviceHealthNotice,
+  type LeaseProgressNotice,
+  toMcpErrorResult,
+} from "./session.js";
 
 const SERVER_INFO = { name: "pitlane", version: "1.0.0" };
 
@@ -183,7 +188,46 @@ export function createMcpServer(session: McpSession): McpServer {
     });
   });
 
+  session.onDeviceHealth((notice) => {
+    void server.server.sendLoggingMessage(deviceHealthLoggingMessage(notice));
+  });
+
   return server;
+}
+
+/**
+ * Whatever this session had running inside the device (a launched app, a log stream, an
+ * Appium/XCUITest session, a port forward) died with the crash and pitlane cannot restore it --
+ * the lease survives, but the agent still needs to know its in-device state is gone.
+ */
+function deviceHealthLoggingMessage(notice: DeviceHealthNotice): {
+  readonly data: Record<string, unknown>;
+  readonly level: "info" | "warning";
+  readonly logger: "pitlane";
+} {
+  if (notice.kind === "unhealthy") {
+    return {
+      data: {
+        device_id: notice.deviceId,
+        lease_id: notice.leaseId,
+        message:
+          "Pitlane's device crashed outside pitlane; anything running inside it (apps, log streams, automation sessions, port forwards) is gone. Recovery is in progress under the same lease.",
+        reason: notice.reason,
+      },
+      level: "warning",
+      logger: "pitlane",
+    };
+  }
+  return {
+    data: {
+      attempts: notice.attempts,
+      device_id: notice.deviceId,
+      lease_id: notice.leaseId,
+      message: "Pitlane's device was rebooted and is ready again under the same lease.",
+    },
+    level: "info",
+    logger: "pitlane",
+  };
 }
 
 function success(structuredContent: Record<string, unknown>) {

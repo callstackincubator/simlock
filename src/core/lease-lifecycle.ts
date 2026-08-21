@@ -44,6 +44,7 @@ export class DetachedLeaseHeartbeatError extends Error {
 export class LeaseLifecycle {
   constructor(private readonly options: LeaseLifecycleOptions) {}
 
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's leases port.
   async grant(input: {
     readonly deviceId: string;
     readonly mode: LeaseRecord["mode"];
@@ -73,6 +74,7 @@ export class LeaseLifecycle {
     return { device, lease };
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through LeaseReleaseCoordinator's lifecycle port.
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
     const effectiveTtlMs = ttlMs ?? this.#ttlFor(current?.mode ?? "detached");
@@ -122,7 +124,7 @@ export class LeaseLifecycle {
 
   async beginRelease(
     leaseId: string,
-    reason: "closed" | "explicit" | "killed" | "orphaned" | "expired",
+    reason: "closed" | "explicit" | "killed" | "orphaned" | "expired" | "device-lost",
   ): Promise<ReleasedLease> {
     const released = await this.options.registry.beginRelease(leaseId);
     this.options.expiryScheduler.cancel(leaseId);

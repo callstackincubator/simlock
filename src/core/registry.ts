@@ -338,6 +338,40 @@ export class Registry {
     return cloneDevice(updated);
   }
 
+  /** Marks a recovery boot attempt; keeps the first-seen start time across retries. */
+  // fallow-ignore-next-line unused-class-member -- called through LeaseHealthMonitor's registry port.
+  async markRecoveryAttempt(deviceId: string, at: number): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    const updated = {
+      ...device,
+      recoveringSince: device.recoveringSince ?? at,
+      recoveryAttempts: (device.recoveryAttempts ?? 0) + 1,
+    };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
+  /** Clears recovery markers once recovery has finished, one way or another. */
+  // fallow-ignore-next-line unused-class-member -- called through LeaseHealthMonitor's registry port.
+  async clearRecovery(deviceId: string): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.recoveringSince === undefined && device.recoveryAttempts === undefined) {
+      return cloneDevice(device);
+    }
+    const {
+      recoveringSince: _recoveringSince,
+      recoveryAttempts: _recoveryAttempts,
+      ...rest
+    } = device;
+    const updated = rest as DeviceRecord;
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    await this.#commit(devices, this.#leases);
+    return cloneDevice(updated);
+  }
+
   /** Records externally verified disappearance; no driver verb is invoked. */
   async markDeviceMissing(deviceId: string, initiator: string): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
@@ -402,8 +436,13 @@ export class Registry {
       throw new UnknownDeviceError(lease.deviceId);
     }
 
+    const {
+      recoveringSince: _recoveringSince,
+      recoveryAttempts: _recoveryAttempts,
+      ...withoutRecoveryMarkers
+    } = device;
     const reclaiming = {
-      ...transition(device, "reclaiming"),
+      ...transition(withoutRecoveryMarkers as DeviceRecord, "reclaiming"),
       lastLeaseEndedAt: this.options.clock.now(),
     };
     const devices = [...this.#devices];
@@ -513,6 +552,8 @@ const deviceRecordKeys = [
   "lastLeaseEndedAt",
   "foreignStateDetectedAt",
   "foreignProvenanceDetectedAt",
+  "recoveringSince",
+  "recoveryAttempts",
   "quarantinedAt",
   "quarantineAttempts",
   "quarantineNextRetryAt",
@@ -559,26 +600,44 @@ function eventForTransition(
   return undefined;
 }
 
+/**
+ * Every optional field on a device record happens to be a number, so they are
+ * parsed as one group: absent stays absent, present-but-not-a-number is a
+ * corrupt record. Keeping them out of `parseDevice`'s required-field check is
+ * what stops that check growing another two branches per field added.
+ */
+const optionalDeviceNumberKeys = [
+  "lastLeaseEndedAt",
+  "foreignStateDetectedAt",
+  "foreignProvenanceDetectedAt",
+  "recoveringSince",
+  "recoveryAttempts",
+  "quarantinedAt",
+  "quarantineAttempts",
+  "quarantineNextRetryAt",
+] as const;
+
+type OptionalDeviceNumbers = Partial<Record<(typeof optionalDeviceNumberKeys)[number], number>>;
+
+function parseOptionalDeviceNumbers(value: Record<string, unknown>): OptionalDeviceNumbers {
+  const parsed: OptionalDeviceNumbers = {};
+  for (const key of optionalDeviceNumberKeys) {
+    const candidate = value[key];
+    if (candidate === undefined) continue;
+    if (typeof candidate !== "number") {
+      throw new RegistryLoadError("Invalid device record in registry state");
+    }
+    parsed[key] = candidate;
+  }
+  return parsed;
+}
+
 function parseDevice(value: unknown): DeviceRecord {
   if (!isObject(value)) {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const {
-    address,
-    createdAt,
-    driverData,
-    driverDeviceId,
-    foreignProvenanceDetectedAt,
-    foreignStateDetectedAt,
-    id,
-    lastLeaseEndedAt,
-    quarantineAttempts,
-    quarantineNextRetryAt,
-    quarantinedAt,
-    spec,
-    state,
-  } = value;
+  const { address, createdAt, driverData, driverDeviceId, id, spec, state } = value;
   if (
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
@@ -586,28 +645,17 @@ function parseDevice(value: unknown): DeviceRecord {
     !(isDeviceState(state) || state === "warm") ||
     !isDeviceSpec(spec) ||
     !("driverData" in value) ||
-    (lastLeaseEndedAt !== undefined && typeof lastLeaseEndedAt !== "number") ||
-    (foreignStateDetectedAt !== undefined && typeof foreignStateDetectedAt !== "number") ||
-    (foreignProvenanceDetectedAt !== undefined &&
-      typeof foreignProvenanceDetectedAt !== "number") ||
-    (quarantinedAt !== undefined && typeof quarantinedAt !== "number") ||
-    (quarantineAttempts !== undefined && typeof quarantineAttempts !== "number") ||
-    (quarantineNextRetryAt !== undefined && typeof quarantineNextRetryAt !== "number") ||
-    // `address` is the one field an older daemon's state.json never wrote (see DeviceRecord's
-    // doc comment) -- missing is expected and loads fine; present-but-wrong-typed is corrupt.
+    // Every other optional field is a number and is swept by
+    // `parseOptionalDeviceNumbers`; `address` is the lone string. Missing is expected of a
+    // record written by a pre-address daemon; present-but-wrong-typed is corrupt.
     (address !== undefined && typeof address !== "string")
   ) {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
   return {
+    ...parseOptionalDeviceNumbers(value),
     ...(address === undefined ? {} : { address }),
-    ...(lastLeaseEndedAt === undefined ? {} : { lastLeaseEndedAt }),
-    ...(foreignStateDetectedAt === undefined ? {} : { foreignStateDetectedAt }),
-    ...(foreignProvenanceDetectedAt === undefined ? {} : { foreignProvenanceDetectedAt }),
-    ...(quarantinedAt === undefined ? {} : { quarantinedAt }),
-    ...(quarantineAttempts === undefined ? {} : { quarantineAttempts }),
-    ...(quarantineNextRetryAt === undefined ? {} : { quarantineNextRetryAt }),
     createdAt,
     driverData,
     driverDeviceId,

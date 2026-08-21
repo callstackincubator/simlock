@@ -31,4 +31,18 @@ describe("DeviceOperationClaims", () => {
     expect(claims.tryClaim("device-1", "eviction")).toBeDefined();
     expect(claims.tryClaim("device-2", "cleanup")).toBeDefined();
   });
+
+  it("makes recovery mutually exclusive with other operations on the same device", () => {
+    const claims = new DeviceOperationClaims();
+    const boot = claims.tryClaim("device-1", "boot");
+
+    expect(boot).toBeDefined();
+    expect(claims.tryClaim("device-1", "recovery")).toBeUndefined();
+
+    boot!.release();
+    const recovery = claims.tryClaim("device-1", "recovery");
+    expect(recovery).toBeDefined();
+    expect(claims.operationFor("device-1")).toBe("recovery");
+    expect(claims.tryClaim("device-1", "cleanup")).toBeUndefined();
+  });
 });

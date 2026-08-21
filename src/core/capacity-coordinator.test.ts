@@ -8,6 +8,14 @@ const gibibyte = 1024 ** 3;
 const config: Config = {
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   eventBuffer: { capacity: 1000 },
+  health: {
+    enabled: true,
+    maxConcurrentRecoveries: 1,
+    maxRecoveryAttempts: 3,
+    probeIntervalMs: 30_000,
+    recoveryBackoffMs: 5_000,
+    stableObservations: 2,
+  },
   idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
   warmPool: {
     quarantine: {

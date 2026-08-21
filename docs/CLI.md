@@ -40,8 +40,9 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
+| 14 | — | `lease` held mode only: the daemon ended the lease without the holder asking (TTL backstop, operator `release`, or an unrecoverable device) |
 
-This table matches `DAEMON_ERROR_EXIT_CODES` in `src/cli/index.ts` exactly.
+Every row but 14 matches `DAEMON_ERROR_EXIT_CODES` in `src/cli/index.ts` exactly; 14 is not a daemon error code but an outcome of held mode, so it lives beside the table's other `lease` outcome, 0.
 A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
 surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code.
@@ -115,6 +116,39 @@ work stages; reclaiming work is reported separately:
 {"event":"booting","eta_seconds":30}
 {"event":"reclaiming","eta_seconds":15}
 ```
+
+Once granted, held mode also relays the health monitor's findings about the
+leased device for as long as the connection holds it, on the same stderr
+stream:
+
+```json
+{"event":"device_unhealthy","lease":"lse_9f2c","device_id":"dev_1a2b"}
+{"event":"device_recovered","lease":"lse_9f2c","device_id":"dev_1a2b","attempts":1}
+```
+
+`device_unhealthy` means the device stopped running outside pitlane and a
+reboot is in progress under the same lease; `device_recovered` means that
+reboot passed readiness. The lease itself is untouched by either — it is
+still held and must still be released the normal way. Recovery can instead
+give up (the device vanished, its provenance no longer checks out, or reboot
+attempts ran out); giving up is not itself one of these lines — it ends the
+lease, which surfaces as the same line any other lease loss does:
+
+```json
+{"event":"lease_lost","lease":"lse_9f2c","device_id":"dev_1a2b","reason":"device-lost"}
+```
+
+In all three lines `device_id` is the registry device id — the `id` column of
+`pitlane list --devices`, and the same identifier the event bus uses — not the
+driver-level `udid` the grant returns on stdout. A `lease_lost` line is
+terminal for held mode: there is no longer a lease to
+hold, so the process writes that line and exits `14` rather than waiting for a
+signal, and it does not try to release a lease the daemon has already taken
+back. The `reason` is whatever ended it — `device-lost` here, but equally
+`expired` or `killed`. See [known-pitfalls.md](known-pitfalls.md)
+for what a reboot cannot bring back — anything the agent had running inside
+the device (a launched app, `log stream`, an Appium/XCUITest session, a port
+forward) is gone whether or not recovery succeeds.
 
 ### `pitlane lease renew <lease-id> [--ttl <duration>]`
 

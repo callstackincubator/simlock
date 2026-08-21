@@ -202,4 +202,138 @@ describe("ManagedDeviceLifecycle", () => {
       harness.lifecycle.shutdown(handoff!.device, "test", "cleanup"),
     ).resolves.toMatchObject({ state: "shutdown" });
   });
+
+  describe("recoverLeased", () => {
+    it("reboots a leased device under its own lease id without a registry transition", async () => {
+      const harness = await createHarness();
+      const ready = await readyDevice(harness);
+      const lease = await harness.registry.createLease({
+        deviceId: ready.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 10_000,
+      });
+      await harness.driver.shutdown({
+        address: ready.address ?? "",
+        deviceId: ready.driverDeviceId,
+        driverData: ready.driverData,
+      });
+
+      const recovered = await harness.lifecycle.recoverLeased(ready, lease.id);
+
+      expect(recovered).toMatchObject({ id: ready.id, state: "leased" });
+      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
+      expect(harness.registry.snapshot.leases).toContainEqual(lease);
+      expect(harness.claims.isClaimed(ready.id)).toBe(false);
+    });
+
+    it("never touches a device leased under a different lease id", async () => {
+      const harness = await createHarness();
+      const ready = await readyDevice(harness);
+      await harness.registry.createLease({
+        deviceId: ready.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 10_000,
+      });
+      const makeReadyCallsBefore = harness.driver.calls.filter(
+        (call) => call.operation === "makeReady",
+      ).length;
+
+      const recovered = await harness.lifecycle.recoverLeased(ready, "lse_someone-else");
+
+      expect(recovered).toBeUndefined();
+      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
+        makeReadyCallsBefore,
+      );
+      expect(harness.claims.isClaimed(ready.id)).toBe(false);
+    });
+
+    it("returns undefined for a device that is not leased at all", async () => {
+      const harness = await createHarness();
+      const ready = await readyDevice(harness);
+
+      expect(await harness.lifecycle.recoverLeased(ready, "lse_anything")).toBeUndefined();
+      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+
+      await harness.driver.shutdown({
+        address: ready.address ?? "",
+        deviceId: ready.driverDeviceId,
+        driverData: ready.driverData,
+      });
+      const shutdown = await harness.registry.transitionDevice(ready.id, "shutdown", {
+        event: "device.shutdown",
+        payload: { deviceId: ready.id, initiator: "test" },
+      });
+      expect(await harness.lifecycle.recoverLeased(shutdown, "lse_anything")).toBeUndefined();
+      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
+    });
+
+    it("returns undefined and releases the claim when the lease ends mid-boot", async () => {
+      const harness = await createHarness();
+      const ready = await readyDevice(harness);
+      const lease = await harness.registry.createLease({
+        deviceId: ready.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 10_000,
+      });
+      harness.driver.hangMakeReady();
+
+      const recovering = harness.lifecycle.recoverLeased(ready, lease.id);
+      await vi.waitFor(() =>
+        expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
+          2,
+        ),
+      );
+      await harness.registry.beginRelease(lease.id);
+      harness.driver.releaseMakeReady();
+
+      expect(await recovering).toBeUndefined();
+      expect(harness.claims.isClaimed(ready.id)).toBe(false);
+    });
+
+    it("does not act on a device already claimed for another operation", async () => {
+      const harness = await createHarness();
+      const ready = await readyDevice(harness);
+      const lease = await harness.registry.createLease({
+        deviceId: ready.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 10_000,
+      });
+      const claim = harness.claims.tryClaim(ready.id, "cleanup");
+      if (claim === undefined) throw new Error("expected cleanup claim");
+      const makeReadyCallsBefore = harness.driver.calls.filter(
+        (call) => call.operation === "makeReady",
+      ).length;
+
+      const recovered = await harness.lifecycle.recoverLeased(ready, lease.id);
+
+      expect(recovered).toBeUndefined();
+      expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
+        makeReadyCallsBefore,
+      );
+      expect(harness.claims.operationFor(ready.id)).toBe("cleanup");
+      claim.release();
+    });
+
+    it("propagates a driver failure and releases the claim so recovery can be retried", async () => {
+      const harness = await createHarness();
+      const ready = await readyDevice(harness);
+      const lease = await harness.registry.createLease({
+        deviceId: ready.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 10_000,
+      });
+      harness.driver.failOn("makeReady", 2, new DriverCrashError("boot failed"));
+
+      await expect(harness.lifecycle.recoverLeased(ready, lease.id)).rejects.toThrow("boot failed");
+      expect(harness.claims.isClaimed(ready.id)).toBe(false);
+
+      const retried = await harness.lifecycle.recoverLeased(ready, lease.id);
+      expect(retried).toMatchObject({ id: ready.id, state: "leased" });
+    });
+  });
 });

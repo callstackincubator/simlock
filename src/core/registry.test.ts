@@ -478,4 +478,166 @@ describe("Registry", () => {
       }),
     ).rejects.toThrow(UnknownDeviceError);
   });
+
+  it("records the first recovery attempt's start time and count", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+
+    const updated = await registry.markRecoveryAttempt(device.id, 1_500);
+
+    expect(updated).toMatchObject({ recoveringSince: 1_500, recoveryAttempts: 1 });
+  });
+
+  it("keeps the original recoveringSince and increments the attempt count on retry", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.markRecoveryAttempt(device.id, 1_500);
+
+    const updated = await registry.markRecoveryAttempt(device.id, 2_000);
+
+    expect(updated).toMatchObject({ recoveringSince: 1_500, recoveryAttempts: 2 });
+  });
+
+  it("clears both recovery markers", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.markRecoveryAttempt(device.id, 1_500);
+
+    const cleared = await registry.clearRecovery(device.id);
+
+    expect(cleared.recoveringSince).toBeUndefined();
+    expect(cleared.recoveryAttempts).toBeUndefined();
+  });
+
+  it("survives a save/reload round-trip with recovery markers set", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "test" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.markRecoveryAttempt(device.id, 1_500);
+
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.snapshot).toEqual(registry.snapshot);
+    expect(reloaded.snapshot.devices[0]).toMatchObject({
+      recoveringSince: 1_500,
+      recoveryAttempts: 1,
+    });
+  });
+
+  it("rejects non-numeric recovery markers when loading persisted state", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 500,
+            driverData: {},
+            driverDeviceId: "driver_bad",
+            id: "dev_bad",
+            recoveringSince: "not-a-number",
+            spec,
+            state: "leased",
+          },
+        ],
+        leases: [],
+      }),
+    );
+
+    await expect(
+      Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem,
+        idGenerator: { generate: () => "new" },
+        statePath,
+      }),
+    ).rejects.toThrow("Invalid device record in registry state");
+  });
+
+  it("clears recovery markers as part of the same commit that ends a lease", async () => {
+    const clock = new FakeClock(1_000);
+    const suffixes = ["device", "lease"];
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => suffixes.shift() ?? "unexpected" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_device",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      mode: "held",
+      requesterId: "agent-1",
+      ttlDeadline: 2_000,
+    });
+    await registry.markRecoveryAttempt(device.id, 1_200);
+
+    const released = await registry.beginRelease(lease.id);
+
+    expect(released.device.recoveringSince).toBeUndefined();
+    expect(released.device.recoveryAttempts).toBeUndefined();
+    expect(released.device.state).toBe("reclaiming");
+  });
 });

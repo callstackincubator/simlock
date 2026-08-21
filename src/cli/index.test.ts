@@ -309,6 +309,103 @@ describe("CLI boundary", () => {
     });
   });
 
+  it("writes structured stderr lines for device-unhealthy/device-recovered pushes, ignoring malformed ones", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_health", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    connection.response("lease.release", { leaseId: "lse_health" });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    connection.push("device-unhealthy", {
+      deviceId: "ABCD",
+      leaseId: "lse_health",
+      reason: "crashed",
+    });
+    connection.push("device-recovered", { attempts: 2, deviceId: "ABCD", leaseId: "lse_health" });
+    // Malformed pushes must not crash the CLI or emit a diagnostic line.
+    connection.push("device-unhealthy", { deviceId: 42 });
+    connection.push("device-recovered", null);
+
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(
+      output.stderr
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      { device_id: "ABCD", event: "device_unhealthy", lease: "lse_health" },
+      { attempts: 2, device_id: "ABCD", event: "device_recovered", lease: "lse_health" },
+    ]);
+  });
+
+  it("reports a lost lease, exits 14, and does not re-release it", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_lost", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    connection.response("lease.release", new Error("lease.release must not be called"));
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    // A malformed push must not end the holder's lease: it is ignored outright,
+    // and the process keeps waiting exactly as it did before.
+    connection.push("lease-lost", { deviceId: 42 });
+    // No signal: the daemon ending the lease is what must stop the holder.
+    connection.push("lease-lost", {
+      deviceId: "ABCD",
+      leaseId: "lse_lost",
+      reason: "device-lost",
+    });
+
+    await expect(run).resolves.toBe(14);
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(
+      output.stderr
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      { device_id: "ABCD", event: "lease_lost", lease: "lse_lost", reason: "device-lost" },
+    ]);
+  });
+
   it("flagship e2e: queues a second CLI holder until the first connection drops", async () => {
     const harness = await createHarness();
     const first = outputCapture();
@@ -784,6 +881,14 @@ function testConfig(): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
+    health: {
+      enabled: true,
+      maxConcurrentRecoveries: 1,
+      maxRecoveryAttempts: 3,
+      probeIntervalMs: 30_000,
+      recoveryBackoffMs: 5_000,
+      stableObservations: 2,
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     limits: {
