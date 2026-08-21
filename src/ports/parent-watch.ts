@@ -29,6 +29,12 @@ const POLL_INTERVAL_MS = 2_000;
  * not take on. Polling is the real, portable mechanism available today; it
  * satisfies the same `ParentWatch` interface as a future native adapter
  * would, so swapping one in later touches only this file.
+ *
+ * What polling cannot see, and a native watch could: a pid the OS has since
+ * recycled onto an unrelated process reads as alive forever, so that holder
+ * falls back to the TTL backstop -- the same net as machine sleep. Erring
+ * that way is deliberate; the opposite mistake releases a device out from
+ * under an agent that is still working.
  */
 export class NodeParentWatch implements ParentWatch {
   constructor(private readonly intervalMs: number = POLL_INTERVAL_MS) {}

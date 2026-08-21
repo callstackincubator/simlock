@@ -11,6 +11,7 @@ import {
   SystemClock,
   type Filesystem,
   type ParentWatch,
+  type ParentWatchHandle,
 } from "../ports/index.js";
 import {
   connectDaemon,
@@ -831,13 +832,17 @@ function waitForTermination(
   parentPid?: number,
 ): Promise<void> {
   return new Promise((resolve) => {
+    // Declared before `finish` closes over it: an adapter that reported an
+    // already-dead parent synchronously from `watch()` would otherwise reach
+    // this binding before its initialiser ran.
+    let watchHandle: ParentWatchHandle | undefined;
     const finish = () => {
       signals.off("SIGINT", finish);
       signals.off("SIGTERM", finish);
       watchHandle?.stop();
       resolve();
     };
-    const watchHandle =
+    watchHandle =
       parentWatch !== undefined && parentPid !== undefined && parentPid > 0
         ? parentWatch.watch(parentPid, finish)
         : undefined;
