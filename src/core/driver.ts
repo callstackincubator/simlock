@@ -72,6 +72,19 @@ export interface ReclaimResult {
 export type ReclaimStrategy = ReclaimResult["strategy"];
 
 /**
+ * What `estimate` is being asked to price. `reclaim` carries the clean level because it is
+ * the input `reclaimStrategy` already selects on, and the strategies it picks between differ
+ * by an order of magnitude -- an iOS `erase` runs tens of seconds while an Android `snapshot`
+ * restore runs in a few. A single blended reclaim number cannot be right for both, and the
+ * callers that consume it (a requester's ETA, `Doctor`'s stalled-transition threshold) are
+ * both misled by one that is wrong in the optimistic direction.
+ */
+export type DriverEstimate =
+  | { readonly operation: "provision" }
+  | { readonly operation: "boot" }
+  | { readonly operation: "reclaim"; readonly clean: "standard" | "full" };
+
+/**
  * What a driver can resolve right now, read from the platform SDK without
  * side effects: resolvable device models plus installed runtimes / system
  * images, and which installed runtime `resolveSpec` would pick by default
@@ -107,7 +120,7 @@ export interface Driver {
   listManaged(): Promise<DriverReality>;
   /** Read-only: must never trigger a runtime / system-image download. */
   listCatalog(): Promise<DriverCatalogEntry>;
-  estimate(operation: "provision" | "boot" | "reclaim", spec: DeviceSpec): number;
+  estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
 }
 
 export class RuntimeMissingError extends Error {

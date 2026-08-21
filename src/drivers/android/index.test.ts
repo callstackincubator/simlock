@@ -465,9 +465,21 @@ describe("AndroidDriver", () => {
     );
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 
-    expect(driver.estimate("provision", spec)).toBe(1_000);
-    expect(driver.estimate("boot", spec)).toBe(31_000);
-    expect(driver.estimate("reclaim", spec)).toBe(2_000);
+    expect(driver.estimate({ operation: "provision" }, spec)).toBe(1_000);
+    expect(driver.estimate({ operation: "boot" }, spec)).toBe(31_000);
+  });
+
+  it("prices reclaim by the strategy the clean level selects", async () => {
+    const driver: Driver = await createDriver(
+      await androidFilesystem(),
+      new ScriptedProcessRunner([]),
+    );
+    const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+
+    // A `wipe` reclaim only shuts the emulator down -- the wipe itself is deferred to the
+    // next `makeReady` -- so it is the cheaper of the two here, not the dearer.
+    expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(6_000);
+    expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(3_000);
   });
 
   it("lists resolvable models and installed API levels, defaulting to the newest", async () => {

@@ -6,6 +6,15 @@ export interface DeviceSpec {
   readonly osVersion: string;
 }
 
+/** Spec identity as every selection path means it: same platform, model, and OS version. */
+export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
+  return (
+    left.platform === right.platform &&
+    left.model === right.model &&
+    left.osVersion === right.osVersion
+  );
+}
+
 export type DeviceState =
   | "provisioning"
   | "ready"

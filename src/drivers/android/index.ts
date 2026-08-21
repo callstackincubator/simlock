@@ -6,6 +6,7 @@ import {
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
+  type DriverEstimate,
   type DriverReality,
   type ObservedDevice,
   type ObservedMark,
@@ -34,6 +35,15 @@ const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+const PROVISION_ESTIMATE_MS = 1_000;
+// A `snapshot` reclaim is a snapshot load followed by the same readiness wait a snapshot boot
+// pays, so it costs about what SNAPSHOT_BOOT_ESTIMATE_MS covers plus the load itself.
+const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
+// A `wipe` reclaim is cheaper than it sounds, and cheaper than a `full` clean suggests: this
+// path only shuts the emulator down and sets `needsWipe`, deferring the wipe itself to the
+// next `makeReady`, where it is paid as a cold boot. So what `reclaim` costs here is bounded
+// by the shutdown, not by the erase -- the opposite of iOS, whose `erase` is synchronous.
+const WIPE_RECLAIM_ESTIMATE_MS = 3_000;
 const CLEAN_BASELINE = "simlock_clean_baseline";
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
@@ -473,14 +483,16 @@ export class AndroidDriver implements Driver {
     };
   }
 
-  estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {
-    switch (operation) {
+  estimate(estimate: DriverEstimate, _spec: DeviceSpec): number {
+    switch (estimate.operation) {
       case "provision":
-        return 1_000;
+        return PROVISION_ESTIMATE_MS;
       case "boot":
         return COLD_BOOT_ESTIMATE_MS;
       case "reclaim":
-        return 2_000;
+        return this.reclaimStrategy({ clean: estimate.clean }) === "wipe"
+          ? WIPE_RECLAIM_ESTIMATE_MS
+          : SNAPSHOT_RECLAIM_ESTIMATE_MS;
     }
   }
 

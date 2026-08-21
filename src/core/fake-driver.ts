@@ -5,6 +5,7 @@ import {
   type Driver,
   type DriverCatalogEntry,
   type DriverDevice,
+  type DriverEstimate,
   type DriverReality,
   type ObservedRunState,
   RuntimeMissingError,
@@ -32,6 +33,12 @@ export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   readonly clock: Clock;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
+  /**
+   * Reclaim estimate for a `full` clean, when a test needs the two clean levels priced apart
+   * the way a real driver prices them (an Android `snapshot` against a `wipe`). Falls back to
+   * `estimateMs.reclaim`, so a test that does not care about the split says nothing.
+   */
+  readonly fullCleanReclaimEstimateMs?: number;
   readonly knownModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly platform: Platform;
@@ -53,6 +60,7 @@ export class FakeDriver implements Driver {
   readonly #calls: FakeDriverCall[] = [];
   readonly #clock: Clock;
   readonly #estimateMs: FakeDriverOptions["estimateMs"];
+  readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
   readonly #knownModels: Set<string> | undefined;
@@ -70,6 +78,7 @@ export class FakeDriver implements Driver {
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
     this.#clock = options.clock;
     this.#estimateMs = options.estimateMs;
+    this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#latencyMs = options.latencyMs;
@@ -198,8 +207,11 @@ export class FakeDriver implements Driver {
     };
   }
 
-  estimate(operation: DriverEstimateOperation, _spec: DeviceSpec): number {
-    return this.#estimateMs?.[operation] ?? 0;
+  estimate(estimate: DriverEstimate, _spec: DeviceSpec): number {
+    if (estimate.operation === "reclaim" && estimate.clean === "full") {
+      return this.#fullCleanReclaimEstimateMs ?? this.#estimateMs?.reclaim ?? 0;
+    }
+    return this.#estimateMs?.[estimate.operation] ?? 0;
   }
 
   failOn(operation: FakeDriverOperation, callNumber: number, error: Error): void {
