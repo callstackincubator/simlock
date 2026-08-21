@@ -147,8 +147,8 @@ function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "c
     connect: () =>
       connectDaemon({
         // MCP's holder process dies with its agent (stdin EOF -> session.close()), so a
-        // sliding TTL is safe here. The CLI deliberately does not declare this — see
-        // docs/known-pitfalls.md on reparented CLI holders.
+        // sliding TTL is safe here. CLI held mode declares the same capability now that
+        // it self-terminates on parent death too — see docs/known-pitfalls.md.
         capabilities: { heartbeat: true },
         clock,
         ipc,
