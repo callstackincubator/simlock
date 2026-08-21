@@ -1,6 +1,6 @@
 # CLI reference
 
-Part of the user manual: every command the pitlane CLI is expected to
+Part of the user manual: every command the simlock CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
 agents are the primary audience. `status`, `catalog`, and
@@ -8,7 +8,7 @@ agents are the primary audience. `status`, `catalog`, and
 human-oriented view for interactive/operator use and accept `--json` to
 switch to the structured form. Every other command's output is already
 unconditionally JSON, so passing `--json` to it is a usage error (exit 2)
-rather than a silent no-op. `pitlane mcp` reserves stdout for MCP JSON-RPC
+rather than a silent no-op. `simlock mcp` reserves stdout for MCP JSON-RPC
 framing and accepts no flags at all.
 
 On failure, every command writes one structured line to stderr:
@@ -21,7 +21,7 @@ On failure, every command writes one structured line to stderr:
 daemon, or a stable CLI-level code otherwise: `USAGE` for bad flags/missing
 arguments/unknown commands, `INTERNAL` for anything unexpected. An unknown
 command or a missing required argument gets a `message` that ends with a
-pointer to `pitlane --help`, so a human hitting one from a terminal isn't
+pointer to `simlock --help`, so a human hitting one from a terminal isn't
 stranded with only a JSON blob — the full command banner itself is no
 longer dumped to stderr on every failure, only on request via `--help`.
 
@@ -59,23 +59,23 @@ like a different requester.
 
 Resolution order, first match wins:
 
-1. `--agent-id <id>` on `pitlane lease`.
-2. the `PITLANE_AGENT_ID` environment variable.
+1. `--agent-id <id>` on `simlock lease`.
+2. the `SIMLOCK_AGENT_ID` environment variable.
 3. a pid-derived value (today's behavior; not stable across invocations).
 
 Reuse the same id across an agent's own invocations (e.g. export
-`PITLANE_AGENT_ID` once per agent session) and use a distinct id per agent so
+`SIMLOCK_AGENT_ID` once per agent session) and use a distinct id per agent so
 they don't collide with each other. The id shows up as the requester in
-`pitlane status` and `pitlane list --leases`, so an operator can tell which
+`simlock status` and `simlock list --leases`, so an operator can tell which
 agent holds what.
 
-## `pitlane lease`
+## `simlock lease`
 
 Acquire a device. Blocks while waiting for capacity, then while provisioning
 and booting, then — in held mode — keeps running to hold the lease.
 
 ```
-pitlane lease --platform <ios|android> --device <model> [--os <version>]
+simlock lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
               [--allow-download] [--bind-pid <pid>]
 ```
@@ -83,7 +83,7 @@ pitlane lease --platform <ios|android> --device <model> [--os <version>]
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
   already installed for that platform.
 - `--agent-id` — this invocation's requester identity; see
-  [Agent identity](#agent-identity). Defaults to `PITLANE_AGENT_ID`, then a
+  [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then a
   pid-derived value.
 - `--timeout` — max time to wait in the queue (exit 10 on expiry).
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
@@ -92,7 +92,7 @@ pitlane lease --platform <ios|android> --device <model> [--os <version>]
   iOS runtimes remain Xcode-managed in v1: `--allow-download` cannot install
   them; install the runtime through Xcode first.
 - `--detach` — detached mode: print the lease result and exit; the lease is
-  TTL-bound and must be renewed with `pitlane lease renew`.
+  TTL-bound and must be renewed with `simlock lease renew`.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of
   the CLI's actual parent. For a holder spawned from a short-lived subshell,
   the immediate parent can die (and get reaped) while the owning agent is
@@ -133,7 +133,7 @@ stream:
 {"event":"device_recovered","lease":"lse_9f2c","device_id":"dev_1a2b","attempts":1}
 ```
 
-`device_unhealthy` means the device stopped running outside pitlane and a
+`device_unhealthy` means the device stopped running outside simlock and a
 reboot is in progress under the same lease; `device_recovered` means that
 reboot passed readiness. The lease itself is untouched by either — it is
 still held and must still be released the normal way. Recovery can instead
@@ -146,7 +146,7 @@ lease, which surfaces as the same line any other lease loss does:
 ```
 
 In all three lines `device_id` is the registry device id — the `id` column of
-`pitlane list --devices`, and the same identifier the event bus uses — not the
+`simlock list --devices`, and the same identifier the event bus uses — not the
 driver-level `udid` the grant returns on stdout. A `lease_lost` line is
 terminal for held mode: there is no longer a lease to
 hold, so the process writes that line and exits `14` rather than waiting for a
@@ -157,7 +157,7 @@ for what a reboot cannot bring back — anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
 
-### `pitlane lease renew <lease-id> [--ttl <duration>]`
+### `simlock lease renew <lease-id> [--ttl <duration>]`
 
 Extend a lease's TTL — works for both detached and held-mode leases. Renewal
 always resets the deadline to now plus the TTL, regardless of how much time
@@ -175,7 +175,7 @@ further out than that does not stick — the next heartbeat pulls it back in.
 Hand-renewal remains the only keep-alive for detached mode, which by design
 never holds a connection to heartbeat over.
 
-## `pitlane release <lease-id> | --all`
+## `simlock release <lease-id> | --all`
 
 Explicitly release a lease (primarily for detached mode or operator
 intervention). `--all` force-releases every lease — confirmation required
@@ -193,14 +193,14 @@ What that means for the next command: the device is `reclaiming` for a moment
 after `release` returns, so it still counts as running capacity and is not
 grantable yet. A `lease` request that wants it simply queues and is granted the
 instant the purge finishes; nothing is lost, but `status` right after a release
-will show `reclaiming` rather than `ready`. `pitlane daemon stop` waits for
+will show `reclaiming` rather than `ready`. `simlock daemon stop` waits for
 in-flight purges before exiting, so a graceful shutdown still leaves the pool
 settled; a daemon killed mid-purge leaves its devices `reclaiming` for the next
 startup to recover.
 
-## `pitlane mcp`
+## `simlock mcp`
 
-Start Pitlane's local stdio MCP server. It accepts no flags. Standard output
+Start Simlock's local stdio MCP server. It accepts no flags. Standard output
 is reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The
 server auto-starts the daemon when needed and exposes the focused
 `list_devices`, `lease_simulator`, `release_simulator`, and `lease_status`
@@ -212,19 +212,19 @@ for that request. See [../README.md](../README.md#mcp-integration-optional)
 for details.
 
 The requester identity for leases made through this server is
-`PITLANE_AGENT_ID`, falling back to a pid-derived value — see
-[Agent identity](#agent-identity). Set a distinct `PITLANE_AGENT_ID` per MCP
+`SIMLOCK_AGENT_ID`, falling back to a pid-derived value — see
+[Agent identity](#agent-identity). Set a distinct `SIMLOCK_AGENT_ID` per MCP
 server process (one per agent session) so the one-lease-per-agent rule is
 meaningful.
 
-## `pitlane status`
+## `simlock status`
 
 Human and JSON status include derived warm counts globally and per platform.
 `ready` devices contribute to those counts; `reclaiming` and `quarantined`
 devices remain visible as busy running capacity and never contribute to warm
 inventory. A `quarantined` device is one whose release-time purge failed, or
 whose `provisioning`/`reclaiming` transition stalled past its driver-derived
-threshold (see `pitlane doctor` below): it stays visible in `status` and
+threshold (see `simlock doctor` below): it stays visible in `status` and
 `list --devices` with that state while `QuarantineCoordinator` retries it in
 the background, and is never handed to a new requester.
 
@@ -241,13 +241,13 @@ for the structured equivalent. `overLimit` is true when a lowered limit
 cannot yet be met, for example because active leases consume all running
 slots.
 
-## `pitlane list [--devices|--leases|--rules]`
+## `simlock list [--devices|--leases|--rules]`
 
 Scriptable listings of managed devices, active leases, or registered cleanup
 rules. Defaults to `--devices`. Each lease record's `requesterId` is the
 agent id (see [Agent identity](#agent-identity)) that holds it.
 
-## `pitlane catalog [--platform <ios|android>] [--json]`
+## `simlock catalog [--platform <ios|android>] [--json]`
 
 Lists what can actually be leased, so an agent can pick a valid `--device`
 and `--os` without a failed round trip through `lease`. For each available
@@ -265,22 +265,22 @@ structured equivalent:
 {"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone 16"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5"}]}
 ```
 
-## `pitlane cleanup [--dry-run] [--rule <name>]`
+## `simlock cleanup [--dry-run] [--rule <name>]`
 
 Run the cleanup reconciliation immediately. `--dry-run` prints the actions
 each rule *would* take (rule name, target, reason) without executing.
 `--rule` restricts to a single named rule (e.g. `--rule idle-destroy`); see
-`pitlane list --rules` for the registered rules.
+`simlock list --rules` for the registered rules.
 
-## `pitlane doctor [--fix]`
+## `simlock doctor [--fix]`
 
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries
-whose device vanished, devices booted outside pitlane, expired-but-held
+whose device vanished, devices booted outside simlock, expired-but-held
 leases, and devices stuck mid-transition. `--fix` applies the safe
 corrections.
 
-A `provisioning` or `reclaiming` device is normally in-flight work Pitlane
+A `provisioning` or `reclaiming` device is normally in-flight work Simlock
 itself is driving and is not reported — but only up to a driver-derived
 threshold (`Driver.estimate` for that operation, scaled by
 `stalledTransition.thresholdMultiplier` and floored at
@@ -289,27 +289,27 @@ Past that threshold it becomes a `stalled-transition` finding: the driver
 call that was supposed to resolve the transition never did, and the
 registry's view of the device has diverged from the driver's. `--fix`
 responds the same way it does for a release-time purge failure — the device
-enters `quarantined` (see [#21](https://github.com/callstackincubator/pitlane/issues/21))
+enters `quarantined` (see [#21](https://github.com/callstackincubator/simlock/issues/21))
 rather than being re-driven, since it may be mid-erase. As with every other
 `--fix` correction, a leased device is never touched.
 
-## `pitlane nuke [--delete-devices] [--yes]`
+## `simlock nuke [--delete-devices] [--yes]`
 
 Emergency reset: force-release all leases, kill emulator/simulator processes
-pitlane started, clear the queue. With `--delete-devices`, also destroy every
+simlock started, clear the queue. With `--delete-devices`, also destroy every
 registry-managed device. Never touches devices outside the registry.
 
-## `pitlane events [--follow] [--since <duration>]`
+## `simlock events [--follow] [--since <duration>]`
 
 Stream the business-event ring buffer (see [EVENTS.md](EVENTS.md)) as JSON
 lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 
-## `pitlane daemon <start|stop|status|logs>`
+## `simlock daemon <start|stop|status|logs>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand;
 `daemon` exists for operators and debugging. `logs` tails daemon logs.
 
-The daemon writes one structured JSON line per record to `~/.pitlane/daemon.log`
+The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields) covering startup (version,
 protocol version, socket path, effective config), socket claim/stale-endpoint
 recovery, driver discovery, connection open/close, shutdown, and unexpected or
@@ -317,7 +317,7 @@ handled errors. Growth is bounded: once the file passes `log.rotateBytes` it is
 rotated to `daemon.log.1` (replacing any previous generation), so `logs` always
 shows the current file with the immediately preceding one prepended.
 
-## `pitlane config [get <key>|set <key> <value>]`
+## `simlock config [get <key>|set <key> <value>]`
 
 Show the effective configuration (defaults + config file + overrides):
 managed and running capacity limits, idle tiers T1/T2/T3, TTLs, disk-pressure
@@ -328,18 +328,18 @@ driver; both must have room before provisioning or booting a shutdown device.
 
 ## Environment variables
 
-### `PITLANE_HOME`
+### `SIMLOCK_HOME`
 
 Overrides the data directory the CLI, MCP server, and daemon all use for
 `config.json`, `state.json`, `daemon.sock`, and `daemon.log`. Defaults to
-`~/.pitlane`. All three frontends resolve it through the same function
-(`resolvePitlaneHome` in `src/ports/paths.ts`), so setting it once in an
+`~/.simlock`. All three frontends resolve it through the same function
+(`resolveSimlockHome` in `src/ports/paths.ts`), so setting it once in an
 agent's environment repoints every command at an isolated data directory —
-useful for running multiple independent pitlane instances on one machine, or
+useful for running multiple independent simlock instances on one machine, or
 for tests. When the CLI or MCP server auto-starts the daemon, the daemon
 process inherits the variable like the rest of the environment.
 
-### `PITLANE_DRIVERS_MODULE` (advanced / testing hook)
+### `SIMLOCK_DRIVERS_MODULE` (advanced / testing hook)
 
 Overrides driver discovery (`discoverDrivers` in `src/daemon/main.ts`) with a
 JavaScript module of your own instead of the real iOS/Android drivers. Point

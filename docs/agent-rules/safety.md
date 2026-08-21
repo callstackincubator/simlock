@@ -4,9 +4,9 @@ These invariants protect the user's machine. They are enforced centrally in
 the cleanup reconciliation loop and the lease path — never bypass them, and
 never enforce them only inside an individual rule or driver.
 
-1. **Registry-only destruction.** Pitlane only shuts down, erases, or deletes
+1. **Registry-only destruction.** Simlock only shuts down, erases, or deletes
    devices, AVDs, snapshots, and runtimes that exist in its own registry
-   (i.e. that pitlane created). Everything else on the machine is strictly
+   (i.e. that simlock created). Everything else on the machine is strictly
    read-only. This includes `doctor --fix` and `nuke`.
 2. **Never touch a leased device.** No cleanup rule, reclaim, or reconcile
    action may target a device in `leased` state. The reaper filters this

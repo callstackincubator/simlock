@@ -27,10 +27,10 @@ async function simctlRuntimes(): Promise<string[]> {
   return parsed.runtimes.filter((runtime) => runtime.isAvailable).map((runtime) => runtime.version);
 }
 
-async function deleteStrayPitlaneSimulators(): Promise<void> {
+async function deleteStraySimlockSimulators(): Promise<void> {
   const devices = await simctlDevices();
   for (const device of devices) {
-    if (device.name.startsWith("pitlane-")) {
+    if (device.name.startsWith("simlock-")) {
       await execFileAsync("xcrun", ["simctl", "delete", device.udid]).catch(() => undefined);
     }
   }
@@ -43,7 +43,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "catalog agrees with simctl, a cold lease boots a real Booted simulator with matching provenance, release keeps it warm, and nuke leaves no pitlane- simulator",
+      "catalog agrees with simctl, a cold lease boots a real Booted simulator with matching provenance, release keeps it warm, and nuke leaves no simlock- simulator",
       { timeout: 300_000 },
       async () => {
         const availableRuntimes = await simctlRuntimes();
@@ -61,15 +61,15 @@ describe.skipIf(process.platform !== "darwin")(
             }
           ).platforms;
           const iosCatalog = platforms.find((platform) => platform.platform === "ios");
-          expect(iosCatalog, "pitlane catalog reported no iOS platform").toBeDefined();
+          expect(iosCatalog, "simlock catalog reported no iOS platform").toBeDefined();
           expect(
             iosCatalog?.models.length ?? 0,
-            "pitlane catalog reported no iOS models",
+            "simlock catalog reported no iOS models",
           ).toBeGreaterThan(0);
           for (const runtime of iosCatalog?.runtimes ?? []) {
             expect(
               availableRuntimes,
-              "pitlane catalog's runtimes must agree with real simctl",
+              "simlock catalog's runtimes must agree with real simctl",
             ).toContain(runtime);
           }
           const model = iosCatalog?.models[0] as string;
@@ -95,8 +95,8 @@ describe.skipIf(process.platform !== "darwin")(
           expect(bootedDevice, `simctl does not know about udid ${grant.udid}`).toBeDefined();
           expect(bootedDevice?.state).toBe("Booted");
           expect(
-            bootedDevice?.name.startsWith("pitlane-"),
-            "device name must carry the pitlane- prefix",
+            bootedDevice?.name.startsWith("simlock-"),
+            "device name must carry the simlock- prefix",
           ).toBe(true);
 
           // Provenance: both marks exist with the same token. `doctor` is the
@@ -117,7 +117,7 @@ describe.skipIf(process.platform !== "darwin")(
               (finding) =>
                 finding.kind === "foreign-provenance-change" && finding.deviceId === registryId,
             ),
-            "expected no provenance drift for a device pitlane just created",
+            "expected no provenance drift for a device simlock just created",
           ).toBe(false);
 
           const release = await env.cli(["release", grant.lease]);
@@ -143,11 +143,11 @@ describe.skipIf(process.platform !== "darwin")(
 
           await waitFor(
             async () =>
-              !(await simctlDevices()).some((device) => device.name.startsWith("pitlane-")),
-            { timeout: 60_000, label: "no pitlane- simulator remains after nuke --delete-devices" },
+              !(await simctlDevices()).some((device) => device.name.startsWith("simlock-")),
+            { timeout: 60_000, label: "no simlock- simulator remains after nuke --delete-devices" },
           );
         } finally {
-          await deleteStrayPitlaneSimulators();
+          await deleteStraySimlockSimulators();
         }
       },
     );

@@ -18,7 +18,7 @@ import {
   toMcpErrorResult,
 } from "./session.js";
 
-const SERVER_INFO = { name: "pitlane", version: "1.0.0" };
+const SERVER_INFO = { name: "simlock", version: "1.0.0" };
 
 /**
  * Progress is reported on a 3-stage scale (queued / provisioning-or-reclaiming / booting), each
@@ -180,11 +180,11 @@ export function createMcpServer(session: McpSession): McpServer {
       data: {
         device_id: notice.deviceId,
         lease_id: notice.leaseId,
-        message: "Pitlane lease ended; this session no longer holds the device.",
+        message: "Simlock lease ended; this session no longer holds the device.",
         reason: notice.reason,
       },
       level: "warning",
-      logger: "pitlane",
+      logger: "simlock",
     });
   });
 
@@ -197,13 +197,13 @@ export function createMcpServer(session: McpSession): McpServer {
 
 /**
  * Whatever this session had running inside the device (a launched app, a log stream, an
- * Appium/XCUITest session, a port forward) died with the crash and pitlane cannot restore it --
+ * Appium/XCUITest session, a port forward) died with the crash and simlock cannot restore it --
  * the lease survives, but the agent still needs to know its in-device state is gone.
  */
 function deviceHealthLoggingMessage(notice: DeviceHealthNotice): {
   readonly data: Record<string, unknown>;
   readonly level: "info" | "warning";
-  readonly logger: "pitlane";
+  readonly logger: "simlock";
 } {
   if (notice.kind === "unhealthy") {
     return {
@@ -211,11 +211,11 @@ function deviceHealthLoggingMessage(notice: DeviceHealthNotice): {
         device_id: notice.deviceId,
         lease_id: notice.leaseId,
         message:
-          "Pitlane's device crashed outside pitlane; anything running inside it (apps, log streams, automation sessions, port forwards) is gone. Recovery is in progress under the same lease.",
+          "Simlock's device crashed outside simlock; anything running inside it (apps, log streams, automation sessions, port forwards) is gone. Recovery is in progress under the same lease.",
         reason: notice.reason,
       },
       level: "warning",
-      logger: "pitlane",
+      logger: "simlock",
     };
   }
   return {
@@ -223,10 +223,10 @@ function deviceHealthLoggingMessage(notice: DeviceHealthNotice): {
       attempts: notice.attempts,
       device_id: notice.deviceId,
       lease_id: notice.leaseId,
-      message: "Pitlane's device was rebooted and is ready again under the same lease.",
+      message: "Simlock's device was rebooted and is ready again under the same lease.",
     },
     level: "info",
-    logger: "pitlane",
+    logger: "simlock",
   };
 }
 

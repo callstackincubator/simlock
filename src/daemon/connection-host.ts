@@ -17,7 +17,7 @@ export interface ConnectionHost {
 
 export class DaemonAlreadyRunningError extends Error {
   constructor(readonly endpoint: string) {
-    super(`Pitlane daemon is already running at ${endpoint}`);
+    super(`Simlock daemon is already running at ${endpoint}`);
     this.name = "DaemonAlreadyRunningError";
   }
 }

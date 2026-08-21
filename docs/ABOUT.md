@@ -1,6 +1,6 @@
-# Pitlane
+# Simlock
 
-Pitlane is a control plane for iOS simulators and Android emulators, built for
+Simlock is a control plane for iOS simulators and Android emulators, built for
 environments where multiple coding agents run in parallel on one machine.
 
 ## The problem
@@ -11,15 +11,15 @@ and installing over each other — without ever knowing the other exists.
 
 ## The solution
 
-Pitlane is a CLI-first control plane (backed by a local daemon) that is the
+Simlock is a CLI-first control plane (backed by a local daemon) that is the
 same for both platforms and gives agents one primitive: **lease a device**.
 An optional local stdio MCP integration exposes the focused lease/release
 workflow to compatible agent clients; the CLI remains the full operator
 interface.
 
-- `pitlane lease` returns a *ready* device — booted and health-checked — that
+- `simlock lease` returns a *ready* device — booted and health-checked — that
   no other agent will touch for the duration of the lease.
-- If no matching device is free, pitlane **provisions** one, up to a
+- If no matching device is free, simlock **provisions** one, up to a
   configurable capacity limit derived from the machine's CPU and RAM.
 - If the limit is reached, the CLI **blocks and waits** in a fair queue until a
   device frees up (with `--timeout` and `--no-wait` escape hatches).
@@ -28,14 +28,14 @@ interface.
 
 ## Key properties
 
-- **Advisory coordination.** Pitlane does not sandbox anything. It works
+- **Advisory coordination.** Simlock does not sandbox anything. It works
   because agents are instructed to never call `simctl` / `avdmanager` directly
   and to only use devices handed to them by a lease.
 - **Process-held leases.** The `lease` command stays running in the
   background; the open connection to the daemon is the heartbeat. Killing the
   process releases the lease. A daemon-side TTL is the backstop for zombies.
 - **One lease per agent** (v1).
-- **Managed-device registry.** Pitlane only ever shuts down, erases, or
+- **Managed-device registry.** Simlock only ever shuts down, erases, or
   deletes devices it created itself. Everything else on the machine is
   read-only to it.
 - **Agent-first output.** CLI lease results are one JSON line on stdout;

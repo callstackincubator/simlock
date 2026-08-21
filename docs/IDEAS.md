@@ -15,7 +15,7 @@ that frees the constrained capacity.
 
 The first warm-pool version is release-driven: it does not proactively boot
 shutdown devices on daemon startup or merely to fill unused running capacity.
-A device enters the warm pool only after an actual lease releases it. Pitlane
+A device enters the warm pool only after an actual lease releases it. Simlock
 also does not provision devices solely to fill the warm pool. Warm devices
 still shut down after the existing T1 idle timeout; the pool is not refilled
 afterward until real lease activity releases another device.

@@ -35,13 +35,13 @@ const listDevicesInvocation = {
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 const driverData = {
   deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
-  name: "pitlane-device-1",
+  name: "simlock-device-1",
   runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
   udid: "00000000-0000-0000-0000-000000000001",
 } as const;
 const dataPath = `/Devices/${driverData.udid}/data`;
-const durableMarkPath = `/Devices/${driverData.udid}/pitlane-mark.json`;
-const erasableMarkPath = `${dataPath}/pitlane-mark.json`;
+const durableMarkPath = `/Devices/${driverData.udid}/simlock-mark.json`;
+const erasableMarkPath = `${dataPath}/simlock-mark.json`;
 
 function deviceListResponse(state: string): string {
   return JSON.stringify({
@@ -135,7 +135,7 @@ describe("IosSimctlDriver", () => {
           args: [
             "simctl",
             "create",
-            "pitlane-device-1",
+            "simlock-device-1",
             driverData.deviceTypeId,
             driverData.runtimeId,
           ],
@@ -166,7 +166,7 @@ describe("IosSimctlDriver", () => {
         args: [
           "simctl",
           "create",
-          "pitlane-device-1",
+          "simlock-device-1",
           driverData.deviceTypeId,
           driverData.runtimeId,
         ],
@@ -189,7 +189,7 @@ describe("IosSimctlDriver", () => {
           args: [
             "simctl",
             "create",
-            "pitlane-device-1",
+            "simlock-device-1",
             driverData.deviceTypeId,
             driverData.runtimeId,
           ],
@@ -313,7 +313,7 @@ describe("IosSimctlDriver", () => {
           args: [
             "simctl",
             "create",
-            "pitlane-device-1",
+            "simlock-device-1",
             driverData.deviceTypeId,
             driverData.runtimeId,
           ],
@@ -398,7 +398,7 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([{ ...listInvocation, options: { timeoutMs: 30_000 } }]);
   });
 
-  it("maps simctl device state to runState and filters to pitlane- devices", async () => {
+  it("maps simctl device state to runState and filters to simlock- devices", async () => {
     const runner = new ScriptedProcessRunner([
       { match: listDevicesInvocation, result: { code: 0, stderr: "", stdout: listDevicesFixture } },
     ]);
@@ -535,7 +535,7 @@ describe("IosSimctlDriver", () => {
     expect(reality.devices[0]?.mark).toBeUndefined();
   });
 
-  it.skipIf(process.env.PITLANE_LIVE_IOS !== "1")(
+  it.skipIf(process.env.SIMLOCK_LIVE_IOS !== "1")(
     "runs a provision-to-destroy smoke test against simctl",
     async () => {
       const driver = new IosSimctlDriver({

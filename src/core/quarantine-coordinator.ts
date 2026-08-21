@@ -209,7 +209,7 @@ export class QuarantineCoordinator {
       // against a grant, still counted against capacity -- rather than either
       // reusing a dirty device or losing track of one that never got cleaned
       // up. No further retry is scheduled, so this is a terminal state that
-      // only an operator (`pitlane doctor` / `nuke`) leaves; emit it as its own
+      // only an operator (`simlock doctor` / `nuke`) leaves; emit it as its own
       // fact rather than letting a device strand itself in silence.
       await this.options.decisions.run(() =>
         this.options.registry.strandQuarantine(device.id, attempts),

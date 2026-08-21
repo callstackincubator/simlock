@@ -4,7 +4,7 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import { type DeviceSpec, Registry, RegistryEventError, UnknownDeviceError } from "./index.js";
 
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 const spec: DeviceSpec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" };
 
 class ObservingFilesystem extends MemoryFilesystem {
@@ -90,7 +90,7 @@ describe("Registry", () => {
   it("loads a legacy warm record as busy reclaiming rather than eligible ready inventory", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       statePath,
       JSON.stringify({
@@ -123,7 +123,7 @@ describe("Registry", () => {
   it("preserves unknown persisted fields when saving a later mutation", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       statePath,
       JSON.stringify({
@@ -602,7 +602,7 @@ describe("Registry", () => {
   it("rejects non-numeric recovery markers when loading persisted state", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       statePath,
       JSON.stringify({

@@ -14,7 +14,7 @@ describe("MCP session semantics", () => {
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
       android: { knownModels: ["Pixel 8"], availableOsVersions: ["34"] },
     });
-    const mcp = await env.mcpClient({ env: { PITLANE_AGENT_ID: "flow7-tools" } });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "flow7-tools" } });
 
     try {
       const devicesBefore = await mcp.client.callTool({ name: "list_devices", arguments: {} });
@@ -68,7 +68,7 @@ describe("MCP session semantics", () => {
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
-    const mcp = await env.mcpClient({ env: { PITLANE_AGENT_ID: "flow7-force-release" } });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "flow7-force-release" } });
 
     try {
       const leaseResult = await mcp.client.callTool({
@@ -87,7 +87,7 @@ describe("MCP session semantics", () => {
           | undefined;
         return data?.lease_id === leased.lease_id ? notification.params : undefined;
       });
-      expect(warning.logger).toBe("pitlane");
+      expect(warning.logger).toBe("simlock");
       expect(warning.level).toBe("warning");
       // The daemon push carries its own internal registry device id, not the
       // driver-opaque `device_id` (udid) the MCP lease result reports -- only assert
@@ -128,7 +128,7 @@ describe("MCP session semantics", () => {
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
-    const mcp = await env.mcpClient({ env: { PITLANE_AGENT_ID: "flow7-restart" } });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "flow7-restart" } });
 
     try {
       const leaseResult = await mcp.client.callTool({

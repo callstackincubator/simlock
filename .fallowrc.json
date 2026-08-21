@@ -3,7 +3,7 @@
   "$schema": "./node_modules/fallow/schema.json",
   // e2e/*.test.ts files are vitest entry points (not reached by static import from any
   // other source file), and e2e/fake-driver/index.ts is loaded dynamically by the
-  // daemon via PITLANE_DRIVERS_MODULE (see docs/CLI.md) -- neither is visible to
+  // daemon via SIMLOCK_DRIVERS_MODULE (see docs/CLI.md) -- neither is visible to
   // fallow's static reachability graph without being declared explicitly.
   "entry": ["src/index.ts", "src/cli/main.ts", "src/daemon/main.ts", "e2e/**/*.test.ts"],
   "dynamicallyLoaded": ["e2e/fake-driver/index.ts"],

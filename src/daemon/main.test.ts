@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 async function start(overrides: Partial<StartDaemonOptions> = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "pitlane-main-"));
+  const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
   temporaryDirectories.push(directory);
   const sink = new MemoryLogSink();
   const clock = new FakeClock(1_000);
@@ -82,7 +82,7 @@ describe("startDaemon startup readiness", () => {
   // can prove the socket answers hello/status.get ("starting"), parks lease.request,
   // and only then converges -- without waiting on a real clock.
   it("claims the socket and answers hello/status.get while doctor.reconcile is still in flight", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "pitlane-main-slow-"));
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-slow-"));
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const socketPath = join(directory, "daemon.sock");
@@ -166,19 +166,19 @@ describe("discoverDrivers", () => {
   });
 });
 
-describe("discoverDrivers with PITLANE_DRIVERS_MODULE", () => {
-  const previousModule = process.env.PITLANE_DRIVERS_MODULE;
+describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
+  const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
 
   afterEach(() => {
     if (previousModule === undefined) {
-      delete process.env.PITLANE_DRIVERS_MODULE;
+      delete process.env.SIMLOCK_DRIVERS_MODULE;
     } else {
-      process.env.PITLANE_DRIVERS_MODULE = previousModule;
+      process.env.SIMLOCK_DRIVERS_MODULE = previousModule;
     }
   });
 
   async function writeModule(contents: string): Promise<string> {
-    const directory = await mkdtemp(join(tmpdir(), "pitlane-drivers-module-"));
+    const directory = await mkdtemp(join(tmpdir(), "simlock-drivers-module-"));
     temporaryDirectories.push(directory);
     const modulePath = join(directory, "drivers.mjs");
     await writeFile(modulePath, contents, "utf8");
@@ -197,7 +197,7 @@ describe("discoverDrivers with PITLANE_DRIVERS_MODULE", () => {
   }
 
   it("substitutes discovery with the module's createDrivers(context), logging the substitution", async () => {
-    process.env.PITLANE_DRIVERS_MODULE = await writeModule(
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
          return [{ platform: "ios", fromModule: true, sawContext: typeof context.logger === "object" }];
        }`,
@@ -210,14 +210,14 @@ describe("discoverDrivers with PITLANE_DRIVERS_MODULE", () => {
     expect(sink.records).toContainEqual(
       expect.objectContaining({
         level: "info",
-        message: "Substituting driver discovery via PITLANE_DRIVERS_MODULE",
+        message: "Substituting driver discovery via SIMLOCK_DRIVERS_MODULE",
         module: "daemon.driver-discovery",
       }),
     );
     expect(sink.records).toContainEqual(
       expect.objectContaining({
         level: "info",
-        message: "Loaded drivers from PITLANE_DRIVERS_MODULE",
+        message: "Loaded drivers from SIMLOCK_DRIVERS_MODULE",
         module: "daemon.driver-discovery",
         fields: expect.objectContaining({ count: 1 }),
       }),
@@ -225,7 +225,7 @@ describe("discoverDrivers with PITLANE_DRIVERS_MODULE", () => {
   });
 
   it("supports a synchronous createDrivers returning an array directly", async () => {
-    process.env.PITLANE_DRIVERS_MODULE = await writeModule(
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers() { return []; }`,
     );
 
@@ -233,15 +233,15 @@ describe("discoverDrivers with PITLANE_DRIVERS_MODULE", () => {
   });
 
   it("fails loudly when the module has no createDrivers export", async () => {
-    process.env.PITLANE_DRIVERS_MODULE = await writeModule(`export const nope = 1;`);
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(`export const nope = 1;`);
 
     await expect(discover(new MemoryLogSink())).rejects.toThrow(/createDrivers/);
   });
 
   it("fails loudly when the module cannot be imported", async () => {
-    process.env.PITLANE_DRIVERS_MODULE = join(
+    process.env.SIMLOCK_DRIVERS_MODULE = join(
       tmpdir(),
-      "pitlane-drivers-module-does-not-exist.mjs",
+      "simlock-drivers-module-does-not-exist.mjs",
     );
 
     await expect(discover(new MemoryLogSink())).rejects.toThrow();

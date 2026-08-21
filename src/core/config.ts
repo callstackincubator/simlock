@@ -2,7 +2,7 @@ import type { Filesystem, LogLevel, SystemStats } from "../ports/index.js";
 
 const GIBIBYTE = 1024 ** 3;
 
-const DEFAULT_CONFIG_PATH = "~/.pitlane/config.json";
+const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
 export interface Config {
   readonly limits: {

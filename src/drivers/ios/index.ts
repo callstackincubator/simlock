@@ -23,7 +23,7 @@ import type {
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
-const MARK_FILE_NAME = "pitlane-mark.json";
+const MARK_FILE_NAME = "simlock-mark.json";
 
 interface IosDriverData {
   readonly deviceTypeId: string;
@@ -119,7 +119,7 @@ export class IosSimctlDriver implements Driver {
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
     const resolved = await this.#resolvedSpec(spec);
-    const name = `pitlane-${this.#idGenerator.generate()}`;
+    const name = `simlock-${this.#idGenerator.generate()}`;
     const result = await this.#simctl(
       ["create", name, resolved.deviceType.identifier, resolved.runtime.identifier],
       COMMAND_TIMEOUT_MS,
@@ -478,7 +478,7 @@ function parseManagedDevices(value: unknown): ParsedManagedDevice[] {
       if (!isRecord(device) || typeof device.name !== "string" || typeof device.udid !== "string") {
         continue;
       }
-      if (!device.name.startsWith("pitlane-")) continue;
+      if (!device.name.startsWith("simlock-")) continue;
       devices.push({
         dataPath: typeof device.dataPath === "string" ? device.dataPath : undefined,
         name: device.name,

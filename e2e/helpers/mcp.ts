@@ -31,7 +31,7 @@ export interface McpClientHandle {
     timeout?: number,
   ): Promise<T>;
   /**
-   * The `pitlane mcp` subprocess's stderr captured so far. Piped (not inherited) so a
+   * The `simlock mcp` subprocess's stderr captured so far. Piped (not inherited) so a
    * subprocess shutdown quirk (see the flow-2 report note on a stack-overflow logged
    * during teardown) does not spam the test runner's own output; available here for
    * a test that needs to inspect it.
@@ -54,8 +54,8 @@ export async function mcpClient(
     command: process.execPath,
     args: [CLI_ENTRY, "mcp"],
     // StdioClientTransport only inherits a safe-listed subset of process.env by
-    // default (DEFAULT_INHERITED_ENV_VARS) -- explicit here so PITLANE_HOME /
-    // PITLANE_DRIVERS_MODULE / PITLANE_AGENT_ID actually reach the spawned process.
+    // default (DEFAULT_INHERITED_ENV_VARS) -- explicit here so SIMLOCK_HOME /
+    // SIMLOCK_DRIVERS_MODULE / SIMLOCK_AGENT_ID actually reach the spawned process.
     env: toStringEnv({ ...env, ...options.env }),
     // Piped (not the default "inherit") so a subprocess shutdown quirk doesn't spam
     // the test runner's own stderr; captured instead, see `stderrOutput()`.
@@ -64,7 +64,7 @@ export async function mcpClient(
   transport.stderr?.on("data", (chunk: Buffer) => {
     stderrOutput += chunk.toString("utf8");
   });
-  const client = new Client({ name: "pitlane-e2e", version: "0.0.0" });
+  const client = new Client({ name: "simlock-e2e", version: "0.0.0" });
 
   const progress: ProgressNotification["params"][] = [];
   const logging: LoggingMessageNotification["params"][] = [];

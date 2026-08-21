@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import { loadConfig } from "./index.js";
 
-const configPath = "/home/agent/.pitlane/config.json";
+const configPath = "/home/agent/.simlock/config.json";
 const gibibyte = 1024 ** 3;
 
 function createStats(): FakeSystemStats {
@@ -75,7 +75,7 @@ describe("loadConfig", () => {
 
   it("applies a file-level log override", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ log: { level: "debug", rotateBytes: 1024 } }),
@@ -87,7 +87,7 @@ describe("loadConfig", () => {
 
   it("rejects a log level outside the known set", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify({ log: { level: "verbose" } }));
 
     await expect(
@@ -97,7 +97,7 @@ describe("loadConfig", () => {
 
   it("rejects a non-positive-integer log rotation cap", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify({ log: { rotateBytes: 0 } }));
 
     await expect(
@@ -107,7 +107,7 @@ describe("loadConfig", () => {
 
   it("applies a file-level warm-pool quarantine override", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ warmPool: { quarantine: { maxRetries: 1, retryBackoffMs: 1_000 } } }),
@@ -124,7 +124,7 @@ describe("loadConfig", () => {
 
   it("rejects a non-positive-integer quarantine retry count", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ warmPool: { quarantine: { maxRetries: 0 } } }),
@@ -137,7 +137,7 @@ describe("loadConfig", () => {
 
   it("rejects a quarantine backoff multiplier below 1", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ warmPool: { quarantine: { retryBackoffMultiplier: 0.5 } } }),
@@ -150,7 +150,7 @@ describe("loadConfig", () => {
 
   it("applies file values over defaults and explicit overrides over file values", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({
@@ -181,7 +181,7 @@ describe("loadConfig", () => {
 
   it("deeply merges a partial config file", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ ramBudget: { androidBytesPerDevice: 5 * gibibyte } }),
@@ -201,7 +201,7 @@ describe("loadConfig", () => {
 
   it("rejects malformed values with the offending key", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ limits: { ios: { maxDevices: "many" } } }),
@@ -218,7 +218,7 @@ describe("loadConfig", () => {
     [{ limits: { android: { maxRunning: "many" } } }, "limits.android.maxRunning"],
   ])("rejects invalid maxRunning values in every scope", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
 
     await expect(
@@ -228,7 +228,7 @@ describe("loadConfig", () => {
 
   it("accepts a heartbeat interval at the boundary of a quarter of the backstop", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ lease: { heldTtlBackstopMs: 40_000, heartbeatIntervalMs: 10_000 } }),
@@ -240,7 +240,7 @@ describe("loadConfig", () => {
 
   it("rejects a non-positive-integer heartbeat interval", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ lease: { heartbeatIntervalMs: 0 } }),
@@ -253,7 +253,7 @@ describe("loadConfig", () => {
 
   it("rejects a heartbeat interval that exceeds a quarter of the backstop", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({ lease: { heldTtlBackstopMs: 40_000, heartbeatIntervalMs: 10_001 } }),
@@ -267,7 +267,7 @@ describe("loadConfig", () => {
   it("warns about unknown keys without rejecting the file", async () => {
     const filesystem = new MemoryFilesystem();
     const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify({ limits: { web: {} } }));
 
     await expect(
@@ -278,7 +278,7 @@ describe("loadConfig", () => {
 
   it("applies a file-level health override", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({
@@ -306,7 +306,7 @@ describe("loadConfig", () => {
 
   it("rejects a non-boolean health.enabled", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify({ health: { enabled: "yes" } }));
 
     await expect(
@@ -323,7 +323,7 @@ describe("loadConfig", () => {
     [{ health: { maxConcurrentRecoveries: 0 } }, "health.maxConcurrentRecoveries"],
   ])("rejects invalid health values in every field", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
 
     await expect(
@@ -334,7 +334,7 @@ describe("loadConfig", () => {
   it("warns about an unknown key nested under health without rejecting the file", async () => {
     const filesystem = new MemoryFilesystem();
     const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify({ health: { maxBoltCount: 7 } }));
 
     await expect(
@@ -345,7 +345,7 @@ describe("loadConfig", () => {
 
   it("applies a file-level stalledTransition override", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({
@@ -365,7 +365,7 @@ describe("loadConfig", () => {
     [{ stalledTransition: { minimumThresholdMs: -1 } }, "stalledTransition.minimumThresholdMs"],
   ])("rejects invalid stalledTransition values in every field", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
 
     await expect(

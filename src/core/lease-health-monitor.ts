@@ -43,7 +43,7 @@ interface CrashCounters {
 
 /**
  * Periodically observes `leased` devices, reboots one whose process crashed
- * outside pitlane under its existing lease, and releases the lease as
+ * outside simlock under its existing lease, and releases the lease as
  * `device-lost` when recovery is impossible or exhausted. Not event-triggered
  * -- purely a `Clock`-driven tick, modelled on `CleanupReaper`.
  *

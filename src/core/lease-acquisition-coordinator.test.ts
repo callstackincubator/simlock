@@ -20,7 +20,7 @@ import { SerializedDecision } from "./serialized-decision.js";
 import { QueueTimeoutError, WaitQueue } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 function config(maxDevices = 1): Config {

@@ -12,7 +12,7 @@ import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 function config(overrides: Partial<Config["health"]> = {}): Config {
@@ -107,7 +107,7 @@ async function seedLeased(
   options: { readonly driverDeviceId?: string; readonly requesterId?: string } = {},
 ) {
   deviceCounter += 1;
-  const driverDeviceId = options.driverDeviceId ?? `pitlane-${deviceCounter}`;
+  const driverDeviceId = options.driverDeviceId ?? `simlock-${deviceCounter}`;
   const device = await harness.registry.registerDevice({
     driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
@@ -428,18 +428,18 @@ describe("LeaseHealthMonitor", () => {
   it("gives up for provenance drift only while running; the same drift while stopped follows the crash path instead", async () => {
     const harness = await createHarness();
     const { device: runningDevice, lease: runningLease } = await seedLeased(harness, {
-      driverDeviceId: "pitlane-running",
+      driverDeviceId: "simlock-running",
     });
     const { device: stoppedDevice } = await seedLeased(harness, {
-      driverDeviceId: "pitlane-stopped",
+      driverDeviceId: "simlock-stopped",
       requesterId: "agent-2",
     });
     const drift: ObservedMark = { durable: "tok-a", erasable: undefined, erasableReadable: true };
 
     harness.driver.setManagedReality({
       devices: [
-        observedDevice("pitlane-running", "running", drift),
-        observedDevice("pitlane-stopped", "stopped", drift),
+        observedDevice("simlock-running", "running", drift),
+        observedDevice("simlock-stopped", "stopped", drift),
       ],
       processes: [],
     });
@@ -496,11 +496,11 @@ describe("LeaseHealthMonitor", () => {
 
   it("caps concurrent recoveries at maxConcurrentRecoveries, leaving a second crashed device for a later tick", async () => {
     const harness = await createHarness({ maxConcurrentRecoveries: 1 });
-    await seedLeased(harness, { driverDeviceId: "pitlane-a" });
-    await seedLeased(harness, { driverDeviceId: "pitlane-b", requesterId: "agent-2" });
+    await seedLeased(harness, { driverDeviceId: "simlock-a" });
+    await seedLeased(harness, { driverDeviceId: "simlock-b", requesterId: "agent-2" });
 
     harness.driver.setManagedReality({
-      devices: [observedDevice("pitlane-a", "stopped"), observedDevice("pitlane-b", "stopped")],
+      devices: [observedDevice("simlock-a", "stopped"), observedDevice("simlock-b", "stopped")],
       processes: [],
     });
     harness.driver.hangMakeReady();
@@ -520,16 +520,16 @@ describe("LeaseHealthMonitor", () => {
 
   it("keeps ticking on schedule for other devices while a slow recovery stays in flight, without double-dispatching it", async () => {
     const harness = await createHarness();
-    await seedLeased(harness, { driverDeviceId: "pitlane-hung" });
+    await seedLeased(harness, { driverDeviceId: "simlock-hung" });
     const { device: healthyDevice } = await seedLeased(harness, {
-      driverDeviceId: "pitlane-healthy",
+      driverDeviceId: "simlock-healthy",
       requesterId: "agent-2",
     });
 
     harness.driver.setManagedReality({
       devices: [
-        observedDevice("pitlane-hung", "stopped"),
-        observedDevice("pitlane-healthy", "running"),
+        observedDevice("simlock-hung", "stopped"),
+        observedDevice("simlock-healthy", "running"),
       ],
       processes: [],
     });

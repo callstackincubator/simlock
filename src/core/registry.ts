@@ -10,7 +10,7 @@ import {
   transition,
 } from "./domain.js";
 
-const DEFAULT_REGISTRY_PATH = "~/.pitlane/state.json";
+const DEFAULT_REGISTRY_PATH = "~/.simlock/state.json";
 
 export interface RegistryOptions {
   readonly filesystem: Filesystem;
@@ -313,7 +313,7 @@ export class Registry {
     return cloneDevice(updated);
   }
 
-  /** Flags a device whose provenance marks no longer prove Pitlane owns it. */
+  /** Flags a device whose provenance marks no longer prove Simlock owns it. */
   async markForeignProvenanceDetected(deviceId: string, at: number): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.foreignProvenanceDetectedAt !== undefined) {

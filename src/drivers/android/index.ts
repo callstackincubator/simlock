@@ -34,9 +34,9 @@ const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
-const CLEAN_BASELINE = "pitlane_clean_baseline";
-const DURABLE_MARK_KEY = "pitlane.mark";
-const ERASABLE_MARK_PATH = "/data/local/tmp/pitlane-mark.json";
+const CLEAN_BASELINE = "simlock_clean_baseline";
+const DURABLE_MARK_KEY = "simlock.mark";
+const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
 export interface AndroidDriverOptions {
   readonly clock: Clock;
@@ -166,7 +166,7 @@ export class AndroidDriver implements Driver {
     this.#assertAndroidSpec(spec);
     const profile = await this.#profileFor(spec.model);
     const image = await this.#requireImage(spec.osVersion);
-    const avdName = `pitlane_${this.#idGenerator.generate()}`;
+    const avdName = `simlock_${this.#idGenerator.generate()}`;
     const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
 
     await this.#runOrThrow(this.#sdk.avdmanager, [
@@ -364,7 +364,7 @@ export class AndroidDriver implements Driver {
     const avdNames: string[] = [];
     if (await this.#filesystem.exists(this.#avdDirectory)) {
       for (const entry of await this.#filesystem.readdir(this.#avdDirectory)) {
-        const match = /^(pitlane_.+)\.avd$/.exec(entry);
+        const match = /^(simlock_.+)\.avd$/.exec(entry);
         if (match?.[1] === undefined) continue;
         avdNames.push(match[1]);
       }
@@ -433,7 +433,7 @@ export class AndroidDriver implements Driver {
       }
       const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
       const avdName = nameLine.trim();
-      if (!avdName.startsWith("pitlane_")) continue;
+      if (!avdName.startsWith("simlock_")) continue;
       runningByAvdName.add(avdName);
       erasableMarkByAvdName.set(avdName, parseErasableMark(markLines.join("\n")));
       const port = Number(candidate.slice("emulator-".length));
@@ -595,8 +595,8 @@ export class AndroidDriver implements Driver {
 
   /**
    * Writes the same provenance token into both regions of the mark: the durable
-   * `pitlane.mark` key in `config.ini` (host-side, survives an erase) and the erasable
-   * `/data/local/tmp/pitlane-mark.json` file on the device (destroyed by an erase). Must be
+   * `simlock.mark` key in `config.ini` (host-side, survives an erase) and the erasable
+   * `/data/local/tmp/simlock-mark.json` file on the device (destroyed by an erase). Must be
    * called after every readiness transition -- see the call sites in `makeReady` and
    * `reclaim` for why "the tail of `makeReady`" alone is not sufficient.
    */
@@ -769,7 +769,7 @@ export class AndroidDriver implements Driver {
   }
 
   #baselineMetadataPath(avdName: string): string {
-    return `${this.#avdDirectory}/${avdName}.avd/pitlane-clean-baseline.json`;
+    return `${this.#avdDirectory}/${avdName}.avd/simlock-clean-baseline.json`;
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {

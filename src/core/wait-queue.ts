@@ -47,7 +47,7 @@ export class RequesterAlreadyLeasedError extends Error {
     super(
       existingLeaseId === undefined
         ? `Requester already has a lease or pending request: ${requesterId}`
-        : `Requester ${requesterId} already holds lease ${existingLeaseId}; release it (\`pitlane release ${existingLeaseId}\`) before requesting another device`,
+        : `Requester ${requesterId} already holds lease ${existingLeaseId}; release it (\`simlock release ${existingLeaseId}\`) before requesting another device`,
     );
     this.name = "RequesterAlreadyLeasedError";
   }

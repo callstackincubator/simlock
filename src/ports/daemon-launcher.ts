@@ -23,7 +23,7 @@ export class NodeDaemonLauncher implements DaemonLauncher {
       const child = spawn(this.options.command, this.options.args, {
         detached: true,
         // Explicit rather than relying on spawn's default: the daemon must inherit
-        // overrides like PITLANE_HOME and PITLANE_DRIVERS_MODULE from whichever
+        // overrides like SIMLOCK_HOME and SIMLOCK_DRIVERS_MODULE from whichever
         // frontend (CLI/MCP) auto-launched it.
         env: process.env,
         stdio: ["ignore", log.fd, log.fd],

@@ -12,8 +12,8 @@ export interface DriverDevice {
   /**
    * The opaque string platform tooling accepts right now -- a simctl UDID for iOS, an adb
    * serial (`emulator-<port>`) for Android. The core carries it without interpreting it; only
-   * the owning driver module knows what it means. Unlike `deviceId` (Pitlane's own, stable
-   * `pitlane-`/`pitlane_`-prefixed name proving Pitlane created the device), this can change
+   * the owning driver module knows what it means. Unlike `deviceId` (Simlock's own, stable
+   * `simlock-`/`simlock_`-prefixed name proving Simlock created the device), this can change
    * across a boot -- see `Driver.makeReady`.
    */
   readonly address: string;
@@ -28,7 +28,7 @@ export interface DriverDevice {
 export type ObservedRunState = "running" | "stopped" | "transitioning";
 
 /**
- * Provenance-mark readings for one managed device. Pitlane writes the same
+ * Provenance-mark readings for one managed device. Simlock writes the same
  * token into two regions of a device it owns: one that survives a fresh-state
  * erase and one the erase destroys. Comparing the pair is what makes a foreign
  * erase visible -- an erased device still exists and still boots, so run-state
@@ -58,9 +58,9 @@ export interface ObservedDevice extends DriverDevice {
 
 /** Reality observable by a driver without trusting the registry. */
 export interface DriverReality {
-  /** Devices whose platform-owned name proves that Pitlane created them. */
+  /** Devices whose platform-owned name proves that Simlock created them. */
   readonly devices: readonly ObservedDevice[];
-  /** Running, Pitlane-attributable device processes not necessarily in the registry. */
+  /** Running, Simlock-attributable device processes not necessarily in the registry. */
   readonly processes: readonly DriverDevice[];
 }
 

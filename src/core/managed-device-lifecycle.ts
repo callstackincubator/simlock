@@ -135,7 +135,7 @@ export class ManagedDeviceLifecycle {
 
   /**
    * Reboots a device that is currently leased and whose underlying process
-   * died outside pitlane, so the lease can continue on the same device. The
+   * died outside simlock, so the lease can continue on the same device. The
    * device stays `leased` throughout: this performs no registry transition
    * and emits no event, deliberately -- the caller (a `LeaseHealthMonitor`)
    * owns deciding what happened and telling the holder.

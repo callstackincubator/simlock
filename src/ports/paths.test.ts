@@ -2,14 +2,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { resolvePitlaneHome } from "./paths.js";
+import { resolveSimlockHome } from "./paths.js";
 
-describe("resolvePitlaneHome", () => {
-  it("defaults to ~/.pitlane when PITLANE_HOME is unset", () => {
-    expect(resolvePitlaneHome({})).toBe(join(homedir(), ".pitlane"));
+describe("resolveSimlockHome", () => {
+  it("defaults to ~/.simlock when SIMLOCK_HOME is unset", () => {
+    expect(resolveSimlockHome({})).toBe(join(homedir(), ".simlock"));
   });
 
-  it("uses PITLANE_HOME when set", () => {
-    expect(resolvePitlaneHome({ PITLANE_HOME: "/tmp/custom-home" })).toBe("/tmp/custom-home");
+  it("uses SIMLOCK_HOME when set", () => {
+    expect(resolveSimlockHome({ SIMLOCK_HOME: "/tmp/custom-home" })).toBe("/tmp/custom-home");
   });
 });

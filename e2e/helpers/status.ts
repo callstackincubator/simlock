@@ -16,20 +16,20 @@ interface LeaseRecord {
 
 async function listDevices(env: TestEnv): Promise<DeviceRecord[]> {
   const result = await env.cli(["list", "--devices"]);
-  if (result.code !== 0) throw new Error(`pitlane list --devices failed: ${result.stderr}`);
+  if (result.code !== 0) throw new Error(`simlock list --devices failed: ${result.stderr}`);
   return result.json as DeviceRecord[];
 }
 
 async function listLeases(env: TestEnv): Promise<LeaseRecord[]> {
   const result = await env.cli(["list", "--leases"]);
-  if (result.code !== 0) throw new Error(`pitlane list --leases failed: ${result.stderr}`);
+  if (result.code !== 0) throw new Error(`simlock list --leases failed: ${result.stderr}`);
   return result.json as LeaseRecord[];
 }
 
 /**
- * Polls `pitlane list --devices` until the device identified by `driverDeviceId`
+ * Polls `simlock list --devices` until the device identified by `driverDeviceId`
  * (the driver-opaque id -- what a lease grant reports as `udid`/`device_id`, *not*
- * pitlane's own registry device id) reaches `state`.
+ * simlock's own registry device id) reaches `state`.
  */
 export async function waitForDeviceState(
   env: TestEnv,
@@ -49,7 +49,7 @@ export async function waitForDeviceState(
   );
 }
 
-/** Polls `pitlane list --leases` until exactly `count` leases are active. */
+/** Polls `simlock list --leases` until exactly `count` leases are active. */
 export async function waitForLeaseCount(
   env: TestEnv,
   count: number,

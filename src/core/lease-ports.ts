@@ -33,7 +33,7 @@ export interface LeaseExpirer {
   expire(leaseId: string): Promise<void>;
 }
 
-/** Read-only device catalog used by the `pitlane catalog` command and MCP tool. */
+/** Read-only device catalog used by the `simlock catalog` command and MCP tool. */
 export interface CatalogReader {
   listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]>;
 }

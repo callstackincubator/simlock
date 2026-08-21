@@ -1,12 +1,12 @@
 {
-  "name": "pitlane",
+  "name": "simlock",
   "version": "1.0.0",
   "description": "Control plane for iOS simulators and Android emulators.",
   "keywords": [],
   "license": "ISC",
   "author": "",
   "bin": {
-    "pitlane": "dist/cli/main.js"
+    "simlock": "dist/cli/main.js"
   },
   "type": "module",
   "scripts": {

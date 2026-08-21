@@ -44,17 +44,17 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-orphan-address",
-          deviceId: "pitlane-orphan",
-          driverData: { fakeDeviceId: "pitlane-orphan" },
+          address: "simlock-orphan-address",
+          deviceId: "simlock-orphan",
+          driverData: { fakeDeviceId: "simlock-orphan" },
           runState: "running",
         },
       ],
       processes: [
         {
-          address: "pitlane-process-address",
-          deviceId: "pitlane-process",
-          driverData: { fakeDeviceId: "pitlane-process" },
+          address: "simlock-process-address",
+          deviceId: "simlock-process",
+          driverData: { fakeDeviceId: "simlock-process" },
         },
       ],
     });
@@ -87,8 +87,8 @@ describe("Doctor", () => {
         devices: [
           {
             createdAt: 1,
-            driverData: { fakeDeviceId: "pitlane-stale" },
-            driverDeviceId: "pitlane-stale",
+            driverData: { fakeDeviceId: "simlock-stale" },
+            driverDeviceId: "simlock-stale",
             id: "dev_1",
             spec: { model: "Phone", osVersion: "1", platform: "ios" },
             state: "leased",
@@ -108,9 +108,9 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-stale-address",
-          deviceId: "pitlane-stale",
-          driverData: { fakeDeviceId: "pitlane-stale" },
+          address: "simlock-stale-address",
+          deviceId: "simlock-stale",
+          driverData: { fakeDeviceId: "simlock-stale" },
           runState: "stopped",
         },
       ],
@@ -143,8 +143,8 @@ describe("Doctor", () => {
       statePath: "/state.json",
     });
     const device = await registry.registerDevice({
-      driverData: { fakeDeviceId: "pitlane-drift" },
-      driverDeviceId: "pitlane-drift",
+      driverData: { fakeDeviceId: "simlock-drift" },
+      driverDeviceId: "simlock-drift",
       provisionDuration: 0,
       spec: { model: "Phone", osVersion: "1", platform: "ios" },
     });
@@ -162,9 +162,9 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-drift-address",
-          deviceId: "pitlane-drift",
-          driverData: { fakeDeviceId: "pitlane-drift" },
+          address: "simlock-drift-address",
+          deviceId: "simlock-drift",
+          driverData: { fakeDeviceId: "simlock-drift" },
           runState: "stopped",
         },
       ],
@@ -208,7 +208,7 @@ describe("Doctor", () => {
       });
       const device = await registry.registerDevice({
         driverData: {},
-        driverDeviceId: "pitlane-marked",
+        driverDeviceId: "simlock-marked",
         provisionDuration: 0,
         spec: { model: "Phone", osVersion: "1", platform: "ios" },
       });
@@ -220,8 +220,8 @@ describe("Doctor", () => {
       driver.setManagedReality({
         devices: [
           {
-            address: "pitlane-marked-address",
-            deviceId: "pitlane-marked",
+            address: "simlock-marked-address",
+            deviceId: "simlock-marked",
             driverData: {},
             mark,
             runState: "running",
@@ -260,7 +260,7 @@ describe("Doctor", () => {
     }
   });
 
-  it("ignores provenance marks while Pitlane is itself erasing the device", async () => {
+  it("ignores provenance marks while Simlock is itself erasing the device", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
     const registry = await Registry.load({
@@ -272,7 +272,7 @@ describe("Doctor", () => {
     });
     const device = await registry.registerDevice({
       driverData: {},
-      driverDeviceId: "pitlane-reclaiming",
+      driverDeviceId: "simlock-reclaiming",
       provisionDuration: 0,
       spec: { model: "Phone", osVersion: "1", platform: "ios" },
     });
@@ -291,8 +291,8 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-reclaiming-address",
-          deviceId: "pitlane-reclaiming",
+          address: "simlock-reclaiming-address",
+          deviceId: "simlock-reclaiming",
           driverData: {},
           mark: { durable: "tok", erasable: undefined, erasableReadable: true },
           runState: "running",
@@ -338,17 +338,17 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-orphan-address",
-          deviceId: "pitlane-orphan",
-          driverData: { fakeDeviceId: "pitlane-orphan" },
+          address: "simlock-orphan-address",
+          deviceId: "simlock-orphan",
+          driverData: { fakeDeviceId: "simlock-orphan" },
           runState: "running",
         },
       ],
       processes: [
         {
-          address: "pitlane-process-address",
-          deviceId: "pitlane-process",
-          driverData: { fakeDeviceId: "pitlane-process" },
+          address: "simlock-process-address",
+          deviceId: "simlock-process",
+          driverData: { fakeDeviceId: "simlock-process" },
         },
       ],
     });
@@ -436,7 +436,7 @@ describe("Doctor", () => {
     expect(eventBus.replay()).toContainEqual(expect.objectContaining({ event: "lease.expired" }));
   });
 
-  it("reports foreign-state-change for a device booted outside Pitlane, on both platforms", async () => {
+  it("reports foreign-state-change for a device booted outside Simlock, on both platforms", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
     const registry = await Registry.load({
@@ -446,15 +446,15 @@ describe("Doctor", () => {
       idGenerator: sequence(),
       statePath: "/state.json",
     });
-    const iosDevice = await shutdownDevice(registry, "pitlane-ios-1", "ios");
-    const androidDevice = await shutdownDevice(registry, "pitlane_android-1", "android");
+    const iosDevice = await shutdownDevice(registry, "simlock-ios-1", "ios");
+    const androidDevice = await shutdownDevice(registry, "simlock_android-1", "android");
 
     const iosDriver = new FakeDriver({ clock, platform: "ios" });
     iosDriver.setManagedReality({
       devices: [
         {
-          address: "pitlane-ios-1-address",
-          deviceId: "pitlane-ios-1",
+          address: "simlock-ios-1-address",
+          deviceId: "simlock-ios-1",
           driverData: {},
           runState: "running",
         },
@@ -465,8 +465,8 @@ describe("Doctor", () => {
     androidDriver.setManagedReality({
       devices: [
         {
-          address: "pitlane_android-1-address",
-          deviceId: "pitlane_android-1",
+          address: "simlock_android-1-address",
+          deviceId: "simlock_android-1",
           driverData: {},
           runState: "running",
         },
@@ -500,7 +500,7 @@ describe("Doctor", () => {
     ]);
   });
 
-  it("reports foreign-state-change for a device shut down outside Pitlane, on both platforms", async () => {
+  it("reports foreign-state-change for a device shut down outside Simlock, on both platforms", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
     const registry = await Registry.load({
@@ -510,15 +510,15 @@ describe("Doctor", () => {
       idGenerator: sequence(),
       statePath: "/state.json",
     });
-    const iosDevice = await readyDevice(registry, "pitlane-ios-2", "ios");
-    const androidDevice = await readyDevice(registry, "pitlane_android-2", "android");
+    const iosDevice = await readyDevice(registry, "simlock-ios-2", "ios");
+    const androidDevice = await readyDevice(registry, "simlock_android-2", "android");
 
     const iosDriver = new FakeDriver({ clock, platform: "ios" });
     iosDriver.setManagedReality({
       devices: [
         {
-          address: "pitlane-ios-2-address",
-          deviceId: "pitlane-ios-2",
+          address: "simlock-ios-2-address",
+          deviceId: "simlock-ios-2",
           driverData: {},
           runState: "stopped",
         },
@@ -529,8 +529,8 @@ describe("Doctor", () => {
     androidDriver.setManagedReality({
       devices: [
         {
-          address: "pitlane_android-2-address",
-          deviceId: "pitlane_android-2",
+          address: "simlock_android-2-address",
+          deviceId: "simlock_android-2",
           driverData: {},
           runState: "stopped",
         },
@@ -574,14 +574,14 @@ describe("Doctor", () => {
       idGenerator: sequence(),
       statePath: "/state.json",
     });
-    await readyDevice(registry, "pitlane-transition", "ios");
+    await readyDevice(registry, "simlock-transition", "ios");
 
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-transition-address",
-          deviceId: "pitlane-transition",
+          address: "simlock-transition-address",
+          deviceId: "simlock-transition",
           driverData: {},
           runState: "transitioning",
         },
@@ -614,11 +614,11 @@ describe("Doctor", () => {
     });
     await registry.registerDevice({
       driverData: {},
-      driverDeviceId: "pitlane-provisioning",
+      driverDeviceId: "simlock-provisioning",
       provisionDuration: 0,
       spec: { model: "Phone", osVersion: "1", platform: "ios" },
     });
-    const reclaiming = await readyDevice(registry, "pitlane-reclaiming", "ios");
+    const reclaiming = await readyDevice(registry, "simlock-reclaiming", "ios");
     const lease = await registry.createLease({
       deviceId: reclaiming.id,
       mode: "held",
@@ -631,14 +631,14 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-provisioning-address",
-          deviceId: "pitlane-provisioning",
+          address: "simlock-provisioning-address",
+          deviceId: "simlock-provisioning",
           driverData: {},
           runState: "stopped",
         },
         {
-          address: "pitlane-reclaiming-address",
-          deviceId: "pitlane-reclaiming",
+          address: "simlock-reclaiming-address",
+          deviceId: "simlock-reclaiming",
           driverData: {},
           runState: "stopped",
         },
@@ -677,7 +677,7 @@ describe("Doctor", () => {
       });
       const device = await registry.registerDevice({
         driverData: {},
-        driverDeviceId: "pitlane-stuck",
+        driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { model: "Phone", osVersion: "1", platform: "ios" },
       });
@@ -725,7 +725,7 @@ describe("Doctor", () => {
       });
       const device = await registry.registerDevice({
         driverData: {},
-        driverDeviceId: "pitlane-claimed",
+        driverDeviceId: "simlock-claimed",
         provisionDuration: 0,
         spec: { model: "Phone", osVersion: "1", platform: "ios" },
       });
@@ -783,7 +783,7 @@ describe("Doctor", () => {
       });
       await registry.registerDevice({
         driverData: {},
-        driverDeviceId: "pitlane-slow",
+        driverDeviceId: "simlock-slow",
         provisionDuration: 0,
         spec: { model: "Phone", osVersion: "1", platform: "ios" },
       });
@@ -813,7 +813,7 @@ describe("Doctor", () => {
         statePath: "/state.json",
       });
       const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
-      const device = await readyDevice(registry, "pitlane-killed", "ios");
+      const device = await readyDevice(registry, "simlock-killed", "ios");
       const lease = await registry.createLease({
         deviceId: device.id,
         mode: "held",
@@ -863,7 +863,7 @@ describe("Doctor", () => {
       });
       const device = await registry.registerDevice({
         driverData: {},
-        driverDeviceId: "pitlane-stuck",
+        driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { model: "Phone", osVersion: "1", platform: "ios" },
       });
@@ -902,7 +902,7 @@ describe("Doctor", () => {
       });
       const device = await registry.registerDevice({
         driverData: {},
-        driverDeviceId: "pitlane-stuck",
+        driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { model: "Phone", osVersion: "1", platform: "ios" },
       });
@@ -911,8 +911,8 @@ describe("Doctor", () => {
       driver.setManagedReality({
         devices: [
           {
-            address: "pitlane-stuck-address",
-            deviceId: "pitlane-stuck",
+            address: "simlock-stuck-address",
+            deviceId: "simlock-stuck",
             driverData: {},
             runState: "stopped",
           },
@@ -962,7 +962,7 @@ describe("Doctor", () => {
             {
               createdAt: 1,
               driverData: {},
-              driverDeviceId: "pitlane-stuck",
+              driverDeviceId: "simlock-stuck",
               id: "dev_1",
               lastLeaseEndedAt: 1,
               spec: { model: "Phone", osVersion: "1", platform: "ios" },
@@ -1018,21 +1018,21 @@ describe("Doctor", () => {
       idGenerator: sequence(),
       statePath: "/state.json",
     });
-    const bootedOutside = await shutdownDevice(registry, "pitlane-booted", "ios");
-    const shutdownOutside = await readyDevice(registry, "pitlane-shutdown", "ios");
+    const bootedOutside = await shutdownDevice(registry, "simlock-booted", "ios");
+    const shutdownOutside = await readyDevice(registry, "simlock-shutdown", "ios");
 
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-booted-address",
-          deviceId: "pitlane-booted",
+          address: "simlock-booted-address",
+          deviceId: "simlock-booted",
           driverData: {},
           runState: "running",
         },
         {
-          address: "pitlane-shutdown-address",
-          deviceId: "pitlane-shutdown",
+          address: "simlock-shutdown-address",
+          deviceId: "simlock-shutdown",
           driverData: {},
           runState: "stopped",
         },
@@ -1063,7 +1063,7 @@ describe("Doctor", () => {
       idGenerator: sequence(),
       statePath: "/state.json",
     });
-    const device = await readyDevice(registry, "pitlane-leased", "ios");
+    const device = await readyDevice(registry, "simlock-leased", "ios");
     await registry.createLease({
       deviceId: device.id,
       mode: "held",
@@ -1075,8 +1075,8 @@ describe("Doctor", () => {
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-leased-address",
-          deviceId: "pitlane-leased",
+          address: "simlock-leased-address",
+          deviceId: "simlock-leased",
           driverData: {},
           runState: "stopped",
         },
@@ -1119,21 +1119,21 @@ describe("Doctor", () => {
       idGenerator: sequence(),
       statePath: "/state.json",
     });
-    const bootedOutside = await shutdownDevice(registry, "pitlane-booted", "ios");
-    const shutdownOutside = await readyDevice(registry, "pitlane-shutdown", "ios");
+    const bootedOutside = await shutdownDevice(registry, "simlock-booted", "ios");
+    const shutdownOutside = await readyDevice(registry, "simlock-shutdown", "ios");
 
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
         {
-          address: "pitlane-booted-address",
-          deviceId: "pitlane-booted",
+          address: "simlock-booted-address",
+          deviceId: "simlock-booted",
           driverData: {},
           runState: "running",
         },
         {
-          address: "pitlane-shutdown-address",
-          deviceId: "pitlane-shutdown",
+          address: "simlock-shutdown-address",
+          deviceId: "simlock-shutdown",
           driverData: {},
           runState: "stopped",
         },

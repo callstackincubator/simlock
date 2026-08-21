@@ -59,7 +59,7 @@ describe.skipIf(!hasAndroidSdk)(
           const androidCatalog = platforms.find((platform) => platform.platform === "android");
           expect(
             androidCatalog,
-            "pitlane catalog reported no android platform -- SDK discovery failed",
+            "simlock catalog reported no android platform -- SDK discovery failed",
           ).toBeDefined();
           expect(androidCatalog?.models.length ?? 0).toBeGreaterThan(0);
           const model = androidCatalog?.models[0] as string;
@@ -80,9 +80,9 @@ describe.skipIf(!hasAndroidSdk)(
           expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
           const grant = lease.json as { lease: string; udid: string };
 
-          // The adb serial (e.g. "emulator-5554") is a driver-internal detail pitlane
+          // The adb serial (e.g. "emulator-5554") is a driver-internal detail simlock
           // deliberately keeps opaque outside drivers/android (architecture.md #2) --
-          // `grant.udid` is pitlane's own AVD name, not the adb serial, so this only
+          // `grant.udid` is simlock's own AVD name, not the adb serial, so this only
           // asserts that *an* emulator is actually online, not which one by serial.
           const onlineSerials = await adbDevices();
           expect(
@@ -92,8 +92,8 @@ describe.skipIf(!hasAndroidSdk)(
 
           const avdNames = await avdManagerList();
           expect(
-            avdNames.some((name) => name.startsWith("pitlane_")),
-            "expected a pitlane_-prefixed AVD",
+            avdNames.some((name) => name.startsWith("simlock_")),
+            "expected a simlock_-prefixed AVD",
           ).toBe(true);
 
           await env.cli(["release", grant.lease]);

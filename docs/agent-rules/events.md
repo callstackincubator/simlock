@@ -24,7 +24,7 @@ Rules for defining and emitting events on the daemon's event bus.
    have to query state that may have moved on. Treat payload shape as a
    public contract: additive changes only.
 7. **Every event carries** `timestamp`, `event`, `payload`, and the emitting
-   module, and is appended to the ring buffer (this powers `pitlane events`
+   module, and is appended to the ring buffer (this powers `simlock events`
    and the audit trail).
 8. **New events are documented in the same change.** Adding or modifying an
    event requires updating [../EVENTS.md](../EVENTS.md) — name, payload,

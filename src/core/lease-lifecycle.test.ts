@@ -6,7 +6,7 @@ import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { DetachedLeaseHeartbeatError, LeaseLifecycle } from "./lease-lifecycle.js";
 import { Registry } from "./registry.js";
 
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 
 async function createHarness(options: { readonly filesystem?: Filesystem } = {}) {
   const clock = new FakeClock(1_000);

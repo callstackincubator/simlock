@@ -29,7 +29,7 @@ import {
   NodeIpcTransport,
   NodeProcessRunner,
   NodeSystemStats,
-  resolvePitlaneHome,
+  resolveSimlockHome,
   SystemClock,
   type SystemStats,
   type ProcessRunner,
@@ -58,7 +58,7 @@ export interface StartDaemonOptions {
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
 // fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
-  const dataDirectory = options.dataDirectory ?? resolvePitlaneHome();
+  const dataDirectory = options.dataDirectory ?? resolveSimlockHome();
   const filesystem = options.filesystem ?? new NodeFilesystem();
   const clock = options.clock ?? new SystemClock();
   const systemStats = options.systemStats ?? new NodeSystemStats();
@@ -129,7 +129,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     config,
     doctor,
     defaultRequesterId:
-      options.defaultRequesterId ?? process.env.PITLANE_AGENT_ID ?? String(process.pid),
+      options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
     healthMonitor: leaseEngine.healthMonitor,
     host: new DaemonEndpointHost({
@@ -177,7 +177,7 @@ export interface DriverDiscoveryContext {
 
 export async function discoverDrivers(options: DriverDiscoveryContext): Promise<Driver[]> {
   const logger = options.logger.child("driver-discovery");
-  const driversModule = process.env.PITLANE_DRIVERS_MODULE;
+  const driversModule = process.env.SIMLOCK_DRIVERS_MODULE;
   if (driversModule !== undefined) {
     return loadDriversModule(driversModule, options, logger);
   }
@@ -218,7 +218,7 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
 
 /**
  * Testing/advanced hook: substitutes real driver discovery with a module supplied via
- * `PITLANE_DRIVERS_MODULE`. The daemon always runs as a separately spawned process, so
+ * `SIMLOCK_DRIVERS_MODULE`. The daemon always runs as a separately spawned process, so
  * the module is resolved as a file path (relative to `process.cwd()`) and dynamically
  * imported -- this is how the e2e suite injects a scriptable fake driver without the
  * daemon ever knowing it isn't talking to real hardware. A missing module, an import
@@ -230,7 +230,7 @@ async function loadDriversModule(
   context: DriverDiscoveryContext,
   logger: Logger,
 ): Promise<Driver[]> {
-  logger.info("Substituting driver discovery via PITLANE_DRIVERS_MODULE", {
+  logger.info("Substituting driver discovery via SIMLOCK_DRIVERS_MODULE", {
     module: modulePath,
   });
   const moduleUrl = pathToFileURL(resolve(modulePath)).href;
@@ -239,11 +239,11 @@ async function loadDriversModule(
   };
   if (typeof imported.createDrivers !== "function") {
     throw new Error(
-      `PITLANE_DRIVERS_MODULE ${modulePath} does not export a createDrivers(context) function`,
+      `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export a createDrivers(context) function`,
     );
   }
   const drivers = await imported.createDrivers(context);
-  logger.info("Loaded drivers from PITLANE_DRIVERS_MODULE", {
+  logger.info("Loaded drivers from SIMLOCK_DRIVERS_MODULE", {
     count: drivers.length,
     module: modulePath,
     platforms: drivers.map((driver) => driver.platform),
@@ -261,7 +261,7 @@ function createFatalLogger(): Logger {
     clock: new SystemClock(),
     level: "error",
     module: "daemon",
-    sink: new NodeFileLogSink({ path: join(resolvePitlaneHome(), "daemon.log") }),
+    sink: new NodeFileLogSink({ path: join(resolveSimlockHome(), "daemon.log") }),
   });
 }
 

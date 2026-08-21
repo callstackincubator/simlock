@@ -125,7 +125,7 @@ afterEach(async () => {
 });
 
 async function tempDir(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "pitlane-logger-"));
+  const directory = await mkdtemp(join(tmpdir(), "simlock-logger-"));
   temporaryDirectories.push(directory);
   return directory;
 }

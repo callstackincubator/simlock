@@ -95,7 +95,7 @@ export function toMcpErrorResult(error: unknown): McpErrorResult {
   if (error instanceof DaemonClientError || error instanceof McpSessionError) {
     return { code: error.code, message: error.message };
   }
-  return { code: "INTERNAL", message: "Pitlane could not complete the request" };
+  return { code: "INTERNAL", message: "Simlock could not complete the request" };
 }
 
 export class McpSession {

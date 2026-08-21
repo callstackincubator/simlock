@@ -101,7 +101,7 @@ export interface WithDaemonOptions {
   readonly configOverrides?: Record<string, unknown>;
   readonly agentId?: string;
   /**
-   * "fake" (default) wires `PITLANE_DRIVERS_MODULE` at the scriptable out-of-process
+   * "fake" (default) wires `SIMLOCK_DRIVERS_MODULE` at the scriptable out-of-process
    * fake driver. "real" leaves driver discovery alone -- the daemon finds the real
    * iOS/Android drivers exactly as it would in production -- for the slow, real-SDK
    * lane; `driverScript`/`driverLog` are inert in that mode (nothing reads them).
@@ -114,7 +114,7 @@ export interface TestEnv {
   readonly socketPath: string;
   readonly logPath: string;
   readonly configPath: string;
-  /** Environment to pass to any spawned pitlane process (CLI, MCP, or the daemon). */
+  /** Environment to pass to any spawned simlock process (CLI, MCP, or the daemon). */
   readonly env: NodeJS.ProcessEnv;
   readonly driverScript: DriverScriptControl;
   readonly driverLog: DriverLogControl;
@@ -126,9 +126,9 @@ export interface TestEnv {
     names: readonly string[],
     options?: { readonly since?: string; readonly timeout?: number },
   ): Promise<RecordedEvent[]>;
-  /** Starts the daemon explicitly (`pitlane daemon start`); a no-op if already running. */
+  /** Starts the daemon explicitly (`simlock daemon start`); a no-op if already running. */
   startDaemon(): Promise<CliResult>;
-  /** Stops the daemon gracefully (`pitlane daemon stop`), then restarts it explicitly. */
+  /** Stops the daemon gracefully (`simlock daemon stop`), then restarts it explicitly. */
   restartDaemon(): Promise<void>;
   /** Sends the given signal directly to the daemon process (default SIGKILL), for
    *  stale-socket-recovery and orphan-sweep tests. Resolves once the process is gone. */
@@ -139,7 +139,7 @@ export interface TestEnv {
 }
 
 /**
- * Allocates an isolated `PITLANE_HOME`, wires the fake driver in, and returns a
+ * Allocates an isolated `SIMLOCK_HOME`, wires the fake driver in, and returns a
  * `TestEnv`. Registers itself with the module-level `activeEnvs` registry so the one
  * real `afterEach` above tears it down at the end of the current test: kills any
  * backgrounded CLI/MCP processes this env spawned, gracefully stops the daemon, then
@@ -150,7 +150,7 @@ export interface TestEnv {
  * it itself (e.g. `waitForLeaseCount(env, 0)`).
  */
 export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestEnv> {
-  const home = await mkdtemp(join(tmpdir(), "pitlane-e2e-"));
+  const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
   const socketPath = join(home, "daemon.sock");
   const logPath = join(home, "daemon.log");
   const configPath = join(home, "config.json");
@@ -160,15 +160,15 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
   const useFakeDriver = options.driver !== "real";
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    PITLANE_HOME: home,
+    SIMLOCK_HOME: home,
     ...(useFakeDriver
       ? {
-          PITLANE_DRIVERS_MODULE: FAKE_DRIVER_MODULE,
-          PITLANE_FAKE_DRIVER_SCRIPT: scriptPath,
-          PITLANE_FAKE_DRIVER_LOG: logCallPath,
+          SIMLOCK_DRIVERS_MODULE: FAKE_DRIVER_MODULE,
+          SIMLOCK_FAKE_DRIVER_SCRIPT: scriptPath,
+          SIMLOCK_FAKE_DRIVER_LOG: logCallPath,
         }
       : {}),
-    ...(options.agentId === undefined ? {} : { PITLANE_AGENT_ID: options.agentId }),
+    ...(options.agentId === undefined ? {} : { SIMLOCK_AGENT_ID: options.agentId }),
   };
 
   const seededConfig = useFakeDriver

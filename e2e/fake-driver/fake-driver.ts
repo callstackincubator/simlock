@@ -44,8 +44,8 @@ const DEFAULT_SCRIPT: FakeDriverPlatformScript = {
 /**
  * Driver implementation for the daemon-spawned process the e2e suite drives out of
  * band. Every behaviour lives in a JSON script file re-read on each operation (env
- * var `PITLANE_FAKE_DRIVER_SCRIPT`), and every call is appended as a JSON line to a
- * log file (env var `PITLANE_FAKE_DRIVER_LOG`) so a test can assert what the daemon
+ * var `SIMLOCK_FAKE_DRIVER_SCRIPT`), and every call is appended as a JSON line to a
+ * log file (env var `SIMLOCK_FAKE_DRIVER_LOG`) so a test can assert what the daemon
  * did and did not do. A missing script file falls back to permissive defaults --
  * never a crash, per the safety rule that a broken test harness should not look like
  * a broken daemon.

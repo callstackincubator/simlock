@@ -13,7 +13,7 @@ import {
 } from "../ports/index.js";
 import { DaemonAlreadyRunningError, DaemonEndpointHost } from "./connection-host.js";
 
-const endpoint = "/pitlane/daemon.sock";
+const endpoint = "/simlock/daemon.sock";
 
 describe("DaemonEndpointHost", () => {
   it("binds a fresh endpoint and removes only its owned entry on repeated stop", async () => {
@@ -22,17 +22,17 @@ describe("DaemonEndpointHost", () => {
     const host = hostFor(filesystem, ipc, ipc);
     await host.start(() => undefined);
     await filesystem.writeFileAtomic(endpoint, "owned");
-    await filesystem.writeFileAtomic("/pitlane/other.sock", "unrelated");
+    await filesystem.writeFileAtomic("/simlock/other.sock", "unrelated");
     await host.stop();
     await host.stop();
     expect(await filesystem.exists(endpoint)).toBe(false);
-    expect(await filesystem.exists("/pitlane/other.sock")).toBe(true);
+    expect(await filesystem.exists("/simlock/other.sock")).toBe(true);
     await expect(ipc.connect(endpoint)).rejects.toMatchObject({ code: "endpoint-not-found" });
   });
 
   it("removes a stale endpoint before binding", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/pitlane");
+    await filesystem.mkdirp("/simlock");
     await filesystem.writeFileAtomic(endpoint, "stale");
     const ipc = new MemoryIpcTransport();
     const host = hostFor(filesystem, ipc, ipc);
@@ -43,7 +43,7 @@ describe("DaemonEndpointHost", () => {
 
   it("rejects a live endpoint before binding", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/pitlane");
+    await filesystem.mkdirp("/simlock");
     await filesystem.writeFileAtomic(endpoint, "live");
     const ipc = new MemoryIpcTransport();
     const existing = await ipc.listen(endpoint, () => undefined);
@@ -82,7 +82,7 @@ describe("DaemonEndpointHost", () => {
 
   it("propagates unknown probe failures", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/pitlane");
+    await filesystem.mkdirp("/simlock");
     await filesystem.writeFileAtomic(endpoint, "existing");
     const connector: IpcConnector = {
       connect: async (): Promise<IpcConnection> => {
@@ -122,7 +122,7 @@ describe("DaemonEndpointHost", () => {
 
   it("logs recovering a stale endpoint before claiming it", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/pitlane");
+    await filesystem.mkdirp("/simlock");
     await filesystem.writeFileAtomic(endpoint, "stale");
     const ipc = new MemoryIpcTransport();
     const sink = new MemoryLogSink();

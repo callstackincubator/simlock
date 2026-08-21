@@ -141,11 +141,11 @@ describe("MCP server", () => {
             data: {
               device_id: "SIM-1",
               lease_id: "lease-1",
-              message: "Pitlane lease ended; this session no longer holds the device.",
+              message: "Simlock lease ended; this session no longer holds the device.",
               reason: "expired",
             },
             level: "warning",
-            logger: "pitlane",
+            logger: "simlock",
           },
         ]);
 
@@ -314,7 +314,7 @@ describe("MCP server", () => {
       });
       expect(JSON.parse(text(unexpected))).toEqual({
         code: "INTERNAL",
-        message: "Pitlane could not complete the request",
+        message: "Simlock could not complete the request",
       });
       expect(text(unexpected)).not.toContain("private");
     } finally {
