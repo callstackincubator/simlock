@@ -76,7 +76,7 @@ and booting, then — in held mode — keeps running to hold the lease.
 ```
 pitlane lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
-              [--allow-download]
+              [--allow-download] [--bind-pid <pid>]
 ```
 
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
@@ -92,6 +92,10 @@ pitlane lease --platform <ios|android> --device <model> [--os <version>]
   them; install the runtime through Xcode first.
 - `--detach` — detached mode: print the lease result and exit; the lease is
   TTL-bound and must be renewed with `pitlane lease renew`.
+- `--bind-pid <pid>` — held mode only: watch this pid for death instead of
+  the CLI's actual parent. For a holder spawned from a short-lived subshell,
+  the immediate parent can die (and get reaped) while the owning agent is
+  still very much alive; point this at the agent's own pid instead.
 
 One lease per requester in v1: leasing while you already hold a lease or
 have a request queued fails with `REQUESTER_ALREADY_LEASED` (exit 13); the
@@ -105,9 +109,12 @@ As soon as the device is ready, one JSON line is printed on stdout:
 ```
 
 then the process stays alive holding the lease. **Kill the process to
-release.** Progress streams on stderr and reflects only the action selected
-for that request. A queued request reports its position without speculative
-work stages; reclaiming work is reported separately:
+release** — or let it die on its own: held mode watches its parent (the pid
+captured at startup, or `--bind-pid`) and releases and exits on its own the
+moment that parent is gone, so a crashed or killed agent's backgrounded
+`lease` does not outlive it. Progress streams on stderr and reflects only the
+action selected for that request. A queued request reports its position
+without speculative work stages; reclaiming work is reported separately:
 
 ```json
 {"event":"queued","queue_position":1}
@@ -118,22 +125,21 @@ work stages; reclaiming work is reported separately:
 
 ### `pitlane lease renew <lease-id> [--ttl <duration>]`
 
-Extend a lease's TTL — works for both detached and held-mode leases. A held
-CLI lease has no automatic keep-alive, so this is how a long-running held
-lease survives past its backstop: hand-renew it (e.g. from a cron job or a
-wrapper script) before the deadline. Renewal always resets the deadline to
-now plus the TTL, regardless of how much time was left.
+Extend a lease's TTL — works for both detached and held-mode leases. Renewal
+always resets the deadline to now plus the TTL, regardless of how much time
+was left.
 
 Without `--ttl`, the new deadline uses the lease's own mode-aware default:
 `lease.detachedTtlMs` (15m) for a detached lease, `lease.heldTtlBackstopMs`
 (1h) for a held one — never the other mode's default. Exit 1 if the lease is
 unknown or already expired (error code `UNKNOWN_LEASE`).
 
-A holder that declared the `heartbeat` capability (today, the MCP frontend)
-slides its own deadline to now + `lease.heldTtlBackstopMs` on every
-heartbeat, so renewing such a lease to a deadline further out than that does
-not stick — the next heartbeat pulls it back in. Hand-renewal is for holders
-that do not heartbeat, which today means CLI held mode.
+A holder that declares the `heartbeat` capability — both frontends' held
+mode — slides its own deadline to now + `lease.heldTtlBackstopMs`
+automatically on every heartbeat, so renewing such a lease to a deadline
+further out than that does not stick — the next heartbeat pulls it back in.
+Hand-renewal remains the only keep-alive for detached mode, which by design
+never holds a connection to heartbeat over.
 
 ## `pitlane release <lease-id> | --all`
 

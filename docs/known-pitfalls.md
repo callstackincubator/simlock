@@ -1,33 +1,39 @@
 # Known pitfalls
 
-## Orphaned lease holders (deferred from v1)
+## Orphaned lease holders (resolved)
 
 The primary lease mechanism is process-held: `pitlane lease` runs in the
 background, holds an open socket to the daemon (connection-alive acts as the
 heartbeat), and the agent kills the process to release the lease.
 
-**The pitfall:** if the agent crashes or is killed, its backgrounded `lease`
-process does *not* die with it — it gets reparented (to launchd on macOS) and
-keeps the socket open, holding the lease indefinitely. This silently
-reintroduces the "crashed agent holds a device forever" problem the tool
-exists to solve.
+**The pitfall:** if the agent crashed or was killed, its backgrounded `lease`
+process did *not* die with it — it got reparented (to launchd on macOS) and
+kept the socket open, holding the lease indefinitely. This silently
+reintroduced the "crashed agent holds a device forever" problem the tool
+exists to solve, and it blocked CLI held mode from declaring the heartbeat
+capability: a reparented holder is alive and would answer heartbeats
+forever, which would have turned the bounded TTL-backstop leak into an
+unbounded one.
 
-**Status in v1:** known and accepted. The daemon-side long TTL backstop is the
-only safety net, and it is intentionally long, so an orphaned holder can block
-a device for a while. `pitlane doctor` / manual force-release is the recovery
-path.
+**Fix:** the holder watches its parent through the `ParentWatch` port
+(`src/ports/parent-watch.ts`) and self-terminates the moment that parent
+dies — releasing its lease and exiting through the exact same signal path
+`runLease` already uses for SIGINT/SIGTERM, not a separate shutdown path. The
+watched pid is captured at startup; `--bind-pid <pid>` overrides it for a
+holder spawned from a short-lived subshell, where the immediate parent dies
+even though the owning agent is still alive.
 
-**Planned fix (post-v1):** the holder process watches its original parent and
-self-terminates when it dies:
+The plan called for macOS `kqueue`/`EVFILT_PROC`/`NOTE_EXIT` and Linux
+`prctl(PR_SET_PDEATHSIG)`. Neither is reachable from plain Node without a
+native addon, which this package does not take on, so the shipped adapter
+(`NodeParentWatch`) instead polls `process.kill(pid, 0)` for liveness —
+portable across platforms with no native dependency. It satisfies the same
+`ParentWatch` port a future native adapter would, so replacing it later
+touches only that one file. CLI held mode now declares the `heartbeat`
+capability, same as MCP.
 
-- macOS: `kqueue` with `EVFILT_PROC` / `NOTE_EXIT` on the parent PID captured
-  at startup.
-- Linux: `prctl(PR_SET_PDEATHSIG, SIGTERM)`.
-
-Edge cases the fix must still consider: the agent may spawn the CLI from a
-short-lived subshell (parent dies immediately even though the agent is alive),
-so the watched PID may need to be configurable (`--bind-pid <pid>`), and
-machine sleep / zombie sockets still rely on the TTL backstop.
+Machine sleep and zombie sockets still fall back to the daemon-side TTL
+backstop; this fix is about a holder outliving its owner, nothing more.
 
 ## Warm-pool purge failures (accepted in the first version)
 

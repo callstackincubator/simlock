@@ -44,9 +44,15 @@ describe("sliding TTL and heartbeat", () => {
     );
   });
 
-  it("slides a heartbeat-capable (MCP) lease past the backstop while a non-capable (CLI) lease expires at it", async () => {
+  it("slides every heartbeat-capable held lease (MCP and CLI) past the backstop while a detached lease expires at it", async () => {
     const env = await withDaemon({
-      configOverrides: { lease: { heldTtlBackstopMs: 4_000, heartbeatIntervalMs: 800 } },
+      // detachedTtlMs is pinned to the same value as heldTtlBackstopMs purely so the
+      // detached lease's own (unrelated) TTL knob expires it on the timeline this
+      // test already waits on -- detached mode never heartbeats regardless of TTL,
+      // it just isn't naturally this short by default.
+      configOverrides: {
+        lease: { detachedTtlMs: 4_000, heldTtlBackstopMs: 4_000, heartbeatIntervalMs: 800 },
+      },
     });
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
@@ -72,26 +78,52 @@ describe("sliding TTL and heartbeat", () => {
       });
       const mcpLease = leaseResult.structuredContent as { lease_id: string; expires_at_ms: number };
 
-      const cliGrant = JSON.parse(await cliHeld.firstStdoutLine()) as { lease: string };
+      const cliGrant = JSON.parse(await cliHeld.firstStdoutLine()) as {
+        lease: string;
+        expires_at_ms: number;
+      };
 
-      // The CLI lease deliberately never declares the heartbeat capability, so its
-      // backstop deadline never moves and it expires exactly at the original grant
-      // + heldTtlBackstopMs; the MCP lease, which does declare it, should still be
-      // alive well past that point with an advancing deadline and heartbeat marker.
+      const detachedResult = await env.cli([
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 16",
+        "--os",
+        "18.4",
+        "--agent-id",
+        "flow6-detached",
+        "--detach",
+      ]);
+      const detachedGrant = detachedResult.json as { lease: string };
+
+      // Both held leases -- MCP and CLI -- declare the heartbeat capability and
+      // slide their deadline on every ping; the detached lease holds no connection
+      // at all, never heartbeats, and expires exactly at its grant-time TTL.
       await waitFor(
         async () => {
           const rows = await leaseRows(env);
-          const cliRow = rows.find((row) => row.id === cliGrant.lease);
-          return cliRow === undefined;
+          const detachedRow = rows.find((row) => row.id === detachedGrant.lease);
+          return detachedRow === undefined;
         },
-        { timeout: 15_000, label: "CLI (non-heartbeating) lease expires at the backstop" },
+        { timeout: 15_000, label: "detached (non-heartbeating) lease expires at its TTL" },
       );
 
-      const rowsAfterCliExpiry = await leaseRows(env);
-      const mcpRow = rowsAfterCliExpiry.find((row) => row.id === mcpLease.lease_id);
-      expect(mcpRow, "MCP lease should have survived past the CLI lease's expiry").toBeDefined();
+      const rowsAfterExpiry = await leaseRows(env);
+      const mcpRow = rowsAfterExpiry.find((row) => row.id === mcpLease.lease_id);
+      const cliRow = rowsAfterExpiry.find((row) => row.id === cliGrant.lease);
+      expect(
+        mcpRow,
+        "MCP lease should have survived past the detached lease's expiry",
+      ).toBeDefined();
+      expect(
+        cliRow,
+        "CLI held lease should have survived past the detached lease's expiry",
+      ).toBeDefined();
       expect(mcpRow?.ttlDeadline).toBeGreaterThan(mcpLease.expires_at_ms);
       expect(mcpRow?.lastHeartbeatAt).toBeGreaterThan(0);
+      expect(cliRow?.ttlDeadline).toBeGreaterThan(cliGrant.expires_at_ms);
+      expect(cliRow?.lastHeartbeatAt).toBeGreaterThan(0);
 
       const statusResult = await mcp.client.callTool({ name: "lease_status", arguments: {} });
       const statusExpiry = (statusResult.structuredContent as { expires_at_ms: number })
@@ -107,10 +139,18 @@ describe("sliding TTL and heartbeat", () => {
         ).length,
         "expected repeated lease.renewed events for the heartbeating MCP lease",
       ).toBeGreaterThan(1);
+      expect(
+        recorded.filter(
+          (entry) =>
+            entry.event === "lease.renewed" &&
+            (entry.payload as { leaseId?: string }).leaseId === cliGrant.lease,
+        ).length,
+        "expected repeated lease.renewed events for the heartbeating CLI lease",
+      ).toBeGreaterThan(1);
       expect(recorded).toContainEqual(
         expect.objectContaining({
           event: "lease.expired",
-          payload: expect.objectContaining({ leaseId: cliGrant.lease }),
+          payload: expect.objectContaining({ leaseId: detachedGrant.lease }),
         }),
       );
 

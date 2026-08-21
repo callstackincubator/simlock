@@ -6,11 +6,17 @@ import {
   NodeDaemonLauncher,
   NodeFilesystem,
   NodeIpcTransport,
+  NodeParentWatch,
   resolvePitlaneHome,
   SystemClock,
   type Filesystem,
+  type ParentWatch,
 } from "../ports/index.js";
-import { connectDaemon, connectExistingDaemon } from "../daemon-client/client.js";
+import {
+  connectDaemon,
+  connectExistingDaemon,
+  type DaemonClientCapabilities,
+} from "../daemon-client/client.js";
 import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
@@ -65,7 +71,7 @@ type McpStdioRunner = () => Promise<void>;
 
 export interface CliEnvironment {
   readonly configPath: string;
-  readonly connect: () => Promise<DaemonConnection>;
+  readonly connect: (capabilities?: DaemonClientCapabilities) => Promise<DaemonConnection>;
   readonly connectExisting?: () => Promise<DaemonConnection>;
   readonly now?: () => number;
   readonly requesterId: string;
@@ -75,6 +81,9 @@ export interface CliEnvironment {
   readonly loadMcpStdio?: () => Promise<McpStdioRunner>;
   readonly runMcpStdio?: () => Promise<void>;
   readonly signals: Signals;
+  /** The pid `lease` held mode watches by default -- the parent captured at CLI startup. */
+  readonly parentPid?: number;
+  readonly parentWatch?: ParentWatch;
   readonly stderr: Output;
   readonly stdout: Output;
   readonly confirm?: (question: string) => Promise<boolean>;
@@ -101,8 +110,9 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
   const logPath = join(dataDirectory, "daemon.log");
   return {
     configPath,
-    connect: () =>
+    connect: (capabilities) =>
       connectDaemon({
+        ...(capabilities === undefined ? {} : { capabilities }),
         clock,
         ipc,
         launcher: new NodeDaemonLauncher({
@@ -114,6 +124,10 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
       }),
     connectExisting: () => connectExistingDaemon(socketPath, ipc),
     now: () => clock.now(),
+    // Captured once at process startup, before anything can reparent this
+    // process -- `--bind-pid` overrides it per invocation.
+    parentPid: process.ppid,
+    parentWatch: new NodeParentWatch(),
     requesterId: fallbackRequesterId(env),
     readConfigFile: async () => {
       if (!(await filesystem.exists(configPath))) return {};
@@ -227,12 +241,22 @@ export function parseDuration(value: string): number {
   return milliseconds;
 }
 
+/** Parses `--bind-pid` only at the CLI boundary. `undefined` input means the flag was not given. */
+function parseBindPid(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const pid = typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isInteger(pid) || pid <= 0)
+    throw new UsageError("lease --bind-pid must be a positive integer");
+  return pid;
+}
+
 // fallow-ignore-next-line complexity -- CLI command parsing remains intentionally local to its rendering boundary.
 async function runLease(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   if (argv[0] === "renew") return runRenew(argv.slice(1), environment);
   const values = commandArgs(argv, {
     "agent-id": { type: "string" },
     "allow-download": { type: "boolean" },
+    "bind-pid": { type: "string" },
     detach: { type: "boolean" },
     device: { type: "string" },
     help: { type: "boolean", short: "h" },
@@ -245,7 +269,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     environment.stdout.write(
       "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--allow-download]\n",
+        "                     [--allow-download] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -257,8 +281,20 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   const requesterId = values["agent-id"] ?? environment.requesterId;
   const detached = values.detach ?? false;
   const timeoutMs = typeof values.timeout === "string" ? parseDuration(values.timeout) : undefined;
-  const termination = detached ? undefined : waitForTermination(environment.signals);
-  const connection = await environment.connect();
+  // Held mode watches its parent so a crashed agent's backgrounded holder
+  // self-terminates instead of surviving reparenting (docs/known-pitfalls.md).
+  // `--bind-pid` overrides which pid that is, for a holder spawned from a
+  // short-lived subshell whose immediate parent dies before the agent does.
+  const bindPid = parseBindPid(values["bind-pid"]);
+  const watchedPid = bindPid ?? environment.parentPid;
+  const termination = detached
+    ? undefined
+    : waitForTermination(environment.signals, environment.parentWatch, watchedPid);
+  // Declaring the heartbeat capability opts this connection into the daemon's
+  // sliding TTL -- safe now that a dead-parent holder self-terminates instead
+  // of pinging forever. Detached mode never holds a connection, so it keeps
+  // relying purely on its own TTL.
+  const connection = await environment.connect(detached ? undefined : { heartbeat: true });
   const unsubscribe = connection.onPush((kind, payload) => {
     if (kind === "progress") environment.stderr.write(`${JSON.stringify(progressLine(payload))}\n`);
   });
@@ -769,13 +805,31 @@ function requireArray(value: unknown): unknown[] {
 function writeResult(environment: CliEnvironment, value: unknown): void {
   environment.stdout.write(`${JSON.stringify(value)}\n`);
 }
-function waitForTermination(signals: Signals): Promise<void> {
+/**
+ * Resolves on SIGINT, SIGTERM, or (when `parentWatch`/`parentPid` are given)
+ * the watched parent dying -- all three converge on the same `finish`, so a
+ * dead parent is handled through the exact release-then-exit path in
+ * `runLease` that a signal already takes, not a second shutdown path.
+ * `parentPid` is skipped when unset or non-positive: nothing meaningful to
+ * watch (e.g. an already-reparented process at startup) degrades to today's
+ * signal-only behavior rather than failing to start.
+ */
+function waitForTermination(
+  signals: Signals,
+  parentWatch?: ParentWatch,
+  parentPid?: number,
+): Promise<void> {
   return new Promise((resolve) => {
     const finish = () => {
       signals.off("SIGINT", finish);
       signals.off("SIGTERM", finish);
+      watchHandle?.stop();
       resolve();
     };
+    const watchHandle =
+      parentWatch !== undefined && parentPid !== undefined && parentPid > 0
+        ? parentWatch.watch(parentPid, finish)
+        : undefined;
     signals.on("SIGINT", finish);
     signals.on("SIGTERM", finish);
   });

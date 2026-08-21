@@ -155,8 +155,10 @@ Conclusions baked into the drivers:
 
 - **Held mode (default)**: lease lives as long as its holding frontend's daemon
   connection. For the CLI, that is the CLI process; for MCP, it is the MCP
-  server process for that agent session. Connection close = release. Known
-  gap: orphaned holders when the agent dies — see
+  server process for that agent session. Connection close = release. The CLI
+  holder additionally watches its parent through the `ParentWatch` port and
+  self-terminates if it dies, so a crashed agent's backgrounded `pitlane
+  lease` cannot outlive it by getting reparented — see
   [known-pitfalls.md](known-pitfalls.md).
 - **Detached mode (`--detach`)**: returns a token, daemon enforces a TTL, the
   agent must `pitlane renew` periodically.
@@ -177,11 +179,12 @@ Conclusions baked into the drivers:
   the slid deadline, not the grant-time one. It is a pure sliding window: a
   holder that stops ponging simply reaches its existing backstop deadline and
   expires exactly as before — no missed-pong counter, no extra expiry reason.
-  MCP declares the capability because its holder process dies with its agent
-  (stdin EOF); the CLI deliberately does not, because a backgrounded `pitlane
-  lease` gets reparented on the holder's death (see
-  [known-pitfalls.md](known-pitfalls.md)) and would otherwise pong forever,
-  turning a bounded leak into an unbounded one.
+  Both frontends' held mode declare the capability: MCP because its holder
+  process dies with its agent (stdin EOF), and CLI held mode because its
+  holder now self-terminates on parent death instead of surviving reparenting
+  (see [known-pitfalls.md](known-pitfalls.md)) — without that, a reparented
+  CLI holder would pong forever, turning a bounded leak into an unbounded
+  one.
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).
 
@@ -269,8 +272,8 @@ emitters. See [EVENTS.md](EVENTS.md) and
 Every external API the app touches gets its own type/interface (a *port*),
 and application code depends only on that interface — never on the underlying
 API directly. This applies to the filesystem, process execution (shelling out
-to `simctl`/`adb`/`emulator`), the clock/timers, sockets/IPC, and system
-stats (CPU/RAM/disk):
+to `simctl`/`adb`/`emulator`), the clock/timers, sockets/IPC, system
+stats (CPU/RAM/disk), and watching another process for exit:
 
 ```
 Filesystem   — read/write/delete/stat/disk-free
@@ -280,6 +283,7 @@ SystemStats  — cpu count, total/free RAM, disk free
 IpcConnector / IpcListenerFactory — connect to and host daemon IPC endpoints
 DaemonLauncher — detached daemon startup with append-only combined logs
 Logger       — debug/info/warn/error(message, fields) plus child(module) scoping
+ParentWatch  — watch a pid, notify once on exit (CLI held-mode self-termination)
 ```
 
 Real implementations are thin adapters wired up once at daemon startup;
