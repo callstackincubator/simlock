@@ -359,6 +359,53 @@ describe("CLI boundary", () => {
     ]);
   });
 
+  it("reports a lost lease, exits 14, and does not re-release it", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_lost", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    connection.response("lease.release", new Error("lease.release must not be called"));
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    // A malformed push must not end the holder's lease: it is ignored outright,
+    // and the process keeps waiting exactly as it did before.
+    connection.push("lease-lost", { deviceId: 42 });
+    // No signal: the daemon ending the lease is what must stop the holder.
+    connection.push("lease-lost", {
+      deviceId: "ABCD",
+      leaseId: "lse_lost",
+      reason: "device-lost",
+    });
+
+    await expect(run).resolves.toBe(14);
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(
+      output.stderr
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      { device_id: "ABCD", event: "lease_lost", lease: "lse_lost", reason: "device-lost" },
+    ]);
+  });
+
   it("flagship e2e: queues a second CLI holder until the first connection drops", async () => {
     const harness = await createHarness();
     const first = outputCapture();

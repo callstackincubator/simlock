@@ -118,15 +118,17 @@ export function cliBackground(
     }
   });
 
-  let exited: Promise<CliResult> | undefined;
-  const exit = (): Promise<CliResult> => {
-    exited ??= new Promise((resolve) => {
-      child.once("close", (code) => {
-        resolve({ code, stdout, stderr, ...parseOutputs(stdout, stderr) });
-      });
+  // Subscribed at spawn time, not lazily on the first waitForExit(): a process that
+  // ends on its own -- a held `lease` whose lease the daemon took back, say -- can
+  // emit "close" while the test is still asserting on its output, and a listener
+  // attached after the fact never fires. That would time out as "process never
+  // exited" when it had in fact already exited.
+  const exited = new Promise<CliResult>((resolve) => {
+    child.once("close", (code) => {
+      resolve({ code, stdout, stderr, ...parseOutputs(stdout, stderr) });
     });
-    return exited;
-  };
+  });
+  const exit = (): Promise<CliResult> => exited;
 
   return {
     pid: child.pid,
