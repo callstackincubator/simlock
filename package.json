@@ -2,9 +2,21 @@
   "name": "simlock",
   "version": "1.0.0",
   "description": "Control plane for iOS simulators and Android emulators.",
-  "keywords": [],
-  "license": "ISC",
-  "author": "",
+  "keywords": [
+    "agents",
+    "emulators",
+    "simulators"
+  ],
+  "homepage": "https://github.com/callstackincubator/simlock",
+  "bugs": {
+    "url": "https://github.com/callstackincubator/simlock/issues"
+  },
+  "license": "MIT",
+  "author": "Szymon Chmal <szymon@chmal.it> (V3RON)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/callstackincubator/simlock"
+  },
   "bin": {
     "simlock": "dist/cli/main.js"
   },
