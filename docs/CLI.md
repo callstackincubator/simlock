@@ -116,6 +116,27 @@ work stages; reclaiming work is reported separately:
 {"event":"reclaiming","eta_seconds":15}
 ```
 
+Once granted, held mode also relays the health monitor's findings about the
+leased device for as long as the connection holds it, on the same stderr
+stream:
+
+```json
+{"event":"device_unhealthy","lease":"lse_9f2c","device_id":"dev_1a2b"}
+{"event":"device_recovered","lease":"lse_9f2c","device_id":"dev_1a2b","attempts":1}
+```
+
+`device_unhealthy` means the device stopped running outside pitlane and a
+reboot is in progress under the same lease; `device_recovered` means that
+reboot passed readiness. The lease itself is untouched by either — it is
+still held and must still be released the normal way. Recovery can instead
+give up (the device vanished, its provenance no longer checks out, or reboot
+attempts ran out); giving up is not itself one of these lines — it ends the
+lease (reason `device-lost`), which the holder learns about the same way it
+learns of any other lease loss. See [known-pitfalls.md](known-pitfalls.md)
+for what a reboot cannot bring back — anything the agent had running inside
+the device (a launched app, `log stream`, an Appium/XCUITest session, a port
+forward) is gone whether or not recovery succeeds.
+
 ### `pitlane lease renew <lease-id> [--ttl <duration>]`
 
 Extend a lease's TTL — works for both detached and held-mode leases. A held

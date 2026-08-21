@@ -24,6 +24,12 @@ and wait in a fair queue rather than failing outright, with `--timeout` and
 using is shut down after a short idle period to reclaim RAM, then deleted
 after a longer one to reclaim disk — automatically, in tiers.
 
+**A crashed simulator doesn't just quietly cost you a device.** If a leased
+device's process dies outside pitlane, Pitlane notices, reboots it under the
+same lease, and tells the holder — it can't restore whatever was running
+inside the device when it died, but the lease and its device don't just
+vanish.
+
 **It's advisory, not a sandbox.** Pitlane doesn't wrap or intercept
 `simctl` / `avdmanager` — it works because agents are instructed to only use
 devices handed to them by a lease. What it _does_ enforce is its own blast
