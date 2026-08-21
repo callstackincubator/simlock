@@ -24,7 +24,7 @@ interface StatusResponse {
 
 async function status(env: Awaited<ReturnType<typeof withDaemon>>): Promise<StatusResponse> {
   const result = await env.cli(["status", "--json"]);
-  if (result.code !== 0) throw new Error(`pitlane status failed: ${result.stderr}`);
+  if (result.code !== 0) throw new Error(`simlock status failed: ${result.stderr}`);
   return result.json as StatusResponse;
 }
 
@@ -32,7 +32,7 @@ async function deviceRows(
   env: Awaited<ReturnType<typeof withDaemon>>,
 ): Promise<{ id: string; driverDeviceId: string; state: string }[]> {
   const result = await env.cli(["list", "--devices"]);
-  if (result.code !== 0) throw new Error(`pitlane list --devices failed: ${result.stderr}`);
+  if (result.code !== 0) throw new Error(`simlock list --devices failed: ${result.stderr}`);
   return result.json as { id: string; driverDeviceId: string; state: string }[];
 }
 
@@ -67,7 +67,7 @@ async function releaseAndForget(
 /**
  * Forces an immediate, synchronous reaper evaluation (rather than waiting on the slow
  * 60s periodic tick or hoping an unrelated `lease.released` retriggers it) by polling
- * `pitlane cleanup` itself until the target reaches `state` -- this is what lets an
+ * `simlock cleanup` itself until the target reaches `state` -- this is what lets an
  * idle-threshold test converge in milliseconds without a fixed sleep: each poll tick
  * both re-checks real elapsed time *and* forces the daemon to act on it.
  */

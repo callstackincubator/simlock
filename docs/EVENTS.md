@@ -14,9 +14,9 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseAcquisitionCoordinator | implemented |
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator | implemented |
 | `lease.granted` | lease id, device id, requester, mode (held/detached) | a device was assigned and handed out | LeaseLifecycle | implemented |
-| `lease.renewed` | lease id, new deadline | an explicit `pitlane lease renew` succeeded (either mode), **or** a held-mode connection that declared the `heartbeat` capability answered a `lease.heartbeat` push (fires once per lease per `lease.heartbeatIntervalMs` while the holder stays alive) | LeaseLifecycle | implemented |
-| `lease.released` | lease id, device id, reason (closed/explicit/killed/orphaned/device-lost) | holder connection closed, explicit release, (orphaned) a `held` lease found still persisted at daemon startup, which cannot have a live holder across a restart, or (device-lost) a leased device could not be recovered after it stopped running outside pitlane | LeaseLifecycle | implemented |
-| `lease.expired` | lease id, device id | TTL backstop fired without a heartbeat sliding it first — for a capability-declaring holder this means it stopped ponging (crashed, hung, or lost its socket); for one that never declared the capability it means the grant-time TTL (or the last explicit `pitlane lease renew`) simply ran out, exactly as before this change | LeaseLifecycle | implemented |
+| `lease.renewed` | lease id, new deadline | an explicit `simlock lease renew` succeeded (either mode), **or** a held-mode connection that declared the `heartbeat` capability answered a `lease.heartbeat` push (fires once per lease per `lease.heartbeatIntervalMs` while the holder stays alive) | LeaseLifecycle | implemented |
+| `lease.released` | lease id, device id, reason (closed/explicit/killed/orphaned/device-lost) | holder connection closed, explicit release, (orphaned) a `held` lease found still persisted at daemon startup, which cannot have a live holder across a restart, or (device-lost) a leased device could not be recovered after it stopped running outside simlock | LeaseLifecycle | implemented |
+| `lease.expired` | lease id, device id | TTL backstop fired without a heartbeat sliding it first — for a capability-declaring holder this means it stopped ponging (crashed, hung, or lost its socket); for one that never declared the capability it means the grant-time TTL (or the last explicit `simlock lease renew`) simply ran out, exactly as before this change | LeaseLifecycle | implemented |
 | `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed) | a request ended without a grant | LeaseAcquisitionCoordinator / WaitQueue | implemented |
 
 ## Device lifecycle
@@ -34,7 +34,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.shutdown` | device id, initiator (rule/command) | device stopped, still on disk | Registry; WarmPoolCoordinator for interrupted reclaim recovery | implemented |
 | `device.deleted` | device id, initiator | device removed from disk and registry | Registry | implemented |
 | `device.foreign-state-detected` | device id, platform, expected (running/stopped), observed (running/stopped) | doctor reconcile found a managed device's observed boot state disagreeing with the committed registry state | Doctor | implemented |
-| `device.foreign-provenance-detected` | device id, platform, detail (erased/mark-mismatch/durable-mark-missing) | doctor reconcile found a managed device's provenance marks no longer proving Pitlane owns it | Doctor | implemented |
+| `device.foreign-provenance-detected` | device id, platform, detail (erased/mark-mismatch/durable-mark-missing) | doctor reconcile found a managed device's provenance marks no longer proving Simlock owns it | Doctor | implemented |
 | `device.stalled-transition-detected` | device id, platform, state (provisioning/reclaiming), age, threshold | doctor reconcile found a `provisioning`/`reclaiming` device whose time in that state exceeds a driver-derived threshold (`stalledTransition.thresholdMultiplier` over `Driver.estimate`, floored at `stalledTransition.minimumThresholdMs`) — the driver call meant to resolve the transition never did | Doctor | implemented |
 | `device.crash-detected` | device id, lease id, platform, observed | a leased device was observed `stopped` for `health.stableObservations` consecutive ticks | LeaseHealthMonitor | implemented |
 | `device.recovered` | device id, lease id, attempts, duration | a crashed leased device was rebooted under its existing lease and passed readiness | LeaseHealthMonitor | implemented |
@@ -53,5 +53,5 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 ## Conventions recap
 
 - Every event carries: `timestamp`, `event`, `payload`, emitting module.
-- Events are appended to a ring buffer that powers `pitlane events --follow`
+- Events are appended to a ring buffer that powers `simlock events --follow`
   and serves as the audit trail.

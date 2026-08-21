@@ -341,7 +341,7 @@ describe("DaemonServer", () => {
   });
 
   it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "pitlane-stale-"));
+    const directory = await mkdtemp(join(tmpdir(), "simlock-stale-"));
     temporaryDirectories.push(directory);
     const socketPath = join(directory, "daemon.sock");
     await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
@@ -1091,7 +1091,7 @@ async function createHarness(
   } = {},
 ) {
   const directory =
-    options.socketPath === undefined ? await mkdtemp(join(tmpdir(), "pitlane-daemon-")) : undefined;
+    options.socketPath === undefined ? await mkdtemp(join(tmpdir(), "simlock-daemon-")) : undefined;
   if (directory !== undefined) {
     temporaryDirectories.push(directory);
   }

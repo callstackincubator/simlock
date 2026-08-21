@@ -14,7 +14,7 @@ import {
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 function config(overrides: Partial<Config["lease"]> = {}): Config {
@@ -1019,7 +1019,7 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
 
   it("recovers a background reclaim interrupted by a daemon crash on the next start", async () => {
     const filesystem = new MemoryFilesystem();
-    const restartStatePath = "/home/agent/.pitlane/restart-state.json";
+    const restartStatePath = "/home/agent/.simlock/restart-state.json";
     let nextId = 1;
     const idGenerator = { generate: () => `${nextId++}` };
     const systemStats = () =>

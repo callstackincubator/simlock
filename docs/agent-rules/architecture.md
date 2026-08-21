@@ -1,6 +1,6 @@
 # Agent rules: architecture
 
-Rules for anyone (human or agent) writing pitlane code. Violating these is
+Rules for anyone (human or agent) writing simlock code. Violating these is
 grounds for rejecting a change even if it works.
 
 1. **The core is platform-agnostic.** Core modules must never import platform

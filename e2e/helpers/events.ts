@@ -8,11 +8,11 @@ export interface RecordedEvent {
   readonly module: string;
 }
 
-/** Replays the business-event ring buffer via `pitlane events --since`, parsed. */
+/** Replays the business-event ring buffer via `simlock events --since`, parsed. */
 export async function events(env: NodeJS.ProcessEnv, since = "1h"): Promise<RecordedEvent[]> {
   const result = await cli(["events", "--since", since], env);
   if (result.code !== 0) {
-    throw new Error(`pitlane events failed (exit ${String(result.code)}): ${result.stderr}`);
+    throw new Error(`simlock events failed (exit ${String(result.code)}): ${result.stderr}`);
   }
   return result.stdout
     .split("\n")

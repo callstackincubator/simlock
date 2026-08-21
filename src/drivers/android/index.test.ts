@@ -14,7 +14,7 @@ import {
 import { AndroidDriver, SdkMissingError } from "./index.js";
 
 const sdk = "/android-sdk";
-const home = "/home/pitlane";
+const home = "/home/simlock";
 const avdDirectory = `${home}/.android/avd`;
 const binaries = {
   adb: `${sdk}/platform-tools/adb`,
@@ -130,7 +130,7 @@ describe("AndroidDriver", () => {
         "create",
         "avd",
         "-n",
-        "pitlane_first",
+        "simlock_first",
         "-k",
         /.+/,
         "-d",
@@ -140,7 +140,7 @@ describe("AndroidDriver", () => {
         "create",
         "avd",
         "-n",
-        "pitlane_second",
+        "simlock_second",
         "-k",
         /.+/,
         "-d",
@@ -164,8 +164,8 @@ describe("AndroidDriver", () => {
       second.provision(spec),
     ]);
 
-    expect(firstDevice.driverData).toMatchObject({ avdName: "pitlane_first", port: 5556 });
-    expect(secondDevice.driverData).toMatchObject({ avdName: "pitlane_second", port: 5558 });
+    expect(firstDevice.driverData).toMatchObject({ avdName: "simlock_first", port: 5556 });
+    expect(secondDevice.driverData).toMatchObject({ avdName: "simlock_second", port: 5558 });
   });
 
   it("cold boots without loading or automatically saving snapshots", async () => {
@@ -173,10 +173,10 @@ describe("AndroidDriver", () => {
 
     await expect(harness.driver.makeReady(harness.device)).resolves.toMatchObject({
       address: "emulator-5554",
-      deviceId: "pitlane_one",
+      deviceId: "simlock_one",
     });
     expect(harness.runner.calls).toContainEqual({
-      args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save", "-no-snapshot-load"],
+      args: ["-avd", "simlock_one", "-port", "5554", "-no-snapshot-save", "-no-snapshot-load"],
       command: binaries.emulator,
       options: {},
     });
@@ -187,18 +187,18 @@ describe("AndroidDriver", () => {
 
     await expect(harness.driver.makeReady(harness.device)).resolves.toMatchObject({
       address: "emulator-5554",
-      deviceId: "pitlane_one",
+      deviceId: "simlock_one",
     });
 
     expect(harness.runner.calls).toContainEqual({
       args: [
         "-avd",
-        "pitlane_one",
+        "simlock_one",
         "-port",
         "5554",
         "-no-snapshot-save",
         "-snapshot",
-        "pitlane_clean_baseline",
+        "simlock_clean_baseline",
       ],
       command: binaries.emulator,
       options: {},
@@ -256,9 +256,9 @@ describe("AndroidDriver", () => {
 
   it("invalidates stale quickboot snapshots and flags the next boot to wipe data", async () => {
     const harness = await provisionedHarness({ forReclaim: true });
-    await harness.filesystem.mkdirp(`${avdDirectory}/pitlane_one.avd/snapshots/default_boot`);
+    await harness.filesystem.mkdirp(`${avdDirectory}/simlock_one.avd/snapshots/default_boot`);
     await harness.filesystem.writeFileAtomic(
-      `${avdDirectory}/pitlane_one.avd/config.ini`,
+      `${avdDirectory}/simlock_one.avd/config.ini`,
       "image.sysdir.1=system-images/android-34/google_apis/arm64-v8a\nhw.ramSize=4096\n",
     );
 
@@ -268,10 +268,10 @@ describe("AndroidDriver", () => {
     });
     await harness.driver.makeReady(harness.device);
     await expect(
-      harness.filesystem.exists(`${avdDirectory}/pitlane_one.avd/snapshots`),
+      harness.filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots`),
     ).resolves.toBe(false);
     await expect(
-      harness.filesystem.exists(`${avdDirectory}/pitlane_one.avd/pitlane-clean-baseline.json`),
+      harness.filesystem.exists(`${avdDirectory}/simlock_one.avd/simlock-clean-baseline.json`),
     ).resolves.toBe(true);
   });
 
@@ -284,7 +284,7 @@ describe("AndroidDriver", () => {
     expect(harness.runner.calls).toContainEqual({
       args: [
         "-avd",
-        "pitlane_one",
+        "simlock_one",
         "-port",
         "5554",
         "-no-snapshot-save",
@@ -306,7 +306,7 @@ describe("AndroidDriver", () => {
     });
 
     expect(harness.runner.calls).toContainEqual({
-      args: ["-s", "emulator-5554", "emu", "avd", "snapshot", "load", "pitlane_clean_baseline"],
+      args: ["-s", "emulator-5554", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
       command: binaries.adb,
       options: {},
     });
@@ -317,7 +317,7 @@ describe("AndroidDriver", () => {
   it("tags the baseline with the emulator-normalized post-boot configuration", async () => {
     const harness = await provisionedHarness({ forBaselineReclaim: true });
     await harness.filesystem.writeFileAtomic(
-      `${avdDirectory}/pitlane_one.avd/config.ini`,
+      `${avdDirectory}/simlock_one.avd/config.ini`,
       "hw.ramSize = 2048\n",
     );
 
@@ -338,7 +338,7 @@ describe("AndroidDriver", () => {
   it("reclaims from persisted baseline metadata after a driver restart", async () => {
     const harness = await provisionedHarness();
     await harness.filesystem.writeFileAtomic(
-      `${avdDirectory}/pitlane_one.avd/config.ini`,
+      `${avdDirectory}/simlock_one.avd/config.ini`,
       "hw.ramSize = 2048\n",
     );
     await harness.driver.makeReady(harness.device);
@@ -347,7 +347,7 @@ describe("AndroidDriver", () => {
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(
         binaries.adb,
-        ["-s", "emulator-5554", "emu", "avd", "snapshot", "load", "pitlane_clean_baseline"],
+        ["-s", "emulator-5554", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
         "OK\n",
       ),
       processResult(
@@ -381,12 +381,12 @@ describe("AndroidDriver", () => {
         match: {
           args: [
             "-avd",
-            "pitlane_one",
+            "simlock_one",
             "-port",
             "5554",
             "-no-snapshot-save",
             "-snapshot",
-            "pitlane_clean_baseline",
+            "simlock_clean_baseline",
           ],
           command: binaries.emulator,
         },
@@ -411,18 +411,18 @@ describe("AndroidDriver", () => {
     expect(restartedRunner.calls[1]).toMatchObject({
       args: [
         "-avd",
-        "pitlane_one",
+        "simlock_one",
         "-port",
         "5554",
         "-no-snapshot-save",
         "-snapshot",
-        "pitlane_clean_baseline",
+        "simlock_clean_baseline",
       ],
       command: binaries.emulator,
     });
   });
 
-  it("shuts down and deletes only the provisioned pitlane AVD", async () => {
+  it("shuts down and deletes only the provisioned simlock AVD", async () => {
     const filesystem = await androidFilesystem({ config: "hw.ramSize=2048\n" });
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
@@ -430,7 +430,7 @@ describe("AndroidDriver", () => {
         "create",
         "avd",
         "-n",
-        "pitlane_delete-me",
+        "simlock_delete-me",
         "-k",
         /.+/,
         "-d",
@@ -442,7 +442,7 @@ describe("AndroidDriver", () => {
         match: { args: ["-s", "emulator-5554", "emu", "kill"], command: binaries.adb },
         result: { code: 1, stderr: "connection refused", stdout: "" },
       },
-      processResult(binaries.avdmanager, ["delete", "avd", "-n", "pitlane_delete-me"]),
+      processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_delete-me"]),
     ]);
     const driver: Driver = await createDriver(filesystem, runner, { ids: ["delete-me"] });
     const spec = await driver.resolveSpec(
@@ -453,7 +453,7 @@ describe("AndroidDriver", () => {
 
     await expect(driver.destroy(device)).resolves.toBeUndefined();
     expect(runner.calls.at(-1)).toMatchObject({
-      args: ["delete", "avd", "-n", "pitlane_delete-me"],
+      args: ["delete", "avd", "-n", "simlock_delete-me"],
       command: binaries.avdmanager,
     });
   });
@@ -518,8 +518,8 @@ describe("AndroidDriver", () => {
 
   it("joins adb devices with getprop to compute runState per AVD: running, stopped, transitioning", async () => {
     const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/pitlane_running.avd`);
-    await filesystem.mkdirp(`${avdDirectory}/pitlane_stopped.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_running.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_stopped.avd`);
     const runner = new ScriptedProcessRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
       processResult(
@@ -528,9 +528,9 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5554",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
-        "pitlane_running\n",
+        "simlock_running\n",
       ),
     ]);
     const driver = await createDriver(filesystem, runner);
@@ -542,15 +542,15 @@ describe("AndroidDriver", () => {
         .map((device) => ({ deviceId: device.deviceId, runState: device.runState }))
         .sort((left, right) => left.deviceId.localeCompare(right.deviceId)),
     ).toEqual([
-      { deviceId: "pitlane_running", runState: "running" },
-      { deviceId: "pitlane_stopped", runState: "stopped" },
+      { deviceId: "simlock_running", runState: "running" },
+      { deviceId: "simlock_stopped", runState: "stopped" },
     ]);
-    expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "pitlane_running" })]);
+    expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "simlock_running" })]);
   });
 
   it("treats an otherwise-stopped AVD as transitioning when an unattributable transitional serial is present", async () => {
     const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/pitlane_idle.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);
     const runner = new ScriptedProcessRunner([
       processResult(
         binaries.adb,
@@ -563,7 +563,7 @@ describe("AndroidDriver", () => {
     const reality = await driver.listManaged();
 
     expect(reality.devices).toEqual([
-      expect.objectContaining({ deviceId: "pitlane_idle", runState: "transitioning" }),
+      expect.objectContaining({ deviceId: "simlock_idle", runState: "transitioning" }),
     ]);
     // Only settled `device`-state serials are counted as running processes; the
     // unattributable offline serial never appears here regardless of the AVD fallback above.
@@ -572,7 +572,7 @@ describe("AndroidDriver", () => {
 
   it("still resolves a stopped AVD as stopped when adb reports no serials at all", async () => {
     const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/pitlane_idle.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);
     const runner = new ScriptedProcessRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
     ]);
@@ -581,7 +581,7 @@ describe("AndroidDriver", () => {
     const reality = await driver.listManaged();
 
     expect(reality.devices).toEqual([
-      expect.objectContaining({ deviceId: "pitlane_idle", runState: "stopped" }),
+      expect.objectContaining({ deviceId: "simlock_idle", runState: "stopped" }),
     ]);
   });
 
@@ -594,7 +594,7 @@ describe("AndroidDriver", () => {
         "create",
         "avd",
         "-n",
-        "pitlane_one",
+        "simlock_one",
         "-k",
         /.+/,
         "-d",
@@ -628,9 +628,9 @@ describe("AndroidDriver", () => {
     await driver.makeReady(device);
     await driver.makeReady(device);
 
-    const config = await filesystem.readFile(`${avdDirectory}/pitlane_one.avd/config.ini`);
-    expect(config.split(/\r?\n/).filter((line) => line.startsWith("pitlane.mark="))).toEqual([
-      "pitlane.mark=device-3",
+    const config = await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`);
+    expect(config.split(/\r?\n/).filter((line) => line.startsWith("simlock.mark="))).toEqual([
+      "simlock.mark=device-3",
     ]);
     expect(config).toContain("hw.ramSize=2048");
   });
@@ -641,8 +641,8 @@ describe("AndroidDriver", () => {
 
     await harness.driver.reclaim(harness.device, { clean: "standard" });
 
-    const config = await harness.filesystem.readFile(`${avdDirectory}/pitlane_one.avd/config.ini`);
-    expect(config).toContain("pitlane.mark=device-3");
+    const config = await harness.filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`);
+    expect(config).toContain("simlock.mark=device-3");
     expect(harness.runner.calls).toContainEqual(
       expect.objectContaining({
         args: markWriteExpectation("emulator-5554", "device-3").match.args,
@@ -650,10 +650,10 @@ describe("AndroidDriver", () => {
     );
   });
 
-  it("does not change the config hash when pitlane.mark is present in config.ini", async () => {
+  it("does not change the config hash when simlock.mark is present in config.ini", async () => {
     const withoutMark = await androidFilesystem({ config: "hw.ramSize=2048\n" });
     const withMark = await androidFilesystem({
-      config: "hw.ramSize=2048\npitlane.mark=some-token\n",
+      config: "hw.ramSize=2048\nsimlock.mark=some-token\n",
     });
     const buildExpectations = (): ScriptedProcessExpectation[] => [
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
@@ -661,7 +661,7 @@ describe("AndroidDriver", () => {
         "create",
         "avd",
         "-n",
-        "pitlane_one",
+        "simlock_one",
         "-k",
         /.+/,
         "-d",
@@ -694,7 +694,7 @@ describe("AndroidDriver", () => {
 
   it("listManaged reports matching durable and erasable marks for a running device", async () => {
     const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
     });
     const runner = new ScriptedProcessRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
@@ -704,16 +704,16 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5554",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
-        'pitlane_one\n{"token":"tok-123"}',
+        'simlock_one\n{"token":"tok-123"}',
       ),
     ]);
     const driver = await createDriver(filesystem, runner);
 
     const reality = await driver.listManaged();
 
-    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
     expect(device?.mark).toEqual({
       durable: "tok-123",
       erasable: "tok-123",
@@ -723,7 +723,7 @@ describe("AndroidDriver", () => {
 
   it("listManaged reports an erased running device when the erasable mark file is gone", async () => {
     const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
     });
     const runner = new ScriptedProcessRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
@@ -733,16 +733,16 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5554",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
-        "pitlane_one\n",
+        "simlock_one\n",
       ),
     ]);
     const driver = await createDriver(filesystem, runner);
 
     const reality = await driver.listManaged();
 
-    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
     expect(device?.mark).toEqual({
       durable: "tok-123",
       erasable: undefined,
@@ -752,7 +752,7 @@ describe("AndroidDriver", () => {
 
   it("keeps listManaged alive when a serial dies between the scan and the read", async () => {
     const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
     });
     const runner = new ScriptedProcessRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5554\tdevice\n"),
@@ -762,7 +762,7 @@ describe("AndroidDriver", () => {
             "-s",
             "emulator-5554",
             "shell",
-            "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/pitlane-mark.json 2>/dev/null || true",
+            "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
           ],
           command: binaries.adb,
         },
@@ -775,7 +775,7 @@ describe("AndroidDriver", () => {
     // reality view over one dead serial would strand every other managed device.
     const reality = await driver.listManaged();
 
-    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
     expect(device?.runState).toBe("transitioning");
     // The durable half is a host file and stays readable; the erasable half genuinely
     // was not read, so it must report unreadable rather than absent -- absent would
@@ -789,7 +789,7 @@ describe("AndroidDriver", () => {
 
   it("listManaged reports erasableReadable: false for a stopped, marked device", async () => {
     const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\npitlane.mark=tok-123\n",
+      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
     });
     const runner = new ScriptedProcessRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
@@ -798,7 +798,7 @@ describe("AndroidDriver", () => {
 
     const reality = await driver.listManaged();
 
-    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_one");
+    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
     expect(device?.mark).toEqual({
       durable: "tok-123",
       erasable: undefined,
@@ -808,7 +808,7 @@ describe("AndroidDriver", () => {
 
   it("listManaged reports no mark for a stopped, pre-existing AVD with no durable key (upgrade path)", async () => {
     const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/pitlane_legacy.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_legacy.avd`);
     const runner = new ScriptedProcessRunner([
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
     ]);
@@ -816,12 +816,12 @@ describe("AndroidDriver", () => {
 
     const reality = await driver.listManaged();
 
-    const device = reality.devices.find((candidate) => candidate.deviceId === "pitlane_legacy");
+    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_legacy");
     expect(device?.mark).toBeUndefined();
   });
 });
 
-const live = process.env.PITLANE_LIVE_ANDROID === "1" ? it : it.skip;
+const live = process.env.SIMLOCK_LIVE_ANDROID === "1" ? it : it.skip;
 
 live(
   "live smoke: provision, quickboot reclaim, re-ready, and destroy",
@@ -835,11 +835,11 @@ live(
     });
     const spec = await driver.resolveSpec(
       {
-        model: process.env.PITLANE_LIVE_ANDROID_MODEL ?? "Pixel 8",
+        model: process.env.SIMLOCK_LIVE_ANDROID_MODEL ?? "Pixel 8",
         platform: "android",
-        ...(process.env.PITLANE_LIVE_ANDROID_API === undefined
+        ...(process.env.SIMLOCK_LIVE_ANDROID_API === undefined
           ? {}
-          : { osVersion: process.env.PITLANE_LIVE_ANDROID_API }),
+          : { osVersion: process.env.SIMLOCK_LIVE_ANDROID_API }),
       },
       { allowDownload: false },
     );
@@ -880,7 +880,7 @@ async function provisionedHarness(
       "create",
       "avd",
       "-n",
-      "pitlane_one",
+      "simlock_one",
       "-k",
       /.+/,
       "-d",
@@ -926,7 +926,7 @@ async function provisionedHarness(
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(
         binaries.adb,
-        ["-s", "emulator-5554", "emu", "avd", "snapshot", "load", "pitlane_clean_baseline"],
+        ["-s", "emulator-5554", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
         "OK\n",
       ),
       processResult(
@@ -1002,8 +1002,8 @@ async function androidFilesystem(
     await filesystem.mkdirp(`${sdk}/system-images/android-${api}/${tag}/${abi}`);
   }
   if (options.config !== undefined) {
-    await filesystem.mkdirp(`${avdDirectory}/pitlane_one.avd`);
-    await filesystem.writeFileAtomic(`${avdDirectory}/pitlane_one.avd/config.ini`, options.config);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
+    await filesystem.writeFileAtomic(`${avdDirectory}/simlock_one.avd/config.ini`, options.config);
   }
   return filesystem;
 }
@@ -1018,7 +1018,7 @@ function baselineBuildExpectations(options: {
     {
       hangs: bootCompleted.trim() !== "1",
       match: {
-        args: ["-avd", "pitlane_one", "-port", "5554", "-no-snapshot-save", ...options.launchArgs],
+        args: ["-avd", "simlock_one", "-port", "5554", "-no-snapshot-save", ...options.launchArgs],
         command: binaries.emulator,
       },
     },
@@ -1056,12 +1056,12 @@ function baselineBuildExpectations(options: {
       "avd",
       "snapshot",
       "save",
-      "pitlane_clean_baseline",
+      "simlock_clean_baseline",
     ]),
     processResult(
       binaries.adb,
       ["-s", "emulator-5554", "emu", "avd", "snapshot", "list"],
-      "pitlane_clean_baseline\n",
+      "simlock_clean_baseline\n",
     ),
     processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
     processResult(binaries.adb, ["-s", "emulator-5554", "emu", "kill"]),
@@ -1070,12 +1070,12 @@ function baselineBuildExpectations(options: {
       match: {
         args: [
           "-avd",
-          "pitlane_one",
+          "simlock_one",
           "-port",
           "5554",
           "-no-snapshot-save",
           "-snapshot",
-          "pitlane_clean_baseline",
+          "simlock_clean_baseline",
         ],
         command: binaries.emulator,
       },
@@ -1107,6 +1107,6 @@ function markWriteExpectation(serial: string, token: string): ScriptedProcessExp
     "-s",
     serial,
     "shell",
-    `echo '${JSON.stringify({ token })}' > /data/local/tmp/pitlane-mark.json`,
+    `echo '${JSON.stringify({ token })}' > /data/local/tmp/simlock-mark.json`,
   ]);
 }

@@ -77,7 +77,7 @@ describe.skipIf(process.platform !== "darwin")(
           await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
         } finally {
           // No cleanup beyond nuke above: this flow must never touch anything besides
-          // what pitlane itself created and already destroyed.
+          // what simlock itself created and already destroyed.
         }
 
         const iosRuntimesAfter = await simctlRuntimeNames();

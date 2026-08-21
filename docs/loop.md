@@ -1,6 +1,6 @@
 # Implementation loop
 
-Historical instructions for implementing a Pitlane stage. Completed stage
+Historical instructions for implementing a Simlock stage. Completed stage
 specifications have been removed from `docs/stages/`.
 
 ## Phase 0 — Orient
@@ -66,6 +66,6 @@ specifications have been removed from `docs/stages/`.
   the grep, run the command).
 - If the stage file conflicts with the code reality you find, STOP and
   report the conflict instead of improvising.
-- If a live test (`PITLANE_LIVE_*`) is required by the stage, run it and
+- If a live test (`SIMLOCK_LIVE_*`) is required by the stage, run it and
   report its actual output; if the environment lacks the prerequisite, say
   so explicitly — never claim a live test passed that didn't run.

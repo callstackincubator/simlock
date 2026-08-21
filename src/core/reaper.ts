@@ -49,7 +49,7 @@ export class CleanupReaper {
     this.#armTick();
   }
 
-  /** Rules currently registered, for `pitlane list --rules` and `--rule` selection. */
+  /** Rules currently registered, for `simlock list --rules` and `--rule` selection. */
   get rules(): readonly CleanupRule[] {
     return this.#automaticRules;
   }

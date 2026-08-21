@@ -219,8 +219,8 @@ export class FakeDriver implements Driver {
 
   setManagedReality(reality: DriverReality): void {
     const managed = {
-      devices: reality.devices.filter(isPitlaneManaged),
-      processes: reality.processes.filter(isPitlaneManaged),
+      devices: reality.devices.filter(isSimlockManaged),
+      processes: reality.processes.filter(isSimlockManaged),
     };
     this.#managedReality = cloneReality(managed);
     for (const device of reality.devices) {
@@ -272,8 +272,8 @@ function addressFor(deviceId: string, bootCount: number): string {
   return `${deviceId}-addr-${bootCount}`;
 }
 
-function isPitlaneManaged(device: DriverDevice): boolean {
-  return device.deviceId.startsWith("pitlane-") || device.deviceId.startsWith("pitlane_");
+function isSimlockManaged(device: DriverDevice): boolean {
+  return device.deviceId.startsWith("simlock-") || device.deviceId.startsWith("simlock_");
 }
 
 function runStateFor(status: "provisioned" | "ready" | "shutdown"): ObservedRunState {

@@ -128,7 +128,7 @@ describe("McpSession", () => {
     });
     expect(toMcpErrorResult(new Error("/private/secret"))).toEqual({
       code: "INTERNAL",
-      message: "Pitlane could not complete the request",
+      message: "Simlock could not complete the request",
     });
   });
 

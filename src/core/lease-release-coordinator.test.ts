@@ -10,7 +10,7 @@ import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 import { Registry, UnknownLeaseError, type ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 
 async function flush(): Promise<void> {
   for (let count = 0; count < 10; count += 1) {
@@ -439,7 +439,7 @@ describe("LeaseReleaseCoordinator", () => {
       // Claimed while the reclaim is in flight -- this is what keeps
       // StartupConverger#recoverInterruptedReclaims from treating a reclaim this
       // process just started as one orphaned by a *previous* crash, and what keeps
-      // `pitlane doctor` from reading a long-but-healthy erase as a stalled transition.
+      // `simlock doctor` from reading a long-but-healthy erase as a stalled transition.
       expect(harness.claims.isClaimed(granted.device.id)).toBe(true);
       expect(harness.claims.operationFor(granted.device.id)).toBe("reclaim");
 

@@ -18,7 +18,7 @@ import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 /**

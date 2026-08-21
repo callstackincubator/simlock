@@ -43,19 +43,19 @@ afterEach(async () => {
 describe("readLogFile", () => {
   it("returns just the current log when there is no rotated generation", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/pitlane");
-    await filesystem.writeFileAtomic("/pitlane/daemon.log", "current\n");
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic("/simlock/daemon.log", "current\n");
 
-    await expect(readLogFile(filesystem, "/pitlane/daemon.log")).resolves.toBe("current\n");
+    await expect(readLogFile(filesystem, "/simlock/daemon.log")).resolves.toBe("current\n");
   });
 
   it("prepends the rotated generation so a pre-rotation crash is not lost", async () => {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/pitlane");
-    await filesystem.writeFileAtomic("/pitlane/daemon.log.1", "rotated\n");
-    await filesystem.writeFileAtomic("/pitlane/daemon.log", "current\n");
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic("/simlock/daemon.log.1", "rotated\n");
+    await filesystem.writeFileAtomic("/simlock/daemon.log", "current\n");
 
-    await expect(readLogFile(filesystem, "/pitlane/daemon.log")).resolves.toBe(
+    await expect(readLogFile(filesystem, "/simlock/daemon.log")).resolves.toBe(
       "rotated\ncurrent\n",
     );
   });
@@ -63,7 +63,7 @@ describe("readLogFile", () => {
   it("propagates the read failure when neither file exists", async () => {
     const filesystem = new MemoryFilesystem();
 
-    await expect(readLogFile(filesystem, "/pitlane/daemon.log")).rejects.toThrow();
+    await expect(readLogFile(filesystem, "/simlock/daemon.log")).rejects.toThrow();
   });
 });
 
@@ -108,7 +108,7 @@ describe("CLI boundary", () => {
       "lease.request",
       new DaemonClientError(
         "REQUESTER_ALREADY_LEASED",
-        "Requester test-requester already holds lease lse_1; release it (`pitlane release lse_1`) before requesting another device",
+        "Requester test-requester already holds lease lse_1; release it (`simlock release lse_1`) before requesting another device",
       ),
     );
 
@@ -122,7 +122,7 @@ describe("CLI boundary", () => {
     const parsed = JSON.parse(output.stderr) as { error: { code: string; message: string } };
     expect(parsed.error.code).toBe("REQUESTER_ALREADY_LEASED");
     expect(parsed.error.message).toContain("lse_1");
-    expect(parsed.error.message).toContain("pitlane release lse_1");
+    expect(parsed.error.message).toContain("simlock release lse_1");
   });
 
   it("parses human durations and bare milliseconds", () => {
@@ -131,8 +131,8 @@ describe("CLI boundary", () => {
     expect(parseDuration("250")).toBe(250);
   });
 
-  it("resolves the fallback requester id from PITLANE_AGENT_ID, else the process pid", () => {
-    expect(fallbackRequesterId({ PITLANE_AGENT_ID: "agent-from-env" })).toBe("agent-from-env");
+  it("resolves the fallback requester id from SIMLOCK_AGENT_ID, else the process pid", () => {
+    expect(fallbackRequesterId({ SIMLOCK_AGENT_ID: "agent-from-env" })).toBe("agent-from-env");
     expect(fallbackRequesterId({})).toBe(String(process.pid));
   });
 
@@ -185,7 +185,7 @@ describe("CLI boundary", () => {
     await expect(
       runCli(["mcp", help], output.environmentWith({ runMcpStdio: runner })),
     ).resolves.toBe(0);
-    expect(output.stdout).toBe("Usage: pitlane mcp\n");
+    expect(output.stdout).toBe("Usage: simlock mcp\n");
     expect(output.stderr).toBe("");
     expect(runner).not.toHaveBeenCalled();
   });
@@ -970,7 +970,7 @@ class StubConnection implements DaemonConnection {
 }
 
 async function createHarness() {
-  const directory = await mkdtemp(join(tmpdir(), "pitlane-cli-"));
+  const directory = await mkdtemp(join(tmpdir(), "simlock-cli-"));
   temporaryDirectories.push(directory);
   const socketPath = join(directory, "daemon.sock");
   const clock = new FakeClock(1_000);

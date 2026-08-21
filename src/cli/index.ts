@@ -7,7 +7,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NodeParentWatch,
-  resolvePitlaneHome,
+  resolveSimlockHome,
   SystemClock,
   type Filesystem,
   type ParentWatch,
@@ -28,13 +28,13 @@ import { DaemonClientError, type DaemonConnection } from "../daemon-client/proto
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
-const USAGE = `Usage: pitlane <command> [options]
+const USAGE = `Usage: simlock <command> [options]
 
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config
   mcp                         Start the stdio MCP server
-Run 'pitlane <command> --help' for command usage.`;
+Run 'simlock <command> --help' for command usage.`;
 
 /**
  * Held mode ends with the lease already gone: the daemon released it without
@@ -69,7 +69,7 @@ class UsageError extends Error {
  * banner is no longer dumped to stderr on every failure; it is one flag away.
  */
 function withHelpHint(message: string): string {
-  return `${message} (run \`pitlane --help\` for usage)`;
+  return `${message} (run \`simlock --help\` for usage)`;
 }
 
 interface Output {
@@ -105,17 +105,17 @@ export interface CliEnvironment {
 }
 
 /**
- * Resolves the fallback requester identity from the environment: `PITLANE_AGENT_ID`
+ * Resolves the fallback requester identity from the environment: `SIMLOCK_AGENT_ID`
  * when set, else a pid-derived value so callers that never configure a stable id
  * keep today's behavior. The per-invocation `--agent-id` flag on `lease` (parsed at
  * that command's own boundary) takes precedence over this default.
  */
 export function fallbackRequesterId(env: NodeJS.ProcessEnv): string {
-  return env.PITLANE_AGENT_ID ?? String(process.pid);
+  return env.SIMLOCK_AGENT_ID ?? String(process.pid);
 }
 
 function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
-  const dataDirectory = resolvePitlaneHome(env);
+  const dataDirectory = resolveSimlockHome(env);
   const filesystem = new NodeFilesystem();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
@@ -227,7 +227,7 @@ function cliErrorCode(error: unknown): string {
 
 async function runMcp(argv: readonly string[], environment: CliEnvironment): Promise<number> {
   if (argv.length === 1 && isHelp(argv[0])) {
-    environment.stdout.write("Usage: pitlane mcp\n");
+    environment.stdout.write("Usage: simlock mcp\n");
     return 0;
   }
   if (argv.length > 0) throw new UsageError("mcp accepts no arguments");
@@ -281,7 +281,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   });
   if (values.help) {
     environment.stdout.write(
-      "Usage: pitlane lease --platform <ios|android> --device <model> [--os <version>]\n" +
+      "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
         "                     [--allow-download] [--bind-pid <pid>]\n",
     );
@@ -391,7 +391,7 @@ async function runRenew(argv: readonly string[], environment: CliEnvironment): P
   });
   const { positionals } = values;
   if (values.help) {
-    environment.stdout.write("Usage: pitlane lease renew <lease-id> [--ttl <duration>]\n");
+    environment.stdout.write("Usage: simlock lease renew <lease-id> [--ttl <duration>]\n");
     return 0;
   }
   const leaseId = requiredPositional(positionals, "lease-id");
@@ -413,7 +413,7 @@ async function runRelease(argv: readonly string[], environment: CliEnvironment):
   });
   const { positionals } = values;
   if (values.help) {
-    environment.stdout.write("Usage: pitlane release <lease-id> | --all [--yes]\n");
+    environment.stdout.write("Usage: simlock release <lease-id> | --all [--yes]\n");
     return 0;
   }
   if (values.all) {
@@ -439,7 +439,7 @@ async function runStatus(argv: readonly string[], environment: CliEnvironment): 
     json: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane status [--json]\n");
+    environment.stdout.write("Usage: simlock status [--json]\n");
     return 0;
   }
   const status = await requestOnce(environment, "status.get", {});
@@ -456,7 +456,7 @@ async function runList(argv: readonly string[], environment: CliEnvironment): Pr
     rules: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane list [--devices|--leases|--rules]\n");
+    environment.stdout.write("Usage: simlock list [--devices|--leases|--rules]\n");
     return 0;
   }
   if ([values.devices, values.leases, values.rules].filter(Boolean).length > 1)
@@ -473,7 +473,7 @@ async function runCatalog(argv: readonly string[], environment: CliEnvironment):
     platform: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane catalog [--platform <ios|android>] [--json]\n");
+    environment.stdout.write("Usage: simlock catalog [--platform <ios|android>] [--json]\n");
     return 0;
   }
   if (values.platform !== undefined && values.platform !== "ios" && values.platform !== "android")
@@ -495,7 +495,7 @@ async function runCleanup(argv: readonly string[], environment: CliEnvironment):
     rule: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane cleanup [--dry-run] [--rule <name>]\n");
+    environment.stdout.write("Usage: simlock cleanup [--dry-run] [--rule <name>]\n");
     return 0;
   }
   writeResult(
@@ -514,7 +514,7 @@ async function runDoctor(argv: readonly string[], environment: CliEnvironment): 
     help: { type: "boolean", short: "h" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane doctor [--fix]\n");
+    environment.stdout.write("Usage: simlock doctor [--fix]\n");
     return 0;
   }
   writeResult(
@@ -531,11 +531,11 @@ async function runNuke(argv: readonly string[], environment: CliEnvironment): Pr
     yes: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane nuke [--delete-devices] [--yes]\n");
+    environment.stdout.write("Usage: simlock nuke [--delete-devices] [--yes]\n");
     return 0;
   }
   const confirmed =
-    values.yes ?? (await environment.confirm?.("Nuke Pitlane-managed devices? [y/N] "));
+    values.yes ?? (await environment.confirm?.("Nuke Simlock-managed devices? [y/N] "));
   if (!confirmed) throw new UsageError("nuke requires confirmation or --yes");
   writeResult(
     environment,
@@ -553,7 +553,7 @@ async function runEvents(argv: readonly string[], environment: CliEnvironment): 
     since: { type: "string" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: pitlane events [--follow] [--since <duration>]\n");
+    environment.stdout.write("Usage: simlock events [--follow] [--since <duration>]\n");
     return 0;
   }
   const connection = await environment.connect();
@@ -588,7 +588,7 @@ async function runDaemon(argv: readonly string[], environment: CliEnvironment): 
     json: { type: "boolean" },
   });
   if (command === undefined || isHelp(command) || values.help) {
-    environment.stdout.write("Usage: pitlane daemon <start|stop|status|logs>\n");
+    environment.stdout.write("Usage: simlock daemon <start|stop|status|logs>\n");
     return 0;
   }
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
@@ -656,7 +656,7 @@ async function runConfig(argv: readonly string[], environment: CliEnvironment): 
     const values = commandArgs(argv.slice(1), {});
     const [key, rawValue, ...extra] = values.positionals;
     if (key === undefined || rawValue === undefined || extra.length > 0)
-      throw new UsageError("Usage: pitlane config set <key> <value>");
+      throw new UsageError("Usage: simlock config set <key> <value>");
     const config = await environment.readConfigFile();
     writeConfigValue(config, key, parseConfigValue(rawValue));
     await environment.writeConfigFile(config);
@@ -666,7 +666,7 @@ async function runConfig(argv: readonly string[], environment: CliEnvironment): 
     return 0;
   }
   if (isHelp(command)) {
-    environment.stdout.write("Usage: pitlane config [get <key>|set <key> <value>]\n");
+    environment.stdout.write("Usage: simlock config [get <key>|set <key> <value>]\n");
     return 0;
   }
   throw new UsageError(`Unknown config command: ${command}`);

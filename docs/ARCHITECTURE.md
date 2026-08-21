@@ -3,8 +3,8 @@
 ## Topology
 
 ```
-agent ──spawns──> pitlane CLI ──┐
-                                ├─ shared daemon client ──unix socket──> pitlane daemon
+agent ──spawns──> simlock CLI ──┐
+                                ├─ shared daemon client ──unix socket──> simlock daemon
 MCP client ──spawns──> stdio MCP ┘                                      │
                                                                      ┌───┼─────────────┐
                                                                      │ core (platform-│
@@ -76,7 +76,7 @@ reclaim(device)      -> ready | shutdown      // fresh-state strategy lives here
 shutdown(device)
 destroy(device)
 estimate(op)         -> ETA for progress events
-listManaged()        -> Pitlane-prefixed device/process reality for doctor
+listManaged()        -> Simlock-prefixed device/process reality for doctor
 ```
 
 The litmus test for the boundary: adding a third driver (e.g. physical
@@ -138,7 +138,7 @@ provisioning → ready → leased → reclaiming → ready/shutdown → deleted
                  ready/shutdown/deleted
 ```
 
-All transitions go through the core. `pitlane status` reads identically for
+All transitions go through the core. `simlock status` reads identically for
 iOS and Android because of this.
 
 A warm device is derived inventory, not a state: any registry-managed,
@@ -160,7 +160,7 @@ against capacity, not grantable" is expressed by adding its own entry into
 `quarantined`, not by inventing a second state: the release-time purge
 failure (`reclaiming → quarantined`) and the stalled-transition timeout
 (`provisioning → quarantined`, both owned by `QuarantineCoordinator`) are its
-two entries. The latter fires from `pitlane doctor`'s `stalled-transition`
+two entries. The latter fires from `simlock doctor`'s `stalled-transition`
 finding — a `provisioning`/`reclaiming` device whose time in that state has
 outrun a driver-derived threshold, meaning the driver call meant to resolve
 it never did and the registry's view has diverged from the driver's. Safer
@@ -212,11 +212,11 @@ Conclusions baked into the drivers:
   connection. For the CLI, that is the CLI process; for MCP, it is the MCP
   server process for that agent session. Connection close = release. The CLI
   holder additionally watches its parent through the `ParentWatch` port and
-  self-terminates if it dies, so a crashed agent's backgrounded `pitlane
+  self-terminates if it dies, so a crashed agent's backgrounded `simlock
   lease` cannot outlive it by getting reparented — see
   [known-pitfalls.md](known-pitfalls.md).
 - **Detached mode (`--detach`)**: returns a token, daemon enforces a TTL, the
-  agent must `pitlane renew` periodically.
+  agent must `simlock renew` periodically.
 - **TTL backstop**: even held leases have a long daemon-side TTL for zombie
   sockets, machine sleep, etc.
 - **Heartbeat-driven sliding TTL, capability-gated**: a held lease's backstop
@@ -260,7 +260,7 @@ The device is not lost track of while that runs. It is `reclaiming`, so it
 still counts as running capacity and is invisible to every grant path
 (`AcquisitionPlanner` selects by exact state), and the reclaim holds a
 `reclaim` operation claim for its whole duration — which is how
-`StartupConverger#recoverInterruptedReclaims` and `pitlane doctor`'s
+`StartupConverger#recoverInterruptedReclaims` and `simlock doctor`'s
 stalled-transition finding both tell a live purge from an abandoned one. A
 waiter queued for exactly that device is granted the moment the purge settles:
 the coordinator re-notifies acquisition *after* releasing the claim, because
@@ -273,7 +273,7 @@ Three things still wait for the purge, deliberately:
   records, so a device left mid-reclaim would be skipped by the very reset
   meant to take it down. `beginMaintenance` drains in-flight background
   reclaims, and the maintenance-authorized release awaits its own inline.
-- **A graceful `pitlane daemon stop`.** It drains the in-flight reclaims
+- **A graceful `simlock daemon stop`.** It drains the in-flight reclaims
   (before disposing timers, so a purge that settles into quarantine still gets
   its retry cancelled), leaving the pool in the same settled shape an inline
   reclaim used to.
@@ -326,10 +326,10 @@ nuke interfaces rather than duplicating core decisions in the CLI or server.
 
 `Doctor.reconcile()` already knew a leased device could crash: its
 `expectedRunState` maps `leased -> "running"`, so a leased device whose
-process an operator kills from outside pitlane produces a
+process an operator kills from outside simlock produces a
 `foreign-state-change` finding. What was missing was anything that acted on
 that finding at the moment it mattered. `reconcile()` only ran at daemon
-startup and from an explicit `pitlane doctor`, so a crash between those
+startup and from an explicit `simlock doctor`, so a crash between those
 points sat undetected indefinitely. And even a `doctor --fix` run that saw it
 couldn't repair it: `#fixForeignStateChange` bails on a leased device, the
 cleanup reaper filters leased targets centrally before a rule ever runs, and
@@ -390,7 +390,7 @@ should.
 
 None of this is silent. A reboot resumes the lease, but it cannot resume
 whatever the agent had running *inside* the device when it died — a launched
-app, a `log stream`, an Appium/XCUITest session, a port forward — pitlane has
+app, a `log stream`, an Appium/XCUITest session, a port forward — simlock has
 no way to know that state existed, let alone restore it. So the monitor emits
 `device.crash-detected` the moment a crash is confirmed and `device.recovered`
 once the reboot passes readiness; the daemon pushes both to whichever
@@ -434,14 +434,14 @@ Reaper triggers are observer subscriptions to `lease.released`,
 reaper itself emits `disk.pressure-detected` (edge-triggered, once per
 crossing) as a post-commit fact for observers — never as the mechanism that
 drives `idle-destroy`'s own behavior. Every successful action emits its rule
-and reason in `cleanup.executed`; `pitlane cleanup --dry-run` previews
+and reason in `cleanup.executed`; `simlock cleanup --dry-run` previews
 proposals.
 
 ## Event bus
 
 An in-process, typed event bus carries **past-tense business facts**
 (`device.reclaimed`, `lease.expired`). Observers — cleanup triggers,
-logging/metrics, `pitlane events --follow` — subscribe to it. Warm-pool
+logging/metrics, `simlock events --follow` — subscribe to it. Warm-pool
 reclaim/disposition, cleanup execution, startup convergence, eviction, and
 nuke remain explicit direct component call chains.
 
@@ -534,11 +534,11 @@ destruction, never touching a leased device) is unsafe to have in flight
 during shutdown; it just means "stopped" is not instantaneous relative to the
 failure being reported. `health` itself does not grow a third state for this:
 `running` means convergence finished, not that every backgrounded reclaim it
-kicked off has settled — `pitlane status` already reports each device's own
+kicked off has settled — `simlock status` already reports each device's own
 state (`reclaiming` included), so a separate aggregate would duplicate
 information already visible per-device rather than add any.
 
-Operational logging is a separate concern from the event bus: `pitlane events`
+Operational logging is a separate concern from the event bus: `simlock events`
 carries business facts (lease granted, device cleaned up, …) in an in-memory
 ring buffer that resets on restart, while the `Logger` port writes durable,
 structured JSON lines — one per record — for startup, socket claim/recovery,
@@ -549,7 +549,7 @@ module-scoped children (`logger.child("server")`, `.child("connection-host")`,
 `.child("driver-discovery")`) to each component so every line is attributable.
 The sink tracks bytes written and rotates `daemon.log` to `daemon.log.1`
 (replacing any previous generation) once `config.log.rotateBytes` is exceeded,
-so growth is bounded and `pitlane daemon logs` reads the rotated generation
+so growth is bounded and `simlock daemon logs` reads the rotated generation
 before the current file. The one exception is the fatal top-level handler: it
 cannot depend on `config.log` having loaded successfully, so it builds its own
 logger straight from the default log path at a fixed level, falling back to

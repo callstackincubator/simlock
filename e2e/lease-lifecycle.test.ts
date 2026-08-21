@@ -69,7 +69,7 @@ describe("lease lifecycle across both frontends", () => {
     });
     const agentId = "flow2-mcp-agent";
 
-    const mcp = await env.mcpClient({ env: { PITLANE_AGENT_ID: agentId } });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: agentId } });
     try {
       const leaseResult = await mcp.client.callTool({
         name: "lease_simulator",

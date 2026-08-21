@@ -20,7 +20,7 @@ interface Finding {
 
 async function deviceRows(env: Awaited<ReturnType<typeof withDaemon>>): Promise<DeviceRow[]> {
   const result = await env.cli(["list", "--devices"]);
-  if (result.code !== 0) throw new Error(`pitlane list --devices failed: ${result.stderr}`);
+  if (result.code !== 0) throw new Error(`simlock list --devices failed: ${result.stderr}`);
   return result.json as DeviceRow[];
 }
 

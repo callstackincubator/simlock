@@ -14,7 +14,7 @@ export interface AcquisitionMaintenance {
   endMaintenance(): Promise<void>;
 }
 
-/** Read-only registry view used to select Pitlane-owned device records. */
+/** Read-only registry view used to select Simlock-owned device records. */
 export interface NukeRegistryView {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];

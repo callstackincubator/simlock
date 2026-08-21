@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { type Filesystem, MemoryFilesystem, NodeFilesystem } from "./index.js";
 
-const temporaryDirectory = `${process.cwd()}/.pitlane-ports-test`;
+const temporaryDirectory = `${process.cwd()}/.simlock-ports-test`;
 
 const implementations: Array<{
   name: string;

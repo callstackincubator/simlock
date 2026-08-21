@@ -27,7 +27,7 @@ export interface CliResult {
 }
 
 /**
- * Runs one `pitlane` CLI invocation to completion. Exit-code and structured-error
+ * Runs one `simlock` CLI invocation to completion. Exit-code and structured-error
  * assertions read as one-liners: `expect((await cli(env, [...])).code).toBe(13)`.
  */
 export function cli(
@@ -46,7 +46,7 @@ export function cli(
         ? undefined
         : setTimeout(() => {
             child.kill("SIGKILL");
-            reject(new Error(`pitlane ${args.join(" ")} timed out after ${options.timeout}ms`));
+            reject(new Error(`simlock ${args.join(" ")} timed out after ${options.timeout}ms`));
           }, options.timeout);
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -81,7 +81,7 @@ export interface CliBackgroundHandle {
 }
 
 /**
- * Starts a `pitlane` invocation that stays running (held-mode `lease`), for tests
+ * Starts a `simlock` invocation that stays running (held-mode `lease`), for tests
  * that need to observe progress, kill the process, or hold a lease across other
  * assertions.
  */

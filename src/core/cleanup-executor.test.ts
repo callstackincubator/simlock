@@ -10,7 +10,7 @@ import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
-const statePath = "/home/agent/.pitlane/state.json";
+const statePath = "/home/agent/.simlock/state.json";
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 async function createHarness() {

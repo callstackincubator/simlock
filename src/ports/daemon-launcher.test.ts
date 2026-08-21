@@ -19,7 +19,7 @@ describe("FakeDaemonLauncher", () => {
 
 describe("NodeDaemonLauncher", () => {
   it("rejects asynchronous spawn failures", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "pitlane-launcher-"));
+    const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
     try {
       await expect(
         new NodeDaemonLauncher({
@@ -34,7 +34,7 @@ describe("NodeDaemonLauncher", () => {
   });
 
   it("combines stdout and stderr in an append-only log", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "pitlane-launcher-"));
+    const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
     const logPath = join(directory, "daemon.log");
     const launcher = new NodeDaemonLauncher({
       args: ["-e", "console.log('out'); console.error('err')"],

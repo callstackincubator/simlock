@@ -82,5 +82,5 @@ export interface FakeDriverLogEntry {
   readonly arguments: readonly unknown[];
 }
 
-export const DEFAULT_SCRIPT_ENV = "PITLANE_FAKE_DRIVER_SCRIPT";
-export const DEFAULT_LOG_ENV = "PITLANE_FAKE_DRIVER_LOG";
+export const DEFAULT_SCRIPT_ENV = "SIMLOCK_FAKE_DRIVER_SCRIPT";
+export const DEFAULT_LOG_ENV = "SIMLOCK_FAKE_DRIVER_LOG";

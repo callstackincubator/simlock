@@ -121,7 +121,7 @@ export class LeaseReleaseCoordinator
 
   /**
    * Awaits every reclaim currently running in the background. Nothing on a
-   * client's path calls this -- a graceful daemon shutdown does, so a `pitlane
+   * client's path calls this -- a graceful daemon shutdown does, so a `simlock
    * daemon stop` still leaves the pool in the same settled shape an inline
    * reclaim used to. An ungraceful death instead leaves those devices
    * `reclaiming` for `StartupConverger#recoverInterruptedReclaims`.
@@ -221,7 +221,7 @@ export class LeaseReleaseCoordinator
    * Claims the device for the reclaim's duration. Two readers depend on that claim
    * to tell a live in-process reclaim apart from an abandoned one: `StartupConverger
    * #recoverInterruptedReclaims`, which must not mistake a reclaim this process just
-   * started for one orphaned by a *previous* crash, and `pitlane doctor`'s
+   * started for one orphaned by a *previous* crash, and `simlock doctor`'s
    * stalled-transition finding, which must not read a legitimately long erase as a
    * driver call that never returned. Both exclude claimed devices for exactly this
    * reason; a reclaim orphaned by a crash carries no claim in the new process, so
@@ -231,7 +231,7 @@ export class LeaseReleaseCoordinator
    * reclaim settles -- no caller is awaiting this promise, so a rejection here would
    * otherwise be unhandled. A purge that fails at the driver is not that case: it is
    * handled inside `WarmPoolCoordinator#reclaim`, which quarantines the device
-   * instead of rejecting, and stays visible in `pitlane status` and
+   * instead of rejecting, and stays visible in `simlock status` and
    * `device.purge-failed`.
    */
   #reclaimInBackground(released: ReleasedLease): void {

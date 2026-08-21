@@ -46,12 +46,12 @@ export type DoctorFinding =
 
 /**
  * `erased` -- the durable mark stands but the erasable one is gone: the device
- * was erased or wiped outside Pitlane.
+ * was erased or wiped outside Simlock.
  * `mark-mismatch` -- both regions carry a token but they disagree, so
  * something re-marked one region independently.
  * `durable-mark-missing` -- the durable region carries no token at all: the
  * device definition was recreated, or foreign tooling rewrote it. On Android
- * that also catches an `avdmanager create` reusing a `pitlane_` name, which
+ * that also catches an `avdmanager create` reusing a `simlock_` name, which
  * the prefix match in `listManaged` would otherwise adopt silently.
  */
 export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
@@ -295,7 +295,7 @@ function registryDriftFindings(
   }
 
   // `expected === undefined` means the registry is mid-transition (provisioning,
-  // reclaiming, deleted). Pitlane is acting on the device itself in those states,
+  // reclaiming, deleted). Simlock is acting on the device itself in those states,
   // including erasing it, so neither run state nor marks are compared.
   const expected = expectedRunState(device.state);
   const observed = observedDevices.get(deviceKey);
@@ -327,7 +327,7 @@ function registryDriftFindings(
 }
 
 /**
- * A `provisioning` / `reclaiming` device is normally in-flight work Pitlane itself is
+ * A `provisioning` / `reclaiming` device is normally in-flight work Simlock itself is
  * driving (see `expectedRunState`), not drift -- but only up to a point. Past a
  * driver-derived threshold it stops being "still working" and becomes a stall: the
  * driver call that was supposed to resolve it never did. This is a documented failure

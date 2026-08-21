@@ -26,8 +26,8 @@ the daemon owns real OS resources.
 
 ## How isolation works
 
-Each `withDaemon()` allocates a temp `PITLANE_HOME` (so config, state, socket and
-log are per-test) and, in the fast lane, points `PITLANE_DRIVERS_MODULE` at
+Each `withDaemon()` allocates a temp `SIMLOCK_HOME` (so config, state, socket and
+log are per-test) and, in the fast lane, points `SIMLOCK_DRIVERS_MODULE` at
 `e2e/fake-driver` — the daemon then talks to a scripted driver instead of real
 hardware without knowing the difference. Both variables are documented in
 [../docs/CLI.md](../docs/CLI.md#environment-variables).

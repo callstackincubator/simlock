@@ -4,7 +4,7 @@
  * `reclaim` -- the last marks the device as a live, in-process operation so
  * `StartupConverger#recoverInterruptedReclaims` (which only recovers *unclaimed*
  * `reclaiming` devices) never mistakes it for one left over from a previous crash,
- * and so `pitlane doctor` never reads a long-but-healthy erase as a stalled
+ * and so `simlock doctor` never reads a long-but-healthy erase as a stalled
  * transition. Every release takes one, since none of them wait for the purge.
  * See `LeaseReleaseCoordinator#reclaimInBackground`.
  */

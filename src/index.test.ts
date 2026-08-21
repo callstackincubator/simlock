@@ -4,6 +4,6 @@ import { projectName } from "./index.js";
 
 describe("projectName", () => {
   it("identifies the project", () => {
-    expect(projectName).toBe("pitlane");
+    expect(projectName).toBe("simlock");
   });
 });

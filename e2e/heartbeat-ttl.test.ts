@@ -12,7 +12,7 @@ interface LeaseRow {
 
 async function leaseRows(env: Awaited<ReturnType<typeof withDaemon>>): Promise<LeaseRow[]> {
   const result = await env.cli(["list", "--leases"]);
-  if (result.code !== 0) throw new Error(`pitlane list --leases failed: ${result.stderr}`);
+  if (result.code !== 0) throw new Error(`simlock list --leases failed: ${result.stderr}`);
   return result.json as LeaseRow[];
 }
 
@@ -58,7 +58,7 @@ describe("sliding TTL and heartbeat", () => {
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
 
-    const mcp = await env.mcpClient({ env: { PITLANE_AGENT_ID: "flow6-mcp" } });
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "flow6-mcp" } });
     const cliHeld = env.cliBackground([
       "lease",
       "--platform",

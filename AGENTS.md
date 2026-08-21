@@ -1,6 +1,6 @@
 # Agent guide
 
-Pitlane is a control plane for iOS simulators and Android emulators that lets
+Simlock is a control plane for iOS simulators and Android emulators that lets
 parallel coding agents lease devices without fighting over them.
 
 ## Rules — read before writing code

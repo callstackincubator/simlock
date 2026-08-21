@@ -2,7 +2,7 @@
 
 ## Orphaned lease holders (resolved)
 
-The primary lease mechanism is process-held: `pitlane lease` runs in the
+The primary lease mechanism is process-held: `simlock lease` runs in the
 background, holds an open socket to the daemon (connection-alive acts as the
 heartbeat), and the agent kills the process to release the lease.
 
@@ -38,12 +38,12 @@ backstop; this fix is about a holder outliving its owner, nothing more.
 ## Crash recovery cannot restore in-device session state
 
 `LeaseHealthMonitor` reboots a leased device whose process died outside
-pitlane and hands the same lease back to its holder, so the device and its
+simlock and hands the same lease back to its holder, so the device and its
 on-disk state — installed apps, written data — survive the crash intact.
 
 **The pitfall:** anything the agent had running *inside* the device died with
 the process and a reboot cannot bring it back: a launched app, a `log
-stream`, an Appium/XCUITest session, a port forward. Pitlane has no visibility
+stream`, an Appium/XCUITest session, a port forward. Simlock has no visibility
 into what was running there, so it cannot even enumerate what was lost, let
 alone restore it. This is why recovery notifies the holder
 (`device-unhealthy` / `device-recovered` in held mode) rather than healing
@@ -57,7 +57,7 @@ default, so up to ~60s). This debounce is deliberate — `simctl` reports
 `Booting`/`Shutting Down` and an emulator reads offline in `adb devices`
 before it answers `getprop`, and either would misfire as a crash without it.
 
-A device erased or deleted outside pitlane is a different, unrecoverable case:
+A device erased or deleted outside simlock is a different, unrecoverable case:
 recovery detects the provenance drift (the same check `doctor` runs) and
 releases the lease as `device-lost` rather than rebooting it, because the
 disk state a reboot would resume is no longer provably the agent's. The
@@ -66,7 +66,7 @@ get its device rebuilt.
 
 **Status:** known and accepted. This is the intended boundary of crash
 recovery, not a bug — restoring in-device session state would require
-pitlane to understand and reproduce whatever the agent was doing inside the
+simlock to understand and reproduce whatever the agent was doing inside the
 device, which is out of scope for a device control plane.
 
 **Possible future fix:** none planned. An agent that needs resilience to this
@@ -75,7 +75,7 @@ rather than assume continuity.
 
 ## Warm-pool purge failures (resolved: quarantine, #21)
 
-Before a released device enters the warm pool, Pitlane attempts to purge the
+Before a released device enters the warm pool, Simlock attempts to purge the
 previous lease's state. A successful purge produces a clean, ready device.
 
 **The original pitfall:** the first warm-pool version emitted
@@ -95,7 +95,7 @@ the purge on a `Clock`-driven backoff (`warmPool.quarantine.{maxRetries,
 retryBackoffMs,retryBackoffMultiplier,maxRetryBackoffMs}`); a successful
 retry returns the device to the warm pool, and exhausting the retry budget
 destroys it (registry-only, as always). The device stays visible as
-`quarantined` in `pitlane status` and `pitlane list --devices` throughout.
+`quarantined` in `simlock status` and `simlock list --devices` throughout.
 `device.purge-failed` still fires as before; `device.quarantined`,
 `device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
 follow-up facts (see `docs/EVENTS.md`).

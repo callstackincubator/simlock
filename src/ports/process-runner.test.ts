@@ -42,10 +42,10 @@ describe("ScriptedProcessRunner", () => {
     const runner = new ScriptedProcessRunner([
       {
         hangs: true,
-        match: { command: "emulator", args: ["@pitlane"] },
+        match: { command: "emulator", args: ["@simlock"] },
       },
     ]);
-    const process = runner.spawn("emulator", ["@pitlane"]);
+    const process = runner.spawn("emulator", ["@simlock"]);
 
     const result = process.wait();
     process.kill("SIGTERM");

@@ -33,7 +33,7 @@ export class DaemonStartupCoordinator {
         await delay(this.options.clock, this.options.retryIntervalMs ?? 50);
       }
     }
-    throw new Error(`Timed out starting pitlane daemon: ${errorMessage(lastError)}`);
+    throw new Error(`Timed out starting simlock daemon: ${errorMessage(lastError)}`);
   }
 }
 

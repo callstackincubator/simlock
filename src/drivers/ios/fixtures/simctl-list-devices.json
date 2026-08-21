@@ -2,31 +2,31 @@
   "devices": {
     "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
       {
-        "name": "pitlane-booted",
+        "name": "simlock-booted",
         "udid": "00000000-0000-0000-0000-000000000101",
         "state": "Booted",
         "dataPath": "/Devices/00000000-0000-0000-0000-000000000101/data"
       },
       {
-        "name": "pitlane-shutdown",
+        "name": "simlock-shutdown",
         "udid": "00000000-0000-0000-0000-000000000102",
         "state": "Shutdown",
         "dataPath": "/Devices/00000000-0000-0000-0000-000000000102/data"
       },
       {
-        "name": "pitlane-booting",
+        "name": "simlock-booting",
         "udid": "00000000-0000-0000-0000-000000000103",
         "state": "Booting",
         "dataPath": "/Devices/00000000-0000-0000-0000-000000000103/data"
       },
       {
-        "name": "pitlane-shutting-down",
+        "name": "simlock-shutting-down",
         "udid": "00000000-0000-0000-0000-000000000104",
         "state": "Shutting Down",
         "dataPath": "/Devices/00000000-0000-0000-0000-000000000104/data"
       },
       {
-        "name": "Not Pitlane",
+        "name": "Not Simlock",
         "udid": "00000000-0000-0000-0000-000000000105",
         "state": "Booted",
         "dataPath": "/Devices/00000000-0000-0000-0000-000000000105/data"

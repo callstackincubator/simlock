@@ -91,13 +91,13 @@ describe("MCP stdio lifecycle", () => {
     await client.close();
   });
 
-  it("sources the requester id from PITLANE_AGENT_ID when none is given explicitly", async () => {
+  it("sources the requester id from SIMLOCK_AGENT_ID when none is given explicitly", async () => {
     const connection = new LeaseConnection();
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const runner = await startMcpStdio({
       connect: async () => connection,
       createTransport: () => serverTransport,
-      env: { PITLANE_AGENT_ID: "agent-from-env" },
+      env: { SIMLOCK_AGENT_ID: "agent-from-env" },
       signals: new FakeSignals(),
     });
     const client = new Client({ name: "test", version: "1.0.0" });
@@ -115,13 +115,13 @@ describe("MCP stdio lifecycle", () => {
     await client.close();
   });
 
-  it("prefers an explicit requesterId over PITLANE_AGENT_ID", async () => {
+  it("prefers an explicit requesterId over SIMLOCK_AGENT_ID", async () => {
     const connection = new LeaseConnection();
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const runner = await startMcpStdio({
       connect: async () => connection,
       createTransport: () => serverTransport,
-      env: { PITLANE_AGENT_ID: "agent-from-env" },
+      env: { SIMLOCK_AGENT_ID: "agent-from-env" },
       requesterId: "explicit-agent",
       signals: new FakeSignals(),
     });

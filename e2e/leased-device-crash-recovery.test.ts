@@ -227,7 +227,7 @@ describe("leased device crash recovery", () => {
       label: "held CLI reports the lease ending",
       timeout: 5_000,
     });
-    // `device_id` here is the registry device id (what `pitlane list --devices` calls
+    // `device_id` here is the registry device id (what `simlock list --devices` calls
     // `id`), not the driver `udid` the grant returns on stdout -- these pushes carry
     // the same identifier the event bus does.
     const lost = healthLines(held).find((line) => line.event === "lease_lost");

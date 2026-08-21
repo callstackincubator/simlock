@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   NodeDaemonLauncher,
   NodeIpcTransport,
-  resolvePitlaneHome,
+  resolveSimlockHome,
   SystemClock,
 } from "../ports/index.js";
 import { connectDaemon } from "../daemon-client/client.js";
@@ -35,7 +35,7 @@ export interface McpStdioEnvironment {
   readonly connect?: () => Promise<DaemonConnection>;
   readonly createServer?: (session: McpSession) => McpServer;
   readonly createTransport?: () => McpTransport;
-  /** Source for `PITLANE_AGENT_ID` when `requesterId` is not given explicitly. */
+  /** Source for `SIMLOCK_AGENT_ID` when `requesterId` is not given explicitly. */
   readonly env?: NodeJS.ProcessEnv;
   readonly requesterId?: string;
   readonly signals?: Signals;
@@ -66,7 +66,7 @@ export async function startMcpStdio(
   const env = environment.env ?? process.env;
   const session = new McpSession({
     connect: environment.connect ?? defaults.connect,
-    requesterId: environment.requesterId ?? env.PITLANE_AGENT_ID ?? `mcp:${process.pid}`,
+    requesterId: environment.requesterId ?? env.SIMLOCK_AGENT_ID ?? `mcp:${process.pid}`,
   });
   const server = (environment.createServer ?? createMcpServer)(session);
   const transport = (environment.createTransport ?? defaults.createTransport)();
@@ -138,7 +138,7 @@ export async function startMcpStdio(
 }
 
 function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "createTransport">> {
-  const dataDirectory = resolvePitlaneHome();
+  const dataDirectory = resolveSimlockHome();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
   const socketPath = join(dataDirectory, "daemon.sock");

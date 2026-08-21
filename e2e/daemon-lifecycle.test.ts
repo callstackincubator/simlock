@@ -49,7 +49,7 @@ describe("daemon lifecycle & recovery", () => {
     expect(status.json).toMatchObject({ health: "running" });
   });
 
-  // Suspected bug: `pitlane daemon status` always writes raw JSON via `writeResult`
+  // Suspected bug: `simlock daemon status` always writes raw JSON via `writeResult`
   // (src/cli/index.ts `runDaemon`, the "status" branch) regardless of `--json`,
   // unlike its siblings `daemon start`/`daemon stop` which both branch on
   // `values.json` to print "Daemon running"/"Daemon stopping" in human mode. This

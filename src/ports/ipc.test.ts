@@ -44,7 +44,7 @@ describe("MemoryIpcTransport", () => {
 
 describe("NodeIpcTransport", () => {
   it("connects, exchanges data, closes, and normalizes setup failures", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "pitlane-ipc-"));
+    const directory = await mkdtemp(join(tmpdir(), "simlock-ipc-"));
     const endpoint = join(directory, "daemon.sock");
     const ipc = new NodeIpcTransport();
     try {
