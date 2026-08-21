@@ -35,21 +35,29 @@ capability, same as MCP.
 Machine sleep and zombie sockets still fall back to the daemon-side TTL
 backstop; this fix is about a holder outliving its owner, nothing more.
 
-## Warm-pool purge failures (accepted in the first version)
+## Warm-pool purge failures (resolved: quarantine, #21)
 
 Before a released device enters the warm pool, Pitlane attempts to purge the
 previous lease's state. A successful purge produces a clean, ready device.
 
-**The pitfall:** if that purge fails, the first warm-pool version emits
-`device.purge-failed` but still leaves the device running and eligible for
-another lease. The device continues to count against the running-device
-limit. The next agent may therefore observe apps, data, or other state left by
-the previous lease.
+**The original pitfall:** the first warm-pool version emitted
+`device.purge-failed` but still left the device running and eligible for
+another lease. The next agent could silently inherit apps, data, or other
+state left by the previous lease — indistinguishable from the app itself
+misbehaving.
 
-**Status in the first warm-pool version:** known and accepted. Purge failure
-must be visible through the event stream so its frequency and impact can be
-measured, but it does not quarantine the device or block acquisition.
-
-**Possible future fix:** quarantine the device after a failed purge, retry
-with backoff, or shut down/delete it after a configurable number of failures.
-Revisit once real-world failure data shows which recovery policy is justified.
+**Fix (#21):** a failed purge now commits the device to `quarantined` instead
+of readiness-checking it back into circulation. `quarantined` is a shared
+"present in the registry, counts against running capacity, not grantable"
+disposition (see `docs/ARCHITECTURE.md`, "Quarantine: present but not
+grantable") — `AcquisitionPlanner` and the warm-pool eviction helpers select
+targets by exact state, so a quarantined device is simply invisible to every
+grant path with no special-casing required. `QuarantineCoordinator` retries
+the purge on a `Clock`-driven backoff (`warmPool.quarantine.{maxRetries,
+retryBackoffMs,retryBackoffMultiplier,maxRetryBackoffMs}`); a successful
+retry returns the device to the warm pool, and exhausting the retry budget
+destroys it (registry-only, as always). The device stays visible as
+`quarantined` in `pitlane status` and `pitlane list --devices` throughout.
+`device.purge-failed` still fires as before; `device.quarantined`,
+`device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
+follow-up facts (see `docs/EVENTS.md`).

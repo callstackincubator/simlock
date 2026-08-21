@@ -141,6 +141,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       await doctor.reconcile();
       await leaseEngine.convergeRunningCapacity();
     },
+    dispose: () => leaseEngine.dispose(),
   });
   await daemon.start();
   return daemon;

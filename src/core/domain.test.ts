@@ -19,6 +19,10 @@ describe("transition", () => {
     ["leased", "reclaiming"],
     ["reclaiming", "ready"],
     ["reclaiming", "shutdown"],
+    ["reclaiming", "quarantined"],
+    ["quarantined", "ready"],
+    ["quarantined", "shutdown"],
+    ["quarantined", "deleted"],
     ["shutdown", "ready"],
     ["shutdown", "deleted"],
   ] as const)("allows %s -> %s", (from, to) => {
@@ -31,6 +35,13 @@ describe("transition", () => {
     ["ready", "deleted"],
     ["leased", "shutdown"],
     ["deleted", "ready"],
+    ["provisioning", "quarantined"],
+    // A leased device can only reach `quarantined` by first going through
+    // `reclaiming` (i.e. after release) -- never directly. This is the structural
+    // half of "never quarantine a leased device" (#21): even a caller bug can't
+    // skip the release step and quarantine a device out from under its holder.
+    ["leased", "quarantined"],
+    ["quarantined", "leased"],
   ] as const)("rejects %s -> %s", (from, to) => {
     expect(() => transition({ ...baseDevice, state: from }, to)).toThrow(IllegalTransition);
   });

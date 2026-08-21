@@ -702,6 +702,7 @@ function formatStatus(status: Record<string, unknown>): string {
     const markers = [
       record.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
       record.foreignProvenanceDetectedAt === undefined ? undefined : "foreign provenance change",
+      record.state === "quarantined" ? quarantineMarker(record) : undefined,
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     return `Device ${String(record.id)}: ${String(record.state)}${suffix}`;
@@ -722,6 +723,16 @@ function formatStatus(status: Record<string, unknown>): string {
     ...leaseLines,
     `Queue depth: ${queueDepth}`,
   ].join("\n");
+}
+
+/** Surfaces retry progress for a quarantined device instead of leaving it as a bare state name. */
+function quarantineMarker(record: Record<string, unknown>): string {
+  const attempts = typeof record.quarantineAttempts === "number" ? record.quarantineAttempts : 0;
+  const nextRetryAt =
+    typeof record.quarantineNextRetryAt === "number"
+      ? `, next retry at ${String(record.quarantineNextRetryAt)}`
+      : "";
+  return `purge retry ${attempts}${nextRetryAt}`;
 }
 
 function formatCatalog(response: Record<string, unknown>): string {

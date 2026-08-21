@@ -7,9 +7,10 @@ import type { Config } from "./config.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
+import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
+import { WarmPoolCoordinator, type WarmPoolQuarantine } from "./warm-pool-coordinator.js";
 
 const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
@@ -17,6 +18,14 @@ const config: Config = {
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   eventBuffer: { capacity: 100 },
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+  warmPool: {
+    quarantine: {
+      maxRetries: 3,
+      maxRetryBackoffMs: 300_000,
+      retryBackoffMs: 30_000,
+      retryBackoffMultiplier: 2,
+    },
+  },
   lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
   limits: {
     android: { maxDevices: 2, maxRunning: 1 },
@@ -66,11 +75,11 @@ class TestRegistry {
     return updated;
   }
 
-  async completeFailedPurge(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord> {
+  async completeInterruptedReclaim(deviceId: string): Promise<DeviceRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
     const current = this.#devices[index];
     if (index === -1 || current === undefined) throw new Error("missing device");
-    const updated = { ...current, state: to } as DeviceRecord;
+    const updated = { ...current, state: "shutdown" } as DeviceRecord;
     this.#devices[index] = updated;
     return updated;
   }
@@ -103,6 +112,10 @@ async function createHarness(
   const reclaiming = device("reclaiming", "reclaiming", driverDevice.deviceId, spec);
   const registry = new TestRegistry(options.devices ?? [reclaiming], options.leases, bus);
   const notifyAvailability = vi.fn();
+  const quarantined: QuarantinePurgeFailure[] = [];
+  const quarantine: WarmPoolQuarantine = {
+    enter: vi.fn(async (failure) => void quarantined.push(failure)),
+  };
   const coordinator = new WarmPoolCoordinator({
     capacity: capacity(),
     clock,
@@ -110,11 +123,22 @@ async function createHarness(
     drivers: new DriverCatalog([driver]),
     eventBus: bus,
     notifyAvailability,
+    quarantine,
     queueHeadDemand: () =>
       options.headSpec === undefined ? undefined : { spec: options.headSpec },
     registry,
   });
-  return { bus, clock, coordinator, driver, notifyAvailability, reclaiming, registry };
+  return {
+    bus,
+    clock,
+    coordinator,
+    driver,
+    notifyAvailability,
+    quarantine,
+    quarantined,
+    reclaiming,
+    registry,
+  };
 }
 
 function device(
@@ -163,6 +187,7 @@ describe("WarmPoolCoordinator", () => {
       drivers: new DriverCatalog([harness.driver]),
       eventBus: harness.bus,
       notifyAvailability: harness.notifyAvailability,
+      quarantine: harness.quarantine,
       queueHeadDemand: () => undefined,
       registry: overloaded,
     });
@@ -196,39 +221,28 @@ describe("WarmPoolCoordinator", () => {
     expect(harness.driver.calls.map((call) => call.operation)).toContain("makeReady");
   });
 
-  it("commits purge failure readiness before emitting the failure fact and waking availability", async () => {
+  it("hands a release-time purge failure to quarantine instead of readiness-checking the device back in", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.failOn("reclaim", 1, new Error("purge exploded"));
     const harness = await createHarness({ driver });
-    let stateAtFact: DeviceRecord["state"] | undefined;
-    harness.bus.subscribe("device.purge-failed", () => {
-      stateAtFact = harness.registry.snapshot.devices[0]?.state;
-    });
 
     await harness.coordinator.reclaim(released(harness.reclaiming));
 
-    expect(stateAtFact).toBe("ready");
-    expect(
-      harness.bus.replay().find((event) => event.event === "device.purge-failed"),
-    ).toMatchObject({
-      module: "warm-pool-coordinator",
-      payload: { error: "Error: purge exploded", leaseId: "lease-1" },
-    });
-    expect(harness.notifyAvailability).toHaveBeenCalledOnce();
-  });
-
-  it("commits failed purge recovery as shutdown when readiness check fails", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("purge exploded"));
-    driver.failOn("makeReady", 1, new Error("not ready"));
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
-    expect(harness.bus.replay().filter((event) => event.event === "device.reclaimed")).toEqual([]);
+    expect(harness.quarantined).toEqual([
+      {
+        attemptedStrategy: "wipe",
+        deviceId: harness.reclaiming.id,
+        duration: 0,
+        error: "Error: purge exploded",
+        leaseId: "lease-1",
+      },
+    ]);
+    // Quarantine entry is a coordinator concern, not a capacity one: the device
+    // stays running (`reclaiming` and `quarantined` both count), so nothing here
+    // wakes a queued waiter -- and no readiness probe ever runs.
+    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("makeReady");
+    expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
   it("recovers an unleased interrupted reclaim through shutdown and a committed fact", async () => {

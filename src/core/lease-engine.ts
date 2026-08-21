@@ -21,6 +21,7 @@ import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { NukeService } from "./nuke-service.js";
+import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
@@ -59,6 +60,7 @@ export class LeaseEngine {
   readonly #nuke: NukeService;
   readonly #planner: AcquisitionPlanner;
   readonly #provisioner: DeviceProvisioner;
+  readonly #quarantine: QuarantineCoordinator;
   readonly #queue: WaitQueue;
   readonly #releaseCoordinator: LeaseReleaseCoordinator;
   readonly #decisions = new SerializedDecision();
@@ -120,6 +122,15 @@ export class LeaseEngine {
       queue: this.#queue,
       registry: options.registry,
     });
+    this.#quarantine = new QuarantineCoordinator({
+      clock: options.clock,
+      config: options.config.warmPool.quarantine,
+      decisions: this.#decisions,
+      drivers: this.#drivers,
+      eventBus: options.eventBus,
+      notifyAvailability: () => this.#acquisition.kick(),
+      registry: options.registry,
+    });
     this.#warmPool = new WarmPoolCoordinator({
       capacity: this.#capacity,
       clock: options.clock,
@@ -127,6 +138,7 @@ export class LeaseEngine {
       drivers: this.#drivers,
       eventBus: options.eventBus,
       notifyAvailability: () => this.#acquisition.kick(),
+      quarantine: this.#quarantine,
       queueHeadDemand: () => {
         const spec = this.#acquisition.queueHeadSpec;
         return spec === undefined ? undefined : { spec };
@@ -161,6 +173,7 @@ export class LeaseEngine {
           await this.#warmPool.recoverInterrupted(device.id);
         },
       },
+      quarantineRestore: { restore: () => this.#quarantine.restore() },
       registry: options.registry,
       releases: {
         releaseOrphaned: async (leaseId) => {
@@ -191,6 +204,11 @@ export class LeaseEngine {
   /** Operator-only reset; targets device records from this registry exclusively. */
   async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
     return this.#nuke.nuke(deleteDevices);
+  }
+
+  /** Cancels the quarantine coordinator's armed retry timers on daemon shutdown. */
+  dispose(): void {
+    this.#quarantine.dispose();
   }
 
   /** Read-only device catalog; a platform without a registered driver is omitted. */

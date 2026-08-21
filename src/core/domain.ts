@@ -11,6 +11,7 @@ export type DeviceState =
   | "ready"
   | "leased"
   | "reclaiming"
+  | "quarantined"
   | "shutdown"
   | "deleted";
 
@@ -24,6 +25,12 @@ export interface DeviceRecord {
   readonly lastLeaseEndedAt?: number;
   readonly foreignStateDetectedAt?: number;
   readonly foreignProvenanceDetectedAt?: number;
+  /** Set on entry to `quarantined`; the wall-clock moment the first purge failed. */
+  readonly quarantinedAt?: number;
+  /** Failed retry count since entering quarantine (the triggering failure itself is not a retry). */
+  readonly quarantineAttempts?: number;
+  /** When the next purge retry is armed for, so a restarted daemon can re-arm it faithfully. */
+  readonly quarantineNextRetryAt?: number;
   /**
    * The driver-reported address (see `DriverDevice.address`), current as of this device's
    * last `ready` transition. Undefined for a device still `provisioning` (never made ready
@@ -44,11 +51,23 @@ export interface LeaseRecord {
   readonly ttlDeadline: number;
 }
 
+/**
+ * `quarantined` is the shared "present in the registry, counts against running
+ * capacity, but not grantable" disposition: a device the core cannot vouch for
+ * right now, sitting outside the `ready`/`shutdown` states every grant and
+ * eviction path already selects on. `reclaiming -> quarantined` is its release-time
+ * purge-failure entry (see WarmPoolCoordinator); a future stalled-transition timeout
+ * (e.g. `provisioning` that never finishes) would add `provisioning -> quarantined`
+ * as its own entry into the same state rather than inventing a second one. Exits are
+ * symmetric either way: `ready` on a successful retry, `shutdown`/`deleted` on giving
+ * up.
+ */
 const legalTransitions: Readonly<Record<DeviceState, readonly DeviceState[]>> = {
   provisioning: ["ready", "deleted"],
   ready: ["leased", "shutdown"],
   leased: ["reclaiming"],
-  reclaiming: ["ready", "shutdown"],
+  reclaiming: ["ready", "shutdown", "quarantined"],
+  quarantined: ["ready", "shutdown", "deleted"],
   shutdown: ["ready", "deleted"],
   deleted: [],
 };

@@ -831,5 +831,13 @@ function config(): Config {
     },
     ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    warmPool: {
+      quarantine: {
+        maxRetries: 3,
+        maxRetryBackoffMs: 300_000,
+        retryBackoffMs: 30_000,
+        retryBackoffMultiplier: 2,
+      },
+    },
   };
 }
