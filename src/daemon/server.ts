@@ -13,6 +13,7 @@ import {
   UnknownModelError,
   type CleanupReaper,
   type Doctor,
+  type LeaseHealthMonitor,
   type Nuke,
   UnknownLeaseError,
 } from "../core/index.js";
@@ -61,6 +62,7 @@ export interface DaemonServerOptions {
   readonly protocolVersion?: number;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
+  readonly healthMonitor?: LeaseHealthMonitor;
   readonly nuke?: Nuke;
   readonly registry: Registry;
   readonly version: string;
@@ -154,6 +156,11 @@ export class DaemonServer {
     // "answers hello and status.get..." / "parks a request type..." tests, and the
     // dedicated ordering test below. The next event type added that can fire during
     // convergence should re-check this invariant rather than assume it still holds.
+    //
+    // `device.crash-detected` / `device.recovered` re-checked: the health monitor
+    // that emits them is only started after convergence too (see `LeaseEngine` /
+    // `DaemonServer` startup wiring), so neither can fire during this window either
+    // -- the same "nothing emitted during convergence needs a push" argument holds.
     this.#unsubscribeLeaseLost.push(
       this.options.eventBus.subscribe("lease.expired", (envelope) =>
         this.#notifyLeaseLost(envelope.payload.leaseId, envelope.payload.deviceId, "expired"),
@@ -163,6 +170,16 @@ export class DaemonServer {
           envelope.payload.leaseId,
           envelope.payload.deviceId,
           envelope.payload.reason,
+        ),
+      ),
+      this.options.eventBus.subscribe("device.crash-detected", (envelope) =>
+        this.#notifyDeviceUnhealthy(envelope.payload.leaseId, envelope.payload.deviceId),
+      ),
+      this.options.eventBus.subscribe("device.recovered", (envelope) =>
+        this.#notifyDeviceRecovered(
+          envelope.payload.leaseId,
+          envelope.payload.deviceId,
+          envelope.payload.attempts,
         ),
       ),
     );
@@ -179,6 +196,12 @@ export class DaemonServer {
       version: this.options.version,
     });
     this.#scheduleHeartbeatTick();
+    // Armed only here, after convergence: a probe tick shells out per platform, and
+    // convergence is already doing that per driver and device. Starting it late is
+    // also what keeps the subscriptions above safe -- nothing can emit
+    // device.crash-detected during the startup window, because the only emitter is
+    // this monitor.
+    this.options.healthMonitor?.start();
   }
 
   async #converge(): Promise<void> {
@@ -223,6 +246,7 @@ export class DaemonServer {
     }
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.options.reaper.dispose();
+    this.options.healthMonitor?.dispose();
     this.options.dispose?.();
     await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
     for (const connection of this.#connections) {
@@ -671,6 +695,49 @@ export class DaemonServer {
     payload: { readonly deviceId: string; readonly leaseId: string; readonly reason: string },
   ): Promise<void> {
     await writeFrame(socket, { push: "lease-lost", payload });
+  }
+
+  /**
+   * Finds the connection currently holding `leaseId`, without touching `heldLeaseIds`.
+   * Unlike `#notifyLeaseLost`, a crash/recovery notice does not end the lease -- it is
+   * still held, and the connection must still release it on close -- so this is a
+   * deliberate sibling rather than a shared helper `#notifyLeaseLost` could be
+   * parameterised into: reusing that one here would risk someone later adding a flag
+   * that forgets to keep a live lease in the set.
+   */
+  #connectionHolding(leaseId: string): Connection | undefined {
+    for (const connection of this.#connections) {
+      if (connection.heldLeaseIds.has(leaseId)) return connection;
+    }
+    return undefined;
+  }
+
+  /** Reacts to the post-commit `device.crash-detected` fact; observer-only, nothing awaits this. */
+  #notifyDeviceUnhealthy(leaseId: string, deviceId: string): void {
+    const connection = this.#connectionHolding(leaseId);
+    if (connection === undefined) return;
+    void this.#pushDeviceUnhealthy(connection.socket, { deviceId, leaseId, reason: "crashed" });
+  }
+
+  async #pushDeviceUnhealthy(
+    socket: IpcConnection,
+    payload: { readonly deviceId: string; readonly leaseId: string; readonly reason: "crashed" },
+  ): Promise<void> {
+    await writeFrame(socket, { push: "device-unhealthy", payload });
+  }
+
+  /** Reacts to the post-commit `device.recovered` fact; observer-only, nothing awaits this. */
+  #notifyDeviceRecovered(leaseId: string, deviceId: string, attempts: number): void {
+    const connection = this.#connectionHolding(leaseId);
+    if (connection === undefined) return;
+    void this.#pushDeviceRecovered(connection.socket, { attempts, deviceId, leaseId });
+  }
+
+  async #pushDeviceRecovered(
+    socket: IpcConnection,
+    payload: { readonly attempts: number; readonly deviceId: string; readonly leaseId: string },
+  ): Promise<void> {
+    await writeFrame(socket, { push: "device-recovered", payload });
   }
 
   async #respondError(

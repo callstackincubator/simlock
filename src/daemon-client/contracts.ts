@@ -83,6 +83,44 @@ export function parseRawLeaseLost(value: unknown): RawLeaseLost {
   return { deviceId: payload.deviceId, leaseId: payload.leaseId, reason: payload.reason };
 }
 
+export interface RawDeviceUnhealthy {
+  readonly deviceId: string;
+  readonly leaseId: string;
+  readonly reason: string;
+}
+
+/** Parses the `device-unhealthy` push notified to a lease's holding connection. */
+export function parseRawDeviceUnhealthy(value: unknown): RawDeviceUnhealthy {
+  const payload = requireObject(value, "Daemon sent an invalid device-unhealthy notification");
+  if (
+    typeof payload.deviceId !== "string" ||
+    typeof payload.leaseId !== "string" ||
+    typeof payload.reason !== "string"
+  ) {
+    throw new Error("Daemon sent an invalid device-unhealthy notification");
+  }
+  return { deviceId: payload.deviceId, leaseId: payload.leaseId, reason: payload.reason };
+}
+
+export interface RawDeviceRecovered {
+  readonly attempts: number;
+  readonly deviceId: string;
+  readonly leaseId: string;
+}
+
+/** Parses the `device-recovered` push notified to a lease's holding connection. */
+export function parseRawDeviceRecovered(value: unknown): RawDeviceRecovered {
+  const payload = requireObject(value, "Daemon sent an invalid device-recovered notification");
+  if (
+    typeof payload.attempts !== "number" ||
+    typeof payload.deviceId !== "string" ||
+    typeof payload.leaseId !== "string"
+  ) {
+    throw new Error("Daemon sent an invalid device-recovered notification");
+  }
+  return { attempts: payload.attempts, deviceId: payload.deviceId, leaseId: payload.leaseId };
+}
+
 export interface RawLeaseHeartbeatAck {
   readonly leases: readonly { readonly leaseId: string; readonly ttlDeadline: number }[];
 }

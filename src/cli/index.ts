@@ -18,7 +18,12 @@ import {
   connectExistingDaemon,
   type DaemonClientCapabilities,
 } from "../daemon-client/client.js";
-import { parseRawLeaseGrant } from "../daemon-client/contracts.js";
+import {
+  parseRawDeviceRecovered,
+  parseRawDeviceUnhealthy,
+  parseRawLeaseGrant,
+  parseRawLeaseLost,
+} from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
@@ -30,6 +35,14 @@ Commands:
   daemon, config
   mcp                         Start the stdio MCP server
 Run 'pitlane <command> --help' for command usage.`;
+
+/**
+ * Held mode ends with the lease already gone: the daemon released it without
+ * the holder asking (a TTL backstop, an operator `release`, or a leased device
+ * that could not be recovered). Distinct from 0, which means the holder ended
+ * its own lease.
+ */
+const LEASE_LOST_EXIT_CODE = 14;
 
 const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   BAD_FRAME: 2,
@@ -296,8 +309,43 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   // of pinging forever. Detached mode never holds a connection, so it keeps
   // relying purely on its own TTL.
   const connection = await environment.connect(detached ? undefined : { heartbeat: true });
+  // Set once the daemon says this connection's lease ended without us asking. The
+  // daemon only pushes lease-lost to the connection that holds the lease, and a held
+  // CLI holds exactly one, so there is nothing to match it against -- checking it
+  // against the grant would only open a window where a push that arrives in the same
+  // read as the grant response is dropped.
+  let leaseLost = false;
+  let notifyLeaseLost: (() => void) | undefined;
+  const leaseLostSignal = new Promise<void>((resolve) => {
+    notifyLeaseLost = resolve;
+  });
   const unsubscribe = connection.onPush((kind, payload) => {
-    if (kind === "progress") environment.stderr.write(`${JSON.stringify(progressLine(payload))}\n`);
+    if (kind === "progress") {
+      environment.stderr.write(`${JSON.stringify(progressLine(payload))}\n`);
+      return;
+    }
+    if (kind === "device-unhealthy") {
+      writeDeviceHealthLine(environment, () => deviceUnhealthyLine(payload));
+      return;
+    }
+    if (kind === "device-recovered") {
+      writeDeviceHealthLine(environment, () => deviceRecoveredLine(payload));
+      return;
+    }
+    if (kind === "lease-lost") {
+      // Parse before deciding the lease is gone: unlike the health lines, acting on
+      // this one ends the process, so a malformed push must be ignored outright
+      // rather than exiting the holder with no explanation of why.
+      let line;
+      try {
+        line = leaseLostLine(payload);
+      } catch {
+        return;
+      }
+      environment.stderr.write(`${JSON.stringify(line)}\n`);
+      leaseLost = true;
+      notifyLeaseLost?.();
+    }
   });
   try {
     const response = await connection.request("lease.request", {
@@ -314,8 +362,12 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     });
     const result = leaseResult(response);
     environment.stdout.write(`${JSON.stringify(result)}\n`);
-    if (detached) return 0;
-    await termination;
+    if (detached || termination === undefined) return 0;
+    await Promise.race([termination.settled, leaseLostSignal]);
+    if (leaseLost) {
+      // The daemon already released it; asking again would only raise UNKNOWN_LEASE.
+      return LEASE_LOST_EXIT_CODE;
+    }
     try {
       await connection.request("lease.release", { leaseId: result.lease });
     } catch (error: unknown) {
@@ -326,6 +378,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     }
     return 0;
   } finally {
+    termination?.dispose();
     unsubscribe();
     await connection.close();
   }
@@ -517,7 +570,7 @@ async function runEvents(argv: readonly string[], environment: CliEnvironment): 
       writeResult(environment, event);
     if (values.follow) {
       await connection.request("events.subscribe", {});
-      await waitForTermination(environment.signals);
+      await waitForTermination(environment.signals).settled;
       await connection.request("events.unsubscribe", {});
     }
     return 0;
@@ -686,6 +739,62 @@ function progressLine(value: unknown): {
   throw new Error("Daemon returned invalid progress");
 }
 
+/**
+ * Writes one structured diagnostic line for a device-unhealthy/device-recovered push, mirroring
+ * `progressLine`'s stderr shape. A malformed push is diagnostic noise, not fatal: the CLI's
+ * stdout contract (exactly one JSON result line) must survive it, so parse failures are dropped
+ * silently rather than thrown.
+ */
+function writeDeviceHealthLine(
+  environment: CliEnvironment,
+  build: () => Record<string, unknown>,
+): void {
+  try {
+    environment.stderr.write(`${JSON.stringify(build())}\n`);
+  } catch {
+    // Ignore a malformed push.
+  }
+}
+
+function deviceUnhealthyLine(value: unknown): {
+  readonly device_id: string;
+  readonly event: "device_unhealthy";
+  readonly lease: string;
+} {
+  const notice = parseRawDeviceUnhealthy(value);
+  return { device_id: notice.deviceId, event: "device_unhealthy", lease: notice.leaseId };
+}
+
+function deviceRecoveredLine(value: unknown): {
+  readonly attempts: number;
+  readonly device_id: string;
+  readonly event: "device_recovered";
+  readonly lease: string;
+} {
+  const notice = parseRawDeviceRecovered(value);
+  return {
+    attempts: notice.attempts,
+    device_id: notice.deviceId,
+    event: "device_recovered",
+    lease: notice.leaseId,
+  };
+}
+
+function leaseLostLine(value: unknown): {
+  readonly device_id: string;
+  readonly event: "lease_lost";
+  readonly lease: string;
+  readonly reason: string;
+} {
+  const notice = parseRawLeaseLost(value);
+  return {
+    device_id: notice.deviceId,
+    event: "lease_lost",
+    lease: notice.leaseId,
+    reason: notice.reason,
+  };
+}
+
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: Record<string, unknown>): string {
   const devices = requireArray(status.devices);
@@ -825,30 +934,46 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
  * `parentPid` is skipped when unset or non-positive: nothing meaningful to
  * watch (e.g. an already-reparented process at startup) degrades to today's
  * signal-only behavior rather than failing to start.
+ *
+ * A registered signal listener keeps Node's event loop alive on its own, and so
+ * does a pending parent poll, so any path that stops waiting *without* a signal
+ * arriving -- the daemon taking the lease back -- has to detach both itself,
+ * otherwise the CLI finishes its work, sets an exit code, and then hangs with
+ * nothing left to do. Hence the disposer.
  */
+interface TerminationWatch {
+  readonly settled: Promise<void>;
+  dispose(): void;
+}
+
 function waitForTermination(
   signals: Signals,
   parentWatch?: ParentWatch,
   parentPid?: number,
-): Promise<void> {
-  return new Promise((resolve) => {
-    // Declared before `finish` closes over it: an adapter that reported an
-    // already-dead parent synchronously from `watch()` would otherwise reach
-    // this binding before its initialiser ran.
-    let watchHandle: ParentWatchHandle | undefined;
+): TerminationWatch {
+  let detach!: () => void;
+  // Declared before `finish` closes over it: an adapter that reported an
+  // already-dead parent synchronously from `watch()` would otherwise reach
+  // this binding before its initialiser ran.
+  let watchHandle: ParentWatchHandle | undefined;
+  const settled = new Promise<void>((resolve) => {
     const finish = () => {
+      detach();
+      resolve();
+    };
+    detach = () => {
       signals.off("SIGINT", finish);
       signals.off("SIGTERM", finish);
       watchHandle?.stop();
-      resolve();
     };
+    signals.on("SIGINT", finish);
+    signals.on("SIGTERM", finish);
     watchHandle =
       parentWatch !== undefined && parentPid !== undefined && parentPid > 0
         ? parentWatch.watch(parentPid, finish)
         : undefined;
-    signals.on("SIGINT", finish);
-    signals.on("SIGTERM", finish);
   });
+  return { dispose: () => detach(), settled };
 }
 async function confirmTerminal(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;

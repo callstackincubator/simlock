@@ -14,7 +14,8 @@ MCP client ──spawns──> stdio MCP ┘                                    
                                                                      │ registry ·     │
                                                                      │ capacity ·     │
                                                                      │ state machine ·│
-                                                                     │ reaper · event │
+                                                                     │ reaper · health│
+                                                                     │ monitor · event│
                                                                      │ bus · warm-pool│
                                                                      │ policy         │
                                                                      └─┬─────────┬────┘
@@ -62,7 +63,8 @@ MCP client ──spawns──> stdio MCP ┘                                    
 The core is platform-agnostic and written once: lease table, fair wait queue,
 managed-device registry, device-limit and RAM capacity accounting (RAM is the
 binding constraint for Android emulators), the device state machine, the
-cleanup reaper, the event bus, and warm-pool *policy*.
+cleanup reaper, the leased-device health monitor, the event bus, and
+warm-pool *policy*.
 
 Platform mechanisms live behind a narrow driver interface:
 
@@ -250,6 +252,92 @@ observers.
 
 The daemon consumes role-specific lease, capacity, queue, cleanup, doctor, and
 nuke interfaces rather than duplicating core decisions in the CLI or server.
+
+## Leased-device health and crash recovery
+
+`Doctor.reconcile()` already knew a leased device could crash: its
+`expectedRunState` maps `leased -> "running"`, so a leased device whose
+process an operator kills from outside pitlane produces a
+`foreign-state-change` finding. What was missing was anything that acted on
+that finding at the moment it mattered. `reconcile()` only ran at daemon
+startup and from an explicit `pitlane doctor`, so a crash between those
+points sat undetected indefinitely. And even a `doctor --fix` run that saw it
+couldn't repair it: `#fixForeignStateChange` bails on a leased device, the
+cleanup reaper filters leased targets centrally before a rule ever runs, and
+`ManagedDeviceLifecycle`'s registered-target guard rejects any operation on a
+device a lease references. Every repair path existed specifically to leave a
+leased device alone — correctly, for everything except this one case.
+
+`LeaseHealthMonitor` closes that gap with a `Clock`-driven tick, modelled on
+`CleanupReaper`: each pass polls `listManaged()` once per platform that has
+leased devices, and classifies every `leased` device against that reality.
+`ObservedRunState` is three-valued, not two, because the two drivers'
+"stopped" and "still coming up" look identical for a moment: `simctl` reports
+`Booting` / `Shutting Down`, and an emulator reads offline in `adb devices`
+before it answers `getprop`. Treating either as evidence of a crash would
+misfire on every ordinary boot. So `transitioning` is never a crash
+observation — it leaves the device's counter untouched — and only
+`health.stableObservations` consecutive `stopped` reads count as one; a single
+`running` observation resets the counter to zero. The monitor would rather
+miss a tick's worth of time than reboot a device that was merely still
+shutting down.
+
+The device stays `leased` for the entire recovery and no `recovering` state
+was added to `legalTransitions`. A new state would have meant teaching
+capacity accounting, the cleanup reaper's safety filter, doctor's
+`expectedRunState`, CLI/status rendering, and the persisted state file about
+it — five places to keep in sync for what is, from the registry's point of
+view, not a state at all: it's a lease continuing on the same device. In-flight
+recovery is tracked instead as fields on the `DeviceRecord`
+(`recoveringSince`, `recoveryAttempts`) plus an exclusive `"recovery"` device
+operation claim, so it can never overlap a boot, eviction, cleanup, or nuke on
+the same device. No capacity reservation is taken for the reboot either:
+`RUNNING_STATES` already counts `leased` as running, so the slot was never
+given up in the first place. And the driver call is `makeReady`, already
+idempotent for an already-booted device — this reboots, it does not
+re-provision or erase, because a crash killed a process, not the disk image;
+the agent's installed apps and data are still there to resume.
+
+Provenance drift — `erased` / `mark-mismatch` / `durable-mark-missing`, the
+same check doctor runs — is only ever trusted while the device is observed
+`running`. A stopped device can't be read reliably: Android's erasable mark
+lives on the userdata partition, reachable only over `adb` while the emulator
+runs. So the monitor only evaluates it in the branch that also resets the
+crash counters, right after confirming the device answered — never against a
+device it just found stopped, where the same mark would be unreadable or
+stale.
+
+Recovery gives up — releasing the lease with reason `device-lost` so the
+device returns to the pool — in exactly three cases: the device is absent
+from driver reality entirely (`device-missing`, itself debounced by
+`stableObservations` so a driver hiccup doesn't cost a lease), provenance
+drift is detected (rebooting a device whose data provably isn't the agent's
+anymore would be worse than losing the lease), or `health.maxRecoveryAttempts`
+reboot attempts have already failed. All three emit `device.recovery-failed`
+(with the reason) and then route through the same `DeviceLostReleaser`, so
+the lease-release path — and its `lease.released { reason: "device-lost" }`
+fact — stays the single place a lease ends, regardless of who decided it
+should.
+
+None of this is silent. A reboot resumes the lease, but it cannot resume
+whatever the agent had running *inside* the device when it died — a launched
+app, a `log stream`, an Appium/XCUITest session, a port forward — pitlane has
+no way to know that state existed, let alone restore it. So the monitor emits
+`device.crash-detected` the moment a crash is confirmed and `device.recovered`
+once the reboot passes readiness; the daemon pushes both to whichever
+connection currently holds the lease (`device-unhealthy` / `device-recovered`
+on the wire) so the holder learns its device blinked instead of quietly
+finding its session gone. A give-up is not a separate push: it ends the lease
+through the normal `lease.released` path, so the holder learns about it the
+same way it learns about any other lease loss.
+
+The monitor starts only after startup convergence completes
+(`DaemonServer#start`, after `#converge()` returns) — the same claim-first
+ordering the daemon already uses. It is also what keeps this feature from
+needing a special case in the lease-lost subscription wiring: nothing can
+emit `device.crash-detected` or `device.recovered` during the convergence
+window, because the health monitor is the only emitter and it isn't armed
+yet.
 
 ## Cleanup: many rules, one reaper
 

@@ -310,10 +310,9 @@ describe("CLI boundary", () => {
     });
   });
 
-  it("releases and exits when the watched parent process dies, via the same path as a signal", async () => {
+  it("writes structured stderr lines for device-unhealthy/device-recovered pushes, ignoring malformed ones", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
-    const parentWatch = new FakeParentWatch();
     const connection = new StubConnection();
     connection.response("lease.request", {
       device: {
@@ -321,7 +320,7 @@ describe("CLI boundary", () => {
         spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
         state: "leased",
       },
-      lease: { id: "lse_parent_death", mode: "held", ttlDeadline: 61_000 },
+      lease: { id: "lse_health", mode: "held", ttlDeadline: 61_000 },
       timing: {
         estimatedBootMs: 0,
         estimatedProvisionMs: 0,
@@ -329,28 +328,41 @@ describe("CLI boundary", () => {
         estimatedReadyMs: 0,
       },
     });
+    connection.response("lease.release", { leaseId: "lse_health" });
     const run = runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      output.environmentWith({
-        connect: async () => connection,
-        parentPid: 4321,
-        parentWatch,
-        signals,
-      }),
+      output.environmentWith({ connect: async () => connection, signals }),
     );
 
     await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    parentWatch.exit(4321);
+    connection.push("device-unhealthy", {
+      deviceId: "ABCD",
+      leaseId: "lse_health",
+      reason: "crashed",
+    });
+    connection.push("device-recovered", { attempts: 2, deviceId: "ABCD", leaseId: "lse_health" });
+    // Malformed pushes must not crash the CLI or emit a diagnostic line.
+    connection.push("device-unhealthy", { deviceId: 42 });
+    connection.push("device-recovered", null);
 
+    signals.emit("SIGTERM");
     await expect(run).resolves.toBe(0);
-    expect(connection.calls.map((call) => call.type)).toEqual(["lease.request", "lease.release"]);
-    expect(connection.closed).toBe(true);
+
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(
+      output.stderr
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      { device_id: "ABCD", event: "device_unhealthy", lease: "lse_health" },
+      { attempts: 2, device_id: "ABCD", event: "device_recovered", lease: "lse_health" },
+    ]);
   });
 
-  it("--bind-pid overrides which pid the CLI watches for parent death", async () => {
+  it("reports a lost lease, exits 14, and does not re-release it", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
-    const parentWatch = new FakeParentWatch();
     const connection = new StubConnection();
     connection.response("lease.request", {
       device: {
@@ -358,7 +370,7 @@ describe("CLI boundary", () => {
         spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
         state: "leased",
       },
-      lease: { id: "lse_bind_pid", mode: "held", ttlDeadline: 61_000 },
+      lease: { id: "lse_lost", mode: "held", ttlDeadline: 61_000 },
       timing: {
         estimatedBootMs: 0,
         estimatedProvisionMs: 0,
@@ -366,103 +378,33 @@ describe("CLI boundary", () => {
         estimatedReadyMs: 0,
       },
     });
-    let finished = false;
+    connection.response("lease.release", new Error("lease.release must not be called"));
     const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16", "--bind-pid", "9999"],
-      output.environmentWith({
-        connect: async () => connection,
-        parentPid: 4321,
-        parentWatch,
-        signals,
-      }),
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
     );
-    void run.then(() => (finished = true));
 
     await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    // The default parent pid is not the one bound for this invocation -- must not terminate it.
-    parentWatch.exit(4321);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(finished).toBe(false);
-
-    parentWatch.exit(9999);
-    await expect(run).resolves.toBe(0);
-  });
-
-  it("rejects a non-numeric --bind-pid as a structured USAGE error", async () => {
-    const output = outputCapture();
-
-    await expect(
-      runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 16", "--bind-pid", "not-a-pid"],
-        output.environment,
-      ),
-    ).resolves.toBe(2);
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "USAGE", message: "lease --bind-pid must be a positive integer" },
+    // A malformed push must not end the holder's lease: it is ignored outright,
+    // and the process keeps waiting exactly as it did before.
+    connection.push("lease-lost", { deviceId: 42 });
+    // No signal: the daemon ending the lease is what must stop the holder.
+    connection.push("lease-lost", {
+      deviceId: "ABCD",
+      leaseId: "lse_lost",
+      reason: "device-lost",
     });
-  });
 
-  it("declares the heartbeat capability for held-mode leases, not for detached ones", async () => {
-    const capabilitiesSeen: unknown[] = [];
-    const heldConnection = new StubConnection();
-    heldConnection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_held_cap", mode: "held", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
-    const heldOutput = outputCapture();
-    const heldSignals = new EventEmitter();
-    const heldRun = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      heldOutput.environmentWith({
-        connect: async (capabilities) => {
-          capabilitiesSeen.push(capabilities);
-          return heldConnection;
-        },
-        signals: heldSignals,
-      }),
-    );
-    await vi.waitFor(() => expect(heldOutput.stdout).not.toBe(""));
-    heldSignals.emit("SIGTERM");
-    await expect(heldRun).resolves.toBe(0);
-
-    const detachedConnection = new StubConnection();
-    detachedConnection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_detached_cap", mode: "detached", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
-    await expect(
-      runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 16", "--detach"],
-        outputCapture().environmentWith({
-          connect: async (capabilities) => {
-            capabilitiesSeen.push(capabilities);
-            return detachedConnection;
-          },
-        }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(capabilitiesSeen).toEqual([{ heartbeat: true }, undefined]);
+    await expect(run).resolves.toBe(14);
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(
+      output.stderr
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual([
+      { device_id: "ABCD", event: "lease_lost", lease: "lse_lost", reason: "device-lost" },
+    ]);
   });
 
   it("flagship e2e: queues a second CLI holder until the first connection drops", async () => {
@@ -825,6 +767,161 @@ describe("CLI boundary", () => {
     );
   });
 
+  it("releases and exits when the watched parent process dies, via the same path as a signal", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const parentWatch = new FakeParentWatch();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_parent_death", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({
+        connect: async () => connection,
+        parentPid: 4321,
+        parentWatch,
+        signals,
+      }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    parentWatch.exit(4321);
+
+    await expect(run).resolves.toBe(0);
+    expect(connection.calls.map((call) => call.type)).toEqual(["lease.request", "lease.release"]);
+    expect(connection.closed).toBe(true);
+  });
+
+  it("--bind-pid overrides which pid the CLI watches for parent death", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const parentWatch = new FakeParentWatch();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_bind_pid", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    let finished = false;
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16", "--bind-pid", "9999"],
+      output.environmentWith({
+        connect: async () => connection,
+        parentPid: 4321,
+        parentWatch,
+        signals,
+      }),
+    );
+    void run.then(() => (finished = true));
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    // The default parent pid is not the one bound for this invocation -- must not terminate it.
+    parentWatch.exit(4321);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(finished).toBe(false);
+
+    parentWatch.exit(9999);
+    await expect(run).resolves.toBe(0);
+  });
+
+  it("rejects a non-numeric --bind-pid as a structured USAGE error", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 16", "--bind-pid", "not-a-pid"],
+        output.environment,
+      ),
+    ).resolves.toBe(2);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "USAGE", message: "lease --bind-pid must be a positive integer" },
+    });
+  });
+
+  it("declares the heartbeat capability for held-mode leases, not for detached ones", async () => {
+    const capabilitiesSeen: unknown[] = [];
+    const heldConnection = new StubConnection();
+    heldConnection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_held_cap", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    const heldOutput = outputCapture();
+    const heldSignals = new EventEmitter();
+    const heldRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      heldOutput.environmentWith({
+        connect: async (capabilities) => {
+          capabilitiesSeen.push(capabilities);
+          return heldConnection;
+        },
+        signals: heldSignals,
+      }),
+    );
+    await vi.waitFor(() => expect(heldOutput.stdout).not.toBe(""));
+    heldSignals.emit("SIGTERM");
+    await expect(heldRun).resolves.toBe(0);
+
+    const detachedConnection = new StubConnection();
+    detachedConnection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_detached_cap", mode: "detached", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 16", "--detach"],
+        outputCapture().environmentWith({
+          connect: async (capabilities) => {
+            capabilitiesSeen.push(capabilities);
+            return detachedConnection;
+          },
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(capabilitiesSeen).toEqual([{ heartbeat: true }, undefined]);
+  });
+
   it("rejects an invalid --platform without contacting the daemon", async () => {
     const output = outputCapture();
 
@@ -940,6 +1037,14 @@ function testConfig(): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
+    health: {
+      enabled: true,
+      maxConcurrentRecoveries: 1,
+      maxRecoveryAttempts: 3,
+      probeIntervalMs: 30_000,
+      recoveryBackoffMs: 5_000,
+      stableObservations: 2,
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     limits: {

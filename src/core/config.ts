@@ -36,6 +36,14 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
+  readonly health: {
+    readonly enabled: boolean;
+    readonly probeIntervalMs: number;
+    readonly stableObservations: number;
+    readonly maxRecoveryAttempts: number;
+    readonly recoveryBackoffMs: number;
+    readonly maxConcurrentRecoveries: number;
+  };
 }
 
 export type ConfigOverrides = DeepPartial<Config>;
@@ -123,6 +131,14 @@ function defaultConfig(systemStats: SystemStats): Config {
     diskPressure: { freeBytesThreshold: 10 * GIBIBYTE },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    health: {
+      enabled: true,
+      probeIntervalMs: 30_000,
+      stableObservations: 2,
+      maxRecoveryAttempts: 3,
+      recoveryBackoffMs: 5_000,
+      maxConcurrentRecoveries: 1,
+    },
   };
 }
 
@@ -194,6 +210,14 @@ const validators = {
   diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
   eventBuffer: objectValidator({ capacity: positiveInteger }),
   log: objectValidator({ level: logLevel, rotateBytes: positiveInteger }),
+  health: objectValidator({
+    enabled: booleanValue,
+    probeIntervalMs: positiveNumber,
+    stableObservations: positiveInteger,
+    maxRecoveryAttempts: positiveInteger,
+    recoveryBackoffMs: positiveNumber,
+    maxConcurrentRecoveries: positiveInteger,
+  }),
 } satisfies Record<string, Validator>;
 
 function objectValidator(shape: Record<string, Validator>): Validator {
@@ -238,6 +262,22 @@ function logLevel(value: unknown, path: string): LogLevel {
 function nonNegativeNumber(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw invalidValue(path, "a non-negative number");
+  }
+
+  return value;
+}
+
+function positiveNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw invalidValue(path, "a positive number");
+  }
+
+  return value;
+}
+
+function booleanValue(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw invalidValue(path, "a boolean");
   }
 
   return value;

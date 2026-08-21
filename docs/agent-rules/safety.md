@@ -10,7 +10,19 @@ never enforce them only inside an individual rule or driver.
    read-only. This includes `doctor --fix` and `nuke`.
 2. **Never touch a leased device.** No cleanup rule, reclaim, or reconcile
    action may target a device in `leased` state. The reaper filters this
-   centrally; rules must not rely on their own checks.
+   centrally; rules must not rely on their own checks. There is exactly one
+   deliberate exception: crash recovery, in
+   `ManagedDeviceLifecycle.recoverLeased`. The guard there is *inverted*, not
+   removed — every other operation's target check requires "no lease
+   references this device"; recovery's requires "a lease references this
+   device, and its id is exactly the one recovery was authorised for". Any
+   other lease, no lease, or a lease that has moved on all fail the check the
+   same as before. The exception is also narrow in what it may do: it only
+   ever reboots (`makeReady`) an already-provisioned device, never erases,
+   destroys, or re-provisions one — recovering a crashed process is not the
+   same privilege as recovering a lost device, and this rule does not grant
+   the latter. No cleanup rule, reclaim path, or reconcile action gains any
+   version of this ability; it lives nowhere but this one lease-scoped guard.
 3. **Cleanup rules propose, the reaper disposes.** Rules are pure functions
    over a read-only registry view returning proposed actions. A rule that
    executes side effects directly is a bug regardless of what it does.

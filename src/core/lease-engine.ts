@@ -17,6 +17,7 @@ import {
   type LeaseRequestOptions,
 } from "./lease-acquisition-coordinator.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
+import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
@@ -50,6 +51,12 @@ export {
 /** Composition root and compatibility facade for the daemon's lease subsystem. */
 export class LeaseEngine {
   readonly cleanup: CleanupActionExecutor;
+  /**
+   * Built here but deliberately not started: the daemon arms it only once startup
+   * convergence has finished, so no health probe shells out while convergence is
+   * still doing so itself. See `DaemonServer#start`.
+   */
+  readonly healthMonitor: LeaseHealthMonitor;
   readonly #acquisition: LeaseAcquisitionCoordinator;
   readonly #capacity: CapacityCoordinator;
   readonly #claims = new DeviceOperationClaims();
@@ -182,6 +189,19 @@ export class LeaseEngine {
       },
       timers: this.#leases,
     });
+    this.healthMonitor = new LeaseHealthMonitor({
+      clock: options.clock,
+      config: options.config,
+      drivers: this.#drivers,
+      eventBus: options.eventBus,
+      lifecycle: this.#deviceLifecycle,
+      registry: options.registry,
+      releaser: {
+        releaseDeviceLost: async (leaseId) => {
+          await this.#releaseCoordinator.releaseDeviceLost(leaseId);
+        },
+      },
+    });
   }
 
   async request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant> {
@@ -193,10 +213,12 @@ export class LeaseEngine {
   }
 
   /** Releases the daemon's current leases for an explicit operator command. */
+  // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer (same as the sibling release).
   async releaseAll(reason: "explicit" | "killed"): Promise<readonly string[]> {
     return this.#releaseCoordinator.releaseAll(reason);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the LeaseExpirer port by Doctor.
   async expire(leaseId: string): Promise<void> {
     await this.#releaseCoordinator.expire(leaseId);
   }
@@ -217,10 +239,12 @@ export class LeaseEngine {
     return this.#drivers.listCatalog(platform);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer.
   get queueDepth(): number {
     return this.#acquisition.queueDepth;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
   get runningCapacity(): RunningCapacity {
     return this.#capacity.runningCapacity(this.#capacityDevices());
   }
@@ -231,10 +255,12 @@ export class LeaseEngine {
   }
 
   /** Stops client feedback for a queued request without affecting its lease outcome. */
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling queueDepth).
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.#acquisition.detachQueuedProgress(requesterId);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer (same as the sibling heartbeat).
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     return this.#releaseCoordinator.renew(leaseId, ttlMs);
   }

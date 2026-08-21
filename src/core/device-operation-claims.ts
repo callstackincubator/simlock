@@ -1,5 +1,8 @@
-/** Operations that must not overlap for a single device. */
-export type DeviceOperation = "boot" | "eviction" | "cleanup" | "nuke";
+/**
+ * Operations that must not overlap for a single device: booting, eviction,
+ * cleanup, nuke, and the lease-scoped crash `recovery` reboot.
+ */
+export type DeviceOperation = "boot" | "eviction" | "cleanup" | "nuke" | "recovery";
 
 /** An exclusive, idempotently releasable claim for one device operation. */
 export interface DeviceOperationClaim {

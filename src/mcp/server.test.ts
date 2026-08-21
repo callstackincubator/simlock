@@ -161,6 +161,52 @@ describe("MCP server", () => {
     }
   });
 
+  it("relays device-unhealthy and device-recovered pushes as MCP logging notifications, keeping the lease held", async () => {
+    const connection = new StubConnection([grant]);
+    const { client, close, session } = await connectedServer(connection);
+    try {
+      const notifications: unknown[] = [];
+      client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
+        notifications.push(notification.params);
+      });
+
+      const lease = await call(client, "lease_simulator", {
+        device: "iPhone 17 Pro",
+        platform: "ios",
+      });
+      expect(lease.isError).not.toBe(true);
+
+      connection.pushDeviceUnhealthy({ deviceId: "SIM-1", leaseId: "lease-1", reason: "crashed" });
+      connection.pushDeviceRecovered({ attempts: 2, deviceId: "SIM-1", leaseId: "lease-1" });
+      await expect.poll(() => notifications).toHaveLength(2);
+
+      expect(notifications).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            device_id: "SIM-1",
+            lease_id: "lease-1",
+            reason: "crashed",
+          }),
+          level: "warning",
+        }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            attempts: 2,
+            device_id: "SIM-1",
+            lease_id: "lease-1",
+          }),
+          level: "info",
+        }),
+      ]);
+
+      // The lease is still owned: unlike a lease-lost push, device health notices never
+      // clear it.
+      expect(session.status()).toMatchObject({ held: true, lease_id: "lease-1" });
+    } finally {
+      await close();
+    }
+  });
+
   it("relays queued/provisioning/booting/reclaiming progress as notifications/progress when a token is supplied", async () => {
     const deferredGrant = deferredResponse();
     const connection = new StubConnection([deferredGrant.promise]);
@@ -354,6 +400,14 @@ class StubConnection implements DaemonConnection {
 
   pushProgress(payload: unknown): void {
     for (const listener of this.#listeners) listener("progress", payload);
+  }
+
+  pushDeviceUnhealthy(payload: unknown): void {
+    for (const listener of this.#listeners) listener("device-unhealthy", payload);
+  }
+
+  pushDeviceRecovered(payload: unknown): void {
+    for (const listener of this.#listeners) listener("device-recovered", payload);
   }
   async request(type: string, payload: unknown): Promise<unknown> {
     this.calls.push({ payload, type });
