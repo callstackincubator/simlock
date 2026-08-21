@@ -136,6 +136,7 @@ export class IosSimctlDriver implements Driver {
     }
 
     return {
+      address: udid,
       deviceId: udid,
       driverData: {
         deviceTypeId: resolved.deviceType.identifier,
@@ -146,7 +147,8 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
-  async makeReady(device: DriverDevice): Promise<void> {
+  /** The UDID never changes across a boot -- unlike Android's port, there is nothing to re-derive. */
+  async makeReady(device: DriverDevice): Promise<DriverDevice> {
     const data = iosDriverData(device);
     const boot = await this.#invokeSimctl(["boot", data.udid], COMMAND_TIMEOUT_MS);
     if (boot.kind === "timed-out") {
@@ -166,6 +168,7 @@ export class IosSimctlDriver implements Driver {
     }
 
     this.#assertSuccessful(["bootstatus", data.udid, "-b"], outcome.result);
+    return { address: data.udid, deviceId: device.deviceId, driverData: device.driverData };
   }
 
   async reclaim(
@@ -206,6 +209,7 @@ export class IosSimctlDriver implements Driver {
       parsed.map(async (device) => {
         const mark = await this.#readMark(device.dataPath);
         return {
+          address: device.udid,
           deviceId: device.udid,
           driverData: {
             deviceTypeId: "",

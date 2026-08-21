@@ -62,6 +62,8 @@ export class FakeDriver implements Driver {
   readonly #reclaimResult: "ready" | "shutdown";
   readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
+  /** Bumped on every `makeReady` boot -- mirrors a real driver reassigning a port per boot. */
+  readonly #bootCounts = new Map<string, number>();
   #managedReality: DriverReality | undefined;
 
   constructor(options: FakeDriverOptions) {
@@ -113,10 +115,11 @@ export class FakeDriver implements Driver {
     this.#nextDeviceNumber += 1;
     this.#devices.set(deviceId, "provisioned");
 
-    return { deviceId, driverData: { fakeDeviceId: deviceId } };
+    return { address: addressFor(deviceId, 0), deviceId, driverData: { fakeDeviceId: deviceId } };
   }
 
-  async makeReady(device: DriverDevice): Promise<void> {
+  /** Each boot re-reads a fresh address, same as the real drivers -- never the caller's. */
+  async makeReady(device: DriverDevice): Promise<DriverDevice> {
     await this.#beforeCall("makeReady", device);
     this.#requireDevice(device);
 
@@ -127,6 +130,13 @@ export class FakeDriver implements Driver {
     }
 
     this.#devices.set(device.deviceId, "ready");
+    const bootCount = (this.#bootCounts.get(device.deviceId) ?? 0) + 1;
+    this.#bootCounts.set(device.deviceId, bootCount);
+    return {
+      address: addressFor(device.deviceId, bootCount),
+      deviceId: device.deviceId,
+      driverData: device.driverData,
+    };
   }
 
   async reclaim(
@@ -169,6 +179,7 @@ export class FakeDriver implements Driver {
     }
     return {
       devices: [...this.#devices.entries()].map(([deviceId, status]) => ({
+        address: addressFor(deviceId, this.#bootCounts.get(deviceId) ?? 0),
         deviceId,
         driverData: { fakeDeviceId: deviceId },
         runState: runStateFor(status),
@@ -255,6 +266,10 @@ export class FakeDriver implements Driver {
       throw new FakeDriverUnknownDeviceError(device.deviceId);
     }
   }
+}
+
+function addressFor(deviceId: string, bootCount: number): string {
+  return `${deviceId}-addr-${bootCount}`;
 }
 
 function isPitlaneManaged(device: DriverDevice): boolean {

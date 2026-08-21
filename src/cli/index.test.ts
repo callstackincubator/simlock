@@ -536,7 +536,7 @@ describe("CLI boundary", () => {
       ),
     ).resolves.toBe(0);
     expect(detached.stdout).toBe(
-      '{"device":"iPhone 17 Pro","lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","udid":"ABCD"}\n',
+      '{"device":"iPhone 17 Pro","expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
     );
     expect(connection.closed).toBe(true);
 

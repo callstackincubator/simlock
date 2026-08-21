@@ -197,12 +197,13 @@ export class AndroidDriver implements Driver {
       snapshotExpected: false,
     });
 
-    return { deviceId: avdName, driverData };
+    return { address: serialFor(port), deviceId: avdName, driverData };
   }
 
-  async makeReady(device: DriverDevice): Promise<void> {
+  /** Returns the device with its address re-read: see `Driver.makeReady` for why it is read here. */
+  async makeReady(device: DriverDevice): Promise<DriverDevice> {
     const data = this.#dataFor(device);
-    await this.#withDeviceLock(data.avdName, async () => {
+    return this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
       if (state.handle !== undefined) {
         await this.#waitForReadiness(data, this.#clock.now());
@@ -211,7 +212,7 @@ export class AndroidDriver implements Driver {
         // single readiness transition that lets a caller re-lease an already-ready device
         // without ever seeing a moment where "ready" and "marked" disagree.
         await this.#writeMark(data);
-        return;
+        return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
       const baselineHash = await this.#baselineHash(data.avdName);
@@ -249,6 +250,7 @@ export class AndroidDriver implements Driver {
       // baseline-capture restart) with a single call: whichever path ran, the device is ready
       // now and must be re-marked unconditionally.
       await this.#writeMark(data);
+      return { address: data.serial, deviceId: device.deviceId, driverData: data };
     });
   }
 
@@ -436,6 +438,7 @@ export class AndroidDriver implements Driver {
       erasableMarkByAvdName.set(avdName, parseErasableMark(markLines.join("\n")));
       const port = Number(candidate.slice("emulator-".length));
       processes.push({
+        address: candidate,
         deviceId: avdName,
         driverData: {
           avdName,
@@ -1069,6 +1072,8 @@ function observedAndroidDevice(
   unattributableTransitionalSerial: boolean,
 ): ObservedDevice {
   return {
+    // Reconnaissance only: an observed device is never granted, so it carries no usable address.
+    address: "",
     deviceId: avdName,
     driverData: {
       avdName,
