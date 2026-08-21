@@ -1,12 +1,13 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
 import type { CapacityDecision, CapacityDevice, RunningCapacity } from "./capacity.js";
-import type {
-  DeviceRecord,
-  DeviceSpec,
-  DeviceTransitionUpdate,
-  LeaseRecord,
-  Platform,
+import {
+  type DeviceRecord,
+  type DeviceSpec,
+  type DeviceTransitionUpdate,
+  type LeaseRecord,
+  type Platform,
+  sameSpec,
 } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
@@ -208,14 +209,6 @@ export class WarmPoolCoordinator {
 
 function capacityDevices(devices: readonly DeviceRecord[]): readonly CapacityDevice[] {
   return devices.map((device) => ({ platform: device.spec.platform, state: device.state }));
-}
-
-function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
-  return (
-    left.platform === right.platform &&
-    left.model === right.model &&
-    left.osVersion === right.osVersion
-  );
 }
 
 function stableError(error: unknown): string {

@@ -1,6 +1,12 @@
 import type { CapacityReservation, CapacityCoordinator } from "./capacity-coordinator.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
-import type { DeviceRecord, DeviceSpec, LeaseRecord, Platform } from "./domain.js";
+import {
+  type DeviceRecord,
+  type DeviceSpec,
+  type LeaseRecord,
+  type Platform,
+  sameSpec,
+} from "./domain.js";
 import { selectManagedVictim, selectWarmVictim, type WarmVictimScope } from "./warm-pool.js";
 
 export interface AcquisitionPlannerSnapshot {
@@ -153,12 +159,4 @@ function capacityDevices(snapshot: AcquisitionPlannerSnapshot) {
     platform: device.spec.platform,
     state: device.state,
   }));
-}
-
-function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
-  return (
-    left.platform === right.platform &&
-    left.model === right.model &&
-    left.osVersion === right.osVersion
-  );
 }

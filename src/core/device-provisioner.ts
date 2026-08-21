@@ -43,7 +43,10 @@ export class DeviceProvisioner {
     const startedAt = this.options.clock.now();
     let driverDevice: DriverDevice;
     try {
-      options.onProgress?.({ stage: "provisioning", etaMs: driver.estimate("provision", spec) });
+      options.onProgress?.({
+        stage: "provisioning",
+        etaMs: driver.estimate({ operation: "provision" }, spec),
+      });
       driverDevice = await driver.provision(spec);
     } catch (error: unknown) {
       options.reservation.release();
@@ -66,7 +69,10 @@ export class DeviceProvisioner {
     }
 
     try {
-      options.onProgress?.({ stage: "booting", etaMs: driver.estimate("boot", spec) });
+      options.onProgress?.({
+        stage: "booting",
+        etaMs: driver.estimate({ operation: "boot" }, spec),
+      });
       const ready = await this.options.lifecycle.readyProvisionedForLease(device);
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);

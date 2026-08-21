@@ -374,9 +374,19 @@ describe("IosSimctlDriver", () => {
       ["simctl", "shutdown", driverData.udid],
       ["simctl", "delete", driverData.udid],
     ]);
-    expect(driver.estimate("provision", spec)).toBe(500);
-    expect(driver.estimate("boot", spec)).toBe(30_000);
-    expect(driver.estimate("reclaim", spec)).toBe(1_000);
+    expect(driver.estimate({ operation: "provision" }, spec)).toBe(500);
+    expect(driver.estimate({ operation: "boot" }, spec)).toBe(60_000);
+  });
+
+  it("prices reclaim as the erase it always runs, at either clean level", () => {
+    const driver = createDriver(new ScriptedProcessRunner([]));
+
+    // `reclaimStrategy` answers `erase` for both levels, so both must be priced as one --
+    // and as tens of seconds, not the ~1s the estimate used to claim (#56).
+    expect(driver.reclaimStrategy({ clean: "standard" })).toBe("erase");
+    expect(driver.reclaimStrategy({ clean: "full" })).toBe("erase");
+    expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(34_000);
+    expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(34_000);
   });
 
   it("lists resolvable models and installed runtimes, defaulting to the newest", async () => {

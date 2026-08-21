@@ -3,6 +3,7 @@ import type { Clock } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
   type DeviceRecord,
+  type DeviceSpec,
   type DeviceState,
   type Platform,
   transitionEnteredAt,
@@ -327,6 +328,21 @@ function registryDriftFindings(
 }
 
 /**
+ * The reclaim estimate for the slowest strategy the driver would pick, whatever the clean
+ * level. A `reclaiming` record does not say which level started it -- every production path
+ * asks for `standard`, but that is the caller's choice, not an invariant this finding can
+ * depend on -- and the two errors are not symmetric: an estimate that is too tight turns a
+ * healthy reclaim into a false stall finding, while one that is too loose only delays a real
+ * one. So this takes the slower branch rather than assuming.
+ */
+function slowestReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
+  return Math.max(
+    driver.estimate({ clean: "standard", operation: "reclaim" }, spec),
+    driver.estimate({ clean: "full", operation: "reclaim" }, spec),
+  );
+}
+
+/**
  * A `provisioning` / `reclaiming` device is normally in-flight work Simlock itself is
  * driving (see `expectedRunState`), not drift -- but only up to a point. Past a
  * driver-derived threshold it stops being "still working" and becomes a stall: the
@@ -348,11 +364,12 @@ function registryDriftFindings(
  * runs. This is the same live-versus-orphaned test `StartupConverger
  * #recoverInterruptedReclaims` already makes, and it is load-bearing rather than
  * belt-and-braces -- every release now backgrounds its reclaim, holding the device in
- * `reclaiming` for a full erase, measured at ~34s against a threshold that floors at
- * 60s for both drivers, and several such erases run at once and contend for the same
- * disk. Tuning the threshold against that would be guessing at disk speed; the claim
- * answers it exactly. A reclaim orphaned by a crash has no claim in the new process,
- * so the case this finding exists to catch is untouched.
+ * `reclaiming` for a full erase, measured at ~34s, and several such erases run at once
+ * and contend for the same disk. The estimate the threshold is built from now reflects
+ * that erase rather than the 1s it used to claim (#56), but tuning a threshold against
+ * contended disk speed would still be guessing; the claim answers it exactly. A reclaim
+ * orphaned by a crash has no claim in the new process, so the case this finding exists to
+ * catch is untouched.
  */
 function stalledTransitionFinding(
   device: DeviceRecord,
@@ -375,8 +392,9 @@ function stalledTransitionFinding(
 
   const estimateMs =
     device.state === "provisioning"
-      ? driver.estimate("provision", device.spec) + driver.estimate("boot", device.spec)
-      : driver.estimate("reclaim", device.spec);
+      ? driver.estimate({ operation: "provision" }, device.spec) +
+        driver.estimate({ operation: "boot" }, device.spec)
+      : slowestReclaimEstimateMs(driver, device.spec);
   const thresholdMs = Math.max(estimateMs * config.thresholdMultiplier, config.minimumThresholdMs);
   const ageMs = now - enteredAt;
   if (ageMs <= thresholdMs) {

@@ -846,6 +846,58 @@ describe("Doctor", () => {
       );
     });
 
+    it("holds a reclaiming device to the slower clean level's estimate", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      // A record in `reclaiming` does not say which clean level started it, so the threshold
+      // has to clear the slower of the two: pricing it at `standard` would call a healthy
+      // `full` reclaim a stall.
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { reclaim: 2_000 },
+        fullCleanReclaimEstimateMs: 20_000,
+        platform: "ios",
+      });
+      const device = await readyDevice(registry, "simlock-slow-clean", "ios");
+      const lease = await registry.createLease({
+        deviceId: device.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 999_999,
+      });
+      await registry.beginRelease(lease.id);
+      const doctor = new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      });
+
+      // Past the `standard` threshold (2_000 * 3) but inside the `full` one (20_000 * 3).
+      clock.advance(6_001);
+      const early = await doctor.reconcile();
+      expect(early.findings.filter((finding) => finding.kind === "stalled-transition")).toEqual([]);
+
+      clock.advance(60_000);
+      const late = await doctor.reconcile();
+      expect(late.findings).toContainEqual(
+        expect.objectContaining({
+          deviceId: device.id,
+          kind: "stalled-transition",
+          state: "reclaiming",
+          thresholdMs: 60_000,
+        }),
+      );
+    });
+
     it("emits device.stalled-transition-detected for a stalled device", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);

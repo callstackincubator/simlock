@@ -69,7 +69,51 @@ describe("contention & queueing", () => {
     waiterE.kill("SIGTERM");
     await waiterE.waitForExit(15_000);
   });
+
+  it("tells a waiter queued behind a reclaim how long that reclaim runs", async () => {
+    const env = await withDaemon({
+      configOverrides: { limits: { maxRunning: 1, ios: { maxDevices: 1, maxRunning: 1 } } },
+    });
+    await env.driverScript.set({
+      ios: {
+        knownModels: ["iPhone 16"],
+        availableOsVersions: ["18.4"],
+        estimateMs: { reclaim: 34_000 },
+        latencyMs: { reclaim: 4_000 },
+      },
+    });
+
+    const holder = await env.cli([...LEASE_ARGS, "--agent-id", "agent-holder", "--detach"]);
+    expect(holder.code).toBe(0);
+    const holderGrant = holder.json as { lease: string };
+
+    // Release hands the caller back before the purge (#58), so the device is `reclaiming` with
+    // its full latency still ahead when the next requester arrives -- the case the stage exists
+    // for, and the one nothing exercised before this covered the whole path out to the CLI.
+    const release = await env.cli(["release", holderGrant.lease]);
+    expect(release.code).toBe(0);
+
+    const waiter = env.cliBackground([...LEASE_ARGS, "--agent-id", "agent-waiter"]);
+    await waitFor(() => waiter.progressEvents().some(isReclaimingWithEta(34)), {
+      label: "agent-waiter told the reclaim's ETA",
+    });
+    expect(waiter.progressEvents().some((event) => isQueuedAt(event, 1))).toBe(true);
+
+    const granted = JSON.parse(await waiter.firstStdoutLine(15_000)) as { device: string };
+    expect(granted.device).toBe("iPhone 16");
+
+    waiter.kill("SIGTERM");
+    await waiter.waitForExit(15_000);
+  });
 });
+
+function isReclaimingWithEta(seconds: number): (event: unknown) => boolean {
+  return (event) =>
+    typeof event === "object" &&
+    event !== null &&
+    (event as Record<string, unknown>).event === "reclaiming" &&
+    (event as Record<string, unknown>).eta_seconds === seconds;
+}
 
 function isQueuedAt(event: unknown, position: number): boolean {
   return (

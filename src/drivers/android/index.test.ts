@@ -465,9 +465,22 @@ describe("AndroidDriver", () => {
     );
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 
-    expect(driver.estimate("provision", spec)).toBe(1_000);
-    expect(driver.estimate("boot", spec)).toBe(31_000);
-    expect(driver.estimate("reclaim", spec)).toBe(2_000);
+    expect(driver.estimate({ operation: "provision" }, spec)).toBe(1_000);
+    expect(driver.estimate({ operation: "boot" }, spec)).toBe(31_000);
+  });
+
+  it("prices reclaim by the strategy the clean level selects", async () => {
+    const driver: Driver = await createDriver(
+      await androidFilesystem(),
+      new ScriptedProcessRunner([]),
+    );
+    const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+
+    // Both measured on an M3 Pro / Pixel 8 / API 35. The gap is real: a `wipe` reclaim defers
+    // the wipe to the next `makeReady`, but the warm-pool disposition runs that boot before the
+    // device leaves `reclaiming`, so the window is a cold wipe boot rather than a shutdown.
+    expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(6_000);
+    expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(32_000);
   });
 
   it("lists resolvable models and installed API levels, defaulting to the newest", async () => {

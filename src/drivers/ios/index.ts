@@ -5,6 +5,7 @@ import {
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
+  type DriverEstimate,
   type DriverReality,
   type ObservedDevice,
   type ObservedRunState,
@@ -23,6 +24,17 @@ import type {
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
+const PROVISION_ESTIMATE_MS = 500;
+// A cold `simctl boot` to `bootstatus` measures roughly 30s on a fast, idle machine and up to
+// a minute on a loaded or slower one. The upper end is the estimate, deliberately: this number
+// is what a waiting requester is quoted, and quoting 30s to someone who then waits 60s is the
+// failure mode #56 is about. The cost is that `Doctor`'s `provisioning` stall threshold widens
+// with it -- see the note there on why that is the cheaper of the two errors.
+const COLD_BOOT_ESTIMATE_MS = 60_000;
+// Measured, not guessed: a single `simctl erase` took ~34s in #43's investigation. Unlike
+// Android, iOS has no deferred-wipe path -- `erase` is synchronous and every reclaim pays it,
+// at either clean level, so this is the only reclaim number the driver has.
+const ERASE_ESTIMATE_MS = 34_000;
 const MARK_FILE_NAME = "simlock-mark.json";
 
 interface IosDriverData {
@@ -236,14 +248,16 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
-  estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {
-    switch (operation) {
+  estimate(estimate: DriverEstimate, _spec: DeviceSpec): number {
+    switch (estimate.operation) {
       case "provision":
-        return 500;
+        return PROVISION_ESTIMATE_MS;
       case "boot":
-        return 30_000;
+        return COLD_BOOT_ESTIMATE_MS;
       case "reclaim":
-        return 1_000;
+        // `reclaimStrategy` returns `erase` for both clean levels, so there is nothing to
+        // branch on here -- the clean level only matters to a driver that has a fast path.
+        return ERASE_ESTIMATE_MS;
     }
   }
 

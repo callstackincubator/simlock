@@ -58,9 +58,9 @@ describe("FakeDriver", () => {
     });
     const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
-    expect(driver.estimate("provision", spec)).toBe(10);
-    expect(driver.estimate("boot", spec)).toBe(20);
-    expect(driver.estimate("reclaim", spec)).toBe(30);
+    expect(driver.estimate({ operation: "provision" }, spec)).toBe(10);
+    expect(driver.estimate({ operation: "boot" }, spec)).toBe(20);
+    expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(30);
   });
 
   it("implements the platform-agnostic Driver contract", () => {

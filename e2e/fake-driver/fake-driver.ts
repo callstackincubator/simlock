@@ -10,6 +10,7 @@ import {
   type Driver,
   type DriverCatalogEntry,
   type DriverDevice,
+  type DriverEstimate,
   type DriverReality,
   type ObservedMark,
   type ObservedRunState,
@@ -187,10 +188,10 @@ export class OutOfProcessFakeDriver implements Driver {
     };
   }
 
-  estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {
+  estimate(estimate: DriverEstimate, _spec: DeviceSpec): number {
     // estimate() is synchronous in the Driver interface, so it reads the script
     // synchronously best-effort; a stale/missing read just falls back to 0.
-    return this.#lastKnownEstimateMs?.[operation] ?? 0;
+    return this.#lastKnownEstimateMs?.[estimate.operation] ?? 0;
   }
 
   async #beforeCall(

@@ -6,7 +6,7 @@ import {
   type DeviceOperationClaims,
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
-import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
+import { type DeviceRecord, type DeviceSpec, type LeaseRecord, sameSpec } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
 import { type DriverCatalog } from "./driver-catalog.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
@@ -318,6 +318,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
     if (plan.kind === "grant-ready") {
+      waiter.timing = grantReadyTiming(
+        this.options.drivers.get(plan.device.spec.platform),
+        plan.device.spec,
+      );
       await this.#grant(waiter, plan.device.id);
       return undefined;
     }
@@ -424,7 +428,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       this.options.queue.notifyProgress(waiter, {
         stage: "booting",
-        etaMs: driver.estimate("boot", device.spec),
+        etaMs: driver.estimate({ operation: "boot" }, device.spec),
       });
       const ready = await this.options.lifecycle.bootForLease(device, claim);
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
@@ -452,8 +456,33 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   #defer(waiter: AcquisitionWaiter): void {
-    if (waiter.options.noWait) this.#reject(waiter, new NoCapacityError(), "no-wait");
-    else this.#enqueue(waiter);
+    if (waiter.options.noWait) {
+      this.#reject(waiter, new NoCapacityError(), "no-wait");
+      return;
+    }
+    this.#enqueue(waiter);
+    this.#notifyReclaimWait(waiter);
+  }
+
+  /**
+   * A queued waiter whose spec matches a device already being reclaimed is waiting on that
+   * reclaim, not on nothing in particular: an iOS erase holds the only matching device for
+   * tens of seconds, and reporting only `queued` leaves the requester with a position and no
+   * sense of how long. Purely informational -- the plan is untouched, and the device is
+   * granted through the normal `ready` path when its reclaim commits. Nothing is reported
+   * when no matching device is reclaiming, so this never invents a stage out of an idle wait.
+   */
+  #notifyReclaimWait(waiter: AcquisitionWaiter): void {
+    const spec = waiter.spec;
+    if (spec === undefined) return;
+    const reclaiming = this.options.registry.snapshot.devices.some(
+      (device) => device.state === "reclaiming" && sameSpec(device.spec, spec),
+    );
+    if (!reclaiming) return;
+    this.options.queue.notifyProgress(waiter, {
+      etaMs: releaseReclaimEstimateMs(this.options.drivers.get(spec.platform), spec),
+      stage: "reclaiming",
+    });
   }
 
   async #grantHandoff(
@@ -533,24 +562,44 @@ function asError(error: unknown): Error {
 }
 
 function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  const estimatedProvisionMs = driver.estimate("provision", spec);
-  const estimatedBootMs = driver.estimate("boot", spec);
+  const estimatedProvisionMs = driver.estimate({ operation: "provision" }, spec);
+  const estimatedBootMs = driver.estimate({ operation: "boot" }, spec);
   return {
     estimatedBootMs,
     estimatedProvisionMs,
-    estimatedReclaimMs: 0,
+    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
     estimatedReadyMs: estimatedProvisionMs + estimatedBootMs,
   };
 }
 
 function estimatedBootTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  const estimatedBootMs = driver.estimate("boot", spec);
+  const estimatedBootMs = driver.estimate({ operation: "boot" }, spec);
   return {
     estimatedBootMs,
     estimatedProvisionMs: 0,
-    estimatedReclaimMs: 0,
+    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
     estimatedReadyMs: estimatedBootMs,
   };
+}
+
+/** A device that is already ready costs nothing to hand over; only its reclaim lies ahead. */
+function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
+  return {
+    estimatedBootMs: 0,
+    estimatedProvisionMs: 0,
+    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
+    estimatedReadyMs: 0,
+  };
+}
+
+/**
+ * What this device's reclaim will cost once the lease is released -- the one part of a
+ * grant's timing that describes work still ahead of the holder rather than work already
+ * done. `standard` because that is what every release path asks for (`WarmPoolCoordinator
+ * #reclaim`, `QuarantineCoordinator`); a holder cannot request a different clean level.
+ */
+function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
+  return driver.estimate({ clean: "standard", operation: "reclaim" }, spec);
 }
 
 function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {

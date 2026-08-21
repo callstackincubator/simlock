@@ -6,6 +6,7 @@ import {
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
+  type DriverEstimate,
   type DriverReality,
   type ObservedDevice,
   type ObservedMark,
@@ -34,6 +35,23 @@ const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+const PROVISION_ESTIMATE_MS = 1_000;
+// Measured on an M3 Pro against Pixel 8 / API 35: 2.4-5.1s over nine steady-state reclaims
+// (median 4.6s), and 3.7-5.7s with three running at once. A `snapshot` reclaim loads the clean
+// baseline and commits the device straight back to `ready`, so the driver call is the whole
+// window the device spends `reclaiming`. Held just above the observed maximum.
+const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
+// Measured at 22.8-42.8s on the same hardware (median 31.7s) -- an order of magnitude above the
+// 3s this first guessed, for a reason worth stating precisely. `reclaim` itself really does
+// only shut the emulator down and defer the wipe to the next `makeReady`; what it does not do
+// is end the device's time in `reclaiming`. `WarmPoolCoordinator#disposition` re-readies a
+// device the pool wants to keep warm before committing the transition, so the wipe boot and the
+// baseline re-capture land inside the same window -- and that window, not the driver call, is
+// what both consumers of this number measure: a waiting requester's ETA, and the state age
+// `Doctor` compares against. A device the pool does not keep warm settles in seconds instead.
+// The slow branch is the one to quote: pricing the fast one would make every kept-warm reclaim
+// look stalled, while over-quoting only delays a finding.
+const WIPE_RECLAIM_ESTIMATE_MS = 32_000;
 const CLEAN_BASELINE = "simlock_clean_baseline";
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
@@ -473,14 +491,20 @@ export class AndroidDriver implements Driver {
     };
   }
 
-  estimate(operation: "provision" | "boot" | "reclaim", _spec: DeviceSpec): number {
-    switch (operation) {
+  estimate(estimate: DriverEstimate, _spec: DeviceSpec): number {
+    switch (estimate.operation) {
       case "provision":
-        return 1_000;
+        return PROVISION_ESTIMATE_MS;
       case "boot":
         return COLD_BOOT_ESTIMATE_MS;
       case "reclaim":
-        return 2_000;
+        // `standard` is priced as the snapshot restore it selects. It can still fall back to
+        // the wipe branch when the baseline no longer matches the AVD config, which runs some
+        // five times longer; that is the exception rather than the case to quote, and `Doctor`
+        // covers it by taking the slower clean level instead of this averaging the two.
+        return this.reclaimStrategy({ clean: estimate.clean }) === "wipe"
+          ? WIPE_RECLAIM_ESTIMATE_MS
+          : SNAPSHOT_RECLAIM_ESTIMATE_MS;
     }
   }
 

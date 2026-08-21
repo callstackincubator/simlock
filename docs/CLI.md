@@ -120,9 +120,16 @@ without speculative work stages; reclaiming work is reported separately:
 ```json
 {"event":"queued","queue_position":1}
 {"event":"provisioning","eta_seconds":90}
-{"event":"booting","eta_seconds":30}
-{"event":"reclaiming","eta_seconds":15}
+{"event":"booting","eta_seconds":60}
+{"event":"reclaiming","eta_seconds":34}
 ```
+
+`reclaiming` follows `queued` when the device the request is waiting on is
+being purged for its previous holder: the position alone would not say that
+the wait is an iOS erase rather than a moment. Every `eta_seconds` comes from
+the driver's own estimate for the work it selected, which for a reclaim means
+the strategy that clean level uses -- an erase runs tens of seconds, a
+snapshot restore a few.
 
 Once granted, held mode also relays the health monitor's findings about the
 leased device for as long as the connection holds it, on the same stderr

@@ -23,6 +23,7 @@ export {
   type DriverCatalogEntry,
   DriverCrashError,
   type DriverDevice,
+  type DriverEstimate,
   type DriverReality,
   type ObservedDevice,
   type ObservedRunState,
