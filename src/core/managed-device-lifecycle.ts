@@ -146,6 +146,13 @@ export class ManagedDeviceLifecycle {
     if (claimed === undefined) return undefined;
 
     try {
+      // The address `makeReady` re-reads is deliberately dropped here, unlike every other
+      // readiness transition (see `Driver.makeReady`): recovery keeps the device `leased`
+      // throughout, so there is no transition to commit it through, and neither driver moves
+      // a device's address when rebooting one that already exists -- iOS UDIDs are fixed, and
+      // Android reuses the console port already in the device's driver data. A driver that
+      // ever does move it would need this to persist the new value, because the holder is
+      // still using the address from its original grant.
       await this.catalog
         .get(claimed.device.spec.platform)
         .makeReady(toDriverDevice(claimed.device));
