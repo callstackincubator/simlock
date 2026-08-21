@@ -24,6 +24,7 @@ Useful documentation lives in [docs/](docs/):
 - [ABOUT.md](docs/ABOUT.md) — what the tool is and the problem it solves
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — high-level architecture overview
 - [CLI.md](docs/CLI.md) — the expected CLI command surface (user manual)
+- [API.md](docs/API.md) — proposed JS/TS API surface (proposal)
 - [EVENTS.md](docs/EVENTS.md) — catalog of business events
 - [IDEAS.md](docs/IDEAS.md) — post-v1 ideas; don't implement these unless asked
 - [known-pitfalls.md](docs/known-pitfalls.md) — accepted gaps and their planned fixes
