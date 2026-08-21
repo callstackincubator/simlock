@@ -1,3 +1,5 @@
+import { type Logger, NoopLogger } from "../ports/index.js";
+import type { DeviceOperationClaims } from "./device-operation-claims.js";
 import type { LeaseRecord } from "./domain.js";
 import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
@@ -34,8 +36,11 @@ export interface LeaseReleaseRegistry {
 }
 
 export interface LeaseReleaseCoordinatorOptions {
+  /** Claims the reclaiming device for the duration of a backgrounded (orphaned) reclaim. */
+  readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly lifecycle: LeaseReleaseLifecycle;
+  readonly logger?: Logger;
   readonly registry: LeaseReleaseRegistry;
   readonly warmPool: Pick<WarmPoolCoordinator, "reclaim">;
 }
@@ -51,10 +56,20 @@ export class LeaseReleaseCoordinator
   implements LeaseReleaseCommands, LeaseExpirationAdmin, LeaseReleaseMaintenance
 {
   readonly #activeWorkflows = new Set<Promise<void>>();
+  /**
+   * Reclaims started by `#release`'s `orphaned` branch, tracked only so tests can
+   * observe them settling; nothing in this class awaits the set itself. A daemon
+   * that exits while one is in flight relies on `StartupConverger#recoverInterruptedReclaims`
+   * to finish it on the next start (see the `orphaned` branch of `#release`).
+   */
+  readonly #backgroundReclaims = new Set<Promise<void>>();
+  readonly #logger: Logger;
   readonly #maintenanceWaiters: (() => void)[] = [];
   #maintenanceDepth = 0;
 
-  constructor(private readonly options: LeaseReleaseCoordinatorOptions) {}
+  constructor(private readonly options: LeaseReleaseCoordinatorOptions) {
+    this.#logger = options.logger?.child("lease-release-coordinator") ?? new NoopLogger();
+  }
 
   async release(leaseId: string, reason: LeaseReleaseReason): Promise<void> {
     await this.#runNormal(() => this.#release(leaseId, reason));
@@ -132,7 +147,47 @@ export class LeaseReleaseCoordinator
       return this.options.lifecycle.beginRelease(leaseId, reason);
     });
     if (released === undefined) return;
+    if (reason === "orphaned") {
+      // Startup convergence (StartupConverger#releaseOrphanedHeldLeases) only awaits
+      // the registry-only release committed above -- the device is already
+      // `reclaiming` and therefore already ungrantable (AcquisitionPlanner only ever
+      // selects `ready`). The slow part, the driver-side reclaim (an erase can run
+      // tens of seconds), proceeds in the background instead of blocking convergence,
+      // so N orphaned leases no longer cost N serial erases on the startup critical
+      // path (#43). Kicked off here rather than queued, so every orphaned device's
+      // reclaim starts immediately (not one-after-another): queuing would let a
+      // healthy reclaim sit idle in `reclaiming` waiting its turn, which is exactly
+      // the state age a stalled-transition detector would misread as a stall.
+      this.#reclaimInBackground(released);
+      return;
+    }
     await this.options.warmPool.reclaim(released);
+  }
+
+  /**
+   * Claims the device before starting its reclaim so `StartupConverger
+   * #recoverInterruptedReclaims`, which runs immediately afterward in the same
+   * startup pass, does not mistake a reclaim this process just started for one
+   * orphaned by a *previous* crash (that check excludes claimed devices
+   * precisely so a live, in-process operation is never treated as interrupted).
+   * The claim is released, and the failure logged rather than thrown, once the
+   * reclaim settles -- nothing is awaiting this promise, so a rejection here
+   * would otherwise be unhandled.
+   */
+  #reclaimInBackground(released: ReleasedLease): void {
+    const claim = this.options.claims.tryClaim(released.device.id, "reclaim");
+    const reclaim = this.options.warmPool
+      .reclaim(released)
+      .catch((error: unknown) => {
+        this.#logger.error("background reclaim failed", {
+          deviceId: released.device.id,
+          error: error instanceof Error ? error.message : String(error),
+          leaseId: released.lease.id,
+        });
+      })
+      .finally(() => claim?.release());
+    this.#backgroundReclaims.add(reclaim);
+    void reclaim.finally(() => this.#backgroundReclaims.delete(reclaim));
   }
 
   async #releaseAll(reason: "explicit" | "killed"): Promise<readonly string[]> {

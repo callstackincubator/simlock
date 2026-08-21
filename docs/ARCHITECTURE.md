@@ -96,16 +96,35 @@ At startup, `StartupConverger` first releases every persisted `held` lease
 (reason `orphaned`) through the normal release path — a held lease's liveness
 is its daemon connection, so it cannot have a live holder across a restart,
 and this runs before timers are restored so an orphaned lease's timer is
-never re-armed. It then restores persisted TTL timers for the remaining
-(`detached`) leases, whose liveness is the TTL rather than a connection, and
-re-arms retry timers for devices still `quarantined` (see below) from their
-persisted next-retry deadline. It then recovers unleased interrupted reclaims
-through the warm-pool recovery port, and finally deterministically shuts down
-excess unleased, unclaimed `ready` registry devices through
-`CleanupActionExecutor`. Running this release step before timer restoration
-and capacity convergence means the devices it frees are visible to both.
-Leased devices that survive the orphan sweep are never touched, so a lowered
-limit may remain visibly over-limit until leases naturally release.
+never re-armed. This release step is registry-only: the device commits
+straight to `reclaiming` and the lease record is gone, but the driver-side
+reclaim itself (an erase can run tens of seconds) is kicked off in the
+background instead of awaited inline (#43), one per device rather than
+queued, so N orphaned leases no longer cost N serial erases on this path. It
+then restores persisted TTL timers for the remaining (`detached`) leases,
+whose liveness is the TTL rather than a connection, and re-arms retry timers
+for devices still `quarantined` (see below) from their persisted next-retry
+deadline. It then recovers unleased interrupted reclaims through the
+warm-pool recovery port — a backgrounded reclaim marks its device with a
+`reclaim` operation claim for exactly this reason, so this step can tell it
+apart from one truly orphaned by a *previous* crash (unclaimed, since claims
+never survive a restart) rather than cutting it short — and finally
+deterministically shuts down excess unleased, unclaimed `ready` registry
+devices through `CleanupActionExecutor`. Running this release step before
+timer restoration and capacity convergence means the devices it frees are
+visible to both. Leased devices that survive the orphan sweep are never
+touched, so a lowered limit may remain visibly over-limit until leases
+naturally release.
+
+The capacity sweep's view of what's `ready` is only ever a snapshot, and a
+background reclaim in flight makes it more so: `reclaiming` already counts
+toward the running total (see above), but a device mid-reclaim cannot be a
+shutdown *candidate* until it settles. The sweep does not wait for that or
+re-run afterward — it tolerates the transient view, because a completed
+reclaim (`WarmPoolCoordinator#reclaim`) makes its own capacity-aware
+keep-or-shutdown decision when it settles, serialized against everything
+else touching the registry, so the pool can never end up over limit even
+though the sweep that ran at startup couldn't see the reclaim coming.
 
 ## Device state machine
 
@@ -427,11 +446,19 @@ policies replaceable without introducing an ambient dependency container.
 
 Reachability does not depend on startup recovery work. `DaemonServer#start`
 claims the socket (`DaemonEndpointHost#start`) before running `startDaemon`'s
-`converge` callback — `doctor.reconcile()` followed by
-`leaseEngine.convergeRunningCapacity()`, the two calls that shell out per
-driver/device and, since running-capacity convergence releases orphaned held
-leases and awaits the resulting device reclaim, can take tens of seconds. Two
-consequences follow from claiming first:
+`converge` callback, which runs `doctor.reconcile()` and
+`leaseEngine.convergeRunningCapacity()` concurrently rather than one after the
+other: `doctor.reconcile()` is pure reconnaissance that already runs
+interleaved with live lease/reclaim activity whenever a client issues
+`doctor.run` mid-session (it shells out per driver/device, then at most flags
+drift for a later `--fix`), so overlapping it with startup's own registry
+work introduces nothing this codebase doesn't already do elsewhere. Neither
+call awaits a device reclaim inline any more (#43) — an orphaned held lease's
+reclaim runs in the background once its release commits — so what's left on
+this path is comparatively fast: per-driver/device reconnaissance plus
+whatever unleased interrupted-reclaim recovery and capacity-sweep shutdowns
+convergence itself still performs inline. Two consequences follow from
+claiming first:
 
 - A second daemon racing to start now discovers `DaemonAlreadyRunningError`
   from the claim itself, before it does any device work — not after, as when
@@ -448,9 +475,18 @@ consequences follow from claiming first:
 If convergence itself throws, `start()` stops the daemon (closing the
 listener and any connections that raced in during convergence) rather than
 leaving it accepting connections it can never serve; parked requests reject
-with `DAEMON_STARTUP_FAILED` instead of hanging. Moving the underlying device
-reclaim off the startup path entirely — the remaining source of startup
-latency — is a deliberately separate, more invasive follow-up.
+with `DAEMON_STARTUP_FAILED` instead of hanging. Because the two converge
+calls run concurrently, one throwing does not cancel the other — `Promise.all`
+still attaches a handler to both, so neither can produce an unhandled
+rejection, but a straggling `convergeRunningCapacity()` step can keep running
+briefly after `stop()` has begun. Nothing it can still do (registry-only
+destruction, never touching a leased device) is unsafe to have in flight
+during shutdown; it just means "stopped" is not instantaneous relative to the
+failure being reported. `health` itself does not grow a third state for this:
+`running` means convergence finished, not that every backgrounded reclaim it
+kicked off has settled — `pitlane status` already reports each device's own
+state (`reclaiming` included), so a separate aggregate would duplicate
+information already visible per-device rather than add any.
 
 Operational logging is a separate concern from the event bus: `pitlane events`
 carries business facts (lease granted, device cleaned up, …) in an in-memory

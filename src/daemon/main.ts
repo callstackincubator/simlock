@@ -134,13 +134,18 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
     version: options.version ?? "1.0.0",
     // Runs after the socket is claimed (see DaemonServer#start): reachability no
-    // longer depends on doctor reconciliation or running-capacity convergence, which
-    // can shell out per driver/device and, since #38, await an orphaned lease's
-    // device reclaim (~34s for one simulator). Requests other than hello/status.get
-    // park until this resolves.
+    // longer depends on doctor reconciliation or running-capacity convergence.
+    // Requests other than hello/status.get park until this resolves, so the two are
+    // run concurrently rather than doctor-then-capacity: doctor.reconcile() is pure
+    // reconnaissance (it shells out per driver/device, then at most flags drift --
+    // see doctor.ts) that already runs interleaved with live lease/reclaim activity
+    // whenever a client issues `doctor.run` mid-session, so running it alongside
+    // startup's own registry work is nothing this codebase doesn't already do.
+    // convergeRunningCapacity() no longer awaits an orphaned lease's device reclaim
+    // inline either (#43): that erase (~34s for one simulator) proceeds in the
+    // background, off this critical path, once its lease is released registry-only.
     converge: async () => {
-      await doctor.reconcile();
-      await leaseEngine.convergeRunningCapacity();
+      await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
     },
     dispose: () => leaseEngine.dispose(),
   });

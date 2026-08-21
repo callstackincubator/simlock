@@ -153,6 +153,7 @@ export class LeaseEngine {
       registry: options.registry,
     });
     this.#releaseCoordinator = new LeaseReleaseCoordinator({
+      claims: this.#claims,
       decisions: this.#decisions,
       lifecycle: this.#leases,
       registry: options.registry,

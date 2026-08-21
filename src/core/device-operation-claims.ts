@@ -1,8 +1,12 @@
 /**
  * Operations that must not overlap for a single device: booting, eviction,
- * cleanup, nuke, and the lease-scoped crash `recovery` reboot.
+ * cleanup, nuke, the lease-scoped crash `recovery` reboot, and a backgrounded
+ * (orphaned-lease) `reclaim` -- the last marks the device as a live, in-process
+ * operation so `StartupConverger#recoverInterruptedReclaims` (which only recovers
+ * *unclaimed* `reclaiming` devices) never mistakes it for one left over from a
+ * previous crash. See `LeaseReleaseCoordinator#reclaimInBackground`.
  */
-export type DeviceOperation = "boot" | "eviction" | "cleanup" | "nuke" | "recovery";
+export type DeviceOperation = "boot" | "eviction" | "cleanup" | "nuke" | "recovery" | "reclaim";
 
 /** An exclusive, idempotently releasable claim for one device operation. */
 export interface DeviceOperationClaim {

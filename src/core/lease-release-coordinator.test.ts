@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import { DeviceOperationClaims } from "./device-operation-claims.js";
 import type { DeviceRecord, LeaseRecord } from "./domain.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
@@ -10,6 +11,12 @@ import { Registry, UnknownLeaseError, type ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const statePath = "/home/agent/.pitlane/state.json";
+
+async function flush(): Promise<void> {
+  for (let count = 0; count < 10; count += 1) {
+    await Promise.resolve();
+  }
+}
 
 async function createHarness() {
   const clock = new FakeClock(1_000);
@@ -36,13 +43,15 @@ async function createHarness() {
       reclaims.push(released);
     },
   };
+  const claims = new DeviceOperationClaims();
   const coordinator = new LeaseReleaseCoordinator({
+    claims,
     decisions: new SerializedDecision(),
     lifecycle,
     registry,
     warmPool,
   });
-  return { clock, coordinator, eventBus, lifecycle, reclaims, registry, warmPool };
+  return { claims, clock, coordinator, eventBus, lifecycle, reclaims, registry, warmPool };
 }
 
 async function grant(
@@ -226,5 +235,96 @@ describe("LeaseReleaseCoordinator", () => {
     const second = harness.coordinator.releaseAll("killed");
 
     await expect(Promise.all([first, second])).rejects.toBeInstanceOf(UnknownLeaseError);
+  });
+
+  describe("orphaned release (#43: backgrounded reclaim)", () => {
+    it("commits the registry-only release and resolves without waiting for the reclaim", async () => {
+      const harness = await createHarness();
+      const granted = await grant(harness);
+      let unblockReclaim!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        unblockReclaim = resolve;
+      });
+      harness.warmPool.reclaim = async (released) => {
+        harness.reclaims.push(released);
+        await blocked;
+      };
+
+      // The registry-only half (device -> reclaiming, lease gone, `lease.released`
+      // emitted) is exactly what StartupConverger's orphaned-lease release needs to
+      // be fast; the driver-side reclaim is still stuck on `blocked` and this must
+      // not wait for it, or nothing was gained over the old inline-await shape.
+      await harness.coordinator.release(granted.lease.id, "orphaned");
+
+      expect(harness.registry.snapshot.leases).toEqual([]);
+      expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+      expect(
+        harness.eventBus
+          .replay()
+          .some(
+            (envelope) =>
+              envelope.event === "lease.released" && envelope.payload.reason === "orphaned",
+          ),
+      ).toBe(true);
+
+      unblockReclaim();
+      await flush();
+      expect(harness.reclaims).toMatchObject([{ lease: { id: granted.lease.id } }]);
+    });
+
+    it("claims the device for the background reclaim's duration, then releases the claim", async () => {
+      const harness = await createHarness();
+      const granted = await grant(harness);
+      let unblockReclaim!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        unblockReclaim = resolve;
+      });
+      harness.warmPool.reclaim = async () => {
+        await blocked;
+      };
+
+      await harness.coordinator.release(granted.lease.id, "orphaned");
+
+      // Claimed while the reclaim is in flight -- this is what keeps
+      // StartupConverger#recoverInterruptedReclaims from treating a reclaim this
+      // process just started as one orphaned by a *previous* crash.
+      expect(harness.claims.isClaimed(granted.device.id)).toBe(true);
+      expect(harness.claims.operationFor(granted.device.id)).toBe("reclaim");
+
+      unblockReclaim();
+      await flush();
+      expect(harness.claims.isClaimed(granted.device.id)).toBe(false);
+    });
+
+    it("logs and swallows a background reclaim failure instead of leaving it unhandled", async () => {
+      const harness = await createHarness();
+      const granted = await grant(harness);
+      const sink = new MemoryLogSink();
+      const logger = new JsonLinesLogger({ clock: harness.clock, level: "debug", sink });
+      const failingCoordinator = new LeaseReleaseCoordinator({
+        claims: harness.claims,
+        decisions: new SerializedDecision(),
+        lifecycle: harness.lifecycle,
+        logger,
+        registry: harness.registry,
+        warmPool: { reclaim: async () => Promise.reject(new Error("reclaim failed")) },
+      });
+
+      // Vitest fails a test on an unhandled rejection, so simply not throwing here
+      // already proves the background failure was caught, not just re-thrown late.
+      await expect(
+        failingCoordinator.release(granted.lease.id, "orphaned"),
+      ).resolves.toBeUndefined();
+      await flush();
+
+      expect(sink.records).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          message: "background reclaim failed",
+          fields: expect.objectContaining({ deviceId: granted.device.id }),
+        }),
+      );
+      expect(harness.claims.isClaimed(granted.device.id)).toBe(false);
+    });
   });
 });
