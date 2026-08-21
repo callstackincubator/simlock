@@ -54,6 +54,7 @@ function config(): Config {
       recoveryBackoffMs: 5_000,
       stableObservations: 2,
     },
+    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
     limits: {

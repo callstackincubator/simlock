@@ -1,6 +1,12 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
-import type { DeviceRecord, DeviceState, Platform } from "./domain.js";
+import type { Config } from "./config.js";
+import {
+  type DeviceRecord,
+  type DeviceState,
+  type Platform,
+  transitionEnteredAt,
+} from "./domain.js";
 import type { Driver, DriverDevice, ObservedDevice, ObservedMark } from "./driver.js";
 import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
@@ -26,6 +32,15 @@ export type DoctorFinding =
       readonly deviceId: string;
       readonly platform: Platform;
       readonly detail: ProvenanceDrift;
+    }
+  | {
+      readonly kind: "stalled-transition";
+      readonly deviceId: string;
+      readonly platform: Platform;
+      readonly state: "provisioning" | "reclaiming";
+      readonly enteredAt: number;
+      readonly ageMs: number;
+      readonly thresholdMs: number;
     };
 
 /**
@@ -44,11 +59,18 @@ export interface DoctorReport {
   readonly findings: readonly DoctorFinding[];
 }
 
+/** The one quarantine-entry operation Doctor needs -- see `QuarantineCoordinator.enterFromStalledTransition`. */
+export interface DoctorQuarantine {
+  enterFromStalledTransition(deviceId: string): Promise<void>;
+}
+
 export interface DoctorOptions {
   readonly clock: Clock;
+  readonly config: Config;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
   readonly leaseExpirer?: LeaseExpirer;
+  readonly quarantine?: DoctorQuarantine;
   readonly registry: Registry;
 }
 
@@ -77,6 +99,9 @@ export class Doctor {
     const registryDeviceKeys = new Set(
       snapshot.devices.map((device) => key(device.spec.platform, device.driverDeviceId)),
     );
+    const driversByPlatform = new Map(
+      this.options.drivers.map((driver) => [driver.platform, driver]),
+    );
     const findings: DoctorFinding[] = [];
 
     for (const device of snapshot.devices) {
@@ -91,6 +116,15 @@ export class Doctor {
           this.options.clock.now(),
         );
       }
+      const stalled = stalledTransitionFinding(
+        device,
+        driversByPlatform,
+        this.options.config.stalledTransition,
+        this.options.clock.now(),
+      );
+      if (stalled !== undefined) {
+        findings.push(stalled);
+      }
     }
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
@@ -99,12 +133,12 @@ export class Doctor {
     if (fix) {
       await this.#applySafeFixes(findings);
     }
-    this.#emitForeignStateEvents(findings);
+    this.#emitFindingEvents(findings);
     this.options.eventBus.emit("doctor.reconciled", { driftFindings: findings }, "doctor");
     return report;
   }
 
-  #emitForeignStateEvents(findings: readonly DoctorFinding[]): void {
+  #emitFindingEvents(findings: readonly DoctorFinding[]): void {
     for (const finding of findings) {
       if (finding.kind === "foreign-state-change") {
         this.options.eventBus.emit(
@@ -122,6 +156,19 @@ export class Doctor {
         this.options.eventBus.emit(
           "device.foreign-provenance-detected",
           { detail: finding.detail, deviceId: finding.deviceId, platform: finding.platform },
+          "doctor",
+        );
+      }
+      if (finding.kind === "stalled-transition") {
+        this.options.eventBus.emit(
+          "device.stalled-transition-detected",
+          {
+            ageMs: finding.ageMs,
+            deviceId: finding.deviceId,
+            platform: finding.platform,
+            state: finding.state,
+            thresholdMs: finding.thresholdMs,
+          },
           "doctor",
         );
       }
@@ -148,6 +195,9 @@ export class Doctor {
           break;
         case "foreign-provenance-change":
           // Report-only: re-marking destroys the evidence, and the device may be leased.
+          break;
+        case "stalled-transition":
+          await this.#fixStalledTransition(finding);
           break;
       }
     }
@@ -193,6 +243,29 @@ export class Doctor {
       return;
     }
     await this.options.registry.clearForeignStateDetected(finding.deviceId);
+  }
+
+  async #fixStalledTransition(
+    finding: Extract<DoctorFinding, { readonly kind: "stalled-transition" }>,
+  ): Promise<void> {
+    // A device this finding targets is never `leased` -- that's a separate state
+    // entirely -- but the guard is kept anyway, matching every other fix here, so a
+    // future change to what produces this finding can never reach a leased device.
+    const snapshot = this.options.registry.snapshot;
+    if (snapshot.leases.some((lease) => lease.deviceId === finding.deviceId)) {
+      return;
+    }
+    const device = snapshot.devices.find((candidate) => candidate.id === finding.deviceId);
+    // Only fix if the device is still in the exact state the finding was computed
+    // against -- it may have resolved on its own between finding computation and fix
+    // application within this reconcile call.
+    if (device === undefined || device.state !== finding.state) {
+      return;
+    }
+    if (this.options.quarantine === undefined) {
+      return;
+    }
+    await this.options.quarantine.enterFromStalledTransition(finding.deviceId);
   }
 }
 
@@ -243,6 +316,58 @@ function registryDriftFindings(
   }
 
   return findings;
+}
+
+/**
+ * A `provisioning` / `reclaiming` device is normally in-flight work Pitlane itself is
+ * driving (see `expectedRunState`), not drift -- but only up to a point. Past a
+ * driver-derived threshold it stops being "still working" and becomes a stall: the
+ * driver call that was supposed to resolve it never did. This is a documented failure
+ * mode, not a hypothetical one -- `DeviceProvisioner` deliberately leaves a device
+ * `provisioning` when a boot-timeout's own cleanup `destroy` also fails ("The
+ * registered record remains for reconcile when the driver cannot destroy it").
+ *
+ * The threshold is `driver.estimate(...) * thresholdMultiplier`, floored at
+ * `minimumThresholdMs`: not `estimate` itself, because the estimate is tuned for a
+ * routine run and real-world variance (a cold Android boot, a loaded host) can
+ * legitimately run well past it without anything having stalled. No driver for the
+ * device's platform, or no recorded entry time (defensive; see `transitionEnteredAt`),
+ * means there is nothing to compare against, so no finding rather than a guess.
+ */
+function stalledTransitionFinding(
+  device: DeviceRecord,
+  driversByPlatform: ReadonlyMap<Platform, Driver>,
+  config: Config["stalledTransition"],
+  now: number,
+): DoctorFinding | undefined {
+  if (device.state !== "provisioning" && device.state !== "reclaiming") {
+    return undefined;
+  }
+  const enteredAt = transitionEnteredAt(device);
+  const driver = driversByPlatform.get(device.spec.platform);
+  if (enteredAt === undefined || driver === undefined) {
+    return undefined;
+  }
+
+  const estimateMs =
+    device.state === "provisioning"
+      ? driver.estimate("provision", device.spec) + driver.estimate("boot", device.spec)
+      : driver.estimate("reclaim", device.spec);
+  const thresholdMs = Math.max(estimateMs * config.thresholdMultiplier, config.minimumThresholdMs);
+  const ageMs = now - enteredAt;
+  if (ageMs <= thresholdMs) {
+    return undefined;
+  }
+
+  return {
+    ageMs,
+    deviceId: device.id,
+    enteredAt,
+    kind: "stalled-transition",
+    platform: device.spec.platform,
+    state: device.state,
+    thresholdMs,
+  };
 }
 
 /**

@@ -776,6 +776,9 @@ function formatStatus(status: Record<string, unknown>): string {
       record.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
       record.foreignProvenanceDetectedAt === undefined ? undefined : "foreign provenance change",
       record.state === "quarantined" ? quarantineMarker(record) : undefined,
+      typeof record.transitionAgeMs === "number"
+        ? `mid-transition ${record.transitionAgeMs}ms`
+        : undefined,
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     return `Device ${String(record.id)}: ${String(record.state)}${suffix}`;

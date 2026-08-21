@@ -163,6 +163,41 @@ describe("QuarantineCoordinator", () => {
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
+  it("commits stalled-transition quarantine entry, emits only quarantined, and does not wake availability", async () => {
+    const harness = await createHarness();
+
+    await harness.coordinator.enterFromStalledTransition(harness.target.id);
+
+    expect(harness.registry.snapshot.devices[0]).toMatchObject({
+      quarantineAttempts: 0,
+      quarantineNextRetryAt: 2_000,
+      state: "quarantined",
+    });
+    // Unlike enter(), there was no purge -- no device.purge-failed fires.
+    expect(eventsOf(harness.bus).map((event) => event.event)).toEqual(["device.quarantined"]);
+    expect(eventsOf(harness.bus)[0]).toMatchObject({
+      payload: { deviceId: harness.target.id, maxRetries: 2, nextRetryAt: 2_000 },
+    });
+    expect(harness.notifyAvailability).not.toHaveBeenCalled();
+  });
+
+  it("retries and gives up on a stalled-transition entry exactly like a purge-failure one", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const harness = await createHarness({ clock, driver });
+
+    await harness.coordinator.enterFromStalledTransition(harness.target.id);
+    harness.clock.advance(retryConfig.retryBackoffMs);
+    await flush();
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(eventsOf(harness.bus).map((event) => event.event)).toEqual([
+      "device.quarantined",
+      "device.quarantine-recovered",
+    ]);
+    expect(harness.notifyAvailability).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers on a successful retry, rejoins the pool, and wakes availability", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });

@@ -45,6 +45,7 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
   };
 }
 

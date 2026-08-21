@@ -67,6 +67,7 @@ describe("loadConfig", () => {
           maxRetryBackoffMs: 5 * 60_000,
         },
       },
+      stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.limits)).toBe(true);
@@ -340,5 +341,35 @@ describe("loadConfig", () => {
       loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
     ).resolves.toBeDefined();
     expect(warn).toHaveBeenCalledWith('Unknown config key: "health.maxBoltCount"');
+  });
+
+  it("applies a file-level stalledTransition override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        stalledTransition: { thresholdMultiplier: 5, minimumThresholdMs: 120_000 },
+      }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.stalledTransition).toEqual({
+      thresholdMultiplier: 5,
+      minimumThresholdMs: 120_000,
+    });
+  });
+
+  it.each([
+    [{ stalledTransition: { thresholdMultiplier: 0.5 } }, "stalledTransition.thresholdMultiplier"],
+    [{ stalledTransition: { minimumThresholdMs: -1 } }, "stalledTransition.minimumThresholdMs"],
+  ])("rejects invalid stalledTransition values in every field", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.pitlane");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
   });
 });

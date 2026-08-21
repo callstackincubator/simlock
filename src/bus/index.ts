@@ -100,6 +100,13 @@ export interface EventMap {
     readonly expected: string;
     readonly observed: string;
   };
+  "device.stalled-transition-detected": {
+    readonly deviceId: string;
+    readonly platform: string;
+    readonly state: string;
+    readonly ageMs: number;
+    readonly thresholdMs: number;
+  };
   "cleanup.executed": {
     readonly ruleName: string;
     readonly action: string;

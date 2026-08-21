@@ -187,16 +187,18 @@ export class Registry {
   }
 
   /**
-   * Commits the release-time purge-failure disposition: the device leaves
-   * `reclaiming` for `quarantined` instead of rejoining the warm pool dirty.
-   * The caller (WarmPoolCoordinator) emits `device.purge-failed` and
-   * `device.quarantined` after this commits.
+   * Commits quarantine entry from either of its two legal sources (see domain.ts):
+   * a release-time purge failure leaves `reclaiming`, and a stalled-transition
+   * timeout leaves `provisioning`. The caller -- WarmPoolCoordinator for the former,
+   * QuarantineCoordinator's stalled-transition entry point for the latter -- emits
+   * `device.quarantined` (and, for a purge failure, `device.purge-failed`) after this
+   * commits.
    */
-  // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's registry port.
+  // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
   async enterQuarantine(deviceId: string, nextRetryAt: number): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
-    if (device.state !== "reclaiming") {
-      throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
+    if (device.state !== "reclaiming" && device.state !== "provisioning") {
+      throw new RegistryEventError(`Device is not reclaiming or provisioning: ${deviceId}`);
     }
     const updated: DeviceRecord = {
       ...transition(device, "quarantined"),

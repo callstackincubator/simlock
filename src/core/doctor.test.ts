@@ -1,13 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { Doctor } from "./doctor.js";
+import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseEngine } from "./lease-engine.js";
+import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { Registry } from "./registry.js";
+import { SerializedDecision } from "./serialized-decision.js";
 
 describe("Doctor", () => {
   it("reports all reconciliation drift classes without changing state", async () => {
@@ -55,7 +58,13 @@ describe("Doctor", () => {
       ],
     });
 
-    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile();
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile();
 
     expect(report.findings.map((finding) => finding.kind)).toEqual([
       "registry-device-missing",
@@ -107,7 +116,13 @@ describe("Doctor", () => {
       processes: [],
     });
 
-    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile({
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile({
       fix: true,
     });
 
@@ -154,7 +169,7 @@ describe("Doctor", () => {
       ],
       processes: [],
     });
-    const doctor = new Doctor({ clock, drivers: [driver], eventBus, registry });
+    const doctor = new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry });
 
     await doctor.reconcile();
     clock.advance(60_000);
@@ -214,7 +229,13 @@ describe("Doctor", () => {
         processes: [],
       });
 
-      const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile({
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile({
         fix: true,
       });
 
@@ -279,7 +300,13 @@ describe("Doctor", () => {
       processes: [],
     });
 
-    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile();
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile();
 
     expect(report.findings.map((finding) => finding.kind)).not.toContain(
       "foreign-provenance-change",
@@ -324,7 +351,7 @@ describe("Doctor", () => {
         },
       ],
     });
-    const doctor = new Doctor({ clock, drivers: [driver], eventBus, registry });
+    const doctor = new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry });
 
     await expect(doctor.reconcile({ fix: true })).resolves.toMatchObject({
       findings: expect.arrayContaining([
@@ -397,6 +424,7 @@ describe("Doctor", () => {
 
     await new Doctor({
       clock,
+      config: config(),
       drivers: [driver],
       eventBus,
       leaseExpirer: leaseEngine,
@@ -447,6 +475,7 @@ describe("Doctor", () => {
 
     const report = await new Doctor({
       clock,
+      config: config(),
       drivers: [iosDriver, androidDriver],
       eventBus,
       registry,
@@ -510,6 +539,7 @@ describe("Doctor", () => {
 
     const report = await new Doctor({
       clock,
+      config: config(),
       drivers: [iosDriver, androidDriver],
       eventBus,
       registry,
@@ -558,7 +588,13 @@ describe("Doctor", () => {
       processes: [],
     });
 
-    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile();
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile();
 
     expect(report.findings.filter((finding) => finding.kind === "foreign-state-change")).toEqual(
       [],
@@ -609,11 +645,306 @@ describe("Doctor", () => {
       processes: [],
     });
 
-    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile();
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile();
 
     expect(report.findings.filter((finding) => finding.kind === "foreign-state-change")).toEqual(
       [],
     );
+  });
+
+  describe("stalled transitions", () => {
+    it("reports a stalled-transition finding for a provisioning device past its driver-derived threshold", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000 },
+        platform: "ios",
+      });
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "pitlane-stuck",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      // threshold = (provision 1_000 + boot 2_000) * thresholdMultiplier 3 = 9_000
+      clock.advance(9_001);
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(report.findings).toContainEqual({
+        ageMs: 9_001,
+        deviceId: device.id,
+        enteredAt: 10_000,
+        kind: "stalled-transition",
+        platform: "ios",
+        state: "provisioning",
+        thresholdMs: 9_000,
+      });
+    });
+
+    it("does not report a stalled-transition finding for a device still legitimately in-flight", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      // A cold Android-shaped provision-plus-boot estimate can legitimately run well
+      // past its raw estimate -- this stays under the multiplied threshold (9_000),
+      // not the raw 3_000, and must not be flagged.
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000 },
+        platform: "ios",
+      });
+      await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "pitlane-slow",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      clock.advance(8_000);
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(report.findings.filter((finding) => finding.kind === "stalled-transition")).toEqual(
+        [],
+      );
+    });
+
+    it("reports a stalled-transition finding for a reclaiming device whose emulator was killed out from under the daemon", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
+      const device = await readyDevice(registry, "pitlane-killed", "ios");
+      const lease = await registry.createLease({
+        deviceId: device.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 999_999,
+      });
+      await registry.beginRelease(lease.id);
+      // The emulator process is gone entirely -- not `stopped`, not `transitioning`,
+      // absent from reality altogether -- exactly what `kill -9` on the process leaves
+      // behind. The stall check never consults driver reality either way (see
+      // `stalledTransitionFinding`): the registry's own clock is what bounds it.
+      driver.setManagedReality({ devices: [], processes: [] });
+      // threshold = reclaim 2_000 * thresholdMultiplier 3 = 6_000
+      clock.advance(6_001);
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(report.findings).toContainEqual(
+        expect.objectContaining({
+          deviceId: device.id,
+          kind: "stalled-transition",
+          state: "reclaiming",
+        }),
+      );
+    });
+
+    it("emits device.stalled-transition-detected for a stalled device", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000 },
+        platform: "ios",
+      });
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "pitlane-stuck",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      clock.advance(9_001);
+
+      await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(eventBus.replay()).toContainEqual(
+        expect.objectContaining({
+          event: "device.stalled-transition-detected",
+          payload: expect.objectContaining({ deviceId: device.id, state: "provisioning" }),
+        }),
+      );
+    });
+
+    it("--fix quarantines a stalled provisioning device through QuarantineCoordinator", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = new FakeDriver({
+        clock,
+        estimateMs: { boot: 2_000, provision: 1_000 },
+        platform: "ios",
+      });
+      const device = await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "pitlane-stuck",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      // Reality still shows the device (never actually booted) so the fix pass isn't
+      // also chasing an unrelated registry-device-missing finding on the same device.
+      driver.setManagedReality({
+        devices: [
+          {
+            address: "pitlane-stuck-address",
+            deviceId: "pitlane-stuck",
+            driverData: {},
+            runState: "stopped",
+          },
+        ],
+        processes: [],
+      });
+      const quarantine = new QuarantineCoordinator({
+        clock,
+        config: {
+          maxRetries: 3,
+          maxRetryBackoffMs: 300_000,
+          retryBackoffMs: 30_000,
+          retryBackoffMultiplier: 2,
+        },
+        decisions: new SerializedDecision(),
+        drivers: new DriverCatalog([driver]),
+        eventBus,
+        notifyAvailability: () => {},
+        registry,
+      });
+      clock.advance(9_001);
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        quarantine,
+        registry,
+      }).reconcile({ fix: true });
+
+      expect(report.findings).toContainEqual(
+        expect.objectContaining({ deviceId: device.id, kind: "stalled-transition" }),
+      );
+      expect(registry.snapshot.devices[0]?.state).toBe("quarantined");
+      expect(eventBus.replay().map((event) => event.event)).toContain("device.quarantined");
+    });
+
+    it("--fix never quarantines a device that (inconsistently) still carries a lease", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const filesystem = new MemoryFilesystem();
+      await filesystem.writeFileAtomic(
+        "/state.json",
+        JSON.stringify({
+          devices: [
+            {
+              createdAt: 1,
+              driverData: {},
+              driverDeviceId: "pitlane-stuck",
+              id: "dev_1",
+              lastLeaseEndedAt: 1,
+              spec: { model: "Phone", osVersion: "1", platform: "ios" },
+              state: "reclaiming",
+            },
+          ],
+          leases: [
+            {
+              deviceId: "dev_1",
+              grantedAt: 1,
+              id: "lse_1",
+              mode: "held",
+              requesterId: "agent",
+              ttlDeadline: 999_999,
+            },
+          ],
+        }),
+      );
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem,
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
+      const quarantine = { enterFromStalledTransition: vi.fn() };
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        quarantine,
+        registry,
+      }).reconcile({ fix: true });
+
+      expect(report.findings).toContainEqual(
+        expect.objectContaining({ deviceId: "dev_1", kind: "stalled-transition" }),
+      );
+      expect(quarantine.enterFromStalledTransition).not.toHaveBeenCalled();
+      expect(registry.snapshot.devices[0]?.state).toBe("reclaiming");
+    });
   });
 
   it("--fix reconciles an unleased device's state to observed reality in both directions", async () => {
@@ -648,7 +979,9 @@ describe("Doctor", () => {
       processes: [],
     });
 
-    await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile({ fix: true });
+    await new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry }).reconcile({
+      fix: true,
+    });
 
     const snapshot = registry.snapshot;
     const booted = snapshot.devices.find((device) => device.id === bootedOutside.id);
@@ -690,7 +1023,13 @@ describe("Doctor", () => {
       processes: [],
     });
 
-    const report = await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile({
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile({
       fix: true,
     });
 
@@ -741,7 +1080,9 @@ describe("Doctor", () => {
       processes: [],
     });
 
-    await new Doctor({ clock, drivers: [driver], eventBus, registry }).reconcile({ fix: true });
+    await new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry }).reconcile({
+      fix: true,
+    });
 
     const events = eventBus.replay();
     const foreignStateEvents = events.filter(
@@ -818,7 +1159,7 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-function config(): Config {
+function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {}): Config {
   return {
     diskPressure: { freeBytesThreshold: 1 },
     eventBuffer: { capacity: 10 },
@@ -846,6 +1187,11 @@ function config(): Config {
         retryBackoffMs: 30_000,
         retryBackoffMultiplier: 2,
       },
+    },
+    stalledTransition: {
+      thresholdMultiplier: 3,
+      minimumThresholdMs: 1_000,
+      ...stalledTransitionOverrides,
     },
   };
 }
