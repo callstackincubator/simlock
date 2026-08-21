@@ -15,6 +15,14 @@ const config: Config = {
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   eventBuffer: { capacity: 1000 },
   idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
+  warmPool: {
+    quarantine: {
+      maxRetries: 3,
+      maxRetryBackoffMs: 300_000,
+      retryBackoffMs: 30_000,
+      retryBackoffMultiplier: 2,
+    },
+  },
   lease: {
     detachedTtlMs: 15 * 60_000,
     heldTtlBackstopMs: 60 * 60_000,

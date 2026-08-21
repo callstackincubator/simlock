@@ -34,7 +34,7 @@ export interface RunningCapacity {
   readonly android: RunningCapacityEntry;
 }
 
-const RUNNING_STATES = new Set(["ready", "leased", "reclaiming"]);
+const RUNNING_STATES = new Set(["ready", "leased", "reclaiming", "quarantined"]);
 
 export function runningCapacity(
   devices: readonly CapacityDevice[],

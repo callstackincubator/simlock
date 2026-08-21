@@ -89,6 +89,7 @@ function createHarness(
       updateState(lease.deviceId, "ready");
     }),
   };
+  const quarantineRestore = { restore: vi.fn(() => void order.push("quarantine-restore")) };
   const converger = new StartupConverger({
     capacity: {
       get runningCapacity() {
@@ -99,6 +100,7 @@ function createHarness(
     cleanup,
     decisions: new SerializedDecision(),
     interruptedReclaimRecovery: recovery,
+    quarantineRestore,
     registry: {
       get snapshot() {
         return { devices, leases };
@@ -125,6 +127,7 @@ function createHarness(
     },
     leases,
     order,
+    quarantineRestore,
     recovery,
     releasedLeaseIds,
     releases,
@@ -142,8 +145,14 @@ describe("StartupConverger", () => {
 
     await harness.converger.converge();
 
-    expect(harness.order).toEqual(["timers", "recover:reclaiming", "cleanup:ready"]);
+    expect(harness.order).toEqual([
+      "timers",
+      "quarantine-restore",
+      "recover:reclaiming",
+      "cleanup:ready",
+    ]);
     expect(harness.timers.restoreExpiryTimers).toHaveBeenCalledOnce();
+    expect(harness.quarantineRestore.restore).toHaveBeenCalledOnce();
     expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
   });
 
