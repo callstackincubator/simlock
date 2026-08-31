@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import type { CapacityLimits, ResourceStrategyOptions } from "./capacity/index.js";
 import {
   BootTimeoutError,
   type Config,
@@ -33,12 +34,17 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25, ...overrides },
-    limits: {
-      android: { maxDevices: 1, maxRunning: 1 },
-      ios: { maxDevices: 1, maxRunning: 1 },
-      maxRunning: 1 + 1,
+    capacity: {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 1, maxRunning: 1 },
+          maxRunning: 1 + 1,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+      },
     },
-    ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
@@ -51,12 +57,18 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
   };
 }
 
+/** Narrows the config's capacity block, which the harness always builds as `resource`. */
+function resourceOptions(source: Config): ResourceStrategyOptions {
+  if (source.capacity.strategy !== "resource") throw new Error("expected the resource strategy");
+  return source.capacity.config;
+}
+
 async function createHarness(
   options: {
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
     readonly lease?: Partial<Config["lease"]>;
-    readonly limits?: Config["limits"];
+    readonly limits?: CapacityLimits;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -74,7 +86,15 @@ async function createHarness(
   });
   const baseConfig = config(options.lease);
   const engineConfig: Config =
-    options.limits === undefined ? baseConfig : { ...baseConfig, limits: options.limits };
+    options.limits === undefined
+      ? baseConfig
+      : {
+          ...baseConfig,
+          capacity: {
+            strategy: "resource",
+            config: { ...resourceOptions(baseConfig), limits: options.limits },
+          },
+        };
   const engine = new LeaseEngine({
     clock,
     config: engineConfig,

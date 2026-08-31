@@ -1,11 +1,5 @@
 export { type Config, type ConfigOverrides, loadConfig } from "./config.js";
 export {
-  canProvision,
-  canReserveRunning,
-  type CapacityDevice,
-  runningCapacity,
-} from "./capacity.js";
-export {
   type DeviceRecord,
   type DeviceSpec,
   type LeaseRecord,

@@ -1,5 +1,5 @@
 import type { Clock } from "../ports/index.js";
-import type { CapacityReservation } from "./capacity-coordinator.js";
+import type { CapacityReservation } from "./capacity/index.js";
 import type { DeviceRecord, DeviceSpec } from "./domain.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";

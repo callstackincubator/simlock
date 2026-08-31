@@ -601,7 +601,7 @@ export class DaemonServer {
       (["ios", "android"] as const).map((platform) => [
         platform,
         {
-          limit: this.options.config.limits[platform].maxDevices,
+          limit: this.options.capacity.deviceLimit(platform),
           ...running[platform],
           warm: warmDevices.filter((device) => device.spec.platform === platform).length,
           used: snapshot.devices.filter(

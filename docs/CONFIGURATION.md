@@ -7,13 +7,7 @@ a warning. Inspect the effective, merged configuration at any time with
 
 | Property                          | Description                                                                                                                                                                                                                  | Default                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `limits.maxRunning`               | Global cap on devices running at once, across both platforms.                                                                                                                                                                | Sum of `limits.ios.maxDevices` and `limits.android.maxDevices` |
-| `limits.ios.maxDevices`           | Max number of iOS simulators Simlock will manage at once.                                                                                                                                                                    | `max(1, cpuCount / 2)`                                         |
-| `limits.ios.maxRunning`           | Max number of iOS simulators running at once.                                                                                                                                                                                | Same as `limits.ios.maxDevices`                                |
-| `limits.android.maxDevices`       | Max number of Android emulators Simlock will manage at once.                                                                                                                                                                 | `max(1, min(cpuCount / 4, totalRamGb / 8))`                    |
-| `limits.android.maxRunning`       | Max number of Android emulators running at once.                                                                                                                                                                             | Same as `limits.android.maxDevices`                            |
-| `ramBudget.iosBytesPerDevice`     | RAM reserved per iOS simulator when computing capacity.                                                                                                                                                                      | `1.5 GiB`                                                       |
-| `ramBudget.androidBytesPerDevice` | RAM reserved per Android emulator when computing capacity.                                                                                                                                                                   | `4 GiB`                                                         |
+| `capacity.strategy`               | Which policy decides how many devices may exist and run at once: `resource` or `fixed`. The options under `capacity.config` are that strategy's own -- see [Capacity strategies](#capacity-strategies).                     | `resource`                                                      |
 | `idle.shutdownAfterMs`            | How long an unused device sits idle before Simlock shuts it down (tier 1, reclaims RAM).                                                                                                                                     | `10 minutes`                                                    |
 | `idle.deleteAfterMs`              | How long a shut-down device sits idle before Simlock deletes it (tier 2, reclaims disk).                                                                                                                                     | `1 hour`                                                        |
 | `warmPool.quarantine.maxRetries`  | Failed purge retries allowed on a quarantined device (after the triggering failure) before Simlock gives up and destroys it.                                                                                                | `3`                                                              |
@@ -42,19 +36,78 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `health.maxConcurrentRecoveries` must be positive integers.
 `stalledTransition.thresholdMultiplier` must be a number `>= 1`;
 `stalledTransition.minimumThresholdMs` must be a non-negative number.
+See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
+`simlock config` command itself.
+
+## Capacity strategies
+
+How many devices Simlock lets exist and run at once is decided by a capacity
+strategy. `capacity.strategy` picks one; `capacity.config` holds that
+strategy's own options, so its shape depends on the strategy you selected.
+
+### `resource` (default)
+
+Device and running ceilings derived from the machine, with a RAM budget on
+top: a device is only created if its budgeted RAM still fits under the
+machine's total, minus 4 GiB left for the OS.
+
+| Property                                        | Description                                                     | Default                                                                     |
+| ----------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `capacity.config.limits.maxRunning`             | Global cap on devices running at once, across both platforms.   | Sum of the two `maxDevices` values                                          |
+| `capacity.config.limits.ios.maxDevices`         | Max iOS simulators Simlock will manage at once.                 | `max(1, cpuCount / 2)`                                                      |
+| `capacity.config.limits.ios.maxRunning`         | Max iOS simulators running at once.                             | Same as `capacity.config.limits.ios.maxDevices`                             |
+| `capacity.config.limits.android.maxDevices`     | Max Android emulators Simlock will manage at once.              | `max(1, min(cpuCount / 4, totalRamGb / 8))`                                 |
+| `capacity.config.limits.android.maxRunning`     | Max Android emulators running at once.                          | Same as `capacity.config.limits.android.maxDevices`                         |
+| `capacity.config.ramBudget.iosBytesPerDevice`   | RAM reserved per iOS simulator when computing capacity.         | `1.5 GiB`                                                                    |
+| `capacity.config.ramBudget.androidBytesPerDevice` | RAM reserved per Android emulator when computing capacity.    | `4 GiB`                                                                      |
+
 Running limits are independent of managed-device limits — an omitted
 `maxRunning` defaults to its corresponding `maxDevices` value (and, at the
 global level, to their sum):
 
 ```json
 {
-  "limits": {
-    "maxRunning": 3,
-    "ios": { "maxDevices": 4, "maxRunning": 2 },
-    "android": { "maxDevices": 2, "maxRunning": 2 }
+  "capacity": {
+    "strategy": "resource",
+    "config": {
+      "limits": {
+        "maxRunning": 3,
+        "ios": { "maxDevices": 4, "maxRunning": 2 },
+        "android": { "maxDevices": 2, "maxRunning": 2 }
+      }
+    }
   }
 }
 ```
 
-See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
-`simlock config` command itself.
+### `fixed`
+
+A pinned number of devices, with no machine inspection at all: no RAM
+budget, and no CPU- or RAM-derived defaults. Use it when you want the
+concurrency to be exactly the number you wrote down, on every machine.
+
+| Property                              | Description                                                | Default                                    |
+| ------------------------------------- | ---------------------------------------------------------- | ------------------------------------------ |
+| `capacity.config.maxRunning`          | Devices running at once, across both platforms.            | `2`                                        |
+| `capacity.config.ios.maxRunning`      | iOS simulators running at once.                            | `capacity.config.maxRunning`               |
+| `capacity.config.ios.maxDevices`      | iOS simulators Simlock will manage at once.                | `capacity.config.ios.maxRunning`           |
+| `capacity.config.android.maxRunning`  | Android emulators running at once.                         | `capacity.config.maxRunning`               |
+| `capacity.config.android.maxDevices`  | Android emulators Simlock will manage at once.             | `capacity.config.android.maxRunning`       |
+
+`maxRunning` on its own is a complete configuration — the per-platform
+blocks exist only to carve that budget up:
+
+```json
+{
+  "capacity": { "strategy": "fixed", "config": { "maxRunning": 4 } }
+}
+```
+
+### Older config files
+
+Before capacity strategies existed, the `resource` options were spelled as
+top-level `limits` and `ramBudget` keys. Those still work exactly as they
+did — a config file written against an older Simlock keeps its behaviour
+without changes, and needs none. Setting them alongside an explicitly
+selected non-`resource` strategy is the one case Simlock warns about, since
+those settings would have no effect.

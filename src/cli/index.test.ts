@@ -1048,13 +1048,18 @@ function testConfig(): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
-    limits: {
-      android: { maxDevices: 1, maxRunning: 1 },
-      ios: { maxDevices: 1, maxRunning: 1 },
-      maxRunning: 1 + 1,
+    capacity: {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 1, maxRunning: 1 },
+          maxRunning: 1 + 1,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+      },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     warmPool: {
       quarantine: {
         maxRetries: 3,

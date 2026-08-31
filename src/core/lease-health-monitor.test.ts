@@ -38,13 +38,18 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
     },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
-    limits: {
-      android: { maxDevices: 2, maxRunning: 2 },
-      ios: { maxDevices: 2, maxRunning: 2 },
-      maxRunning: 4,
+    capacity: {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 2, maxRunning: 2 },
+          ios: { maxDevices: 2, maxRunning: 2 },
+          maxRunning: 4,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+      },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
   };
 }

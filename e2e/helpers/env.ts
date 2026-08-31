@@ -68,9 +68,9 @@ function errorMessage(error: unknown): string {
  * Capacity inputs the fake-driver lane pins so a flow's device budget comes from the
  * flow, never from the machine running it. `defaultConfig` derives the per-platform
  * device limits from `availableParallelism()` (a 2-core runner yields exactly one iOS
- * device), and `capacity.ts` independently gates on `totalmem()` minus a 4 GiB OS
- * reserve at 1.5 GiB per iOS device (a 7 GiB runner therefore admits two, whatever
- * `limits` says). A flow needing more concurrent devices than that passes on a dev
+ * device), and the `resource` capacity strategy independently gates on `totalmem()`
+ * minus a 4 GiB OS reserve at 1.5 GiB per iOS device (a 7 GiB runner therefore admits
+ * two, whatever `limits` says). A flow needing more concurrent devices than that passes on a dev
  * machine and wedges on a small CI runner -- the extra lease simply queues until the
  * test's own timeout, which reads as a hang rather than as "capacity refused".
  *
@@ -79,6 +79,10 @@ function errorMessage(error: unknown): string {
  * wired. Flows that exercise capacity itself override `limits` on top of this. The real
  * -SDK lane deliberately does not get this treatment: there the host's RAM is a real
  * constraint and the production defaults are what should apply.
+ *
+ * These are deliberately written in the pre-`capacity.strategy` spelling: the whole e2e
+ * lane then doubles as end-to-end coverage that a config file written against an older
+ * Simlock still configures the `resource` strategy correctly.
  */
 const FAKE_LANE_BASE_CONFIG: Record<string, unknown> = {
   limits: {

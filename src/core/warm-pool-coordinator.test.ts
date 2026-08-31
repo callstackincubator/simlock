@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats } from "../ports/index.js";
-import { CapacityCoordinator } from "./capacity-coordinator.js";
+import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -36,12 +36,17 @@ const config: Config = {
     },
   },
   lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
-  limits: {
-    android: { maxDevices: 2, maxRunning: 1 },
-    ios: { maxDevices: 2, maxRunning: 1 },
-    maxRunning: 1,
+  capacity: {
+    strategy: "resource",
+    config: {
+      limits: {
+        android: { maxDevices: 2, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 1 },
+        maxRunning: 1,
+      },
+      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+    },
   },
-  ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
   log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
 };
 
@@ -96,12 +101,14 @@ class TestRegistry {
 
 function capacity(): CapacityCoordinator {
   return new CapacityCoordinator(
-    config,
-    new FakeSystemStats({
-      cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
-      totalRamBytes: 32 * gibibyte,
-    }),
+    createCapacityStrategy(
+      config.capacity,
+      new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+    ),
   );
 }
 

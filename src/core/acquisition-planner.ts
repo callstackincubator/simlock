@@ -1,4 +1,4 @@
-import type { CapacityReservation, CapacityCoordinator } from "./capacity-coordinator.js";
+import type { CapacityReservation, CapacityCoordinator } from "./capacity/index.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
 import {
   type DeviceRecord,

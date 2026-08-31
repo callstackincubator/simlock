@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
-import { CapacityCoordinator } from "./capacity-coordinator.js";
+import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
@@ -38,12 +38,17 @@ function config(maxDevices = 1): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
-    limits: {
-      android: { maxDevices, maxRunning: 1 },
-      ios: { maxDevices, maxRunning: 1 },
-      maxRunning: 1,
+    capacity: {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices, maxRunning: 1 },
+          ios: { maxDevices, maxRunning: 1 },
+          maxRunning: 1,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+      },
     },
-    ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
@@ -77,8 +82,14 @@ async function createHarness(
   const claims = new DeviceOperationClaims();
   const catalog = new DriverCatalog(drivers);
   const capacity = new CapacityCoordinator(
-    config(options.maxDevices),
-    new FakeSystemStats({ cpuCount: 8, freeRamBytes: 32 * gibibyte, totalRamBytes: 32 * gibibyte }),
+    createCapacityStrategy(
+      config(options.maxDevices).capacity,
+      new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+    ),
   );
   const lifecycle = new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock);
   const provisioner = new DeviceProvisioner({ catalog, clock, decisions, lifecycle, registry });

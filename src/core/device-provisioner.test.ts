@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
-import { type CapacityReservation } from "./capacity-coordinator.js";
+import { type CapacityReservation } from "./capacity/index.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { DriverCatalog } from "./driver-catalog.js";

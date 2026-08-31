@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
-import { loadConfig } from "./index.js";
+import type { ResourceStrategyOptions } from "./capacity/index.js";
+import { type Config, loadConfig } from "./index.js";
+
+/** Narrows the capacity block for assertions on resource-strategy configs. */
+function resourceOptions(config: Config): ResourceStrategyOptions {
+  if (config.capacity.strategy !== "resource") throw new Error("expected the resource strategy");
+  return config.capacity.config;
+}
 
 const configPath = "/home/agent/.simlock/config.json";
 const gibibyte = 1024 ** 3;
@@ -22,11 +29,12 @@ describe("loadConfig", () => {
       systemStats: createStats(),
     });
 
-    expect(config.limits.ios.maxDevices).toBe(Math.max(1, Math.floor(8 / 2)));
-    expect(config.limits.android.maxDevices).toBe(
+    expect(config.capacity.strategy).toBe("resource");
+    expect(resourceOptions(config).limits.ios.maxDevices).toBe(Math.max(1, Math.floor(8 / 2)));
+    expect(resourceOptions(config).limits.android.maxDevices).toBe(
       Math.max(1, Math.min(Math.floor(8 / 4), Math.floor(32 / 8))),
     );
-    expect(config.limits).toMatchObject({
+    expect(resourceOptions(config).limits).toMatchObject({
       android: { maxRunning: 2 },
       ios: { maxRunning: 4 },
       maxRunning: 6,
@@ -57,7 +65,12 @@ describe("loadConfig", () => {
         heldTtlBackstopMs: 60 * 60_000,
         heartbeatIntervalMs: 5 * 60_000,
       },
-      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
+      capacity: {
+        strategy: "resource",
+        config: {
+          ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
+        },
+      },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
       warmPool: {
         quarantine: {
@@ -70,7 +83,7 @@ describe("loadConfig", () => {
       stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     });
     expect(Object.isFrozen(config)).toBe(true);
-    expect(Object.isFrozen(config.limits)).toBe(true);
+    expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
   });
 
   it("applies a file-level log override", async () => {
@@ -169,9 +182,9 @@ describe("loadConfig", () => {
       systemStats: createStats(),
     });
 
-    expect(config.limits.ios.maxDevices).toBe(3);
-    expect(config.limits.android.maxDevices).toBe(2);
-    expect(config.limits).toMatchObject({
+    expect(resourceOptions(config).limits.ios.maxDevices).toBe(3);
+    expect(resourceOptions(config).limits.android.maxDevices).toBe(2);
+    expect(resourceOptions(config).limits).toMatchObject({
       android: { maxRunning: 1 },
       ios: { maxRunning: 2 },
       maxRunning: 4,
@@ -193,7 +206,7 @@ describe("loadConfig", () => {
       systemStats: createStats(),
     });
 
-    expect(config.ramBudget).toEqual({
+    expect(resourceOptions(config).ramBudget).toEqual({
       androidBytesPerDevice: 5 * gibibyte,
       iosBytesPerDevice: 1.5 * gibibyte,
     });
@@ -371,5 +384,155 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow(path);
+  });
+});
+
+describe("loadConfig capacity strategies", () => {
+  async function load(
+    contents: unknown,
+    options: {
+      readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly warn?: (message: string) => void;
+    } = {},
+  ) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+    return loadConfig({
+      configPath,
+      filesystem,
+      systemStats: createStats(),
+      ...(options.overrides === undefined ? {} : { overrides: options.overrides }),
+      ...(options.warn === undefined ? {} : { warn: options.warn }),
+    });
+  }
+
+  it("selects the resource strategy when nothing names one", async () => {
+    const config = await load({});
+
+    expect(config.capacity.strategy).toBe("resource");
+  });
+
+  it("defaults the fixed strategy to a machine-independent pin", async () => {
+    const config = await load({ capacity: { strategy: "fixed" } });
+
+    expect(config.capacity).toEqual({ strategy: "fixed", config: { maxRunning: 2 } });
+  });
+
+  it("pins concurrency from a single key", async () => {
+    const config = await load({ capacity: { strategy: "fixed", config: { maxRunning: 4 } } });
+
+    expect(config.capacity.config).toEqual({ maxRunning: 4 });
+  });
+
+  it("lets an override switch the strategy chosen by the file", async () => {
+    const config = await load(
+      { capacity: { strategy: "resource" } },
+      { overrides: { capacity: { strategy: "fixed", config: { maxRunning: 6 } } } },
+    );
+
+    expect(config.capacity).toEqual({ strategy: "fixed", config: { maxRunning: 6 } });
+  });
+
+  it("starts from the selected strategy's defaults, not the default strategy's", async () => {
+    const config = await load({ capacity: { strategy: "fixed", config: { maxRunning: 3 } } });
+
+    expect(config.capacity.config).not.toHaveProperty("ramBudget");
+    expect(config.capacity.config).not.toHaveProperty("limits");
+  });
+
+  it("rejects a strategy name with no registered implementation", async () => {
+    await expect(load({ capacity: { strategy: "vibes" } })).rejects.toThrow("capacity.strategy");
+  });
+
+  it("hands capacity.config to the selected strategy's own validator", async () => {
+    await expect(
+      load({ capacity: { strategy: "fixed", config: { maxRunning: 0 } } }),
+    ).rejects.toThrow("capacity.config.maxRunning");
+  });
+
+  it("warns when capacity.config carries another strategy's keys", async () => {
+    const warn = vi.fn();
+    await load({ capacity: { strategy: "fixed", config: { ramBudget: {} } } }, { warn });
+
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "capacity.config.ramBudget"');
+  });
+});
+
+describe("loadConfig legacy capacity keys", () => {
+  async function load(
+    contents: unknown,
+    options: {
+      readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly warn?: (message: string) => void;
+    } = {},
+  ) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+    return loadConfig({
+      configPath,
+      filesystem,
+      systemStats: createStats(),
+      ...(options.overrides === undefined ? {} : { overrides: options.overrides }),
+      ...(options.warn === undefined ? {} : { warn: options.warn }),
+    });
+  }
+
+  it("folds top-level limits and ramBudget into the resource strategy's options", async () => {
+    const warn = vi.fn();
+    const config = await load(
+      {
+        limits: { ios: { maxDevices: 3, maxRunning: 3 }, maxRunning: 5 },
+        ramBudget: { iosBytesPerDevice: 2 * gibibyte },
+      },
+      { warn },
+    );
+
+    expect(config.capacity.strategy).toBe("resource");
+    expect(resourceOptions(config).limits).toMatchObject({
+      ios: { maxDevices: 3, maxRunning: 3 },
+      maxRunning: 5,
+    });
+    expect(resourceOptions(config).ramBudget.iosBytesPerDevice).toBe(2 * gibibyte);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("prefers capacity.config over the legacy spelling within one layer", async () => {
+    const config = await load({
+      capacity: { strategy: "resource", config: { limits: { maxRunning: 9 } } },
+      limits: { maxRunning: 2 },
+    });
+
+    expect(resourceOptions(config).limits.maxRunning).toBe(9);
+  });
+
+  it("keeps layer precedence when the layers disagree about spelling", async () => {
+    const config = await load(
+      { limits: { maxRunning: 8 } },
+      { overrides: { capacity: { strategy: "resource", config: { limits: { maxRunning: 4 } } } } },
+    );
+
+    expect(resourceOptions(config).limits.maxRunning).toBe(4);
+  });
+
+  it("lets a legacy override win over a capacity.config file value", async () => {
+    const config = await load(
+      { capacity: { strategy: "resource", config: { limits: { maxRunning: 8 } } } },
+      { overrides: { limits: { maxRunning: 4 } } },
+    );
+
+    expect(resourceOptions(config).limits.maxRunning).toBe(4);
+  });
+
+  it("warns and ignores legacy keys when another strategy is selected", async () => {
+    const warn = vi.fn();
+    const config = await load(
+      { capacity: { strategy: "fixed", config: { maxRunning: 3 } }, limits: { maxRunning: 8 } },
+      { warn },
+    );
+
+    expect(config.capacity).toEqual({ strategy: "fixed", config: { maxRunning: 3 } });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring limits"));
   });
 });

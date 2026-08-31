@@ -1,6 +1,6 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock } from "../ports/index.js";
-import type { CapacityDecision, CapacityDevice, RunningCapacity } from "./capacity.js";
+import type { CapacityDecision, CapacityDevice, RunningCapacity } from "./capacity/index.js";
 import {
   type DeviceRecord,
   type DeviceSpec,

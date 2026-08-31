@@ -1,4 +1,4 @@
-import type { RunningCapacity } from "./capacity.js";
+import type { CapacityPlatform, RunningCapacity } from "./capacity/index.js";
 import type { LeaseRecord, Platform } from "./domain.js";
 import type { DeviceRequest } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
@@ -26,6 +26,8 @@ export interface QueueControl {
 /** Read-only capacity view used by daemon status. */
 export interface CapacityReader {
   readonly runningCapacity: RunningCapacity;
+  /** Managed-device ceiling, taken from the live strategy rather than from config. */
+  deviceLimit(platform: CapacityPlatform): number;
 }
 
 /** Administrative lease expiry used by doctor reconciliation. */

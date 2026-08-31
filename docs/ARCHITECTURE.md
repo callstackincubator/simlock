@@ -61,8 +61,9 @@ MCP client ──spawns──> stdio MCP ┘                                    
 ## Core vs. drivers
 
 The core is platform-agnostic and written once: lease table, fair wait queue,
-managed-device registry, device-limit and RAM capacity accounting (RAM is the
-binding constraint for Android emulators), the device state machine, the
+managed-device registry, capacity accounting behind a pluggable strategy
+(the default derives limits from the machine and treats RAM as the binding
+constraint for Android emulators), the device state machine, the
 cleanup reaper, the leased-device health monitor, the event bus, and
 warm-pool *policy*.
 
@@ -85,7 +86,12 @@ devices) must require **no core changes**. If it does, the interface leaked.
 ## Running capacity
 
 Managed-device limits govern provisioning, while running limits govern any
-operation that starts a device. The core accounts `ready`, `leased`,
+operation that starts a device. Where those limits come from is a
+`CapacityStrategy`, selected by config: `resource` derives them from the
+machine and adds a RAM budget, `fixed` pins them to a configured number.
+Each strategy lives behind one entry point in `core/capacity/strategies/`
+and is registered in one map, so adding a policy touches neither the
+coordinator nor its callers. The core accounts `ready`, `leased`,
 `reclaiming`, and `quarantined` devices as running. A serialized,
 platform-agnostic reservation covers provisioning and boots from `shutdown`
 until the registry commits the resulting running or non-running state. Global
@@ -301,8 +307,8 @@ capacity coordinator into these direct transactional call chains:
   A release passes its committed result directly to `WarmPoolCoordinator`,
   which performs reclaim and warm-pool disposition — without the releasing
   caller waiting on it (see "Release hands the purge off").
-- `CapacityCoordinator` owns provisioning and running reservations while pure
-  capacity functions calculate limits. `DeviceOperationClaims` excludes
+- `CapacityCoordinator` owns provisioning and running reservations while the
+  configured `CapacityStrategy` decides the limits. `DeviceOperationClaims` excludes
   overlapping boot, eviction, cleanup, and nuke operations per device.
 - `CleanupReaper` evaluates pure rules and directly calls
   `CleanupActionExecutor`; the executor revalidates registry ownership,

@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import type { CapacityReservation } from "./capacity-coordinator.js";
+import type { CapacityReservation } from "./capacity/index.js";
 import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
 import {
   type DeviceOperationClaim,

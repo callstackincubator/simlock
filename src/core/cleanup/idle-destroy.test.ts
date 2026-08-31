@@ -27,12 +27,17 @@ const config: Config = {
     },
   },
   lease: { detachedTtlMs: 1, heldTtlBackstopMs: 1, heartbeatIntervalMs: 1 },
-  limits: {
-    android: { maxDevices: 1, maxRunning: 1 },
-    ios: { maxDevices: 1, maxRunning: 1 },
-    maxRunning: 1 + 1,
+  capacity: {
+    strategy: "resource",
+    config: {
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 1, maxRunning: 1 },
+        maxRunning: 1 + 1,
+      },
+      ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
+    },
   },
-  ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
   log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
 };
 

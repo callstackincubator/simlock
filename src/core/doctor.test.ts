@@ -1286,12 +1286,17 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
     },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
-    limits: {
-      android: { maxDevices: 1, maxRunning: 1 },
-      ios: { maxDevices: 1, maxRunning: 1 },
-      maxRunning: 1 + 1,
+    capacity: {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 1, maxRunning: 1 },
+          maxRunning: 1 + 1,
+        },
+        ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
+      },
     },
-    ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {

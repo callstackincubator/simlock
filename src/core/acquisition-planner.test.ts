@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { FakeSystemStats } from "../ports/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
-import { CapacityCoordinator } from "./capacity-coordinator.js";
+import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
@@ -31,12 +31,17 @@ const config: Config = {
     },
   },
   lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
-  limits: {
-    android: { maxDevices: 2, maxRunning: 2 },
-    ios: { maxDevices: 1, maxRunning: 1 },
-    maxRunning: 1,
+  capacity: {
+    strategy: "resource",
+    config: {
+      limits: {
+        android: { maxDevices: 2, maxRunning: 2 },
+        ios: { maxDevices: 1, maxRunning: 1 },
+        maxRunning: 1,
+      },
+      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+    },
   },
-  ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
   log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
 };
 
@@ -58,12 +63,14 @@ function device(
 function planner() {
   const claims = new DeviceOperationClaims();
   const capacity = new CapacityCoordinator(
-    config,
-    new FakeSystemStats({
-      cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
-      totalRamBytes: 32 * gibibyte,
-    }),
+    createCapacityStrategy(
+      config.capacity,
+      new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+    ),
   );
   return { claims, planner: new AcquisitionPlanner(capacity, claims) };
 }

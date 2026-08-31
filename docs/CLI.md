@@ -329,9 +329,12 @@ shows the current file with the immediately preceding one prepended.
 Show the effective configuration (defaults + config file + overrides):
 managed and running capacity limits, idle tiers T1/T2/T3, TTLs, disk-pressure
 threshold, and the daemon's log level/rotation cap (`log.level`,
-`log.rotateBytes`). With no args, prints everything. Running capacity
-uses `limits.maxRunning` globally and `limits.<platform>.maxRunning` for each
-driver; both must have room before provisioning or booting a shutdown device.
+`log.rotateBytes`). With no args, prints everything. The capacity numbers
+come from the selected capacity strategy (`capacity.strategy`, configured
+under `capacity.config` — see
+[CONFIGURATION.md](CONFIGURATION.md#capacity-strategies)). Whichever strategy
+is running, both a global and a per-platform running limit must have room
+before Simlock provisions or boots a shutdown device.
 
 ## Environment variables
 

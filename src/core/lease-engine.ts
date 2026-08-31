@@ -1,8 +1,8 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
-import type { RunningCapacity } from "./capacity.js";
+import type { RunningCapacity } from "./capacity/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
-import { CapacityCoordinator } from "./capacity-coordinator.js";
+import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.js";
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
@@ -88,7 +88,9 @@ export class LeaseEngine {
   readonly #warmPool: WarmPoolCoordinator;
 
   constructor(private readonly options: LeaseEngineOptions) {
-    this.#capacity = new CapacityCoordinator(options.config, options.systemStats);
+    this.#capacity = new CapacityCoordinator(
+      createCapacityStrategy(options.config.capacity, options.systemStats),
+    );
     this.claimReader = this.#claims;
     this.#planner = new AcquisitionPlanner(this.#capacity, this.#claims);
     this.#drivers = new DriverCatalog(options.drivers);
@@ -279,6 +281,12 @@ export class LeaseEngine {
   // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
   get runningCapacity(): RunningCapacity {
     return this.#capacity.runningCapacity(this.#capacityDevices());
+  }
+
+  /** The managed-device ceiling the live strategy enforces, for status reporting. */
+  // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
+  deviceLimit(platform: Platform): number {
+    return this.#capacity.deviceLimit(platform);
   }
 
   /** Safely converges unleased running devices after startup reconciliation. */

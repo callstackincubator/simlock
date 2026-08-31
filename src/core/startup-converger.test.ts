@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { RunningCapacity } from "./capacity.js";
+import type { RunningCapacity } from "./capacity/index.js";
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import type { DeviceRecord, DeviceState, LeaseRecord, Platform } from "./domain.js";
 import { SerializedDecision } from "./serialized-decision.js";
@@ -92,6 +92,7 @@ function createHarness(
   const quarantineRestore = { restore: vi.fn(() => void order.push("quarantine-restore")) };
   const converger = new StartupConverger({
     capacity: {
+      deviceLimit: () => limits.ios + limits.android,
       get runningCapacity() {
         return capacity(devices, limits);
       },

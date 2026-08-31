@@ -1,19 +1,35 @@
 import type { Filesystem, LogLevel, SystemStats } from "../ports/index.js";
-
-const GIBIBYTE = 1024 ** 3;
+import {
+  capacityStrategyNames,
+  capacityStrategyValidator,
+  DEFAULT_CAPACITY_STRATEGY,
+  defaultCapacityOptions,
+  isCapacityStrategyName,
+  type CapacityConfig,
+  type CapacityLimits,
+  type CapacityStrategyName,
+  type ResourceStrategyOptions,
+} from "./capacity/index.js";
+import { resourceOptionValidators } from "./capacity/strategies/resource/index.js";
+import {
+  booleanValue,
+  ConfigError,
+  invalidValue,
+  nonNegativeNumber,
+  numberAtLeast,
+  objectValidator,
+  positiveInteger,
+  positiveNumber,
+  requireObject,
+  stringUnion,
+  type Validator,
+  type Warn,
+} from "./validation.js";
 
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
 export interface Config {
-  readonly limits: {
-    readonly maxRunning: number;
-    readonly ios: { readonly maxDevices: number; readonly maxRunning: number };
-    readonly android: { readonly maxDevices: number; readonly maxRunning: number };
-  };
-  readonly ramBudget: {
-    readonly iosBytesPerDevice: number;
-    readonly androidBytesPerDevice: number;
-  };
+  readonly capacity: CapacityConfig;
   readonly idle: {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
@@ -58,22 +74,27 @@ export interface Config {
   };
 }
 
-export type ConfigOverrides = DeepPartial<Config>;
+/**
+ * The pre-`capacity` spelling of the resource strategy's options. Still accepted
+ * everywhere the new shape is, and folded into `capacity.config` before anything
+ * downstream sees it, so existing config files keep working untouched.
+ */
+export interface LegacyCapacityOverrides {
+  readonly limits?: DeepPartial<CapacityLimits>;
+  readonly ramBudget?: DeepPartial<ResourceStrategyOptions["ramBudget"]>;
+}
+
+export type ConfigOverrides = DeepPartial<Config> & LegacyCapacityOverrides;
 
 export interface LoadConfigOptions {
   readonly filesystem: Filesystem;
   readonly systemStats: SystemStats;
   readonly configPath?: string;
   readonly overrides?: ConfigOverrides;
-  readonly warn?: (message: string) => void;
+  readonly warn?: Warn;
 }
 
-class ConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConfigError";
-  }
-}
+type Layer = Record<string, unknown>;
 
 export async function loadConfig({
   configPath = DEFAULT_CONFIG_PATH,
@@ -82,12 +103,30 @@ export async function loadConfig({
   systemStats,
   warn = () => {},
 }: LoadConfigOptions): Promise<Config> {
-  const defaults = defaultConfig(systemStats);
   const fromFile = await readConfigFile(filesystem, configPath);
-  const fileConfig = validateConfigLayer(fromFile, "", warn);
-  const overrideConfig = validateConfigLayer(overrides ?? {}, "", warn);
+  const fromOverrides = overrides ?? {};
 
-  const merged = mergeConfig(mergeConfig(defaults, fileConfig), overrideConfig);
+  // The strategy has to be known before anything else can be validated or
+  // defaulted: it decides which options block `capacity.config` is, and which
+  // defaults the merge starts from.
+  const strategy = resolveStrategyName([fromFile, fromOverrides]);
+  const validators = configValidators(strategy);
+
+  const fileConfig = normalizeLayer(
+    validateConfigLayer(fromFile, "", warn, validators),
+    strategy,
+    warn,
+  );
+  const overrideConfig = normalizeLayer(
+    validateConfigLayer(fromOverrides, "", warn, validators),
+    strategy,
+    warn,
+  );
+
+  const merged = mergeConfig(
+    mergeConfig(defaultConfig(systemStats, strategy), fileConfig),
+    overrideConfig,
+  ) as unknown as Config;
   validateHeartbeatInterval(merged);
   return deepFreeze(merged);
 }
@@ -103,26 +142,84 @@ function validateHeartbeatInterval(config: Config): void {
   }
 }
 
-function defaultConfig(systemStats: SystemStats): Config {
-  const cpuCount = systemStats.cpuCount();
-  const totalRamGb = systemStats.totalRamBytes() / GIBIBYTE;
+/** Last layer that names a strategy wins; absent everywhere means the default. */
+function resolveStrategyName(layers: readonly unknown[]): CapacityStrategyName {
+  let resolved: CapacityStrategyName = DEFAULT_CAPACITY_STRATEGY;
 
-  const iosMaxDevices = Math.max(1, Math.floor(cpuCount / 2));
-  const androidMaxDevices = Math.max(
-    1,
-    Math.min(Math.floor(cpuCount / 4), Math.floor(totalRamGb / 8)),
-  );
+  for (const layer of layers) {
+    const capacity = requireObject(layer, "config")["capacity"];
+    if (capacity === undefined) continue;
 
+    const candidate = requireObject(capacity, "capacity")["strategy"];
+    if (candidate === undefined) continue;
+
+    if (!isCapacityStrategyName(candidate)) {
+      throw invalidValue(
+        "capacity.strategy",
+        `one of ${capacityStrategyNames.map((name) => `"${name}"`).join(", ")}`,
+      );
+    }
+
+    resolved = candidate;
+  }
+
+  return resolved;
+}
+
+/** The pre-`capacity` spelling of the resource strategy's options. */
+const LEGACY_RESOURCE_KEYS = ["limits", "ramBudget"] as const;
+
+/**
+ * Folds the legacy top-level keys into `capacity.config`. Runs per layer, before
+ * merging, so precedence between layers is unaffected by which spelling each one
+ * happens to use. Within a layer `capacity.config` wins.
+ */
+function normalizeLayer(layer: Layer, strategy: CapacityStrategyName, warn: Warn): Layer {
+  const legacy = pick(layer, LEGACY_RESOURCE_KEYS);
+  const present = Object.keys(legacy);
+  if (present.length === 0) return layer;
+
+  const rest = omit(layer, LEGACY_RESOURCE_KEYS);
+  if (strategy !== "resource") {
+    warn(legacyIgnoredMessage(present, strategy));
+    return rest;
+  }
+
+  const capacity = asObject(rest["capacity"]);
   return {
-    limits: {
-      maxRunning: iosMaxDevices + androidMaxDevices,
-      ios: { maxDevices: iosMaxDevices, maxRunning: iosMaxDevices },
-      android: { maxDevices: androidMaxDevices, maxRunning: androidMaxDevices },
-    },
-    ramBudget: {
-      iosBytesPerDevice: 1.5 * GIBIBYTE,
-      androidBytesPerDevice: 4 * GIBIBYTE,
-    },
+    ...rest,
+    capacity: { ...capacity, config: mergeConfig(legacy, asObject(capacity["config"])) },
+  };
+}
+
+function legacyIgnoredMessage(keys: readonly string[], strategy: CapacityStrategyName): string {
+  const subject = keys.length > 1 ? "these keys configure" : "this key configures";
+  return (
+    `Ignoring ${keys.join(" and ")}: ${subject} the "resource" capacity strategy, ` +
+    `but "${strategy}" is selected. Move the settings under "capacity.config".`
+  );
+}
+
+function pick(layer: Layer, keys: readonly string[]): Layer {
+  return Object.fromEntries(
+    keys.filter((key) => layer[key] !== undefined).map((key) => [key, layer[key]]),
+  );
+}
+
+function omit(layer: Layer, keys: readonly string[]): Layer {
+  return Object.fromEntries(Object.entries(layer).filter(([key]) => !keys.includes(key)));
+}
+
+function asObject(value: unknown): Layer {
+  return isObject(value) ? value : {};
+}
+
+function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName): Config {
+  return {
+    capacity: {
+      strategy,
+      config: defaultCapacityOptions(strategy, systemStats),
+    } as CapacityConfig,
     idle: {
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
@@ -140,7 +237,7 @@ function defaultConfig(systemStats: SystemStats): Config {
       detachedTtlMs: 15 * 60_000,
       heartbeatIntervalMs: 5 * 60_000,
     },
-    diskPressure: { freeBytesThreshold: 10 * GIBIBYTE },
+    diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     health: {
@@ -177,14 +274,15 @@ async function readConfigFile(filesystem: Filesystem, configPath: string): Promi
 function validateConfigLayer(
   value: unknown,
   path: string,
-  warn: (message: string) => void,
-): ConfigOverrides {
+  warn: Warn,
+  validators: Record<string, Validator>,
+): Layer {
   const object = requireObject(value, path || "config");
-  const result: Record<string, unknown> = {};
+  const result: Layer = {};
 
   for (const [key, child] of Object.entries(object)) {
     const childPath = path === "" ? key : `${path}.${key}`;
-    const validator = validators[key as keyof typeof validators];
+    const validator = validators[key];
 
     if (validator === undefined) {
       warn(`Unknown config key: "${childPath}"`);
@@ -194,138 +292,57 @@ function validateConfigLayer(
     result[key] = validator(child, childPath, warn);
   }
 
-  return result as ConfigOverrides;
-}
-
-type Validator = (value: unknown, path: string, warn: (message: string) => void) => unknown;
-
-const validators = {
-  limits: objectValidator({
-    maxRunning: positiveInteger,
-    ios: objectValidator({ maxDevices: positiveInteger, maxRunning: positiveInteger }),
-    android: objectValidator({ maxDevices: positiveInteger, maxRunning: positiveInteger }),
-  }),
-  ramBudget: objectValidator({
-    iosBytesPerDevice: nonNegativeNumber,
-    androidBytesPerDevice: nonNegativeNumber,
-  }),
-  idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
-  warmPool: objectValidator({
-    quarantine: objectValidator({
-      maxRetries: positiveInteger,
-      retryBackoffMs: nonNegativeNumber,
-      retryBackoffMultiplier: numberAtLeast(1),
-      maxRetryBackoffMs: nonNegativeNumber,
-    }),
-  }),
-  lease: objectValidator({
-    heldTtlBackstopMs: nonNegativeNumber,
-    detachedTtlMs: nonNegativeNumber,
-    heartbeatIntervalMs: positiveInteger,
-  }),
-  diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
-  eventBuffer: objectValidator({ capacity: positiveInteger }),
-  log: objectValidator({ level: logLevel, rotateBytes: positiveInteger }),
-  health: objectValidator({
-    enabled: booleanValue,
-    probeIntervalMs: positiveNumber,
-    stableObservations: positiveInteger,
-    maxRecoveryAttempts: positiveInteger,
-    recoveryBackoffMs: positiveNumber,
-    maxConcurrentRecoveries: positiveInteger,
-  }),
-  stalledTransition: objectValidator({
-    thresholdMultiplier: numberAtLeast(1),
-    minimumThresholdMs: nonNegativeNumber,
-  }),
-} satisfies Record<string, Validator>;
-
-function objectValidator(shape: Record<string, Validator>): Validator {
-  return (value, path, warn) => {
-    const object = requireObject(value, path);
-    const result: Record<string, unknown> = {};
-
-    for (const [key, child] of Object.entries(object)) {
-      const childPath = `${path}.${key}`;
-      const validator = shape[key];
-
-      if (validator === undefined) {
-        warn(`Unknown config key: "${childPath}"`);
-        continue;
-      }
-
-      result[key] = validator(child, childPath, warn);
-    }
-
-    return result;
-  };
-}
-
-function positiveInteger(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw invalidValue(path, "a positive integer");
-  }
-
-  return value;
+  return result;
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 
-function logLevel(value: unknown, path: string): LogLevel {
-  if (typeof value !== "string" || !LOG_LEVELS.includes(value as LogLevel)) {
-    throw invalidValue(path, `one of ${LOG_LEVELS.map((level) => `"${level}"`).join(", ")}`);
-  }
-
-  return value as LogLevel;
-}
-
-function nonNegativeNumber(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw invalidValue(path, "a non-negative number");
-  }
-
-  return value;
-}
-
-function positiveNumber(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw invalidValue(path, "a positive number");
-  }
-
-  return value;
-}
-
-function booleanValue(value: unknown, path: string): boolean {
-  if (typeof value !== "boolean") {
-    throw invalidValue(path, "a boolean");
-  }
-
-  return value;
-}
-
-function numberAtLeast(minimum: number): Validator {
-  return (value: unknown, path: string) => {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
-      throw invalidValue(path, `a number >= ${minimum}`);
-    }
-
-    return value;
+/**
+ * The `capacity.config` validator is the selected strategy's own, so a strategy
+ * owns its options end to end and nothing here has to know their shape.
+ */
+function configValidators(strategy: CapacityStrategyName): Record<string, Validator> {
+  return {
+    capacity: objectValidator({
+      strategy: stringUnion(capacityStrategyNames),
+      config: capacityStrategyValidator(strategy),
+    }),
+    // Legacy spelling of the resource options; still type-checked here so a typo
+    // inside them is still reported rather than silently dropped.
+    ...resourceOptionValidators,
+    idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
+    warmPool: objectValidator({
+      quarantine: objectValidator({
+        maxRetries: positiveInteger,
+        retryBackoffMs: nonNegativeNumber,
+        retryBackoffMultiplier: numberAtLeast(1),
+        maxRetryBackoffMs: nonNegativeNumber,
+      }),
+    }),
+    lease: objectValidator({
+      heldTtlBackstopMs: nonNegativeNumber,
+      detachedTtlMs: nonNegativeNumber,
+      heartbeatIntervalMs: positiveInteger,
+    }),
+    diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
+    eventBuffer: objectValidator({ capacity: positiveInteger }),
+    log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
+    health: objectValidator({
+      enabled: booleanValue,
+      probeIntervalMs: positiveNumber,
+      stableObservations: positiveInteger,
+      maxRecoveryAttempts: positiveInteger,
+      recoveryBackoffMs: positiveNumber,
+      maxConcurrentRecoveries: positiveInteger,
+    }),
+    stalledTransition: objectValidator({
+      thresholdMultiplier: numberAtLeast(1),
+      minimumThresholdMs: nonNegativeNumber,
+    }),
   };
 }
 
-function requireObject(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw invalidValue(path, "an object");
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function invalidValue(path: string, expected: string): ConfigError {
-  return new ConfigError(`Invalid config value for "${path}": expected ${expected}`);
-}
-
-function mergeConfig<Base extends object>(base: Base, overrides: DeepPartial<Base>): Base {
+function mergeConfig<Base extends object>(base: Base, overrides: object): Base {
   const merged: Record<string, unknown> = { ...(base as Record<string, unknown>) };
 
   for (const [key, override] of Object.entries(overrides)) {

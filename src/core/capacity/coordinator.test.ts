@@ -1,53 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeSystemStats } from "../ports/index.js";
-import type { Config } from "./config.js";
-import { CapacityCoordinator } from "./capacity-coordinator.js";
+import { FakeSystemStats } from "../../ports/index.js";
+import { CapacityCoordinator } from "./coordinator.js";
+import { resourceStrategy } from "./strategies/resource/index.js";
 
 const gibibyte = 1024 ** 3;
-const config: Config = {
-  diskPressure: { freeBytesThreshold: 10 * gibibyte },
-  eventBuffer: { capacity: 1000 },
-  health: {
-    enabled: true,
-    maxConcurrentRecoveries: 1,
-    maxRecoveryAttempts: 3,
-    probeIntervalMs: 30_000,
-    recoveryBackoffMs: 5_000,
-    stableObservations: 2,
-  },
-  stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-  idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
-  warmPool: {
-    quarantine: {
-      maxRetries: 3,
-      maxRetryBackoffMs: 300_000,
-      retryBackoffMs: 30_000,
-      retryBackoffMultiplier: 2,
-    },
-  },
-  lease: {
-    detachedTtlMs: 15 * 60_000,
-    heldTtlBackstopMs: 60 * 60_000,
-    heartbeatIntervalMs: 5 * 60_000,
-  },
-  limits: {
-    android: { maxDevices: 4, maxRunning: 2 },
-    ios: { maxDevices: 1, maxRunning: 1 },
-    maxRunning: 2,
-  },
-  ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
-  log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-};
 
 function coordinator(): CapacityCoordinator {
   return new CapacityCoordinator(
-    config,
-    new FakeSystemStats({
-      cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
-      totalRamBytes: 32 * gibibyte,
-    }),
+    resourceStrategy.create(
+      {
+        limits: {
+          android: { maxDevices: 4, maxRunning: 2 },
+          ios: { maxDevices: 1, maxRunning: 1 },
+          maxRunning: 2,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 1.5 * gibibyte },
+      },
+      new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+    ),
   );
 }
 
@@ -106,5 +81,9 @@ describe("CapacityCoordinator", () => {
       global: { maxRunning: 2, overLimit: false, reserved: 1, running: 0 },
       ios: { maxRunning: 1, overLimit: false, reserved: 1, running: 0 },
     });
+  });
+
+  it("delegates the device ceiling to the strategy it was given", () => {
+    expect(coordinator().deviceLimit("android")).toBe(4);
   });
 });

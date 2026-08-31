@@ -1280,12 +1280,17 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       heartbeatIntervalMs: 5_000,
       ...leaseOverrides,
     },
-    limits: {
-      android: { maxDevices: 1, maxRunning: 1 },
-      ios: { maxDevices: 1, maxRunning: 1 },
-      maxRunning: 1 + 1,
+    capacity: {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 1, maxRunning: 1 },
+          maxRunning: 1 + 1,
+        },
+        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+      },
     },
-    ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
