@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
 import {
+  CryptoTokenSecrets,
   FakeClock,
   FakeParentWatch,
   FakeSystemStats,
@@ -15,6 +16,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
 } from "../ports/index.js";
+import { TokenStore } from "../http/token-store.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
 import { connectExistingDaemon } from "../daemon-client/client.js";
@@ -930,6 +932,117 @@ describe("CLI boundary", () => {
   });
 });
 
+describe("simlock token", () => {
+  it("creates an agent token, printing the record and secret on one JSON line", async () => {
+    const { environment, output } = tokenHarness();
+
+    await expect(
+      runCli(["token", "create", "--role", "agent", "--label", "ci-runner"], environment),
+    ).resolves.toBe(0);
+    expect(output.stderr).toBe("");
+    const parsed = JSON.parse(output.stdout) as {
+      secret: string;
+      token: { id: string; role: string; label: string; createdAt: number };
+    };
+    expect(parsed.token).toEqual({
+      createdAt: 1_000,
+      id: "tok_1",
+      label: "ci-runner",
+      role: "agent",
+    });
+    expect(parsed.secret).toMatch(/^slk_/);
+    expect(JSON.stringify(parsed.token)).not.toContain("hash");
+  });
+
+  it("creates an operator token without a label, omitting the field entirely", async () => {
+    const { environment, output } = tokenHarness();
+
+    await expect(runCli(["token", "create", "--role", "operator"], environment)).resolves.toBe(0);
+    const parsed = JSON.parse(output.stdout) as { token: Record<string, unknown> };
+    expect(parsed.token.role).toBe("operator");
+    expect("label" in parsed.token).toBe(false);
+  });
+
+  it("rejects a missing --role as a structured usage error", async () => {
+    const { environment, output } = tokenHarness();
+
+    await expect(runCli(["token", "create"], environment)).resolves.toBe(2);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "USAGE", message: expect.stringContaining("--role") },
+    });
+  });
+
+  it("rejects an invalid --role as a structured usage error", async () => {
+    const { environment, output } = tokenHarness();
+
+    await expect(runCli(["token", "create", "--role", "superuser"], environment)).resolves.toBe(2);
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
+  });
+
+  it("lists created tokens without exposing their hash", async () => {
+    const { environment, output, store } = tokenHarness();
+    await store.create("agent", "one");
+    await store.create("operator", "two");
+
+    await expect(runCli(["token", "list"], environment)).resolves.toBe(0);
+    const parsed = JSON.parse(output.stdout) as { tokens: Array<Record<string, unknown>> };
+    expect(parsed.tokens.map((token) => token.label)).toEqual(["one", "two"]);
+    expect(JSON.stringify(parsed.tokens)).not.toContain("hash");
+  });
+
+  it("revokes an existing token", async () => {
+    const { environment, output, store } = tokenHarness();
+    const { record } = await store.create("agent");
+
+    await expect(runCli(["token", "revoke", record.id], environment)).resolves.toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({ revoked: true });
+    await expect(store.list()).resolves.toEqual([]);
+  });
+
+  it("reports UNKNOWN_TOKEN revoking a token id that does not exist", async () => {
+    const { environment, output } = tokenHarness();
+
+    await expect(runCli(["token", "revoke", "tok_missing"], environment)).resolves.toBe(1);
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "UNKNOWN_TOKEN", message: expect.stringContaining("tok_missing") },
+    });
+  });
+
+  it("prints usage for the bare command and --help without touching the store", async () => {
+    const { environment, output } = tokenHarness();
+
+    await expect(runCli(["token"], environment)).resolves.toBe(0);
+    expect(output.stdout).toContain("simlock token create");
+    expect(output.stdout).toContain("simlock token list");
+    expect(output.stdout).toContain("simlock token revoke");
+  });
+
+  it("rejects an unknown token subcommand", async () => {
+    const { environment, output } = tokenHarness();
+
+    await expect(runCli(["token", "bogus"], environment)).resolves.toBe(2);
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
+  });
+});
+
+function tokenHarness(): {
+  environment: CliEnvironment;
+  output: ReturnType<typeof outputCapture>;
+  store: TokenStore;
+} {
+  const output = outputCapture();
+  const store = new TokenStore({
+    clock: new FakeClock(1_000),
+    filesystem: new MemoryFilesystem(),
+    idGenerator: sequence(),
+    path: "/tokens.json",
+    secrets: new CryptoTokenSecrets(),
+  });
+  return { environment: output.environmentWith({ tokenStore: store }), output, store };
+}
+
 class StubConnection implements DaemonConnection {
   readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
   closed = false;
@@ -1046,6 +1159,7 @@ function testConfig(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     capacity: {

@@ -156,6 +156,7 @@ function config(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     capacity: {

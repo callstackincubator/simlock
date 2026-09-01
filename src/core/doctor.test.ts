@@ -1311,5 +1311,6 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       minimumThresholdMs: 1_000,
       ...stalledTransitionOverrides,
     },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
   };
 }

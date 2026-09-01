@@ -21,6 +21,7 @@ export interface LeaseCommands {
 export interface QueueControl {
   readonly queueDepth: number;
   detachQueuedProgress(requesterId: string): Promise<void>;
+  cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable">;
 }
 
 /** Read-only capacity view used by daemon status. */
