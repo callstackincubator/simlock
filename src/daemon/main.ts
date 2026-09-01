@@ -89,6 +89,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const drivers =
     options.drivers ??
     (await discoverDrivers({
+      acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
       clock,
       downloadTimeoutMs: config.downloads.timeoutMs,
       filesystem,
@@ -175,8 +176,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 }
 
 export interface DriverDiscoveryContext {
+  /** Threaded into the Android driver's `downloads.acceptAndroidLicenses` gate; defaults to `false` when omitted. */
+  readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
-  /** Threaded into the iOS driver's `xcodebuild -downloadPlatform` timeout; defaults to the driver's own default when omitted. */
+  /**
+   * Threaded into the iOS driver's `xcodebuild -downloadPlatform` timeout and the Android
+   * driver's `sdkmanager --install` / `--licenses` timeout; defaults to each driver's own
+   * default (mirroring `downloads.timeoutMs`'s config default) when omitted.
+   */
   readonly downloadTimeoutMs?: number;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
@@ -209,7 +216,11 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
   try {
     drivers.push(
       await AndroidDriver.create({
+        acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
         clock: options.clock,
+        ...(options.downloadTimeoutMs === undefined
+          ? {}
+          : { downloadTimeoutMs: options.downloadTimeoutMs }),
         env: process.env,
         filesystem: options.filesystem,
         homeDirectory: homedir(),

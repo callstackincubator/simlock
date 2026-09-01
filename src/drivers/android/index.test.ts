@@ -11,7 +11,12 @@ import {
   type ScriptedProcessExpectation,
   SystemClock,
 } from "../../ports/index.js";
-import { AndroidDriver, SdkMissingError } from "./index.js";
+import {
+  AndroidDriver,
+  AndroidLicenseNotAcceptedError,
+  SdkMissingError,
+  type AndroidDriverDiagnostic,
+} from "./index.js";
 
 const sdk = "/android-sdk";
 const home = "/home/simlock";
@@ -832,6 +837,290 @@ describe("AndroidDriver", () => {
     const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_legacy");
     expect(device?.mark).toBeUndefined();
   });
+
+  describe("device-profile sources", () => {
+    it("resolves a devices.xml-only model and applies its properties to config.ini before the config hash is captured", async () => {
+      const filesystem = await androidFilesystem();
+      await writeDevicesXml(filesystem, customDeviceXml("Custom A", 4096));
+      // `avdmanager create avd` is scripted (not a real process), so it never creates the AVD
+      // directory the way it would for real -- seed it here the same way, since applying
+      // hardware properties to config.ini right after create relies on that directory existing.
+      await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.avdmanager, [
+          "create",
+          "avd",
+          "-n",
+          "simlock_one",
+          "-k",
+          /.+/,
+          "-d",
+          "pixel_8",
+        ]),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+
+      const spec = await driver.resolveSpec(
+        { model: "Custom A", osVersion: "34", platform: "android" },
+        { allowDownload: false },
+      );
+      expect(spec).toEqual({ model: "Custom A", osVersion: "34", platform: "android" });
+
+      const device = await driver.provision(spec);
+
+      const config = await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`);
+      expect(config).toContain("hw.device.name=Custom A");
+      expect(config).toContain("hw.ramSize=4096");
+      // The avdmanager `-d` seed uses a built-in device only to skip the interactive prompt --
+      // it must never leak into the resolved spec or the applied hardware properties.
+      expect(config).not.toContain("pixel_8");
+      expect(device.driverData).toMatchObject({ avdName: "simlock_one" });
+    });
+
+    it("captures differing hardware properties in the config hash, proving they land before it is computed", async () => {
+      const buildHarness = async (ramMiB: number) => {
+        const filesystem = await androidFilesystem();
+        await writeDevicesXml(filesystem, customDeviceXml("Custom A", ramMiB));
+        await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
+        const runner = new ScriptedProcessRunner([
+          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+          processResult(binaries.avdmanager, [
+            "create",
+            "avd",
+            "-n",
+            "simlock_one",
+            "-k",
+            /.+/,
+            "-d",
+            "pixel_8",
+          ]),
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ]);
+        const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+        const spec = await driver.resolveSpec(
+          { model: "Custom A", osVersion: "34", platform: "android" },
+          { allowDownload: false },
+        );
+        return driver.provision(spec);
+      };
+
+      const lowRam = await buildHarness(2048);
+      const highRam = await buildHarness(4096);
+
+      expect((lowRam.driverData as { configHash: string }).configHash).not.toBe(
+        (highRam.driverData as { configHash: string }).configHash,
+      );
+    });
+
+    it("shadows a devices.xml profile with a built-in one of the same name and never applies properties", async () => {
+      const filesystem = await androidFilesystem();
+      // Same name as the built-in fixture's "Pixel 8" -- the built-in source is registered
+      // first, so it must win and the devices.xml properties must never be touched.
+      await writeDevicesXml(filesystem, customDeviceXml("Pixel 8", 4096));
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.avdmanager, [
+          "create",
+          "avd",
+          "-n",
+          "simlock_one",
+          "-k",
+          /.+/,
+          "-d",
+          "pixel_8",
+        ]),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+
+      const spec = await driver.resolveSpec(
+        { model: "Pixel 8", osVersion: "34", platform: "android" },
+        { allowDownload: false },
+      );
+      await driver.provision(spec);
+
+      // Only one `avdmanager list device` call happened (asserted implicitly by the runner
+      // never receiving the unscripted second call a `properties`-profile seed lookup would
+      // require), and no properties were merged into config.ini -- it was never even written.
+      await expect(filesystem.exists(`${avdDirectory}/simlock_one.avd/config.ini`)).resolves.toBe(
+        false,
+      );
+    });
+
+    it("surfaces malformed devices.xml as a diagnostic and falls through to UnknownModelError, never throwing from the parse itself", async () => {
+      const filesystem = await androidFilesystem();
+      await filesystem.mkdirp(`${home}/.android`);
+      await filesystem.writeFileAtomic(`${home}/.android/devices.xml`, "not xml at all {{{");
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      ]);
+      const diagnostics: AndroidDriverDiagnostic[] = [];
+      const driver = await createDriver(filesystem, runner, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      await expect(
+        driver.resolveSpec(
+          { model: "Nonexistent Model", osVersion: "34", platform: "android" },
+          { allowDownload: false },
+        ),
+      ).rejects.toMatchObject({ name: "UnknownModelError" });
+
+      expect(diagnostics).toEqual([
+        expect.objectContaining({ kind: "device-profile-source-unreadable" }),
+      ]);
+    });
+  });
+
+  describe("Android SDK license handling", () => {
+    const licenseNotAcceptedOutput =
+      "Warning: License for package Android SDK Platform 35 not accepted.\n\n" +
+      "1 package(s) were skipped due to license issues. Please accept the license(s) and try " +
+      "again.\nTo resolve, run: sdkmanager --licenses\n";
+
+    it("fails naming downloads.acceptAndroidLicenses when licenses are unaccepted and the flag is off", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: { code: 1, stderr: "", stdout: licenseNotAcceptedOutput },
+        },
+      ]);
+      const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: false });
+
+      const error = await driver
+        .resolveSpec(
+          { model: "Pixel 8", osVersion: "35", platform: "android" },
+          { allowDownload: true },
+        )
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(AndroidLicenseNotAcceptedError);
+      expect((error as Error).message).toContain("downloads.acceptAndroidLicenses");
+      expect((error as Error).message).toContain("sdkmanager --licenses");
+    });
+
+    it("accepts licenses through piped confirmation and retries the install once when the flag is on", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: { code: 1, stderr: "", stdout: licenseNotAcceptedOutput },
+        },
+        processResult(binaries.sdkmanager, ["--licenses"], "All licenses accepted.\n"),
+        processResult(binaries.sdkmanager, [
+          "--install",
+          "system-images;android-35;google_apis;arm64-v8a",
+        ]),
+      ]);
+      const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: true });
+
+      await expect(
+        driver.resolveSpec(
+          { model: "Pixel 8", osVersion: "35", platform: "android" },
+          { allowDownload: true },
+        ),
+      ).resolves.toEqual({ model: "Pixel 8", osVersion: "35", platform: "android" });
+
+      const licensesCall = runner.calls.find(
+        (call) => call.command === binaries.sdkmanager && call.args[0] === "--licenses",
+      );
+      expect(licensesCall?.options.input).toBe("y\n".repeat(100));
+      // Exactly one retry: install, licenses, install again -- never a second acceptance pass.
+      expect(runner.calls.filter((call) => call.args[0] === "--install")).toHaveLength(2);
+    });
+
+    it("still fails when the install is rejected again after accepting licenses", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: { code: 1, stderr: "", stdout: licenseNotAcceptedOutput },
+        },
+        processResult(binaries.sdkmanager, ["--licenses"], "All licenses accepted.\n"),
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: { code: 1, stderr: "still refusing", stdout: "" },
+        },
+      ]);
+      const driver = await createDriver(filesystem, runner, { acceptAndroidLicenses: true });
+
+      await expect(
+        driver.resolveSpec(
+          { model: "Pixel 8", osVersion: "35", platform: "android" },
+          { allowDownload: true },
+        ),
+      ).rejects.toMatchObject({ name: "DriverCrashError" });
+    });
+  });
+
+  describe("download timeout", () => {
+    it("threads the configured downloadTimeoutMs into the sdkmanager install call", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.sdkmanager, [
+          "--install",
+          "system-images;android-35;google_apis;arm64-v8a",
+        ]),
+      ]);
+      const driver = await createDriver(filesystem, runner, { downloadTimeoutMs: 42_000 });
+
+      await driver.resolveSpec(
+        { model: "Pixel 8", osVersion: "35", platform: "android" },
+        { allowDownload: true },
+      );
+
+      const installCall = runner.calls.find(
+        (call) => call.command === binaries.sdkmanager && call.args[0] === "--install",
+      );
+      expect(installCall?.options.timeoutMs).toBe(42_000);
+    });
+
+    it("defaults to the same 20-minute timeout as before this option existed", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.sdkmanager, [
+          "--install",
+          "system-images;android-35;google_apis;arm64-v8a",
+        ]),
+      ]);
+      const driver = await createDriver(filesystem, runner);
+
+      await driver.resolveSpec(
+        { model: "Pixel 8", osVersion: "35", platform: "android" },
+        { allowDownload: true },
+      );
+
+      const installCall = runner.calls.find(
+        (call) => call.command === binaries.sdkmanager && call.args[0] === "--install",
+      );
+      expect(installCall?.options.timeoutMs).toBe(20 * 60_000);
+    });
+  });
 });
 
 const live = process.env.SIMLOCK_LIVE_ANDROID === "1" ? it : it.skip;
@@ -977,14 +1266,23 @@ async function createDriver(
   filesystem: Filesystem,
   processRunner: ScriptedProcessRunner,
   options: {
+    readonly acceptAndroidLicenses?: boolean;
     readonly clock?: FakeClock;
+    readonly downloadTimeoutMs?: number;
     readonly ids?: readonly string[];
+    readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly readinessTimeoutMs?: number;
   } = {},
 ) {
   let nextId = 0;
   return AndroidDriver.create({
+    ...(options.acceptAndroidLicenses === undefined
+      ? {}
+      : { acceptAndroidLicenses: options.acceptAndroidLicenses }),
     clock: options.clock ?? new FakeClock(),
+    ...(options.downloadTimeoutMs === undefined
+      ? {}
+      : { downloadTimeoutMs: options.downloadTimeoutMs }),
     env: { ANDROID_HOME: sdk },
     filesystem,
     homeDirectory: home,
@@ -992,11 +1290,27 @@ async function createDriver(
     idGenerator: {
       generate: () => options.ids?.[nextId++] ?? `device-${nextId}`,
     },
+    ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
     ...(options.readinessTimeoutMs === undefined
       ? {}
       : { readinessTimeoutMs: options.readinessTimeoutMs }),
     processRunner,
   });
+}
+
+async function writeDevicesXml(filesystem: MemoryFilesystem, deviceBodies: string): Promise<void> {
+  await filesystem.mkdirp(`${home}/.android`);
+  await filesystem.writeFileAtomic(
+    `${home}/.android/devices.xml`,
+    `<?xml version="1.0"?><d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">${deviceBodies}</d:devices>`,
+  );
+}
+
+function customDeviceXml(name: string, ramMiB: number): string {
+  return (
+    `<d:device><d:name>${name}</d:name><d:hardware><d:ram>` +
+    `<d:ram-size unit="MiB">${ramMiB}</d:ram-size></d:ram></d:hardware></d:device>`
+  );
 }
 
 async function androidFilesystem(

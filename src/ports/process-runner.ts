@@ -24,6 +24,12 @@ export interface ProcessRunOptions {
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
+  /**
+   * Written to the child's stdin and then closed. For a CLI that reads an interactive prompt
+   * from stdin (e.g. `sdkmanager --licenses`'s per-license `y/N`) rather than accepting a flag.
+   * Omitted means stdin is left open and unwritten, exactly as before this option existed.
+   */
+  readonly input?: string;
 }
 
 export interface ProcessResult {
@@ -83,6 +89,10 @@ export class NodeProcessRunner implements ProcessRunner {
       detached: process.platform !== "win32",
       stdio: "pipe",
     });
+
+    if (options.input !== undefined) {
+      child.stdin?.end(options.input);
+    }
 
     return new NodeProcessHandle(child);
   }
