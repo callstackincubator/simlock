@@ -5,7 +5,16 @@ import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
+import {
+  type Config,
+  CleanupReaper,
+  FakeDriver,
+  InsufficientDiskSpaceError,
+  LeaseEngine,
+  Registry,
+  RuntimeMissingError,
+} from "../core/index.js";
+import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
   FakeClock,
   FakeSystemStats,
@@ -1136,6 +1145,77 @@ describe("DaemonServer download policy", () => {
     expect(response.ok).toBe(false);
     expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
     expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+
+  it("never attaches the download-policy suffix to an undownloadable RuntimeMissingError, even under the never policy", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    // Stands in for a real out-of-range / unpaired-runtime error: no download could ever have
+    // fixed this request, so the policy is not what blocked it.
+    driver.failOn(
+      "resolveSpec",
+      1,
+      new RuntimeMissingError("ios", "12.0", { downloadable: false }),
+    );
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      allowDownload: true,
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "12.0", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+});
+
+describe("DaemonServer error code mapping", () => {
+  it("maps InsufficientDiskSpaceError to INSUFFICIENT_DISK_SPACE", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.failOn("resolveSpec", 1, new InsufficientDiskSpaceError("ios", 8 * 1024 ** 3, 0));
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "INSUFFICIENT_DISK_SPACE" });
+    await client.close();
+  });
+
+  it("maps LicenseNotAcceptedError to LICENSE_NOT_ACCEPTED", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "android" });
+    driver.failOn(
+      "resolveSpec",
+      1,
+      new AndroidLicenseNotAcceptedError("system-images;android-35;google_apis;arm64-v8a"),
+    );
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "Pixel 8", osVersion: "35", platform: "android" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "LICENSE_NOT_ACCEPTED" });
     await client.close();
   });
 });

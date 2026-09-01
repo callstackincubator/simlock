@@ -125,12 +125,24 @@ export interface Driver {
 }
 
 export class RuntimeMissingError extends Error {
+  /**
+   * Whether a download could plausibly fix this. `true` by default -- a plain "runtime not
+   * installed" is exactly what `--allow-download` exists for. A subclass reporting a request
+   * no download can ever satisfy (out of the model's pairing range, an installed runtime that
+   * does not pair with the model, a version older than Xcode's automatic-download floor) sets
+   * this `false` so callers (see the daemon's download-policy suffix) don't point someone at a
+   * flag that cannot help.
+   */
+  readonly downloadable: boolean;
+
   constructor(
     readonly platform: Platform,
     readonly osVersion: string,
+    options?: { readonly downloadable?: boolean },
   ) {
     super(`Runtime missing for ${platform} ${osVersion}`);
     this.name = "RuntimeMissingError";
+    this.downloadable = options?.downloadable ?? true;
   }
 }
 
@@ -174,6 +186,23 @@ export class InsufficientDiskSpaceError extends Error {
 
 function formatGibibytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+/**
+ * A component install was refused because a required license/EULA is not accepted --
+ * platform-agnostic the same way `RuntimeMissingError` is, so the daemon can map it to a
+ * stable error code without importing a driver module. `AndroidLicenseNotAcceptedError` (the
+ * only concrete case today) extends this with its own message; a future platform with the same
+ * shape of gate would do the same rather than the daemon special-casing Android.
+ */
+export class LicenseNotAcceptedError extends Error {
+  constructor(
+    readonly platform: Platform,
+    readonly componentName: string,
+  ) {
+    super(`A license required to install ${componentName} for ${platform} is not accepted`);
+    this.name = "LicenseNotAcceptedError";
+  }
 }
 
 /**

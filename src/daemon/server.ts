@@ -6,6 +6,8 @@ import {
   type LeaseProgress,
   type LeaseRecord,
   effectiveAllowDownload,
+  InsufficientDiskSpaceError,
+  LicenseNotAcceptedError,
   NoCapacityError,
   NoDriverError,
   QueueTimeoutError,
@@ -576,8 +578,11 @@ export class DaemonServer {
       // The driver only ever sees the clamped-to-false permission, so its own
       // RuntimeMissingError just says "missing" -- it has no way to know a request asked for a
       // download and config refused it. Recover that distinction here, the one place that saw
-      // both sides, rather than teaching the driver about config.
-      if (blockedByDownloadPolicy && error instanceof RuntimeMissingError) {
+      // both sides, rather than teaching the driver about config. Gated on `downloadable`: a
+      // request no download could ever have fixed (out of range, an installed-but-unpaired
+      // runtime, older than the download floor) must not be blamed on the download policy --
+      // that policy was never what stood between this request and success.
+      if (blockedByDownloadPolicy && error instanceof RuntimeMissingError && error.downloadable) {
         error.message = `${error.message} (downloads are disabled by configuration: downloads.policy is "never")`;
       }
       throw error;
@@ -949,6 +954,12 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof UnknownModelError) {
     return "UNKNOWN_MODEL";
+  }
+  if (error instanceof InsufficientDiskSpaceError) {
+    return "INSUFFICIENT_DISK_SPACE";
+  }
+  if (error instanceof LicenseNotAcceptedError) {
+    return "LICENSE_NOT_ACCEPTED";
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";

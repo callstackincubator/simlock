@@ -654,6 +654,44 @@ describe("AndroidDriver", () => {
     expect(config).toContain("hw.ramSize=2048");
   });
 
+  it("rethrows a non-missing-file config.ini read error from the mark write instead of clobbering it as empty", async () => {
+    const configPath = `${avdDirectory}/simlock_one.avd/config.ini`;
+    const originalConfig = "hw.ramSize=2048\n";
+    const permissionError = Object.assign(new Error("EACCES: permission denied"), {
+      code: "EACCES",
+    });
+    const failureFilesystem = new ReadFailureFilesystem(configPath, permissionError);
+    const filesystem = await androidFilesystem({ config: originalConfig }, failureFilesystem);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      processResult(binaries.avdmanager, [
+        "create",
+        "avd",
+        "-n",
+        "simlock_one",
+        "-k",
+        /.+/,
+        "-d",
+        "pixel_8",
+      ]),
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }),
+      markWriteExpectation("emulator-5554", "device-2"),
+    ]);
+    const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+    const spec = await driver.resolveSpec(
+      { model: "Pixel 8", osVersion: "34", platform: "android" },
+      { allowDownload: false },
+    );
+    const device = await driver.provision(spec);
+
+    await expect(driver.makeReady(device)).rejects.toBe(permissionError);
+
+    failureFilesystem.armed = false;
+    await expect(filesystem.readFile(configPath)).resolves.toBe(originalConfig);
+  });
+
   it("rewrites the mark on reclaim's snapshot-restore success path", async () => {
     const harness = await provisionedHarness({ forBaselineReclaim: true });
     await harness.driver.makeReady(harness.device);
@@ -1077,6 +1115,29 @@ describe("AndroidDriver", () => {
     });
   });
 
+  it("dedupes concurrent resolveSpec calls for the same missing system image behind one sdkmanager install", async () => {
+    const filesystem = await androidFilesystem();
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      processResult(binaries.sdkmanager, [
+        "--install",
+        "system-images;android-35;google_apis;arm64-v8a",
+      ]),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+    const request = { model: "Pixel 8", osVersion: "35", platform: "android" } as const;
+
+    const [first, second] = await Promise.all([
+      driver.resolveSpec(request, { allowDownload: true }),
+      driver.resolveSpec(request, { allowDownload: true }),
+    ]);
+
+    expect(first).toEqual({ model: "Pixel 8", osVersion: "35", platform: "android" });
+    expect(second).toEqual({ model: "Pixel 8", osVersion: "35", platform: "android" });
+    expect(runner.calls.filter((call) => call.args[0] === "--install")).toHaveLength(1);
+  });
+
   describe("component install diagnostics", () => {
     it("reports component-install-started then component-installed with a duration on a clean install", async () => {
       const filesystem = await androidFilesystem();
@@ -1224,6 +1285,34 @@ describe("AndroidDriver", () => {
       // The device-profile lookup ran (avdmanager list device), but no sdkmanager call at all.
       expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
       expect(diagnostics).toEqual([]);
+    });
+
+    it("checks disk space on the SDK's own volume, not the daemon's working directory", async () => {
+      class RecordingFilesystem extends MemoryFilesystem {
+        readonly diskFreePaths: string[] = [];
+
+        override async diskFree(path: string): Promise<number> {
+          this.diskFreePaths.push(path);
+          return super.diskFree(path);
+        }
+      }
+      const recordingFilesystem = new RecordingFilesystem();
+      const filesystem = await androidFilesystem({}, recordingFilesystem);
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.sdkmanager, [
+          "--install",
+          "system-images;android-35;google_apis;arm64-v8a",
+        ]),
+      ]);
+      const driver = await createDriver(filesystem, runner);
+
+      await driver.resolveSpec(
+        { model: "Pixel 8", osVersion: "35", platform: "android" },
+        { allowDownload: true },
+      );
+
+      expect(recordingFilesystem.diskFreePaths).toEqual([sdk]);
     });
   });
 
@@ -1464,14 +1553,38 @@ function customDeviceXml(name: string, ramMiB: number): string {
   );
 }
 
+/**
+ * Fails every `readFile` of `failingPath` with a non-ENOENT error while `armed`, so a test can
+ * assert a caller rethrows it instead of treating it as an absent file -- then disarm to read
+ * the path back and confirm nothing overwrote it in the meantime.
+ */
+class ReadFailureFilesystem extends MemoryFilesystem {
+  armed = true;
+
+  constructor(
+    private readonly failingPath: string,
+    private readonly error: Error,
+    freeDiskBytes?: number,
+  ) {
+    super(freeDiskBytes);
+  }
+
+  override async readFile(path: string): Promise<string> {
+    if (this.armed && path === this.failingPath) {
+      throw this.error;
+    }
+    return super.readFile(path);
+  }
+}
+
 async function androidFilesystem(
   options: {
     readonly config?: string;
     readonly freeDiskBytes?: number;
     readonly images?: readonly (readonly [string, string, string])[];
   } = {},
+  filesystem: MemoryFilesystem = new MemoryFilesystem(options.freeDiskBytes),
 ): Promise<MemoryFilesystem> {
-  const filesystem = new MemoryFilesystem(options.freeDiskBytes);
   for (const binary of Object.values(binaries)) {
     await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
     await filesystem.writeFileAtomic(binary, "binary");

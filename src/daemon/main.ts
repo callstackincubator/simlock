@@ -215,6 +215,7 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
     drivers.push(
       new IosSimctlDriver({
         clock: options.clock,
+        coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
         ...(options.downloadTimeoutMs === undefined
           ? {}
           : { downloadTimeoutMs: options.downloadTimeoutMs }),

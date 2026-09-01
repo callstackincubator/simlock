@@ -174,9 +174,51 @@ describe("IosSimctlDriver", () => {
 
     expect(result).toBeInstanceOf(RuntimeMissingError);
     expect(result).toMatchObject({
+      downloadable: false,
       message: expect.stringContaining("iPhone Xs supports iOS 12.0-18.6"),
     });
     // No xcodebuild (or any further simctl) call: out-of-range is checked before download logic.
+    expect(runner.calls).toHaveLength(1);
+  });
+
+  it("rejects an installed runtime whose supportedDeviceTypes omits the requested model, without ever calling simctl create", async () => {
+    const catalog = JSON.stringify({
+      devicetypes: [
+        {
+          identifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+          maxRuntimeVersion: 16_777_215,
+          minRuntimeVersion: 0,
+          name: "iPhone 16",
+        },
+      ],
+      runtimes: [
+        {
+          identifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+          isAvailable: true,
+          name: "iOS 18.4",
+          supportedDeviceTypes: [],
+          version: "18.4",
+        },
+      ],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: catalog } },
+    ]);
+    const driver = createDriver(runner);
+
+    const result = await driver
+      .resolveSpec(
+        { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+        { allowDownload: true },
+      )
+      .catch((error: unknown) => error);
+
+    expect(result).toBeInstanceOf(RuntimeMissingError);
+    expect(result).toMatchObject({
+      downloadable: false,
+      message: "iOS 18.4 is installed but does not support iPhone 16",
+    });
+    // Installed and in range, but not paired: no download attempted, no simctl create.
     expect(runner.calls).toHaveLength(1);
   });
 
@@ -205,8 +247,8 @@ describe("IosSimctlDriver", () => {
       )
       .catch((error: unknown) => error);
 
-    expect(result).toBeInstanceOf(DriverCrashError);
-    expect(result).toMatchObject({ message: expect.stringContaining("16.0") });
+    expect(result).toBeInstanceOf(RuntimeMissingError);
+    expect(result).toMatchObject({ downloadable: false, message: expect.stringContaining("16.0") });
     // Range check passed (13.0 is within iPhone 7's 9.0-15.0), but no xcodebuild call was made.
     expect(runner.calls).toHaveLength(1);
   });
@@ -387,6 +429,85 @@ describe("IosSimctlDriver", () => {
       // Only the initial catalog list happened: no xcodebuild invocation, no diagnostic.
       expect(runner.calls.map((call) => call.command)).toEqual(["xcrun"]);
       expect(diagnostics).toEqual([]);
+    });
+
+    it("surfaces a disk-preflight failure from the bounded-default download path as InsufficientDiskSpaceError, not DriverCrashError", async () => {
+      // A device type with a finite max (bounded, unlike the "latest" test above) and no
+      // installed runtime pairs with it -- forces the bounded-default download branch, whose
+      // catch previously wrapped every failure (including this one) in a DriverCrashError. The
+      // installed runtime below keeps the catalog non-empty (required to parse at all) without
+      // pairing with the requested model.
+      const catalog = JSON.stringify({
+        devicetypes: [
+          {
+            identifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-Xs",
+            maxRuntimeVersion: 1_181_184,
+            minRuntimeVersion: 786_432,
+            name: "iPhone Xs",
+          },
+        ],
+        runtimes: [
+          {
+            identifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+            isAvailable: true,
+            name: "iOS 18.4",
+            supportedDeviceTypes: [],
+            version: "18.4",
+          },
+        ],
+      });
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: catalog } },
+      ]);
+      const filesystem = new MemoryFilesystem(1024);
+      const driver = createDriver(runner, new FakeClock(), filesystem);
+
+      const error = await driver
+        .resolveSpec({ model: "iPhone Xs", platform: "ios" }, { allowDownload: true })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
+      // Only the initial catalog list happened: no xcodebuild invocation attempted.
+      expect(runner.calls.map((call) => call.command)).toEqual(["xcrun"]);
+    });
+
+    it("checks disk space on the configured CoreSimulator volume, not the daemon's own working directory", async () => {
+      class RecordingFilesystem extends MemoryFilesystem {
+        readonly diskFreePaths: string[] = [];
+
+        override async diskFree(path: string): Promise<number> {
+          this.diskFreePaths.push(path);
+          return super.diskFree(path);
+        }
+      }
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: {
+            command: "xcodebuild",
+            args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+          },
+        },
+        {
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: listFixtureAfterDownload },
+        },
+      ]);
+      const filesystem = new RecordingFilesystem();
+      const driver = new IosSimctlDriver({
+        clock: new FakeClock(),
+        coreSimulatorRoot: "/Users/agent/Library/Developer/CoreSimulator",
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        processRunner: runner,
+      });
+
+      await driver.resolveSpec(
+        { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+        { allowDownload: true },
+      );
+
+      expect(filesystem.diskFreePaths).toEqual(["/Users/agent/Library/Developer/CoreSimulator"]);
     });
   });
 

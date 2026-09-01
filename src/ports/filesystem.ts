@@ -175,7 +175,10 @@ export class MemoryFilesystem implements Filesystem {
   #entryAt(path: string): MemoryEntry {
     const entry = this.#entries.get(path);
     if (entry === undefined) {
-      throw new Error(`No such file or directory: ${path}`);
+      // Carries `code: "ENOENT"` like Node's real fs errors, so callers that branch on
+      // `isMissingPathError` (rather than swallowing every read failure) behave the same
+      // against this fake as they do against `NodeFilesystem`.
+      throw enoent(path);
     }
 
     return entry;
@@ -194,6 +197,14 @@ function parentPath(path: string): string {
   return lastSeparator <= 0 ? "/" : path.slice(0, lastSeparator);
 }
 
-function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
+export function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function enoent(path: string): NodeJS.ErrnoException {
+  const error = new Error(
+    `ENOENT: no such file or directory, open '${path}'`,
+  ) as NodeJS.ErrnoException;
+  error.code = "ENOENT";
+  return error;
 }

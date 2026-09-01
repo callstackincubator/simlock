@@ -73,6 +73,8 @@ describe("CLI boundary", () => {
     ["NO_CAPACITY", 11],
     ["RUNTIME_MISSING", 12],
     ["UNKNOWN_MODEL", 12],
+    ["INSUFFICIENT_DISK_SPACE", 12],
+    ["LICENSE_NOT_ACCEPTED", 12],
     ["BAD_REQUEST", 2],
     ["REQUESTER_ALREADY_LEASED", 13],
   ] as const)("maps %s daemon errors to exit %d", async (code, expected) => {

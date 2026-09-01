@@ -9,19 +9,22 @@ import {
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
+  LicenseNotAcceptedError,
   type ObservedDevice,
   type ObservedMark,
   type ReclaimResult,
   RuntimeMissingError,
 } from "../../core/driver.js";
+import { stableError } from "../../core/stable-error.js";
 import type { ComponentInstallDiagnostic } from "../diagnostics.js";
-import type {
-  Clock,
-  Filesystem,
-  IdGenerator,
-  ProcessHandle,
-  ProcessResult,
-  ProcessRunner,
+import {
+  isMissingPathError,
+  type Clock,
+  type Filesystem,
+  type IdGenerator,
+  type ProcessHandle,
+  type ProcessResult,
+  type ProcessRunner,
 } from "../../ports/index.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
 import {
@@ -116,13 +119,13 @@ export class SdkMissingError extends Error {
   }
 }
 
-export class AndroidLicenseNotAcceptedError extends Error {
+export class AndroidLicenseNotAcceptedError extends LicenseNotAcceptedError {
   constructor(readonly packageName: string) {
-    super(
+    super("android", packageName);
+    this.message =
       `sdkmanager refused to install ${packageName}: an Android SDK license is not accepted. ` +
-        `Set "downloads.acceptAndroidLicenses": true in config to accept automatically, or run ` +
-        `\`sdkmanager --licenses\` manually.`,
-    );
+      `Set "downloads.acceptAndroidLicenses": true in config to accept automatically, or run ` +
+      `\`sdkmanager --licenses\` manually.`;
     this.name = "AndroidLicenseNotAcceptedError";
   }
 }
@@ -163,6 +166,7 @@ export class AndroidDriver implements Driver {
   readonly #filesystem: Filesystem;
   readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
+  readonly #installLocks = new Map<string, Promise<void>>();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -587,32 +591,34 @@ export class AndroidDriver implements Driver {
     return first.id;
   }
 
-  /**
-   * Merges `properties` into the AVD's `config.ini`, overwriting any key it already has and
-   * appending the rest -- same read-modify-write shape as `#writeDurableMark` below.
-   */
+  /** Merges `properties` into the AVD's `config.ini` -- see `#mergeConfigIniLines`. */
   async #applyHardwareProperties(
     avdName: string,
     properties: Readonly<Record<string, string>>,
   ): Promise<void> {
-    const path = this.#configIniPath(avdName);
-    let contents: string;
-    try {
-      contents = await this.#filesystem.readFile(path);
-    } catch {
-      contents = "";
+    await this.#mergeConfigIniLines(avdName, properties);
+  }
+
+  /**
+   * Dedupes concurrent installs of the same system-image package behind one in-flight promise
+   * -- mirrors the iOS driver's `#downloadLocks`, sized to a package instead of a whole
+   * `xcodebuild` invocation. The map entry is removed once the install settles (success or
+   * failure), so a later, non-concurrent call starts a fresh attempt rather than replaying a
+   * stale result.
+   */
+  async #installSystemImage(packageName: string): Promise<void> {
+    const inFlight = this.#installLocks.get(packageName);
+    if (inFlight !== undefined) {
+      return inFlight;
     }
-    const lines = contents === "" ? [] : contents.replace(/\r?\n$/, "").split(/\r?\n/);
-    for (const [key, value] of Object.entries(properties)) {
-      const line = `${key}=${value}`;
-      const existingIndex = lines.findIndex((entry) => entry.startsWith(`${key}=`));
-      if (existingIndex >= 0) {
-        lines[existingIndex] = line;
-      } else {
-        lines.push(line);
+
+    const promise = this.#installSystemImageOnce(packageName).finally(() => {
+      if (this.#installLocks.get(packageName) === promise) {
+        this.#installLocks.delete(packageName);
       }
-    }
-    await this.#filesystem.writeFileAtomic(path, `${lines.join("\n")}\n`);
+    });
+    this.#installLocks.set(packageName, promise);
+    return promise;
   }
 
   /**
@@ -624,8 +630,13 @@ export class AndroidDriver implements Driver {
    * sees exactly one `install-failed` regardless of which branch below throws, never one per
    * attempt.
    */
-  async #installSystemImage(packageName: string): Promise<void> {
-    await assertDiskSpace(this.#filesystem, this.platform, ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES);
+  async #installSystemImageOnce(packageName: string): Promise<void> {
+    await assertDiskSpace(
+      this.#filesystem,
+      this.platform,
+      ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES,
+      this.#sdk.root,
+    );
     this.#onDiagnostic?.({ componentId: packageName, kind: "component-install-started" });
     const startedAt = this.#clock.now();
     try {
@@ -796,20 +807,41 @@ export class AndroidDriver implements Driver {
   }
 
   async #writeDurableMark(avdName: string, token: string): Promise<void> {
+    await this.#mergeConfigIniLines(avdName, { [DURABLE_MARK_KEY]: token });
+  }
+
+  /**
+   * Reads `avdName`'s `config.ini`, merges `entries` into it -- overwriting any key already
+   * present, appending the rest -- and writes it back atomically. Shared by
+   * `#applyHardwareProperties` and `#writeDurableMark`, the driver's two config.ini
+   * read-modify-write sites. A missing file (the AVD's config.ini not created yet) starts the
+   * merge from empty content; any other read failure is rethrown rather than treated as an
+   * empty file -- silently starting from "" on, say, an EACCES or EIO would write back only
+   * `entries` and clobber whatever config.ini already held.
+   */
+  async #mergeConfigIniLines(
+    avdName: string,
+    entries: Readonly<Record<string, string>>,
+  ): Promise<void> {
     const path = this.#configIniPath(avdName);
     let contents: string;
     try {
       contents = await this.#filesystem.readFile(path);
-    } catch {
+    } catch (error: unknown) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
       contents = "";
     }
     const lines = contents === "" ? [] : contents.replace(/\r?\n$/, "").split(/\r?\n/);
-    const markLine = `${DURABLE_MARK_KEY}=${token}`;
-    const existingIndex = lines.findIndex((line) => line.startsWith(`${DURABLE_MARK_KEY}=`));
-    if (existingIndex >= 0) {
-      lines[existingIndex] = markLine;
-    } else {
-      lines.push(markLine);
+    for (const [key, value] of Object.entries(entries)) {
+      const line = `${key}=${value}`;
+      const existingIndex = lines.findIndex((entry) => entry.startsWith(`${key}=`));
+      if (existingIndex >= 0) {
+        lines[existingIndex] = line;
+      } else {
+        lines.push(line);
+      }
     }
     await this.#filesystem.writeFileAtomic(path, `${lines.join("\n")}\n`);
   }
@@ -1322,12 +1354,6 @@ function hostAbiFor(architecture: string): string {
 function hasUnacceptedLicense(result: ProcessResult): boolean {
   const combined = `${result.stdout}\n${result.stderr}`;
   return /licen[cs]e/i.test(combined) && /not accepted/i.test(combined);
-}
-
-/** Matches `stableError` in `warm-pool-coordinator.ts` -- `device.purge-failed`'s own summary shape. */
-function stableError(error: unknown): string {
-  const value = error instanceof Error ? error : new Error(String(error));
-  return `${value.name}: ${value.message}`;
 }
 
 /**

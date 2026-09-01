@@ -28,6 +28,7 @@ export {
   type DriverEstimate,
   type DriverReality,
   InsufficientDiskSpaceError,
+  LicenseNotAcceptedError,
   type ObservedDevice,
   type ObservedRunState,
   RuntimeMissingError,

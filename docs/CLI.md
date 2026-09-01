@@ -39,6 +39,8 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
+| 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
+| 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` held mode only: the daemon ended the lease without the holder asking (TTL backstop, operator `release`, or an unrecoverable device) |
 

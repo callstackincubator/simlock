@@ -8,6 +8,7 @@ import {
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
+  InsufficientDiskSpaceError,
   type ObservedDevice,
   type ObservedRunState,
   RuntimeMissingError,
@@ -15,6 +16,7 @@ import {
 } from "../../core/index.js";
 import type { ObservedMark } from "../../core/driver.js";
 import type { DeviceSpec } from "../../core/index.js";
+import { stableError } from "../../core/stable-error.js";
 import type {
   Clock,
   Filesystem,
@@ -62,6 +64,14 @@ interface IosDriverData {
 
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
+  /**
+   * Volume a runtime download actually lands on, for the disk preflight in
+   * `#installComponent` -- simulator runtimes install under `~/Library/Developer/
+   * CoreSimulator`, which is not necessarily the same volume as the daemon's working
+   * directory. Defaults to `"."` (the daemon process's own volume) only when nothing better
+   * is available, mirroring the Android driver's use of `sdk.root`.
+   */
+  readonly coreSimulatorRoot?: string;
   /** Per-download timeout; defaults to `downloads.timeoutMs`'s own default. */
   readonly downloadTimeoutMs?: number;
   readonly filesystem: Filesystem;
@@ -112,6 +122,7 @@ type ProcessOutcome =
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
   readonly #clock: Clock;
+  readonly #coreSimulatorRoot: string;
   readonly #downloadLocks = new Map<string, Promise<void>>();
   readonly #downloadTimeoutMs: number;
   readonly #filesystem: Filesystem;
@@ -123,6 +134,7 @@ export class IosSimctlDriver implements Driver {
 
   constructor(options: IosSimctlDriverOptions) {
     this.#clock = options.clock;
+    this.#coreSimulatorRoot = options.coreSimulatorRoot ?? ".";
     this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
@@ -166,6 +178,13 @@ export class IosSimctlDriver implements Driver {
 
     const installed = findInstalledRuntime(catalog, osVersion);
     if (installed !== undefined) {
+      // In the model's declared `[min, max]` range is necessary but not sufficient: a runtime
+      // can be installed and still not pair with this specific device type (`supportedDeviceTypeIds`
+      // is the authoritative source once a runtime is actually on disk -- the range above is
+      // only a static hint). Checked before committing, so a mismatch never reaches `simctl create`.
+      if (!installed.supportedDeviceTypeIds.has(deviceType.identifier)) {
+        throw new IosRuntimeUnpairedError(deviceType.name, osVersion);
+      }
       return this.#commitResolution(deviceType, installed);
     }
 
@@ -178,10 +197,7 @@ export class IosSimctlDriver implements Driver {
     }
 
     if (isTooOldToDownload(osVersion)) {
-      throw new DriverCrashError(
-        `iOS ${osVersion} predates Xcode's automatic download support (introduced for iOS ` +
-          `16.0 and newer); install it manually via Xcode`,
-      );
+      throw new IosDownloadFloorError(osVersion);
     }
 
     await this.#downloadRuntime(osVersion, [
@@ -233,6 +249,13 @@ export class IosSimctlDriver implements Driver {
       try {
         await this.#downloadRuntime(major, ["-downloadPlatform", "iOS", "-buildVersion", major]);
       } catch (error: unknown) {
+        // A disk preflight failure or a typed "nothing to do here" (e.g. a concurrent caller's
+        // RuntimeMissingError) is meaningful on its own and must reach the caller unchanged --
+        // wrapping it in a DriverCrashError below would bury a clean, actionable error under an
+        // opaque "could not download" one.
+        if (error instanceof InsufficientDiskSpaceError || error instanceof RuntimeMissingError) {
+          throw error;
+        }
         throw new DriverCrashError(
           `Could not download a default iOS runtime for ${deviceType.name} (tried ${major}): ` +
             `${errorMessage(error)}; pass --os <version> to request an exact release`,
@@ -293,7 +316,12 @@ export class IosSimctlDriver implements Driver {
    * attempted, so there is nothing to report as started or failed.
    */
   async #installComponent(componentId: string, args: readonly string[]): Promise<void> {
-    await assertDiskSpace(this.#filesystem, this.platform, IOS_RUNTIME_MIN_FREE_BYTES);
+    await assertDiskSpace(
+      this.#filesystem,
+      this.platform,
+      IOS_RUNTIME_MIN_FREE_BYTES,
+      this.#coreSimulatorRoot,
+    );
     this.#onDiagnostic?.({ componentId, kind: "component-install-started" });
     const startedAt = this.#clock.now();
     try {
@@ -687,9 +715,41 @@ class IosUnknownModelError extends UnknownModelError {
  */
 class IosVersionOutOfRangeError extends RuntimeMissingError {
   constructor(model: string, requested: string, deviceType: DeviceType) {
-    super("ios", requested);
+    super("ios", requested, { downloadable: false });
     const range = formatVersionRange(deviceType.minRuntimeVersion, deviceType.maxRuntimeVersion);
     this.message = `${model} supports iOS ${range}; iOS ${requested} is out of range`;
+  }
+}
+
+/**
+ * The requested runtime is installed and its version falls in the model's declared range, but
+ * the runtime's own `supportedDeviceTypes` (authoritative once it is actually on disk) does not
+ * include this model -- e.g. a device Apple dropped support for in a later point release of an
+ * OS it otherwise still ships. Extends `RuntimeMissingError` for the same reason
+ * `IosVersionOutOfRangeError` does (shared error code / exit status), and sets `downloadable:
+ * false` for the same reason: the runtime is already installed, so downloading it again changes
+ * nothing.
+ */
+class IosRuntimeUnpairedError extends RuntimeMissingError {
+  constructor(model: string, requested: string) {
+    super("ios", requested, { downloadable: false });
+    this.message = `iOS ${requested} is installed but does not support ${model}`;
+  }
+}
+
+/**
+ * A requested version predates Xcode's automatic download support (`xcodebuild
+ * -downloadPlatform` only reaches back to iOS 16.0 -- see `IOS_DOWNLOAD_FLOOR`). Not a driver
+ * crash: nothing went wrong, the request is simply outside what `--allow-download` can ever do.
+ * `RuntimeMissingError` with `downloadable: false` reports that distinction the same way the
+ * out-of-range and unpaired-runtime errors do, rather than surfacing as an opaque internal error.
+ */
+class IosDownloadFloorError extends RuntimeMissingError {
+  constructor(requested: string) {
+    super("ios", requested, { downloadable: false });
+    this.message =
+      `iOS ${requested} predates Xcode's automatic download support (introduced for iOS ` +
+      `16.0 and newer); install it manually via Xcode`;
   }
 }
 
@@ -931,10 +991,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** Matches `stableError` in `warm-pool-coordinator.ts` -- `device.purge-failed`'s own summary shape. */
-function stableError(error: unknown): string {
-  const value = error instanceof Error ? error : new Error(String(error));
-  return `${value.name}: ${value.message}`;
 }

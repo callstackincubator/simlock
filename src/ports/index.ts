@@ -1,4 +1,9 @@
-export { type Filesystem, MemoryFilesystem, NodeFilesystem } from "./filesystem.js";
+export {
+  type Filesystem,
+  isMissingPathError,
+  MemoryFilesystem,
+  NodeFilesystem,
+} from "./filesystem.js";
 export { resolveSimlockHome } from "./paths.js";
 export { type DaemonLauncher, FakeDaemonLauncher, NodeDaemonLauncher } from "./daemon-launcher.js";
 export {
