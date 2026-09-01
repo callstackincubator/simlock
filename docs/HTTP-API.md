@@ -92,10 +92,16 @@ Role: `agent`. Enqueues a device request.
 `platform` and `device` are required; `os` defaults to the newest installed
 runtime; `ttlMs` defaults to `lease.detachedTtlMs`; `timeoutMs` (optional) is
 enforced daemon-side so a vanished client can't hold a queue slot forever.
-An `Idempotency-Key` header makes a replay of the same key, from the same
-requester, return the original request resource instead of double-queueing —
-held in memory with a TTL, so a replay after a daemon restart creates a fresh
-request (see [Lifecycle semantics](#lifecycle-semantics) below).
+An `Idempotency-Key` header (at most 200 characters) makes a replay of the
+same key, from the same requester, return the original request resource
+instead of double-queueing — held in memory with a TTL, so a replay after a
+daemon restart creates a fresh request (see
+[Lifecycle semantics](#lifecycle-semantics) below).
+
+With `allowDownload: true` the `201` is returned immediately, before the
+request is even admitted — resolving a downloadable runtime can take minutes,
+so progress (and any admission failure, `REQUESTER_ALREADY_LEASED` included)
+surfaces on the request resource instead of on the `POST` itself.
 
 → `201`, `Location: /v1/lease-requests/{id}`:
 
@@ -115,7 +121,9 @@ instead — see the state list below.
 
 Role: `agent` (its own requests; `operator` sees all). Poll the request.
 `?wait=<seconds>` long-polls: returns as soon as the state changes, else
-once `wait` elapses.
+once `wait` elapses. `wait` is capped at 60 seconds — a larger value is
+clamped, not rejected, and the poll simply returns (unchanged) sooner than
+asked; re-poll to keep waiting.
 
 States: `queued | reclaiming | provisioning | booting | granted | failed |
 cancelled`, carrying `queuePosition` (`queued`) or `etaSeconds`
@@ -162,6 +170,12 @@ now so its arrival is additive rather than a breaking shape change.
 Role: `agent` (own lease; `operator` any). Re-fetches the lease — a client
 that restarts mid-lease recovers its state instead of leaking the lease.
 `404 UNKNOWN_LEASE` once it has expired or been released.
+
+`expiresAt` is always the authoritative deadline. After a **daemon** restart
+the gateway no longer remembers a per-request `ttlMs`, so the payload reports
+the lease's mode default (the interval a body-less renew applies from then
+on) and may omit `requestId`; schedule renewals from `expiresAt`, not from
+`ttlMs`.
 
 ### `POST /v1/leases/{id}/renew`
 

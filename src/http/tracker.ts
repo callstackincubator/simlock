@@ -7,7 +7,7 @@ import {
 } from "../core/index.js";
 import type { LeaseCommands, QueueControl } from "../core/lease-ports.js";
 import type { LeaseGrant, LeaseProgress, LeaseRequestOptions } from "../core/wait-queue.js";
-import type { Clock, IdGenerator, TimerHandle } from "../ports/index.js";
+import type { Clock, IdGenerator, Logger, TimerHandle } from "../ports/index.js";
 import { mapError } from "./errors.js";
 
 export interface LeaseRequestInput {
@@ -36,17 +36,17 @@ export interface LeasePayload {
 }
 
 /**
- * `LeaseRecord` has no `createdAt` -- `grantedAt` is its equivalent. `ttlMs` prefers the
- * caller-supplied effective value (the tracker's own record of what was actually applied at
- * grant or last renew) over deriving it from the record, because `ttlDeadline - grantedAt`
- * silently drifts wrong the moment a lease is renewed to a different length: `grantedAt`
- * never moves, so that arithmetic would grow by whatever time passed before the renewal
- * instead of reporting the length actually in effect.
+ * `LeaseRecord` has no `createdAt` -- `grantedAt` is its equivalent. `ttlMs` must be supplied
+ * by the caller (the tracker's record of what was applied at grant or last renew, or the
+ * lease's mode default when that record is gone, e.g. after a daemon restart). It is never
+ * derived as `ttlDeadline - grantedAt`: `grantedAt` never moves on renewal, so that
+ * arithmetic reports grant-age plus TTL rather than the interval actually in force --
+ * `expiresAt` is the authoritative deadline either way.
  */
 export function buildLeasePayload(
   device: DeviceRecord,
   lease: LeaseRecord,
-  extra: { readonly requestId?: string; readonly ttlMs?: number } = {},
+  extra: { readonly requestId?: string; readonly ttlMs: number },
 ): LeasePayload {
   return {
     id: lease.id,
@@ -58,7 +58,7 @@ export function buildLeasePayload(
     deviceId: device.id,
     createdAt: new Date(lease.grantedAt).toISOString(),
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
-    ttlMs: extra.ttlMs ?? lease.ttlDeadline - lease.grantedAt,
+    ttlMs: extra.ttlMs,
     dataPlane: null,
   };
 }
@@ -103,6 +103,14 @@ interface TrackedRequest {
 const TERMINAL_RETENTION_MS = 5 * 60_000;
 /** How long an `Idempotency-Key` replay window stays open. */
 const IDEMPOTENCY_TTL_MS = 10 * 60_000;
+/**
+ * Hard ceiling on live idempotency entries: an authenticated caller can mint a fresh key per
+ * request without ever occupying its one queue slot, so without a cap this map (and its
+ * expiry timers) grows without bound. FIFO eviction of the oldest entry only weakens replay
+ * protection for whoever is flooding, and `RequesterAlreadyLeasedError` remains the backstop
+ * against a double grant.
+ */
+const IDEMPOTENCY_MAX_ENTRIES = 10_000;
 
 export interface LeaseRequestTrackerOptions {
   readonly leases: LeaseCommands;
@@ -112,6 +120,7 @@ export interface LeaseRequestTrackerOptions {
   readonly idGenerator: IdGenerator;
   /** `lease.detachedTtlMs` -- every HTTP lease is detached, so this is the one mode default that applies. */
   readonly defaultTtlMs: number;
+  readonly logger?: Logger;
 }
 
 /**
@@ -123,7 +132,7 @@ export interface LeaseRequestTrackerOptions {
  */
 export class LeaseRequestTracker {
   readonly #requests = new Map<string, TrackedRequest>();
-  readonly #idempotency = new Map<string, string>();
+  readonly #idempotency = new Map<string, { requestId: string; timer: TimerHandle }>();
   readonly #leaseRequestId = new Map<string, string>();
   readonly #leaseTtlMs = new Map<string, number>();
   readonly #unsubscribers: Array<() => void>;
@@ -221,10 +230,23 @@ export class LeaseRequestTracker {
           if (settled) return;
           settled = true;
           // Never became visible to any client (the POST itself is about to fail), so it
-          // shouldn't answer a later GET/replay either.
+          // shouldn't answer a later GET/replay either -- including through the
+          // idempotency map, whose entry (and pending expiry timer) would otherwise
+          // outlive the record it points at.
           this.#requests.delete(record.id);
+          if (idempotencyKey !== undefined) {
+            this.#dropIdempotency(idempotencyCacheKey(identity.requesterId, idempotencyKey));
+          }
           resolve({ kind: "rejected", error });
         });
+
+      // A download-permitted request can spend minutes inside the driver's `resolveSpec`
+      // (an Android `sdkmanager --install` runs there) before the first progress callback
+      // -- the one pre-progress stretch that legitimately runs long. Settle the POST now:
+      // the client polls the resource instead, and even an instant admission rejection
+      // (already-leased) then surfaces as the resource's terminal `failed` state rather
+      // than an HTTP error, because by the time it lands the resource is already visible.
+      if (body.allowDownload === true) settleCreated();
     });
   }
 
@@ -241,8 +263,17 @@ export class LeaseRequestTracker {
     return () => record.listeners.delete(listener);
   }
 
-  /** Resolves early on the next state change, else once `seconds` elapses; `undefined` if `id` is unknown. */
-  waitForChange(id: string, seconds: number): Promise<TrackedRequestView | undefined> {
+  /**
+   * Resolves early on the next state change, else once `seconds` elapses; `undefined` if
+   * `id` is unknown. An aborted `signal` (the HTTP request's own -- the client hung up)
+   * also finishes immediately, so a disconnected long-poll releases its listener and timer
+   * right away instead of pinning them for the full requested wait.
+   */
+  waitForChange(
+    id: string,
+    seconds: number,
+    signal?: AbortSignal,
+  ): Promise<TrackedRequestView | undefined> {
     const record = this.#requests.get(id);
     if (record === undefined) return Promise.resolve(undefined);
     if (isTerminalStage(record.state)) return Promise.resolve(toView(record));
@@ -253,11 +284,14 @@ export class LeaseRequestTracker {
         if (settled) return;
         settled = true;
         unsubscribe();
+        signal?.removeEventListener("abort", finish);
         this.options.clock.cancel(timer);
         resolve(toView(record));
       };
       const unsubscribe = this.subscribe(id, finish) ?? (() => {});
       const timer = this.options.clock.setTimer(Math.max(0, seconds) * 1_000, finish);
+      if (signal?.aborted === true) finish();
+      else signal?.addEventListener("abort", finish, { once: true });
     });
   }
 
@@ -316,9 +350,9 @@ export class LeaseRequestTracker {
     idempotencyKey: string | undefined,
   ): TrackedRequestView | undefined {
     if (idempotencyKey === undefined) return undefined;
-    const existingId = this.#idempotency.get(idempotencyCacheKey(requesterId, idempotencyKey));
-    if (existingId === undefined) return undefined;
-    const existing = this.#requests.get(existingId);
+    const entry = this.#idempotency.get(idempotencyCacheKey(requesterId, idempotencyKey));
+    if (entry === undefined) return undefined;
+    const existing = this.#requests.get(entry.requestId);
     // The mapping outlived the request's own 5-minute retention: treat this as a fresh key
     // rather than returning nothing -- `submit`'s caller falls through to creating a new
     // request, and `RequesterAlreadyLeasedError` remains the real backstop against a double
@@ -332,13 +366,27 @@ export class LeaseRequestTracker {
     requestId: string,
   ): void {
     if (idempotencyKey === undefined) return;
+    if (this.#idempotency.size >= IDEMPOTENCY_MAX_ENTRIES) {
+      const oldest = this.#idempotency.keys().next().value;
+      if (oldest !== undefined) this.#dropIdempotency(oldest);
+    }
     const cacheKey = idempotencyCacheKey(requesterId, idempotencyKey);
-    this.#idempotency.set(cacheKey, requestId);
     const timer = this.options.clock.setTimer(IDEMPOTENCY_TTL_MS, () => {
       this.#activeTimers.delete(timer);
-      if (this.#idempotency.get(cacheKey) === requestId) this.#idempotency.delete(cacheKey);
+      if (this.#idempotency.get(cacheKey)?.requestId === requestId) {
+        this.#idempotency.delete(cacheKey);
+      }
     });
     this.#activeTimers.add(timer);
+    this.#idempotency.set(cacheKey, { requestId, timer });
+  }
+
+  #dropIdempotency(cacheKey: string): void {
+    const entry = this.#idempotency.get(cacheKey);
+    if (entry === undefined) return;
+    this.options.clock.cancel(entry.timer);
+    this.#activeTimers.delete(entry.timer);
+    this.#idempotency.delete(cacheKey);
   }
 
   #applyProgress(record: TrackedRequest, progress: LeaseProgress): void {
@@ -373,7 +421,15 @@ export class LeaseRequestTracker {
         // doc and this session's report for what was investigated here.
         lease = await this.options.leases.renew(lease.id, ttlMs);
         effectiveTtlMs = ttlMs;
-      } catch {
+      } catch (error: unknown) {
+        this.options.logger?.warn(
+          "Requested ttlMs was not applied; lease keeps the default deadline",
+          {
+            leaseId: lease.id,
+            message: error instanceof Error ? error.message : String(error),
+            requestedTtlMs: ttlMs,
+          },
+        );
         // Renewing a lease that was just granted failing would be surprising; fall back to the
         // grant's own (config-default) deadline rather than losing the lease record entirely.
         // `effectiveTtlMs` deliberately stays at the default: the payload must report the ttl

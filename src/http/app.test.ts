@@ -622,3 +622,40 @@ describe("operator surface", () => {
     expect(frames[0]?.event).toBe("daemon.stopping");
   });
 });
+
+describe("hardening from review", () => {
+  it("400s an oversized Idempotency-Key", async () => {
+    const { app } = buildHarness();
+    const response = await postLeaseRequest(app, defaultBody, {
+      ...agentAuth,
+      "Idempotency-Key": "x".repeat(201),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("clamps an oversized ?wait to the 60s ceiling", async () => {
+    const { app, clock, leases } = buildHarness();
+    const { id } = await createLeaseRequest(app, leases);
+
+    const waitPromise = app.request(`/v1/lease-requests/${id}?wait=999999`, {
+      headers: agentAuth,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    clock.advance(60_000);
+    const response = await waitPromise;
+    expect(((await response.json()) as { request: { state: string } }).request.state).toBe(
+      "queued",
+    );
+  });
+
+  it("reports the mode-default ttlMs for a lease the tracker has no record of", async () => {
+    const { app, config, registry } = buildHarness();
+    registry.devices = [makeDevice({ id: "dev_1" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
+
+    const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
+    const body = (await response.json()) as { lease: { ttlMs: number } };
+    expect(body.lease.ttlMs).toBe(config.lease.detachedTtlMs);
+  });
+});

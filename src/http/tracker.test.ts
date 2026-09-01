@@ -268,3 +268,62 @@ async function createTrackedWithKey(
   if (outcome.kind !== "created") throw new Error("expected created");
   return { view: outcome.view };
 }
+
+describe("LeaseRequestTracker.submit with allowDownload", () => {
+  it("answers 'created' immediately, before any progress callback", async () => {
+    const { leases, tracker } = buildTracker();
+    const outcome = await tracker.submit(identity, { ...body, allowDownload: true });
+    expect(outcome.kind).toBe("created");
+    expect(leases.calls[0]?.options.allowDownload).toBe(true);
+  });
+
+  it("keeps the request visible when the grant later fails -- terminal failed, not a rejected POST", async () => {
+    const { leases, tracker } = buildTracker();
+    const outcome = await tracker.submit(identity, { ...body, allowDownload: true });
+    if (outcome.kind !== "created") throw new Error("expected created");
+
+    leases.calls[0]?.reject(new Error("download failed"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(tracker.get(outcome.view.id)?.state.stage).toBe("failed");
+  });
+});
+
+describe("LeaseRequestTracker.waitForChange abort", () => {
+  it("finishes immediately when the caller's signal aborts", async () => {
+    const { leases, tracker } = buildTracker();
+    const { view } = await createTracked(tracker, leases);
+
+    const controller = new AbortController();
+    const wait = tracker.waitForChange(view.id, 30, controller.signal);
+    controller.abort();
+    const result = await wait;
+    expect(result?.state.stage).toBe("queued");
+  });
+
+  it("finishes immediately for a signal that is already aborted", async () => {
+    const { leases, tracker } = buildTracker();
+    const { view } = await createTracked(tracker, leases);
+
+    const controller = new AbortController();
+    controller.abort();
+    const result = await tracker.waitForChange(view.id, 30, controller.signal);
+    expect(result?.state.stage).toBe("queued");
+  });
+});
+
+describe("LeaseRequestTracker idempotency cleanup", () => {
+  it("drops the mapping when a submission is rejected before becoming visible -- a replay creates a fresh request", async () => {
+    const { leases, tracker } = buildTracker();
+    const first = tracker.submit(identity, body, "key-1");
+    leases.calls[0]?.reject(new RequesterAlreadyLeasedError("tok_agent"));
+    const firstOutcome = await first;
+    expect(firstOutcome.kind).toBe("rejected");
+
+    const second = tracker.submit(identity, body, "key-1");
+    leases.calls[1]?.options.onProgress?.({ queuePosition: 1, stage: "queued" });
+    const secondOutcome = await second;
+    expect(secondOutcome.kind).toBe("created");
+    expect(leases.calls).toHaveLength(2);
+  });
+});

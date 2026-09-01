@@ -60,6 +60,11 @@ export interface HttpGatewayDeps {
 
 type Env = AuthEnv;
 
+/** Upper bound on `?wait=` long-polls; bounds how long an abandoned poll can pin resources. */
+const MAX_LONG_POLL_SECONDS = 60;
+/** Idempotency keys are map keys held for the replay window; unbounded length is a memory lever. */
+const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+
 const leaseRequestBodySchema = z.object({
   allowDownload: z.boolean().optional(),
   device: z.string().min(1),
@@ -86,6 +91,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     eventBus: deps.eventBus,
     idGenerator: deps.idGenerator,
     leases: deps.leases,
+    logger,
     queue: deps.queue,
   });
   const notices = new LeaseNoticeBuffer(deps.eventBus);
@@ -109,6 +115,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   app.use("*", async (c, next) => {
     const start = deps.clock.now();
     await next();
+    // The one unauthenticated route is also the one a tunnel/load-balancer polls: logging it
+    // would let an anonymous flood drive the synchronous log sink from the event loop.
+    if (c.req.path === "/v1/healthz") return;
     const identity = c.get("identity") as TokenIdentity | undefined;
     logger.info("request", {
       durationMs: deps.clock.now() - start,
@@ -144,6 +153,11 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       const identity = c.get("identity");
       const body = c.req.valid("json");
       const idempotencyKey = c.req.header("Idempotency-Key");
+      if (idempotencyKey !== undefined && idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+        throw badRequest(
+          `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`,
+        );
+      }
 
       // `allowDownload` passes through unclamped, matching the socket daemon's handling of the
       // same flag; if a config-level download policy ever gates it there, this route must gate
@@ -181,7 +195,10 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       if (!Number.isFinite(seconds) || seconds < 0) {
         throw badRequest("wait must be a non-negative number of seconds");
       }
-      await tracker.waitForChange(id, seconds);
+      // Clamped, not rejected: an oversized wait still long-polls correctly -- the client
+      // simply re-polls sooner than it asked -- and the clamp bounds how long an abandoned
+      // poll can pin its listener and timer. Aborting the request releases them immediately.
+      await tracker.waitForChange(id, Math.min(seconds, MAX_LONG_POLL_SECONDS), c.req.raw.signal);
     }
 
     const view = tracker.get(id) ?? initial;
@@ -236,11 +253,15 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const device = findDevice(deps, lease.deviceId);
     if (device === undefined) throw unknownLease(lease.id);
     const requestId = tracker.requestIdForLease(lease.id);
-    const ttlMs = tracker.effectiveTtlMs(lease.id);
+    // The tracker's record is gone after a daemon restart; the mode default is then the
+    // interval that will actually be in force from the next default renew on. `expiresAt`
+    // stays the authoritative deadline either way -- never derive ttlMs from `grantedAt`,
+    // which does not move on renewal.
+    const ttlMs = tracker.effectiveTtlMs(lease.id) ?? modeDefaultTtlMs(lease, deps.config);
     return c.json({
       lease: buildLeasePayload(device, lease, {
         ...(requestId === undefined ? {} : { requestId }),
-        ...(ttlMs === undefined ? {} : { ttlMs }),
+        ttlMs,
       }),
     });
   });
@@ -255,12 +276,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     }
 
     const renewed = await deps.leases.renew(id, ttlMs);
-    const effectiveTtlMs =
-      ttlMs ??
-      (current.mode === "held"
-        ? deps.config.lease.heldTtlBackstopMs
-        : deps.config.lease.detachedTtlMs);
-    tracker.recordLeaseTtl(id, effectiveTtlMs);
+    tracker.recordLeaseTtl(id, ttlMs ?? modeDefaultTtlMs(current, deps.config));
 
     return c.json({
       expiresAt: new Date(renewed.ttlDeadline).toISOString(),
@@ -353,6 +369,11 @@ function serializeRequest(
     case "cancelled":
       return base;
   }
+}
+
+/** The interval a default (body-less) renew of this lease applies -- its mode's configured TTL. */
+function modeDefaultTtlMs(lease: LeaseRecord, config: Config): number {
+  return lease.mode === "held" ? config.lease.heldTtlBackstopMs : config.lease.detachedTtlMs;
 }
 
 /** Shared preamble of every `/v1/leases/:id` route: resolve the lease, then gate on ownership. */

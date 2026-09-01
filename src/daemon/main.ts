@@ -213,7 +213,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // client observe half-converged state. A connection refused while the daemon is
     // still starting up is accepted v1 behavior -- there is no HTTP-level "starting"
     // response to mirror the socket protocol's parked dispatch.
-    await gateway.start();
+    try {
+      await gateway.start();
+    } catch (error: unknown) {
+      // The daemon is already fully started (socket claimed, timers armed) by this point.
+      // A bind failure -- an occupied port, an invalid host -- must not strand it as a
+      // half-configured zombie that startDaemon's caller believes failed to start: tear it
+      // down before rethrowing, so failure means *nothing* is left running.
+      app.dispose();
+      await daemon.stop("http-start-failed").catch(() => undefined);
+      throw error;
+    }
     stopHttpGateway = async () => {
       await gateway.stop();
       app.dispose();
