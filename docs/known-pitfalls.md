@@ -100,7 +100,7 @@ destroys it (registry-only, as always). The device stays visible as
 `device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
 follow-up facts (see `docs/EVENTS.md`).
 
-## iOS runtime downloads: per-request blocking and the bounded-default edge case
+## Component downloads: per-request blocking, the bounded-default edge case, and no progress push
 
 The iOS driver's `resolveSpec` (`src/drivers/ios/index.ts`) can now run
 `xcodebuild -downloadPlatform iOS` when a requested runtime is missing and
@@ -126,3 +126,23 @@ downloadables index isn't parsed in v1; see `docs/IDEAS.md`). If Xcode
 doesn't have a build matching that bare major version, the download fails
 and the caller is told to pass `--os <version>` explicitly rather than
 retrying blind.
+
+**No requester-visible progress during a download (#67 stage 4).** The
+requester's lease-progress stream (`LeaseProgress` in `src/core/wait-queue.ts`
+— `queued` / `provisioning` / `booting` / `reclaiming`, relayed as CLI stderr
+JSON lines and MCP `notifications/progress`) has no `downloading` stage. Both
+drivers' `resolveSpec` — where a runtime or system-image install actually
+happens — runs before `LeaseAcquisitionCoordinator#drive`'s provisioning
+step, and `Driver.resolveSpec`'s signature carries no progress callback the
+way `provision`/`makeReady` do. A held-mode CLI or MCP caller waiting on a
+multi-minute install today sees nothing on the wire between its request and
+either the eventual grant or a timeout; the only visibility is the daemon's
+own `component.install-started` bus event (`simlock events --follow`) and log
+line, neither reaching the waiting connection itself. Threading a
+`downloading` stage through would mean widening the `Driver` interface
+(`resolveSpec` gaining an `onProgress`-shaped option, both drivers
+implementing it), a new `LeaseProgress` variant, and CLI/MCP wire changes —
+real protocol machinery, not a small addition, so it was deliberately not
+built in stage 4. `component.install-started`'s payload already carries
+enough (`platform`, `componentId`) that a future pass wiring this through
+would mostly be plumbing, not new information to invent.

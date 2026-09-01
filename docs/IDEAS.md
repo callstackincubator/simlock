@@ -53,6 +53,34 @@ boundary held.
 (pre-installed certs, test apps). Offer per-pool config: reclaim by erase
 (default) or by re-clone from a maintained golden device.
 
+## Parse Apple's downloadables index for exact runtime versions (iOS)
+
+The bounded-default download path (`IosSimctlDriver#resolveDefaultRuntime`,
+`src/drivers/ios/index.ts`) can only ask `xcodebuild -downloadPlatform iOS
+-buildVersion <major>` when no `--os` was given and the model's pairing range
+has an upper bound — the bare major version, not an exact patch release,
+because the exact downloadable versions for the installed Xcode aren't known
+offline. Xcode's own downloadable-runtimes catalog (fetched by Xcode/App
+Store internally) would let the driver resolve the exact newest compatible
+patch release instead of gambling on the major matching a real build. Not
+pursued in v1: parsing an undocumented, Apple-controlled catalog format is a
+maintenance burden disproportionate to the edge case it closes (see
+`docs/known-pitfalls.md`, "Component downloads").
+
+## Requester-visible download progress
+
+Neither driver's install (`xcodebuild -downloadPlatform`, `sdkmanager
+--install`) currently reaches the requesting connection's progress stream —
+see `docs/known-pitfalls.md` ("no progress push"). Closing this needs a
+`downloading` stage on `LeaseProgress` (`src/core/wait-queue.ts`) and a
+`Driver.resolveSpec` progress callback both drivers implement, threaded
+through `LeaseAcquisitionCoordinator#resolveAndDrive` the same way
+`provision`/`makeReady` already report `provisioning`/`booting`. Deferred
+because it is protocol machinery (interface + CLI/MCP wire changes), not a
+small addition, and the daemon-side `component.install-started` bus event
+already gives an operator visibility via `simlock events --follow` even
+though the waiting requester itself does not see it yet.
+
 ## Cross-machine coordination
 
 A fleet-level broker over multiple hosts. Explicitly out of scope for v1

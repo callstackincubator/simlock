@@ -95,7 +95,18 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
   installing/upgrading Xcode by hand. A requested `--os` outside the
   device's supported runtime range (e.g. iPhone Xs above iOS 18.x) fails
   immediately — no download is ever attempted for a version that could not
-  work regardless.
+  work regardless. For Android, this runs `sdkmanager --install`; an
+  unaccepted SDK license fails naming `downloads.acceptAndroidLicenses`
+  (config) unless that flag is set, in which case licenses are accepted
+  automatically and the install retried once. Both drivers check free disk
+  space before starting either install and fail fast, naming required vs.
+  available bytes, instead of risking a full disk mid-download. Every
+  install attempt (including a license-triggered retry) emits
+  `component.install-started` / `component.installed` /
+  `component.install-failed` on the event bus (`simlock events --follow`);
+  see [EVENTS.md](EVENTS.md#components). The requester's own progress stream
+  (below) does not yet reflect an in-flight download — see
+  [known-pitfalls.md](known-pitfalls.md).
 - `--detach` — detached mode: print the lease result and exit; the lease is
   TTL-bound and must be renewed with `simlock lease renew`.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of

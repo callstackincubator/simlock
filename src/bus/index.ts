@@ -86,6 +86,18 @@ export interface EventMap {
   };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
+  "component.install-started": { readonly platform: string; readonly componentId: string };
+  "component.installed": {
+    readonly platform: string;
+    readonly componentId: string;
+    readonly durationMs: number;
+  };
+  "component.install-failed": {
+    readonly platform: string;
+    readonly componentId: string;
+    readonly durationMs: number;
+    readonly error: string;
+  };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };

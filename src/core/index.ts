@@ -18,6 +18,7 @@ export { type CleanupRule, type RegistryView } from "./cleanup/types.js";
 export { automaticCleanupRules } from "./cleanup/rules.js";
 export { CleanupReaper } from "./reaper.js";
 export {
+  assertDiskSpace,
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
@@ -26,6 +27,7 @@ export {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  InsufficientDiskSpaceError,
   type ObservedDevice,
   type ObservedRunState,
   RuntimeMissingError,

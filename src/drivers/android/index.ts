@@ -1,5 +1,6 @@
 import type { DeviceSpec } from "../../core/domain.js";
 import {
+  assertDiskSpace,
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
@@ -13,6 +14,7 @@ import {
   type ReclaimResult,
   RuntimeMissingError,
 } from "../../core/driver.js";
+import type { ComponentInstallDiagnostic } from "../diagnostics.js";
 import type {
   Clock,
   Filesystem,
@@ -52,6 +54,9 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+// Conservative estimate for a system-image download+install -- checked before `sdkmanager
+// --install` ever starts, so a full disk fails fast instead of filling up mid-download.
+const ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES = 2 * 1024 ** 3;
 const PROVISION_ESTIMATE_MS = 1_000;
 // Measured on an M3 Pro against Pixel 8 / API 35: 2.4-5.1s over nine steady-state reclaims
 // (median 4.6s), and 3.7-5.7s with three running at once. A `snapshot` reclaim loads the clean
@@ -101,7 +106,8 @@ export interface AndroidDriverOptions {
 
 export type AndroidDriverDiagnostic =
   | { readonly avdName: string; readonly kind: "snapshot-cold-boot"; readonly readyAfterMs: number }
-  | DeviceProfileSourceDiagnostic;
+  | DeviceProfileSourceDiagnostic
+  | ComponentInstallDiagnostic;
 
 export class SdkMissingError extends Error {
   constructor(readonly searchedPaths: readonly string[]) {
@@ -610,11 +616,42 @@ export class AndroidDriver implements Driver {
   }
 
   /**
+   * Disk preflight, then the actual `sdkmanager` install, wrapped with `component.install-*`
+   * diagnostics -- split from `#installSystemImageOrThrow` below so the license-retry branching
+   * stays its own single-responsibility function rather than growing this one's complexity. A
+   * preflight failure is reported before any diagnostic fires: no install was actually
+   * attempted, so there is nothing to report as started or failed. The try/catch means a caller
+   * sees exactly one `install-failed` regardless of which branch below throws, never one per
+   * attempt.
+   */
+  async #installSystemImage(packageName: string): Promise<void> {
+    await assertDiskSpace(this.#filesystem, this.platform, ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES);
+    this.#onDiagnostic?.({ componentId: packageName, kind: "component-install-started" });
+    const startedAt = this.#clock.now();
+    try {
+      await this.#installSystemImageOrThrow(packageName);
+    } catch (error: unknown) {
+      this.#onDiagnostic?.({
+        componentId: packageName,
+        durationMs: this.#clock.now() - startedAt,
+        error: stableError(error),
+        kind: "component-install-failed",
+      });
+      throw error;
+    }
+    this.#onDiagnostic?.({
+      componentId: packageName,
+      durationMs: this.#clock.now() - startedAt,
+      kind: "component-installed",
+    });
+  }
+
+  /**
    * Installs a system image, accepting Android SDK licenses first when `sdkmanager` refuses
    * on an unaccepted one and `acceptAndroidLicenses` allows it -- never otherwise: license
    * consent is independent of, and never implied by, download permission.
    */
-  async #installSystemImage(packageName: string): Promise<void> {
+  async #installSystemImageOrThrow(packageName: string): Promise<void> {
     const result = await this.#processRunner.run(this.#sdk.sdkmanager, ["--install", packageName], {
       timeoutMs: this.#downloadTimeoutMs,
     });
@@ -1285,6 +1322,12 @@ function hostAbiFor(architecture: string): string {
 function hasUnacceptedLicense(result: ProcessResult): boolean {
   const combined = `${result.stdout}\n${result.stderr}`;
   return /licen[cs]e/i.test(combined) && /not accepted/i.test(combined);
+}
+
+/** Matches `stableError` in `warm-pool-coordinator.ts` -- `device.purge-failed`'s own summary shape. */
+function stableError(error: unknown): string {
+  const value = error instanceof Error ? error : new Error(String(error));
+  return `${value.name}: ${value.message}`;
 }
 
 /**

@@ -1,4 +1,5 @@
 import {
+  assertDiskSpace,
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
@@ -21,6 +22,7 @@ import type {
   ProcessResult,
   ProcessRunner,
 } from "../../ports/index.js";
+import type { ComponentInstallDiagnostic } from "../diagnostics.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
@@ -35,6 +37,10 @@ const UNBOUNDED_VERSION = 0xff_ff_ff;
 // `xcodebuild -downloadPlatform iOS -buildVersion` only reaches back to iOS 16.0 (Xcode
 // 16.1+); older runtimes must be installed through Xcode itself.
 const IOS_DOWNLOAD_FLOOR: readonly [number, number, number] = [16, 0, 0];
+// Conservative estimate for a simulator runtime download+install (~7 GB observed, rounded up
+// with headroom) -- checked before `xcodebuild -downloadPlatform` ever starts, so a full disk
+// fails fast instead of filling up mid-download.
+const IOS_RUNTIME_MIN_FREE_BYTES = 8 * 1024 ** 3;
 // A cold `simctl boot` to `bootstatus` measures roughly 30s on a fast, idle machine and up to
 // a minute on a loaded or slower one. The upper end is the estimate, deliberately: this number
 // is what a waiting requester is quoted, and quoting 30s to someone who then waits 60s is the
@@ -60,6 +66,12 @@ export interface IosSimctlDriverOptions {
   readonly downloadTimeoutMs?: number;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
+  /**
+   * Reports `component.install-*` facts for the daemon layer to bridge onto the event bus --
+   * this driver never depends on the bus directly (architecture rule 5). Mirrors the Android
+   * driver's `onDiagnostic` option.
+   */
+  readonly onDiagnostic?: (diagnostic: ComponentInstallDiagnostic) => void;
   readonly processRunner: ProcessRunner;
 }
 
@@ -104,6 +116,7 @@ export class IosSimctlDriver implements Driver {
   readonly #downloadTimeoutMs: number;
   readonly #filesystem: Filesystem;
   readonly #idGenerator: IdGenerator;
+  readonly #onDiagnostic: ((diagnostic: ComponentInstallDiagnostic) => void) | undefined;
   readonly #processRunner: ProcessRunner;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
   #devicesRoot: string | undefined;
@@ -113,6 +126,7 @@ export class IosSimctlDriver implements Driver {
     this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
+    this.#onDiagnostic = options.onDiagnostic;
     this.#processRunner = options.processRunner;
   }
 
@@ -170,7 +184,12 @@ export class IosSimctlDriver implements Driver {
       );
     }
 
-    await this.#downloadRuntime(["-downloadPlatform", "iOS", "-buildVersion", osVersion]);
+    await this.#downloadRuntime(osVersion, [
+      "-downloadPlatform",
+      "iOS",
+      "-buildVersion",
+      osVersion,
+    ]);
     const refreshed = await this.#loadCatalog();
     const runtime = findInstalledRuntime(refreshed, osVersion);
     if (runtime === undefined) {
@@ -208,11 +227,11 @@ export class IosSimctlDriver implements Driver {
     if (isUnboundedMax(deviceType.maxRuntimeVersion)) {
       // No upper bound on this model's pairing range: any released version works, so there is
       // nothing more specific to ask for than "latest".
-      await this.#downloadRuntime(["-downloadPlatform", "iOS"]);
+      await this.#downloadRuntime("latest", ["-downloadPlatform", "iOS"]);
     } else {
       const major = majorVersionString(deviceType.maxRuntimeVersion);
       try {
-        await this.#downloadRuntime(["-downloadPlatform", "iOS", "-buildVersion", major]);
+        await this.#downloadRuntime(major, ["-downloadPlatform", "iOS", "-buildVersion", major]);
       } catch (error: unknown) {
         throw new DriverCrashError(
           `Could not download a default iOS runtime for ${deviceType.name} (tried ${major}): ` +
@@ -247,22 +266,52 @@ export class IosSimctlDriver implements Driver {
    * callers that ask for the exact same invocation behind one in-flight promise -- mirrors the
    * Android driver's `#locks` pattern, sized to a single component instead of a whole device.
    * The map entry is removed once the download settles (success or failure), so a later,
-   * non-concurrent call starts a fresh attempt rather than replaying a stale result.
+   * non-concurrent call starts a fresh attempt rather than replaying a stale result. `componentId`
+   * is the runtime version being installed ("latest" for a bare `-downloadPlatform iOS`, the bare
+   * major version for the bounded-default case) -- reported on `component.install-*`, never
+   * parsed back out of `args`.
    */
-  async #downloadRuntime(args: readonly string[]): Promise<void> {
+  async #downloadRuntime(componentId: string, args: readonly string[]): Promise<void> {
     const key = args.join(" ");
     const inFlight = this.#downloadLocks.get(key);
     if (inFlight !== undefined) {
       return inFlight;
     }
 
-    const promise = this.#xcodebuildOrThrow(args).finally(() => {
+    const promise = this.#installComponent(componentId, args).finally(() => {
       if (this.#downloadLocks.get(key) === promise) {
         this.#downloadLocks.delete(key);
       }
     });
     this.#downloadLocks.set(key, promise);
     return promise;
+  }
+
+  /**
+   * Disk preflight, then `xcodebuild`, wrapped with `component.install-*` diagnostics. A
+   * preflight failure is reported before any diagnostic fires -- no install was actually
+   * attempted, so there is nothing to report as started or failed.
+   */
+  async #installComponent(componentId: string, args: readonly string[]): Promise<void> {
+    await assertDiskSpace(this.#filesystem, this.platform, IOS_RUNTIME_MIN_FREE_BYTES);
+    this.#onDiagnostic?.({ componentId, kind: "component-install-started" });
+    const startedAt = this.#clock.now();
+    try {
+      await this.#xcodebuildOrThrow(args);
+    } catch (error: unknown) {
+      this.#onDiagnostic?.({
+        componentId,
+        durationMs: this.#clock.now() - startedAt,
+        error: stableError(error),
+        kind: "component-install-failed",
+      });
+      throw error;
+    }
+    this.#onDiagnostic?.({
+      componentId,
+      durationMs: this.#clock.now() - startedAt,
+      kind: "component-installed",
+    });
   }
 
   async #xcodebuildOrThrow(args: readonly string[]): Promise<void> {
@@ -882,4 +931,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Matches `stableError` in `warm-pool-coordinator.ts` -- `device.purge-failed`'s own summary shape. */
+function stableError(error: unknown): string {
+  const value = error instanceof Error ? error : new Error(String(error));
+  return `${value.name}: ${value.message}`;
 }

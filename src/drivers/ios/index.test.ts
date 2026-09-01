@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   BootTimeoutError,
   DriverCrashError,
+  InsufficientDiskSpaceError,
   RuntimeMissingError,
   UnknownModelError,
 } from "../../core/index.js";
@@ -17,6 +18,7 @@ import {
   SystemClock,
   type Filesystem,
 } from "../../ports/index.js";
+import type { ComponentInstallDiagnostic } from "../diagnostics.js";
 import { IosSimctlDriver } from "./index.js";
 
 const listFixture = readFileSync(new URL("./fixtures/simctl-list.json", import.meta.url), "utf8");
@@ -255,6 +257,137 @@ describe("IosSimctlDriver", () => {
     expect(first).toEqual({ model: "iPhone 16", osVersion: "18.6", platform: "ios" });
     expect(second).toEqual({ model: "iPhone 16", osVersion: "18.6", platform: "ios" });
     expect(runner.calls.filter((call) => call.command === "xcodebuild")).toHaveLength(1);
+  });
+
+  describe("component install diagnostics", () => {
+    it("reports component-install-started then component-installed with a duration on a successful download", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: {
+            command: "xcodebuild",
+            args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+          },
+        },
+        {
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: listFixtureAfterDownload },
+        },
+      ]);
+      const clock = new FakeClock();
+      const diagnostics: ComponentInstallDiagnostic[] = [];
+      const driver = createDriver(runner, clock, new MemoryFilesystem(), (diagnostic) =>
+        diagnostics.push(diagnostic),
+      );
+
+      await driver.resolveSpec(
+        { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+        { allowDownload: true },
+      );
+
+      expect(diagnostics).toEqual([
+        { componentId: "18.6", kind: "component-install-started" },
+        { componentId: "18.6", durationMs: 0, kind: "component-installed" },
+      ]);
+    });
+
+    it("reports component-install-failed with a stable error summary when xcodebuild fails", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: {
+            command: "xcodebuild",
+            args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+          },
+          result: { code: 1, stderr: "no network", stdout: "" },
+        },
+      ]);
+      const diagnostics: ComponentInstallDiagnostic[] = [];
+      const driver = createDriver(runner, new FakeClock(), new MemoryFilesystem(), (diagnostic) =>
+        diagnostics.push(diagnostic),
+      );
+
+      await driver
+        .resolveSpec(
+          { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+          { allowDownload: true },
+        )
+        .catch((error: unknown) => error);
+
+      expect(diagnostics).toEqual([
+        { componentId: "18.6", kind: "component-install-started" },
+        {
+          componentId: "18.6",
+          durationMs: 0,
+          error: expect.stringContaining("DriverCrashError:"),
+          kind: "component-install-failed",
+        },
+      ]);
+    });
+
+    it('reports "latest" as the component id for an unbounded default-runtime download', async () => {
+      // A device type with no upper bound (maxRuntimeVersion unbounded) but no currently
+      // installed runtime lists it as supported -- forces the "no paired runtime, download
+      // latest" branch rather than the exact-version one the other tests exercise.
+      const unpairedCatalog = JSON.stringify({
+        devicetypes: [
+          {
+            identifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+            maxRuntimeVersion: 16_777_215,
+            minRuntimeVersion: 917_504,
+            name: "iPhone 16",
+          },
+        ],
+        runtimes: [
+          {
+            identifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+            isAvailable: true,
+            name: "iOS 18.4",
+            supportedDeviceTypes: [],
+            version: "18.4",
+          },
+        ],
+      });
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: unpairedCatalog } },
+        { match: { command: "xcodebuild", args: ["-downloadPlatform", "iOS"] } },
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: unpairedCatalog } },
+      ]);
+      const diagnostics: ComponentInstallDiagnostic[] = [];
+      const driver = createDriver(runner, new FakeClock(), new MemoryFilesystem(), (diagnostic) =>
+        diagnostics.push(diagnostic),
+      );
+
+      await driver
+        .resolveSpec({ model: "iPhone 16", platform: "ios" }, { allowDownload: true })
+        .catch(() => undefined);
+
+      expect(diagnostics[0]).toEqual({ componentId: "latest", kind: "component-install-started" });
+    });
+
+    it("fails disk preflight before ever invoking xcodebuild, and reports no diagnostic", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ]);
+      const diagnostics: ComponentInstallDiagnostic[] = [];
+      const filesystem = new MemoryFilesystem(1024);
+      const driver = createDriver(runner, new FakeClock(), filesystem, (diagnostic) =>
+        diagnostics.push(diagnostic),
+      );
+
+      const error = await driver
+        .resolveSpec(
+          { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+          { allowDownload: true },
+        )
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
+      expect((error as Error).message).toMatch(/needs ~8\.0 GiB.*only 0\.0 GiB available/);
+      // Only the initial catalog list happened: no xcodebuild invocation, no diagnostic.
+      expect(runner.calls.map((call) => call.command)).toEqual(["xcrun"]);
+      expect(diagnostics).toEqual([]);
+    });
   });
 
   it("provisions with the exact simctl argv and returns opaque iOS driver data", async () => {
@@ -712,11 +845,13 @@ function createDriver(
   runner: ScriptedProcessRunner,
   clock = new FakeClock(),
   filesystem: Filesystem = new MemoryFilesystem(),
+  onDiagnostic?: (diagnostic: ComponentInstallDiagnostic) => void,
 ): IosSimctlDriver {
   return new IosSimctlDriver({
     clock,
     filesystem,
     idGenerator: { generate: () => "device-1" },
+    ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
     processRunner: runner,
   });
 }

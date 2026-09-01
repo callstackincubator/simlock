@@ -1,3 +1,4 @@
+import type { Filesystem } from "../ports/index.js";
 import type { DeviceSpec, Platform } from "./domain.js";
 
 export interface DeviceRequest {
@@ -154,5 +155,42 @@ export class DriverCrashError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "DriverCrashError";
+  }
+}
+
+export class InsufficientDiskSpaceError extends Error {
+  constructor(
+    readonly platform: Platform,
+    readonly requiredBytes: number,
+    readonly availableBytes: number,
+  ) {
+    super(
+      `Not enough free disk space to install a ${platform} component: needs ~` +
+        `${formatGibibytes(requiredBytes)} free, only ${formatGibibytes(availableBytes)} available`,
+    );
+    this.name = "InsufficientDiskSpaceError";
+  }
+}
+
+function formatGibibytes(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+/**
+ * Checked before a driver starts any multi-GB component download/install, so a full disk fails
+ * fast with a clear message instead of filling up mid-download (see safety rule 4's spirit --
+ * downloads must never surprise the machine they run on). `path` defaults to `"."`, the same
+ * convention `CleanupReaper` uses for its own disk-pressure check (`src/core/reaper.ts`): the
+ * daemon process's own working-directory volume.
+ */
+export async function assertDiskSpace(
+  filesystem: Pick<Filesystem, "diskFree">,
+  platform: Platform,
+  requiredBytes: number,
+  path = ".",
+): Promise<void> {
+  const availableBytes = await filesystem.diskFree(path);
+  if (availableBytes < requiredBytes) {
+    throw new InsufficientDiskSpaceError(platform, requiredBytes, availableBytes);
   }
 }

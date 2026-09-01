@@ -458,6 +458,29 @@ Events are emitted post-commit only; handler failures are isolated from
 emitters. See [EVENTS.md](EVENTS.md) and
 [agent-rules/events.md](agent-rules/events.md).
 
+### Driver facts reach the bus through diagnostics, never directly
+
+Drivers must never depend on the event bus (architecture rule 5 — a driver is
+not an observer of its own facts). Where a driver needs to report something
+the daemon should turn into a bus event, it reports it through its own
+`onDiagnostic` callback option instead — the Android driver already did this
+for `snapshot-cold-boot` and unreadable device-profile sources; the iOS
+driver gained the same option for component installs. `src/daemon/main.ts`
+wires each driver's `onDiagnostic` at construction time
+(`discoverDrivers`), bridging the diagnostic to `component.install-started` /
+`component.installed` / `component.install-failed` — see
+[EVENTS.md](EVENTS.md#components). This is also why those events are
+attributed to the `driver-diagnostics` emitter rather than to `IosSimctlDriver`
+or `AndroidDriver` directly: the driver only observed the fact, the daemon
+layer is what committed it to the bus.
+
+Before starting either install, the driver checks free disk space against a
+conservative per-component estimate (~8 GiB for an iOS runtime, ~2 GiB for an
+Android system image) via `Filesystem#diskFree` and fails fast with a typed
+`InsufficientDiskSpaceError` naming required vs. available bytes — no
+`component.install-*` diagnostic fires for a preflight failure, since no
+install was actually attempted.
+
 ## External APIs behind interfaces (ports)
 
 Every external API the app touches gets its own type/interface (a *port*),
@@ -560,6 +583,14 @@ before the current file. The one exception is the fatal top-level handler: it
 cannot depend on `config.log` having loaded successfully, so it builds its own
 logger straight from the default log path at a fixed level, falling back to
 `console.error` only if that itself fails.
+
+`startDaemon` also subscribes `logger.child("components")` to `component.installed`
+(`wireComponentInstallLogging` in `src/daemon/main.ts`) so a component simlock
+installed on an agent's behalf stays attributable in `daemon.log` after the
+event ring buffer resets on restart — the same durable-vs-ring-buffer split as
+everything else in this section, applied to component installs specifically
+because there is no registry entry or uninstall for them to be recovered from
+otherwise (see "Out of scope" in the #67 issue).
 
 ## Device requests
 

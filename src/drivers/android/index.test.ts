@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { Driver } from "../../core/driver.js";
+import { InsufficientDiskSpaceError } from "../../core/index.js";
 import {
   FakeClock,
   type Filesystem,
@@ -1076,6 +1077,156 @@ describe("AndroidDriver", () => {
     });
   });
 
+  describe("component install diagnostics", () => {
+    it("reports component-install-started then component-installed with a duration on a clean install", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.sdkmanager, [
+          "--install",
+          "system-images;android-35;google_apis;arm64-v8a",
+        ]),
+      ]);
+      const diagnostics: AndroidDriverDiagnostic[] = [];
+      const driver = await createDriver(filesystem, runner, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      await driver.resolveSpec(
+        { model: "Pixel 8", osVersion: "35", platform: "android" },
+        { allowDownload: true },
+      );
+
+      expect(diagnostics).toEqual([
+        {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          kind: "component-install-started",
+        },
+        {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          durationMs: 0,
+          kind: "component-installed",
+        },
+      ]);
+    });
+
+    it("reports component-install-failed with a stable error summary when the install is rejected outright", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: { code: 1, stderr: "no network", stdout: "" },
+        },
+      ]);
+      const diagnostics: AndroidDriverDiagnostic[] = [];
+      const driver = await createDriver(filesystem, runner, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      await driver
+        .resolveSpec(
+          { model: "Pixel 8", osVersion: "35", platform: "android" },
+          { allowDownload: true },
+        )
+        .catch((error: unknown) => error);
+
+      expect(diagnostics).toEqual([
+        {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          kind: "component-install-started",
+        },
+        {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          durationMs: 0,
+          error: expect.stringContaining("DriverCrashError:"),
+          kind: "component-install-failed",
+        },
+      ]);
+    });
+
+    it("reports exactly one component-install-failed for a license-retry failure, not one per attempt", async () => {
+      const licenseNotAcceptedOutput =
+        "Warning: License for package Android SDK Platform 35 not accepted.\n\n" +
+        "1 package(s) were skipped due to license issues. Please accept the license(s) and try " +
+        "again.\nTo resolve, run: sdkmanager --licenses\n";
+      const filesystem = await androidFilesystem();
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: { code: 1, stderr: "", stdout: licenseNotAcceptedOutput },
+        },
+        processResult(binaries.sdkmanager, ["--licenses"], "All licenses accepted.\n"),
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: { code: 1, stderr: "still refusing", stdout: "" },
+        },
+      ]);
+      const diagnostics: AndroidDriverDiagnostic[] = [];
+      const driver = await createDriver(filesystem, runner, {
+        acceptAndroidLicenses: true,
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      await driver
+        .resolveSpec(
+          { model: "Pixel 8", osVersion: "35", platform: "android" },
+          { allowDownload: true },
+        )
+        .catch((error: unknown) => error);
+
+      const installDiagnostics = diagnostics.filter((diagnostic) =>
+        diagnostic.kind.startsWith("component-install"),
+      );
+      expect(installDiagnostics).toEqual([
+        {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          kind: "component-install-started",
+        },
+        {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          durationMs: 0,
+          error: expect.stringContaining("DriverCrashError:"),
+          kind: "component-install-failed",
+        },
+      ]);
+    });
+
+    it("fails disk preflight before ever invoking sdkmanager, and reports no diagnostic", async () => {
+      const filesystem = await androidFilesystem({ freeDiskBytes: 1024 });
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      ]);
+      const diagnostics: AndroidDriverDiagnostic[] = [];
+      const driver = await createDriver(filesystem, runner, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      const error = await driver
+        .resolveSpec(
+          { model: "Pixel 8", osVersion: "35", platform: "android" },
+          { allowDownload: true },
+        )
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
+      expect((error as Error).message).toMatch(/needs ~2\.0 GiB.*only 0\.0 GiB available/);
+      // The device-profile lookup ran (avdmanager list device), but no sdkmanager call at all.
+      expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
+      expect(diagnostics).toEqual([]);
+    });
+  });
+
   describe("download timeout", () => {
     it("threads the configured downloadTimeoutMs into the sdkmanager install call", async () => {
       const filesystem = await androidFilesystem();
@@ -1316,10 +1467,11 @@ function customDeviceXml(name: string, ramMiB: number): string {
 async function androidFilesystem(
   options: {
     readonly config?: string;
+    readonly freeDiskBytes?: number;
     readonly images?: readonly (readonly [string, string, string])[];
   } = {},
 ): Promise<MemoryFilesystem> {
-  const filesystem = new MemoryFilesystem();
+  const filesystem = new MemoryFilesystem(options.freeDiskBytes);
   for (const binary of Object.values(binaries)) {
     await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
     await filesystem.writeFileAtomic(binary, "binary");
