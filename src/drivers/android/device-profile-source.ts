@@ -234,6 +234,7 @@ interface DevicesXmlProfile {
  * from whichever `<d:hardware>` block appears first in the file, matching `<d:screen>` /
  * `<d:ram>` textually rather than per-state.
  */
+// fallow-ignore-next-line complexity -- per-field extraction and rejection checks are one parse pass over one <d:device> block.
 export function parseDevicesXml(contents: string): readonly DevicesXmlProfile[] {
   const trimmed = contents.trim();
   if (trimmed === "") {
@@ -249,20 +250,52 @@ export function parseDevicesXml(contents: string): readonly DevicesXmlProfile[] 
     if (rawName === undefined || rawName === "") {
       continue;
     }
+    // A value containing CR, LF, or NUL is never a legitimate device name or property --
+    // devices.xml is Android Studio's own file, but Simlock only ever reads it (safety rule 1),
+    // and every value here eventually flows into a `config.ini` line-merge
+    // (`AndroidDriver#applyHardwareProperties` -> `#mergeConfigIniLines`). A newline there would
+    // inject an arbitrary extra `config.ini` key. Thrown rather than silently skipped or
+    // sanitized: this routes through the same malformed-devices.xml diagnostic path the caller
+    // (`UserDeviceProfileSource#profiles`) already has for an unparseable file, so a poisoned
+    // value is surfaced rather than quietly dropped.
+    if (containsForbiddenCharacter(rawName)) {
+      throw new Error(`devices.xml device name contains an embedded line break or NUL byte`);
+    }
     const name = unescapeXml(rawName);
     const hardwareProperties: Record<string, string> = { "hw.device.name": name };
 
     const manufacturer = extractText(block, "manufacturer");
     if (manufacturer !== undefined && manufacturer !== "") {
+      if (containsForbiddenCharacter(manufacturer)) {
+        throw new Error(
+          `devices.xml manufacturer for device "${name}" contains an embedded line break or NUL byte`,
+        );
+      }
       hardwareProperties["hw.device.manufacturer"] = unescapeXml(manufacturer);
     }
 
     applyScreenProperties(block, hardwareProperties);
     applyRamProperty(block, hardwareProperties);
 
+    // Defense in depth beyond the per-field checks above: every value about to leave this
+    // parser (including ones a future field addition might forget to check individually) must
+    // be a single line before it is handed to the driver -- the same invariant
+    // `AndroidDriver#mergeConfigIniLines` enforces again on its own side, independently.
+    if (Object.values(hardwareProperties).some(containsForbiddenCharacter)) {
+      throw new Error(
+        `devices.xml property for device "${name}" contains an embedded line break or NUL byte`,
+      );
+    }
+
     profiles.push({ hardwareProperties, name });
   }
   return profiles;
+}
+
+/** CR, LF, or NUL -- see the rejection check at the top of the `<d:device>` loop above. */
+function containsForbiddenCharacter(value: string): boolean {
+  // oxlint-disable-next-line no-control-regex -- NUL rejection is intentional, not an accidental control-character match.
+  return /[\r\n\u0000]/.test(value);
 }
 
 function applyScreenProperties(

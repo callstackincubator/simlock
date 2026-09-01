@@ -1,8 +1,8 @@
 import type { DeviceSpec } from "../../core/domain.js";
 import {
-  assertDiskSpace,
   BootTimeoutError,
   type DeviceRequest,
+  DiskSpaceGuard,
   type Driver,
   type DriverCatalogEntry,
   type DriverDevice,
@@ -95,6 +95,14 @@ export interface AndroidDriverOptions {
    * `~/.android/devices.xml`, so a name defined in both resolves to the built-in.
    */
   readonly deviceProfileSources?: readonly DeviceProfileSource[];
+  /**
+   * Disk-space preflight, shared with every other driver that installs components -- see the
+   * iOS driver's `IosSimctlDriverOptions.diskSpaceGuard` for why a bare `assertDiskSpace` call
+   * isn't enough on its own. Defaults to a private, driver-local guard when omitted (tests,
+   * `SIMLOCK_DRIVERS_MODULE`); production wiring (`src/daemon/main.ts`) passes one shared
+   * instance to every driver.
+   */
+  readonly diskSpaceGuard?: DiskSpaceGuard;
   /** Per-install timeout for `sdkmanager`; defaults to `downloads.timeoutMs`'s own default. */
   readonly downloadTimeoutMs?: number;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -162,6 +170,7 @@ export class AndroidDriver implements Driver {
   readonly #clock: Clock;
   readonly #deviceProfiles: DeviceProfileRegistry;
   readonly #devices = new Map<string, DeviceState>();
+  readonly #diskSpaceGuard: DiskSpaceGuard;
   readonly #downloadTimeoutMs: number;
   readonly #filesystem: Filesystem;
   readonly #hostAbi: string;
@@ -179,6 +188,7 @@ export class AndroidDriver implements Driver {
   private constructor(options: AndroidDriverOptions, sdk: AndroidSdkPaths) {
     this.#acceptAndroidLicenses = options.acceptAndroidLicenses ?? false;
     this.#clock = options.clock;
+    this.#diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
     this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi ?? hostAbiFor(process.arch);
@@ -205,7 +215,7 @@ export class AndroidDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     if (request.platform !== this.platform) {
       throw new Error(`Android driver cannot resolve ${request.platform} requests`);
@@ -224,7 +234,7 @@ export class AndroidDriver implements Driver {
       }
 
       const packageName = systemImagePackage(apiLevel, "google_apis", this.#hostAbi);
-      await this.#installSystemImage(packageName);
+      await this.#installSystemImage(packageName, options.requesterId);
     }
 
     this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
@@ -606,13 +616,13 @@ export class AndroidDriver implements Driver {
    * failure), so a later, non-concurrent call starts a fresh attempt rather than replaying a
    * stale result.
    */
-  async #installSystemImage(packageName: string): Promise<void> {
+  async #installSystemImage(packageName: string, requesterId: string | undefined): Promise<void> {
     const inFlight = this.#installLocks.get(packageName);
     if (inFlight !== undefined) {
       return inFlight;
     }
 
-    const promise = this.#installSystemImageOnce(packageName).finally(() => {
+    const promise = this.#installSystemImageOnce(packageName, requesterId).finally(() => {
       if (this.#installLocks.get(packageName) === promise) {
         this.#installLocks.delete(packageName);
       }
@@ -622,39 +632,78 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * Disk preflight, then the actual `sdkmanager` install, wrapped with `component.install-*`
-   * diagnostics -- split from `#installSystemImageOrThrow` below so the license-retry branching
-   * stays its own single-responsibility function rather than growing this one's complexity. A
-   * preflight failure is reported before any diagnostic fires: no install was actually
-   * attempted, so there is nothing to report as started or failed. The try/catch means a caller
-   * sees exactly one `install-failed` regardless of which branch below throws, never one per
-   * attempt.
+   * Disk preflight (via the shared `DiskSpaceGuard`, released once the install settles either
+   * way), then the actual `sdkmanager` install, wrapped with `component.install-*` diagnostics
+   * -- split from `#installSystemImageOrThrow` below so the license-retry branching stays its
+   * own single-responsibility function rather than growing this one's complexity. A preflight
+   * failure is reported before any diagnostic fires: no install was actually attempted, so
+   * there is nothing to report as started or failed. The try/catch means a caller sees exactly
+   * one `install-failed` regardless of which branch below throws, never one per attempt.
+   *
+   * `component-installed` is a verified fact, not "`sdkmanager` exited 0 (possibly after a
+   * license-accept retry)": once the install call itself succeeds, this re-scans
+   * `#installedImages` and only reports `component-installed` once the package actually
+   * installed is present there. Absent (a "reported success but nothing showed up" case)
+   * reports `component-install-failed` instead and throws, matching the iOS driver's
+   * post-download verification.
    */
-  async #installSystemImageOnce(packageName: string): Promise<void> {
-    await assertDiskSpace(
+  // fallow-ignore-next-line complexity -- reservation, install, and post-install verification are one attempt with one exit per outcome.
+  async #installSystemImageOnce(
+    packageName: string,
+    requesterId: string | undefined,
+  ): Promise<void> {
+    const release = await this.#diskSpaceGuard.reserve(
       this.#filesystem,
       this.platform,
       ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES,
       this.#sdk.root,
     );
-    this.#onDiagnostic?.({ componentId: packageName, kind: "component-install-started" });
-    const startedAt = this.#clock.now();
     try {
-      await this.#installSystemImageOrThrow(packageName);
-    } catch (error: unknown) {
+      this.#onDiagnostic?.({
+        componentId: packageName,
+        kind: "component-install-started",
+        ...(requesterId === undefined ? {} : { requesterId }),
+      });
+      const startedAt = this.#clock.now();
+      try {
+        await this.#installSystemImageOrThrow(packageName);
+      } catch (error: unknown) {
+        this.#onDiagnostic?.({
+          componentId: packageName,
+          durationMs: this.#clock.now() - startedAt,
+          error: stableError(error),
+          kind: "component-install-failed",
+          ...(requesterId === undefined ? {} : { requesterId }),
+        });
+        throw error;
+      }
+
+      const images = await this.#installedImages();
+      if (
+        !images.some(
+          (image) => systemImagePackage(image.apiLevel, image.tag, image.abi) === packageName,
+        )
+      ) {
+        const message = `sdkmanager reported success but ${packageName} is still not installed`;
+        this.#onDiagnostic?.({
+          componentId: packageName,
+          durationMs: this.#clock.now() - startedAt,
+          error: message,
+          kind: "component-install-failed",
+          ...(requesterId === undefined ? {} : { requesterId }),
+        });
+        throw new DriverCrashError(message);
+      }
+
       this.#onDiagnostic?.({
         componentId: packageName,
         durationMs: this.#clock.now() - startedAt,
-        error: stableError(error),
-        kind: "component-install-failed",
+        kind: "component-installed",
+        ...(requesterId === undefined ? {} : { requesterId }),
       });
-      throw error;
+    } finally {
+      release();
     }
-    this.#onDiagnostic?.({
-      componentId: packageName,
-      durationMs: this.#clock.now() - startedAt,
-      kind: "component-installed",
-    });
   }
 
   /**
@@ -818,11 +867,26 @@ export class AndroidDriver implements Driver {
    * merge from empty content; any other read failure is rethrown rather than treated as an
    * empty file -- silently starting from "" on, say, an EACCES or EIO would write back only
    * `entries` and clobber whatever config.ini already held.
+   *
+   * Defense in depth against a config.ini injection: `#applyHardwareProperties` calls this with
+   * values sourced from a device profile (`avdmanager list device`, or a parsed
+   * `~/.android/devices.xml` -- see `device-profile-source.ts`'s own line-break rejection at the
+   * parse boundary). A key or value containing a line break would let one logical property
+   * inject arbitrary extra `config.ini` lines once joined in -- rejected here unconditionally,
+   * independent of and in addition to that parse-time check, so this merge is never the only
+   * thing standing between untrusted input and config.ini.
    */
   async #mergeConfigIniLines(
     avdName: string,
     entries: Readonly<Record<string, string>>,
   ): Promise<void> {
+    for (const [key, value] of Object.entries(entries)) {
+      if (containsLineBreak(key) || containsLineBreak(value)) {
+        throw new DriverCrashError(
+          `Refusing to merge config.ini entry with an embedded line break (key ${JSON.stringify(key)})`,
+        );
+      }
+    }
     const path = this.#configIniPath(avdName);
     let contents: string;
     try {
@@ -1331,6 +1395,11 @@ function portsFromAdbDevices(output: string): number[] {
     .filter((port) => Number.isInteger(port));
 }
 
+/** See `#mergeConfigIniLines`'s defense-in-depth check. */
+function containsLineBreak(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
+
 function stableHash(parts: readonly string[]): string {
   let hash = 0x811c9dc5;
   for (const character of parts.join("\u0000")) {
@@ -1353,7 +1422,9 @@ function hostAbiFor(architecture: string): string {
  */
 function hasUnacceptedLicense(result: ProcessResult): boolean {
   const combined = `${result.stdout}\n${result.stderr}`;
-  return /licen[cs]e/i.test(combined) && /not accepted/i.test(combined);
+  // Covers both documented sdkmanager phrasings: "License for package ... not accepted." and
+  // "licenses have not been accepted." -- the latter has "been" between "not" and "accepted".
+  return /licen[cs]e/i.test(combined) && /not (?:been )?accepted/i.test(combined);
 }
 
 /**

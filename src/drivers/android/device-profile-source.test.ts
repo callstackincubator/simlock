@@ -96,6 +96,31 @@ describe("UserDeviceProfileSource", () => {
     });
   });
 
+  it("reports a devices.xml with a newline embedded in a device name as a diagnostic and produces no profile", async () => {
+    // Stands in for `<d:manufacturer>Google\ndisk.dataPartition.path=/evil</d:manufacturer>`:
+    // a value that would inject an arbitrary extra config.ini line once
+    // `AndroidDriver#applyHardwareProperties` merges it in. Embedded directly (not via an XML
+    // entity) since `extractText` only trims leading/trailing whitespace, not internal
+    // characters.
+    const filesystem = await filesystemWithDevicesXml(
+      '<?xml version="1.0"?><d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">' +
+        "<d:device><d:name>Evil\nPhone</d:name></d:device>" +
+        "</d:devices>",
+    );
+    const diagnostics: DeviceProfileSourceDiagnostic[] = [];
+    const source = new UserDeviceProfileSource(devicesXmlPath, filesystem, (diagnostic) =>
+      diagnostics.push(diagnostic),
+    );
+
+    await expect(source.listModels()).resolves.toEqual([]);
+    await expect(source.resolve("Evil\nPhone")).resolves.toBeUndefined();
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]).toMatchObject({
+      kind: "device-profile-source-unreadable",
+      path: devicesXmlPath,
+    });
+  });
+
   it("treats a well-formed but empty devices.xml as legitimately profile-less", async () => {
     const filesystem = await filesystemWithDevicesXml(
       '<?xml version="1.0"?><d:devices xmlns:d="http://schemas.android.com/sdk/devices/7"/>',
@@ -152,6 +177,28 @@ describe("parseDevicesXml", () => {
     </d:devices>`;
 
     expect(parseDevicesXml(xml)).toEqual([]);
+  });
+
+  it("rejects a device name containing an embedded line break or NUL byte", () => {
+    const withNewline =
+      '<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">' +
+      "<d:device><d:name>Evil\nPhone</d:name></d:device></d:devices>";
+    expect(() => parseDevicesXml(withNewline)).toThrow();
+
+    const withNul =
+      '<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">' +
+      "<d:device><d:name>Evil\u0000Phone</d:name></d:device></d:devices>";
+    expect(() => parseDevicesXml(withNul)).toThrow();
+  });
+
+  it("rejects a manufacturer value containing an embedded line break, routing config.ini injection attempts through the same rejection as the name field", () => {
+    const xml =
+      '<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7"><d:device>' +
+      "<d:name>Pixel Knockoff</d:name>" +
+      "<d:manufacturer>Google\ndisk.dataPartition.path=/evil</d:manufacturer>" +
+      "</d:device></d:devices>";
+
+    expect(() => parseDevicesXml(xml)).toThrow();
   });
 
   it("returns no profiles for an empty file without throwing", () => {

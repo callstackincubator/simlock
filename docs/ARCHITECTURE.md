@@ -472,14 +472,40 @@ wires each driver's `onDiagnostic` at construction time
 [EVENTS.md](EVENTS.md#components). This is also why those events are
 attributed to the `driver-diagnostics` emitter rather than to `IosSimctlDriver`
 or `AndroidDriver` directly: the driver only observed the fact, the daemon
-layer is what committed it to the bus.
+layer is what committed it to the bus. Both drivers also thread the
+requesting lease's `requesterId` (when `resolveSpec`'s caller knew one — see
+`LeaseAcquisitionCoordinator#resolveAndDrive`) through the diagnostic into
+the bridged event's payload, so a component install is attributable to the
+request that caused it.
 
-Before starting either install, the driver checks free disk space against a
+`component.installed` is a verified fact, not "the installer exited 0":
+`xcodebuild`/`sdkmanager` reporting success only means the tool claims to
+have finished, not that the thing the request actually needed — a runtime at
+the requested version, paired with the requested device type for iOS; the
+requested system image for Android — is now present. Both drivers re-scan
+their own catalog (`simctl list` / the SDK's `system-images` tree) after the
+installer returns and only report `component.installed` once that re-scan
+confirms it; a re-scan that comes up empty reports `component.install-failed`
+with that reason instead, and the caller still sees the same typed error it
+always did (`DriverCrashError` for iOS's "still not installed" case,
+`IosRuntimeUnpairedError` for a downloaded-but-unpaired runtime). Exactly one
+terminal fact fires per install attempt, matching the pre-existing
+`component.install-started` timing.
+
+Before starting either install, the driver reserves free disk space against a
 conservative per-component estimate (~8 GiB for an iOS runtime, ~2 GiB for an
-Android system image) via `Filesystem#diskFree` and fails fast with a typed
-`InsufficientDiskSpaceError` naming required vs. available bytes — no
-`component.install-*` diagnostic fires for a preflight failure, since no
-install was actually attempted.
+Android system image) through a `DiskSpaceGuard` shared across every driver
+(`src/daemon/main.ts` constructs one instance and passes it to each driver's
+options) rather than a bare instantaneous `Filesystem#diskFree` reading: two
+concurrent installs — an iOS runtime download racing an Android system-image
+install, or two of either — could otherwise each observe enough free space
+individually and jointly overfill the volume neither alone would have. The
+guard tracks bytes reserved but not yet released, keyed per path, and checks
+free space *minus* those outstanding reservations; the reservation is
+released once the install settles either way. A reservation that doesn't fit
+still fails fast with the same typed `InsufficientDiskSpaceError` naming
+required vs. available bytes, and no `component.install-*` diagnostic fires
+for a preflight failure, since no install was actually attempted.
 
 ## External APIs behind interfaces (ports)
 
@@ -590,7 +616,9 @@ installed on an agent's behalf stays attributable in `daemon.log` after the
 event ring buffer resets on restart — the same durable-vs-ring-buffer split as
 everything else in this section, applied to component installs specifically
 because there is no registry entry or uninstall for them to be recovered from
-otherwise (see "Out of scope" in the #67 issue).
+otherwise (see "Out of scope" in the #67 issue). The log line carries
+`requesterId` whenever the event payload has one, so the durable record names
+which agent's request caused the install, not just that one happened.
 
 ## Device requests
 
@@ -601,9 +629,13 @@ installed runtime that both falls inside the device type's supported range
 (`simctl list devicetypes`' `minRuntimeVersion`/`maxRuntimeVersion`) and
 still lists the model in its `supportedDeviceTypes`, not the newest
 installed runtime overall (a newer runtime can drop a model, as iOS 26 did
-for iPhone XS/XR). If the requested runtime / system image is not
-installed, the lease fails with a clear error unless downloads are
-permitted for that request (downloads are multi-GB and must never be
+for iPhone XS/XR). This still resolves on a fresh Xcode install with zero
+simulator runtimes present at all — an empty runtime list is a normal
+starting state, not a malformed catalog, so it falls straight through to
+the same "not installed, permitted to download" path as a non-empty catalog
+that simply lacks a matching runtime. If the requested runtime / system
+image is not installed, the lease fails with a clear error unless downloads
+are permitted for that request (downloads are multi-GB and must never be
 triggered implicitly). An OS version outside a model's supported range
 fails immediately with the range named in the error — never as an attempted
 download, since no download could make it work.

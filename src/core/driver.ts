@@ -101,7 +101,16 @@ export interface Driver {
   readonly platform: Platform;
   resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: {
+      readonly allowDownload: boolean;
+      /**
+       * The requester on whose behalf this resolution runs, when known. Optional: a caller that
+       * resolves outside of a lease request (e.g. a driver revalidating its own cached spec) has
+       * no requester to attribute. Threaded through to a driver's component-install diagnostics
+       * so the resulting `component.install-*` events carry it -- see `docs/EVENTS.md`.
+       */
+      readonly requesterId?: string;
+    },
   ): Promise<DeviceSpec>;
   provision(spec: DeviceSpec): Promise<DriverDevice>;
   /**
@@ -206,11 +215,70 @@ export class LicenseNotAcceptedError extends Error {
 }
 
 /**
+ * Serializes disk-space preflight across concurrent component installs sharing a volume.
+ * `assertDiskSpace` alone only ever sees the disk's free space at the instant it is called: two
+ * installs racing the same preflight (an iOS runtime download and an Android system-image
+ * install, or two of either) can each observe enough free space and both proceed, jointly
+ * overfilling the volume neither alone would have. A single shared `DiskSpaceGuard` instance,
+ * injected into every driver that installs components (wired once in `src/daemon/main.ts`),
+ * fixes that by tracking bytes reserved but not yet released, keyed per path, and checking free
+ * space *minus* those outstanding reservations rather than free space alone.
+ *
+ * `reserve` resolves or throws synchronously with respect to any other in-flight `reserve` call:
+ * the only `await` is `filesystem.diskFree`, and the check-then-record step immediately after it
+ * runs to completion before any other queued continuation gets a turn (JS's single-threaded
+ * run-to-completion semantics), so two concurrent reservations against the same path can never
+ * both observe headroom the other has already claimed.
+ */
+export class DiskSpaceGuard {
+  readonly #outstandingBytesByPath = new Map<string, number>();
+
+  /**
+   * Reserves `requiredBytes` against `path`'s free space, minus whatever this guard already has
+   * outstanding there. Throws `InsufficientDiskSpaceError` (same shape `assertDiskSpace` throws)
+   * when the reservation would not fit. On success, returns a release function the caller must
+   * invoke exactly once (typically in a `finally`) once the install this reservation was made
+   * for has settled, freeing the bytes for the next reservation.
+   */
+  async reserve(
+    filesystem: Pick<Filesystem, "diskFree">,
+    platform: Platform,
+    requiredBytes: number,
+    path = ".",
+  ): Promise<() => void> {
+    const availableBytes = await filesystem.diskFree(path);
+    const outstandingBytes = this.#outstandingBytesByPath.get(path) ?? 0;
+    const effectivelyAvailableBytes = availableBytes - outstandingBytes;
+    if (effectivelyAvailableBytes < requiredBytes) {
+      throw new InsufficientDiskSpaceError(
+        platform,
+        requiredBytes,
+        Math.max(0, effectivelyAvailableBytes),
+      );
+    }
+    this.#outstandingBytesByPath.set(path, outstandingBytes + requiredBytes);
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.#outstandingBytesByPath.get(path) ?? 0) - requiredBytes;
+      if (remaining <= 0) {
+        this.#outstandingBytesByPath.delete(path);
+      } else {
+        this.#outstandingBytesByPath.set(path, remaining);
+      }
+    };
+  }
+}
+
+/**
  * Checked before a driver starts any multi-GB component download/install, so a full disk fails
  * fast with a clear message instead of filling up mid-download (see safety rule 4's spirit --
  * downloads must never surprise the machine they run on). `path` defaults to `"."`, the same
  * convention `CleanupReaper` uses for its own disk-pressure check (`src/core/reaper.ts`): the
- * daemon process's own working-directory volume.
+ * daemon process's own working-directory volume. Single-shot: does not account for another
+ * concurrent install's own in-flight reservation -- see `DiskSpaceGuard` for that.
  */
 export async function assertDiskSpace(
   filesystem: Pick<Filesystem, "diskFree">,

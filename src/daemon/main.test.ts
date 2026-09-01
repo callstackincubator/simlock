@@ -216,6 +216,28 @@ describe("component install diagnostic bridging", () => {
     ]);
   });
 
+  it("carries requesterId onto the bridged event when the diagnostic knows one, and omits it when it doesn't", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = emitComponentInstallDiagnostic(eventBus, "ios");
+
+    bridge({ componentId: "18.6", kind: "component-install-started", requesterId: "agent-1" });
+    bridge({ componentId: "18.6", kind: "component-install-started" });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: { componentId: "18.6", platform: "ios", requesterId: "agent-1" },
+      }),
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: { componentId: "18.6", platform: "ios" },
+      }),
+    ]);
+  });
+
   it("forwards only component-install-* diagnostics from the Android driver's broader onDiagnostic surface", () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
@@ -266,6 +288,34 @@ describe("wireComponentInstallLogging", () => {
         message: "Component installed",
         module: "daemon.components",
         fields: { componentId: "18.6", durationMs: 42_000, platform: "ios" },
+      }),
+    );
+  });
+
+  it("includes requesterId in the durable log line when the event carries one", () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "component.installed",
+      { componentId: "18.6", durationMs: 42_000, platform: "ios", requesterId: "agent-1" },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Component installed",
+        module: "daemon.components",
+        fields: {
+          componentId: "18.6",
+          durationMs: 42_000,
+          platform: "ios",
+          requesterId: "agent-1",
+        },
       }),
     );
   });

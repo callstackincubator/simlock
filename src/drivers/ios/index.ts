@@ -1,7 +1,7 @@
 import {
-  assertDiskSpace,
   BootTimeoutError,
   type DeviceRequest,
+  DiskSpaceGuard,
   type Driver,
   type DriverCatalogEntry,
   type DriverDevice,
@@ -74,6 +74,16 @@ export interface IosSimctlDriverOptions {
   readonly coreSimulatorRoot?: string;
   /** Per-download timeout; defaults to `downloads.timeoutMs`'s own default. */
   readonly downloadTimeoutMs?: number;
+  /**
+   * Disk-space preflight, shared with every other driver that installs components -- a bare
+   * `assertDiskSpace` call only ever sees an instantaneous free-space reading, so two concurrent
+   * installs (this driver's and the Android driver's, or two of this driver's own) can each pass
+   * it and jointly overfill the volume neither alone would have. Defaults to a private,
+   * driver-local guard when omitted (tests, `SIMLOCK_DRIVERS_MODULE`); production wiring
+   * (`src/daemon/main.ts`) passes one instance to every driver so the tracking is actually
+   * shared.
+   */
+  readonly diskSpaceGuard?: DiskSpaceGuard;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   /**
@@ -123,7 +133,8 @@ export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
   readonly #clock: Clock;
   readonly #coreSimulatorRoot: string;
-  readonly #downloadLocks = new Map<string, Promise<void>>();
+  readonly #diskSpaceGuard: DiskSpaceGuard;
+  readonly #downloadLocks = new Map<string, Promise<number>>();
   readonly #downloadTimeoutMs: number;
   readonly #filesystem: Filesystem;
   readonly #idGenerator: IdGenerator;
@@ -135,6 +146,7 @@ export class IosSimctlDriver implements Driver {
   constructor(options: IosSimctlDriverOptions) {
     this.#clock = options.clock;
     this.#coreSimulatorRoot = options.coreSimulatorRoot ?? ".";
+    this.#diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
     this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
@@ -144,7 +156,7 @@ export class IosSimctlDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     this.#requireIosPlatform(request.platform);
     const catalog = await this.#loadCatalog();
@@ -166,11 +178,12 @@ export class IosSimctlDriver implements Driver {
    * *before* anything else -- an out-of-range request can never be fixed by downloading, so it
    * must never even reach the download decision.
    */
+  // fallow-ignore-next-line complexity -- range/pairing checks, the download decision, and post-download verification are one resolution attempt.
   async #resolveExactRuntime(
     deviceType: DeviceType,
     osVersion: string,
     catalog: SimctlCatalog,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     if (!isVersionInRange(osVersion, deviceType)) {
       throw new IosVersionOutOfRangeError(deviceType.name, osVersion, deviceType);
@@ -200,19 +213,40 @@ export class IosSimctlDriver implements Driver {
       throw new IosDownloadFloorError(osVersion);
     }
 
-    await this.#downloadRuntime(osVersion, [
-      "-downloadPlatform",
-      "iOS",
-      "-buildVersion",
+    const startedAt = await this.#downloadRuntime(
       osVersion,
-    ]);
+      ["-downloadPlatform", "iOS", "-buildVersion", osVersion],
+      options.requesterId,
+    );
+    // `component.installed` is a verified fact, not "xcodebuild exited 0": re-scan the catalog
+    // and confirm the thing this request actually needed -- a runtime at this version, paired
+    // with this device type -- is now present before reporting success. Either failure mode
+    // reports `component-install-failed`, never `component-installed`.
     const refreshed = await this.#loadCatalog();
     const runtime = findInstalledRuntime(refreshed, osVersion);
     if (runtime === undefined) {
-      throw new DriverCrashError(
-        `xcodebuild reported success but iOS ${osVersion} is still not installed`,
-      );
+      const message = `xcodebuild reported success but iOS ${osVersion} is still not installed`;
+      this.#reportVerificationFailure(osVersion, startedAt, message, options.requesterId);
+      throw new DriverCrashError(message);
     }
+    // A version match alone is not enough: the same pairing check that gates an
+    // already-installed runtime above must also gate a freshly downloaded one -- a version can
+    // be on disk and still not pair with this specific device type.
+    if (!runtime.supportedDeviceTypeIds.has(deviceType.identifier)) {
+      this.#reportVerificationFailure(
+        osVersion,
+        startedAt,
+        `iOS ${osVersion} installed but does not pair with ${deviceType.name}`,
+        options.requesterId,
+      );
+      throw new IosRuntimeUnpairedError(deviceType.name, osVersion);
+    }
+    this.#onDiagnostic?.({
+      componentId: osVersion,
+      durationMs: this.#clock.now() - startedAt,
+      kind: "component-installed",
+      ...(options.requesterId === undefined ? {} : { requesterId: options.requesterId }),
+    });
     return this.#commitResolution(deviceType, runtime);
   }
 
@@ -222,10 +256,11 @@ export class IosSimctlDriver implements Driver {
    * installed runtime overall, which may have dropped this model (iOS 26 dropping iPhone
    * XS/XR support is the motivating case).
    */
+  // fallow-ignore-next-line complexity -- the download-target decision and post-download verification are one resolution attempt.
   async #resolveDefaultRuntime(
     deviceType: DeviceType,
     catalog: SimctlCatalog,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     const paired = pairedInstalledRuntime(catalog, deviceType);
     if (paired !== undefined) {
@@ -240,14 +275,26 @@ export class IosSimctlDriver implements Driver {
       );
     }
 
+    let componentId: string;
+    let startedAt: number;
     if (isUnboundedMax(deviceType.maxRuntimeVersion)) {
       // No upper bound on this model's pairing range: any released version works, so there is
       // nothing more specific to ask for than "latest".
-      await this.#downloadRuntime("latest", ["-downloadPlatform", "iOS"]);
+      componentId = "latest";
+      startedAt = await this.#downloadRuntime(
+        componentId,
+        ["-downloadPlatform", "iOS"],
+        options.requesterId,
+      );
     } else {
       const major = majorVersionString(deviceType.maxRuntimeVersion);
+      componentId = major;
       try {
-        await this.#downloadRuntime(major, ["-downloadPlatform", "iOS", "-buildVersion", major]);
+        startedAt = await this.#downloadRuntime(
+          major,
+          ["-downloadPlatform", "iOS", "-buildVersion", major],
+          options.requesterId,
+        );
       } catch (error: unknown) {
         // A disk preflight failure or a typed "nothing to do here" (e.g. a concurrent caller's
         // RuntimeMissingError) is meaningful on its own and must reach the caller unchanged --
@@ -263,15 +310,46 @@ export class IosSimctlDriver implements Driver {
       }
     }
 
+    // Same verified-fact requirement as the exact-version path: only report `component-installed`
+    // once a paired runtime for this device type is actually present in a re-scanned catalog.
     const refreshed = await this.#loadCatalog();
     const runtime = pairedInstalledRuntime(refreshed, deviceType);
     if (runtime === undefined) {
-      throw new DriverCrashError(
+      const message =
         `xcodebuild reported success but no installed iOS runtime pairs with ` +
-          `${deviceType.name} yet`,
-      );
+        `${deviceType.name} yet`;
+      this.#reportVerificationFailure(componentId, startedAt, message, options.requesterId);
+      throw new DriverCrashError(message);
     }
+    this.#onDiagnostic?.({
+      componentId,
+      durationMs: this.#clock.now() - startedAt,
+      kind: "component-installed",
+      ...(options.requesterId === undefined ? {} : { requesterId: options.requesterId }),
+    });
     return this.#commitResolution(deviceType, runtime);
+  }
+
+  /**
+   * Reports the terminal `component-install-failed` diagnostic for the "xcodebuild exited 0 but
+   * post-download verification didn't find what this request needed" case -- pairing failure or
+   * outright absence. `#installComponent` already reports `component-install-failed` for a
+   * nonzero xcodebuild exit; this covers the other way an install attempt can fail to produce a
+   * usable component.
+   */
+  #reportVerificationFailure(
+    componentId: string,
+    startedAt: number,
+    message: string,
+    requesterId: string | undefined,
+  ): void {
+    this.#onDiagnostic?.({
+      componentId,
+      durationMs: this.#clock.now() - startedAt,
+      error: message,
+      kind: "component-install-failed",
+      ...(requesterId === undefined ? {} : { requesterId }),
+    });
   }
 
   #commitResolution(deviceType: DeviceType, runtime: Runtime): DeviceSpec {
@@ -292,16 +370,22 @@ export class IosSimctlDriver implements Driver {
    * non-concurrent call starts a fresh attempt rather than replaying a stale result. `componentId`
    * is the runtime version being installed ("latest" for a bare `-downloadPlatform iOS`, the bare
    * major version for the bounded-default case) -- reported on `component.install-*`, never
-   * parsed back out of `args`.
+   * parsed back out of `args`. Resolves to the `started` timestamp on success rather than
+   * `void`: the caller needs it to compute an accurate `durationMs` once its own post-download
+   * catalog re-scan confirms (or fails to confirm) the component it actually needed.
    */
-  async #downloadRuntime(componentId: string, args: readonly string[]): Promise<void> {
+  async #downloadRuntime(
+    componentId: string,
+    args: readonly string[],
+    requesterId: string | undefined,
+  ): Promise<number> {
     const key = args.join(" ");
     const inFlight = this.#downloadLocks.get(key);
     if (inFlight !== undefined) {
       return inFlight;
     }
 
-    const promise = this.#installComponent(componentId, args).finally(() => {
+    const promise = this.#installComponent(componentId, args, requesterId).finally(() => {
       if (this.#downloadLocks.get(key) === promise) {
         this.#downloadLocks.delete(key);
       }
@@ -311,35 +395,49 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
-   * Disk preflight, then `xcodebuild`, wrapped with `component.install-*` diagnostics. A
-   * preflight failure is reported before any diagnostic fires -- no install was actually
-   * attempted, so there is nothing to report as started or failed.
+   * Disk preflight (via the shared `DiskSpaceGuard`, released once `xcodebuild` settles either
+   * way), then `xcodebuild`, wrapped with `component.install-*` diagnostics. A preflight failure
+   * is reported before any diagnostic fires -- no install was actually attempted, so there is
+   * nothing to report as started or failed.
    */
-  async #installComponent(componentId: string, args: readonly string[]): Promise<void> {
-    await assertDiskSpace(
+  async #installComponent(
+    componentId: string,
+    args: readonly string[],
+    requesterId: string | undefined,
+  ): Promise<number> {
+    const release = await this.#diskSpaceGuard.reserve(
       this.#filesystem,
       this.platform,
       IOS_RUNTIME_MIN_FREE_BYTES,
       this.#coreSimulatorRoot,
     );
-    this.#onDiagnostic?.({ componentId, kind: "component-install-started" });
-    const startedAt = this.#clock.now();
     try {
-      await this.#xcodebuildOrThrow(args);
-    } catch (error: unknown) {
       this.#onDiagnostic?.({
         componentId,
-        durationMs: this.#clock.now() - startedAt,
-        error: stableError(error),
-        kind: "component-install-failed",
+        kind: "component-install-started",
+        ...(requesterId === undefined ? {} : { requesterId }),
       });
-      throw error;
+      const startedAt = this.#clock.now();
+      try {
+        await this.#xcodebuildOrThrow(args);
+      } catch (error: unknown) {
+        this.#onDiagnostic?.({
+          componentId,
+          durationMs: this.#clock.now() - startedAt,
+          error: stableError(error),
+          kind: "component-install-failed",
+          ...(requesterId === undefined ? {} : { requesterId }),
+        });
+        throw error;
+      }
+      // No `component-installed` here: xcodebuild exiting 0 only means the tool claims success,
+      // not that the catalog now has what a specific caller needed (an exact version, or one
+      // that pairs with a specific device type). The caller re-scans and reports the terminal
+      // fact itself -- see `#reportVerificationFailure` and its call sites.
+      return startedAt;
+    } finally {
+      release();
     }
-    this.#onDiagnostic?.({
-      componentId,
-      durationMs: this.#clock.now() - startedAt,
-      kind: "component-installed",
-    });
   }
 
   async #xcodebuildOrThrow(args: readonly string[]): Promise<void> {
@@ -807,8 +905,13 @@ function parseCatalog(value: unknown): SimctlCatalog {
   const deviceTypes = value.devicetypes.flatMap(parseDeviceType);
   const runtimes = value.runtimes.flatMap(parseRuntime);
 
-  if (deviceTypes.length === 0 || runtimes.length === 0) {
-    throw new DriverCrashError("Invalid simctl list JSON: no usable device types or runtimes");
+  // Device types come from the Xcode install itself and are never empty on a working
+  // toolchain, so an empty list here means the JSON was malformed. Runtimes are different: a
+  // fresh Xcode with zero simulator runtimes installed is a normal, if unusual, starting state
+  // -- and it must be able to reach the download-latest path in `#resolveDefaultRuntime` rather
+  // than being rejected here before any resolution is attempted.
+  if (deviceTypes.length === 0) {
+    throw new DriverCrashError("Invalid simctl list JSON: no usable device types");
   }
 
   return { deviceTypes, runtimes };

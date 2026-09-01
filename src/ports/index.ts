@@ -34,13 +34,13 @@ export type { LogRecord } from "./logger.js";
 export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
 export { FakeSystemStats, NodeSystemStats, type SystemStats } from "./system-stats.js";
 export { FakeParentWatch, NodeParentWatch, type ParentWatch } from "./parent-watch.js";
-// fallow-ignore-next-line unused-type -- public handle contract returned by ParentWatch.watch().
 export type { ParentWatchHandle } from "./parent-watch.js";
 export {
   NodeProcessRunner,
   type ProcessHandle,
   type ProcessResult,
   type ProcessRunner,
+  type ProcessRunOptions,
   ScriptedProcessRunner,
   type ScriptedProcessExpectation,
 } from "./process-runner.js";

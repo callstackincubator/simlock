@@ -553,7 +553,6 @@ export class DaemonServer {
     // missing" message below), `always` grants it without the caller asking.
     const requestedAllowDownload = optionalBoolean(payload, "allowDownload") ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
-    const blockedByDownloadPolicy = downloadsPolicy === "never" && requestedAllowDownload;
     let progressSocket: IpcConnection | undefined = connection.socket;
     const disposeProgress = () => {
       progressSocket = undefined;
@@ -576,13 +575,21 @@ export class DaemonServer {
       });
     } catch (error: unknown) {
       // The driver only ever sees the clamped-to-false permission, so its own
-      // RuntimeMissingError just says "missing" -- it has no way to know a request asked for a
-      // download and config refused it. Recover that distinction here, the one place that saw
-      // both sides, rather than teaching the driver about config. Gated on `downloadable`: a
-      // request no download could ever have fixed (out of range, an installed-but-unpaired
-      // runtime, older than the download floor) must not be blamed on the download policy --
-      // that policy was never what stood between this request and success.
-      if (blockedByDownloadPolicy && error instanceof RuntimeMissingError && error.downloadable) {
+      // RuntimeMissingError just says "missing" -- it has no way to know config is what's
+      // standing between this request and success. Recover that distinction here, the one place
+      // that saw both sides, rather than teaching the driver about config. Attach the suffix
+      // whenever the `never` policy is active, regardless of whether this particular request
+      // asked for a download: the driver's message suggests `--allow-download`, which under
+      // `never` can never help, so the suffix is the correction every caller needs to see, not
+      // just the ones that happened to ask. Still gated on `downloadable`: a request no download
+      // could ever have fixed (out of range, an installed-but-unpaired runtime, older than the
+      // download floor) must not be blamed on the download policy -- that policy was never what
+      // stood between this request and success.
+      if (
+        downloadsPolicy === "never" &&
+        error instanceof RuntimeMissingError &&
+        error.downloadable
+      ) {
         error.message = `${error.message} (downloads are disabled by configuration: downloads.policy is "never")`;
       }
       throw error;

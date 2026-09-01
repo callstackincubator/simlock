@@ -86,17 +86,24 @@ export interface EventMap {
   };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
-  "component.install-started": { readonly platform: string; readonly componentId: string };
+  "component.install-started": {
+    readonly platform: string;
+    readonly componentId: string;
+    /** The requester on whose behalf this install runs, when the triggering resolution knew one. */
+    readonly requesterId?: string;
+  };
   "component.installed": {
     readonly platform: string;
     readonly componentId: string;
     readonly durationMs: number;
+    readonly requesterId?: string;
   };
   "component.install-failed": {
     readonly platform: string;
     readonly componentId: string;
     readonly durationMs: number;
     readonly error: string;
+    readonly requesterId?: string;
   };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };

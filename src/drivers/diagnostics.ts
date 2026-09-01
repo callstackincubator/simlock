@@ -10,15 +10,22 @@
  * -- see `emitComponentInstallDiagnostic` in `src/daemon/main.ts`.
  */
 export type ComponentInstallDiagnostic =
-  | { readonly kind: "component-install-started"; readonly componentId: string }
+  | {
+      readonly kind: "component-install-started";
+      readonly componentId: string;
+      /** The requester on whose behalf this install runs, when the resolution that triggered it knew one. */
+      readonly requesterId?: string;
+    }
   | {
       readonly kind: "component-installed";
       readonly componentId: string;
       readonly durationMs: number;
+      readonly requesterId?: string;
     }
   | {
       readonly kind: "component-install-failed";
       readonly componentId: string;
       readonly durationMs: number;
       readonly error: string;
+      readonly requesterId?: string;
     };

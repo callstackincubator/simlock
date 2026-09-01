@@ -20,6 +20,13 @@ const EXIT_TO_CLOSE_GRACE_MS = 1_000;
 // may be incomplete; nothing else is waiting on it by then.
 const EXIT_TO_CLOSE_MAX_DEFERRAL_MS = 5_000;
 
+// A hard bound on how long `run()` waits after a timeout-triggered SIGTERM before escalating to
+// SIGKILL. A child that ignores SIGTERM (or is itself stuck in an uninterruptible wait) would
+// otherwise hold the caller's `await process.wait()` open forever -- exactly the unbounded wait
+// this constant exists to cap. Fixed rather than derived from `timeoutMs`: it is a
+// termination-cleanup budget, not a scaled fraction of the operation's own timeout.
+const SIGTERM_TO_SIGKILL_GRACE_MS = 10_000;
+
 export interface ProcessRunOptions {
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
@@ -62,6 +69,7 @@ export class NodeProcessRunner implements ProcessRunner {
     options: ProcessRunOptions = {},
   ): Promise<ProcessResult> {
     const process = this.spawn(command, args, options);
+    let killTimeout: NodeJS.Timeout | undefined;
     const timeout =
       options.timeoutMs === undefined
         ? undefined
@@ -71,6 +79,18 @@ export class NodeProcessRunner implements ProcessRunner {
             } catch {
               // The child may have exited between the timer firing and the kill.
             }
+            // SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
+            // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
+            // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
+            // itself the moment `process.wait()` actually settles, so a child that does exit
+            // promptly after SIGTERM never sees the follow-up signal.
+            killTimeout = setTimeout(() => {
+              try {
+                process.kill("SIGKILL");
+              } catch {
+                // The child may have exited between the timer firing and the kill.
+              }
+            }, SIGTERM_TO_SIGKILL_GRACE_MS);
           }, options.timeoutMs);
 
     try {
@@ -78,6 +98,9 @@ export class NodeProcessRunner implements ProcessRunner {
     } finally {
       if (timeout !== undefined) {
         clearTimeout(timeout);
+      }
+      if (killTimeout !== undefined) {
+        clearTimeout(killTimeout);
       }
     }
   }

@@ -93,7 +93,7 @@ export class FakeDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     await this.#beforeCall("resolveSpec", request, options);
     this.#assertMatchingPlatform(request.platform);

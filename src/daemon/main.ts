@@ -7,6 +7,7 @@ import {
   type ConfigOverrides,
   type Driver,
   CleanupReaper,
+  DiskSpaceGuard,
   Doctor,
   LeaseEngine,
   loadConfig,
@@ -95,11 +96,15 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // is only attributable later through the daemon's own log file.
   wireComponentInstallLogging(eventBus, logger);
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
+  // One instance shared across every driver discovered below, so a disk-space reservation one
+  // driver makes is visible to the other's own preflight -- see `DiskSpaceGuard`.
+  const diskSpaceGuard = new DiskSpaceGuard();
   const drivers =
     options.drivers ??
     (await discoverDrivers({
       acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
       clock,
+      diskSpaceGuard,
       downloadTimeoutMs: config.downloads.timeoutMs,
       eventBus,
       filesystem,
@@ -195,6 +200,13 @@ export interface DriverDiscoveryContext {
    * default (mirroring `downloads.timeoutMs`'s config default) when omitted.
    */
   readonly downloadTimeoutMs?: number;
+  /**
+   * Shared across every driver constructed from this context, so concurrent installs on
+   * different drivers see each other's outstanding reservations -- see `DiskSpaceGuard`.
+   * Defaults to a private instance (no sharing) when omitted, which only matters for a caller
+   * that constructs its own drivers directly rather than through `discoverDrivers`.
+   */
+  readonly diskSpaceGuard?: DiskSpaceGuard;
   /** Bridges each driver's `component.install-*` diagnostic onto the bus -- see `emitComponentInstallDiagnostic`. */
   readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Filesystem;
@@ -210,12 +222,14 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
     return loadDriversModule(driversModule, options, logger);
   }
 
+  const diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
   const drivers: Driver[] = [];
   if (process.platform === "darwin") {
     drivers.push(
       new IosSimctlDriver({
         clock: options.clock,
         coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
+        diskSpaceGuard,
         ...(options.downloadTimeoutMs === undefined
           ? {}
           : { downloadTimeoutMs: options.downloadTimeoutMs }),
@@ -232,6 +246,7 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
       await AndroidDriver.create({
         acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
         clock: options.clock,
+        diskSpaceGuard,
         ...(options.downloadTimeoutMs === undefined
           ? {}
           : { downloadTimeoutMs: options.downloadTimeoutMs }),
@@ -305,14 +320,27 @@ export function emitComponentInstallDiagnostic(
       case "component-install-started":
         eventBus.emit(
           "component.install-started",
-          { componentId: diagnostic.componentId, platform },
+          {
+            componentId: diagnostic.componentId,
+            platform,
+            ...(diagnostic.requesterId === undefined
+              ? {}
+              : { requesterId: diagnostic.requesterId }),
+          },
           "driver-diagnostics",
         );
         return;
       case "component-installed":
         eventBus.emit(
           "component.installed",
-          { componentId: diagnostic.componentId, durationMs: diagnostic.durationMs, platform },
+          {
+            componentId: diagnostic.componentId,
+            durationMs: diagnostic.durationMs,
+            platform,
+            ...(diagnostic.requesterId === undefined
+              ? {}
+              : { requesterId: diagnostic.requesterId }),
+          },
           "driver-diagnostics",
         );
         return;
@@ -324,6 +352,9 @@ export function emitComponentInstallDiagnostic(
             durationMs: diagnostic.durationMs,
             error: diagnostic.error,
             platform,
+            ...(diagnostic.requesterId === undefined
+              ? {}
+              : { requesterId: diagnostic.requesterId }),
           },
           "driver-diagnostics",
         );
@@ -375,6 +406,9 @@ export function wireComponentInstallLogging(
       componentId: envelope.payload.componentId,
       durationMs: envelope.payload.durationMs,
       platform: envelope.payload.platform,
+      ...(envelope.payload.requesterId === undefined
+        ? {}
+        : { requesterId: envelope.payload.requesterId }),
     });
   });
 }

@@ -44,9 +44,9 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `component.install-started` | platform, component id (iOS runtime version or "latest"; Android `sdkmanager` package name) | a driver is about to run `xcodebuild -downloadPlatform` / `sdkmanager --install` for a missing component, disk preflight already passed | driver-diagnostics | implemented |
-| `component.installed` | platform, component id, duration | the install succeeded | driver-diagnostics | implemented |
-| `component.install-failed` | platform, component id, duration, stable error summary | the install failed, including a license-retry failure (exactly one `install-failed` per attempted install, never one per retry) | driver-diagnostics | implemented |
+| `component.install-started` | platform, component id (iOS runtime version or "latest"; Android `sdkmanager` package name), requester id (when the triggering resolution knew one) | a driver is about to run `xcodebuild -downloadPlatform` / `sdkmanager --install` for a missing component, disk preflight already passed | driver-diagnostics | implemented |
+| `component.installed` | platform, component id, duration, requester id | the install succeeded **and** a post-install re-scan confirmed the component the request actually needed is present (paired with the requested device type, for iOS) — never fired on a bare exit-0 | driver-diagnostics | implemented |
+| `component.install-failed` | platform, component id, duration, stable error summary, requester id | the install failed, including a license-retry failure (exactly one `install-failed` per attempted install, never one per retry), **or** the installer exited 0 but the post-install re-scan could not confirm the component | driver-diagnostics | implemented |
 
 Drivers never touch the event bus directly (architecture rule 5): both drivers report these
 facts through their own `onDiagnostic` callback (mirroring the Android driver's pre-existing

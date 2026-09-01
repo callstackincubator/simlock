@@ -1099,6 +1099,7 @@ describe("DaemonServer download policy", () => {
     expect(grant.ok).toBe(true);
     expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
       allowDownload: true,
+      requesterId: "agent-1",
     });
     await client.close();
   });
@@ -1122,6 +1123,7 @@ describe("DaemonServer download policy", () => {
     expect(response.error?.message).toContain("downloads.policy");
     expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
       allowDownload: false,
+      requesterId: "agent-1",
     });
     await client.close();
   });
@@ -1145,6 +1147,28 @@ describe("DaemonServer download policy", () => {
     expect(response.ok).toBe(false);
     expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
     expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+
+  it("attaches the download-policy suffix under the never policy even when the request itself never asked for a download", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    // No allowDownload on this request at all -- the driver's own message still suggests
+    // `--allow-download`, which under the never policy can never help, so the suffix must
+    // still attach as the correction.
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).toContain("downloads.policy");
     await client.close();
   });
 

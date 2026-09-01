@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BootTimeoutError,
+  DiskSpaceGuard,
   DriverCrashError,
   InsufficientDiskSpaceError,
   RuntimeMissingError,
@@ -301,6 +302,110 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.filter((call) => call.command === "xcodebuild")).toHaveLength(1);
   });
 
+  it("rejects a freshly downloaded exact-version runtime that does not pair with the requested device type", async () => {
+    // Mirrors the already-installed pairing check (`rejects an installed runtime whose
+    // supportedDeviceTypes omits the requested model` above), but for a runtime that only shows
+    // up *after* the download -- the refreshed catalog's iOS 18.6 exists but pairs with nothing.
+    const unpairedAfterDownload = JSON.stringify({
+      devicetypes: (JSON.parse(listFixture) as { devicetypes: unknown }).devicetypes,
+      runtimes: [
+        ...(JSON.parse(listFixture) as { runtimes: unknown[] }).runtimes,
+        {
+          identifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-6",
+          isAvailable: true,
+          name: "iOS 18.6",
+          supportedDeviceTypes: [],
+          version: "18.6",
+        },
+      ],
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: {
+          command: "xcodebuild",
+          args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+        },
+      },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: unpairedAfterDownload } },
+    ]);
+    const driver = createDriver(runner);
+
+    const result = await driver
+      .resolveSpec(
+        { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+        { allowDownload: true },
+      )
+      .catch((error: unknown) => error);
+
+    expect(result).toBeInstanceOf(RuntimeMissingError);
+    expect(result).toMatchObject({
+      downloadable: false,
+      message: expect.stringContaining("does not support iPhone 16"),
+    });
+    // Downloaded, but never committed to a spec: no simctl create followed the failed pairing check.
+    expect(runner.calls.map((call) => call.command)).toEqual(["xcrun", "xcodebuild", "xcrun"]);
+  });
+
+  describe("empty runtime catalog", () => {
+    // Devicetypes come from the Xcode install itself and are never empty on a working
+    // toolchain (an empty list there still means malformed JSON), but a fresh Xcode with zero
+    // simulator runtimes installed is a normal starting state -- `parseCatalog` must let it
+    // through so `resolveSpec` can reach the download-latest path instead of failing before any
+    // resolution is attempted.
+    const emptyRuntimesCatalog = JSON.stringify({
+      devicetypes: [
+        {
+          identifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+          maxRuntimeVersion: 16_777_215,
+          minRuntimeVersion: 0,
+          name: "iPhone 16",
+        },
+      ],
+      runtimes: [],
+    });
+
+    it("resolves via the download path when allowDownload is true", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: emptyRuntimesCatalog } },
+        { match: { command: "xcodebuild", args: ["-downloadPlatform", "iOS"] } },
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ]);
+      const driver = createDriver(runner);
+
+      await expect(
+        driver.resolveSpec({ model: "iPhone 16", platform: "ios" }, { allowDownload: true }),
+      ).resolves.toEqual({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+    });
+
+    it("gives a clean RuntimeMissingError, not a parse-time DriverCrashError, when allowDownload is false", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: emptyRuntimesCatalog } },
+      ]);
+      const driver = createDriver(runner);
+
+      const result = await driver
+        .resolveSpec({ model: "iPhone 16", platform: "ios" }, { allowDownload: false })
+        .catch((error: unknown) => error);
+
+      expect(result).toBeInstanceOf(RuntimeMissingError);
+      expect(result).not.toBeInstanceOf(DriverCrashError);
+    });
+
+    it("lists an empty runtimes catalog with defaultRuntime undefined instead of throwing", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: emptyRuntimesCatalog } },
+      ]);
+      const driver = createDriver(runner);
+
+      await expect(driver.listCatalog()).resolves.toEqual({
+        defaultRuntime: undefined,
+        models: ["iPhone 16"],
+        runtimes: [],
+      });
+    });
+  });
+
   describe("component install diagnostics", () => {
     it("reports component-install-started then component-installed with a duration on a successful download", async () => {
       const runner = new ScriptedProcessRunner([
@@ -508,6 +613,104 @@ describe("IosSimctlDriver", () => {
       );
 
       expect(filesystem.diskFreePaths).toEqual(["/Users/agent/Library/Developer/CoreSimulator"]);
+    });
+
+    it("reports component-install-failed, never component-installed, when xcodebuild exits 0 but the runtime never shows up", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: {
+            command: "xcodebuild",
+            args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+          },
+        },
+        // Deliberately re-scans to the SAME catalog: xcodebuild claims success, but no iOS 18.6
+        // runtime is present -- the "reported success but still not installed" case the
+        // post-download re-scan exists to catch.
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ]);
+      const diagnostics: ComponentInstallDiagnostic[] = [];
+      const driver = createDriver(runner, new FakeClock(), new MemoryFilesystem(), (diagnostic) =>
+        diagnostics.push(diagnostic),
+      );
+
+      const error = await driver
+        .resolveSpec(
+          { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+          { allowDownload: true },
+        )
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect((error as Error).message).toContain("iOS 18.6 is still not installed");
+      expect(diagnostics).toEqual([
+        { componentId: "18.6", kind: "component-install-started" },
+        {
+          componentId: "18.6",
+          durationMs: 0,
+          error: expect.stringContaining("still not installed"),
+          kind: "component-install-failed",
+        },
+      ]);
+    });
+
+    it("carries requesterId through to component-install diagnostics when resolveSpec's caller knows one", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: {
+            command: "xcodebuild",
+            args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+          },
+        },
+        {
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: listFixtureAfterDownload },
+        },
+      ]);
+      const diagnostics: ComponentInstallDiagnostic[] = [];
+      const driver = createDriver(runner, new FakeClock(), new MemoryFilesystem(), (diagnostic) =>
+        diagnostics.push(diagnostic),
+      );
+
+      await driver.resolveSpec(
+        { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+        { allowDownload: true, requesterId: "agent-7" },
+      );
+
+      expect(diagnostics).toEqual([
+        { componentId: "18.6", kind: "component-install-started", requesterId: "agent-7" },
+        {
+          componentId: "18.6",
+          durationMs: 0,
+          kind: "component-installed",
+          requesterId: "agent-7",
+        },
+      ]);
+    });
+
+    it("respects disk-space reservations already outstanding on a shared DiskSpaceGuard", async () => {
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ]);
+      const filesystem = new MemoryFilesystem(9 * 1024 ** 3);
+      const diskSpaceGuard = new DiskSpaceGuard();
+      // Stands in for another driver's (or another install's) concurrent reservation against the
+      // same shared guard -- 2 of the 9 GiB free is already spoken for, leaving less than the
+      // 8 GiB `IOS_RUNTIME_MIN_FREE_BYTES` floor this download needs.
+      const releaseOther = await diskSpaceGuard.reserve(filesystem, "android", 2 * 1024 ** 3, ".");
+      const driver = createDriver(runner, new FakeClock(), filesystem, undefined, diskSpaceGuard);
+
+      const error = await driver
+        .resolveSpec(
+          { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+          { allowDownload: true },
+        )
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(InsufficientDiskSpaceError);
+      expect(runner.calls.map((call) => call.command)).toEqual(["xcrun"]);
+      releaseOther();
     });
   });
 
@@ -967,9 +1170,11 @@ function createDriver(
   clock = new FakeClock(),
   filesystem: Filesystem = new MemoryFilesystem(),
   onDiagnostic?: (diagnostic: ComponentInstallDiagnostic) => void,
+  diskSpaceGuard?: DiskSpaceGuard,
 ): IosSimctlDriver {
   return new IosSimctlDriver({
     clock,
+    ...(diskSpaceGuard === undefined ? {} : { diskSpaceGuard }),
     filesystem,
     idGenerator: { generate: () => "device-1" },
     ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
