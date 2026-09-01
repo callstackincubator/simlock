@@ -2,15 +2,21 @@
   "devicetypes": [
     {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
-      "name": "iPhone 17 Pro"
+      "name": "iPhone 17 Pro",
+      "minRuntimeVersion": 0,
+      "maxRuntimeVersion": 16777215
     },
     {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
-      "name": "iPhone 16"
+      "name": "iPhone 16",
+      "minRuntimeVersion": 0,
+      "maxRuntimeVersion": 16777215
     },
     {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro",
-      "name": "iPhone 15 Pro"
+      "name": "iPhone 15 Pro",
+      "minRuntimeVersion": 0,
+      "maxRuntimeVersion": 16777215
     }
   ],
   "runtimes": [
@@ -18,13 +24,35 @@
       "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
       "name": "iOS 18.4",
       "version": "18.4",
-      "isAvailable": true
+      "isAvailable": true,
+      "supportedDeviceTypes": [
+        {
+          "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+          "name": "iPhone 17 Pro"
+        },
+        { "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16", "name": "iPhone 16" },
+        {
+          "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro",
+          "name": "iPhone 15 Pro"
+        }
+      ]
     },
     {
       "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
       "name": "iOS 26.5",
       "version": "26.5",
-      "isAvailable": true
+      "isAvailable": true,
+      "supportedDeviceTypes": [
+        {
+          "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+          "name": "iPhone 17 Pro"
+        },
+        { "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16", "name": "iPhone 16" },
+        {
+          "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro",
+          "name": "iPhone 15 Pro"
+        }
+      ]
     },
     {
       "identifier": "com.apple.CoreSimulator.SimRuntime.watchOS-26-5",

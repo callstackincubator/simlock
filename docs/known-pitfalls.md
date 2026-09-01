@@ -99,3 +99,30 @@ destroys it (registry-only, as always). The device stays visible as
 `device.purge-failed` still fires as before; `device.quarantined`,
 `device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
 follow-up facts (see `docs/EVENTS.md`).
+
+## iOS runtime downloads: per-request blocking and the bounded-default edge case
+
+The iOS driver's `resolveSpec` (`src/drivers/ios/index.ts`) can now run
+`xcodebuild -downloadPlatform iOS` when a requested runtime is missing and
+downloads are permitted. Two things worth knowing about that path:
+
+**Only the requesting lease waits.** `resolveSpec` runs inside
+`LeaseAcquisitionCoordinator#resolveAndDrive`, per request, outside the
+serialized decision gate and outside the FIFO head — a slow download (tens
+of minutes for a ~7 GB runtime) blocks only the request that triggered it.
+Concurrent requests for the *same* missing runtime are deduped behind an
+in-driver promise (one `xcodebuild` invocation, all callers await it); a
+request for a different model or version proceeds independently and is
+never queued behind someone else's download.
+
+**The bounded-default edge case.** When no `--os` is given and no installed
+runtime pairs with the model, the driver has to guess a version to
+download: unbounded models (no `maxRuntimeVersion` cap) get a plain
+`-downloadPlatform iOS` (latest), but a model with a bounded max (like an
+older device type whose newest compatible runtime is a specific release)
+gets `-buildVersion <major from maxRuntimeVersion>` — just the major
+version number, since the exact patch release isn't known offline (Apple's
+downloadables index isn't parsed in v1; see `docs/IDEAS.md`). If Xcode
+doesn't have a build matching that bare major version, the download fails
+and the caller is told to pass `--os <version>` explicitly rather than
+retrying blind.

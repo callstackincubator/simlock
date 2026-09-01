@@ -24,6 +24,30 @@ const listDevicesFixture = readFileSync(
   new URL("./fixtures/simctl-list-devices.json", import.meta.url),
   "utf8",
 );
+// iPhone 16 pairs with both installed runtimes; iPhone Xs pairs only with the older one (iOS 26
+// dropped it, mirroring real Xcode 27) and its range caps out at iOS 18.6; iPhone 7 caps out at
+// iOS 15.0, below the 16.0 auto-download floor.
+const pairingFixture = readFileSync(
+  new URL("./fixtures/simctl-list-pairing.json", import.meta.url),
+  "utf8",
+);
+// Same catalog as `listFixture`, plus an iOS 18.6 runtime that has just finished downloading --
+// stands in for the re-scanned catalog `resolveSpec` reads after a successful `xcodebuild` call.
+const listFixtureAfterDownload = JSON.stringify({
+  devicetypes: (JSON.parse(listFixture) as { devicetypes: unknown }).devicetypes,
+  runtimes: [
+    ...(JSON.parse(listFixture) as { runtimes: unknown[] }).runtimes,
+    {
+      identifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-6",
+      isAvailable: true,
+      name: "iOS 18.6",
+      supportedDeviceTypes: [
+        { identifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-16", name: "iPhone 16" },
+      ],
+      version: "18.6",
+    },
+  ],
+});
 const listInvocation = {
   command: "xcrun",
   args: ["simctl", "list", "-j", "devicetypes", "runtimes"],
@@ -86,12 +110,14 @@ describe("IosSimctlDriver", () => {
     ).resolves.toEqual(spec);
   });
 
-  it("rejects an unknown model", async () => {
+  it("rejects an unknown model, pointing at a newer Xcode", async () => {
     const driver = createDriver(scriptedListRunner());
+    const result = await driver
+      .resolveSpec({ model: "iPhone 99", platform: "ios" }, { allowDownload: false })
+      .catch((error: unknown) => error);
 
-    await expect(
-      driver.resolveSpec({ model: "iPhone 99", platform: "ios" }, { allowDownload: false }),
-    ).rejects.toBeInstanceOf(UnknownModelError);
+    expect(result).toBeInstanceOf(UnknownModelError);
+    expect(result).toMatchObject({ message: expect.stringContaining("newer Xcode") });
   });
 
   it("rejects malformed simctl catalog JSON without trusting partial data", async () => {
@@ -110,17 +136,125 @@ describe("IosSimctlDriver", () => {
     ).rejects.toBeInstanceOf(DriverCrashError);
   });
 
-  it("rejects missing runtimes even when downloads are allowed", async () => {
-    const driver = createDriver(scriptedListRunner());
+  it("rejects a missing runtime without downloading when downloads are not allowed, naming the fix", async () => {
+    const runner = scriptedListRunner();
+    const driver = createDriver(runner);
     const result = await driver
       .resolveSpec(
-        { model: "iPhone 16", osVersion: "27", platform: "ios" },
+        { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+        { allowDownload: false },
+      )
+      .catch((error: unknown) => error);
+
+    expect(result).toBeInstanceOf(RuntimeMissingError);
+    expect(result).toMatchObject({
+      message: expect.stringMatching(/18\.6/),
+    });
+    expect(result).toMatchObject({
+      message: expect.stringMatching(/allow-download|downloads\.policy/),
+    });
+    // Never attempted a download: only the initial catalog list call happened.
+    expect(runner.calls).toHaveLength(1);
+  });
+
+  it("rejects an out-of-range OS version before ever considering a download", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: pairingFixture } },
+    ]);
+    const driver = createDriver(runner);
+
+    const result = await driver
+      .resolveSpec(
+        { model: "iPhone Xs", osVersion: "26.5", platform: "ios" },
         { allowDownload: true },
       )
       .catch((error: unknown) => error);
 
     expect(result).toBeInstanceOf(RuntimeMissingError);
-    expect(result).toMatchObject({ message: expect.stringContaining("install it via Xcode") });
+    expect(result).toMatchObject({
+      message: expect.stringContaining("iPhone Xs supports iOS 12.0-18.6"),
+    });
+    // No xcodebuild (or any further simctl) call: out-of-range is checked before download logic.
+    expect(runner.calls).toHaveLength(1);
+  });
+
+  it("selects the newest installed runtime that actually pairs with the model, not the newest overall", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: pairingFixture } },
+    ]);
+    const driver = createDriver(runner);
+
+    // iOS 26.5 is newer and installed, but only iOS 18.4 still lists iPhone Xs as supported.
+    await expect(
+      driver.resolveSpec({ model: "iPhone Xs", platform: "ios" }, { allowDownload: false }),
+    ).resolves.toEqual({ model: "iPhone Xs", osVersion: "18.4", platform: "ios" });
+  });
+
+  it("refuses to auto-download a runtime older than the iOS 16.0 floor", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: pairingFixture } },
+    ]);
+    const driver = createDriver(runner);
+
+    const result = await driver
+      .resolveSpec(
+        { model: "iPhone 7", osVersion: "13.0", platform: "ios" },
+        { allowDownload: true },
+      )
+      .catch((error: unknown) => error);
+
+    expect(result).toBeInstanceOf(DriverCrashError);
+    expect(result).toMatchObject({ message: expect.stringContaining("16.0") });
+    // Range check passed (13.0 is within iPhone 7's 9.0-15.0), but no xcodebuild call was made.
+    expect(runner.calls).toHaveLength(1);
+  });
+
+  it("downloads a missing in-range runtime via xcodebuild and re-scans the catalog", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: {
+          command: "xcodebuild",
+          args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+        },
+      },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixtureAfterDownload } },
+    ]);
+    const driver = createDriver(runner);
+
+    await expect(
+      driver.resolveSpec(
+        { model: "iPhone 16", osVersion: "18.6", platform: "ios" },
+        { allowDownload: true },
+      ),
+    ).resolves.toEqual({ model: "iPhone 16", osVersion: "18.6", platform: "ios" });
+    expect(runner.calls.map((call) => call.command)).toEqual(["xcrun", "xcodebuild", "xcrun"]);
+  });
+
+  it("dedupes concurrent resolveSpec calls for the same missing runtime behind one xcodebuild invocation", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: {
+          command: "xcodebuild",
+          args: ["-downloadPlatform", "iOS", "-buildVersion", "18.6"],
+        },
+      },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixtureAfterDownload } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixtureAfterDownload } },
+    ]);
+    const driver = createDriver(runner);
+    const request = { model: "iPhone 16", osVersion: "18.6", platform: "ios" } as const;
+
+    const [first, second] = await Promise.all([
+      driver.resolveSpec(request, { allowDownload: true }),
+      driver.resolveSpec(request, { allowDownload: true }),
+    ]);
+
+    expect(first).toEqual({ model: "iPhone 16", osVersion: "18.6", platform: "ios" });
+    expect(second).toEqual({ model: "iPhone 16", osVersion: "18.6", platform: "ios" });
+    expect(runner.calls.filter((call) => call.command === "xcodebuild")).toHaveLength(1);
   });
 
   it("provisions with the exact simctl argv and returns opaque iOS driver data", async () => {

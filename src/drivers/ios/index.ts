@@ -25,6 +25,16 @@ import type {
 const COMMAND_TIMEOUT_MS = 30_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
 const PROVISION_ESTIMATE_MS = 500;
+// Mirrors `downloads.timeoutMs`'s config default (`src/core/config.ts`) -- used only when a
+// caller constructs the driver directly without threading the configured value through (tests,
+// `SIMLOCK_DRIVERS_MODULE`).
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 1_200_000;
+// `simctl`'s `minRuntimeVersion` / `maxRuntimeVersion` encode "no bound" as 0xFFFFFF
+// (255.255.255) rather than omitting the field.
+const UNBOUNDED_VERSION = 0xff_ff_ff;
+// `xcodebuild -downloadPlatform iOS -buildVersion` only reaches back to iOS 16.0 (Xcode
+// 16.1+); older runtimes must be installed through Xcode itself.
+const IOS_DOWNLOAD_FLOOR: readonly [number, number, number] = [16, 0, 0];
 // A cold `simctl boot` to `bootstatus` measures roughly 30s on a fast, idle machine and up to
 // a minute on a loaded or slower one. The upper end is the estimate, deliberately: this number
 // is what a waiting requester is quoted, and quoting 30s to someone who then waits 60s is the
@@ -46,6 +56,8 @@ interface IosDriverData {
 
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
+  /** Per-download timeout; defaults to `downloads.timeoutMs`'s own default. */
+  readonly downloadTimeoutMs?: number;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly processRunner: ProcessRunner;
@@ -54,6 +66,10 @@ export interface IosSimctlDriverOptions {
 interface DeviceType {
   readonly identifier: string;
   readonly name: string;
+  /** Decoded `0xAABBCC` -> `[AA, BB, CC]`; simctl's inclusive lower bound on pairable runtimes. */
+  readonly minRuntimeVersion: number;
+  /** Same encoding; `UNBOUNDED_VERSION` means "no upper bound". */
+  readonly maxRuntimeVersion: number;
 }
 
 interface Runtime {
@@ -61,6 +77,8 @@ interface Runtime {
   readonly name: string;
   readonly version: string;
   readonly isAvailable: boolean;
+  /** Device type identifiers this runtime pairs with -- authoritative once the runtime is installed. */
+  readonly supportedDeviceTypeIds: ReadonlySet<string>;
 }
 
 interface SimctlCatalog {
@@ -82,6 +100,8 @@ type ProcessOutcome =
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
   readonly #clock: Clock;
+  readonly #downloadLocks = new Map<string, Promise<void>>();
+  readonly #downloadTimeoutMs: number;
   readonly #filesystem: Filesystem;
   readonly #idGenerator: IdGenerator;
   readonly #processRunner: ProcessRunner;
@@ -90,6 +110,7 @@ export class IosSimctlDriver implements Driver {
 
   constructor(options: IosSimctlDriverOptions) {
     this.#clock = options.clock;
+    this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
     this.#processRunner = options.processRunner;
@@ -97,7 +118,7 @@ export class IosSimctlDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    _options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean },
   ): Promise<DeviceSpec> {
     this.#requireIosPlatform(request.platform);
     const catalog = await this.#loadCatalog();
@@ -106,19 +127,112 @@ export class IosSimctlDriver implements Driver {
     );
 
     if (deviceType === undefined) {
-      throw new UnknownModelError(this.platform, request.model);
+      throw new IosUnknownModelError(request.model);
     }
 
-    const installedRuntimes = catalog.runtimes.filter((runtime) => runtime.isAvailable);
-    const runtime =
-      request.osVersion === undefined
-        ? newestRuntime(installedRuntimes)
-        : installedRuntimes.find((candidate) => candidate.version === request.osVersion);
+    return request.osVersion === undefined
+      ? this.#resolveDefaultRuntime(deviceType, catalog, options)
+      : this.#resolveExactRuntime(deviceType, request.osVersion, catalog, options);
+  }
 
+  /**
+   * Version requested explicitly: validated against the model's `[min, max]` pairing range
+   * *before* anything else -- an out-of-range request can never be fixed by downloading, so it
+   * must never even reach the download decision.
+   */
+  async #resolveExactRuntime(
+    deviceType: DeviceType,
+    osVersion: string,
+    catalog: SimctlCatalog,
+    options: { readonly allowDownload: boolean },
+  ): Promise<DeviceSpec> {
+    if (!isVersionInRange(osVersion, deviceType)) {
+      throw new IosVersionOutOfRangeError(deviceType.name, osVersion, deviceType);
+    }
+
+    const installed = findInstalledRuntime(catalog, osVersion);
+    if (installed !== undefined) {
+      return this.#commitResolution(deviceType, installed);
+    }
+
+    if (!options.allowDownload) {
+      throw new IosRuntimeMissingError(
+        osVersion,
+        `iOS ${osVersion} is not installed; pass --allow-download (or set downloads.policy) ` +
+          `to download it`,
+      );
+    }
+
+    if (isTooOldToDownload(osVersion)) {
+      throw new DriverCrashError(
+        `iOS ${osVersion} predates Xcode's automatic download support (introduced for iOS ` +
+          `16.0 and newer); install it manually via Xcode`,
+      );
+    }
+
+    await this.#downloadRuntime(["-downloadPlatform", "iOS", "-buildVersion", osVersion]);
+    const refreshed = await this.#loadCatalog();
+    const runtime = findInstalledRuntime(refreshed, osVersion);
     if (runtime === undefined) {
-      throw new IosRuntimeMissingError(request.osVersion ?? "default");
+      throw new DriverCrashError(
+        `xcodebuild reported success but iOS ${osVersion} is still not installed`,
+      );
+    }
+    return this.#commitResolution(deviceType, runtime);
+  }
+
+  /**
+   * No version requested: defaults to the newest *installed* runtime that both falls in the
+   * model's range and actually pairs with it (`supportedDeviceTypes`) -- not the newest
+   * installed runtime overall, which may have dropped this model (iOS 26 dropping iPhone
+   * XS/XR support is the motivating case).
+   */
+  async #resolveDefaultRuntime(
+    deviceType: DeviceType,
+    catalog: SimctlCatalog,
+    options: { readonly allowDownload: boolean },
+  ): Promise<DeviceSpec> {
+    const paired = pairedInstalledRuntime(catalog, deviceType);
+    if (paired !== undefined) {
+      return this.#commitResolution(deviceType, paired);
     }
 
+    if (!options.allowDownload) {
+      throw new IosRuntimeMissingError(
+        "default",
+        `No installed iOS runtime pairs with ${deviceType.name}; pass --allow-download (or ` +
+          `set downloads.policy) to download a compatible runtime`,
+      );
+    }
+
+    if (isUnboundedMax(deviceType.maxRuntimeVersion)) {
+      // No upper bound on this model's pairing range: any released version works, so there is
+      // nothing more specific to ask for than "latest".
+      await this.#downloadRuntime(["-downloadPlatform", "iOS"]);
+    } else {
+      const major = majorVersionString(deviceType.maxRuntimeVersion);
+      try {
+        await this.#downloadRuntime(["-downloadPlatform", "iOS", "-buildVersion", major]);
+      } catch (error: unknown) {
+        throw new DriverCrashError(
+          `Could not download a default iOS runtime for ${deviceType.name} (tried ${major}): ` +
+            `${errorMessage(error)}; pass --os <version> to request an exact release`,
+        );
+      }
+    }
+
+    const refreshed = await this.#loadCatalog();
+    const runtime = pairedInstalledRuntime(refreshed, deviceType);
+    if (runtime === undefined) {
+      throw new DriverCrashError(
+        `xcodebuild reported success but no installed iOS runtime pairs with ` +
+          `${deviceType.name} yet`,
+      );
+    }
+    return this.#commitResolution(deviceType, runtime);
+  }
+
+  #commitResolution(deviceType: DeviceType, runtime: Runtime): DeviceSpec {
     const spec: DeviceSpec = {
       model: deviceType.name,
       osVersion: runtime.version,
@@ -126,6 +240,40 @@ export class IosSimctlDriver implements Driver {
     };
     this.#resolvedSpecs.set(specKey(spec), { deviceType, runtime, spec });
     return spec;
+  }
+
+  /**
+   * Runs `xcodebuild -downloadPlatform iOS [-buildVersion <version>]`, deduping concurrent
+   * callers that ask for the exact same invocation behind one in-flight promise -- mirrors the
+   * Android driver's `#locks` pattern, sized to a single component instead of a whole device.
+   * The map entry is removed once the download settles (success or failure), so a later,
+   * non-concurrent call starts a fresh attempt rather than replaying a stale result.
+   */
+  async #downloadRuntime(args: readonly string[]): Promise<void> {
+    const key = args.join(" ");
+    const inFlight = this.#downloadLocks.get(key);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+
+    const promise = this.#xcodebuildOrThrow(args).finally(() => {
+      if (this.#downloadLocks.get(key) === promise) {
+        this.#downloadLocks.delete(key);
+      }
+    });
+    this.#downloadLocks.set(key, promise);
+    return promise;
+  }
+
+  async #xcodebuildOrThrow(args: readonly string[]): Promise<void> {
+    const result = await this.#processRunner.run("xcodebuild", args, {
+      timeoutMs: this.#downloadTimeoutMs,
+    });
+    if (result.code !== 0) {
+      throw new DriverCrashError(
+        `xcodebuild ${args.join(" ")} failed: ${result.stderr || result.stdout}`,
+      );
+    }
   }
 
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
@@ -467,9 +615,32 @@ export class IosSimctlDriver implements Driver {
 }
 
 class IosRuntimeMissingError extends RuntimeMissingError {
-  constructor(osVersion: string) {
+  constructor(osVersion: string, message: string) {
     super("ios", osVersion);
-    this.message = `iOS runtime ${osVersion} is not installed; install it via Xcode`;
+    this.message = message;
+  }
+}
+
+class IosUnknownModelError extends UnknownModelError {
+  constructor(model: string) {
+    super("ios", model);
+    this.message = `Unknown ios model: ${model}; a newer Xcode version may add this device`;
+  }
+}
+
+/**
+ * A requested OS version outside the model's `[minRuntimeVersion, maxRuntimeVersion]` pairing
+ * range. Extends `RuntimeMissingError` (rather than living as an unrelated class) so it flows
+ * through the daemon/CLI exactly like `IosRuntimeMissingError` already does -- same error code,
+ * same exit status -- without either needing to learn a new type. Unlike a missing runtime, no
+ * download can ever fix this, which is why the message states the supported range instead of
+ * pointing at `--allow-download`.
+ */
+class IosVersionOutOfRangeError extends RuntimeMissingError {
+  constructor(model: string, requested: string, deviceType: DeviceType) {
+    super("ios", requested);
+    const range = formatVersionRange(deviceType.minRuntimeVersion, deviceType.maxRuntimeVersion);
+    this.message = `${model} supports iOS ${range}; iOS ${requested} is out of range`;
   }
 }
 
@@ -539,7 +710,14 @@ function parseDeviceType(value: unknown): readonly DeviceType[] {
     return [];
   }
 
-  return [{ identifier: value.identifier, name: value.name }];
+  return [
+    {
+      identifier: value.identifier,
+      maxRuntimeVersion: versionIntOr(value.maxRuntimeVersion, UNBOUNDED_VERSION),
+      minRuntimeVersion: versionIntOr(value.minRuntimeVersion, 0),
+      name: value.name,
+    },
+  ];
 }
 
 function parseRuntime(value: unknown): readonly Runtime[] {
@@ -559,9 +737,87 @@ function parseRuntime(value: unknown): readonly Runtime[] {
       identifier: value.identifier,
       isAvailable: value.isAvailable,
       name: value.name,
+      supportedDeviceTypeIds: parseSupportedDeviceTypeIds(value.supportedDeviceTypes),
       version: value.version,
     },
   ];
+}
+
+function versionIntOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function parseSupportedDeviceTypeIds(value: unknown): ReadonlySet<string> {
+  if (!Array.isArray(value)) {
+    return new Set();
+  }
+  const ids = value
+    .filter(isRecord)
+    .map((entry) => entry.identifier)
+    .filter((identifier): identifier is string => typeof identifier === "string");
+  return new Set(ids);
+}
+
+function findInstalledRuntime(catalog: SimctlCatalog, version: string): Runtime | undefined {
+  return catalog.runtimes.find((runtime) => runtime.isAvailable && runtime.version === version);
+}
+
+/** Installed, in the model's range, and pairs with it -- the newest of those, or none. */
+function pairedInstalledRuntime(
+  catalog: SimctlCatalog,
+  deviceType: DeviceType,
+): Runtime | undefined {
+  const candidates = catalog.runtimes.filter(
+    (runtime) =>
+      runtime.isAvailable &&
+      runtime.supportedDeviceTypeIds.has(deviceType.identifier) &&
+      isVersionInRange(runtime.version, deviceType),
+  );
+  return newestRuntime(candidates);
+}
+
+/** `simctl`'s `0xAABBCC` encoding -> `[major, minor, patch]`. */
+function decodeVersionTriple(encoded: number): readonly [number, number, number] {
+  return [(encoded >> 16) & 0xff, (encoded >> 8) & 0xff, encoded & 0xff];
+}
+
+function formatDecodedVersion(encoded: number): string {
+  const [major, minor, patch] = decodeVersionTriple(encoded);
+  return patch === 0 ? `${major}.${minor}` : `${major}.${minor}.${patch}`;
+}
+
+function isUnboundedMax(encoded: number): boolean {
+  return encoded >= UNBOUNDED_VERSION;
+}
+
+function formatVersionRange(min: number, max: number): string {
+  const minLabel = formatDecodedVersion(min);
+  return isUnboundedMax(max) ? `${minLabel}+` : `${minLabel}-${formatDecodedVersion(max)}`;
+}
+
+function versionTriple(version: string): readonly [number, number, number] {
+  const parts = version.split(".").map(versionPart);
+  return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+}
+
+function versionOrdinal(triple: readonly [number, number, number]): number {
+  return triple[0] * 1_000_000 + triple[1] * 1_000 + triple[2];
+}
+
+function isVersionInRange(version: string, deviceType: DeviceType): boolean {
+  const ordinal = versionOrdinal(versionTriple(version));
+  return (
+    ordinal >= versionOrdinal(decodeVersionTriple(deviceType.minRuntimeVersion)) &&
+    ordinal <= versionOrdinal(decodeVersionTriple(deviceType.maxRuntimeVersion))
+  );
+}
+
+function isTooOldToDownload(version: string): boolean {
+  return versionOrdinal(versionTriple(version)) < versionOrdinal(IOS_DOWNLOAD_FLOOR);
+}
+
+function majorVersionString(encoded: number): string {
+  return String(decodeVersionTriple(encoded)[0]);
 }
 
 function newestRuntime(runtimes: readonly Runtime[]): Runtime | undefined {

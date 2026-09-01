@@ -89,8 +89,13 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
-  iOS runtimes remain Xcode-managed in v1: `--allow-download` cannot install
-  them; install the runtime through Xcode first.
+  For iOS, this runs `xcodebuild -downloadPlatform iOS` under the hood and
+  only reaches back to iOS 16.0 (a floor of Xcode's own downloader); older
+  runtimes and unknown device types (which need a newer Xcode) still require
+  installing/upgrading Xcode by hand. A requested `--os` outside the
+  device's supported runtime range (e.g. iPhone Xs above iOS 18.x) fails
+  immediately — no download is ever attempted for a version that could not
+  work regardless.
 - `--detach` — detached mode: print the lease result and exit; the lease is
   TTL-bound and must be renewed with `simlock lease renew`.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of

@@ -564,10 +564,18 @@ logger straight from the default log path at a fixed level, falling back to
 ## Device requests
 
 Required to identify a device: **platform + device model + OS version**.
-OS defaults to the newest runtime already installed on the machine. If the
-requested runtime / system image is not installed, the lease fails with a
-clear error unless downloads are permitted for that request (downloads are
-multi-GB and must never be triggered implicitly).
+OS defaults to the newest runtime already installed on the machine that can
+actually run the requested model — for iOS specifically, the newest
+installed runtime that both falls inside the device type's supported range
+(`simctl list devicetypes`' `minRuntimeVersion`/`maxRuntimeVersion`) and
+still lists the model in its `supportedDeviceTypes`, not the newest
+installed runtime overall (a newer runtime can drop a model, as iOS 26 did
+for iPhone XS/XR). If the requested runtime / system image is not
+installed, the lease fails with a clear error unless downloads are
+permitted for that request (downloads are multi-GB and must never be
+triggered implicitly). An OS version outside a model's supported range
+fails immediately with the range named in the error — never as an attempted
+download, since no download could make it work.
 
 Permission comes from `config.downloads.policy`, resolved once, in the
 daemon, before a request ever reaches the acquisition path: `"never"`

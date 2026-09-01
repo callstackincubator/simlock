@@ -88,7 +88,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
   const drivers =
     options.drivers ??
-    (await discoverDrivers({ clock, filesystem, idGenerator, logger, processRunner }));
+    (await discoverDrivers({
+      clock,
+      downloadTimeoutMs: config.downloads.timeoutMs,
+      filesystem,
+      idGenerator,
+      logger,
+      processRunner,
+    }));
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -169,6 +176,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 
 export interface DriverDiscoveryContext {
   readonly clock: Clock;
+  /** Threaded into the iOS driver's `xcodebuild -downloadPlatform` timeout; defaults to the driver's own default when omitted. */
+  readonly downloadTimeoutMs?: number;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
@@ -187,6 +196,9 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
     drivers.push(
       new IosSimctlDriver({
         clock: options.clock,
+        ...(options.downloadTimeoutMs === undefined
+          ? {}
+          : { downloadTimeoutMs: options.downloadTimeoutMs }),
         filesystem: options.filesystem,
         idGenerator: options.idGenerator,
         processRunner: options.processRunner,
