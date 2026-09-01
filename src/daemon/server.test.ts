@@ -1073,6 +1073,73 @@ describe("DaemonServer lease heartbeat", () => {
   });
 });
 
+describe("DaemonServer download policy", () => {
+  it("grants download permission under the always policy without a per-request flag", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const grant = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(grant.ok).toBe(true);
+    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
+      allowDownload: true,
+    });
+    await client.close();
+  });
+
+  it("withholds download permission under the never policy even when the request asks for it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      allowDownload: true,
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).toContain("downloads.policy");
+    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
+      allowDownload: false,
+    });
+    await client.close();
+  });
+
+  it("defers to the request's own flag under the default on-request policy", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    // No allowDownload on the request and the default policy, so this fails exactly as it
+    // did before the policy existed -- and, unlike the never-policy case above, the message
+    // is not attributed to configuration, since nothing in config forced the outcome.
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+});
+
 // fallow-ignore-next-line complexity -- a test harness whose branches are all trivial optional-parameter defaulting.
 async function createHarness(
   options: {
@@ -1084,6 +1151,7 @@ async function createHarness(
     readonly clock?: FakeClock;
     readonly converge?: () => Promise<void>;
     readonly dispose?: () => void;
+    readonly downloads?: Partial<Config["downloads"]>;
     readonly driver?: FakeDriver;
     readonly logger?: Logger;
     readonly settle?: () => Promise<void>;
@@ -1115,7 +1183,7 @@ async function createHarness(
       ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
       platform: "ios",
     });
-  const config = testConfig(options.lease);
+  const config = testConfig(options.lease, options.downloads);
   const engine = new LeaseEngine({
     clock,
     config,
@@ -1260,7 +1328,10 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
+function testConfig(
+  leaseOverrides?: Partial<Config["lease"]>,
+  downloadsOverrides?: Partial<Config["downloads"]>,
+): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
@@ -1273,6 +1344,12 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    downloads: {
+      policy: "on-request",
+      acceptAndroidLicenses: false,
+      timeoutMs: 1_200_000,
+      ...downloadsOverrides,
+    },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       detachedTtlMs: 60_000,

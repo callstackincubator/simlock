@@ -156,6 +156,7 @@ function config(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     capacity: {

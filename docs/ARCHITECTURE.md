@@ -566,5 +566,17 @@ logger straight from the default log path at a fixed level, falling back to
 Required to identify a device: **platform + device model + OS version**.
 OS defaults to the newest runtime already installed on the machine. If the
 requested runtime / system image is not installed, the lease fails with a
-clear error unless `--allow-download` is passed (downloads are multi-GB and
-must never be triggered implicitly).
+clear error unless downloads are permitted for that request (downloads are
+multi-GB and must never be triggered implicitly).
+
+Permission comes from `config.downloads.policy`, resolved once, in the
+daemon, before a request ever reaches the acquisition path: `"never"`
+forbids installs outright, even over an explicit `--allow-download` /
+`allow_download`; `"always"` grants it to every explicit lease request
+without the caller having to ask; `"on-request"` (the default) defers to
+the request's own flag, which is today's behavior byte-for-byte. Only an
+explicit lease request (`LeaseEngine#request`) can carry download
+permission to a driver's `resolveSpec` — warm-pool provisioning and startup
+convergence reuse specs already committed to the registry and never call
+`resolveSpec` themselves, so neither can trigger a download regardless of
+policy.

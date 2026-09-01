@@ -1311,5 +1311,6 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       minimumThresholdMs: 1_000,
       ...stalledTransitionOverrides,
     },
+    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
   };
 }

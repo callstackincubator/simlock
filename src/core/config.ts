@@ -28,8 +28,23 @@ import {
 
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
+/**
+ * `never` forbids installs even when a request passes `--allow-download` (locked-down
+ * machines/CI). `on-request` (default) preserves today's contract: install only when the
+ * request itself carries the flag. `always` lets the daemon install missing components for
+ * any explicit lease request without the per-request flag.
+ */
+export type DownloadPolicy = "never" | "on-request" | "always";
+
 export interface Config {
   readonly capacity: CapacityConfig;
+  readonly downloads: {
+    readonly policy: DownloadPolicy;
+    /** Explicit legal consent for Android SDK licenses, independent of `policy`. */
+    readonly acceptAndroidLicenses: boolean;
+    /** Per-install timeout; downloads run minutes, not seconds. */
+    readonly timeoutMs: number;
+  };
   readonly idle: {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
@@ -132,6 +147,19 @@ export async function loadConfig({
 }
 
 /**
+ * Reduces `downloads.policy` and a request's own `--allow-download` / `allow_download` flag
+ * to the single permission a driver's `resolveSpec` actually sees. `never` overrides an
+ * explicit `true` on the request -- the whole point of the policy is that it cannot be
+ * opted back into per request -- and `always` grants permission the request never had to ask
+ * for. Only `on-request` defers to what the caller asked for, which is today's behavior.
+ */
+export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolean): boolean {
+  if (policy === "always") return true;
+  if (policy === "never") return false;
+  return requested;
+}
+
+/**
  * Cross-field check: the heartbeat cadence must be frequent enough, relative to the
  * backstop, that a few missed beats (context compaction, a slow tick) still land well
  * before the backstop deadline rather than racing it.
@@ -220,6 +248,11 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
     } as CapacityConfig,
+    downloads: {
+      policy: "on-request",
+      acceptAndroidLicenses: false,
+      timeoutMs: 1_200_000,
+    },
     idle: {
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
@@ -296,6 +329,7 @@ function validateConfigLayer(
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
+const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 
 /**
  * The `capacity.config` validator is the selected strategy's own, so a strategy
@@ -310,6 +344,11 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     // Legacy spelling of the resource options; still type-checked here so a typo
     // inside them is still reported rather than silently dropped.
     ...resourceOptionValidators,
+    downloads: objectValidator({
+      policy: stringUnion(DOWNLOAD_POLICIES),
+      acceptAndroidLicenses: booleanValue,
+      timeoutMs: positiveNumber,
+    }),
     idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
     warmPool: objectValidator({
       quarantine: objectValidator({

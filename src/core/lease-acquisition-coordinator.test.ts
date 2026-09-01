@@ -26,6 +26,7 @@ const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as co
 function config(maxDevices = 1): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     health: {
       enabled: true,
