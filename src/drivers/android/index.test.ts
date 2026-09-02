@@ -1191,6 +1191,59 @@ describe("AndroidDriver emulator registration", () => {
   });
 });
 
+describe("AndroidDriver pre-root devices", () => {
+  it("re-proves an intact root by re-running the validation its start was judged by", async () => {
+    const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
+
+    await expect(driver.revalidateRoot()).resolves.toBeUndefined();
+  });
+
+  it("refuses to re-prove a root that has become a symlink since startup", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    // The case the re-proof exists for: the path was proven at startup and swapped since,
+    // so `listManaged` would now answer with the user's own AVDs.
+    filesystem.defineSymlink(avdDirectory, `${home}/.android/avd`);
+
+    await expect(driver.revalidateRoot()).rejects.toMatchObject({
+      name: "OwnedRootError",
+      reason: "symlink",
+    });
+  });
+
+  it("finds an AVD stranded in the pre-root AVD home", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${home}/.android/avd/simlock_old.avd`);
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    await expect(driver.findLegacy("simlock_old")).resolves.toMatchObject({
+      device: { deviceId: "simlock_old" },
+      path: `${home}/.android/avd/simlock_old.avd`,
+    });
+    await expect(driver.findLegacy("simlock_never_existed")).resolves.toBeUndefined();
+  });
+
+  it("deletes a stranded AVD against the legacy AVD home, not Simlock's root", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${home}/.android/avd/simlock_old.avd`);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+    const legacy = await driver.findLegacy("simlock_old");
+
+    await driver.destroyLegacy(legacy!.device);
+
+    // Pointed at the home the AVD is actually in, and deliberately carrying no
+    // `ANDROID_ADB_SERVER_PORT`: a device this old is not on Simlock's server, and the
+    // user's is not one Simlock may drive.
+    expect(runner.calls.at(-1)?.options?.env).toEqual({
+      ANDROID_AVD_HOME: `${home}/.android/avd`,
+      ANDROID_HOME: sdk,
+    });
+  });
+});
+
 function bootProbes(runner: ScriptedProcessRunner): number {
   return runner.calls.filter((call) => call.args.includes("sys.boot_completed")).length;
 }

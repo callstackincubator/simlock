@@ -84,6 +84,11 @@ export interface EventMap {
     readonly attempts: number;
     readonly error: string;
   };
+  "device.orphan-purged": {
+    readonly driverDeviceId: string;
+    readonly platform: string;
+    readonly deviceRoot: string;
+  };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };

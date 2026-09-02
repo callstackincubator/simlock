@@ -198,4 +198,71 @@ describe("doctor and drift", () => {
     heldB.kill("SIGKILL");
     await heldB.waitForExit(15_000).catch(() => undefined);
   });
+
+  it("purges orphans only when asked and confirmed, and re-proves the root first", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: {
+        knownModels: ["iPhone 16"],
+        availableOsVersions: ["18.4"],
+        managedReality: {
+          devices: [{ deviceId: "fake-ios-orphan", runState: "running" }],
+          processes: [{ deviceId: "fake-ios-orphan" }],
+        },
+      },
+    });
+
+    const reported = await env.cli(["doctor"]);
+    expect(reported.code).toBe(0);
+    expect((reported.json as { findings: Finding[] }).findings.map((f) => f.kind)).toEqual([
+      "orphan-device",
+      "orphan-process",
+    ]);
+
+    // No TTY behind the e2e CLI, so `confirm` answers no: the refusal is the documented
+    // `USAGE`/exit 2 contract `release --all` already has (safety rule 5).
+    await env.driverLog.clear();
+    const declined = await env.cli(["doctor", "--purge-orphans"]);
+    expect(declined.code).toBe(2);
+    expect(declined.error?.code).toBe("USAGE");
+    expect((await env.driverLog.calls()).map((call) => call.operation)).not.toContain("destroy");
+
+    await env.driverLog.clear();
+    const purged = await env.cli(["doctor", "--purge-orphans", "--yes"]);
+    expect(purged.code).toBe(0);
+
+    // Both findings go: destroying the device covers the process it was running.
+    expect((purged.json as { findings: Finding[] }).findings).toEqual([]);
+    const operations = (await env.driverLog.calls())
+      .map((call) => call.operation)
+      .filter((operation) => operation !== "listManaged");
+    expect(operations, "the root is re-proven before anything is destroyed").toEqual([
+      "revalidateRoot",
+      "destroy",
+    ]);
+    await env.expectEvents(["device.orphan-purged"]);
+  });
+
+  it("destroys nothing when the root can no longer be proven", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: {
+        knownModels: ["iPhone 16"],
+        availableOsVersions: ["18.4"],
+        failures: { revalidateRoot: { type: "generic", message: "root is a symlink now" } },
+        managedReality: { devices: [{ deviceId: "fake-ios-orphan", runState: "stopped" }] },
+      },
+    });
+
+    await env.driverLog.clear();
+    const refused = await env.cli(["doctor", "--purge-orphans", "--yes"]);
+
+    // The orphan stays reported, and stays on disk: a root that stopped proving ownership
+    // is exactly the case where `listManaged` may be describing the user's own devices.
+    expect(refused.code).toBe(0);
+    expect((refused.json as { findings: Finding[] }).findings.map((f) => f.kind)).toEqual([
+      "orphan-device",
+    ]);
+    expect((await env.driverLog.calls()).map((call) => call.operation)).not.toContain("destroy");
+  });
 });

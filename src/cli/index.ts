@@ -579,14 +579,25 @@ async function runDoctor(argv: readonly string[], environment: CliEnvironment): 
   const values = commandArgs(argv, {
     fix: { type: "boolean" },
     help: { type: "boolean", short: "h" },
+    "purge-orphans": { type: "boolean" },
+    yes: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: simlock doctor [--fix]\n");
+    environment.stdout.write("Usage: simlock doctor [--fix] [--purge-orphans] [--yes]\n");
     return 0;
+  }
+  const purgeOrphans = values["purge-orphans"] ?? false;
+  if (purgeOrphans) {
+    // Destructive, so it confirms exactly as `release --all` and `nuke` do (safety rule 5),
+    // and a missing confirm hook refuses rather than proceeds: a non-interactive caller
+    // that meant it says `--yes`.
+    const confirmed =
+      values.yes ?? (await environment.confirm?.("Destroy every orphaned device? [y/N] "));
+    if (!confirmed) throw new UsageError("doctor --purge-orphans requires confirmation or --yes");
   }
   writeResult(
     environment,
-    await requestOnce(environment, "doctor.run", { fix: values.fix ?? false }),
+    await requestOnce(environment, "doctor.run", { fix: values.fix ?? false, purgeOrphans }),
   );
   return 0;
 }

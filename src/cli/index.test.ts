@@ -1133,6 +1133,87 @@ describe("CLI boundary", () => {
     await expect(runCli(["catalog", "--platform", "windows"], output.environment)).resolves.toBe(2);
     expect(output.stderr).toContain("--platform must be ios or android");
   });
+
+  it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", { findings: [] });
+
+    await expect(
+      runCli(
+        ["doctor", "--purge-orphans"],
+        output.environmentWith({ confirm: async () => true, connect: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(connection.calls).toEqual([
+      { payload: { fix: false, purgeOrphans: true }, type: "doctor.run" },
+    ]);
+  });
+
+  it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", { findings: [] });
+
+    await expect(
+      runCli(["doctor", "--fix"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+
+    // The upgrade contract: `doctor --fix` running unattended in CI never becomes
+    // destructive on its own (ADR 0001, decision 6).
+    expect(connection.calls).toEqual([
+      { payload: { fix: true, purgeOrphans: false }, type: "doctor.run" },
+    ]);
+  });
+
+  it.each([
+    ["declined", async () => false],
+    ["unavailable", undefined],
+  ] as const)(
+    "refuses --purge-orphans and contacts nobody when confirmation is %s",
+    async (_case, confirm) => {
+      const output = outputCapture();
+      const connection = new StubConnection();
+
+      await expect(
+        runCli(
+          ["doctor", "--purge-orphans"],
+          output.environmentWith({
+            ...(confirm === undefined ? {} : { confirm }),
+            connect: async () => connection,
+          }),
+        ),
+      ).resolves.toBe(2);
+
+      expect(connection.calls).toEqual([]);
+      expect(JSON.parse(output.stderr)).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("--yes") },
+      });
+    },
+  );
+
+  it("takes --yes as the confirmation, so an unattended purge needs no terminal", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", { findings: [] });
+
+    await expect(
+      runCli(
+        ["doctor", "--purge-orphans", "--yes"],
+        output.environmentWith({
+          confirm: async () => {
+            throw new Error("--yes must not ask");
+          },
+          connect: async () => connection,
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(connection.calls).toEqual([
+      { payload: { fix: false, purgeOrphans: true }, type: "doctor.run" },
+    ]);
+  });
 });
 
 class StubConnection implements DaemonConnection {

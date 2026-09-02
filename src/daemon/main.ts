@@ -156,6 +156,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     driverRejections: rejections,
     eventBus,
     leaseExpirer: leaseEngine,
+    logger,
     quarantine: leaseEngine,
     registry,
   });

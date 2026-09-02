@@ -20,4 +20,4 @@ Status values:
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted — not yet implemented |
+| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted |
