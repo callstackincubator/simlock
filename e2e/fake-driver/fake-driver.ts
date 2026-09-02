@@ -69,6 +69,12 @@ function refusedAdbVerb(args: readonly string[]): string | undefined {
  * The refusal rules, restated rather than imported: this one driver stands in for both
  * platforms, and the e2e lane is exactly where the published behaviour -- exit 2 with a
  * USAGE line naming what to run instead -- has to be exercised end to end.
+ *
+ * Because they are restated, these are a *mirror* of the real rules and never evidence
+ * for them: deleting the refusal branch from `src/drivers/ios/index.ts` would leave every
+ * e2e case here green. What the shipped drivers refuse is pinned in
+ * `src/drivers/ios/index.test.ts` and `src/drivers/android/index.test.ts`; this pair only
+ * has to be refusable, not complete.
  */
 const PASSTHROUGH_REFUSALS: Readonly<
   Record<Platform, (args: readonly string[]) => string | undefined>

@@ -988,6 +988,45 @@ describe("AndroidDriver.create", () => {
     expect(() => driver.passthrough(["kill-server"])).toThrow(/simlock release/);
   });
 
+  it("refuses kill-server behind a global flag, not only in first position", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    // Every other case passes it first, so an `args[0] === "kill-server"` rule would pass
+    // them all; this is the one that holds the documented "anywhere in the arguments".
+    expect(() => driver.passthrough(["-P", "1", "kill-server"])).toThrow(PassthroughRefusedError);
+  });
+
+  it.each([[["emu", "avd", "stop"]], [["-s", "emulator-5586", "emu", "avd", "stop"]]])(
+    "refuses an emu avd stop that would stop a device Simlock believes is running: %j",
+    async (args) => {
+      const filesystem = await androidFilesystem();
+      const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+      expect(() => driver.passthrough(args)).toThrow(PassthroughRefusedError);
+      expect(() => driver.passthrough(args)).toThrow(/simlock release/);
+    },
+  );
+
+  it("refuses to delete the snapshot every later reclaim restores from", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["emu", "avd", "snapshot", "delete", "default_boot"])).toThrow(
+      PassthroughRefusedError,
+    );
+    expect(() => driver.passthrough(["emu", "avd", "snapshot", "delete", "default_boot"])).toThrow(
+      /full wipe/,
+    );
+  });
+
+  it("still proxies the snapshot operations that do not destroy the baseline", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    expect(driver.passthrough(["emu", "avd", "snapshot", "list"]).args).toContain("list");
+  });
+
   it("refuses an emu kill pair even behind the -s serial that targets a device", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));

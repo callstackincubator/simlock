@@ -27,6 +27,7 @@ import {
   type RawPassthroughCommand,
 } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
+import { spawnPassthrough } from "./passthrough.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
@@ -54,6 +55,14 @@ const LEASE_LOST_EXIT_CODE = 14;
  * contract `docs/CLI.md` documents for a refused passthrough.
  */
 const PASSTHROUGH_REFUSED_CODE = "PASSTHROUGH_REFUSED";
+
+/**
+ * A key that is safe to the left of `=` in a shell `export`. Anything else is a command
+ * waiting for `eval` to run it, and escaping the value alone defends the half an attacker
+ * does not need. Not reachable through the shipped drivers (their keys are literals), but
+ * `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
+ */
+const SHELL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   BAD_FRAME: 2,
@@ -216,6 +225,11 @@ export async function runCli(
         return await runConfig(argv.slice(1), environment);
       case "simctl":
       case "adb":
+        // Named here rather than discovered from the drivers on purpose: these are
+        // user-facing command names published in `docs/CLI.md`, and the CLI never builds a
+        // simctl or adb argument -- it forwards the name and spawns whatever the daemon
+        // hands back, so which flags scope the tool and which verbs it refuses still live
+        // entirely in the driver (architecture rule 2 is about knowledge, not about names).
         // Every argument after the tool name is the tool's, verbatim -- including `--help`,
         // which belongs to `simctl`/`adb` and not to Simlock. `simlock --help` lists these.
         return await runPassthrough(argv[0], argv.slice(1), environment);
@@ -413,11 +427,8 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     const result = leaseResult(response);
     // Held mode still holds after this line, whichever shape it took: `--export-env` only
     // changes what stdout carries, never how long the lease lives.
-    environment.stdout.write(
-      values["export-env"] === true
-        ? exportEnvLines(result.environment)
-        : `${JSON.stringify(result)}\n`,
-    );
+    if (values["export-env"] === true) writeExportEnv(environment, result);
+    else environment.stdout.write(`${JSON.stringify(result)}\n`);
     if (detached || termination === undefined) return 0;
     await Promise.race([termination.settled, leaseLostSignal]);
     if (leaseLost) {
@@ -754,15 +765,42 @@ function commandArgs(
 }
 
 /**
+ * Writes the export lines, and -- when there are none -- one line to stderr saying so.
+ * Silence would be worse than it looks: the lease is committed and TTL-bound either way,
+ * and a caller that was told neither its id nor that anything was missing can neither
+ * renew nor release it, and has no scoping to reach the device with. stdout stays clean so
+ * `eval "$(...)"` is unaffected. An older daemon, which sends no `environment` at all, is
+ * the case that actually produces this.
+ */
+function writeExportEnv(environment: CliEnvironment, result: ReturnType<typeof leaseResult>): void {
+  environment.stdout.write(exportEnvLines(result.environment));
+  if (Object.keys(result.environment).length > 0) return;
+  environment.stderr.write(
+    `simlock: lease ${result.lease} carries no environment, so there is nothing to export and the device may be unreachable from a bare simctl or adb. Release it with \`simlock release ${result.lease}\`.\n`,
+  );
+}
+
+/**
  * Shell `export` lines for `eval "$(simlock lease ... --export-env)"`. Single quotes because
  * they are the only shell quoting that takes every byte literally, and `'\''` is the one way
  * to get a literal quote back inside them -- a device-set path is a user-configurable path
  * and may hold a space or an apostrophe. Sorted so repeated runs produce identical output.
+ *
+ * A key that is not a shell identifier fails the command rather than being skipped: the
+ * driver that produced it is broken, and dropping it silently would leave the holder with
+ * a lease it cannot reach and no idea why.
  */
 function exportEnvLines(environment: Readonly<Record<string, string>>): string {
   return Object.entries(environment)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `export ${key}='${value.replaceAll("'", "'\\''")}'\n`)
+    .map(([key, value]) => {
+      if (!SHELL_IDENTIFIER.test(key)) {
+        throw new Error(
+          `Refusing to export ${JSON.stringify(key)}: a lease environment key must be a shell identifier, and this one would change what \`eval\` runs.`,
+        );
+      }
+      return `export ${key}='${value.replaceAll("'", "'\\''")}'\n`;
+    })
     .join("");
 }
 
@@ -1052,30 +1090,6 @@ function waitForTermination(
         : undefined;
   });
   return { dispose: () => detach(), settled };
-}
-/**
- * Inherited stdio, so a passthrough behaves exactly as the bare tool would: `adb shell`
- * stays interactive, `simctl io ... screenshot` writes where it was told to, and nothing
- * is buffered through this process. The scoped environment is layered over the CLI's own
- * rather than replacing it -- it carries only the scoping keys, and a tool spawned without
- * `PATH` or `ANDROID_HOME` would not find the SDK the daemon just pointed it at.
- */
-async function spawnPassthrough(command: RawPassthroughCommand): Promise<number> {
-  const { spawn } = await import("node:child_process");
-  const { constants } = await import("node:os");
-  const child = spawn(command.command, [...command.args], {
-    env: { ...process.env, ...command.env },
-    stdio: "inherit",
-  });
-  return new Promise<number>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      // A child killed by a signal has no exit code; report it the way a shell does, so a
-      // passthrough interrupted with ^C is distinguishable from one that simply failed.
-      if (code !== null) resolve(code);
-      else resolve(signal === null ? 1 : 128 + (constants.signals[signal] ?? 0));
-    });
-  });
 }
 
 async function confirmTerminal(question: string): Promise<boolean> {

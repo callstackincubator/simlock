@@ -95,7 +95,9 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
   TTL-bound and must be renewed with `simlock lease renew`.
 - `--export-env` — print the grant's `environment` as shell `export` lines on
   stdout instead of the JSON line, for `eval "$(...)"`. See
-  [Reaching a leased device](#reaching-a-leased-device).
+  [Reaching a leased device](#reaching-a-leased-device). If the grant carries no
+  environment at all (an older daemon), stdout stays empty and a note naming the
+  lease id goes to stderr, so the lease can still be renewed or released.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of
   the CLI's actual parent. For a holder spawned from a short-lived subshell,
   the immediate parent can die (and get reaped) while the owning agent is
@@ -238,11 +240,22 @@ simlock simctl install booted ./MyApp.app
 simlock simctl io booted screenshot shot.png
 ```
 
-Refused: `create`, `erase`, and `delete`. Those change a device's lifecycle
-behind the registry's back, so Simlock would report the device as drifted on
-the next reconcile. Use `simlock release` (which reclaims the device for you)
-or `simlock cleanup` instead. Exit 2 with `USAGE`, and the message names the
-command to use.
+Refused, all exit 2 with `USAGE` and a message naming what to run instead:
+
+- `create`, `erase`, `delete` — they change a device's lifecycle behind the
+  registry's back, so Simlock would report the device as drifted on the next
+  reconcile. Use `simlock release` (which reclaims the device for you) or
+  `simlock cleanup`.
+- `shutdown all` — it stops every device in the set, for every agent, and each
+  interrupted lease spends its recovery budget rebooting; one that runs out
+  ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
+- `runtime delete` — it deletes a runtime shared with Xcode, and Simlock will
+  not download one back. Delete it through Xcode if that is what you mean.
+- `--set` and `--profiles`, in any spelling — `simlock simctl` supplies the
+  device set itself. A caller-supplied one would point simctl outside what
+  Simlock manages, and (because their value is a separate argument) would let
+  a refused verb read as an ordinary operand. Run `xcrun simctl` directly if
+  you mean to leave Simlock's set.
 
 ## `simlock adb <args...>`
 
@@ -254,10 +267,20 @@ simlock adb shell input tap 100 200
 simlock adb logcat -d
 ```
 
-Refused: `emu kill` and `kill-server`, for the same reason as above — the
-first stops a device Simlock believes is running, the second would detach
-every leased emulator at once. (Simlock's server rejects `kill-server`
-outright in any case.)
+Refused, all exit 2 with `USAGE` and a message naming what to run instead.
+Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
+`-P 1 kill-server` are caught too:
+
+- `kill-server` — it would detach every leased emulator at once. (Simlock's
+  server rejects `kill-server` outright in any case.)
+- `emu kill`, `emu avd stop` — they stop a device Simlock believes is
+  running, which reports as drift on the next reconcile.
+- `emu avd snapshot delete` — it destroys the clean-boot snapshot Simlock
+  restores from, turning every later reclaim of that device from a snapshot
+  load into a full wipe.
+
+Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
+instead.
 
 ## `simlock release <lease-id> | --all`
 

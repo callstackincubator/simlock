@@ -43,6 +43,14 @@ const COLD_BOOT_ESTIMATE_MS = 60_000;
 const ERASE_ESTIMATE_MS = 34_000;
 const MARK_FILE_NAME = "simlock-mark.json";
 /**
+ * The `simlock <tool>` wrapper this driver answers to. Published as a constant because a
+ * driver that refused to start has no instance to ask, and `DriverRejection` carries the
+ * name so `simlock simctl` can say why it is unavailable rather than reading as a missing
+ * SDK.
+ */
+export const IOS_PASSTHROUGH_TOOL = "simctl";
+
+/**
  * Verbs `simlock simctl` will not proxy. Every one of them changes a device's lifecycle,
  * which the registry -- not `simctl` -- is the record of: a device created here has no
  * registry entry and reads as an orphan, and one erased or deleted under a live lease
@@ -50,6 +58,29 @@ const MARK_FILE_NAME = "simlock-mark.json";
  * exactly the capability the device set exists to take away (ADR 0001, decision 7).
  */
 const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
+
+/**
+ * simctl's usage is `simctl [--set <path>] [--profiles <path>] <subcommand>`, so these are
+ * the only two globals whose value is a separate argv entry -- and a separated value is
+ * indistinguishable from a subcommand once it is in the array, which is how
+ * `--profiles /tmp erase all` used to read as the subcommand `/tmp` and slide past every
+ * refusal below. Refusing them is what makes "the first non-flag argument is the
+ * subcommand" true by construction rather than by pattern-matching. It is also right on
+ * its own terms: this wrapper exists to supply the device set, and a caller-supplied one
+ * would aim Simlock's own containment wherever it pointed.
+ */
+const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
+
+/**
+ * `shutdown all` is the iOS analogue of `adb kill-server`: it stops every device in the
+ * set, for every agent, and each affected lease then spends its recovery budget rebooting
+ * -- one that runs out ends as `lease_lost`. Shutting down a single device stays allowed.
+ */
+const SHUTDOWN_ALL_TARGET = "all";
+
+/** Every lifecycle refusal ends the same way: the Simlock command that does it safely. */
+const RECLAIM_INSTEAD =
+  "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
 
 interface IosDriverData {
   readonly deviceTypeId: string;
@@ -314,28 +345,74 @@ export class IosSimctlDriver implements Driver {
     return { SIMLOCK_IOS_DEVICE_SET: this.#deviceRoot };
   }
 
-  readonly passthroughTool = "simctl";
+  readonly passthroughTool = IOS_PASSTHROUGH_TOOL;
 
   /**
    * `xcrun simctl --set <root> <args...>`: the same insertion `#invokeSimctl` makes, for a
-   * command the caller runs itself. The refusal looks at the first argument that is not a
-   * flag, which is where a subcommand sits in every documented `simctl` invocation. That is
-   * an accident boundary and not a security one, exactly like the device set it guards
-   * (ADR 0001, "Not a security boundary"): someone who hand-writes a leading global flag
-   * that takes a value can slide a verb past it, and someone who wants to can simply run
-   * `xcrun simctl --set` themselves.
+   * command the caller runs itself. This is still an accident boundary and not a security
+   * one (ADR 0001, "Not a security boundary") -- someone who wants to can run
+   * `xcrun simctl --set` themselves -- but the wrapper must never be the thing that hands
+   * over the set path, so the two globals that could disguise a refused verb are refused
+   * before the verb is resolved at all.
    */
   passthrough(args: readonly string[]): PassthroughCommand {
-    const verb = args.find((argument) => !argument.startsWith("-"));
-    if (verb !== undefined && REFUSED_SIMCTL_VERBS.has(verb)) {
-      throw new PassthroughRefusedError(
-        this.passthroughTool,
-        `Refusing \`simlock simctl ${verb}\`: it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. Use \`simlock release\` (which reclaims the device for you) or \`simlock cleanup\` instead.`,
-      );
-    }
+    this.#assertProxyable(args);
     // No environment: on iOS the device set only ever reaches simctl on the command line
     // (ADR 0001 records that every candidate variable was tried and ignored).
     return { args: ["simctl", "--set", this.#deviceRoot, ...args], command: "xcrun", env: {} };
+  }
+
+  #assertProxyable(args: readonly string[]): void {
+    const [verb, ...operands] = this.#subcommand(args);
+    if (verb === undefined) return;
+    if (REFUSED_SIMCTL_VERBS.has(verb)) {
+      this.#refuse(
+        verb,
+        `it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. ${RECLAIM_INSTEAD}`,
+      );
+    }
+    if (verb === "shutdown" && operands.includes(SHUTDOWN_ALL_TARGET)) {
+      this.#refuse(
+        `shutdown ${SHUTDOWN_ALL_TARGET}`,
+        `it stops every device in Simlock's set at once -- every agent's, not just yours -- and each interrupted lease spends its recovery budget rebooting, so one that runs out ends as \`lease_lost\`. Shutting a single device down by udid is still allowed. ${RECLAIM_INSTEAD}`,
+      );
+    }
+    // A bare `simctl` reaches this too, so refusing it takes no capability away. The
+    // wrapper is advertised as the safe path, and being the convenient route to an
+    // unrecoverable multi-gigabyte deletion is not that.
+    if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
+      this.#refuse(
+        "runtime delete",
+        "it deletes a runtime shared with Xcode, and Simlock will not download one back (`--allow-download` cannot install iOS runtimes). Delete it through Xcode if that is really what you meant.",
+      );
+    }
+  }
+
+  #refuse(command: string, guidance: string): never {
+    throw new PassthroughRefusedError(
+      this.passthroughTool,
+      `Refusing \`simlock simctl ${command}\`: ${guidance}`,
+    );
+  }
+
+  /**
+   * The subcommand and its operands, refusing on the way anything that could be mistaken
+   * for a subcommand. A caller-supplied `--set`/`--profiles` (any spelling, `--set=<path>`
+   * included) is the only way a non-flag argument can precede the subcommand, so once
+   * those are gone the first non-flag argument *is* the subcommand.
+   */
+  #subcommand(args: readonly string[]): readonly string[] {
+    for (const [index, argument] of args.entries()) {
+      if (!argument.startsWith("-")) return args.slice(index);
+      const flag = /^-+([^=]*)/.exec(argument)?.[1];
+      if (flag !== undefined && CALLER_SUPPLIED_SCOPE_FLAGS.has(flag)) {
+        throw new PassthroughRefusedError(
+          this.passthroughTool,
+          `Refusing \`simlock simctl ${argument}\`: \`simlock simctl\` supplies the device set itself, and a caller-supplied \`--${flag}\` would point simctl somewhere Simlock does not manage. Drop the flag -- the command is already scoped -- or run \`xcrun simctl\` directly if you mean to leave Simlock's set.`,
+        );
+      }
+    }
+    return [];
   }
 
   /** CoreSimulator lays a set out as `<set>/<UDID>`, so no subprocess can tell us more. */

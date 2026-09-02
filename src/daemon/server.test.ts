@@ -901,6 +901,58 @@ describe("DaemonServer driver rejections", () => {
     expect(response.error?.message).toBe("No driver registered for platform: android");
   });
 
+  it("names the refusal when a passthrough asks for the tool whose driver did not start", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.adb-server-rejected",
+          passthroughTool: "adb",
+          payload: { port: 5038, reason: "occupied" },
+          platform: "android",
+          reason: "occupied",
+          summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("driver.passthrough", {
+      args: ["devices"],
+      tool: "adb",
+    });
+
+    // Unexplained, "No driver provides a adb passthrough" reads as "this host has no
+    // Android SDK" and sends the operator off to install one, while the summary naming the
+    // port conflict sits unread in `driverRejections` (safety rule 9).
+    expect(response.error?.code).toBe("BAD_REQUEST");
+    expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
+  });
+
+  it("leaves an unknown passthrough tool unexplained when no driver claimed it", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          passthroughTool: "simctl",
+          payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+          platform: "ios",
+          reason: "symlink",
+          summary: "Refusing the ios device root /Devices: it is a symlink",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("driver.passthrough", {
+      args: ["devices"],
+      tool: "adb",
+    });
+
+    expect(response.error?.message).toBe("No driver provides a adb passthrough");
+  });
+
   it("refuses at compile time to pair an event with another event's payload", () => {
     const rejection: DriverRejection = {
       event: "driver.adb-server-rejected",

@@ -692,7 +692,7 @@ describe("CLI boundary", () => {
     );
   });
 
-  it("prints nothing and succeeds when --export-env has no environment to export", async () => {
+  it("names the lease on stderr when --export-env has no environment to export", async () => {
     const output = outputCapture();
     const connection = new StubConnection();
     connection.response("lease.request", detachedGrant);
@@ -703,7 +703,31 @@ describe("CLI boundary", () => {
         output.environmentWith({ connect: async () => connection }),
       ),
     ).resolves.toBe(0);
+    // stdout stays empty so `eval "$(...)"` is unaffected, but the lease is committed and
+    // TTL-bound: a caller told nothing at all could neither renew nor release it.
     expect(output.stdout).toBe("");
+    expect(output.stderr).toContain(detachedGrant.lease.id);
+    expect(output.stderr).toContain("no environment");
+  });
+
+  it("fails loudly rather than exporting a key that would change what eval runs", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      ...detachedGrant,
+      // Not reachable through the shipped drivers, whose keys are literals -- but
+      // `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
+      environment: { "K=1; touch /tmp/probe/PWNED_KEY; X": "1" },
+    });
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
+        output.environmentWith({ connect: async () => connection }),
+      ),
+    ).resolves.toBe(1);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("PWNED_KEY");
   });
 
   it("keeps holding the lease after printing export lines in held mode", async () => {

@@ -411,18 +411,26 @@ export class DaemonServer {
   /**
    * A `NO_DRIVER` for a platform whose driver refused to start says nothing on its own:
    * it reads identically to "this host has no Xcode". Safety rule 9 promises Simlock
-   * reports *why* a platform is missing, and the lease path is where a user meets that
-   * failure, so the refusal's own one-liner travels with the error.
+   * reports *why* a platform is missing, so the refusal's own one-liner travels with the
+   * error on both paths a user meets it: leasing, and the `simlock simctl` / `simlock adb`
+   * wrapper, whose bare "No driver provides a adb passthrough" reads as a missing SDK and
+   * sends the operator off to install one instead of at the port conflict that caused it.
    */
   #describeError(error: unknown): string {
     const message = errorMessage(error);
-    if (!(error instanceof NoDriverError)) {
-      return message;
-    }
-    const rejection = (this.options.driverRejections ?? []).find(
-      (candidate) => candidate.platform === error.platform,
-    );
+    const rejection = this.#rejectionFor(error);
     return rejection === undefined ? message : `${message} (${rejection.summary})`;
+  }
+
+  #rejectionFor(error: unknown): DriverRejection | undefined {
+    const rejections = this.options.driverRejections ?? [];
+    if (error instanceof NoDriverError) {
+      return rejections.find((candidate) => candidate.platform === error.platform);
+    }
+    if (error instanceof UnknownPassthroughToolError) {
+      return rejections.find((candidate) => candidate.passthroughTool === error.tool);
+    }
+    return undefined;
   }
 
   async #handleHello(connection: Connection, frame: RequestFrame): Promise<void> {

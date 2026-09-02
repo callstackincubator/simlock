@@ -20,9 +20,10 @@ import {
 import {
   AdbServerUnavailableError,
   AndroidDriver,
+  ANDROID_PASSTHROUGH_TOOL,
   SdkMissingError,
 } from "../drivers/android/index.js";
-import { IosSimctlDriver } from "../drivers/ios/index.js";
+import { IOS_PASSTHROUGH_TOOL, IosSimctlDriver } from "../drivers/ios/index.js";
 import {
   CryptoIdGenerator,
   JsonLinesLogger,
@@ -306,7 +307,7 @@ async function discoverIosDriver(
       root: error.path,
       summary: error.message,
     });
-    return { rejection: rootRejection(error) };
+    return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOL) };
   }
 }
 
@@ -350,7 +351,7 @@ async function discoverAndroidDriver(
         root: error.path,
         summary: error.message,
       });
-      return { rejection: rootRejection(error) };
+      return { rejection: rootRejection(error, ANDROID_PASSTHROUGH_TOOL) };
     }
     if (error instanceof AdbServerUnavailableError) {
       logger.error("Skipped Android driver: adb server unavailable", {
@@ -368,6 +369,7 @@ async function discoverAndroidDriver(
 function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {
   return {
     event: "driver.adb-server-rejected",
+    passthroughTool: ANDROID_PASSTHROUGH_TOOL,
     payload: { port: error.port, reason: error.reason },
     platform: "android",
     reason: error.reason,
@@ -375,9 +377,15 @@ function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {
   };
 }
 
-function rootRejection(error: OwnedRootError): DriverRejection {
+/**
+ * The tool name is passed in rather than derived from `error.platform`: which wrapper a
+ * platform answers to is the driver module's business, and this file is the composition
+ * root that already knows both driver classes (architecture rule 2).
+ */
+function rootRejection(error: OwnedRootError, passthroughTool: string): DriverRejection {
   return {
     event: "driver.root-rejected",
+    passthroughTool,
     payload: { platform: error.platform, reason: error.reason, root: error.path },
     platform: error.platform,
     reason: error.reason,

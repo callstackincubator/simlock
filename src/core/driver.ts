@@ -223,6 +223,13 @@ interface DriverRefusal<Event extends DriverRejectionEvent> {
    * open. `doctor` reports it as the failing reason.
    */
   readonly reason: DriverRejectionReason;
+  /**
+   * The `simlock <tool>` wrapper this driver would have answered to, when it has one.
+   * Carried because a passthrough that finds no driver is otherwise indistinguishable
+   * from a host with no SDK, and safety rule 9 promises Simlock reports *why*. The core
+   * only compares it to the requested tool name; the name itself is the driver's.
+   */
+  readonly passthroughTool?: string;
   /** One line, for `doctor` output and the startup log. */
   readonly summary: string;
 }
