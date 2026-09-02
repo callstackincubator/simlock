@@ -46,6 +46,16 @@ describe("NodeTcpProbe", () => {
 
     await expect(new NodeTcpProbe().isListening(port)).resolves.toBe(false);
   });
+
+  it.each([-1, 0.5, 70_000])(
+    "reports a port nothing could listen on as free (%s)",
+    async (port) => {
+      // `createConnection` throws for these before a socket exists at all, and a probe that
+      // rejects instead of answering turns a misconfigured port into a daemon that cannot
+      // even report why it will not start.
+      await expect(new NodeTcpProbe().isListening(port)).resolves.toBe(false);
+    },
+  );
 });
 
 describe("FakeTcpProbe", () => {

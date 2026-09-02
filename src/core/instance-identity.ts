@@ -37,14 +37,31 @@ export async function loadInstanceId(options: InstanceIdentityOptions): Promise<
   }
 
   await options.filesystem.mkdirp(dirname(options.path));
-  await options.filesystem.writeFileAtomic(
-    options.path,
-    `${JSON.stringify({ instanceId: options.idGenerator.generate() }, null, 2)}\n`,
-  );
+  const generated = options.idGenerator.generate();
 
-  // Deliberately re-read rather than return what was just generated. Two daemons starting
-  // for the first time at once both write, and only one file survives; trusting the
-  // in-memory value would leave the loser marking roots with an id that is not on disk.
+  try {
+    // An exclusive create, never a plain write: checking that the file is absent and then
+    // writing it is a race two daemons starting at once do lose. The loser's write would
+    // land on top of an identity the winner had already stamped into its roots, and every
+    // one of them would read `wrong-instance` from then on. Here the kernel picks the
+    // winner and the loser is told so.
+    await options.filesystem.writeFileExclusive(options.path, serializeIdentity(generated));
+  } catch (error: unknown) {
+    if (!isExistingPathError(error)) {
+      throw new InstanceIdentityError(
+        `Cannot write the instance identity to ${options.path}: ${describe(error)}`,
+        options.path,
+      );
+    }
+
+    return requireWritten(options);
+  }
+
+  return generated;
+}
+
+/** The identity another process wrote first: this one adopts it rather than competing. */
+async function requireWritten(options: InstanceIdentityOptions): Promise<string> {
   const written = await readInstanceId(options);
   if (written === undefined) {
     throw new InstanceIdentityError(
@@ -60,14 +77,14 @@ export async function loadInstanceId(options: InstanceIdentityOptions): Promise<
 async function readInstanceId(options: InstanceIdentityOptions): Promise<string | undefined> {
   const { filesystem, path } = options;
 
-  if (!(await filesystem.exists(path))) {
-    return undefined;
-  }
-
   let contents: string;
   try {
     contents = await filesystem.readFile(path);
   } catch (error: unknown) {
+    if (isMissingPathError(error)) {
+      return undefined;
+    }
+
     throw new InstanceIdentityError(
       `Cannot read the instance identity at ${path}: ${describe(error)}`,
       path,
@@ -100,6 +117,22 @@ function parseInstanceId(contents: string, path: string): string {
   return instanceId;
 }
 
+function serializeIdentity(instanceId: string): string {
+  return `${JSON.stringify({ instanceId }, null, 2)}\n`;
+}
+
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return errorCode(error) === "ENOENT";
+}
+
+function isExistingPathError(error: unknown): boolean {
+  return errorCode(error) === "EEXIST";
+}
+
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }

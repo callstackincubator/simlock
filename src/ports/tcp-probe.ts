@@ -1,4 +1,4 @@
-import { createConnection } from "node:net";
+import { createConnection, type Socket } from "node:net";
 
 /**
  * Asks whether a loopback port is in use. Simlock needs this to decide whether the port
@@ -20,7 +20,19 @@ const DEFAULT_TIMEOUT_MS = 250;
 export class NodeTcpProbe implements TcpProbe {
   async isListening(port: number, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      const socket = createConnection({ host: "127.0.0.1", port });
+      let socket: Socket;
+      try {
+        socket = createConnection({ host: "127.0.0.1", port });
+      } catch {
+        // `createConnection` throws synchronously (`ERR_SOCKET_BAD_PORT`) for a port
+        // outside 0-65535 or one that is not an integer. That has to answer like every
+        // other failure here -- nothing is serving a port nothing can listen on -- or a
+        // misconfigured port number would reject out of a call whose whole contract is to
+        // report `true` or `false`.
+        resolve(false);
+        return;
+      }
+
       const settle = (listening: boolean): void => {
         socket.destroy();
         resolve(listening);

@@ -4,14 +4,21 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { type Filesystem, MemoryFilesystem, NodeFilesystem } from "../ports/index.js";
+import {
+  CryptoIdGenerator,
+  type Filesystem,
+  MemoryFilesystem,
+  NodeFilesystem,
+} from "../ports/index.js";
 import type { Platform } from "./domain.js";
 import { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./index.js";
 
 const instanceId = "instance-a";
-const root = "/home/agent/.simlock/devices/ios";
+const parent = "/home/agent/.simlock/devices";
+const root = `${parent}/ios`;
 const markerPath = `${root}/${OWNED_ROOT_MARKER_FILE}`;
 const uid = 501;
+const idGenerator = new CryptoIdGenerator();
 
 interface Overrides {
   readonly instanceId?: string;
@@ -26,6 +33,7 @@ function createFilesystem(): MemoryFilesystem {
 async function ensure(filesystem: Filesystem, overrides: Overrides = {}): Promise<string> {
   return ensureOwnedRoot({
     filesystem,
+    idGenerator,
     instanceId: overrides.instanceId ?? instanceId,
     path: overrides.path ?? root,
     platform: overrides.platform ?? "ios",
@@ -79,6 +87,33 @@ describe("ensureOwnedRoot", () => {
       instanceId,
       platform: "ios",
     });
+    // The root is assembled beside itself and published with one rename, so the only
+    // thing that may be left in the parent afterwards is the root.
+    await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
+  });
+
+  it("publishes a root and its marker in the same instant", async () => {
+    // A root that becomes visible before its marker does is refused for ever after by
+    // every later start, and a crash between the two steps makes that permanent.
+    const filesystem = new ObservingFilesystem(root, uid);
+
+    await ensure(filesystem);
+
+    expect(filesystem.rootContentsWhenItAppeared).toEqual([OWNED_ROOT_MARKER_FILE]);
+  });
+
+  it("leaves nothing at the root when it cannot finish creating one", async () => {
+    const filesystem = new FullDiskFilesystem(uid);
+
+    await expect(refusal(filesystem)).resolves.toBe("unreadable");
+    await expect(filesystem.exists(root)).resolves.toBe(false);
+    await expect(filesystem.readdir(parent)).resolves.toEqual([]);
+  });
+
+  it("refuses a root that was swapped between being created and being used", async () => {
+    const filesystem = new SwappedRootFilesystem(uid);
+
+    await expect(refusal(filesystem)).resolves.toBe("wrong-permissions");
   });
 
   it("gives a new root owner-only permissions even when the umask stripped them", async () => {
@@ -99,8 +134,10 @@ describe("ensureOwnedRoot", () => {
 
   it("reuses a root it already owns without rewriting its marker", async () => {
     const filesystem = createFilesystem();
-    await ensure(filesystem);
-    const original = await filesystem.readFile(markerPath);
+    // Bytes Simlock would never write itself: a marker in its own form could be rewritten
+    // byte for byte, since serialisation is deterministic, and this would notice nothing.
+    const original = `${JSON.stringify({ platform: "ios", instanceId, owner: "simlock", schemaVersion: 1, writtenBy: "0.1.0" })}\n`;
+    await seedRoot(filesystem, original);
 
     await expect(ensure(filesystem)).resolves.toBe(root);
     await expect(filesystem.readFile(markerPath)).resolves.toBe(original);
@@ -113,6 +150,49 @@ describe("ensureOwnedRoot", () => {
 
     await expect(ensure(filesystem)).resolves.toBe(root);
     await expect(filesystem.readFile(markerPath)).resolves.toBe(original);
+    await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
+  });
+
+  it.each([
+    ["a relative one", "devices/ios"],
+    ["one written against the home directory", "~/devices/ios"],
+    ["an empty one", ""],
+  ])(
+    "refuses %s rather than resolving it against whatever directory the daemon started in",
+    async (_case, path) => {
+      const filesystem = createFilesystem();
+
+      await expect(refusal(filesystem, { path })).resolves.toBe("not-absolute");
+    },
+  );
+
+  it("names the path it was given when refusing one that is not absolute", async () => {
+    const filesystem = createFilesystem();
+
+    await expect(ensure(filesystem, { path: "devices/ios" })).rejects.toMatchObject({
+      reason: "not-absolute",
+      path: "devices/ios",
+    });
+  });
+
+  it.each([
+    ["the root cannot be read", root],
+    ["its marker cannot be read", markerPath],
+  ])("refuses a root as unreadable when %s", async (_case, failingPath) => {
+    const filesystem = createFilesystem();
+    await seedRoot(filesystem);
+    filesystem.defineFailure(failingPath, "EACCES");
+
+    await expect(refusal(filesystem)).resolves.toBe("unreadable");
+  });
+
+  it("refuses a root whose parent cannot be created rather than failing the daemon", async () => {
+    // A `deviceRoot` of `<home>/notes.txt/ios` is a typo, not a reason to stop every
+    // driver: CP2 skips one platform on an OwnedRootError and dies on anything else.
+    const filesystem = createFilesystem();
+    filesystem.defineFailure(parent, "ENOTDIR");
+
+    await expect(refusal(filesystem)).resolves.toBe("unreadable");
   });
 
   it("refuses an empty root nobody marked", async () => {
@@ -169,7 +249,7 @@ describe("ensureOwnedRoot", () => {
     filesystem.defineAttributes(root, { uid: uid + 1 });
 
     await expect(
-      ensureOwnedRoot({ filesystem, instanceId, path: root, platform: "ios" }),
+      ensureOwnedRoot({ filesystem, idGenerator, instanceId, path: root, platform: "ios" }),
     ).resolves.toBe(root);
   });
 
@@ -187,6 +267,7 @@ describe("ensureOwnedRoot", () => {
     ["names another owner", marker({ owner: "somebody-else" })],
     ["names another platform", marker({ platform: "android" })],
     ["carries no instance id", marker({ instanceId: undefined })],
+    ["carries an empty instance id", marker({ instanceId: "" })],
     ["is not an object", JSON.stringify("simlock")],
   ])("refuses a root whose marker %s", async (_case, contents) => {
     const filesystem = createFilesystem();
@@ -243,14 +324,113 @@ describe("ensureOwnedRoot on a real filesystem", () => {
     await symlink(join(home, "real"), join(home, "link"));
     const path = join(home, "link", "ios");
 
-    const created = await ensureOwnedRoot({ filesystem, instanceId, path, platform: "ios" });
-    const revalidated = await ensureOwnedRoot({ filesystem, instanceId, path, platform: "ios" });
+    const created = await ensureOwnedRoot({
+      filesystem,
+      idGenerator,
+      instanceId,
+      path,
+      platform: "ios",
+    });
+    const revalidated = await ensureOwnedRoot({
+      filesystem,
+      idGenerator,
+      instanceId,
+      path,
+      platform: "ios",
+    });
 
     expect(created).toBe(path);
     expect(revalidated).toBe(path);
     expect(await filesystem.realpath(path)).not.toBe(path);
   });
+
+  it("gives every daemon racing to create one root the same root and marker", async () => {
+    // Three daemons starting at once on a fresh home, against a real kernel. Creating the
+    // root in place makes two of them refuse it -- the loser sees an unmarked directory,
+    // or the winner's half-written marker, and calls it somebody else's data.
+    const filesystem = new NodeFilesystem();
+    home = await mkdtemp(join(tmpdir(), "simlock-device-root-race-"));
+    const path = join(home, "devices", "ios");
+
+    const results = await Promise.allSettled(
+      [0, 1, 2].map(async () =>
+        ensureOwnedRoot({ filesystem, idGenerator, instanceId, path, platform: "ios" }),
+      ),
+    );
+
+    expect(
+      results.map((result) =>
+        result.status === "fulfilled" ? result.value : String(result.reason),
+      ),
+    ).toEqual([path, path, path]);
+    await expect(filesystem.readdir(path)).resolves.toEqual([OWNED_ROOT_MARKER_FILE]);
+    await expect(filesystem.readdir(join(home, "devices"))).resolves.toEqual(["ios"]);
+    await expect(
+      filesystem.readFile(join(path, OWNED_ROOT_MARKER_FILE)).then(JSON.parse),
+    ).resolves.toMatchObject({ instanceId, platform: "ios" });
+  });
 });
+
+/** Records what the root held the first moment it existed at all. */
+class ObservingFilesystem extends MemoryFilesystem {
+  rootContentsWhenItAppeared: readonly string[] | undefined;
+  readonly #root: string;
+
+  constructor(watched: string, owner: number) {
+    super(undefined, owner);
+    this.#root = watched;
+  }
+
+  async mkdir(path: string, options: { readonly mode?: number } = {}): Promise<void> {
+    await super.mkdir(path, options);
+    await this.#observe();
+  }
+
+  async writeFileAtomic(path: string, contents: string): Promise<void> {
+    await super.writeFileAtomic(path, contents);
+    await this.#observe();
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    await super.rename(from, to);
+    await this.#observe();
+  }
+
+  async #observe(): Promise<void> {
+    if (this.rootContentsWhenItAppeared === undefined && (await super.exists(this.#root))) {
+      this.rootContentsWhenItAppeared = await super.readdir(this.#root);
+    }
+  }
+}
+
+/** No room for the marker, so the create path has to unwind everything it built. */
+class FullDiskFilesystem extends MemoryFilesystem {
+  constructor(owner: number) {
+    super(undefined, owner);
+  }
+
+  async writeFileAtomic(path: string, contents: string): Promise<void> {
+    if (path.endsWith(OWNED_ROOT_MARKER_FILE)) {
+      const error: NodeJS.ErrnoException = new Error("No space left on device");
+      error.code = "ENOSPC";
+      throw error;
+    }
+
+    await super.writeFileAtomic(path, contents);
+  }
+}
+
+/** Something replaces the root in the instant between it being published and being used. */
+class SwappedRootFilesystem extends MemoryFilesystem {
+  constructor(owner: number) {
+    super(undefined, owner);
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    await super.rename(from, to);
+    this.defineAttributes(to, { mode: 0o777 });
+  }
+}
 
 /** `mkdir` under a restrictive umask: the mode is a request the umask subtracts from. */
 class UmaskedFilesystem extends MemoryFilesystem {

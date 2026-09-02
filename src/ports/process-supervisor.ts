@@ -14,25 +14,37 @@ export interface ProcessSupervisor {
 
 export class NodeProcessSupervisor implements ProcessSupervisor {
   isAlive(pid: number): boolean {
+    if (!isAddressablePid(pid)) {
+      return false;
+    }
+
     try {
       process.kill(pid, 0);
       return true;
-    } catch {
+    } catch (error: unknown) {
       // Both ESRCH (gone) and EPERM (alive, but another user's) answer "no" here, and
       // deliberately so: this port exists to decide whether a recorded pid is a process
       // this daemon can still reap. One it may not signal is not that, whatever it is --
       // and reporting it alive would leave the caller waiting on a kill that can never
-      // land.
-      return false;
+      // land. Anything else is a bug rather than an answer about a process, and reporting
+      // it as "not alive" would hide it behind a plausible-looking result.
+      if (isFailureWithCode(error, NOT_ALIVE_CODES)) {
+        return false;
+      }
+
+      throw error;
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- ProcessSupervisor contract; the reaping side of it.
   signal(pid: number, signal: NodeJS.Signals): void {
+    if (!isAddressablePid(pid)) {
+      return;
+    }
+
     try {
       process.kill(pid, signal);
     } catch (error: unknown) {
-      if (isNoSuchProcessError(error)) {
+      if (isFailureWithCode(error, NO_SUCH_PROCESS_CODES)) {
         return;
       }
 
@@ -79,6 +91,32 @@ export class FakeProcessSupervisor implements ProcessSupervisor {
   }
 }
 
-function isNoSuchProcessError(error: unknown): error is NodeJS.ErrnoException {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
+/** The pid is gone, or belongs to a user this process may not signal. */
+const NOT_ALIVE_CODES = new Set(["ESRCH", "EPERM"]);
+
+const NO_SUCH_PROCESS_CODES = new Set(["ESRCH"]);
+
+/** `process.kill` refuses anything outside a signed 32-bit integer with a `RangeError`. */
+const MAX_PID = 2 ** 31 - 1;
+
+/**
+ * Whether this number addresses one process at all. `process.kill` reads `0` as "every
+ * process in my group" and a negative pid as a whole group -- `-1` as every process this
+ * user may signal -- so a pid read back from a corrupt record on disk could turn a
+ * routine `SIGKILL` of a stale child into the end of the user's login session. Guarding
+ * here rather than in each caller is the point: this port is the primitive they all pass
+ * through (safety rule 1).
+ */
+function isAddressablePid(pid: number): boolean {
+  return Number.isInteger(pid) && pid > 0 && pid <= MAX_PID;
+}
+
+function isFailureWithCode(error: unknown, codes: ReadonlySet<string>): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    codes.has(error.code)
+  );
 }
