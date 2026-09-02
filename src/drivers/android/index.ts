@@ -23,6 +23,8 @@ import {
   type EnsureOwnedRootOptions,
   type LegacyDevice,
   OwnedRootError,
+  validateOwnedRoot,
+  type ValidateOwnedRootOptions,
 } from "../../core/index.js";
 import type {
   Clock,
@@ -83,6 +85,13 @@ const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // The slow branch is the one to quote: pricing the fast one would make every kept-warm reclaim
 // look stalled, while over-quoting only delays a finding.
 const WIPE_RECLAIM_ESTIMATE_MS = 32_000;
+// Lock files the emulator creates beside each AVD file it opens and removes when it exits.
+// `#isAvdRunning` reads them to tell a stopped pre-root AVD from one whose disk is live.
+const EMULATOR_LOCK_PATHS = [
+  "hardware-qemu.ini.lock",
+  "userdata-qemu.img.lock",
+  "multiinstance.lock",
+] as const;
 const CLEAN_BASELINE = "simlock_clean_baseline";
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
@@ -217,7 +226,7 @@ export class AndroidDriver implements Driver {
   readonly #filesystem: Filesystem;
   readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
-  readonly #legacyAvdHome: string;
+  readonly #legacyAvdHomes: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -225,14 +234,14 @@ export class AndroidDriver implements Driver {
   readonly #profiles = new Map<string, DeviceProfile>();
   readonly #readinessTimeoutMs: number;
   readonly #registrar: AdbRegistrar;
-  readonly #rootOptions: EnsureOwnedRootOptions;
+  readonly #rootOptions: ValidateOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
 
   private constructor(
     options: AndroidDriverOptions,
     sdk: AndroidSdkPaths,
     deviceRoot: string,
-    rootOptions: EnsureOwnedRootOptions,
+    rootOptions: ValidateOwnedRootOptions,
     adbServer: AdbServerSupervisor,
     adbServerPort: number,
   ) {
@@ -250,12 +259,19 @@ export class AndroidDriver implements Driver {
     this.#registrar = new AdbRegistrar({ serverPort: adbServerPort, tcp: options.tcpProbe });
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
-    // Where an AVD Simlock made before it owned a root still sits: the AVD home the user
-    // had configured then, or the SDK's own default. Read only by `findLegacy` /
-    // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
-    // because a stranded device cannot be found anywhere else (ADR 0001, Migration).
-    this.#legacyAvdHome =
-      options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
+    // Every AVD home an AVD Simlock made before it owned a root can still sit in: the one
+    // configured in this daemon's environment *and* the SDK's own default. Both, because
+    // `ANDROID_AVD_HOME` as it stands today says nothing about where an AVD was created
+    // before roots existed -- someone who made Simlock AVDs under `~/.android/avd` and later
+    // pointed the variable at their own volume would otherwise have those AVDs looked for in
+    // the wrong place, reported as merely missing, and their records marked deleted, leaving
+    // gigabytes with nothing left to name them (ADR 0001, Migration). The root itself is
+    // never one of them: an AVD there is not pre-root, it is simply gone, and it must never
+    // be answered through the unscoped path below. Read only by `listLegacy` /
+    // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here.
+    this.#legacyAvdHomes = [
+      ...new Set([options.env.ANDROID_AVD_HOME, join(options.homeDirectory, ".android", "avd")]),
+    ].filter((home): home is string => home !== undefined && home !== "" && home !== deviceRoot);
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
   }
 
@@ -317,62 +333,97 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * The same call `create` made, with the same arguments, because the proof *is* that call:
-   * a cheaper second check here would be a second validator, free to drift from the one
-   * every start is judged by. It is asked for immediately before Simlock destroys anything
-   * inside this root, since between then and startup the path can have become a symlink, or
-   * a `mv` can have left the user's own AVD home standing where this root was.
+   * The checks `create` made, minus the one thing a re-proof must never do: create. It is
+   * asked for immediately before Simlock destroys anything inside this root, since between
+   * then and startup the path can have become a symlink, or a `mv` can have left the user's
+   * own AVD home standing where this root was -- and a root that has simply gone (an
+   * `rm -rf`, an unmounted volume under a configured `deviceRoot`) refuses here rather than
+   * being rebuilt empty under a device list that describes what used to be in it.
    */
   async revalidateRoot(): Promise<void> {
-    await ensureOwnedRoot(this.#rootOptions);
+    await validateOwnedRoot(this.#rootOptions);
   }
 
   /**
-   * Looks for an AVD Simlock created before it owned a root, in the AVD home it would have
-   * used then. Reached only for a registry device this root no longer holds, and it only
-   * reads the filesystem. A legacy home that *is* the root means there is nothing pre-root
-   * about the device -- it is simply gone -- and must never be answered through the
-   * unscoped path below.
+   * Every AVD sitting in a pre-root AVD home, read straight off the filesystem and touched
+   * in no other way. Both homes are searched (see `#legacyAvdHomes`), and what comes back is
+   * candidates rather than findings: only the ones a registry record names ever reach a
+   * destroy, which is what keeps this registry-only destruction (safety rule 1) and not a
+   * claim over AVDs the user made themselves.
    */
-  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
-    if (this.#legacyAvdHome === this.#deviceRoot) {
-      return undefined;
+  async listLegacy(): Promise<readonly LegacyDevice[]> {
+    const legacy: LegacyDevice[] = [];
+    for (const home of this.#legacyAvdHomes) {
+      for (const avdName of await this.#listAvdNames(home)) {
+        legacy.push({
+          device: legacyAndroidDevice(avdName),
+          path: join(home, `${avdName}.avd`),
+        });
+      }
     }
-    const path = join(this.#legacyAvdHome, `${driverDeviceId}.avd`);
-    if (!(await this.#filesystem.exists(path))) {
-      return undefined;
-    }
-
-    return {
-      device: {
-        address: driverDeviceId,
-        deviceId: driverDeviceId,
-        // A stranded AVD has no console port and no serial: it is not running on Simlock's
-        // server, and it is not this driver's business to look for it on anyone else's.
-        driverData: {
-          avdName: driverDeviceId,
-          configHash: "",
-          port: 0,
-          serial: "",
-        } satisfies AndroidDriverData,
-      },
-      path,
-    };
+    return legacy;
   }
 
   /**
    * Deletes a pre-root AVD through the AVD home it actually lives in. Permitted despite
    * sitting outside this driver's root because the registry names it: registry-only
-   * destruction (safety rule 1) is satisfied by the record, not by the root. The
-   * environment points at the legacy home and deliberately not at Simlock's adb server --
-   * an AVD that is somehow still running is running on the user's, and stopping devices on
-   * a server Simlock does not own is not something this may do.
+   * destruction (safety rule 1) is satisfied by the record, not by the root. The environment
+   * points at that home and deliberately not at Simlock's adb server -- a pre-root emulator
+   * answers to the user's own server, which Simlock does not own and will not drive.
+   *
+   * Which is why a running one is refused outright instead. Not driving the user's server
+   * and deleting the AVD's files anyway is the worst of both: `avdmanager delete avd`
+   * unlinks the `.ini`, the userdata images and the snapshots from under a live qemu
+   * process. Refusing costs a person one `adb emu kill` and a re-run of `doctor --fix`;
+   * the alternative costs them a corrupted device they cannot report. iOS shuts its
+   * pre-root simulators down instead, and that asymmetry is deliberate -- there is one
+   * CoreSimulator service per user and Simlock is already talking to it, so stopping a
+   * simulator there uses no privilege the scoped path does not already have.
    */
   async destroyLegacy(device: DriverDevice): Promise<void> {
     const { avdName } = this.#dataFor(device);
+    const home = await this.#legacyHomeOf(avdName);
+    // Gone between the listing and the fix. Nothing to delete, and nothing wrong: the
+    // caller's next step -- recording the device missing -- is the right one either way.
+    if (home === undefined) return;
+
+    if (await this.#isAvdRunning(join(home, `${avdName}.avd`))) {
+      throw new DriverCrashError(
+        `Refusing to delete the pre-root AVD ${avdName} in ${home}: an emulator still holds its files (a \`.lock\` beside them says so). Stop it with \`adb emu kill\` on the machine's own adb server -- or, if nothing is running, remove the stale locks -- then run \`simlock doctor --fix\` again.`,
+      );
+    }
+
     await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", avdName], {
-      env: { ...this.#baseEnv, ANDROID_AVD_HOME: this.#legacyAvdHome },
+      env: { ...this.#baseEnv, ANDROID_AVD_HOME: home },
     });
+  }
+
+  /** The pre-root home that holds this AVD, or `undefined` when none of them does. */
+  async #legacyHomeOf(avdName: string): Promise<string | undefined> {
+    for (const home of this.#legacyAvdHomes) {
+      if (await this.#filesystem.exists(join(home, `${avdName}.avd`))) {
+        return home;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * True while an emulator holds the AVD's files open. The emulator locks each file it
+   * opens by creating `<file>.lock` beside it and removes them when it exits, so this
+   * answers the question without contacting an adb server -- the only one that could see a
+   * pre-root emulator is the user's, and asking it would both start one on their behalf
+   * (`adb devices` launches a server) and mean reaching for a device on a server Simlock
+   * does not own. A lock left behind by a crashed emulator refuses the delete too; that is
+   * the error worth making, and the refusal says what to remove.
+   */
+  async #isAvdRunning(avdPath: string): Promise<boolean> {
+    for (const lock of EMULATOR_LOCK_PATHS) {
+      if (await this.#filesystem.exists(join(avdPath, lock))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   leaseEnvironment(): Readonly<Record<string, string>> {
@@ -674,16 +725,67 @@ export class AndroidDriver implements Driver {
     });
   }
 
+  /**
+   * Stops whatever is running the AVD, then deletes it -- in that order, always.
+   *
+   * The address on `device` is not trusted to be there. An observed device carries none
+   * (`observedAndroidDevice` reports `port: 0`, `serial: ""`, because nothing addresses a
+   * device that is never granted), and `doctor --purge-orphans` destroys exactly those. On
+   * that evidence alone this used to skip the shutdown and go straight to `avdmanager delete
+   * avd`, unlinking the `.ini`, `config.ini`, userdata and snapshots from under a live qemu
+   * process -- and the AVD then being gone from the root, the surviving emulator could never
+   * be attributed to it again: invisible to Simlock forever, unreportable and unkillable,
+   * the permanent leak ADR 0001 exists to eliminate. So an address that is missing is looked
+   * up among the emulators actually running before anything is unlinked, and a device that
+   * will not stop fails the destroy rather than losing the AVD out from under it.
+   */
   async destroy(device: DriverDevice): Promise<void> {
     const data = this.#dataFor(device);
     await this.#withDeviceLock(data.avdName, async () => {
-      if (data.port > 0) {
-        await this.#shutdown(data, this.#stateFor(data));
+      const running = data.port > 0 ? data : await this.#runningEmulator(data.avdName);
+      if (running !== undefined) {
+        await this.#shutdown(running, this.#stateFor(running));
+        await this.#awaitEmulatorStopped(data.avdName, this.#clock.now());
       }
       await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
       this.#devices.delete(data.avdName);
-      this.#portAllocator.release(data.port);
+      this.#portAllocator.release(running?.port ?? data.port);
     });
+  }
+
+  /**
+   * The live console address of an AVD in this root, or `undefined` when nothing is running
+   * it. Membership in the root is checked first and the attribution is the same one
+   * `listManaged` makes: ownership is proven from where the AVD lives, never from which
+   * emulator happens to answer to a name (safety rule 8).
+   */
+  async #runningEmulator(avdName: string): Promise<AndroidDriverData | undefined> {
+    const avdNamesInRoot = new Set(await this.#listAvdNames());
+    if (!avdNamesInRoot.has(avdName)) {
+      return undefined;
+    }
+    const { settledSerials } = await this.#scanAdbSerials();
+    const { processes } = await this.#resolveRunningAvds(settledSerials, avdNamesInRoot);
+    const running = processes.find((candidate) => candidate.deviceId === avdName);
+    return running === undefined ? undefined : this.#dataFor(running);
+  }
+
+  /**
+   * Waits for a stopped emulator's transport to disappear. `emu kill` returns when the
+   * emulator acknowledges it, not when the process is gone, and an emulator this driver
+   * never spawned leaves no `ProcessHandle` to wait on -- so the transport going away is the
+   * only evidence available that the AVD's files have been released. Timing out throws:
+   * leaving an orphan reported is recoverable, deleting its disk while it runs is not.
+   */
+  async #awaitEmulatorStopped(avdName: string, startedAt: number): Promise<void> {
+    while ((await this.#runningEmulator(avdName)) !== undefined) {
+      if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
+        throw new DriverCrashError(
+          `Android emulator for ${avdName} is still attached after emu kill; refusing to delete an AVD a process is running against`,
+        );
+      }
+      await this.#delay(PORT_POLL_INTERVAL_MS);
+    }
   }
 
   async listManaged(): Promise<DriverReality> {
@@ -716,14 +818,16 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * Every AVD in the root, whatever it is called. The name is a cosmetic label with no
+   * Every AVD in a directory, whatever it is called. The name is a cosmetic label with no
    * authority: what makes these AVDs Simlock's is that they sit inside a root Simlock
-   * created empty and marked, which nothing else can put an AVD into (safety rule 8).
+   * created empty and marked, which nothing else can put an AVD into (safety rule 8) --
+   * which is also why `listLegacy`, the one caller that passes a directory that is *not*
+   * the root, produces candidates for the registry to confirm rather than owned devices.
    */
-  async #listAvdNames(): Promise<string[]> {
+  async #listAvdNames(directory: string = this.#deviceRoot): Promise<string[]> {
     const avdNames: string[] = [];
-    if (await this.#filesystem.exists(this.#deviceRoot)) {
-      for (const entry of await this.#filesystem.readdir(this.#deviceRoot)) {
+    if (await this.#filesystem.exists(directory)) {
+      for (const entry of await this.#filesystem.readdir(directory)) {
         const match = /^(.+)\.avd$/.exec(entry);
         if (match?.[1] === undefined) continue;
         avdNames.push(match[1]);
@@ -1503,13 +1607,33 @@ function serialFor(port: number): string {
   return `emulator-${port}`;
 }
 
+/**
+ * A pre-root AVD as a `DriverDevice`: named, and carrying no console port and no serial. It
+ * is not on Simlock's adb server, and finding it on the user's is not this driver's business
+ * -- which is why `destroyLegacy` refuses a running one rather than reaching for it.
+ */
+function legacyAndroidDevice(avdName: string): DriverDevice {
+  return {
+    address: avdName,
+    deviceId: avdName,
+    driverData: {
+      avdName,
+      configHash: "",
+      port: 0,
+      serial: "",
+    } satisfies AndroidDriverData,
+  };
+}
+
 function observedAndroidDevice(
   avdName: string,
   runningByAvdName: ReadonlySet<string>,
   unattributableTransitionalSerial: boolean,
 ): ObservedDevice {
   return {
-    // Reconnaissance only: an observed device is never granted, so it carries no usable address.
+    // Reconnaissance only: an observed device is never granted, so it carries no usable
+    // address. Anything that acts on one has to resolve the address itself -- see `destroy`,
+    // which is handed exactly these by `doctor --purge-orphans`.
     address: "",
     deviceId: avdName,
     driverData: {

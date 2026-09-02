@@ -144,9 +144,12 @@ a claim over devices that were never Simlock's.
 
 **Fix, and the deliberate half-measure in it:** destroying re-proves the root
 and reporting does not. `doctor --purge-orphans` calls `Driver.revalidateRoot()`
-— the same validation `create` was judged by, with the same arguments —
-immediately before its first destroy, and abandons the whole purge if any root
-refuses. Nothing else does, and that asymmetry is the point: a stale proof
+— the checks `create` was judged by, with the same arguments, minus the one
+thing a re-proof must never do: create. A root that is simply gone (an `rm -rf`,
+an unmounted volume under a configured `deviceRoot`) refuses here rather than
+being rebuilt empty under a device list describing what used to be in it. It
+runs immediately before the first destroy, and abandons the whole purge if any
+root refuses. Nothing else does, and that asymmetry is the point: a stale proof
 behind a *report* costs a confusing `doctor` run, while a stale proof behind a
 `destroy` costs the user their devices. Re-validating on every reconcile tick,
 or before every `listManaged`, would buy nothing for the case that matters and

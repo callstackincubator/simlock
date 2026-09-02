@@ -1496,9 +1496,219 @@ describe("Doctor with a platform it cannot observe", () => {
     expect(registry.snapshot.devices[0]?.state).toBe("leased");
   });
 
+  it("re-proves every root a purge reaches into, not only the first", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadRegistry(clock, eventBus);
+    const iosDriver = new FakeDriver({ clock, platform: "ios" });
+    iosDriver.setManagedReality({ devices: [observed("ios-orphan", "stopped")], processes: [] });
+    const androidDriver = new FakeDriver({ clock, platform: "android" });
+    androidDriver.setManagedReality({
+      devices: [observed("android-orphan", "stopped")],
+      processes: [],
+    });
+
+    await new Doctor({
+      clock,
+      config: config(),
+      drivers: [iosDriver, androidDriver],
+      eventBus,
+      registry,
+    }).reconcile({ purgeOrphans: true });
+
+    // Each root authorises destroying inside itself and nothing else, so a re-proof that
+    // stopped at the first platform would be destroying in the others on nobody's proof.
+    for (const driver of [iosDriver, androidDriver]) {
+      expect(driver.calls.map((call) => call.operation)).toEqual([
+        "listManaged",
+        "revalidateRoot",
+        "destroy",
+      ]);
+    }
+  });
+
+  it("purges an orphan through the process entry that carries its address", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadRegistry(clock, eventBus);
+    const driver = new FakeDriver({ clock, platform: "android" });
+    driver.setManagedReality({
+      // What a real driver reports: the device entry is reconnaissance and carries no usable
+      // address, while the process entry beside it is the emulator actually running.
+      devices: [{ address: "", deviceId: "orphan-1", driverData: {}, runState: "running" }],
+      processes: [{ address: "emulator-5586", deviceId: "orphan-1", driverData: {} }],
+    });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile({ purgeOrphans: true });
+
+    // Destroying through the addressless entry is what let a driver skip the shutdown and
+    // unlink an AVD's files from under a live process -- after which nothing could attribute
+    // the survivor to anything ever again.
+    expect(driver.calls.find((call) => call.operation === "destroy")?.arguments[0]).toMatchObject({
+      address: "emulator-5586",
+    });
+    expect(report.findings).toEqual([]);
+  });
+
+  it("spares an orphan that acquired a registry record while the run was working", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadRegistry(clock, eventBus);
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setManagedReality({ devices: [observed("racing", "stopped")], processes: [] });
+    // The re-proof is the last thing before the first destroy, so this stands in for a
+    // provision that committed while the run was busy listing and fixing.
+    vi.spyOn(driver, "revalidateRoot").mockImplementation(async () => {
+      await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "racing",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+    });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile({ purgeOrphans: true });
+
+    // What ADR 0001 accepts is that a device between `provision` and `registerDevice` cannot
+    // be told from a leak *at the instant of the destroy* -- not on a snapshot read minutes
+    // earlier, before every `listManaged`, every pre-root lookup and all of `--fix`.
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toEqual([]);
+    expect(report.findings.map((finding) => finding.kind)).toEqual(["orphan-device"]);
+  });
+
+  it("looks outside the root once per driver, however many of its devices are missing", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadRegistry(clock, eventBus);
+    await readyDevice(registry, "stranded-1", "ios");
+    await readyDevice(registry, "stranded-2", "ios");
+    const driver = new FakeDriver({
+      clock,
+      legacyDevices: {
+        "stranded-1": { device: driverDevice("stranded-1") },
+        "stranded-2": { device: driverDevice("stranded-2") },
+      },
+      platform: "ios",
+    });
+    driver.setManagedReality({ devices: [], processes: [] });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    // The lookup is a subprocess per call (iOS runs a full unscoped `simctl list`), it is
+    // the same answer every time, and it runs inside the converge that parks every request
+    // -- so one per driver, not one per device.
+    expect(driver.calls.filter((call) => call.operation === "listLegacy")).toHaveLength(1);
+    expect(report.findings.map((finding) => finding.kind)).toEqual([
+      "legacy-device",
+      "legacy-device",
+    ]);
+  });
+
+  it("says which device it destroyed outside the root, and where", async () => {
+    const { clock, driver, eventBus, registry } = await legacyDeviceSetup();
+
+    await new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry }).reconcile({
+      fix: true,
+    });
+
+    // The only destruction Simlock performs outside an owned root. Without its own event the
+    // sole trace would be a `device.deleted` identical to a registry-only fix's, and safety
+    // rule 6 asks every destructive action to be attributable.
+    expect(eventBus.replay()).toContainEqual(
+      expect.objectContaining({
+        event: "device.legacy-destroyed",
+        payload: {
+          deviceId: registry.snapshot.devices[0]?.id,
+          driverDeviceId: "stranded",
+          path: "/Library/Devices/stranded",
+          platform: "ios",
+        },
+      }),
+    );
+  });
+
+  it("never destroys a legacy device whose record still says leased", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const filesystem = new MemoryFilesystem();
+    // A device recorded `leased` with no lease row -- the case `#fixForeignStateChange`
+    // already documents. There it costs a skipped transition; here the lease-table guard
+    // alone would let an unscoped delete through against a device someone may be holding.
+    await filesystem.writeFileAtomic(
+      "/state.json",
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 1,
+            driverData: {},
+            driverDeviceId: "stranded",
+            id: "dev_1",
+            spec: { model: "Phone", osVersion: "1", platform: "ios" },
+            state: "leased",
+          },
+        ],
+        leases: [],
+      }),
+    );
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem,
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+    const driver = new FakeDriver({
+      clock,
+      legacyDevices: { stranded: { device: driverDevice("stranded") } },
+      platform: "ios",
+    });
+    driver.setManagedReality({ devices: [], processes: [] });
+
+    await new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry }).reconcile({
+      fix: true,
+    });
+
+    expect(driver.calls.filter((call) => call.operation === "destroyLegacy")).toEqual([]);
+    expect(registry.snapshot.devices[0]?.state).toBe("leased");
+  });
+
+  it("keeps the record of a legacy device whose destroy failed", async () => {
+    const { clock, driver, eventBus, registry } = await legacyDeviceSetup();
+    driver.failOn("destroyLegacy", 1, new Error("avdmanager delete failed"));
+
+    await new Doctor({ clock, config: config(), drivers: [driver], eventBus, registry }).reconcile({
+      fix: true,
+    });
+
+    // The order is load-bearing: marking the record first would strand the device, because
+    // the record is the only thing that names its old location at all.
+    expect(registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(eventBus.replay().some((event) => event.event === "device.legacy-destroyed")).toBe(
+      false,
+    );
+  });
+
   it("reports a missing device as missing when the legacy lookup itself fails", async () => {
     const { clock, driver, eventBus, registry } = await legacyDeviceSetup();
-    driver.failOn("findLegacy", 1, new Error("simctl list failed"));
+    driver.failOn("listLegacy", 1, new Error("simctl list failed"));
 
     const report = await new Doctor({
       clock,

@@ -26,7 +26,7 @@ export type FakeDriverOperation =
   | "listCatalog"
   /** Recorded like every other call, so a test can pin that it precedes the first destroy. */
   | "revalidateRoot"
-  | "findLegacy"
+  | "listLegacy"
   | "destroyLegacy";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
@@ -65,9 +65,9 @@ export interface FakeDriverOptions {
   readonly passthrough?: (args: readonly string[]) => PassthroughCommand;
   readonly platform: Platform;
   /**
-   * What this driver claims to find outside its root for a given device id, keyed by
-   * `driverDeviceId`. Empty by default: a driver that has never had a pre-root life finds
-   * nothing, which is what keeps every other test's missing device simply missing.
+   * What this driver claims to find outside its root, keyed by `driverDeviceId`. Empty by
+   * default: a driver that has never had a pre-root life finds nothing, which is what keeps
+   * every other test's missing device simply missing.
    */
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
   readonly reclaimResult?: "ready" | "shutdown";
@@ -138,9 +138,9 @@ export class FakeDriver implements Driver {
     await this.#beforeCall("revalidateRoot");
   }
 
-  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
-    await this.#beforeCall("findLegacy", driverDeviceId);
-    return this.#legacyDevices.get(driverDeviceId);
+  async listLegacy(): Promise<readonly LegacyDevice[]> {
+    await this.#beforeCall("listLegacy");
+    return [...this.#legacyDevices.values()];
   }
 
   async destroyLegacy(device: DriverDevice): Promise<void> {

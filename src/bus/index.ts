@@ -89,6 +89,14 @@ export interface EventMap {
     readonly platform: string;
     readonly deviceRoot: string;
   };
+  /** The one destruction outside an owned root, so it is named apart from `device.deleted`. */
+  "device.legacy-destroyed": {
+    readonly deviceId: string;
+    readonly driverDeviceId: string;
+    readonly platform: string;
+    /** Where the driver found it, when its tooling says; absent when it does not. */
+    readonly path?: string;
+  };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };

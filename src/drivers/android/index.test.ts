@@ -1211,16 +1211,107 @@ describe("AndroidDriver pre-root devices", () => {
     });
   });
 
+  it("refuses to re-prove a root that has been removed since startup", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    await filesystem.rm(avdDirectory);
+
+    // The failure that most obviously invalidates a device list already in hand -- an
+    // `rm -rf`, an unmounted volume under a configured `deviceRoot`. Re-creating the root
+    // here would report success and let a purge run against a list of devices that are not
+    // there, so the re-proof refuses and creates nothing.
+    await expect(driver.revalidateRoot()).rejects.toMatchObject({
+      name: "OwnedRootError",
+      reason: "missing-marker",
+    });
+    await expect(filesystem.exists(avdDirectory)).resolves.toBe(false);
+  });
+
+  it("stops the emulator it finds running before deleting an AVD handed to it addressless", async () => {
+    const filesystem = await androidFilesystem({ config: "hw.ramSize=2048\n" });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
+      processResult(
+        binaries.adb,
+        [
+          "-s",
+          "emulator-5586",
+          "shell",
+          `getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true`,
+        ],
+        "simlock_one\n",
+      ),
+      processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_one"]),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    // Exactly what `doctor --purge-orphans` hands over: an observed device carries no port
+    // and no serial, because nothing addresses a device that is never granted. Deleting on
+    // that evidence alone unlinks the `.ini`, userdata and snapshots from under a live qemu
+    // process, and the AVD then being gone from the root, nothing could ever attribute the
+    // surviving emulator to it again.
+    await driver.destroy({
+      address: "",
+      deviceId: "simlock_one",
+      driverData: {
+        avdName: "simlock_one",
+        configHash: "recovered",
+        imageIdentity: "",
+        port: 0,
+        serial: "",
+      },
+    });
+
+    expect(runner.calls.map((call) => call.args)).toContainEqual([
+      "-s",
+      "emulator-5586",
+      "emu",
+      "kill",
+    ]);
+    expect(runner.calls.at(-1)?.args).toEqual(["delete", "avd", "-n", "simlock_one"]);
+  });
+
   it("finds an AVD stranded in the pre-root AVD home", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.mkdirp(`${home}/.android/avd/simlock_old.avd`);
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
-    await expect(driver.findLegacy("simlock_old")).resolves.toMatchObject({
-      device: { deviceId: "simlock_old" },
-      path: `${home}/.android/avd/simlock_old.avd`,
+    await expect(driver.listLegacy()).resolves.toEqual([
+      {
+        device: expect.objectContaining({ deviceId: "simlock_old" }),
+        path: `${home}/.android/avd/simlock_old.avd`,
+      },
+    ]);
+  });
+
+  it("searches the SDK's default AVD home as well as the configured one", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${home}/.android/avd/simlock_default_home.avd`);
+    await filesystem.mkdirp("/volumes/avds/simlock_configured_home.avd");
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]), {
+      env: { ANDROID_AVD_HOME: "/volumes/avds", ANDROID_HOME: sdk },
     });
-    await expect(driver.findLegacy("simlock_never_existed")).resolves.toBeUndefined();
+
+    // `ANDROID_AVD_HOME` as it stands today says nothing about where an AVD was created
+    // before roots existed: someone who set it after Simlock had already made AVDs under
+    // `~/.android/avd` would otherwise have those reported as merely missing, their records
+    // marked deleted, and gigabytes stranded with nothing left to name them.
+    await expect(driver.listLegacy()).resolves.toEqual([
+      expect.objectContaining({ path: "/volumes/avds/simlock_configured_home.avd" }),
+      expect.objectContaining({ path: `${home}/.android/avd/simlock_default_home.avd` }),
+    ]);
+  });
+
+  it("never reports an AVD inside its own root as a pre-root device", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/simlock_current.avd`);
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]), {
+      env: { ANDROID_AVD_HOME: avdDirectory, ANDROID_HOME: sdk },
+    });
+
+    await expect(driver.listLegacy()).resolves.toEqual([]);
   });
 
   it("deletes a stranded AVD against the legacy AVD home, not Simlock's root", async () => {
@@ -1230,7 +1321,7 @@ describe("AndroidDriver pre-root devices", () => {
       processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
     ]);
     const driver = await createDriver(filesystem, runner);
-    const legacy = await driver.findLegacy("simlock_old");
+    const [legacy] = await driver.listLegacy();
 
     await driver.destroyLegacy(legacy!.device);
 
@@ -1241,6 +1332,20 @@ describe("AndroidDriver pre-root devices", () => {
       ANDROID_AVD_HOME: `${home}/.android/avd`,
       ANDROID_HOME: sdk,
     });
+  });
+
+  it("refuses to delete a stranded AVD an emulator is still running against", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${home}/.android/avd/simlock_old.avd/hardware-qemu.ini.lock`);
+    const runner = new ScriptedProcessRunner([]);
+    const driver = await createDriver(filesystem, runner);
+    const [legacy] = await driver.listLegacy();
+
+    // Refusing to stop it on the user's adb server and unlinking its files anyway is
+    // strictly worse than either: `avdmanager delete avd` would take the `.ini`, the
+    // userdata images and the snapshots out from under a live qemu process.
+    await expect(driver.destroyLegacy(legacy!.device)).rejects.toThrow(/still holds its files/);
+    expect(runner.calls).toEqual([]);
   });
 });
 
@@ -1407,6 +1512,7 @@ async function createDriver(
   options: {
     readonly clock?: FakeClock;
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
+    readonly env?: Readonly<Record<string, string | undefined>>;
     readonly ids?: readonly string[];
     readonly readinessTimeoutMs?: number;
     readonly tcpProbe?: FakeTcpProbe;
@@ -1422,7 +1528,7 @@ async function createDriver(
   return AndroidDriver.create({
     clock: options.clock ?? new FakeClock(),
     driverConfig,
-    env: { ANDROID_HOME: sdk },
+    env: options.env ?? { ANDROID_HOME: sdk },
     filesystem,
     homeDirectory: home,
     hostAbi: "arm64-v8a",

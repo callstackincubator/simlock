@@ -168,12 +168,19 @@ export interface Driver {
    */
   passthrough?(args: readonly string[]): PassthroughCommand;
   /**
-   * Looks for a registry device in the location this platform used before Simlock owned a
-   * root, and reports it without touching it. Optional: a driver with no pre-root history
-   * has nothing to find. The core only ever asks about a device the root itself no longer
-   * holds, so a "yes" here is what separates "stranded by the migration" from "gone".
+   * Everything this platform can see in the locations it used before Simlock owned a root,
+   * reported without touching any of it. Optional: a driver with no pre-root history has
+   * nothing to find.
+   *
+   * A whole listing rather than a per-device lookup, because the platform tools answer it
+   * that way: iOS pays a full unscoped `simctl list` per call, so a lookup per missing
+   * device meant N identical 30s-timeout listings, serially, inside the startup converge
+   * that parks every request -- and on the first start after roots ship *every* pre-existing
+   * device is missing by construction. Nothing here is a finding on its own: the core keeps
+   * only the entries a registry record names, which is what makes reaching outside the root
+   * registry-only destruction (safety rule 1) rather than a claim over the user's devices.
    */
-  findLegacy?(driverDeviceId: string): Promise<LegacyDevice | undefined>;
+  listLegacy?(): Promise<readonly LegacyDevice[]>;
   /**
    * Destroys such a device through the old, unscoped path it actually lives on. This is
    * the only Simlock call that reaches outside an owned root, and it is permitted because

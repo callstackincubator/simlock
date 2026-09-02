@@ -40,6 +40,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.recovered` | device id, lease id, attempts, duration | a crashed leased device was rebooted under its existing lease and passed readiness | LeaseHealthMonitor | implemented |
 | `device.recovery-failed` | device id, lease id, attempts, reason, error | recovery could not restore a leased device (absent from driver reality, provenance drift, or attempts exhausted) and its lease was released | LeaseHealthMonitor | implemented |
 | `device.orphan-purged` | driver device id, platform, device root | `simlock doctor --purge-orphans` destroyed a device that sat inside a validly-marked Simlock device root with no registry record — see [ADR 0001](adr/0001-simlock-owned-device-roots.md) | Doctor | implemented |
+| `device.legacy-destroyed` | device id, driver device id, platform, path (when the platform tooling reports one) | `simlock doctor --fix` destroyed a registry device that outlived the move to owned roots, through the pre-root location it still sat in — the only destruction Simlock performs outside an owned root, named apart from the `device.deleted` that follows it so it is attributable (safety rule 6) | Doctor | implemented |
 
 ## System
 

@@ -44,10 +44,8 @@ export class OwnedRootError extends Error {
   }
 }
 
-export interface EnsureOwnedRootOptions {
+export interface ValidateOwnedRootOptions {
   readonly filesystem: Filesystem;
-  /** Names the staging directory a root is assembled in, so two racing daemons never share one. */
-  readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly path: string;
   readonly platform: Platform;
@@ -55,7 +53,14 @@ export interface EnsureOwnedRootOptions {
   readonly uid?: number;
 }
 
-type RootContext = Omit<EnsureOwnedRootOptions, "path"> & { readonly root: string };
+export interface EnsureOwnedRootOptions extends ValidateOwnedRootOptions {
+  /** Names the staging directory a root is assembled in, so two racing daemons never share one. */
+  readonly idGenerator: IdGenerator;
+}
+
+type RootContext = Omit<ValidateOwnedRootOptions, "path"> & { readonly root: string };
+
+type CreateContext = RootContext & { readonly idGenerator: IdGenerator };
 
 /**
  * Establishes that `path` is a device root this Simlock instance owns, creating it when
@@ -70,21 +75,7 @@ type RootContext = Omit<EnsureOwnedRootOptions, "path"> & { readonly root: strin
  * skips a single platform on this error and stops the whole daemon on any other.
  */
 export async function ensureOwnedRoot(options: EnsureOwnedRootOptions): Promise<string> {
-  if (!isAbsolute(options.path)) {
-    // `resolve` would make one up: a relative path lands wherever the process that
-    // launched the daemon happened to be standing, which for an auto-launched daemon is
-    // some agent's working directory rather than a place anyone chose to put tens of
-    // gigabytes of device data -- and in CP5 it is what `--purge-orphans` is aimed at.
-    // An empty path is not absolute either, so this covers it too.
-    throw refusal(
-      options.platform,
-      options.path,
-      "not-absolute",
-      "a device root has to be an absolute path, or it names a different directory to every process that reads the configuration",
-    );
-  }
-
-  const context: RootContext = { ...options, root: resolve(options.path) };
+  const context: CreateContext = { ...rootContext(options), idGenerator: options.idGenerator };
 
   if (await createRoot(context)) {
     // A root is never trusted on the strength of "we think we just made it": the checks
@@ -96,6 +87,42 @@ export async function ensureOwnedRoot(options: EnsureOwnedRootOptions): Promise<
 
   await validateExistingRoot(context);
   return context.root;
+}
+
+/**
+ * The same proof as `ensureOwnedRoot` with the creating half removed: it answers whether the
+ * root that is there right now still belongs to this instance, and never puts one there.
+ *
+ * This is what a re-proof has to be. `ensureOwnedRoot` treats "nothing is there" as the first
+ * start of a fresh root, which is correct at startup and exactly wrong afterwards: the failure
+ * that most obviously invalidates a device list already in hand -- an `rm -rf`, an unmounted
+ * volume under a `deviceRoot` pointed at external storage -- would silently build an empty
+ * root, report success, and let a purge proceed against a list describing a directory that is
+ * no longer there. A read-only check must also stay read-only: nothing here writes, `mkdirp`s
+ * a parent, or chmods anything.
+ */
+export async function validateOwnedRoot(options: ValidateOwnedRootOptions): Promise<string> {
+  const context = rootContext(options);
+  await validateExistingRoot(context);
+  return context.root;
+}
+
+function rootContext(options: ValidateOwnedRootOptions): RootContext {
+  if (!isAbsolute(options.path)) {
+    // `resolve` would make one up: a relative path lands wherever the process that
+    // launched the daemon happened to be standing, which for an auto-launched daemon is
+    // some agent's working directory rather than a place anyone chose to put tens of
+    // gigabytes of device data -- and it is what `--purge-orphans` is aimed at.
+    // An empty path is not absolute either, so this covers it too.
+    throw refusal(
+      options.platform,
+      options.path,
+      "not-absolute",
+      "a device root has to be an absolute path, or it names a different directory to every process that reads the configuration",
+    );
+  }
+
+  return { ...options, root: resolve(options.path) };
 }
 
 /**
@@ -115,7 +142,7 @@ export async function ensureOwnedRoot(options: EnsureOwnedRootOptions): Promise<
  * steps, and the alternatives (a Linux-only `renameat2`, or a lock file that becomes its
  * own stale-state problem) are worse.
  */
-async function createRoot(context: RootContext): Promise<boolean> {
+async function createRoot(context: CreateContext): Promise<boolean> {
   const { filesystem, root } = context;
 
   if ((await pathDetails(context, root, "it")) !== undefined) {
@@ -175,10 +202,16 @@ async function validateRootDirectory(context: RootContext): Promise<void> {
   const details = await pathDetails(context, root, "it");
 
   if (details === undefined) {
-    // The root existed a moment ago (that is why creation stood down, or the rename that
-    // published it succeeded) and is gone now. Creating it here would be the second
-    // attempt this function promises never to make.
-    throw rejected(context, "missing-marker", "it disappeared while it was being validated");
+    // Nothing is there. On the creating path the root existed a moment ago (that is why
+    // creation stood down, or the rename that published it succeeded) and has gone since;
+    // on the re-proof path it may have been removed or unmounted while the daemon held a
+    // device list from it. Either way validation never creates, and an absent root proves
+    // nothing about the devices something is about to act on.
+    throw rejected(
+      context,
+      "missing-marker",
+      "there is nothing at that path, and validation never creates a root",
+    );
   }
 
   if (details.kind === "symlink") {

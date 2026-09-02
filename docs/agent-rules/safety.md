@@ -43,7 +43,8 @@ never enforce them only inside an individual rule or driver.
 4. **No implicit multi-GB downloads.** Missing runtimes / system images fail
    the request unless `--allow-download` was explicitly passed.
 5. **Destructive CLI commands confirm or require `--yes`**
-   (`release --all`, `nuke`). `cleanup` must always support `--dry-run`.
+   (`release --all`, `nuke`, `doctor --purge-orphans`). `cleanup` must always
+   support `--dry-run`.
 6. **Every destructive action is attributable.** Log/emit which rule or
    command caused it, on what target, and why (e.g. "idle 47m > T2=30m").
 7. **Reconcile before trusting state.** On daemon startup (and in `doctor`),

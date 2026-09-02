@@ -231,7 +231,8 @@ describe("doctor and drift", () => {
     const purged = await env.cli(["doctor", "--purge-orphans", "--yes"]);
     expect(purged.code).toBe(0);
 
-    // Both findings go: destroying the device covers the process it was running.
+    // Both findings go, and only because the destroy was handed the process entry: that is
+    // what lets a driver stop the process before it unlinks the device underneath it.
     expect((purged.json as { findings: Finding[] }).findings).toEqual([]);
     const operations = (await env.driverLog.calls())
       .map((call) => call.operation)

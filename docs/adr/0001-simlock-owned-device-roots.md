@@ -388,6 +388,31 @@ live in the old locations become a typed `doctor` finding whose fix destroys
 them through their recorded old path — permitted under registry-only
 destruction, since they are in the registry. Users re-provision.
 
+**Correction (implementation, 2026-09-02).** There is no recorded old path.
+`DeviceRecord` carries a driver device id and no location, and adding one would
+not help: the records that need migrating were written before roots existed, by
+a version that had nothing to record. Each driver therefore *searches* the
+locations its platform could have used and matches by driver device id — iOS
+one unscoped `simctl list` over the default device set, Android a scan of both
+the AVD home `ANDROID_AVD_HOME` names now and the SDK's default `~/.android/avd`.
+Both, on Android, because the live environment says nothing about where an AVD
+was created: someone who made Simlock AVDs under the default home and later
+pointed the variable at another volume would otherwise have them looked for in
+the wrong place, reported as merely missing, and their records marked deleted —
+gigabytes stranded with nothing left to name them, produced by the migration
+path meant to prevent exactly that. A listing is not a claim: only entries a
+registry record names are ever destroyed, which is what keeps this within
+registry-only destruction.
+
+Destroying one still means reaching outside an owned root, so it is the one
+place that does, it emits `device.legacy-destroyed` to say so, and it is
+refused for a device the registry believes is leased. On Android it is also
+refused while an emulator is running against the AVD: those emulators answer to
+the user's own adb server, which Simlock does not drive, and refusing to stop a
+device while deleting its disk anyway is worse than either stopping it or
+leaving it alone. iOS shuts its pre-root simulators down first instead — there
+is one CoreSimulator service per user and Simlock is already talking to it.
+
 **Not a security boundary.** Restated because it will be misread otherwise: a
 user who deliberately passes `--set <path>` or raises
 `ADB_LOCAL_TRANSPORT_MAX_PORT` can still reach these devices. This ADR

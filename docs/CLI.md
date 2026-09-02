@@ -383,19 +383,27 @@ each rule *would* take (rule name, target, reason) without executing.
 
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries
-whose device vanished, devices booted outside simlock, expired-but-held
-leases, devices stuck mid-transition, and orphans. `--fix` applies the safe
-corrections.
+whose device vanished, registry devices left behind in the pre-device-root
+locations, devices booted outside simlock, expired-but-held leases, devices
+stuck mid-transition, and orphans. `--fix` applies the safe corrections.
 
 An **orphan** is a device sitting inside a Simlock device root with no registry
 record — almost always a daemon that died between creating a device and writing
-it down. Because it is inside a root Simlock provably owns, it cannot be a
-device of yours, so it is safe to destroy; but `--fix` never touches it.
-Destroying orphans requires `--purge-orphans`, which asks for confirmation
-unless `--yes` is given, and refuses (exit 2, `USAGE`) when confirmation is
-declined or there is no terminal to ask at. Keeping it on its own flag means a
-`doctor --fix` already running unattended in CI does not start deleting things
-after an upgrade.
+it down. It is inside a root Simlock provably owns, so it is not a device of
+yours; `--fix` never touches it, and destroying orphans requires
+`--purge-orphans`, which asks for confirmation unless `--yes` is given, and
+refuses (exit 2, `USAGE`) when confirmation is declined or there is no terminal
+to ask at. Keeping it on its own flag means a `doctor --fix` already running
+unattended in CI does not start deleting things after an upgrade.
+
+Read that flag as destructive rather than tidy, because one case cannot be told
+apart from a leak: a device this very daemon is in the middle of provisioning
+has no registry record yet either, and that gap is exactly what produces
+orphans. An orphan has no record, so no lease guard and no operation claim can
+protect it. Purging while devices are being provisioned can therefore destroy
+one that a live request is waiting on. That is the risk the flag, the
+confirmation, and its absence from `--fix` exist to keep deliberate (see
+[ADR 0001](adr/0001-simlock-owned-device-roots.md), decision 6).
 
 Before the first device of a purge is destroyed, each root the purge is about
 to reach into is re-validated — ownership is proven at startup and then trusted
@@ -403,12 +411,19 @@ for the life of the daemon, which is fine for reporting and not fine for
 destroying (see [known-pitfalls.md](known-pitfalls.md)). A root that no longer
 proves ownership abandons the whole purge and leaves every finding standing. So
 does a device that could not be destroyed: it stays reported, and the rest of
-the run continues.
+the run continues. The registry is re-read at that same point: a device that
+finished provisioning and registered while the run was working is no longer an
+orphan by the time the list is acted on, and is left alone.
 
 Registry devices left behind in the *old* pre-device-root locations are
-reported the same way and are destroyed by `--fix`, since they are in the
+reported as `legacy-device` and are destroyed by `--fix`, since they are in the
 registry. They are not migrated: neither CoreSimulator nor the Android SDK
-supports relocating a device, so those are re-provisioned.
+supports relocating a device, so those are re-provisioned. Both AVD homes are
+searched on Android — the one `ANDROID_AVD_HOME` names now and the SDK's own
+`~/.android/avd` — because where an AVD lives today says nothing about where it
+was created. An Android AVD that an emulator is still running against is
+refused rather than deleted: it answers to your adb server, which Simlock does
+not drive, so stop it yourself (`adb emu kill`) and re-run `doctor --fix`.
 
 A root that fails ownership validation at startup — missing or foreign marker,
 symlink, wrong owner or permissions, or a `deviceRoot` that is not an absolute

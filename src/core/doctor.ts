@@ -14,6 +14,7 @@ import type {
   DriverDevice,
   DriverRejection,
   DriverRejectionReason,
+  LegacyDevice,
   ObservedDevice,
   ObservedMark,
 } from "./driver.js";
@@ -168,6 +169,12 @@ export class Doctor {
       this.options.drivers.map((driver) => [driver.platform, driver]),
     );
     const findings: DoctorFinding[] = [];
+    // One pre-root listing per driver per run, and only once something is actually missing.
+    // The lookup is a subprocess per platform (an unscoped `simctl list`, a directory scan),
+    // and on the first start after roots ship every pre-existing device is missing by
+    // construction -- so a lookup per device meant N identical listings, serially, inside a
+    // converge that parks every request but `hello` and `status.get`.
+    const legacyDevices = new Map<Platform, Promise<ReadonlyMap<string, LegacyDevice>>>();
 
     for (const device of snapshot.devices) {
       if (observedPlatforms.has(device.spec.platform)) {
@@ -175,6 +182,7 @@ export class Doctor {
           device,
           registryDriftFindings(device, realDeviceKeys, observedDevices),
           driversByPlatform.get(device.spec.platform),
+          legacyDevices,
         );
         findings.push(...deviceFindings);
         if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
@@ -243,12 +251,37 @@ export class Doctor {
       return findings;
     }
 
+    // Re-read, deliberately, rather than reuse the snapshot this run opened with. That one
+    // was taken before every `listManaged`, every pre-root lookup and all of `--fix`'s work
+    // -- minutes, on a post-migration home. A device that finished provisioning and
+    // registered in between has a record now, and what the ADR accepts is that an orphan
+    // cannot be told from a leak *at the instant of the destroy*, not minutes earlier. The
+    // three registry-writing fixes re-read for the same reason.
+    const registered = new Set(
+      this.options.registry.snapshot.devices.map((device) =>
+        key(device.spec.platform, device.driverDeviceId),
+      ),
+    );
+    // The process finding for the same device carries the address its device finding does
+    // not: `listManaged` reports observed devices with no usable address (they are never
+    // granted), while the processes it reports beside them are what the driver actually saw
+    // running. Destroying through that entry is what lets a driver stop the process before
+    // it unlinks the files underneath it.
+    const processes = new Map(
+      findings
+        .filter((finding) => finding.kind === "orphan-process")
+        .map((finding) => [key(finding.platform, finding.device.deviceId), finding.device]),
+    );
+
     const purged = new Set<string>();
+    const stopped = new Set<string>();
     for (const orphan of orphans) {
+      const orphanKey = key(orphan.platform, orphan.device.deviceId);
       const driver = driversByPlatform.get(orphan.platform);
-      if (driver === undefined) continue;
+      if (driver === undefined || registered.has(orphanKey)) continue;
+      const runningProcess = processes.get(orphanKey);
       try {
-        await driver.destroy(orphan.device);
+        await driver.destroy(runningProcess ?? orphan.device);
       } catch (error: unknown) {
         this.#logger.error("Could not purge orphan device", {
           deviceId: orphan.device.deviceId,
@@ -257,7 +290,10 @@ export class Doctor {
         });
         continue;
       }
-      purged.add(key(orphan.platform, orphan.device.deviceId));
+      purged.add(orphanKey);
+      if (runningProcess !== undefined) {
+        stopped.add(orphanKey);
+      }
       this.options.eventBus.emit(
         "device.orphan-purged",
         {
@@ -269,16 +305,19 @@ export class Doctor {
       );
     }
 
-    // An `orphan-process` for a device that is now gone is gone with it: destroying the
-    // device covers the process it was running, so reporting both would ask the operator
-    // to deal with something that no longer exists.
-    return findings.filter(
-      (finding) =>
-        !(
-          (finding.kind === "orphan-device" || finding.kind === "orphan-process") &&
-          purged.has(key(finding.platform, finding.device.deviceId))
-        ),
-    );
+    // An `orphan-process` is dropped only when the destroy that covered it was handed that
+    // very process -- never on the reasoning that destroying a device must have stopped
+    // whatever was running it. A process still running after its device is gone is the one
+    // thing nothing can attribute to anything afterwards, so it has to stay in the report.
+    return findings.filter((finding) => {
+      if (finding.kind === "orphan-device") {
+        return !purged.has(key(finding.platform, finding.device.deviceId));
+      }
+      if (finding.kind === "orphan-process") {
+        return !stopped.has(key(finding.platform, finding.device.deviceId));
+      }
+      return true;
+    });
   }
 
   /**
@@ -333,23 +372,16 @@ export class Doctor {
     device: DeviceRecord,
     findings: readonly DoctorFinding[],
     driver: Driver | undefined,
+    cache: Map<Platform, Promise<ReadonlyMap<string, LegacyDevice>>>,
   ): Promise<readonly DoctorFinding[]> {
-    const findLegacy = driver?.findLegacy?.bind(driver);
-    if (findLegacy === undefined || !findings.some((f) => f.kind === "registry-device-missing")) {
+    if (
+      driver?.listLegacy === undefined ||
+      !findings.some((f) => f.kind === "registry-device-missing")
+    ) {
       return findings;
     }
 
-    let legacy;
-    try {
-      legacy = await findLegacy(device.driverDeviceId);
-    } catch (error: unknown) {
-      this.#logger.warn("Could not look for a pre-root copy of a missing device", {
-        deviceId: device.id,
-        platform: device.spec.platform,
-        reason: errorMessage(error),
-      });
-      return findings;
-    }
+    const legacy = (await this.#legacyDevices(driver, cache)).get(device.driverDeviceId);
     if (legacy === undefined) return findings;
 
     return findings.map((finding) =>
@@ -363,6 +395,43 @@ export class Doctor {
           }
         : finding,
     );
+  }
+
+  /** Memoised for the run: one listing per driver, however many of its devices are missing. */
+  #legacyDevices(
+    driver: Driver,
+    cache: Map<Platform, Promise<ReadonlyMap<string, LegacyDevice>>>,
+  ): Promise<ReadonlyMap<string, LegacyDevice>> {
+    const existing = cache.get(driver.platform);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const pending = this.#loadLegacyDevices(driver);
+    cache.set(driver.platform, pending);
+    return pending;
+  }
+
+  /**
+   * Keyed by driver device id, and empty when the lookup failed: "I could not look outside
+   * the root" is not "it is out there", and the finding that stands in that case is the one
+   * whose fix only writes to the registry. The first entry for an id wins -- two pre-root
+   * locations can hold the same name, and the destroy re-resolves which anyway.
+   */
+  async #loadLegacyDevices(driver: Driver): Promise<ReadonlyMap<string, LegacyDevice>> {
+    const byDriverDeviceId = new Map<string, LegacyDevice>();
+    try {
+      for (const legacy of (await driver.listLegacy?.()) ?? []) {
+        if (!byDriverDeviceId.has(legacy.device.deviceId)) {
+          byDriverDeviceId.set(legacy.device.deviceId, legacy);
+        }
+      }
+    } catch (error: unknown) {
+      this.#logger.warn("Could not look for pre-root copies of missing devices", {
+        platform: driver.platform,
+        reason: errorMessage(error),
+      });
+    }
+    return byDriverDeviceId;
   }
 
   #emitFindingEvents(findings: readonly DoctorFinding[]): void {
@@ -476,6 +545,15 @@ export class Doctor {
     if (snapshot.leases.some((lease) => lease.deviceId === finding.deviceId)) {
       return;
     }
+    // The device's own state as well as the lease table, because they can disagree: a record
+    // left `leased` with no lease reaches past the check above, exactly as
+    // `#fixForeignStateChange` documents. There the cost of missing it is a skipped
+    // transition; here it would be an unscoped delete against a device the registry still
+    // believes someone is holding (safety rule 2).
+    const device = snapshot.devices.find((candidate) => candidate.id === finding.deviceId);
+    if (device === undefined || device.state === "leased") {
+      return;
+    }
     try {
       await destroyLegacy(finding.device);
     } catch (error: unknown) {
@@ -486,6 +564,20 @@ export class Doctor {
       });
       return;
     }
+    // The one destruction Simlock performs outside an owned root, and the only trace of it
+    // otherwise would be a `device.deleted` indistinguishable from a registry-only fix
+    // (safety rule 6). `device.orphan-purged` exists for the *less* privileged of the two
+    // paths, so this one cannot be the unattributable one.
+    this.options.eventBus.emit(
+      "device.legacy-destroyed",
+      {
+        deviceId: finding.deviceId,
+        driverDeviceId: finding.device.deviceId,
+        platform: finding.platform,
+        ...(finding.path === undefined ? {} : { path: finding.path }),
+      },
+      "doctor",
+    );
     await this.#fixMissingDevice(finding.deviceId);
   }
 

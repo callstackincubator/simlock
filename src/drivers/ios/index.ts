@@ -19,6 +19,8 @@ import {
   type ObservedRunState,
   RuntimeMissingError,
   UnknownModelError,
+  validateOwnedRoot,
+  type ValidateOwnedRootOptions,
 } from "../../core/index.js";
 import type { ObservedMark } from "../../core/driver.js";
 import type { DeviceSpec } from "../../core/index.js";
@@ -142,12 +144,12 @@ export class IosSimctlDriver implements Driver {
   readonly #processRunner: ProcessRunner;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
   readonly #deviceRoot: string;
-  readonly #rootOptions: EnsureOwnedRootOptions;
+  readonly #rootOptions: ValidateOwnedRootOptions;
 
   private constructor(
     options: IosSimctlDriverOptions,
     deviceRoot: string,
-    rootOptions: EnsureOwnedRootOptions,
+    rootOptions: ValidateOwnedRootOptions,
   ) {
     this.#clock = options.clock;
     this.#filesystem = options.filesystem;
@@ -184,14 +186,15 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
-   * The same call `create` made, with the same arguments, because the proof *is* that call:
-   * a cheaper second check here would be a second validator, free to drift from the one
-   * every start is judged by. It is asked for immediately before Simlock destroys anything
-   * inside this set, since between then and startup the path can have become a symlink, or
-   * a `mv` can have left the user's own device set standing where this one was.
+   * The checks `create` made, minus the one thing a re-proof must never do: create. It is
+   * asked for immediately before Simlock destroys anything inside this set, since between
+   * then and startup the path can have become a symlink, or a `mv` can have left the user's
+   * own device set standing where this one was -- and a set that has simply gone (an
+   * `rm -rf`, an unmounted volume) refuses here rather than being rebuilt empty under a
+   * device list that describes what used to be in it.
    */
   async revalidateRoot(): Promise<void> {
-    await ensureOwnedRoot(this.#rootOptions);
+    await validateOwnedRoot(this.#rootOptions);
   }
 
   async resolveSpec(
@@ -310,20 +313,17 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
-   * Looks for a UDID in the machine's default device set -- where every simulator Simlock
-   * created before it owned one still lives. Reached only for a registry device the root no
-   * longer holds, and it reads: `simctl list` is the one unscoped call that mutates nothing.
+   * The machine's default device set, where every simulator Simlock created before it owned
+   * one still lives. One listing per reconcile, not one per missing device: `simctl list` is
+   * a subprocess with a 30s timeout and its answer is the same for every UDID asked about.
+   * It reads and nothing more -- `list` is the one unscoped call that mutates nothing -- and
+   * the entries are candidates, never findings: only the ones a registry record names ever
+   * reach a destroy.
    */
-  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+  async listLegacy(): Promise<readonly LegacyDevice[]> {
     const result = await this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
-    const found = parseManagedDevices(JSON.parse(result.stdout) as unknown).find(
-      (device) => device.udid === driverDeviceId,
-    );
-    if (found === undefined) {
-      return undefined;
-    }
 
-    return {
+    return parseManagedDevices(JSON.parse(result.stdout) as unknown).map((found) => ({
       device: {
         address: found.udid,
         deviceId: found.udid,
@@ -338,7 +338,7 @@ export class IosSimctlDriver implements Driver {
       // container's parent is the device directory -- and where the *old* set is is exactly
       // what this driver no longer knows any other way (ADR 0001, consequences).
       ...(found.dataPath === undefined ? {} : { path: dirname(found.dataPath) }),
-    };
+    }));
   }
 
   /**
@@ -346,6 +346,12 @@ export class IosSimctlDriver implements Driver {
    * despite living outside this driver's root because the registry names it: registry-only
    * destruction (safety rule 1) is satisfied by the record, not by the root. `doctor --fix`
    * is the only caller, and it checks the lease guard before asking.
+   *
+   * It stops the device first, where Android's `destroyLegacy` refuses a running one
+   * outright, and the asymmetry is deliberate: there is one CoreSimulator service per user
+   * and Simlock is already talking to it, so shutting a simulator down here uses no
+   * privilege the scoped path does not already have. Android's pre-root emulators answer to
+   * the user's own adb server instead, which Simlock does not own and will not drive.
    */
   async destroyLegacy(device: DriverDevice): Promise<void> {
     const { udid } = iosDriverData(device);
@@ -643,7 +649,7 @@ export class IosSimctlDriver implements Driver {
 
   /**
    * Deliberately unscoped, and the only thing in Simlock that is: the pre-root devices
-   * `findLegacy` / `destroyLegacy` deal with are in the machine's default set, which is
+   * `listLegacy` / `destroyLegacy` deal with are in the machine's default set, which is
    * where a `--set` would stop reaching them. Only those two may call it, and only for a
    * UDID a registry record names -- registry-only destruction (safety rule 1) is satisfied
    * by that record, not by the root.
@@ -737,7 +743,7 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
 }
 
 interface ParsedManagedDevice {
-  /** Only `findLegacy` reads this; a scoped listing already knows where its devices are. */
+  /** Only `listLegacy` reads this; a scoped listing already knows where its devices are. */
   readonly dataPath?: string;
   readonly name: string;
   readonly runState: ObservedRunState;

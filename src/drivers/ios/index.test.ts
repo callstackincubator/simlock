@@ -62,7 +62,7 @@ const legacyUdid = "00000000-0000-0000-0000-0000000000ff";
 
 /**
  * The complete argv of every call the pre-root path is allowed to make without `--set`,
- * spelled out rather than pattern-matched: `findLegacy` / `destroyLegacy` deliberately
+ * spelled out rather than pattern-matched: `listLegacy` / `destroyLegacy` deliberately
  * address the machine's default set (ADR 0001, Migration), and every *other* call must
  * still fail the invariant below if its scoping ever goes missing.
  */
@@ -632,6 +632,24 @@ describe("IosSimctlDriver", () => {
     expect(failure).toMatchObject({ platform: "ios", reason: "symlink" });
   });
 
+  it("refuses to re-prove a device set that has been removed since startup", async () => {
+    const filesystem = new MemoryFilesystem();
+    const driver = await createDriver(new ScriptedProcessRunner([]), new FakeClock(), filesystem);
+    await filesystem.rm(deviceRoot);
+
+    const failure = await driver
+      .revalidateRoot()
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    // Re-creating it here would report success and let a purge run against a device list
+    // describing a directory that is no longer there -- and a re-proof that writes to the
+    // filesystem is not the read-only check three shipped documents describe.
+    expect(failure).toBeInstanceOf(OwnedRootError);
+    expect(failure).toMatchObject({ platform: "ios", reason: "missing-marker" });
+    await expect(filesystem.exists(deviceRoot)).resolves.toBe(false);
+  });
+
   it("finds a pre-root device in the machine's default set, without --set", async () => {
     const runner = new ScriptedProcessRunner([
       {
@@ -656,13 +674,15 @@ describe("IosSimctlDriver", () => {
     ]);
     const driver = await createDriver(runner);
 
-    await expect(driver.findLegacy(legacyUdid)).resolves.toMatchObject({
-      device: { deviceId: legacyUdid },
-      path: `/Library/Devices/${legacyUdid}`,
-    });
+    await expect(driver.listLegacy()).resolves.toEqual([
+      {
+        device: expect.objectContaining({ deviceId: legacyUdid }),
+        path: `/Library/Devices/${legacyUdid}`,
+      },
+    ]);
   });
 
-  it("reports no pre-root device when the default set does not hold the udid", async () => {
+  it("reports nothing pre-root when the default set is empty", async () => {
     const runner = new ScriptedProcessRunner([
       {
         match: { args: ["simctl", "list", "-j", "devices"], command: "xcrun" },
@@ -671,7 +691,7 @@ describe("IosSimctlDriver", () => {
     ]);
     const driver = await createDriver(runner);
 
-    await expect(driver.findLegacy(legacyUdid)).resolves.toBeUndefined();
+    await expect(driver.listLegacy()).resolves.toEqual([]);
   });
 
   it("destroys a pre-root device through the unscoped path it actually lives on", async () => {

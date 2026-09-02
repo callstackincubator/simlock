@@ -32,8 +32,13 @@ export { UnknownPassthroughToolError } from "./driver-catalog.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor } from "./doctor.js";
-export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./device-root.js";
-export type { EnsureOwnedRootOptions } from "./device-root.js";
+export {
+  ensureOwnedRoot,
+  OWNED_ROOT_MARKER_FILE,
+  OwnedRootError,
+  validateOwnedRoot,
+} from "./device-root.js";
+export type { EnsureOwnedRootOptions, ValidateOwnedRootOptions } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary, carried in the driver.root-rejected payload.
 export type { RootRejectionReason } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- public shape of the on-disk ownership marker.

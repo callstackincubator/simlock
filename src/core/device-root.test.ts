@@ -11,7 +11,12 @@ import {
   NodeFilesystem,
 } from "../ports/index.js";
 import type { Platform } from "./domain.js";
-import { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./index.js";
+import {
+  ensureOwnedRoot,
+  OWNED_ROOT_MARKER_FILE,
+  OwnedRootError,
+  validateOwnedRoot,
+} from "./index.js";
 
 const instanceId = "instance-a";
 const parent = "/home/agent/.simlock/devices";
@@ -60,6 +65,17 @@ function marker(overrides: Record<string, unknown> = {}): string {
     instanceId,
     platform: "ios",
     ...overrides,
+  });
+}
+
+/** The read-only re-proof, which takes the same arguments minus the ones only creating needs. */
+async function validate(filesystem: Filesystem, overrides: Overrides = {}): Promise<string> {
+  return validateOwnedRoot({
+    filesystem,
+    instanceId: overrides.instanceId ?? instanceId,
+    path: overrides.path ?? root,
+    platform: overrides.platform ?? "ios",
+    uid,
   });
 }
 
@@ -300,6 +316,44 @@ describe("ensureOwnedRoot", () => {
       path: root,
       platform: "ios",
     });
+  });
+});
+
+describe("validateOwnedRoot", () => {
+  it("accepts a root this instance still owns without writing anything to it", async () => {
+    const filesystem = createFilesystem();
+    await ensure(filesystem);
+    const before = await filesystem.readdir(root);
+
+    await expect(validate(filesystem)).resolves.toBe(root);
+    await expect(filesystem.readdir(root)).resolves.toEqual(before);
+  });
+
+  it("refuses a root that is not there rather than creating one", async () => {
+    const filesystem = createFilesystem();
+
+    // The whole point of a re-proof. `ensureOwnedRoot` reads "nothing is there" as a first
+    // start and builds a fresh, empty, validly-marked root -- correct at startup, and
+    // exactly wrong for a caller holding a device list that describes what used to be in
+    // it: an `rm -rf` or an unmounted volume would report success and let the purge run.
+    await expect(validate(filesystem)).rejects.toMatchObject({
+      reason: "missing-marker",
+      path: root,
+      platform: "ios",
+    });
+    await expect(filesystem.exists(root)).resolves.toBe(false);
+    await expect(filesystem.exists(parent)).resolves.toBe(false);
+  });
+
+  it("refuses a root swapped for a symlink or another instance's", async () => {
+    const symlinked = createFilesystem();
+    await ensure(symlinked);
+    symlinked.defineSymlink(root, "/Users/someone/Devices");
+    const foreign = createFilesystem();
+    await seedRoot(foreign, marker({ instanceId: "instance-b" }));
+
+    await expect(validate(symlinked)).rejects.toMatchObject({ reason: "symlink" });
+    await expect(validate(foreign)).rejects.toMatchObject({ reason: "wrong-instance" });
   });
 });
 

@@ -137,6 +137,7 @@ describe("EventBus", () => {
       | "device.foreign-provenance-detected"
       | "device.stalled-transition-detected"
       | "device.orphan-purged"
+      | "device.legacy-destroyed"
       | "daemon.started"
       | "daemon.stopping"
       | "disk.pressure-detected"
