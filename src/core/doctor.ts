@@ -113,6 +113,16 @@ export class Doctor {
     const realities = await Promise.all(
       this.options.drivers.map(async (driver) => ({ driver, reality: await driver.listManaged() })),
     );
+    // A platform with no driver has no observable reality: its driver refused to start,
+    // its SDK is missing, or this host has none. "I could not look" is not "the device is
+    // gone", and reading it as such is destructive -- every registry device of that
+    // platform would drift-report as missing and `--fix` would mark the lot `deleted`,
+    // stranding tens of gigabytes of simulators in a root with no record left to reach
+    // them. That is the permanent leak ADR 0001 exists to prevent, so existence, run
+    // state, provenance and orphans are all reported only for platforms a driver
+    // actually observed. What remains reportable is what needs no driver: expired
+    // leases, and the `driver-unavailable` finding that says why the platform is dark.
+    const observedPlatforms = new Set(this.options.drivers.map((driver) => driver.platform));
     const realDeviceKeys = new Set(
       realities.flatMap(({ driver, reality }) =>
         reality.devices.map((device) => key(driver.platform, device.deviceId)),
@@ -132,16 +142,18 @@ export class Doctor {
     const findings: DoctorFinding[] = [];
 
     for (const device of snapshot.devices) {
-      const deviceFindings = registryDriftFindings(device, realDeviceKeys, observedDevices);
-      findings.push(...deviceFindings);
-      if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
-        await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
-      }
-      if (deviceFindings.some((finding) => finding.kind === "foreign-provenance-change")) {
-        await this.options.registry.markForeignProvenanceDetected(
-          device.id,
-          this.options.clock.now(),
-        );
+      if (observedPlatforms.has(device.spec.platform)) {
+        const deviceFindings = registryDriftFindings(device, realDeviceKeys, observedDevices);
+        findings.push(...deviceFindings);
+        if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
+          await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
+        }
+        if (deviceFindings.some((finding) => finding.kind === "foreign-provenance-change")) {
+          await this.options.registry.markForeignProvenanceDetected(
+            device.id,
+            this.options.clock.now(),
+          );
+        }
       }
       const stalled = stalledTransitionFinding(
         device,
@@ -455,9 +467,18 @@ function provenanceDrift(mark: ObservedMark): ProvenanceDrift | undefined {
   return mark.erasable === mark.durable ? undefined : "mark-mismatch";
 }
 
+/**
+ * Discovery runs once, at daemon start, so a refusal is a frozen snapshot: repairing the
+ * root and running `doctor` again reports the identical finding, because nothing has
+ * looked at the root since. The finding therefore has to name the step that actually
+ * retries the platform, or it reads as a repair that did not work.
+ */
+const DRIVER_RETRY_REMEDY =
+  "Driver discovery runs once, at daemon startup: restart the daemon (`simlock daemon stop`, then any command relaunches it) once this is fixed, or the platform stays unavailable.";
+
 function driverUnavailableFindings(rejections: readonly DriverRejection[]): DoctorFinding[] {
   return rejections.map((rejection) => ({
-    detail: rejection.summary,
+    detail: `${rejection.summary}. ${DRIVER_RETRY_REMEDY}`,
     kind: "driver-unavailable" as const,
     platform: rejection.platform,
     reason: rejection.reason,

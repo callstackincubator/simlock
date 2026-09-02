@@ -11,6 +11,7 @@ import {
   type DriverReality,
   ensureOwnedRoot,
   type ObservedDevice,
+  OwnedRootError,
   type ObservedRunState,
   RuntimeMissingError,
   UnknownModelError,
@@ -322,8 +323,16 @@ export class IosSimctlDriver implements Driver {
   /**
    * Writes the same provenance token into both regions of a device: the
    * device root (durable -- survives `simctl erase`) and the data container
-   * (erasable -- destroyed by it). Both halves are written together so a
-   * partial write never reads as drift.
+   * (erasable -- destroyed by it).
+   *
+   * The erasable half goes first, and the two are not written concurrently, because a
+   * half-written pair is read by `Doctor` as tampering: durable-without-erasable is
+   * exactly the signature of a foreign erase. Writing the fragile half first means a
+   * failure (`<root>/<udid>/data` is not there, so `writeFileAtomic` -- which creates no
+   * parents -- cannot land) leaves *neither* mark, which reads as "never marked" and
+   * produces no finding at all. The write still throws, so the caller learns something
+   * was wrong with the device; what it must never do is accuse the user of erasing a
+   * device Simlock itself just erased.
    */
   async #writeMark(udid: string): Promise<void> {
     const token = this.#idGenerator.generate();
@@ -332,13 +341,12 @@ export class IosSimctlDriver implements Driver {
       udid,
       writtenAt: new Date(this.#clock.now()).toISOString(),
     });
-    const durablePath = join(this.#deviceDirectory(udid), MARK_FILE_NAME);
-    const erasablePath = join(this.#dataPathFor(udid), MARK_FILE_NAME);
 
-    await Promise.all([
-      this.#filesystem.writeFileAtomic(durablePath, contents),
-      this.#filesystem.writeFileAtomic(erasablePath, contents),
-    ]);
+    await this.#filesystem.writeFileAtomic(join(this.#dataPathFor(udid), MARK_FILE_NAME), contents);
+    await this.#filesystem.writeFileAtomic(
+      join(this.#deviceDirectory(udid), MARK_FILE_NAME),
+      contents,
+    );
   }
 
   /**
@@ -515,12 +523,18 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
   const configured = options.driverConfig["deviceRoot"];
 
   if (configured !== undefined && typeof configured !== "string") {
-    // Not an `OwnedRootError`: that one skips a platform and keeps the daemon up, which is
-    // right for a root that failed validation but wrong for a value that is not a path at
-    // all. Nothing here can guess what was meant, and defaulting would quietly put tens of
-    // gigabytes somewhere the user did not choose.
-    throw new DriverCrashError(
-      `drivers.ios.deviceRoot must be a path, but it is a ${typeof configured}`,
+    // A `deviceRoot` that is not a usable path refuses this platform's *configuration*,
+    // which costs iOS and nothing else -- the same as every other refusal here. It is not
+    // a daemon-fatal error: `"deviceRoot": true` and `"deviceRoot": "devices/ios"` are one
+    // keystroke apart, and killing the process over the first would take Android down with
+    // it and leave the reason unreachable, since `doctor` -- where `docs/CLI.md` promises
+    // it appears -- needs a daemon to answer. `not-absolute` is the vocabulary term the
+    // docs already publish for "this names no usable directory"; nothing new is invented.
+    throw new OwnedRootError(
+      `Refusing the ios device root: drivers.ios.deviceRoot must be an absolute path, but it is the ${typeof configured} ${JSON.stringify(configured)}`,
+      "not-absolute",
+      String(configured),
+      "ios",
     );
   }
 

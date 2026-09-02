@@ -1,4 +1,4 @@
-import { type EventBus, type EventEnvelope, type EventMap } from "../bus/index.js";
+import { type EventBus, type EventEnvelope } from "../bus/index.js";
 import {
   type Config,
   type DeviceRecord,
@@ -208,14 +208,10 @@ export class DaemonServer {
     // After `daemon.started`, because these are facts about the daemon that just started
     // and a subscriber reading the buffer in order should see it come up first.
     for (const rejection of this.options.driverRejections ?? []) {
-      // The driver module owns the name/payload pair; `EventMap` cannot check a pairing
-      // chosen at runtime, so the one assertion lives here, at the only place that
-      // forwards one, rather than being spread over the drivers that produce them.
-      this.options.eventBus.emit(
-        rejection.event,
-        rejection.payload as EventMap[typeof rejection.event],
-        "daemon",
-      );
+      // No assertion: `DriverRejection` pairs each event name with that event's own
+      // payload, so the contract is checked where the driver module builds the refusal
+      // rather than being taken on trust here, one step from the ring buffer.
+      this.options.eventBus.emit(rejection.event, rejection.payload, "daemon");
     }
     this.#logger.info("Daemon started", {
       config: this.options.config,
@@ -398,8 +394,25 @@ export class DaemonServer {
       } else {
         this.#logger.debug("Handled request error", { code, type: frame.type });
       }
-      await this.#respondError(connection.socket, frame.id, code, errorMessage(error));
+      await this.#respondError(connection.socket, frame.id, code, this.#describeError(error));
     }
+  }
+
+  /**
+   * A `NO_DRIVER` for a platform whose driver refused to start says nothing on its own:
+   * it reads identically to "this host has no Xcode". Safety rule 9 promises Simlock
+   * reports *why* a platform is missing, and the lease path is where a user meets that
+   * failure, so the refusal's own one-liner travels with the error.
+   */
+  #describeError(error: unknown): string {
+    const message = errorMessage(error);
+    if (!(error instanceof NoDriverError)) {
+      return message;
+    }
+    const rejection = (this.options.driverRejections ?? []).find(
+      (candidate) => candidate.platform === error.platform,
+    );
+    return rejection === undefined ? message : `${message} (${rejection.summary})`;
   }
 
   async #handleHello(connection: Connection, frame: RequestFrame): Promise<void> {

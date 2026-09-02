@@ -1,3 +1,4 @@
+import type { EventMap } from "../bus/index.js";
 import type { DeviceSpec, Platform } from "./domain.js";
 
 export interface DeviceRequest {
@@ -134,16 +135,22 @@ export interface Driver {
   leaseEnvironment(): Readonly<Record<string, string>>;
 }
 
+/** The events a driver may refuse to start with; each pairs with its own payload below. */
+type DriverRejectionEvent = "driver.root-rejected" | "driver.adb-server-rejected";
+
 /**
- * Why a driver could not start. A driver that refuses to start fails closed and takes only
- * its own platform with it (safety rule 9), so the daemon has to be able to report the
- * refusal without understanding it: the driver module names the event and builds the
- * payload, and the core carries both to the bus and to `doctor` unread.
+ * One refusal, with the payload the event it names is published with.
+ *
+ * The pairing is the point. The core forwards `payload` to the bus without reading it, so
+ * this is the only place the wire contract in `docs/EVENTS.md` can still be checked -- a
+ * wider `Record<string, string | number>` would type-check an adb rejection carrying a
+ * string port, or a root rejection with no root at all, and it would reach
+ * `simlock events --json` unexamined.
  */
-export interface DriverRejection {
+interface DriverRefusal<Event extends DriverRejectionEvent> {
   readonly platform: Platform;
-  readonly event: "driver.root-rejected" | "driver.adb-server-rejected";
-  readonly payload: Readonly<Record<string, string | number>>;
+  readonly event: Event;
+  readonly payload: EventMap[Event];
   /**
    * The refusal's vocabulary term (`missing-marker`, `occupied`, ...), stated separately
    * rather than read back out of `payload`, which is a wire contract the core does not
@@ -153,6 +160,16 @@ export interface DriverRejection {
   /** One line, for `doctor` output and the startup log. */
   readonly summary: string;
 }
+
+/**
+ * Why a driver could not start. A driver that refuses to start fails closed and takes only
+ * its own platform with it (safety rule 9), so the daemon has to be able to report the
+ * refusal without understanding it: the driver module names the event and builds the
+ * payload, and the core carries both to the bus and to `doctor` unread.
+ */
+export type DriverRejection =
+  | DriverRefusal<"driver.root-rejected">
+  | DriverRefusal<"driver.adb-server-rejected">;
 
 export class RuntimeMissingError extends Error {
   constructor(

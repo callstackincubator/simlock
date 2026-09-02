@@ -103,6 +103,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           clock,
           driversConfig: config.drivers,
           filesystem,
+          hostPlatform: process.platform,
           idGenerator,
           instanceId,
           logger,
@@ -195,6 +196,13 @@ export interface DriverDiscoveryContext {
   /** Whole `drivers` config section: each driver is handed its own block, unread. */
   readonly driversConfig: Config["drivers"];
   readonly filesystem: Filesystem;
+  /**
+   * Which platform's tooling this host has, `process.platform` in production and supplied
+   * by the composition root rather than read here. Discovery's fail-closed branch -- the
+   * one that must cost a platform and never the daemon -- is otherwise reachable only on a
+   * Mac, and so is untestable everywhere Simlock's own CI runs.
+   */
+  readonly hostPlatform: NodeJS.Platform;
   readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly logger: Logger;
@@ -219,7 +227,7 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
 
   const drivers: Driver[] = [];
   const rejections: DriverRejection[] = [];
-  if (process.platform === "darwin") {
+  if (options.hostPlatform === "darwin") {
     const ios = await discoverIosDriver(options, logger);
     if (ios.driver !== undefined) drivers.push(ios.driver);
     if (ios.rejection !== undefined) rejections.push(ios.rejection);

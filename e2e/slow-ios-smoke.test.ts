@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { readdir, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
@@ -53,12 +55,43 @@ async function simctlRuntimes(): Promise<string[]> {
  * Everything in the set, by membership rather than by name: the set is Simlock's own, so
  * nothing else can be in it, and CoreSimulator has to be told to forget these devices
  * before the temporary home holding them is removed.
+ *
+ * Shut down first, always. `simctl delete` refuses a booted device, and this runs on the
+ * failure path too -- a `waitFor` that gave up leaves devices booted -- so deleting
+ * without shutting down would leave a running `launchd_sim` attached to a set directory
+ * that `withDaemon`'s teardown is about to remove recursively.
  */
-async function deleteSetDevices(deviceSet: string): Promise<void> {
+async function emptyDeviceSet(deviceSet: string): Promise<void> {
   for (const device of await setDevices(deviceSet).catch(() => [])) {
+    await execFileAsync("xcrun", ["simctl", "--set", deviceSet, "shutdown", device.udid]).catch(
+      () => undefined,
+    );
     await execFileAsync("xcrun", ["simctl", "--set", deviceSet, "delete", device.udid]).catch(
       () => undefined,
     );
+  }
+}
+
+/** Older than any run of this lane can be: its own timeout is five minutes. */
+const STALE_SET_AGE_MS = 60 * 60 * 1000;
+
+/**
+ * Device sets left behind by a run that died before its own cleanup -- a killed vitest, a
+ * crashed machine. Nothing else reclaims them now that the set lives inside a per-test
+ * temporary home instead of the shared default set the old prefix sweep covered, so the
+ * tens of gigabytes each holds would sit in `$TMPDIR` forever. Age-gated rather than
+ * scoped to this run so it can never sweep a set out from under a live one, including a
+ * sibling running in parallel.
+ */
+async function sweepStaleDeviceSets(): Promise<void> {
+  const entries = await readdir(tmpdir(), { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith("simlock-e2e-")) continue;
+    const deviceSet = join(tmpdir(), entry.name, "devices", "ios");
+    const details = await stat(deviceSet).catch(() => undefined);
+    if (details === undefined || Date.now() - details.mtimeMs < STALE_SET_AGE_MS) continue;
+    await emptyDeviceSet(deviceSet);
+    await rm(deviceSet, { force: true, recursive: true });
   }
 }
 
@@ -72,6 +105,7 @@ describe.skipIf(process.platform !== "darwin")(
       "catalog agrees with simctl, a cold lease boots a real Booted simulator inside Simlock's own device set with matching provenance, release keeps it warm, and nuke empties the set",
       { timeout: 300_000 },
       async () => {
+        await sweepStaleDeviceSets();
         const availableRuntimes = await simctlRuntimes();
         if (availableRuntimes.length === 0) {
           throw new Error("No installed, available iOS runtime -- cannot run the iOS smoke lane");
@@ -187,7 +221,7 @@ describe.skipIf(process.platform !== "darwin")(
             label: "no simulator remains in Simlock's device set after nuke --delete-devices",
           });
         } finally {
-          await deleteSetDevices(deviceSet);
+          await emptyDeviceSet(deviceSet);
         }
       },
     );

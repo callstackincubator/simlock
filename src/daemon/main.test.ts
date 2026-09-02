@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeDriver } from "../core/index.js";
+import { FakeDriver, OWNED_ROOT_MARKER_FILE, type OwnedRootError } from "../core/index.js";
+import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
@@ -13,6 +14,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
   ScriptedProcessRunner,
+  type IdGenerator,
 } from "../ports/index.js";
 import { discoverDrivers, startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -170,6 +172,7 @@ describe("discoverDrivers", () => {
       clock: new FakeClock(),
       driversConfig: {},
       filesystem,
+      hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: "instance-1",
       logger,
@@ -186,7 +189,146 @@ describe("discoverDrivers", () => {
       }),
     );
   });
+
+  it("does not look for simulators on a host that has no simctl", async () => {
+    const { drivers, rejections } = await discoverIos({ hostPlatform: "linux" });
+
+    expect(drivers.some((driver) => driver.platform === "ios")).toBe(false);
+    // Nothing refused anything here: a host without Xcode is not a fail-closed refusal
+    // and must not be reported as one.
+    expect(rejections).toEqual([]);
+  });
+
+  it("starts the iOS driver on a host with simctl, with the root it validated", async () => {
+    const filesystem = new MemoryFilesystem();
+
+    const { drivers, rejections } = await discoverIos({ filesystem });
+
+    expect(rejections).toEqual([]);
+    expect(drivers.find((driver) => driver.platform === "ios")?.deviceRoot).toBe(IOS_ROOT);
+  });
+
+  it("keeps the daemon up when the iOS device root is refused, reporting the platform instead", async () => {
+    const filesystem = await foreignOwnedRoot();
+
+    const { drivers, rejections } = await discoverIos({ filesystem });
+
+    // Safety rule 9: the platform goes, the daemon stays -- a daemon that will not start
+    // is a daemon that cannot tell anyone why.
+    expect(drivers.some((driver) => driver.platform === "ios")).toBe(false);
+    expect(rejections.map((rejection) => rejection.platform)).toEqual(["ios"]);
+  });
+
+  it("publishes the refusal as the payload docs/EVENTS.md documents for driver.root-rejected", async () => {
+    const filesystem = await foreignOwnedRoot();
+    const refusal = await refusedRoot(filesystem);
+
+    const { rejections } = await discoverIos({ filesystem });
+
+    // Built from a real `OwnedRootError`, key by key: the payload is a wire contract
+    // `simlock events --json` publishes, so renaming `root` has to fail here.
+    expect(rejections[0]).toEqual({
+      event: "driver.root-rejected",
+      payload: { platform: "ios", reason: "wrong-instance", root: IOS_ROOT },
+      platform: "ios",
+      reason: "wrong-instance",
+      summary: refusal.message,
+    });
+  });
+
+  it("logs the refused root, so the reason survives even if nobody runs doctor", async () => {
+    const sink = new MemoryLogSink();
+
+    await discoverIos({ filesystem: await foreignOwnedRoot(), sink });
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "Skipped iOS driver: device root rejected",
+        module: "daemon.driver-discovery",
+        fields: expect.objectContaining({ reason: "wrong-instance", root: IOS_ROOT }),
+      }),
+    );
+  });
+
+  it("still fails startup when the iOS driver fails for a reason that is not a refusal", async () => {
+    // Anything that is not an `OwnedRootError` is a bug rather than a fail-closed
+    // decision, and swallowing it would hide it behind a silently missing platform.
+    await expect(
+      discoverIos({
+        idGenerator: {
+          generate: () => {
+            throw new Error("entropy exhausted");
+          },
+        },
+      }),
+    ).rejects.toThrow("entropy exhausted");
+  });
 });
+
+const SIMLOCK_HOME = "/home/.simlock";
+const IOS_ROOT = join(SIMLOCK_HOME, "devices", "ios");
+const INSTANCE_ID = "instance-1";
+
+/** A root marked by a different Simlock instance -- the cheapest real `OwnedRootError`. */
+async function foreignOwnedRoot(): Promise<MemoryFilesystem> {
+  const filesystem = new MemoryFilesystem();
+  await filesystem.mkdirp(IOS_ROOT);
+  await filesystem.writeFileAtomic(
+    join(IOS_ROOT, OWNED_ROOT_MARKER_FILE),
+    JSON.stringify({
+      instanceId: "someone-else",
+      owner: "simlock",
+      platform: "ios",
+      schemaVersion: 1,
+    }),
+  );
+  return filesystem;
+}
+
+/** The very `OwnedRootError` the driver raises for that root, never a hand-written copy. */
+async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError> {
+  try {
+    await IosSimctlDriver.create({
+      clock: new FakeClock(),
+      driverConfig: {},
+      filesystem,
+      idGenerator: new CryptoIdGenerator(),
+      instanceId: INSTANCE_ID,
+      processRunner: new ScriptedProcessRunner([]),
+      simlockHome: SIMLOCK_HOME,
+    });
+  } catch (error: unknown) {
+    return error as OwnedRootError;
+  }
+  throw new Error("expected the iOS device root to be refused");
+}
+
+/** Discovery as it runs on a Mac, with the host platform supplied rather than sniffed. */
+function discoverIos(
+  overrides: {
+    readonly filesystem?: MemoryFilesystem;
+    readonly hostPlatform?: NodeJS.Platform;
+    readonly idGenerator?: IdGenerator;
+    readonly sink?: MemoryLogSink;
+  } = {},
+) {
+  return discoverDrivers({
+    clock: new FakeClock(),
+    driversConfig: {},
+    filesystem: overrides.filesystem ?? new MemoryFilesystem(),
+    hostPlatform: overrides.hostPlatform ?? "darwin",
+    idGenerator: overrides.idGenerator ?? new CryptoIdGenerator(),
+    instanceId: INSTANCE_ID,
+    logger: new JsonLinesLogger({
+      clock: new FakeClock(),
+      level: "debug",
+      sink: overrides.sink ?? new MemoryLogSink(),
+    }),
+    processRunner: new ScriptedProcessRunner([]),
+    simlockHome: SIMLOCK_HOME,
+  });
+}
 
 describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
   const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
@@ -213,6 +355,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       clock: new FakeClock(),
       driversConfig: {},
       filesystem: new MemoryFilesystem(),
+      hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: "instance-1",
       logger,

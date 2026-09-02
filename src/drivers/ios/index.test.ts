@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BootTimeoutError,
@@ -53,6 +53,24 @@ const erasableMarkPath = `${dataPath}/simlock-mark.json`;
 function simctlArgs(...args: readonly string[]): string[] {
   return ["simctl", "--set", deviceRoot, ...args];
 }
+
+/** Runners handed to a driver built by `createDriver`; drained by the invariant below. */
+const scopedRunners: ScriptedProcessRunner[] = [];
+
+/**
+ * The one global invariant, asserted over everything every test in this file recorded
+ * rather than per call site: scoping is what makes ownership provable, so a spawn that
+ * reached `xcrun` without `simctl --set <root>` in front of it would address the machine's
+ * default device set (safety rule 8). Per-test argv equality proves today's calls are
+ * scoped; only this proves the next one added is, whether or not it goes through
+ * `#invokeSimctl`.
+ */
+afterEach(() => {
+  for (const call of scopedRunners.splice(0).flatMap((runner) => runner.calls)) {
+    expect(call.command).toBe("xcrun");
+    expect(call.args.slice(0, 3)).toEqual(["simctl", "--set", deviceRoot]);
+  }
+});
 
 function simctl(...args: readonly string[]): { readonly command: string; readonly args: string[] } {
   return { args: simctlArgs(...args), command: "xcrun" };
@@ -224,10 +242,11 @@ describe("IosSimctlDriver", () => {
       deviceId: driverData.udid,
       driverData,
     });
+    // Handled up front so a failure below reports itself rather than surfacing as an
+    // unhandled rejection in whichever test happens to run next.
+    void ready.catch(() => undefined);
 
-    while (runner.calls.length < 2) {
-      await Promise.resolve();
-    }
+    await waitForCalls(runner, 2);
     clock.advance(120_000);
 
     await expect(ready).rejects.toBeInstanceOf(BootTimeoutError);
@@ -409,6 +428,31 @@ describe("IosSimctlDriver", () => {
     expect(await filesystem.exists(durableMarkPath)).toBe(true);
   });
 
+  it("leaves neither provenance mark when the erasable half cannot be written", async () => {
+    const filesystem = new MemoryFilesystem();
+    const runner = new ScriptedProcessRunner([
+      { match: simctl("shutdown", driverData.udid) },
+      { match: simctl("erase", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem);
+    // The device directory exists, its data container does not, and `writeFileAtomic`
+    // creates no parents -- the erasable write cannot land.
+    await filesystem.mkdirp(`${deviceRoot}/${driverData.udid}`);
+
+    await expect(
+      driver.reclaim(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        { clean: "full" },
+      ),
+    ).rejects.toThrow();
+
+    // A durable mark standing alone is exactly what `Doctor` reads as a foreign erase, so
+    // a half-written pair would have `doctor` accusing the user of erasing the device
+    // Simlock itself just erased. Neither half is what "never marked" looks like.
+    expect(await filesystem.exists(durableMarkPath)).toBe(false);
+    expect(await filesystem.exists(erasableMarkPath)).toBe(false);
+  });
+
   it("reports matching provenance tokens for a healthy managed device", async () => {
     const filesystem = new MemoryFilesystem();
     const runner = new ScriptedProcessRunner([
@@ -527,18 +571,25 @@ describe("IosSimctlDriver", () => {
     expect(failure).toMatchObject({ platform: "ios", reason: "wrong-instance" });
   });
 
-  it("does not start when the configured device root is not a path at all", async () => {
-    await expect(
-      IosSimctlDriver.create({
-        clock: new FakeClock(),
-        driverConfig: { deviceRoot: 42 },
-        filesystem: new MemoryFilesystem(),
-        idGenerator: { generate: () => "device-1" },
-        instanceId,
-        processRunner: new ScriptedProcessRunner([]),
-        simlockHome: "/home/.simlock",
-      }),
-    ).rejects.toBeInstanceOf(DriverCrashError);
+  it("refuses the platform, not the daemon, when the configured device root is not a path", async () => {
+    const failure = await IosSimctlDriver.create({
+      clock: new FakeClock(),
+      driverConfig: { deviceRoot: true },
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: new ScriptedProcessRunner([]),
+      simlockHome: "/home/.simlock",
+    })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    // An `OwnedRootError` costs iOS alone; anything else takes the daemon down with it,
+    // and with it every way of finding out why -- `"deviceRoot": true` and
+    // `"deviceRoot": "devices/ios"` must not differ by that much.
+    expect(failure).toBeInstanceOf(OwnedRootError);
+    expect(failure).toMatchObject({ platform: "ios", reason: "not-absolute" });
+    expect(failure).toMatchObject({ message: expect.stringContaining("true") });
   });
 
   it("hands a lease holder the device set its simulator cannot be addressed without", async () => {
@@ -584,6 +635,7 @@ function createDriver(
   clock = new FakeClock(),
   filesystem: Filesystem = new MemoryFilesystem(),
 ): Promise<IosSimctlDriver> {
+  scopedRunners.push(runner);
   return IosSimctlDriver.create({
     clock,
     driverConfig: { deviceRoot },
@@ -606,6 +658,7 @@ function createTokenDriver(
   filesystem: Filesystem,
 ): Promise<IosSimctlDriver> {
   let calls = 0;
+  scopedRunners.push(runner);
   return IosSimctlDriver.create({
     clock: new FakeClock(),
     driverConfig: { deviceRoot },
@@ -621,6 +674,23 @@ function createTokenDriver(
     processRunner: runner,
     simlockHome: "/home/.simlock",
   });
+}
+
+/**
+ * Bounded on purpose. An unexpected invocation makes `ScriptedProcessRunner.spawn` throw
+ * synchronously, `#invokeSimctl` turns that into a `DriverCrashError`, and the call this
+ * is waiting for never arrives -- an unbounded spin then hangs the whole suite instead of
+ * reporting which argv the driver actually produced.
+ */
+async function waitForCalls(runner: ScriptedProcessRunner, count: number): Promise<void> {
+  for (let tick = 0; tick < 1_000 && runner.calls.length < count; tick += 1) {
+    await Promise.resolve();
+  }
+
+  expect(
+    runner.calls.map((call) => call.args),
+    `simctl never reached ${String(count)} calls`,
+  ).toHaveLength(count);
 }
 
 async function readToken(filesystem: Filesystem, path: string): Promise<string> {
