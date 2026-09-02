@@ -11,6 +11,16 @@ export interface NodeDaemonLauncherOptions {
   readonly args: readonly string[];
   readonly command: string;
   readonly logPath: string;
+  /**
+   * The *resolved* `SIMLOCK_HOME` the launching process is using. It is exported into the
+   * daemon's environment rather than left to be inherited, because a relative
+   * `SIMLOCK_HOME` resolves against whatever directory the process reading it happens to
+   * be standing in -- and the two processes agreeing only because one spawned the other
+   * from its own cwd is an assumption, not a guarantee. It now decides where tens of
+   * gigabytes of devices live, and a daemon that resolved it differently would build its
+   * device roots somewhere the CLI never looks.
+   */
+  readonly simlockHome: string;
 }
 
 export class NodeDaemonLauncher implements DaemonLauncher {
@@ -23,9 +33,9 @@ export class NodeDaemonLauncher implements DaemonLauncher {
       const child = spawn(this.options.command, this.options.args, {
         detached: true,
         // Explicit rather than relying on spawn's default: the daemon must inherit
-        // overrides like SIMLOCK_HOME and SIMLOCK_DRIVERS_MODULE from whichever
-        // frontend (CLI/MCP) auto-launched it.
-        env: process.env,
+        // overrides like SIMLOCK_DRIVERS_MODULE from whichever frontend (CLI/MCP)
+        // auto-launched it, and must be told the home this one already resolved.
+        env: { ...process.env, SIMLOCK_HOME: this.options.simlockHome },
         stdio: ["ignore", log.fd, log.fd],
       });
       await new Promise<void>((resolve, reject) => {

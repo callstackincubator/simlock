@@ -1093,7 +1093,9 @@ describe("DaemonServer lease heartbeat", () => {
         finishSettle = resolve;
       });
       const harness = await createHarness({
-        dispose: () => order.push("dispose"),
+        dispose: () => {
+          order.push("dispose");
+        },
         settle: async () => {
           order.push("settle-start");
           await settling;
@@ -1121,6 +1123,30 @@ describe("DaemonServer lease heartbeat", () => {
       // Disposal last: a reclaim that settles into a purge failure arms a quarantine
       // retry timer, and cancelling before the drain would strand it armed.
       expect(order).toEqual(["settle-start", "settle-end", "dispose"]);
+    });
+
+    it("waits for an asynchronous disposal before reporting the daemon stopped", async () => {
+      let disposed = false;
+      let finishDispose!: () => void;
+      const disposing = new Promise<void>((resolve) => {
+        finishDispose = resolve;
+      });
+      const harness = await createHarness({
+        dispose: async () => {
+          await disposing;
+          disposed = true;
+        },
+      });
+
+      const stopping = harness.daemon.stop("test-async-dispose");
+      await expect.poll(() => disposed).toBe(false);
+
+      // A driver's release is asynchronous -- Android's reaps the adb server it started --
+      // and a stop that returned before it finished would report a shutdown that had not
+      // happened, leaving the next daemon to find the port still held.
+      finishDispose();
+      await stopping;
+      expect(disposed).toBe(true);
     });
 
     it("logs a clean shutdown", async () => {
@@ -1196,7 +1222,7 @@ async function createHarness(
     readonly start?: boolean;
     readonly clock?: FakeClock;
     readonly converge?: () => Promise<void>;
-    readonly dispose?: () => void;
+    readonly dispose?: () => void | Promise<void>;
     readonly driver?: FakeDriver;
     readonly driverRejections?: readonly DriverRejection[];
     readonly logger?: Logger;

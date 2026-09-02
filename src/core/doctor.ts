@@ -13,6 +13,7 @@ import type {
   Driver,
   DriverDevice,
   DriverRejection,
+  DriverRejectionReason,
   ObservedDevice,
   ObservedMark,
 } from "./driver.js";
@@ -45,7 +46,7 @@ export type DoctorFinding =
       /** A platform Simlock is running without, because its driver refused to start. */
       readonly kind: "driver-unavailable";
       readonly platform: Platform;
-      readonly reason: string;
+      readonly reason: DriverRejectionReason;
       readonly detail: string;
     }
   | {

@@ -32,12 +32,12 @@ export { FakeSystemStats, NodeSystemStats, type SystemStats } from "./system-sta
 export { FakeParentWatch, NodeParentWatch, type ParentWatch } from "./parent-watch.js";
 export type { ParentWatchHandle } from "./parent-watch.js";
 export { FakeProcessSupervisor, NodeProcessSupervisor } from "./process-supervisor.js";
-// fallow-ignore-next-line unused-type -- public port contract for consumers that address a process by pid.
 export type { ProcessSupervisor } from "./process-supervisor.js";
 // fallow-ignore-next-line unused-type -- public shape of FakeProcessSupervisor.signals.
 export type { SignalRecord } from "./process-supervisor.js";
 export { FakeTcpProbe, NodeTcpProbe } from "./tcp-probe.js";
-// fallow-ignore-next-line unused-type -- public port contract for consumers that probe a port.
+// fallow-ignore-next-line unused-type -- public shape of FakeTcpProbe.sends.
+export type { FakeSend } from "./tcp-probe.js";
 export type { TcpProbe } from "./tcp-probe.js";
 export {
   NodeProcessRunner,

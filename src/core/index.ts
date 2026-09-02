@@ -25,6 +25,8 @@ export {
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
+// fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
+export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor } from "./doctor.js";
 export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- public options contract for the drivers that own a root.

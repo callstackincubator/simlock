@@ -218,6 +218,56 @@ means the only way to stop it is by pid; a daemon that crashed must find and
 reap its own leftover server on restart. It is deliberately not in
 `state.json`, so process supervision does not depend on registry integrity.
 
+**Correction (implementation, 2026-09-02).** The command line above is
+incomplete, and raising `ADB_LOCAL_TRANSPORT_MAX_PORT` on its own is *worse*
+than leaving it alone. The emulator scan's lower bound is hard-coded — there is
+no minimum-port variable — so the ceiling only ever widens the sweep upward
+from 5555 (`packages/modules/adb`, LineageOS mirror of the AOSP module):
+
+```c
+for (int port = DEFAULT_ADB_LOCAL_TRANSPORT_PORT; port <= adb_local_transport_max_port; port += 2)
+    connect_emulator(port);   // Note, uses port and port-1
+```
+
+A ceiling of 5683 therefore makes Simlock's server scan 5555–5683 and connect
+to *the user's own emulators*, leaving two adb servers contending for one
+device — the accident this ADR exists to prevent, running in the other
+direction. What actually contains it is `ADB_EMU=0`, which skips the scanner
+entirely, next to the `ADB_USB` block quoted above in `client/main.cpp`:
+
+```c
+if (!getenv("ADB_EMU") || strcmp(getenv("ADB_EMU"), "0") != 0) {
+    init_emulator_scanner(StringPrintf("tcp:%d", DEFAULT_ADB_LOCAL_TRANSPORT_PORT));
+}
+```
+
+`transport_emulator.cpp` corroborates it (`// < DEFAULT_ADB_LOCAL_TRANSPORT_PORT
+harmlessly mimics ADB_EMU=0`). Simlock's emulators still attach, because an
+emulator announces itself to the server named by `ANDROID_ADB_SERVER_PORT`
+rather than waiting to be found (`adb.cpp`):
+
+```c
+// Indicates a new emulator instance has started.
+if (android::base::ConsumePrefix(&service, "emulator:")) { ... connect_emulator(port); }
+```
+
+That path produces a real `emulator-<console>` transport, so `adb emu avd
+snapshot …` and `adb emu kill` keep working. The cost, also verified: the
+reconnect queue (`retry_ports`, filled by `EmulatorConnection`'s destructor) is
+drained only by the scanner thread, so with the scanner off a kicked emulator
+is never re-attached automatically — Simlock sends the same
+`host:emulator:<adbPort>` announcement itself, after starting an emulator and
+again whenever a serial stays unreachable during the readiness wait.
+
+`ADB_LOCAL_TRANSPORT_MAX_PORT=5683` stays, as belt-and-braces for an adb build
+that ignores `ADB_EMU`: it bounds such a sweep to Simlock's own console range,
+and costs nothing when the scanner is off. Containment is then symmetric —
+Simlock's consoles sit above the user's 5585 ceiling so their server cannot see
+Simlock's emulators, and `ADB_EMU=0` means Simlock's server never looks at
+theirs. The server is also started with `nodaemon server` rather than
+`start-server`, so the pid recorded in `adb-server.json` is the server itself
+and not a launcher that exits immediately.
+
 ### 5. Containment replaces provenance *inference*, not the registry
 
 `listManaged()` stops matching names and starts reporting root membership.

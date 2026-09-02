@@ -89,8 +89,13 @@ export interface DaemonServerOptions {
    * it for startup recovery. Runs after held leases are released and before `dispose`.
    */
   readonly settle?: () => Promise<void>;
-  /** Cancels any timers the lease subsystem armed (e.g. quarantine retries) on shutdown. */
-  readonly dispose?: () => void;
+  /**
+   * Releases what the daemon holds beyond its own state on shutdown: timers the lease
+   * subsystem armed (quarantine retries), and every driver's own external resources.
+   * Awaited, because a driver's release is asynchronous and a stop that returned before it
+   * finished would report a shutdown that had not happened.
+   */
+  readonly dispose?: () => void | Promise<void>;
 }
 
 type DaemonHealth = "starting" | "running" | "failed";
@@ -277,7 +282,7 @@ export class DaemonServer {
     // was inline. Disposal follows rather than precedes it, so a retry timer armed by a
     // reclaim that settles into quarantine is still cancelled.
     await this.options.settle?.();
-    this.options.dispose?.();
+    await this.options.dispose?.();
     for (const connection of this.#connections) {
       await connection.socket.close();
     }

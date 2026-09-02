@@ -17,7 +17,11 @@ import {
   Registry,
   Nuke,
 } from "../core/index.js";
-import { AndroidDriver, SdkMissingError } from "../drivers/android/index.js";
+import {
+  AdbServerUnavailableError,
+  AndroidDriver,
+  SdkMissingError,
+} from "../drivers/android/index.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import {
   CryptoIdGenerator,
@@ -32,11 +36,15 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NodeProcessRunner,
+  NodeProcessSupervisor,
   NodeSystemStats,
+  NodeTcpProbe,
   resolveSimlockHome,
   SystemClock,
   type SystemStats,
   type ProcessRunner,
+  type ProcessSupervisor,
+  type TcpProbe,
 } from "../ports/index.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
@@ -53,9 +61,11 @@ export interface StartDaemonOptions {
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
   readonly processRunner?: ProcessRunner;
+  readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
   readonly statePath?: string;
   readonly systemStats?: SystemStats;
+  readonly tcpProbe?: TcpProbe;
   readonly version?: string;
 }
 
@@ -69,6 +79,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const idGenerator = options.idGenerator ?? new CryptoIdGenerator();
   const ipc = options.ipc ?? new NodeIpcTransport();
   const processRunner = options.processRunner ?? new NodeProcessRunner();
+  const processSupervisor = options.processSupervisor ?? new NodeProcessSupervisor();
+  const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? join(dataDirectory, "daemon.sock");
@@ -108,7 +120,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           instanceId,
           logger,
           processRunner,
+          processSupervisor,
           simlockHome: dataDirectory,
+          tcpProbe,
         })
       : { drivers: options.drivers, rejections: [] };
   const leaseEngine = new LeaseEngine({
@@ -185,7 +199,23 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
     },
     settle: async () => leaseEngine.settle(),
-    dispose: () => leaseEngine.dispose(),
+    // Drivers are disposed after the lease subsystem, and every one of them is tried even
+    // when another throws: Android's disposal is the only thing that can stop the adb
+    // server it started (`ADB_REJECT_KILL_SERVER=1` refuses everything else), and a
+    // shutdown that abandoned it would leave a server nothing can reap holding the port
+    // the next daemon needs.
+    dispose: async () => {
+      leaseEngine.dispose();
+      const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
+      for (const [index, disposal] of disposals.entries()) {
+        if (disposal.status === "rejected") {
+          logger.error("Driver disposal failed", {
+            platform: drivers[index]?.platform,
+            reason: disposal.reason instanceof Error ? disposal.reason.message : "unknown",
+          });
+        }
+      }
+    },
   });
   await daemon.start();
   return daemon;
@@ -207,7 +237,9 @@ export interface DriverDiscoveryContext {
   readonly instanceId: string;
   readonly logger: Logger;
   readonly processRunner: ProcessRunner;
+  readonly processSupervisor: ProcessSupervisor;
   readonly simlockHome: string;
+  readonly tcpProbe: TcpProbe;
 }
 
 /** Drivers that started, and the platforms that refused to -- both are startup outcomes. */
@@ -232,26 +264,10 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
     if (ios.driver !== undefined) drivers.push(ios.driver);
     if (ios.rejection !== undefined) rejections.push(ios.rejection);
   }
-  try {
-    drivers.push(
-      await AndroidDriver.create({
-        clock: options.clock,
-        env: process.env,
-        filesystem: options.filesystem,
-        homeDirectory: homedir(),
-        idGenerator: options.idGenerator,
-        processRunner: options.processRunner,
-      }),
-    );
-    logger.info("Discovered driver", { platform: "android" });
-    return { drivers, rejections };
-  } catch (error: unknown) {
-    if (error instanceof SdkMissingError) {
-      logger.warn("Skipped Android driver: SDK missing", { reason: error.message });
-      return { drivers, rejections };
-    }
-    throw error;
-  }
+  const android = await discoverAndroidDriver(options, logger);
+  if (android.driver !== undefined) drivers.push(android.driver);
+  if (android.rejection !== undefined) rejections.push(android.rejection);
+  return { drivers, rejections };
 }
 
 /**
@@ -291,6 +307,71 @@ async function discoverIosDriver(
     });
     return { rejection: rootRejection(error) };
   }
+}
+
+/**
+ * Android refuses for one more reason than iOS does -- it needs a private adb server as
+ * well as an owned root -- and both refusals cost the platform rather than the daemon.
+ * A missing SDK is not a refusal at all: this host simply has no Android tooling, which is
+ * ordinary and reported by the absence of the platform.
+ */
+async function discoverAndroidDriver(
+  options: DriverDiscoveryContext,
+  logger: Logger,
+): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
+  try {
+    const driver = await AndroidDriver.create({
+      clock: options.clock,
+      driverConfig: options.driversConfig["android"] ?? {},
+      env: process.env,
+      filesystem: options.filesystem,
+      homeDirectory: homedir(),
+      idGenerator: options.idGenerator,
+      instanceId: options.instanceId,
+      processRunner: options.processRunner,
+      processSupervisor: options.processSupervisor,
+      simlockHome: options.simlockHome,
+      tcpProbe: options.tcpProbe,
+      // Ambient like `homedir()` above, and read here rather than in the driver so the
+      // composition root stays the only place that touches process state.
+      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+    });
+    logger.info("Discovered driver", { platform: "android" });
+    return { driver };
+  } catch (error: unknown) {
+    if (error instanceof SdkMissingError) {
+      logger.warn("Skipped Android driver: SDK missing", { reason: error.message });
+      return {};
+    }
+    if (error instanceof OwnedRootError) {
+      logger.error("Skipped Android driver: device root rejected", {
+        reason: error.reason,
+        root: error.path,
+        summary: error.message,
+      });
+      return { rejection: rootRejection(error) };
+    }
+    if (error instanceof AdbServerUnavailableError) {
+      logger.error("Skipped Android driver: adb server unavailable", {
+        port: error.port,
+        reason: error.reason,
+        summary: error.message,
+      });
+      return { rejection: adbServerRejection(error) };
+    }
+
+    throw error;
+  }
+}
+
+function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {
+  return {
+    event: "driver.adb-server-rejected",
+    payload: { port: error.port, reason: error.reason },
+    platform: "android",
+    reason: error.reason,
+    summary: error.message,
+  };
 }
 
 function rootRejection(error: OwnedRootError): DriverRejection {

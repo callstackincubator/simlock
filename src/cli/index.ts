@@ -133,6 +133,7 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
           args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
           command: process.execPath,
           logPath,
+          simlockHome: dataDirectory,
         }),
         socketPath,
       }),

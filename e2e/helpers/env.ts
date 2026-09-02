@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createServer } from "node:net";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -115,6 +116,13 @@ export interface WithDaemonOptions {
 
 export interface TestEnv {
   readonly home: string;
+  /**
+   * The port this env's Simlock runs its own adb server on, in the real-SDK lane. A TCP
+   * port is machine-global, so `SIMLOCK_HOME` alone no longer isolates two Simlocks and a
+   * test that shares one with the developer's own daemon would fail closed on `occupied`.
+   * `undefined` in the fake-driver lane, which has no adb server at all.
+   */
+  readonly adbServerPort: number | undefined;
   readonly socketPath: string;
   readonly logPath: string;
   readonly configPath: string;
@@ -175,9 +183,10 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
     ...(options.agentId === undefined ? {} : { SIMLOCK_AGENT_ID: options.agentId }),
   };
 
+  const adbServerPort = useFakeDriver ? undefined : await freeLoopbackPort();
   const seededConfig = useFakeDriver
     ? mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {})
-    : options.configOverrides;
+    : mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {});
   if (seededConfig !== undefined) {
     await writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
   }
@@ -186,6 +195,7 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
   const mcpClients = new Set<McpClientHandle>();
 
   const testEnv: TestEnv = {
+    adbServerPort,
     home,
     socketPath,
     logPath,
@@ -375,6 +385,27 @@ async function readFileIfExists(path: string): Promise<string | undefined> {
     return await readFile(path, "utf8");
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Binds an ephemeral loopback port and immediately releases it. Inherently racy -- nothing
+ * stops another process taking it in between -- but it is the only way to pick a port no
+ * other test env on this machine is already using, and the alternative (a fixed port) fails
+ * every parallel run rather than an unlucky one.
+ */
+async function freeLoopbackPort(): Promise<number> {
+  const server = createServer();
+  try {
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        resolve(typeof address === "object" && address !== null ? address.port : 0);
+      });
+    });
+    return port;
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
 

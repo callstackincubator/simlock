@@ -10,6 +10,8 @@ import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
   FakeClock,
+  FakeProcessSupervisor,
+  FakeTcpProbe,
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
@@ -177,7 +179,9 @@ describe("discoverDrivers", () => {
       instanceId: "instance-1",
       logger,
       processRunner: new ScriptedProcessRunner([]),
+      processSupervisor: new FakeProcessSupervisor(),
       simlockHome: "/home/.simlock",
+      tcpProbe: new FakeTcpProbe(),
     });
 
     expect(drivers.some((driver) => driver.platform === "android")).toBe(false);
@@ -266,6 +270,92 @@ describe("discoverDrivers", () => {
   });
 });
 
+describe("discoverDrivers on a host with an Android SDK", () => {
+  const previousAndroidHome = process.env.ANDROID_HOME;
+
+  afterEach(() => {
+    if (previousAndroidHome === undefined) {
+      delete process.env.ANDROID_HOME;
+    } else {
+      process.env.ANDROID_HOME = previousAndroidHome;
+    }
+  });
+
+  it("keeps the daemon up when Simlock's adb port is occupied, reporting the platform instead", async () => {
+    const filesystem = await androidSdk();
+
+    const { drivers, rejections } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]));
+
+    expect(drivers.some((driver) => driver.platform === "android")).toBe(false);
+    // The payload is a wire contract `simlock events --json` publishes for
+    // `driver.adb-server-rejected`, so a renamed key has to fail here.
+    expect(rejections[0]).toMatchObject({
+      event: "driver.adb-server-rejected",
+      payload: { port: 5038, reason: "occupied" },
+      platform: "android",
+      reason: "occupied",
+    });
+  });
+
+  it("starts the Android driver on its own root once its adb server is established", async () => {
+    const filesystem = await androidSdk();
+    const probe = new FakeTcpProbe([5038]);
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    // The server a previous daemon left behind, with the pid that proves it is Simlock's.
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+
+    const { drivers, rejections } = await discoverAndroid(filesystem, probe, [4242]);
+
+    expect(rejections).toEqual([]);
+    expect(drivers.find((driver) => driver.platform === "android")?.deviceRoot).toBe(
+      join(SIMLOCK_HOME, "devices", "android"),
+    );
+  });
+
+  /** The minimum layout `discoverSdk` accepts, in memory. */
+  async function androidSdk(): Promise<MemoryFilesystem> {
+    const filesystem = new MemoryFilesystem();
+    process.env.ANDROID_HOME = "/android-sdk";
+    for (const binary of [
+      "/android-sdk/platform-tools/adb",
+      "/android-sdk/emulator/emulator",
+      "/android-sdk/cmdline-tools/latest/bin/avdmanager",
+      "/android-sdk/cmdline-tools/latest/bin/sdkmanager",
+    ]) {
+      await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
+      await filesystem.writeFileAtomic(binary, "binary");
+    }
+    return filesystem;
+  }
+
+  function discoverAndroid(
+    filesystem: MemoryFilesystem,
+    tcpProbe: FakeTcpProbe,
+    livePids: readonly number[] = [],
+  ) {
+    return discoverDrivers({
+      clock: new FakeClock(),
+      driversConfig: {},
+      filesystem,
+      hostPlatform: "linux",
+      idGenerator: new CryptoIdGenerator(),
+      instanceId: INSTANCE_ID,
+      logger: new JsonLinesLogger({
+        clock: new FakeClock(),
+        level: "debug",
+        sink: new MemoryLogSink(),
+      }),
+      processRunner: new ScriptedProcessRunner([]),
+      processSupervisor: new FakeProcessSupervisor(livePids),
+      simlockHome: SIMLOCK_HOME,
+      tcpProbe,
+    });
+  }
+});
+
 const SIMLOCK_HOME = "/home/.simlock";
 const IOS_ROOT = join(SIMLOCK_HOME, "devices", "ios");
 const INSTANCE_ID = "instance-1";
@@ -326,7 +416,9 @@ function discoverIos(
       sink: overrides.sink ?? new MemoryLogSink(),
     }),
     processRunner: new ScriptedProcessRunner([]),
+    processSupervisor: new FakeProcessSupervisor(),
     simlockHome: SIMLOCK_HOME,
+    tcpProbe: new FakeTcpProbe(),
   });
 }
 
@@ -360,7 +452,9 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       instanceId: "instance-1",
       logger,
       processRunner: new ScriptedProcessRunner([]),
+      processSupervisor: new FakeProcessSupervisor(),
       simlockHome: "/home/.simlock",
+      tcpProbe: new FakeTcpProbe(),
     });
   }
 

@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import type { DeviceSpec } from "../../core/domain.js";
 import {
   BootTimeoutError,
@@ -14,6 +16,7 @@ import {
   RuntimeMissingError,
   UnknownModelError,
 } from "../../core/driver.js";
+import { ensureOwnedRoot, OwnedRootError } from "../../core/index.js";
 import type {
   Clock,
   Filesystem,
@@ -21,14 +24,33 @@ import type {
   ProcessHandle,
   ProcessResult,
   ProcessRunner,
+  ProcessSupervisor,
+  TcpProbe,
 } from "../../ports/index.js";
+import { AdbRegistrar } from "./adb-registrar.js";
+import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
+
+export { AdbServerUnavailableError } from "./adb-server.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
 const COLD_BOOT_ESTIMATE_MS = 31_000;
+// Console ports, even ones only, each paired with the odd adb port above it. The range
+// starts above the 5585 ceiling a default adb server scans, so the user's server and
+// Android Studio cannot see, drive, or kill a Simlock emulator (ADR 0001, decision 4).
+// It also repairs the old 5554-5682 range, which was broken at both ends: the bottom
+// competed for the user's own emulators, and everything above 5585 read as free to the
+// allocator below -- which derives occupancy from `adb devices` -- because no server
+// could report a device up there. Simlock's own server scans to 5683, so it can.
 const PORT_MAX = 5682;
-const PORT_MIN = 5554;
+const PORT_MIN = 5586;
 const PORT_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_ADB_SERVER_PORT = 5038;
+// After this long without an answer from a serial, the emulator's own registration is
+// assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
+// already attached, short enough that a lost announcement costs seconds, not the whole
+// readiness timeout.
+const REGISTRATION_RETRY_AFTER_MS = 5_000;
 const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
 // A defense-in-depth bound on the wait that follows a SIGKILL: NodeProcessHandle#wait
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
@@ -58,14 +80,25 @@ const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
 export interface AndroidDriverOptions {
   readonly clock: Clock;
+  /** This driver's own `drivers.android` block, handed over unread by the core. */
+  readonly driverConfig: Readonly<Record<string, string | number | boolean>>;
+  /** The environment every scoped invocation is layered on top of; `process.env` in production. */
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
   readonly hostAbi?: string;
   readonly idGenerator?: IdGenerator;
+  /** Identity this driver's device root ownership marker is checked against. */
+  readonly instanceId: string;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly processRunner: ProcessRunner;
+  readonly processSupervisor: ProcessSupervisor;
   readonly readinessTimeoutMs?: number;
+  /** `SIMLOCK_HOME`: the default device root and the adb server record are derived here, not in the core. */
+  readonly simlockHome: string;
+  readonly tcpProbe: TcpProbe;
+  /** `process.getuid?.()`; `undefined` skips the root's ownership check. */
+  readonly uid?: number;
 }
 
 export interface AndroidDriverDiagnostic {
@@ -114,16 +147,12 @@ const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
 export class AndroidDriver implements Driver {
   readonly platform = "android" as const;
-  /**
-   * Placeholder until this driver owns a validated AVD home and a private adb server
-   * (ADR 0001, decision 4). Deliberately not `#avdDirectory`: that is wherever the user's
-   * own AVDs already live, and naming it here would claim an ownership Simlock has not
-   * proven for it. Nothing reads either member yet.
-   */
-  // fallow-ignore-next-line unused-class-member -- Driver.deviceRoot contract; read by doctor --purge-orphans to say which root an orphan came from.
-  readonly deviceRoot = "/simlock-android-device-root-pending";
+  readonly #adbServer: AdbServerSupervisor;
+  readonly #adbServerPort: number;
+  readonly #baseEnv: Readonly<Record<string, string | undefined>>;
   readonly #clock: Clock;
   readonly #devices = new Map<string, DeviceState>();
+  readonly #deviceRoot: string;
   readonly #filesystem: Filesystem;
   readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
@@ -133,34 +162,128 @@ export class AndroidDriver implements Driver {
   readonly #processRunner: ProcessRunner;
   readonly #profiles = new Map<string, DeviceProfile>();
   readonly #readinessTimeoutMs: number;
+  readonly #registrar: AdbRegistrar;
   readonly #sdk: AndroidSdkPaths;
-  readonly #avdDirectory: string;
 
-  private constructor(options: AndroidDriverOptions, sdk: AndroidSdkPaths) {
+  private constructor(
+    options: AndroidDriverOptions,
+    sdk: AndroidSdkPaths,
+    deviceRoot: string,
+    adbServer: AdbServerSupervisor,
+    adbServerPort: number,
+  ) {
+    this.#adbServer = adbServer;
+    this.#adbServerPort = adbServerPort;
+    this.#baseEnv = options.env;
     this.#clock = options.clock;
+    this.#deviceRoot = deviceRoot;
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi ?? hostAbiFor(process.arch);
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
     this.#onDiagnostic = options.onDiagnostic;
     this.#processRunner = options.processRunner;
     this.#readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+    this.#registrar = new AdbRegistrar({ serverPort: adbServerPort, tcp: options.tcpProbe });
     this.#sdk = sdk;
-    this.#avdDirectory = options.env.ANDROID_AVD_HOME ?? `${options.homeDirectory}/.android/avd`;
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
   }
 
+  /**
+   * Establishes everything containment rests on before the driver can be asked to do
+   * anything: the AVD home this instance owns, and the private adb server its emulators
+   * are reachable through. Both fail closed -- an `OwnedRootError` or an
+   * `AdbServerUnavailableError` here costs the Android platform and nothing else, because
+   * the alternatives are the user's own AVD directory and the machine's shared adb server,
+   * which Simlock can prove nothing about (safety rule 9).
+   */
   static async create(options: AndroidDriverOptions): Promise<AndroidDriver> {
     const sdk = await discoverSdk(options);
-    return new AndroidDriver(options, sdk);
+    const adbServerPort = configuredAdbServerPort(options);
+    // Resolved once and shared: the root's staging directory, the AVD names, and the
+    // provenance tokens all come from the same generator, so a caller that injected one
+    // controls all three rather than two of them.
+    const idGenerator = options.idGenerator ?? new SequentialIdGenerator();
+    const deviceRoot = await ensureOwnedRoot({
+      filesystem: options.filesystem,
+      idGenerator,
+      instanceId: options.instanceId,
+      path: configuredDeviceRoot(options),
+      platform: "android",
+      ...(options.uid === undefined ? {} : { uid: options.uid }),
+    });
+    const adbServer = new AdbServerSupervisor({
+      adbPath: sdk.adb,
+      clock: options.clock,
+      env: options.env,
+      filesystem: options.filesystem,
+      port: adbServerPort,
+      processRunner: options.processRunner,
+      processSupervisor: options.processSupervisor,
+      recordPath: join(options.simlockHome, "adb-server.json"),
+      tcpProbe: options.tcpProbe,
+    });
+    await adbServer.start();
+
+    return new AndroidDriver(
+      { ...options, idGenerator },
+      sdk,
+      deviceRoot,
+      adbServer,
+      adbServerPort,
+    );
   }
 
   get sdkPath(): string {
     return this.#sdk.root;
   }
 
-  // fallow-ignore-next-line unused-class-member -- Driver.leaseEnvironment contract; read by the lease path when it builds a grant.
+  get deviceRoot(): string {
+    return this.#deviceRoot;
+  }
+
   leaseEnvironment(): Readonly<Record<string, string>> {
-    return {};
+    // `adb` reads this variable natively, so a lease holder needs nothing else to reach the
+    // device: without it their `adb` talks to the shared server, which cannot see it.
+    return { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) };
+  }
+
+  /**
+   * Stops the adb server this driver started. Nothing else can: `ADB_REJECT_KILL_SERVER=1`
+   * makes `adb kill-server` refuse Simlock too, and the spawned child is not unref'd, so a
+   * shutdown that skipped this would leave both a server and a daemon that cannot exit.
+   */
+  async dispose(): Promise<void> {
+    await this.#adbServer.stop();
+  }
+
+  /**
+   * The single insertion point for Android's scoping, the way `--set` is iOS's: every
+   * `adb`, `emulator`, and `avdmanager` invocation this driver makes carries both keys, so
+   * a call that slipped past here would address the user's AVD home and the shared adb
+   * server. Layered over the injected environment because `ProcessRunner` replaces a
+   * child's environment wholesale rather than merging into it -- a scoped env alone would
+   * drop `PATH` and `ANDROID_HOME` and break every tool it scopes.
+   */
+  #env(): NodeJS.ProcessEnv {
+    return {
+      ...this.#baseEnv,
+      ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort),
+      ANDROID_AVD_HOME: this.#deviceRoot,
+    };
+  }
+
+  /**
+   * Announces an emulator to Simlock's adb server, which with the scanner off is what
+   * attaches it (see `AdbRegistrar`). Always best-effort: the emulator announces itself
+   * too, so a failure here is usually a duplicate of something that already worked, and
+   * failing a boot over it would trade a working device for a redundant message.
+   */
+  async #register(consolePort: number): Promise<void> {
+    try {
+      await this.#registrar.register(consolePort + 1);
+    } catch {
+      // Nothing to do but wait for the readiness loop, which retries this itself.
+    }
   }
 
   async resolveSpec(
@@ -197,6 +320,9 @@ export class AndroidDriver implements Driver {
     this.#assertAndroidSpec(spec);
     const profile = await this.#profileFor(spec.model);
     const image = await this.#requireImage(spec.osVersion);
+    // Cosmetic only, and worth saying so: the prefix is a label that makes an emulator
+    // recognisable in `adb devices` and in its window title. Nothing reads it back as
+    // evidence of anything -- ownership comes from the root this AVD is created in.
     const avdName = `simlock_${this.#idGenerator.generate()}`;
     const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
 
@@ -212,7 +338,7 @@ export class AndroidDriver implements Driver {
     ]);
 
     const configHash = await this.#configHash(avdName, image);
-    const port = await this.#portAllocator.allocate();
+    const port = await this.#portAllocator.allocate(this.#env());
     const driverData: AndroidDriverData = {
       avdName,
       configHash,
@@ -253,7 +379,7 @@ export class AndroidDriver implements Driver {
           state.baselineCaptured = true;
           state.snapshotExpected = true;
         } else {
-          await this.#filesystem.rm(`${this.#avdDirectory}/${data.avdName}.avd/snapshots`);
+          await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
           state.baselineCaptured = false;
           state.needsWipe = true;
           state.snapshotExpected = false;
@@ -308,7 +434,7 @@ export class AndroidDriver implements Driver {
       const baselineHash = await this.#baselineHash(data.avdName);
       if (baselineHash !== currentHash) {
         await this.#shutdown(data, state);
-        await this.#filesystem.rm(`${this.#avdDirectory}/${data.avdName}.avd/snapshots`);
+        await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
         state.needsWipe = true;
         state.snapshotExpected = false;
         state.baselineCaptured = false;
@@ -366,7 +492,7 @@ export class AndroidDriver implements Driver {
     const avdNames = await this.#listAvdNames();
     const { settledSerials, unattributableTransitionalSerial } = await this.#scanAdbSerials();
     const { processes, runningByAvdName, erasableMarkByAvdName, unreadableSerial } =
-      await this.#resolveRunningAvds(settledSerials);
+      await this.#resolveRunningAvds(settledSerials, new Set(avdNames));
     const unattributable = unattributableTransitionalSerial || unreadableSerial;
 
     const devices: ObservedDevice[] = await Promise.all(
@@ -391,11 +517,16 @@ export class AndroidDriver implements Driver {
     return mark === undefined ? base : { ...base, mark };
   }
 
+  /**
+   * Every AVD in the root, whatever it is called. The name is a cosmetic label with no
+   * authority: what makes these AVDs Simlock's is that they sit inside a root Simlock
+   * created empty and marked, which nothing else can put an AVD into (safety rule 8).
+   */
   async #listAvdNames(): Promise<string[]> {
     const avdNames: string[] = [];
-    if (await this.#filesystem.exists(this.#avdDirectory)) {
-      for (const entry of await this.#filesystem.readdir(this.#avdDirectory)) {
-        const match = /^(simlock_.+)\.avd$/.exec(entry);
+    if (await this.#filesystem.exists(this.#deviceRoot)) {
+      for (const entry of await this.#filesystem.readdir(this.#deviceRoot)) {
+        const match = /^(.+)\.avd$/.exec(entry);
         if (match?.[1] === undefined) continue;
         avdNames.push(match[1]);
       }
@@ -434,7 +565,10 @@ export class AndroidDriver implements Driver {
    * per serial -- the mark read is folded into the `getprop` call that this method already
    * makes, so it costs nothing extra.
    */
-  async #resolveRunningAvds(settledSerials: readonly string[]): Promise<{
+  async #resolveRunningAvds(
+    settledSerials: readonly string[],
+    avdNamesInRoot: ReadonlySet<string>,
+  ): Promise<{
     readonly erasableMarkByAvdName: ReadonlyMap<string, string | undefined>;
     readonly processes: readonly DriverDevice[];
     readonly runningByAvdName: ReadonlySet<string>;
@@ -464,7 +598,11 @@ export class AndroidDriver implements Driver {
       }
       const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
       const avdName = nameLine.trim();
-      if (!avdName.startsWith("simlock_")) continue;
+      // Root membership, never the name and never "our server can see it". `ADB_EMU=0`
+      // should mean this server only holds transports Simlock registered itself, but a
+      // device is Simlock's because of where its AVD lives -- ownership is proven, not
+      // inferred from who happens to be looking at it (safety rule 8).
+      if (!avdNamesInRoot.has(avdName)) continue;
       runningByAvdName.add(avdName);
       erasableMarkByAvdName.set(avdName, parseErasableMark(markLines.join("\n")));
       const port = Number(candidate.slice("emulator-".length));
@@ -627,7 +765,7 @@ export class AndroidDriver implements Driver {
   }
 
   #configIniPath(avdName: string): string {
-    return `${this.#avdDirectory}/${avdName}.avd/config.ini`;
+    return `${this.#deviceRoot}/${avdName}.avd/config.ini`;
   }
 
   /**
@@ -693,14 +831,19 @@ export class AndroidDriver implements Driver {
         throw new BootTimeoutError(data.avdName);
       }
 
-      const completed = await this.#processRunner.run(this.#sdk.adb, [
-        "-s",
-        data.serial,
-        "shell",
-        "getprop",
-        "sys.boot_completed",
-      ]);
+      const completed = await this.#processRunner.run(
+        this.#sdk.adb,
+        ["-s", data.serial, "shell", "getprop", "sys.boot_completed"],
+        { env: this.#env() },
+      );
       if (completed.code !== 0) {
+        // A serial that will not answer is a serial the server has no transport for, which
+        // is the same evidence "absent from `adb devices`" would give and costs no extra
+        // round trip. Past the grace period, assume the emulator's own announcement was
+        // lost -- with the scanner off nothing else will ever re-send it -- and re-announce.
+        if (this.#clock.now() - startedAt >= REGISTRATION_RETRY_AFTER_MS) {
+          await this.#register(data.port);
+        }
         await this.#delay(
           Math.min(
             PORT_POLL_INTERVAL_MS,
@@ -735,15 +878,16 @@ export class AndroidDriver implements Driver {
     fromSnapshot: boolean,
   ): Promise<void> {
     const startedAt = this.#clock.now();
-    const handle = this.#processRunner.spawn(this.#sdk.emulator, [
-      "-avd",
-      data.avdName,
-      "-port",
-      String(data.port),
-      "-no-snapshot-save",
-      ...launchArgs,
-    ]);
+    const handle = this.#processRunner.spawn(
+      this.#sdk.emulator,
+      ["-avd", data.avdName, "-port", String(data.port), "-no-snapshot-save", ...launchArgs],
+      { env: this.#env() },
+    );
     state.handle = handle;
+    // Immediately, not after the boot: the emulator announces itself to the server named by
+    // `ANDROID_ADB_SERVER_PORT` as soon as it is up, and this second announcement is the
+    // one that covers a lost first one.
+    await this.#register(data.port);
 
     try {
       await this.#waitForReadiness(data, startedAt);
@@ -806,11 +950,13 @@ export class AndroidDriver implements Driver {
   }
 
   #baselineMetadataPath(avdName: string): string {
-    return `${this.#avdDirectory}/${avdName}.avd/simlock-clean-baseline.json`;
+    return `${this.#deviceRoot}/${avdName}.avd/simlock-clean-baseline.json`;
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"]);
+    await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
+      env: this.#env(),
+    });
     const handle = state.handle;
     if (handle === undefined) {
       return;
@@ -844,7 +990,7 @@ export class AndroidDriver implements Driver {
     args: readonly string[],
     options: { readonly timeoutMs?: number } = {},
   ) {
-    const result = await this.#processRunner.run(command, args, options);
+    const result = await this.#processRunner.run(command, args, { ...options, env: this.#env() });
     if (result.code !== 0) {
       throw new DriverCrashError(
         `${command} ${args.join(" ")} failed: ${result.stderr || result.stdout}`,
@@ -923,7 +1069,13 @@ class PortAllocator {
     private readonly processRunner: ProcessRunner,
   ) {}
 
-  async allocate(): Promise<number> {
+  /**
+   * The scoped environment is passed per call rather than held, because one allocator is
+   * shared by every driver on a runner (see `portAllocatorFor`) while the environment
+   * belongs to one driver instance -- a stored one would go stale the moment a second
+   * driver appeared and would silently poll the wrong adb server.
+   */
+  async allocate(env: NodeJS.ProcessEnv): Promise<number> {
     const previous = this.#lock;
     let release!: () => void;
     this.#lock = new Promise((resolve) => {
@@ -931,7 +1083,7 @@ class PortAllocator {
     });
     await previous;
     try {
-      const result = await this.processRunner.run(this.adb, ["devices"]);
+      const result = await this.processRunner.run(this.adb, ["devices"], { env });
       if (result.code !== 0) {
         throw new DriverCrashError(`adb devices failed: ${result.stderr || result.stdout}`);
       }
@@ -961,6 +1113,49 @@ class SequentialIdGenerator implements IdGenerator {
     this.#next += 1;
     return String(value);
   }
+}
+
+/**
+ * A `deviceRoot` that is not a usable path refuses this platform's *configuration*, which
+ * costs Android and nothing else -- not the daemon. `"deviceRoot": true` and
+ * `"deviceRoot": "devices/android"` are one keystroke apart, and killing the process over
+ * the first would take iOS down with it and leave the reason unreachable, since `doctor`
+ * needs a daemon to answer. `not-absolute` is the published vocabulary term for "this
+ * names no usable directory"; nothing new is invented here.
+ */
+function configuredDeviceRoot(options: AndroidDriverOptions): string {
+  const configured = options.driverConfig["deviceRoot"];
+
+  if (configured !== undefined && typeof configured !== "string") {
+    throw new OwnedRootError(
+      `Refusing the android device root: drivers.android.deviceRoot must be an absolute path, but it is the ${typeof configured} ${JSON.stringify(configured)}`,
+      "not-absolute",
+      String(configured),
+      "android",
+    );
+  }
+
+  return configured ?? join(options.simlockHome, "devices", "android");
+}
+
+/**
+ * The port is only read here; whether it can actually carry a server is the supervisor's
+ * decision, so range and reserved-port checks are not duplicated. A value that is not a
+ * number at all cannot reach that check as itself, and the event payload has nowhere to
+ * put it -- hence the `0` stand-in, with the configured value named in the message.
+ */
+function configuredAdbServerPort(options: AndroidDriverOptions): number {
+  const configured = options.driverConfig["adbServerPort"];
+
+  if (configured !== undefined && typeof configured !== "number") {
+    throw new AdbServerUnavailableError(
+      `Refusing to run the android driver: drivers.android.adbServerPort must be a TCP port number, but it is the ${typeof configured} ${JSON.stringify(configured)}`,
+      "invalid-port",
+      0,
+    );
+  }
+
+  return configured ?? DEFAULT_ADB_SERVER_PORT;
 }
 
 async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPaths> {
