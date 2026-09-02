@@ -3,6 +3,7 @@ import {
   type DeviceRequest,
   DiskSpaceGuard,
   type Driver,
+  type DriverAdvisory,
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
@@ -906,6 +907,48 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
+   * ADR point 4 (issue #87): slim mode is silent about the runtime gate everywhere except
+   * `makeReady`'s per-boot `SlimSkippedFact` -- an operator who never leases a device on an
+   * old runtime would otherwise have no way to learn slimming is doing nothing for it. Reports
+   * one `slim-runtime-unsupported` advisory naming every installed runtime that predates the
+   * 18.5 persistent-override floor, using the same `supportsPersistentSlim` gate `planSlimBoot`
+   * uses for the real per-device decision, so this can never drift from what `makeReady` will
+   * actually do. Nothing when slim mode is off (there is no gate to warn about) or when every
+   * installed runtime qualifies. Read-only: only `#loadCatalog` (a `simctl list`) runs, no
+   * boot, no download, no mutation -- matching `listCatalog`'s own contract.
+   */
+  async advisories(): Promise<readonly DriverAdvisory[]> {
+    if (this.#slim === undefined || !this.#slim.enabled) {
+      return [];
+    }
+
+    const catalog = await this.#loadCatalog();
+    const unsupportedVersions = [
+      ...new Set(
+        catalog.runtimes
+          .filter((runtime) => runtime.isAvailable)
+          .filter((runtime) => !supportsPersistentSlim(runtimeVersionTuple(runtime.version)))
+          .map((runtime) => runtime.version),
+      ),
+    ].sort(compareVersions);
+
+    if (unsupportedVersions.length === 0) {
+      return [];
+    }
+
+    const plural = unsupportedVersions.length > 1;
+    return [
+      {
+        code: "slim-runtime-unsupported",
+        message:
+          `Slim mode is enabled, but iOS ${unsupportedVersions.join(", ")} ${plural ? "are" : "is"} ` +
+          `below the 18.5 persistent-override floor; devices on ${plural ? "those runtimes" : "that runtime"} ` +
+          `are never slimmed -- \`launchctl disable\` overrides do not survive a reboot below iOS 18.5`,
+      },
+    ];
+  }
+
+  /**
    * Data-container path for a device. `simctl create` returns only the UDID,
    * and a `simctl list` costs ~260ms -- enough to matter on `reclaim`, which
    * runs on every release. So the devices root is learned once from simctl's
@@ -1351,6 +1394,17 @@ function formatVersionRange(min: number, max: number): string {
 function versionTriple(version: string): readonly [number, number, number] {
   const parts = version.split(".").map(versionPart);
   return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+}
+
+/**
+ * `[major, minor]` from a catalog runtime's marketing version string (e.g. `"18.5"`) -- the
+ * same shape `supportsPersistentSlim` already takes from `iosRuntimeVersionFromId`'s parse of a
+ * `runtimeId`, so `#advisories` can reuse that one gate instead of re-deriving it. Built on the
+ * existing `versionTriple` parse rather than a new one.
+ */
+function runtimeVersionTuple(version: string): readonly [number, number] {
+  const [major, minor] = versionTriple(version);
+  return [major, minor];
 }
 
 function versionOrdinal(triple: readonly [number, number, number]): number {

@@ -838,6 +838,77 @@ describe("CLI boundary", () => {
     );
   });
 
+  it("passes every doctor finding through to stdout as JSON, driver-advisory included", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [
+        { deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" },
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "iOS 18.4 is below the 18.5 persistent-override floor",
+          platform: "ios",
+        },
+      ],
+    });
+
+    await expect(
+      runCli(["doctor"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({ payload: { fix: false }, type: "doctor.run" });
+    expect(JSON.parse(output.stdout)).toEqual({
+      findings: [
+        { deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" },
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "iOS 18.4 is below the 18.5 persistent-override floor",
+          platform: "ios",
+        },
+      ],
+    });
+  });
+
+  it("surfaces a driver-advisory finding as a plain warning line on stderr, distinct from drift", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [
+        { deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" },
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "iOS 18.4 is below the 18.5 persistent-override floor",
+          platform: "ios",
+        },
+      ],
+    });
+
+    await expect(
+      runCli(["doctor", "--fix"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({ payload: { fix: true }, type: "doctor.run" });
+    expect(output.stderr).toBe(
+      "Warning [ios] slim-runtime-unsupported: iOS 18.4 is below the 18.5 persistent-override floor\n",
+    );
+    // Only the advisory gets a warning line -- the drift finding is not echoed to stderr.
+    expect(output.stderr).not.toContain("registry-device-missing");
+  });
+
+  it("writes nothing to stderr when doctor reports no driver-advisory findings", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [{ deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" }],
+    });
+
+    await expect(
+      runCli(["doctor"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stderr).toBe("");
+  });
+
   it("releases and exits when the watched parent process dies, via the same path as a signal", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();

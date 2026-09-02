@@ -112,6 +112,19 @@ export interface DriverCatalogEntry {
   readonly defaultRuntime: string | undefined;
 }
 
+/**
+ * A configuration-level problem only the owning driver can see -- reported by `doctor`
+ * alongside its own drift findings (`src/core/doctor.ts`'s `driver-advisory` finding kind).
+ * Unlike drift, this is never something `--fix` acts on: it describes a standing condition of
+ * the driver's own configuration (e.g. a feature silently doing nothing given the installed
+ * runtimes), not a divergence between the registry and reality.
+ */
+export interface DriverAdvisory {
+  /** Short kebab-case identifier the driver owns; the core never interprets it. */
+  readonly code: string;
+  readonly message: string;
+}
+
 export interface Driver {
   readonly platform: Platform;
   resolveSpec(
@@ -146,6 +159,13 @@ export interface Driver {
   /** Read-only: must never trigger a runtime / system-image download. */
   listCatalog(): Promise<DriverCatalogEntry>;
   estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
+  /**
+   * Configuration-level problems only this driver can see -- reported by `doctor` alongside its
+   * drift findings. Read-only and side-effect free (same contract as `listCatalog`): it must
+   * never trigger a download, boot, or mutate anything. Optional: a driver with nothing to
+   * advise omits it.
+   */
+  advisories?(): Promise<readonly DriverAdvisory[]>;
 }
 
 export class RuntimeMissingError extends Error {

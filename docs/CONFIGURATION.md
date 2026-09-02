@@ -50,13 +50,21 @@ See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
 
 Slim mode is opt-in and iOS-only: it disables simulator daemon categories
-(e.g. logging, diagnostics) that most agent workloads never touch, trading
-some simulator functionality for a leaner runtime footprint. It requires
-iOS 18.5 or newer, since the underlying daemon controls are not available
-on older runtimes. Turning it on costs an extra boot per device -- the
-daemons are disabled between a first boot and a second, slower one -- which
-is why `ios.slim.bootTimeoutMs` defaults higher than the normal boot
-timeout, especially on slower CI runners.
+that most agent workloads never touch, trading some simulator functionality
+for a leaner runtime footprint. The categories are widgets, Siri/Apple
+Intelligence, Spotlight/search, iCloud, App Store, mail/calendar (PIM),
+Safari/web, Family Sharing, Health, Photos, bundled apps (News/Weather/Maps/
+Tips/games), messaging, connectivity, telemetry, and a miscellaneous group
+(`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`,
+`health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`,
+`other` -- the valid `ios.slim.categories` strings, defined in
+`src/drivers/ios/slim-labels.ts`). Measured on one simulator: ~258 -> ~70
+processes, ~4.0 GB -> ~0.9 GB. It requires iOS 18.5 or newer, since the
+underlying daemon controls are not available on older runtimes. Turning it
+on costs an extra boot per device -- the daemons are disabled between a
+first boot and a second, slower one -- which is why
+`ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
+especially on slower CI runners.
 
 ## Capacity strategies
 

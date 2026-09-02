@@ -559,11 +559,32 @@ async function runDoctor(argv: readonly string[], environment: CliEnvironment): 
     environment.stdout.write("Usage: simlock doctor [--fix]\n");
     return 0;
   }
-  writeResult(
-    environment,
-    await requestOnce(environment, "doctor.run", { fix: values.fix ?? false }),
-  );
+  const response = await requestOnce(environment, "doctor.run", { fix: values.fix ?? false });
+  writeDriverAdvisoryWarnings(environment, response);
+  writeResult(environment, response);
   return 0;
+}
+
+/**
+ * `driver-advisory` findings (`src/core/doctor.ts`) are configuration-level information, not
+ * drift -- `--fix` never acts on them (see `Doctor#applySafeFixes`). Surfaced as plain warning
+ * lines on stderr, distinct from every drift-finding kind, so a human running `doctor`
+ * interactively notices them without having to parse the JSON report; stdout keeps carrying
+ * every finding kind unmodified via `writeResult`, matching the JSON-passthrough convention
+ * `list`/`cleanup`/`nuke` already use, so a scripted consumer of stdout sees no behavior change.
+ */
+function writeDriverAdvisoryWarnings(environment: CliEnvironment, response: unknown): void {
+  if (typeof response !== "object" || response === null) return;
+  const findings = (response as Record<string, unknown>).findings;
+  if (!Array.isArray(findings)) return;
+  for (const finding of findings) {
+    if (typeof finding !== "object" || finding === null) continue;
+    const record = finding as Record<string, unknown>;
+    if (record.kind !== "driver-advisory") continue;
+    environment.stderr.write(
+      `Warning [${String(record.platform)}] ${String(record.code)}: ${String(record.message)}\n`,
+    );
+  }
 }
 
 async function runNuke(argv: readonly string[], environment: CliEnvironment): Promise<number> {

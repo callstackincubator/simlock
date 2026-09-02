@@ -1807,6 +1807,55 @@ describe("IosSimctlDriver", () => {
 
       expect(driver.estimate({ operation: "boot" }, spec)).toBe(150_000);
     });
+
+    describe("advisories()", () => {
+      it("reports slim-runtime-unsupported when an installed runtime predates 18.5", async () => {
+        const driver = createSlimDriver(
+          scriptedListRunner(),
+          new MemoryFilesystem(),
+          slimOptions(),
+        );
+
+        // listFixture installs iOS 18.4 (below the floor) alongside iOS 26.5 (above it).
+        await expect(driver.advisories()).resolves.toEqual([
+          {
+            code: "slim-runtime-unsupported",
+            message: expect.stringContaining("18.4"),
+          },
+        ]);
+      });
+
+      it("reports nothing when every installed runtime is 18.5+", async () => {
+        const onlyNewFixture = JSON.stringify({
+          devicetypes: (JSON.parse(listFixture) as { devicetypes: unknown }).devicetypes,
+          runtimes: (
+            JSON.parse(listFixture) as { runtimes: { version: string }[] }
+          ).runtimes.filter((runtime) => runtime.version !== "18.4"),
+        });
+        const runner = new ScriptedProcessRunner([
+          { match: listInvocation, result: { code: 0, stderr: "", stdout: onlyNewFixture } },
+        ]);
+        const driver = createSlimDriver(runner, new MemoryFilesystem(), slimOptions());
+
+        await expect(driver.advisories()).resolves.toEqual([]);
+      });
+
+      it("reports nothing when slim mode is off", async () => {
+        const driver = createDriver(scriptedListRunner());
+
+        await expect(driver.advisories()).resolves.toEqual([]);
+      });
+
+      it("reports nothing when slim is configured but disabled", async () => {
+        const driver = createSlimDriver(scriptedListRunner(), new MemoryFilesystem(), {
+          bootTimeoutMs: 300_000,
+          categories: ["widgets"],
+          enabled: false,
+        });
+
+        await expect(driver.advisories()).resolves.toEqual([]);
+      });
+    });
   });
 });
 

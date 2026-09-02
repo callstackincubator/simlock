@@ -146,3 +146,51 @@ real protocol machinery, not a small addition, so it was deliberately not
 built in stage 4. `component.install-started`'s payload already carries
 enough (`platform`, `componentId`) that a future pass wiring this through
 would mostly be plumbing, not new information to invent.
+
+## iOS slim mode: accepted costs and feature loss (#87)
+
+`ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
+daemons across simulator daemon categories to cut RAM/CPU footprint (see
+[CONFIGURATION.md](CONFIGURATION.md)). It carries four trade-offs worth
+knowing before turning it on.
+
+**Every reclaim pays two boots, indefinitely.** `IosSimctlDriver.reclaim`
+always runs `simctl erase`, which wipes the simulator's data partition —
+including the launchd overrides slimming wrote there. So a reclaimed device
+is never still slim: the next `makeReady` re-applies the full disable pass
+and reboots twice (once to boot the freshly erased device, once more for the
+overrides to take effect) rather than skipping straight to the idempotence
+check. Accepted because both reclaim and warm-pool provisioning run off the
+lease-granting critical path — the requester waiting on a device only pays
+for this when nothing pre-provisioned was available. A non-erasing
+`standard` clean level, if one is added later, would let a reclaimed device
+stay slim and remove this cost; no such level exists today.
+
+**Runtimes older than iOS 18.5 silently get nothing.** `launchctl disable`
+overrides only persist across a reboot on iOS 18.5+; older runtimes accept
+the commands and drop them on the post-slim reboot, so slimming would cost a
+second boot for no effect. `planSlimBoot` (`src/drivers/ios/index.ts`) gates
+on this and skips the apply pass entirely rather than paying that cost —
+silently, from the requester's point of view: the lease still grants, just
+with `slim: false`. `simlock doctor`'s `driver-advisory` /
+`slim-runtime-unsupported` finding is what makes an unsupported runtime
+visible to an operator instead of it only ever showing up as an unexpectedly
+non-slim lease.
+
+**Slim devices lose features that depend on the disabled daemons.** Expect
+push notifications, Spotlight/on-device search, StoreKit/App Store sheets,
+universal links, Siri/Apple Intelligence, iCloud sync, and some system
+pickers to not work on a slim device — the categories that back them are
+exactly the ones slimming disables. Mitigations: `simlock lease --full` (MCP
+`full: true`, HTTP `full: true`) opts a single lease out of slimming, and
+every lease response carries a `slim` flag so a caller can tell a
+feature-loss failure apart from an actual bug instead of guessing.
+
+**Mixing slim and full devices under one spec can make `--full` wait or
+re-provision.** `full` is part of the pool key (ADR "serve from a separate
+pool key"), not part of `DeviceSpec` itself, so a `--full` request never
+matches a slim device sitting warm in the pool — even when one is idle and a
+match on model/os alone would otherwise be instant. Depending on capacity,
+that means either queueing for a fresh device to provision or forcing a
+re-provision of a device already running. This is inherent to keeping pool
+matching from fragmenting on driver-level settings, not a bug to fix.

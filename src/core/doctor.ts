@@ -43,6 +43,20 @@ export type DoctorFinding =
       readonly enteredAt: number;
       readonly ageMs: number;
       readonly thresholdMs: number;
+    }
+  | {
+      /**
+       * Configuration-level information from a single driver's `advisories()`, not drift:
+       * nothing here describes a divergence between the registry and observed reality, so
+       * `--fix` never acts on it (see `#applySafeFixes`) and it is excluded from the
+       * `doctor.reconciled` event's `driftFindings` payload (see the comment at that emit
+       * call) -- it stays in `DoctorReport.findings` (what `doctor.run` returns to a caller)
+       * only.
+       */
+      readonly kind: "driver-advisory";
+      readonly platform: Platform;
+      readonly code: string;
+      readonly message: string;
     };
 
 /**
@@ -137,14 +151,57 @@ export class Doctor {
     }
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
+    findings.push(...(await this.#collectAdvisories()));
 
     const report = { findings };
     if (fix) {
       await this.#applySafeFixes(findings);
     }
     this.#emitFindingEvents(findings);
-    this.options.eventBus.emit("doctor.reconciled", { driftFindings: findings }, "doctor");
+    this.options.eventBus.emit(
+      "doctor.reconciled",
+      {
+        // `driftFindings` is a stable payload contract (events rule 6: additive changes only)
+        // that has always meant "things `--fix` might correct" -- every finding kind so far.
+        // A `driver-advisory` is neither drift nor ever actionable by `--fix` (see
+        // `#applySafeFixes`), so folding it into this field would silently redefine what an
+        // existing consumer is entitled to assume about every entry in it. It stays available
+        // through `DoctorReport.findings` (what `doctor.run` returns to a caller) but is
+        // filtered out of the event payload.
+        driftFindings: findings.filter((finding) => finding.kind !== "driver-advisory"),
+      },
+      "doctor",
+    );
     return report;
+  }
+
+  /**
+   * `advisories()` is optional, read-only, best-effort diagnostic information a single driver
+   * reports about its own configuration -- unlike `listManaged` (whose failure today aborts the
+   * whole reconcile via the unhandled rejection in the `Promise.all` above; widening that
+   * tolerance is out of scope here), a driver with no `advisories()` or one that rejects simply
+   * contributes nothing rather than failing every other driver's findings along with it.
+   */
+  async #collectAdvisories(): Promise<DoctorFinding[]> {
+    const perDriver = await Promise.all(
+      this.options.drivers.map(async (driver): Promise<DoctorFinding[]> => {
+        if (driver.advisories === undefined) {
+          return [];
+        }
+        try {
+          const advisories = await driver.advisories();
+          return advisories.map((advisory) => ({
+            code: advisory.code,
+            kind: "driver-advisory" as const,
+            message: advisory.message,
+            platform: driver.platform,
+          }));
+        } catch {
+          return [];
+        }
+      }),
+    );
+    return perDriver.flat();
   }
 
   #emitFindingEvents(findings: readonly DoctorFinding[]): void {
@@ -186,29 +243,39 @@ export class Doctor {
 
   async #applySafeFixes(findings: readonly DoctorFinding[]): Promise<void> {
     for (const finding of findings) {
-      switch (finding.kind) {
-        case "registry-device-missing":
-          await this.#fixMissingDevice(finding.deviceId);
-          break;
-        case "orphan-device":
-        case "orphan-process":
-          // Registry-only destruction: unregistered reality is report-only.
-          break;
-        case "expired-live-lease":
-          if (this.options.leaseExpirer !== undefined) {
-            await this.options.leaseExpirer.expire(finding.leaseId);
-          }
-          break;
-        case "foreign-state-change":
-          await this.#fixForeignStateChange(finding);
-          break;
-        case "foreign-provenance-change":
-          // Report-only: re-marking destroys the evidence, and the device may be leased.
-          break;
-        case "stalled-transition":
-          await this.#fixStalledTransition(finding);
-          break;
-      }
+      await this.#applySafeFix(finding);
+    }
+  }
+
+  /** One finding's `--fix` action, split out of `#applySafeFixes` so the per-kind dispatch
+   * (already at the edge of this file's complexity budget with `driver-advisory` added) doesn't
+   * also have to carry the loop. */
+  async #applySafeFix(finding: DoctorFinding): Promise<void> {
+    switch (finding.kind) {
+      case "registry-device-missing":
+        await this.#fixMissingDevice(finding.deviceId);
+        break;
+      case "orphan-device":
+      case "orphan-process":
+        // Registry-only destruction: unregistered reality is report-only.
+        break;
+      case "expired-live-lease":
+        if (this.options.leaseExpirer !== undefined) {
+          await this.options.leaseExpirer.expire(finding.leaseId);
+        }
+        break;
+      case "foreign-state-change":
+        await this.#fixForeignStateChange(finding);
+        break;
+      case "foreign-provenance-change":
+        // Report-only: re-marking destroys the evidence, and the device may be leased.
+        break;
+      case "stalled-transition":
+        await this.#fixStalledTransition(finding);
+        break;
+      case "driver-advisory":
+        // Information, not drift: `--fix` never acts on a driver advisory.
+        break;
     }
   }
 
