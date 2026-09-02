@@ -444,11 +444,27 @@ export class IosSimctlDriver implements Driver {
     const result = await this.#processRunner.run("xcodebuild", args, {
       timeoutMs: this.#downloadTimeoutMs,
     });
-    if (result.code !== 0) {
-      throw new DriverCrashError(
-        `xcodebuild ${args.join(" ")} failed: ${result.stderr || result.stdout}`,
+    if (result.code === 0) {
+      return;
+    }
+    const message = result.stderr || result.stdout;
+    // Apple's downloader accepts `-buildVersion <marketing version>` only for whatever it
+    // currently offers -- a pin naming a release Apple has since retired from its live catalog
+    // (superseded by a newer point release), or one still ambiguous across several concurrent
+    // beta/seed builds sharing the same marketing version, is rejected outright with "is not
+    // available for download", distinct from every other `xcodebuild` failure this method
+    // otherwise reports as a `DriverCrashError`. Falling back to an unpinned `-downloadPlatform
+    // iOS` here would silently substitute whatever Apple currently offers instead -- a different,
+    // unrequested, and possibly multi-gigabyte runtime -- for a request that named an exact
+    // version, so this fails the request instead of guessing; see
+    // `IosRuntimeUnavailableForDownloadError`.
+    const buildVersionIndex = args.indexOf("-buildVersion");
+    if (buildVersionIndex !== -1 && /is not available for download/.test(message)) {
+      throw new IosRuntimeUnavailableForDownloadError(
+        args[buildVersionIndex + 1] ?? "requested version",
       );
     }
+    throw new DriverCrashError(`xcodebuild ${args.join(" ")} failed: ${message}`);
   }
 
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
@@ -848,6 +864,26 @@ class IosDownloadFloorError extends RuntimeMissingError {
     this.message =
       `iOS ${requested} predates Xcode's automatic download support (introduced for iOS ` +
       `16.0 and newer); install it manually via Xcode`;
+  }
+}
+
+/**
+ * `xcodebuild -downloadPlatform iOS -buildVersion <requested>` was rejected outright ("is not
+ * available for download") rather than fetching anything -- Apple's live catalog only serves a
+ * version-pinned request for whatever it currently offers, and a release it has since retired
+ * (superseded by a newer point release), or one still ambiguous across several concurrent
+ * beta/seed builds sharing the same marketing version, is refused even though a matching build
+ * exists somewhere in Apple's history. `downloadable: false` for the same reason
+ * `IosDownloadFloorError` sets it: retrying with `--allow-download` again changes nothing, since
+ * it is Apple's catalog, not Simlock, that has stopped (or not yet started) offering this exact
+ * version unambiguously.
+ */
+class IosRuntimeUnavailableForDownloadError extends RuntimeMissingError {
+  constructor(requested: string) {
+    super("ios", requested, { downloadable: false });
+    this.message =
+      `iOS ${requested} is not currently offered for download by Apple (likely superseded by a ` +
+      `newer point release); request a different --os, or omit --os for the newest available runtime`;
   }
 }
 
