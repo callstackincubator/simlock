@@ -73,6 +73,7 @@ describe("loadConfig", () => {
       },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
+      http: { enabled: false, host: "127.0.0.1", port: 4700 },
       warmPool: {
         quarantine: {
           maxRetries: 3,
@@ -423,6 +424,67 @@ describe("loadConfig", () => {
     [{ downloads: { timeoutMs: -1 } }, "downloads.timeoutMs"],
     [{ downloads: { timeoutMs: "1200000" } }, "downloads.timeoutMs"],
   ])("rejects a non-positive or malformed downloads.timeoutMs", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("applies a file-level http override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: true, host: "0.0.0.0", port: 8080 } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.http).toEqual({ enabled: true, host: "0.0.0.0", port: 8080 });
+  });
+
+  it("applies an override-level http port over the file value", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http: { port: 5000 } }));
+
+    const config = await loadConfig({
+      configPath,
+      filesystem,
+      overrides: { http: { port: 6000 } },
+      systemStats: createStats(),
+    });
+    expect(config.http.port).toBe(6000);
+  });
+
+  it("rejects a non-boolean http.enabled", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http: { enabled: "yes" } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.enabled");
+  });
+
+  it("rejects a non-string http.host", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http: { host: 127 } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.host");
+  });
+
+  it.each([
+    [{ http: { port: 0 } }, "http.port"],
+    [{ http: { port: 65536 } }, "http.port"],
+    [{ http: { port: 1.5 } }, "http.port"],
+    [{ http: { port: "4700" } }, "http.port"],
+  ])("rejects an out-of-range or malformed http.port", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));

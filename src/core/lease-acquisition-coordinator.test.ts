@@ -28,6 +28,7 @@ function config(maxDevices = 1): Config {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -372,6 +373,59 @@ describe("LeaseAcquisitionCoordinator", () => {
     await maintenance;
     await expect(queued).rejects.toMatchObject({ name: "NukeCancelledError" });
     await harness.coordinator.endMaintenance();
+  });
+
+  it("cancels a queued request, emits lease.rejected(cancelled), and frees the requester immediately", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.request(request, { mode: "held", requesterId: "first" });
+    const queued = harness.coordinator.request(request, { mode: "held", requesterId: "queued" });
+    await flush();
+    expect(harness.coordinator.queueDepth).toBe(1);
+
+    const rejections: unknown[] = [];
+    harness.bus.subscribe("lease.rejected", (envelope) => rejections.push(envelope.payload));
+
+    await expect(harness.coordinator.cancelPending("queued")).resolves.toBe("cancelled");
+    await expect(queued).rejects.toMatchObject({ name: "RequestCancelledError" });
+    expect(harness.coordinator.queueDepth).toBe(0);
+    expect(rejections).toContainEqual({ requestSpec: request, reason: "cancelled" });
+
+    // No capacity remains (still held by "first"), but crucially this is NoCapacityError,
+    // not RequesterAlreadyLeasedError -- the cancelled requester is no longer pending.
+    await expect(
+      harness.coordinator.request(request, { mode: "held", noWait: true, requesterId: "queued" }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+  });
+
+  it("reports not-found for a requester with no pending waiter", async () => {
+    const harness = await createHarness();
+    await expect(harness.coordinator.cancelPending("nobody")).resolves.toBe("not-found");
+  });
+
+  it("reports not-cancellable while device work is already in flight, matching the queue timeout's envelope", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedReady(harness);
+    await harness.driver.shutdown({
+      address: shutdown.address ?? "",
+      deviceId: shutdown.driverDeviceId,
+      driverData: shutdown.driverData,
+    });
+    await harness.registry.transitionDevice(shutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: shutdown.id, initiator: "test" },
+    });
+    harness.driver.hangMakeReady();
+
+    const acquisition = harness.coordinator.request(request, {
+      mode: "held",
+      requesterId: "booting",
+    });
+    await flush();
+
+    await expect(harness.coordinator.cancelPending("booting")).resolves.toBe("not-cancellable");
+
+    harness.driver.releaseMakeReady();
+    await expect(acquisition).resolves.toMatchObject({ device: { id: shutdown.id } });
   });
 
   it("keeps admission closed until concurrent maintenance callers have all finished", async () => {

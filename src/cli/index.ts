@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
+  CryptoIdGenerator,
+  CryptoTokenSecrets,
   NodeDaemonLauncher,
   NodeFilesystem,
   NodeIpcTransport,
@@ -13,6 +15,7 @@ import {
   type ParentWatch,
   type ParentWatchHandle,
 } from "../ports/index.js";
+import { TokenStore, type TokenRecord, type TokenRole } from "../http/token-store.js";
 import {
   connectDaemon,
   connectExistingDaemon,
@@ -32,7 +35,7 @@ const USAGE = `Usage: simlock <command> [options]
 
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
-  daemon, config
+  daemon, config, token
   mcp                         Start the stdio MCP server
 Run 'simlock <command> --help' for command usage.`;
 
@@ -61,6 +64,23 @@ class UsageError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "UsageError";
+  }
+}
+
+/**
+ * `token` operates on the filesystem directly (no daemon round-trip), so its
+ * failures need their own structured error code -- not a `DaemonClientError`
+ * (nothing was sent to the daemon) and not `UsageError` (exit 2 is reserved
+ * for bad flags/arguments). Defaults to exit 1 like any other non-usage,
+ * non-daemon failure.
+ */
+class TokenCliError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "TokenCliError";
   }
 }
 
@@ -104,6 +124,13 @@ export interface CliEnvironment {
   readonly stdout: Output;
   readonly confirm?: (question: string) => Promise<boolean>;
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
+  /**
+   * `token` reads/writes tokens.json directly, like `config` does with
+   * config.json -- no daemon round-trip. Optional so most tests (which never
+   * touch `token`) don't need to fabricate one; `runToken` fails clearly if
+   * it is missing.
+   */
+  readonly tokenStore?: TokenStore;
 }
 
 /**
@@ -124,6 +151,13 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
   const socketPath = join(dataDirectory, "daemon.sock");
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
+  const tokenStore = new TokenStore({
+    clock,
+    filesystem,
+    idGenerator: new CryptoIdGenerator(),
+    path: join(dataDirectory, "tokens.json"),
+    secrets: new CryptoTokenSecrets(),
+  });
   return {
     configPath,
     connect: (capabilities) =>
@@ -154,6 +188,7 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
     stderr: process.stderr,
     stdout: process.stdout,
     confirm: confirmTerminal,
+    tokenStore,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -197,6 +232,8 @@ export async function runCli(
         return await runDaemon(argv.slice(1), environment);
       case "config":
         return await runConfig(argv.slice(1), environment);
+      case "token":
+        return await runToken(argv.slice(1), environment);
       case "mcp":
         return await runMcp(argv.slice(1), environment);
       default:
@@ -224,6 +261,7 @@ function writeError(environment: CliEnvironment, error: unknown): void {
 function cliErrorCode(error: unknown): string {
   if (error instanceof UsageError) return "USAGE";
   if (error instanceof DaemonClientError) return error.code;
+  if (error instanceof TokenCliError) return error.code;
   return "INTERNAL";
 }
 
@@ -672,6 +710,100 @@ async function runConfig(argv: readonly string[], environment: CliEnvironment): 
     return 0;
   }
   throw new UsageError(`Unknown config command: ${command}`);
+}
+
+async function runToken(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  const command = argv[0];
+  if (command === undefined || isHelp(command)) {
+    environment.stdout.write(
+      "Usage: simlock token create --role <agent|operator> [--label <text>]\n" +
+        "       simlock token list\n" +
+        "       simlock token revoke <token-id>\n",
+    );
+    return 0;
+  }
+  const tokenStore = requireTokenStore(environment);
+  if (command === "create") return runTokenCreate(argv.slice(1), tokenStore, environment);
+  if (command === "list") return runTokenList(argv.slice(1), tokenStore, environment);
+  if (command === "revoke") return runTokenRevoke(argv.slice(1), tokenStore, environment);
+  throw new UsageError(withHelpHint(`Unknown token command: ${command}`));
+}
+
+function requireTokenStore(environment: CliEnvironment): TokenStore {
+  if (environment.tokenStore === undefined) throw new Error("Token store is unavailable");
+  return environment.tokenStore;
+}
+
+async function runTokenCreate(
+  argv: readonly string[],
+  tokenStore: TokenStore,
+  environment: CliEnvironment,
+): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    label: { type: "string" },
+    role: { type: "string" },
+  });
+  if (values.help) {
+    environment.stdout.write(
+      "Usage: simlock token create --role <agent|operator> [--label <text>]\n",
+    );
+    return 0;
+  }
+  const role = parseTokenRole(values.role);
+  const label = typeof values.label === "string" ? values.label : undefined;
+  if (label === "") throw new UsageError("token create --label must not be empty");
+  const { record, secret } = await tokenStore.create(role, label);
+  writeResult(environment, { secret, token: serializeToken(record) });
+  return 0;
+}
+
+async function runTokenList(
+  argv: readonly string[],
+  tokenStore: TokenStore,
+  environment: CliEnvironment,
+): Promise<number> {
+  const values = commandArgs(argv, { help: { type: "boolean", short: "h" } });
+  if (values.help) {
+    environment.stdout.write("Usage: simlock token list\n");
+    return 0;
+  }
+  const records = await tokenStore.list();
+  writeResult(environment, { tokens: records.map(serializeToken) });
+  return 0;
+}
+
+async function runTokenRevoke(
+  argv: readonly string[],
+  tokenStore: TokenStore,
+  environment: CliEnvironment,
+): Promise<number> {
+  const values = commandArgs(argv, { help: { type: "boolean", short: "h" } });
+  if (values.help) {
+    environment.stdout.write("Usage: simlock token revoke <token-id>\n");
+    return 0;
+  }
+  const id = requiredPositional(values.positionals, "token-id");
+  if (!(await tokenStore.revoke(id)))
+    throw new TokenCliError("UNKNOWN_TOKEN", `Unknown token: ${id}`);
+  writeResult(environment, { revoked: true });
+  return 0;
+}
+
+function parseTokenRole(value: unknown): TokenRole {
+  if (value !== "agent" && value !== "operator")
+    throw new UsageError(withHelpHint("token create requires --role <agent|operator>"));
+  return value;
+}
+
+/** Drops `hash` -- an implementation detail no CLI output needs to expose. */
+function serializeToken(record: TokenRecord): Record<string, unknown> {
+  return {
+    createdAt: record.createdAt,
+    id: record.id,
+    ...(record.label === undefined ? {} : { label: record.label }),
+    role: record.role,
+  };
 }
 
 async function requestOnce(

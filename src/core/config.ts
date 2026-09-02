@@ -14,6 +14,7 @@ import { resourceOptionValidators } from "./capacity/strategies/resource/index.j
 import {
   booleanValue,
   ConfigError,
+  integerInRange,
   invalidValue,
   nonNegativeNumber,
   numberAtLeast,
@@ -22,6 +23,7 @@ import {
   positiveNumber,
   requireObject,
   stringUnion,
+  stringValue,
   type Validator,
   type Warn,
 } from "./validation.js";
@@ -67,6 +69,11 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
+  readonly http: {
+    readonly enabled: boolean;
+    readonly host: string;
+    readonly port: number;
+  };
   readonly health: {
     readonly enabled: boolean;
     readonly probeIntervalMs: number;
@@ -273,6 +280,7 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
     health: {
       enabled: true,
       probeIntervalMs: 30_000,
@@ -366,6 +374,11 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
+    http: objectValidator({
+      enabled: booleanValue,
+      host: stringValue,
+      port: integerInRange(1, 65535),
+    }),
     health: objectValidator({
       enabled: booleanValue,
       probeIntervalMs: positiveNumber,

@@ -20,13 +20,18 @@ import {
   type LeaseGrant,
   type LeaseRequestOptions,
   type LeaseTiming,
+  RequestCancelledError,
   RequesterAlreadyLeasedError,
   type Waiter,
   type WaitQueue,
 } from "./wait-queue.js";
 
 export type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
-export { QueueTimeoutError, RequesterAlreadyLeasedError } from "./wait-queue.js";
+export {
+  QueueTimeoutError,
+  RequestCancelledError,
+  RequesterAlreadyLeasedError,
+} from "./wait-queue.js";
 export { NoDriverError } from "./driver-catalog.js";
 
 export class NoCapacityError extends Error {
@@ -61,6 +66,7 @@ export type AcquisitionQueue = Pick<
   | "depth"
   | "detachProgress"
   | "enqueue"
+  | "findPendingWaiter"
   | "hasPendingRequester"
   | "head"
   | "isQueued"
@@ -230,6 +236,27 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.options.decisions.run(async () => {
       this.options.queue.detachProgress(requesterId);
+    });
+  }
+
+  /**
+   * Cancels a single pending request. Reuses the queue timeout's safety envelope exactly:
+   * only a waiter still in `queued` state is safe to reject here. `processing` means device
+   * work already claimed it (provision/boot/evict in flight, possibly never having touched
+   * the FIFO list at all on a first-attempt direct dispatch) -- the same state the timeout
+   * timer leaves untouched -- so this reports `not-cancellable` rather than inventing a new
+   * rule for tearing down in-flight driver work; nuke's `cancelAll` already owns that harder
+   * problem, with its own drain of `#activeWorkflows`.
+   */
+  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+    return this.options.decisions.run(async () => {
+      const waiter = this.options.queue.findPendingWaiter(requesterId) as
+        | AcquisitionWaiter
+        | undefined;
+      if (waiter === undefined) return "not-found";
+      if (waiter.state !== "queued") return "not-cancellable";
+      this.#reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
+      return "cancelled";
     });
   }
 
@@ -528,7 +555,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       | "unresolvable-spec"
       | "already-leased"
       | "boot-timeout"
-      | "killed",
+      | "killed"
+      | "cancelled",
   ): void {
     if (this.options.queue.reject(waiter, error)) {
       this.options.eventBus.emit(

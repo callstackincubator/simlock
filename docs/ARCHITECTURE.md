@@ -6,6 +6,8 @@
 agent ──spawns──> simlock CLI ──┐
                                 ├─ shared daemon client ──unix socket──> simlock daemon
 MCP client ──spawns──> stdio MCP ┘                                      │
+                                                                         │
+remote agent ──token auth──> HTTP gateway ──same role interfaces────────┤
                                                                      ┌───┼─────────────┐
                                                                      │ core (platform-│
                                                                      │ agnostic)      │
@@ -26,10 +28,22 @@ MCP client ──spawns──> stdio MCP ┘                                    
                                                                                 emulator/adb)
 ```
 
-- **CLI and stdio MCP server**: sibling thin frontends over the shared daemon
-  client and unix socket. The core never knows which frontend made a request.
-  The CLI is the full operator interface; the MCP server intentionally limits
-  its tool surface to leasing and releasing for an agent session.
+- **CLI, stdio MCP server, and HTTP gateway**: sibling thin frontends. The
+  core never knows which frontend made a request. The CLI and MCP server sit
+  over the shared daemon client and unix socket; the CLI is the full operator
+  interface, and the MCP server intentionally limits its tool surface to
+  leasing and releasing for an agent session. The HTTP gateway is different in
+  kind, not just transport: it is the one frontend meant to be reached over a
+  real network, so it calls the same role interfaces (`LeaseCommands`,
+  `QueueControl`, `CapacityReader`, `CatalogReader`) in-process rather than
+  going through the unix socket, requires a bearer token on every route but
+  `GET /v1/healthz`, and only ever grants detached-style, TTL-renewed leases —
+  "held lease = live connection" does not survive a real network the way it
+  does a local process. It starts only after the daemon's own startup
+  convergence completes (see "Startup: claim first, converge after" below),
+  so unlike the socket protocol's parked-request behavior during that window,
+  a request arriving before then is simply refused. See
+  [HTTP-API.md](HTTP-API.md) for the full route reference.
 - **CLI**: in the default *held* mode it acquires a lease, prints one JSON
   result line on stdout, then stays alive holding the daemon connection; the
   connection is the lease heartbeat. Progress streams as JSON lines on stderr.

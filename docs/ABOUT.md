@@ -15,7 +15,9 @@ Simlock is a CLI-first control plane (backed by a local daemon) that is the
 same for both platforms and gives agents one primitive: **lease a device**.
 An optional local stdio MCP integration exposes the focused lease/release
 workflow to compatible agent clients; the CLI remains the full operator
-interface.
+interface. An optional, token-authenticated HTTP API lets remote agents lease
+devices from a self-hosted simlock host over the network (see
+[HTTP-API.md](HTTP-API.md)).
 
 - `simlock lease` returns a *ready* device — booted and health-checked — that
   no other agent will touch for the duration of the lease.

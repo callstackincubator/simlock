@@ -79,10 +79,33 @@ export function booleanValue(value: unknown, path: string): boolean {
   return value;
 }
 
+export function stringValue(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw invalidValue(path, "a string");
+  }
+
+  return value;
+}
+
 export function numberAtLeast(minimum: number): Validator {
   return (value: unknown, path: string) => {
     if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
       throw invalidValue(path, `a number >= ${minimum}`);
+    }
+
+    return value;
+  };
+}
+
+export function integerInRange(minimum: number, maximum: number): Validator {
+  return (value: unknown, path: string) => {
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < minimum ||
+      value > maximum
+    ) {
+      throw invalidValue(path, `an integer between ${minimum} and ${maximum}`);
     }
 
     return value;

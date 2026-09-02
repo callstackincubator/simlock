@@ -13,6 +13,7 @@ import {
   NoCapacityError,
   QueueTimeoutError,
   Registry,
+  RequestCancelledError,
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
@@ -24,6 +25,7 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -785,6 +787,22 @@ describe("LeaseEngine", () => {
     await harness.engine.release(holder.lease.id, "explicit");
     await expect(queued).resolves.toMatchObject({ lease: { requesterId: "queued" } });
     expect(progress).toEqual(["queued"]);
+  });
+
+  it("cancels a queued request through the QueueControl facade and frees the requester for a later grant", async () => {
+    const harness = await createHarness();
+    const holder = await harness.engine.request(request, { mode: "held", requesterId: "holder" });
+    const queued = harness.engine.request(request, { mode: "held", requesterId: "queued" });
+    await flush();
+
+    await expect(harness.engine.cancelPending("nobody")).resolves.toBe("not-found");
+    await expect(harness.engine.cancelPending("queued")).resolves.toBe("cancelled");
+    await expect(queued).rejects.toBeInstanceOf(RequestCancelledError);
+
+    await harness.engine.release(holder.lease.id, "explicit");
+    await expect(
+      harness.engine.request(request, { mode: "held", requesterId: "queued" }),
+    ).resolves.toMatchObject({ lease: { requesterId: "queued" } });
   });
 
   it("queues at capacity in FIFO order across three waiters", async () => {

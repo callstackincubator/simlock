@@ -41,6 +41,7 @@ export {
   NoCapacityError,
   NoDriverError,
   QueueTimeoutError,
+  RequestCancelledError,
   RequesterAlreadyLeasedError,
 } from "./lease-engine.js";
 export { LeaseHealthMonitor } from "./lease-health-monitor.js";

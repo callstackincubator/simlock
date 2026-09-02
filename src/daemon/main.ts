@@ -21,8 +21,12 @@ import {
 } from "../drivers/android/index.js";
 import type { ComponentInstallDiagnostic } from "../drivers/diagnostics.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
+import { createHttpApp } from "../http/app.js";
+import { HttpGateway } from "../http/server.js";
+import { TokenStore } from "../http/token-store.js";
 import {
   CryptoIdGenerator,
+  CryptoTokenSecrets,
   JsonLinesLogger,
   NodeFileLogSink,
   type Clock,
@@ -145,6 +149,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
   });
   const nuke = new Nuke({ executor: leaseEngine, registry });
+  // Reassigned once the HTTP gateway actually starts (after `daemon.start()` resolves
+  // below), but must exist as a stable closure now: `stopAuxiliary` is fixed at
+  // `DaemonServer` construction time, before the gateway itself exists.
+  let stopHttpGateway: (() => Promise<void>) | undefined;
   const daemon = new DaemonServer({
     capacity: leaseEngine,
     catalog: leaseEngine,
@@ -185,8 +193,66 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     settle: async () => leaseEngine.settle(),
     dispose: () => leaseEngine.dispose(),
+    stopAuxiliary: () => stopHttpGateway?.() ?? Promise.resolve(),
   });
   await daemon.start();
+
+  if (config.http.enabled) {
+    const httpLogger = logger.child("http");
+    const tokens = new TokenStore({
+      clock,
+      filesystem,
+      idGenerator,
+      path: join(dataDirectory, "tokens.json"),
+      secrets: new CryptoTokenSecrets(),
+    });
+    const app = createHttpApp({
+      capacity: leaseEngine,
+      catalog: leaseEngine,
+      clock,
+      config,
+      // Only ever read once `daemon.start()` above has resolved (the gateway starts
+      // strictly after it, see the comment below), so this is always "running" -- the
+      // "failed" arm of the underlying `#health` state can only be observed during
+      // convergence, which is over by the time any HTTP request reaches this closure.
+      daemonHealth: () => daemon.health as "starting" | "running",
+      eventBus,
+      idGenerator,
+      leases: leaseEngine,
+      logger: httpLogger,
+      queue: leaseEngine,
+      registry,
+      tokens,
+    });
+    const gateway = new HttpGateway(app, {
+      host: config.http.host,
+      logger: httpLogger,
+      port: config.http.port,
+    });
+    // Started strictly after `daemon.start()` resolves, i.e. after convergence: a
+    // socket-daemon request parks on `#awaitReady` until convergence completes, but
+    // HTTP routes call the role interfaces (leaseEngine, registry) directly with no
+    // equivalent gate, so serving before convergence completes could let a remote
+    // client observe half-converged state. A connection refused while the daemon is
+    // still starting up is accepted v1 behavior -- there is no HTTP-level "starting"
+    // response to mirror the socket protocol's parked dispatch.
+    try {
+      await gateway.start();
+    } catch (error: unknown) {
+      // The daemon is already fully started (socket claimed, timers armed) by this point.
+      // A bind failure -- an occupied port, an invalid host -- must not strand it as a
+      // half-configured zombie that startDaemon's caller believes failed to start: tear it
+      // down before rethrowing, so failure means *nothing* is left running.
+      app.dispose();
+      await daemon.stop("http-start-failed").catch(() => undefined);
+      throw error;
+    }
+    stopHttpGateway = async () => {
+      await gateway.stop();
+      app.dispose();
+    };
+  }
+
   return daemon;
 }
 
