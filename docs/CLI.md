@@ -336,6 +336,27 @@ under `capacity.config` — see
 is running, both a global and a per-platform running limit must have room
 before Simlock provisions or boots a shutdown device.
 
+## `simlock token create --role <agent|operator> [--label <text>]` / `list` / `revoke <token-id>`
+
+Mint and manage bearer tokens for the HTTP API. Operates on
+`~/.simlock/tokens.json` directly (under `SIMLOCK_HOME`) — no daemon
+round-trip, like `config` reading its file.
+
+`create` prints the minted secret **once**, alongside the token record:
+
+```json
+{"token":{"id":"tok_9f2c","role":"agent","label":"ci-runner","createdAt":1735689600000},"secret":"slk_Wn9…"}
+```
+
+Only the secret's SHA-256 hash is ever persisted; there is no way to recover
+a lost secret, only to `revoke` the token and `create` a new one. The token
+id doubles as the requester identity over HTTP — one token is one requester,
+same as the CLI's `--agent-id`.
+
+`list` prints `{"tokens":[...]}` — the same record shape as `create`, minus
+the secret and its hash. `revoke <token-id>` prints `{"revoked":true}`, or a
+structured `UNKNOWN_TOKEN` error (exit 1) for an id that does not exist.
+
 ## Environment variables
 
 ### `SIMLOCK_HOME`

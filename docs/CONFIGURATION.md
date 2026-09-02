@@ -17,6 +17,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `lease.heldTtlBackstopMs`         | Backstop TTL for held-mode leases, in case the holding process dies without releasing.                                                                                                                                       | `1 hour`                                                        |
 | `lease.detachedTtlMs`             | TTL for detached-mode leases before they must be renewed with `simlock lease renew`.                                                                                                                                         | `15 minutes`                                                    |
 | `lease.heartbeatIntervalMs`       | How often the daemon pings a held-mode connection that declared the `heartbeat` capability; each pong slides that connection's leases' TTL back out to a full `heldTtlBackstopMs`. Must be `<= lease.heldTtlBackstopMs / 4`. | `5 minutes`                                                     |
+| `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`.                                                                              | `false`                                                          |
+| `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
+| `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of business events kept in the in-memory ring buffer (see `simlock events`).                                                                                                                                          | `1000`                                                           |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery.                                                                                                                                                                | `true`                                                           |
@@ -36,6 +39,8 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `health.maxConcurrentRecoveries` must be positive integers.
 `stalledTransition.thresholdMultiplier` must be a number `>= 1`;
 `stalledTransition.minimumThresholdMs` must be a non-negative number.
+`http.enabled` is a boolean, `http.host` a string, and `http.port` an
+integer in `1`-`65535`.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
 

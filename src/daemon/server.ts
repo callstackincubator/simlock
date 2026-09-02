@@ -84,6 +84,13 @@ export interface DaemonServerOptions {
   readonly settle?: () => Promise<void>;
   /** Cancels any timers the lease subsystem armed (e.g. quarantine retries) on shutdown. */
   readonly dispose?: () => void;
+  /**
+   * Stops an auxiliary frontend (today: the HTTP gateway's listener, started only after
+   * `start()` resolves -- see `main.ts`) before anything else in `stop()` runs, so no
+   * request arriving through it can ever observe a stopping engine. A no-op default when
+   * no auxiliary frontend is running.
+   */
+  readonly stopAuxiliary?: () => Promise<void>;
 }
 
 type DaemonHealth = "starting" | "running" | "failed";
@@ -116,6 +123,11 @@ export class DaemonServer {
   // fallow-ignore-next-line unused-class-member -- retained as a daemon compatibility facade.
   get socketPath(): string {
     return this.options.host.endpoint;
+  }
+
+  /** Public read of `#health` for an auxiliary frontend (e.g. the HTTP gateway's `daemonHealth`) that needs it without becoming a privileged internal itself. */
+  get health(): DaemonHealth {
+    return this.#health;
   }
 
   /**
@@ -247,6 +259,12 @@ export class DaemonServer {
   }
 
   async #stop(reason: string): Promise<void> {
+    // Awaited first, before anything below: an auxiliary frontend calls the role
+    // interfaces directly rather than parking on `#awaitReady`/this method's own
+    // teardown order, so it must be shut off before held-lease release and
+    // lease/queue teardown begin -- otherwise a request arriving through it mid-stop
+    // could run against an engine already being torn down.
+    await this.options.stopAuxiliary?.();
     this.#logger.info("Daemon stopping", { reason });
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
     if (this.#heartbeatTimer !== undefined) {

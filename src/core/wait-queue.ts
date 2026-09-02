@@ -38,6 +38,13 @@ export class QueueTimeoutError extends Error {
   }
 }
 
+export class RequestCancelledError extends Error {
+  constructor(readonly requestId: string) {
+    super(`Lease request cancelled: ${requestId}`);
+    this.name = "RequestCancelledError";
+  }
+}
+
 export class RequesterAlreadyLeasedError extends Error {
   constructor(
     readonly requesterId: string,
@@ -111,6 +118,19 @@ export class WaitQueue {
 
   hasPendingRequester(requesterId: string): boolean {
     return this.#pendingRequesters.has(requesterId);
+  }
+
+  /**
+   * Finds a requester's waiter across every non-terminal state, not just the FIFO list -- a
+   * waiter driven straight to `processing` on its first attempt never gets enqueued at all, so
+   * a caller deciding cancellability needs this broader membership, unlike `detachProgress`
+   * which only ever needs to reach an already-queued entry.
+   */
+  findPendingWaiter(requesterId: string): Waiter | undefined {
+    for (const waiter of this.#pendingWaiters) {
+      if (waiter.options.requesterId === requesterId) return waiter;
+    }
+    return undefined;
   }
 
   create(request: DeviceRequest, requestOptions: LeaseRequestOptions): Waiter {

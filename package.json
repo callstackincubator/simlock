@@ -44,7 +44,10 @@
     "release": "release-it"
   },
   "dependencies": {
+    "@hono/node-server": "2.0.10",
+    "@hono/zod-validator": "^0.9.1",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "hono": "^4.13.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {

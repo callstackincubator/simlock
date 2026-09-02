@@ -51,6 +51,7 @@ export {
   NoCapacityError,
   NoDriverError,
   QueueTimeoutError,
+  RequestCancelledError,
   RequesterAlreadyLeasedError,
 } from "./lease-acquisition-coordinator.js";
 
@@ -298,6 +299,12 @@ export class LeaseEngine {
   // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling queueDepth).
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.#acquisition.detachQueuedProgress(requesterId);
+  }
+
+  /** Cancels a single pending request by requester id, for the HTTP lease-request delete route. */
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling detachQueuedProgress).
+  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+    return this.#acquisition.cancelPending(requesterId);
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer (same as the sibling heartbeat).

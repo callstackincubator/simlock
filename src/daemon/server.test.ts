@@ -1010,6 +1010,44 @@ describe("DaemonServer lease heartbeat", () => {
       expect(order).toEqual(["settle-start", "settle-end", "dispose"]);
     });
 
+    it("stops an auxiliary frontend before releasing held leases and draining settle", async () => {
+      const order: string[] = [];
+      const harness = await createHarness({
+        dispose: () => order.push("dispose"),
+        settle: async () => {
+          order.push("settle");
+        },
+        stopAuxiliary: async () => {
+          order.push("stopAuxiliary");
+        },
+      });
+      const holder = await createClient(harness.socketPath);
+      await hello(holder);
+      await holder.request("lease.request", {
+        mode: "held",
+        requesterId: "holder",
+        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      });
+
+      await harness.daemon.stop("test-stop-auxiliary");
+
+      expect(order).toEqual(["stopAuxiliary", "settle", "dispose"]);
+      // The held lease was still released as part of the same stop -- stopping the
+      // auxiliary frontend first doesn't skip the socket protocol's own teardown.
+      expect(harness.registry.snapshot.leases).toHaveLength(0);
+    });
+
+    it("reports health via the public accessor across the startup/stop lifecycle", async () => {
+      const harness = await createHarness({ start: false });
+      expect(harness.daemon.health).toBe("starting");
+
+      await harness.daemon.start();
+      expect(harness.daemon.health).toBe("running");
+
+      await harness.daemon.stop("test-health");
+      expect(harness.daemon.health).toBe("running");
+    });
+
     it("logs a clean shutdown", async () => {
       const { logger: log, sink } = logger();
       const harness = await createHarness({ logger: log });
@@ -1088,6 +1126,7 @@ async function createHarness(
     readonly logger?: Logger;
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
+    readonly stopAuxiliary?: () => Promise<void>;
   } = {},
 ) {
   const directory =
@@ -1158,6 +1197,7 @@ async function createHarness(
     registry,
     settle: options.settle ?? (async () => engine.settle()),
     ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
+    ...(options.stopAuxiliary === undefined ? {} : { stopAuxiliary: options.stopAuxiliary }),
     version: "test",
   });
   runningDaemons.push(daemon);
@@ -1273,6 +1313,7 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       detachedTtlMs: 60_000,
