@@ -36,6 +36,7 @@ describe("McpSession", () => {
       mode: "held",
       os: "26.5",
       platform: "ios",
+      slim: false,
       state: "leased",
       timing: {
         estimated_boot_ms: 20,
@@ -52,6 +53,34 @@ describe("McpSession", () => {
           noWait: false,
           requesterId: "mcp-session-1",
           request: { model: "iPhone 17 Pro", platform: "ios" },
+        },
+        type: "lease.request",
+      },
+    ]);
+  });
+
+  it("sends full: true on the request when full is set, and slim: true when the grant reports a reduced feature profile", async () => {
+    const connection = new StubConnection();
+    connection.responses.push({
+      ...rawGrant,
+      device: { ...rawGrant.device, featureProfile: "reduced" },
+    });
+    const session = new McpSession({
+      connect: async () => connection,
+      requesterId: "mcp-session-1",
+    });
+
+    await expect(
+      session.lease(leaseSimulatorInputSchema.parse({ ...input, full: true })),
+    ).resolves.toMatchObject({ slim: true });
+    expect(connection.requests).toEqual([
+      {
+        payload: {
+          allowDownload: false,
+          mode: "held",
+          noWait: false,
+          requesterId: "mcp-session-1",
+          request: { full: true, model: "iPhone 17 Pro", platform: "ios" },
         },
         type: "lease.request",
       },

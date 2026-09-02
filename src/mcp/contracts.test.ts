@@ -13,9 +13,16 @@ describe("MCP contracts", () => {
     expect(leaseSimulatorInputSchema.parse({ device: "iPhone 17 Pro", platform: "ios" })).toEqual({
       allow_download: false,
       device: "iPhone 17 Pro",
+      full: false,
       no_wait: false,
       platform: "ios",
     });
+  });
+
+  it("accepts an explicit full: true lease input", () => {
+    expect(
+      leaseSimulatorInputSchema.parse({ device: "iPhone 17 Pro", full: true, platform: "ios" }),
+    ).toMatchObject({ full: true });
   });
 
   it.each([
@@ -38,6 +45,7 @@ describe("MCP contracts", () => {
         mode: "held",
         os: "26.5",
         platform: "ios",
+        slim: false,
         state: "leased",
         timing: {
           estimated_boot_ms: 20,
@@ -46,7 +54,7 @@ describe("MCP contracts", () => {
           estimated_ready_ms: 30,
         },
       }),
-    ).toMatchObject({ lease_id: "lse_9f2c", state: "leased" });
+    ).toMatchObject({ lease_id: "lse_9f2c", slim: false, state: "leased" });
     expect(releaseSimulatorInputSchema.parse({ lease_id: "lse_9f2c" })).toEqual({
       lease_id: "lse_9f2c",
     });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type DeviceRecord, IllegalTransition, transition, transitionEnteredAt } from "./index.js";
+import { type DeviceSpec, sameSpec } from "./domain.js";
 
 const baseDevice: Omit<DeviceRecord, "state"> = {
   createdAt: 1_000,
@@ -66,5 +67,34 @@ describe("transitionEnteredAt", () => {
     for (const state of ["ready", "leased", "quarantined", "shutdown", "deleted"] as const) {
       expect(transitionEnteredAt({ ...baseDevice, state })).toBeUndefined();
     }
+  });
+});
+
+describe("sameSpec", () => {
+  const spec: DeviceSpec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" };
+
+  it("matches two identical plain specs", () => {
+    expect(sameSpec(spec, { ...spec })).toBe(true);
+  });
+
+  it("treats undefined and false full as the same value", () => {
+    expect(sameSpec(spec, { ...spec, full: false })).toBe(true);
+    expect(sameSpec({ ...spec, full: false }, spec)).toBe(true);
+  });
+
+  it("fragments a --full spec from a slim (non-full) spec", () => {
+    expect(sameSpec({ ...spec, full: true }, spec)).toBe(false);
+    expect(sameSpec(spec, { ...spec, full: true })).toBe(false);
+    expect(sameSpec({ ...spec, full: true }, { ...spec, full: false })).toBe(false);
+  });
+
+  it("matches two full specs", () => {
+    expect(sameSpec({ ...spec, full: true }, { ...spec, full: true })).toBe(true);
+  });
+
+  it("still compares platform, model, and osVersion", () => {
+    expect(sameSpec(spec, { ...spec, model: "iPhone 15" })).toBe(false);
+    expect(sameSpec(spec, { ...spec, osVersion: "26.4" })).toBe(false);
+    expect(sameSpec(spec, { ...spec, platform: "android" })).toBe(false);
   });
 });

@@ -280,6 +280,73 @@ describe("CLI boundary", () => {
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
   });
 
+  it("sends full: true in the lease.request payload for --full and reports slim in the result", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        featureProfile: "full",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_full", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16", "--full"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+
+    const leaseCall = connection.calls.find((call) => call.type === "lease.request");
+    expect(leaseCall?.payload).toMatchObject({ request: { full: true } });
+    expect(JSON.parse(output.stdout)).toMatchObject({ slim: false });
+  });
+
+  it("omits full from the lease.request payload without --full", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_default", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+
+    const leaseCall = connection.calls.find((call) => call.type === "lease.request");
+    const requestPayload = (leaseCall?.payload as { request: Record<string, unknown> } | undefined)
+      ?.request;
+    expect(requestPayload).not.toHaveProperty("full");
+    expect(JSON.parse(output.stdout)).toMatchObject({ slim: false });
+  });
+
   it("reports a post-signal release failure as a structured stderr line, not prose", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
@@ -638,7 +705,7 @@ describe("CLI boundary", () => {
       ),
     ).resolves.toBe(0);
     expect(detached.stdout).toBe(
-      '{"device":"iPhone 17 Pro","expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
+      '{"device":"iPhone 17 Pro","expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","slim":false,"state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
     );
     expect(connection.closed).toBe(true);
 

@@ -559,10 +559,12 @@ export class DaemonServer {
     const payload = objectPayload(value);
     const requestPayload = isObject(payload.request) ? payload.request : payload;
     const osVersion = optionalString(requestPayload, "osVersion", "os");
+    const full = optionalBoolean(requestPayload, "full") ?? false;
     const request: DeviceRequest = {
       model: requiredString(requestPayload, "model", "device"),
       platform: requiredPlatform(requestPayload),
       ...(osVersion === undefined ? {} : { osVersion }),
+      ...(full ? { full: true } : {}),
     };
     const mode = payload.mode === "detached" ? "detached" : "held";
     const requesterId = optionalString(payload, "requesterId") ?? this.options.defaultRequesterId;

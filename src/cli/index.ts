@@ -313,6 +313,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     "bind-pid": { type: "string" },
     detach: { type: "boolean" },
     device: { type: "string" },
+    full: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
@@ -323,7 +324,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--allow-download] [--bind-pid <pid>]\n",
+        "                     [--allow-download] [--full] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -397,6 +398,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
         model: values.device,
         ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
         platform: values.platform,
+        ...(values.full === true ? { full: true } : {}),
       },
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
@@ -842,6 +844,7 @@ function leaseResult(value: unknown): Record<string, unknown> & { readonly lease
     lease: grant.lease.id,
     os: grant.device.spec.osVersion,
     platform: grant.device.spec.platform,
+    slim: grant.slim,
     state: "leased",
     timing: {
       estimated_boot_ms: grant.timing.estimatedBootMs,

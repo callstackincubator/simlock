@@ -336,4 +336,77 @@ describe("ManagedDeviceLifecycle", () => {
       expect(retried).toMatchObject({ id: ready.id, state: "leased" });
     });
   });
+
+  it("persists a driver's featureProfile alongside address and driverData on boot (#makeReady path)", async () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const driver = new FakeDriver({ clock, featureProfile: "reduced", platform: "ios" });
+    let nextId = 0;
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => `${nextId++}` },
+      statePath,
+    });
+    const lifecycle = new ManagedDeviceLifecycle(
+      new DriverCatalog([driver]),
+      registry,
+      new SerializedDecision(),
+      new DeviceOperationClaims(),
+      clock,
+    );
+    const driverDevice = await driver.provision({
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const device = await registry.registerDevice({
+      driverData: driverDevice.driverData,
+      driverDeviceId: driverDevice.deviceId,
+      provisionDuration: 0,
+      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    const ready = await lifecycle.readyProvisioned(device);
+
+    expect(ready).toMatchObject({ featureProfile: "reduced" });
+  });
+
+  it("persists a driver's featureProfile via the bootForLease handoff path (#makeReadyForLease)", async () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const driver = new FakeDriver({ clock, featureProfile: "reduced", platform: "ios" });
+    let nextId = 0;
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => `${nextId++}` },
+      statePath,
+    });
+    const claims = new DeviceOperationClaims();
+    const lifecycle = new ManagedDeviceLifecycle(
+      new DriverCatalog([driver]),
+      registry,
+      new SerializedDecision(),
+      claims,
+      clock,
+    );
+    const driverDevice = await driver.provision({
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const device = await registry.registerDevice({
+      driverData: driverDevice.driverData,
+      driverDeviceId: driverDevice.deviceId,
+      provisionDuration: 0,
+      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    const handoff = await lifecycle.readyProvisionedForLease(device);
+
+    expect(handoff?.device).toMatchObject({ featureProfile: "reduced" });
+  });
 });

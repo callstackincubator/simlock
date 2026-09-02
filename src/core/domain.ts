@@ -4,14 +4,27 @@ export interface DeviceSpec {
   readonly platform: Platform;
   readonly model: string;
   readonly osVersion: string;
+  /**
+   * Set when this spec was resolved from a `--full` request (see `DeviceRequest.full`): a
+   * device with no driver-side resource reduction. Part of spec identity (`sameSpec`) so a
+   * `--full` request never matches, and never shares a pool key with, a slim device -- the
+   * ADR's "serve from a separate pool key". Never `false`; omitted for every request that did
+   * not ask for it, so specs stay byte-identical to before this field existed.
+   */
+  readonly full?: boolean;
 }
 
-/** Spec identity as every selection path means it: same platform, model, and OS version. */
+/**
+ * Spec identity as every selection path means it: same platform, model, OS version, and
+ * `full`-ness. `undefined` and `false` compare equal for `full` so registries written before
+ * this field existed keep matching.
+ */
 export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
   return (
     left.platform === right.platform &&
     left.model === right.model &&
-    left.osVersion === right.osVersion
+    left.osVersion === right.osVersion &&
+    (left.full ?? false) === (right.full ?? false)
   );
 }
 
@@ -51,6 +64,13 @@ export interface DeviceRecord {
    * ever guesses at a value it wasn't told.
    */
   readonly address?: string;
+  /**
+   * Mirrors `DriverDevice.featureProfile` (see `driver.ts`), current as of this device's last
+   * `ready` transition. Undefined for a device still `provisioning` (never made ready yet)
+   * and for any driver that does not reduce anything -- today's behaviour, and every non-iOS
+   * driver.
+   */
+  readonly featureProfile?: "full" | "reduced";
 }
 
 export interface LeaseRecord {
@@ -96,6 +116,7 @@ export class IllegalTransition extends Error {
 export interface DeviceTransitionUpdate {
   readonly address?: string;
   readonly driverData?: unknown;
+  readonly featureProfile?: "full" | "reduced";
 }
 
 export function transition(

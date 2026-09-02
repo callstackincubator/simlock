@@ -5,6 +5,13 @@ export interface DeviceRequest {
   readonly platform: Platform;
   readonly model: string;
   readonly osVersion?: string;
+  /**
+   * Platform-neutral request for a device with no driver-side resource reduction -- the
+   * iOS driver happens to implement this as "do not slim"; other drivers ignore it. Never
+   * read by the core beyond stamping it onto the resolved spec (see `DeviceSpec.full` and
+   * the comment where `LeaseAcquisitionCoordinator` does that stamping).
+   */
+  readonly full?: boolean;
 }
 
 export interface DriverDevice {
@@ -18,6 +25,14 @@ export interface DriverDevice {
    * across a boot -- see `Driver.makeReady`.
    */
   readonly address: string;
+  /**
+   * What the driver actually produced for this device, as of its last `makeReady` --
+   * platform-neutral so the core can report feature loss without reading a driver's opaque
+   * `driverData`. `"reduced"` means the driver cut the device's feature set (the iOS driver's
+   * slim mode); `"full"` means it did not. `undefined` means the driver does not reduce
+   * anything at all -- today's behaviour, and every non-iOS driver.
+   */
+  readonly featureProfile?: "full" | "reduced";
 }
 
 /**

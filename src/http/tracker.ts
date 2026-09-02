@@ -18,6 +18,7 @@ export interface LeaseRequestInput {
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
+  readonly full?: boolean;
 }
 
 /** Matches the issue's lease object exactly; `dataPlane` is reserved and always `null` in v1. */
@@ -33,6 +34,8 @@ export interface LeasePayload {
   readonly expiresAt: string;
   readonly ttlMs: number;
   readonly dataPlane: null;
+  /** Whether the granted device had its feature set reduced -- see `DeviceRecord.featureProfile`. */
+  readonly slim: boolean;
 }
 
 /**
@@ -60,6 +63,7 @@ export function buildLeasePayload(
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
     ttlMs: extra.ttlMs,
     dataPlane: null,
+    slim: device.featureProfile === "reduced",
   };
 }
 
@@ -189,6 +193,7 @@ export class LeaseRequestTracker {
       model: body.device,
       platform: body.platform,
       ...(body.os === undefined ? {} : { osVersion: body.os }),
+      ...(body.full === undefined ? {} : { full: body.full }),
     };
 
     // Races the grant/rejection against the request's *first* progress callback. A rejection

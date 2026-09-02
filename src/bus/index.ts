@@ -87,6 +87,16 @@ export interface EventMap {
   };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
+  "device.slimmed": {
+    readonly deviceId: string;
+    readonly address: string;
+    readonly platform: "ios";
+    readonly categories: readonly string[];
+    readonly labelCount: number;
+    readonly durationMs: number;
+    readonly signature: string;
+    readonly unknownLabels: readonly string[];
+  };
   "component.install-started": {
     readonly platform: string;
     readonly componentId: string;

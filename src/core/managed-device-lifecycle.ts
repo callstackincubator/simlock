@@ -67,7 +67,6 @@ export class ManagedDeviceLifecycle {
     return this.#makeReady(target, "shutdown", claim);
   }
 
-  // fallow-ignore-next-line unused-class-member -- no production caller: superseded by readyProvisionedForLease, still covered by its own tests.
   async readyProvisioned(target: DeviceRecord): Promise<DeviceRecord | undefined> {
     return this.#makeReady(target, "provisioning");
   }
@@ -82,7 +81,6 @@ export class ManagedDeviceLifecycle {
   }
 
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */
-  // fallow-ignore-next-line unused-class-member -- reached through DeviceProvisioner's lifecycle port.
   async readyProvisionedForLease(target: DeviceRecord): Promise<ReadyDeviceHandoff | undefined> {
     return this.#makeReadyForLease(target, "provisioning");
   }
@@ -237,7 +235,11 @@ export class ManagedDeviceLifecycle {
         event: "device.ready",
         payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
       },
-      { address: ready.address, driverData: ready.driverData },
+      {
+        address: ready.address,
+        driverData: ready.driverData,
+        ...(ready.featureProfile === undefined ? {} : { featureProfile: ready.featureProfile }),
+      },
     );
   }
 
@@ -268,7 +270,11 @@ export class ManagedDeviceLifecycle {
           event: "device.ready",
           payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
         },
-        { address: ready.address, driverData: ready.driverData },
+        {
+          address: ready.address,
+          driverData: ready.driverData,
+          ...(ready.featureProfile === undefined ? {} : { featureProfile: ready.featureProfile }),
+        },
       );
       if (device === undefined) {
         await this.#release(claimed);

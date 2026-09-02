@@ -580,6 +580,7 @@ function daemonLeaseRequest(
       model: input.device,
       ...(input.os === undefined ? {} : { osVersion: input.os }),
       platform: input.platform,
+      ...(input.full ? { full: true } : {}),
     },
     ...(input.timeout_seconds === undefined
       ? {}
@@ -628,6 +629,7 @@ function leaseSimulatorOutput(grant: RawLeaseGrant): LeaseSimulatorOutput {
     mode: "held",
     os: grant.device.spec.osVersion,
     platform: grant.device.spec.platform,
+    slim: grant.slim,
     state: "leased",
     timing: {
       estimated_boot_ms: grant.timing.estimatedBootMs,

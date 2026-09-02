@@ -7,6 +7,9 @@ export const MAX_TIMEOUT_SECONDS = Number.MAX_SAFE_INTEGER / 1_000;
 export const leaseSimulatorInputSchema = z.object({
   allow_download: z.boolean().default(false),
   device: nonEmptyString,
+  // Platform-neutral: "give me a device with no driver-side resource reduction". The iOS
+  // driver implements this as "do not slim"; other drivers ignore it.
+  full: z.boolean().default(false),
   no_wait: z.boolean().default(false),
   os: nonEmptyString.optional(),
   platform: z.enum(["ios", "android"]),
@@ -27,6 +30,8 @@ export const leaseSimulatorOutputSchema = z.object({
   mode: z.literal("held"),
   os: nonEmptyString,
   platform: z.enum(["ios", "android"]),
+  /** Whether the granted device had its feature set reduced -- see `RawLeaseGrant.slim`. */
+  slim: z.boolean(),
   state: z.literal("leased"),
   timing: z.object({
     estimated_boot_ms: finiteNumber,

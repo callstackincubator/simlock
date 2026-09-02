@@ -444,4 +444,38 @@ describe("LeaseAcquisitionCoordinator", () => {
       harness.coordinator.request(request, { mode: "held", requesterId: "reopened" }),
     ).resolves.toMatchObject({ lease: { requesterId: "reopened" } });
   });
+
+  it("stamps full: true onto the resolved spec centrally for a --full request", async () => {
+    const harness = await createHarness();
+    const granted = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", requesterId: "agent" },
+    );
+
+    expect(granted.device.spec).toMatchObject({ full: true });
+  });
+
+  it("never stamps full: false onto a spec for a plain request", async () => {
+    const harness = await createHarness();
+    const granted = await harness.coordinator.request(request, {
+      mode: "held",
+      requesterId: "agent",
+    });
+
+    expect(granted.device.spec).not.toHaveProperty("full");
+  });
+
+  it("keeps a --full request from matching a warm slim device of the same spec", async () => {
+    const harness = await createHarness({ maxDevices: 2 });
+    await seedReady(harness, request);
+
+    const granted = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", requesterId: "agent" },
+    );
+
+    // A fresh device was provisioned rather than the warm slim one being handed out.
+    expect(granted.device.spec).toMatchObject({ full: true });
+    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+  });
 });

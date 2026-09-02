@@ -24,7 +24,27 @@ const leaseGrant = {
 
 describe("parseRawLeaseGrant", () => {
   it("parses the lease fields shared by daemon frontends", () => {
-    expect(parseRawLeaseGrant(leaseGrant)).toEqual(leaseGrant);
+    expect(parseRawLeaseGrant(leaseGrant)).toEqual({ ...leaseGrant, slim: false });
+  });
+
+  it("defaults slim to false when an older daemon never sends featureProfile", () => {
+    expect(parseRawLeaseGrant(leaseGrant).slim).toBe(false);
+  });
+
+  it("reports slim: true when the device's featureProfile is reduced", () => {
+    const grant = {
+      ...leaseGrant,
+      device: { ...leaseGrant.device, featureProfile: "reduced" },
+    };
+    expect(parseRawLeaseGrant(grant).slim).toBe(true);
+  });
+
+  it("reports slim: false when the device's featureProfile is full", () => {
+    const grant = {
+      ...leaseGrant,
+      device: { ...leaseGrant.device, featureProfile: "full" },
+    };
+    expect(parseRawLeaseGrant(grant).slim).toBe(false);
   });
 
   it.each([
@@ -38,6 +58,7 @@ describe("parseRawLeaseGrant", () => {
     [{ ...leaseGrant, lease: { ...leaseGrant.lease, mode: "forever" } }],
     [{ ...leaseGrant, lease: { id: "lse_9f2c", mode: "held" } }],
     [{ ...leaseGrant, timing: { ...leaseGrant.timing, estimatedReadyMs: "30" } }],
+    [{ ...leaseGrant, device: { ...leaseGrant.device, featureProfile: "half" } }],
     [null],
   ])("rejects malformed daemon payloads", (value) => {
     expect(() => parseRawLeaseGrant(value)).toThrow("Daemon returned an invalid lease grant");

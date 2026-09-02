@@ -39,6 +39,13 @@ export interface FakeDriverOptions {
    * `estimateMs.reclaim`, so a test that does not care about the split says nothing.
    */
   readonly fullCleanReclaimEstimateMs?: number;
+  /**
+   * The `DriverDevice.featureProfile` `makeReady` reports for every boot -- undefined by
+   * default (this fake, like every real driver except iOS, does not reduce anything), settable
+   * by a test that needs to exercise the core's `featureProfile` persistence without a real
+   * iOS driver.
+   */
+  readonly featureProfile?: "full" | "reduced";
   readonly knownModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly platform: Platform;
@@ -60,6 +67,7 @@ export class FakeDriver implements Driver {
   readonly #calls: FakeDriverCall[] = [];
   readonly #clock: Clock;
   readonly #estimateMs: FakeDriverOptions["estimateMs"];
+  readonly #featureProfile: "full" | "reduced" | undefined;
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
@@ -78,6 +86,7 @@ export class FakeDriver implements Driver {
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
     this.#clock = options.clock;
     this.#estimateMs = options.estimateMs;
+    this.#featureProfile = options.featureProfile;
     this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
@@ -145,6 +154,7 @@ export class FakeDriver implements Driver {
       address: addressFor(device.deviceId, bootCount),
       deviceId: device.deviceId,
       driverData: device.driverData,
+      ...(this.#featureProfile === undefined ? {} : { featureProfile: this.#featureProfile }),
     };
   }
 

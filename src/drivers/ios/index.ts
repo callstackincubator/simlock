@@ -25,6 +25,7 @@ import type {
   ProcessRunner,
 } from "../../ports/index.js";
 import type { ComponentInstallDiagnostic } from "../diagnostics.js";
+import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
@@ -54,12 +55,63 @@ const COLD_BOOT_ESTIMATE_MS = 60_000;
 // at either clean level, so this is the only reclaim number the driver has.
 const ERASE_ESTIMATE_MS = 34_000;
 const MARK_FILE_NAME = "simlock-mark.json";
+// Slim mode reboots the device a second time and runs a launchctl-disable pass on top of the
+// usual cold boot -- without a dedicated estimate, `doctor`'s provisioning-stall threshold would
+// be sized for a single boot and flag every slim device as stuck. Budget: one `COLD_BOOT_ESTIMATE_MS`
+// boot, a second one for the post-slim reboot, plus headroom for the chunked `simctl spawn` calls
+// (a handful of ~60s-capped chunks that in practice finish in a few seconds each).
+const SLIM_BOOT_ESTIMATE_MS = 150_000;
+// simslim batches ~170 individual `launchctl disable` calls into shell loops rather than one
+// `simctl spawn` per label -- at ~150ms/spawn that is well over half a minute of pure process
+// overhead per full slim, which would swamp the boot budget above. 50 labels/chunk keeps each
+// chunk's own script small (and its timeout comfortably generous) while still cutting spawn count
+// by ~50x versus one-label-per-call.
+const SLIM_CHUNK_SIZE = 50;
+// A chunk of 50 `launchctl disable` calls inside a simulator is not instant -- COMMAND_TIMEOUT_MS
+// (30s) has been observed to be tight for this under load, so slim chunks get their own, more
+// generous budget instead of reusing it.
+const SLIM_CHUNK_TIMEOUT_MS = 60_000;
+const SLIM_FAILED_MARKER = "simlock-slim-failed";
+// Slim labels are compile-time constants from our own data file (`slim-labels.ts`), so this can
+// never actually reject anything in production -- it exists purely as a second line of defense:
+// if that data file ever grew a label containing shell metacharacters, this stops it from
+// escaping the generated `sh -c` script instead of silently trusting the data.
+const SLIM_LABEL_SAFE_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 interface IosDriverData {
   readonly deviceTypeId: string;
   readonly name: string;
   readonly runtimeId: string;
   readonly udid: string;
+  /** Per-lease override (set by `provision` from the device spec): never slim this device. */
+  readonly full?: boolean;
+  /** `slimSignature(...)` of the label set actually applied -- the idempotence marker. */
+  readonly slimSignature?: string;
+  /** The device's *erasable* provenance-mark token as read at the moment slimming was applied. */
+  readonly slimMarkToken?: string;
+}
+
+/** Fact reported to the daemon layer once a slim reboot has committed (`onSlimmed`). */
+export interface SlimmedFact {
+  readonly deviceId: string;
+  readonly address: string;
+  readonly categories: readonly string[];
+  readonly labelCount: number;
+  readonly durationMs: number;
+  readonly signature: string;
+  /**
+   * Category names `resolveSlimCategories` didn't recognize, plus individual launchd labels a
+   * chunk reported via `simlock-slim-failed` -- neither is fatal (ADR point 8), both are worth
+   * surfacing.
+   */
+  readonly unknownLabels: readonly string[];
+}
+
+/** Fact reported when a device that should have been slimmed wasn't. */
+export interface SlimSkippedFact {
+  readonly deviceId: string;
+  readonly reason: "runtime-too-old" | "unknown-runtime" | "apply-failed";
+  readonly detail: string;
 }
 
 export interface IosSimctlDriverOptions {
@@ -92,8 +144,29 @@ export interface IosSimctlDriverOptions {
    * driver's `onDiagnostic` option.
    */
   readonly onDiagnostic?: (diagnostic: ComponentInstallDiagnostic) => void;
+  /**
+   * Reports the `device.slimmed` fact for the daemon layer to bridge onto the event bus -- this
+   * driver never depends on the bus directly (architecture rule 5). Mirrors `onDiagnostic`.
+   */
+  readonly onSlimmed?: (fact: SlimmedFact) => void;
+  /** Reports why a device slim didn't happen when slim mode is on. Mirrors `onDiagnostic`. */
+  readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
   readonly processRunner: ProcessRunner;
+  /** Slim mode; omitted or `enabled: false` means today's behaviour exactly. */
+  readonly slim?: {
+    readonly enabled: boolean;
+    readonly categories?: readonly string[];
+    readonly bootTimeoutMs: number;
+  };
 }
+
+type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
+
+/** Result of `#applySlimLabels`: either every label was attempted (some may still have failed
+ * individually, tracked in `failedLabels`), or the whole apply never ran. */
+type SlimApplyOutcome =
+  | { readonly kind: "applied"; readonly failedLabels: readonly string[] }
+  | { readonly kind: "failed"; readonly detail: string };
 
 interface DeviceType {
   readonly identifier: string;
@@ -139,8 +212,11 @@ export class IosSimctlDriver implements Driver {
   readonly #filesystem: Filesystem;
   readonly #idGenerator: IdGenerator;
   readonly #onDiagnostic: ((diagnostic: ComponentInstallDiagnostic) => void) | undefined;
+  readonly #onSlimmed: ((fact: SlimmedFact) => void) | undefined;
+  readonly #onSlimSkipped: ((fact: SlimSkippedFact) => void) | undefined;
   readonly #processRunner: ProcessRunner;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
+  readonly #slim: SlimOptions | undefined;
   #devicesRoot: string | undefined;
 
   constructor(options: IosSimctlDriverOptions) {
@@ -151,7 +227,10 @@ export class IosSimctlDriver implements Driver {
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
     this.#onDiagnostic = options.onDiagnostic;
+    this.#onSlimmed = options.onSlimmed;
+    this.#onSlimSkipped = options.onSlimSkipped;
     this.#processRunner = options.processRunner;
+    this.#slim = options.slim;
   }
 
   async resolveSpec(
@@ -494,32 +573,255 @@ export class IosSimctlDriver implements Driver {
         name,
         runtimeId: resolved.runtime.identifier,
         udid,
+        // Per-lease opt-out (`DeviceSpec.full`, ADR "serve from a separate pool key"): stamped
+        // onto driver data only when set, so a normal (non-`--full`) request's driver data stays
+        // byte-identical to a spec resolved before this field existed.
+        ...(spec.full === true ? { full: true } : {}),
       } satisfies IosDriverData,
     };
   }
 
-  /** The UDID never changes across a boot -- unlike Android's port, there is nothing to re-derive. */
+  /**
+   * The UDID never changes across a boot -- unlike Android's port, there is nothing to
+   * re-derive. When slim mode is on and this device qualifies (not `full`, runtime new enough --
+   * `#slimApplicable`), the boot deadline is widened *before* the first boot (that decision must
+   * be made from `driverData` alone, ADR point 9) and, once booted, a slim pass may run: apply the
+   * disable list, then reboot once more. A failed or skipped slim never fails the lease -- the
+   * device is still returned, just not marked as slimmed.
+   */
   async makeReady(device: DriverDevice): Promise<DriverDevice> {
     const data = iosDriverData(device);
-    const boot = await this.#invokeSimctl(["boot", data.udid], COMMAND_TIMEOUT_MS);
+    const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim);
+
+    await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
+
+    if (plan.kind === "skip") {
+      this.#onSlimSkipped?.({
+        deviceId: device.deviceId,
+        detail: plan.detail,
+        reason: plan.reason,
+      });
+    }
+
+    if (plan.kind !== "apply") {
+      return this.#asIs(device, data, "full");
+    }
+
+    return this.#applySlimAndReboot(device, data, plan.slim, bootstatusTimeoutMs);
+  }
+
+  /** The device's current `address`/`driverData`, unmodified, tagged with the feature profile. */
+  #asIs(
+    device: DriverDevice,
+    data: IosDriverData,
+    featureProfile: "full" | "reduced",
+  ): DriverDevice {
+    return {
+      address: data.udid,
+      deviceId: device.deviceId,
+      driverData: device.driverData,
+      featureProfile,
+    };
+  }
+
+  /**
+   * Boot, tolerate already-booted, wait for `bootstatus -b`; on a bootstatus timeout, make a
+   * best-effort shutdown before surfacing `BootTimeoutError` so a hung device isn't left running.
+   * Shared by `makeReady`'s first boot and the post-slim reboot -- identical behaviour either way,
+   * only the deadline differs.
+   */
+  async #bootAndWait(udid: string, deviceId: string, bootstatusTimeoutMs: number): Promise<void> {
+    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
     if (boot.kind === "timed-out") {
-      throw new BootTimeoutError(device.deviceId);
+      throw new BootTimeoutError(deviceId);
     }
     if (boot.result.code !== 0 && !alreadyBooted(boot.result.stderr)) {
-      this.#assertSuccessful(["boot", data.udid], boot.result);
+      this.#assertSuccessful(["boot", udid], boot.result);
     }
-    const outcome = await this.#invokeSimctl(
-      ["bootstatus", data.udid, "-b"],
-      BOOTSTATUS_TIMEOUT_MS,
-    );
+    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs);
 
     if (outcome.kind === "timed-out") {
-      await this.#bestEffortShutdown(data.udid);
-      throw new BootTimeoutError(device.deviceId);
+      await this.#bestEffortShutdown(udid);
+      throw new BootTimeoutError(deviceId);
     }
 
-    this.#assertSuccessful(["bootstatus", data.udid, "-b"], outcome.result);
-    return { address: data.udid, deviceId: device.deviceId, driverData: device.driverData };
+    this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
+  }
+
+  /**
+   * Runs after the first boot has already succeeded with the slim deadline. Idempotence: skip
+   * the whole step (no second boot) only when the stored signature *and* mark token both match
+   * what's true right now -- a missing/unreadable token or a differing one means the device was
+   * erased (by `reclaim`) since it was last slimmed, and a differing signature means the
+   * configured categories (or the shipped label list) changed; either way, re-apply. Applying
+   * twice is harmless.
+   */
+  async #applySlimAndReboot(
+    device: DriverDevice,
+    data: IosDriverData,
+    slim: SlimOptions,
+    bootstatusTimeoutMs: number,
+  ): Promise<DriverDevice> {
+    const resolved = resolveSlimCategories(slim.categories);
+    if (resolved.categories.length === 0) {
+      return this.#skipApply(
+        device,
+        data,
+        `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
+      );
+    }
+
+    const signature = slimSignature(resolved.categories);
+    const idempotence = await this.#checkAlreadySlimmed(data, signature);
+    if (idempotence.alreadySlimmed) {
+      return this.#asIs(device, data, "reduced");
+    }
+
+    const labels = labelsFor(resolved.categories);
+    const startedAt = this.#clock.now();
+    const applyOutcome = await this.#applySlimLabels(data.udid, labels);
+    if (applyOutcome.kind === "failed") {
+      return this.#skipApply(device, data, applyOutcome.detail);
+    }
+
+    // The reboot below is what makes the disable entries take effect; never write the
+    // idempotence marker or report `device.slimmed` on a device that hasn't actually rebooted
+    // with them applied.
+    await this.#shutdown(data.udid);
+    await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
+
+    return this.#commitSlim(
+      device,
+      data,
+      resolved,
+      labels,
+      signature,
+      idempotence.currentToken,
+      startedAt,
+      applyOutcome,
+    );
+  }
+
+  /** Reports `device.slim-skipped` with reason `apply-failed` and returns the device as-is. */
+  #skipApply(device: DriverDevice, data: IosDriverData, detail: string): DriverDevice {
+    this.#onSlimSkipped?.({ deviceId: device.deviceId, detail, reason: "apply-failed" });
+    return this.#asIs(device, data, "full");
+  }
+
+  /**
+   * Idempotence check split out of `#applySlimAndReboot`: skip the whole step (no second boot)
+   * only when the stored signature *and* mark token both match what's true right now -- a
+   * missing/unreadable token or a differing one means the device was erased (by `reclaim`) since
+   * it was last slimmed, and a differing signature means the configured categories (or the
+   * shipped label list) changed; either way, re-apply. Applying twice is harmless.
+   */
+  async #checkAlreadySlimmed(
+    data: IosDriverData,
+    signature: string,
+  ): Promise<{ readonly alreadySlimmed: boolean; readonly currentToken: string | undefined }> {
+    const dataPath = await this.#dataPathFor(data.udid);
+    const currentToken =
+      dataPath === undefined ? undefined : await this.#readToken(`${dataPath}/${MARK_FILE_NAME}`);
+
+    const alreadySlimmed =
+      data.slimSignature !== undefined &&
+      currentToken !== undefined &&
+      data.slimMarkToken !== undefined &&
+      data.slimSignature === signature &&
+      data.slimMarkToken === currentToken;
+
+    return { alreadySlimmed, currentToken };
+  }
+
+  /**
+   * Builds the post-reboot driver data (new signature + mark token) and reports `device.slimmed`
+   * -- split out of `#applySlimAndReboot` so the outer method's own branching stays about
+   * *whether* to apply, not the bookkeeping for a successful apply.
+   */
+  #commitSlim(
+    device: DriverDevice,
+    data: IosDriverData,
+    resolved: ReturnType<typeof resolveSlimCategories>,
+    labels: readonly string[],
+    signature: string,
+    currentToken: string | undefined,
+    startedAt: number,
+    applyOutcome: Extract<SlimApplyOutcome, { readonly kind: "applied" }>,
+  ): DriverDevice {
+    const newDriverData: Record<string, unknown> = {
+      ...(isRecord(device.driverData) ? device.driverData : {}),
+      slimSignature: signature,
+      // `currentToken` was read from the erasable mark *before* this reboot -- a reboot alone
+      // never touches the mark (only `provision`/`reclaim` rewrite it), so re-reading afterward
+      // would just repeat the same value at the cost of another filesystem round trip.
+      ...(currentToken === undefined ? {} : { slimMarkToken: currentToken }),
+    };
+
+    this.#onSlimmed?.({
+      address: data.udid,
+      categories: resolved.categories.map((category) => category.name),
+      deviceId: device.deviceId,
+      durationMs: this.#clock.now() - startedAt,
+      labelCount: labels.length,
+      signature,
+      unknownLabels: [...resolved.unknown, ...applyOutcome.failedLabels],
+    });
+
+    return {
+      address: data.udid,
+      deviceId: device.deviceId,
+      driverData: newDriverData,
+      featureProfile: "reduced",
+    };
+  }
+
+  /**
+   * Batches `launchctl disable system/<label>` calls into shell loops of at most
+   * `SLIM_CHUNK_SIZE`, one `simctl spawn` per chunk -- ~170 individual spawns would dominate the
+   * slim budget (see `SLIM_CHUNK_SIZE`'s comment). Each label that `launchctl disable` itself
+   * rejects (e.g. renamed/removed between runtimes) is caught by the script's own `|| echo` and
+   * reported back, never thrown (ADR point 8) -- only a chunk that fails to run at all (timeout,
+   * nonzero exit from the `sh -c` invocation itself) is treated as that chunk's labels failing
+   * outright. The whole apply is reported as failed only when *no* chunk ran successfully.
+   */
+  async #applySlimLabels(udid: string, labels: readonly string[]): Promise<SlimApplyOutcome> {
+    const { safe, rejected } = sanitizeSlimLabels(labels);
+    if (safe.length === 0) {
+      return { detail: "no labels passed the shell-safety filter", kind: "failed" };
+    }
+
+    const chunks = chunk(safe, SLIM_CHUNK_SIZE);
+    const failedLabels: string[] = [...rejected];
+    let anyChunkSucceeded = false;
+
+    for (const chunkLabels of chunks) {
+      const script =
+        `for l in ${chunkLabels.join(" ")}; do launchctl disable "system/$l" ` +
+        `>/dev/null 2>&1 || echo "${SLIM_FAILED_MARKER} $l"; done`;
+      const outcome = await this.#invokeSimctl(
+        ["spawn", udid, "/bin/sh", "-c", script],
+        SLIM_CHUNK_TIMEOUT_MS,
+      );
+
+      if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
+        failedLabels.push(...chunkLabels);
+        continue;
+      }
+
+      anyChunkSucceeded = true;
+      for (const line of outcome.result.stdout.split("\n")) {
+        const match = /^simlock-slim-failed (\S+)$/.exec(line.trim());
+        if (match?.[1] !== undefined) {
+          failedLabels.push(match[1]);
+        }
+      }
+    }
+
+    if (!anyChunkSucceeded) {
+      return { detail: `all ${String(chunks.length)} chunk(s) failed to run`, kind: "failed" };
+    }
+
+    return { failedLabels, kind: "applied" };
   }
 
   async reclaim(
@@ -592,7 +894,10 @@ export class IosSimctlDriver implements Driver {
       case "provision":
         return PROVISION_ESTIMATE_MS;
       case "boot":
-        return COLD_BOOT_ESTIMATE_MS;
+        // Slim mode pays for a second boot plus a launchctl-disable pass on top of the usual
+        // one -- quoting the plain cold-boot number here would make `doctor` flag every slim
+        // device as stalled.
+        return this.#slim?.enabled === true ? SLIM_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
       case "reclaim":
         // `reclaimStrategy` returns `erase` for both clean levels, so there is nothing to
         // branch on here -- the clean level only matters to a driver that has a fast path.
@@ -1109,7 +1414,115 @@ function iosDriverData(device: DriverDevice): IosDriverData {
     name: value.name,
     runtimeId: value.runtimeId,
     udid: value.udid,
+    // All three are optional and post-date `state.json` registries written before slim mode
+    // shipped -- absent or wrong-typed is tolerated (ignored) rather than rejected, so an old
+    // registry keeps loading (compatibility requirement).
+    ...(typeof value.full === "boolean" ? { full: value.full } : {}),
+    ...(typeof value.slimSignature === "string" ? { slimSignature: value.slimSignature } : {}),
+    ...(typeof value.slimMarkToken === "string" ? { slimMarkToken: value.slimMarkToken } : {}),
   };
+}
+
+/**
+ * Parses the iOS version out of a `simctl` runtime identifier, e.g.
+ * `com.apple.CoreSimulator.SimRuntime.iOS-18-5` -> `[18, 5]`. Handles a bare major
+ * (`iOS-18` -> `[18, 0]`) and a trailing patch segment (`iOS-18-5-1`, patch ignored) the same
+ * way. An unparseable or empty `runtimeId` returns `undefined`.
+ */
+export function iosRuntimeVersionFromId(runtimeId: string): readonly [number, number] | undefined {
+  const match = /iOS-(\d+)(?:-(\d+))?(?:-(\d+))?$/.exec(runtimeId);
+  if (match === null) {
+    return undefined;
+  }
+  const major = Number.parseInt(match[1] ?? "", 10);
+  const minor = match[2] === undefined ? 0 : Number.parseInt(match[2], 10);
+  if (Number.isNaN(major) || Number.isNaN(minor)) {
+    return undefined;
+  }
+  return [major, minor];
+}
+
+/**
+ * ADR point 4: `launchctl disable` overrides only persist across reboots on iOS 18.5+; older
+ * runtimes accept the commands but silently drop them on reboot, which would make slimming pay
+ * for a second boot for nothing. `undefined` (unparseable/empty `runtimeId`) is never supported --
+ * an unknown version is not assumed new enough.
+ */
+export function supportsPersistentSlim(version: readonly [number, number] | undefined): boolean {
+  if (version === undefined) {
+    return false;
+  }
+  const [major, minor] = version;
+  return major > 18 || (major === 18 && minor >= 5);
+}
+
+/**
+ * What `makeReady` should do about slimming this boot -- decided from `driverData` and the slim
+ * options alone, before any `simctl` call runs. `"off"` covers both slim mode being disabled
+ * entirely and this device's per-lease `full: true` opt-out; `"skip"` is the runtime-gate
+ * failure (too old / unparseable), carrying the `SlimSkippedFact` fields `makeReady` reports
+ * as-is; `"apply"` carries the resolved `slim` options `#applySlimAndReboot` needs.
+ */
+type SlimPlan =
+  | { readonly kind: "off" }
+  | { readonly kind: "skip"; readonly reason: SlimSkippedFact["reason"]; readonly detail: string }
+  | { readonly kind: "apply"; readonly slim: SlimOptions };
+
+/**
+ * Pure decision step extracted from `makeReady`: given only this device's driver data and the
+ * driver's slim options, decides what this boot should do and how long the initial `bootstatus`
+ * wait may take. Slim mode off, or this device's `full: true` opt-out, both read as `"off"` --
+ * the two are equivalent from here on (same as-is return, same ordinary boot deadline).
+ */
+function planSlimBoot(
+  data: IosDriverData,
+  slim: SlimOptions | undefined,
+): { readonly plan: SlimPlan; readonly bootstatusTimeoutMs: number } {
+  if (slim === undefined || !slim.enabled || data.full === true) {
+    return { bootstatusTimeoutMs: BOOTSTATUS_TIMEOUT_MS, plan: { kind: "off" } };
+  }
+
+  const version = iosRuntimeVersionFromId(data.runtimeId);
+  if (!supportsPersistentSlim(version)) {
+    return {
+      bootstatusTimeoutMs: BOOTSTATUS_TIMEOUT_MS,
+      plan: {
+        detail:
+          version === undefined
+            ? `runtimeId "${data.runtimeId}" does not parse to an iOS version`
+            : `iOS ${String(version[0])}.${String(version[1])} is below the 18.5 persistent-override floor`,
+        kind: "skip",
+        reason: version === undefined ? "unknown-runtime" : "runtime-too-old",
+      },
+    };
+  }
+
+  return { bootstatusTimeoutMs: slim.bootTimeoutMs, plan: { kind: "apply", slim } };
+}
+
+/**
+ * Defense in depth for the generated `sh -c` script (see `#applySlimLabels`): labels are
+ * compile-time constants from `slim-labels.ts`, so this should never actually reject anything in
+ * production, but a label containing shell metacharacters must never reach the script unfiltered.
+ */
+export function sanitizeSlimLabels(labels: readonly string[]): {
+  readonly safe: readonly string[];
+  readonly rejected: readonly string[];
+} {
+  const safe: string[] = [];
+  const rejected: string[] = [];
+  for (const label of labels) {
+    (SLIM_LABEL_SAFE_PATTERN.test(label) ? safe : rejected).push(label);
+  }
+  return { rejected, safe };
+}
+
+function chunk<T>(items: readonly T[], size: number): readonly (readonly T[])[] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function alreadyShutdown(stderr: string): boolean {
