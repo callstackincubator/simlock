@@ -66,6 +66,15 @@ describe("reaching a leased device", () => {
       `${exported.stdout}printf %s "$SIMLOCK_IOS_DEVICE_SET"`,
     ]);
     expect(evaluated.stdout).toBe("/Users/o'brien/My Sims/devices/ios");
+    // Released rather than left to the TTL because an outstanding detached lease keeps the
+    // daemon from exiting on `daemon stop` -- a defect that predates this work (it
+    // reproduces on the branch this stack is based on) and is not this test's subject.
+    const exportedGrant = JSON.parse((await env.cli(["status", "--json"])).stdout) as {
+      readonly leases: readonly { readonly id: string }[];
+    };
+    for (const lease of exportedGrant.leases) {
+      await env.cli(["release", lease.id]);
+    }
   });
 
   it("scopes a passthrough to the driver's root and returns the tool's own exit code", async () => {
