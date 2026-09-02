@@ -58,6 +58,22 @@ function simctlArgs(...args: readonly string[]): string[] {
 /** Runners handed to a driver built by `createDriver`; drained by the invariant below. */
 const scopedRunners: ScriptedProcessRunner[] = [];
 
+const legacyUdid = "00000000-0000-0000-0000-0000000000ff";
+
+/**
+ * The complete argv of every call the pre-root path is allowed to make without `--set`,
+ * spelled out rather than pattern-matched: `findLegacy` / `destroyLegacy` deliberately
+ * address the machine's default set (ADR 0001, Migration), and every *other* call must
+ * still fail the invariant below if its scoping ever goes missing.
+ */
+const UNSCOPED_LEGACY_CALLS = new Set(
+  [
+    ["simctl", "list", "-j", "devices"],
+    ["simctl", "shutdown", legacyUdid],
+    ["simctl", "delete", legacyUdid],
+  ].map((argv) => argv.join(" ")),
+);
+
 /**
  * The one global invariant, asserted over everything every test in this file recorded
  * rather than per call site: scoping is what makes ownership provable, so a spawn that
@@ -69,6 +85,7 @@ const scopedRunners: ScriptedProcessRunner[] = [];
 afterEach(() => {
   for (const call of scopedRunners.splice(0).flatMap((runner) => runner.calls)) {
     expect(call.command).toBe("xcrun");
+    if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
     expect(call.args.slice(0, 3)).toEqual(["simctl", "--set", deviceRoot]);
   }
 });
@@ -591,6 +608,89 @@ describe("IosSimctlDriver", () => {
     expect(failure).toBeInstanceOf(OwnedRootError);
     expect(failure).toMatchObject({ platform: "ios", reason: "not-absolute" });
     expect(failure).toMatchObject({ message: expect.stringContaining("true") });
+  });
+
+  it("re-proves an intact root by re-running the validation its start was judged by", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    await expect(driver.revalidateRoot()).resolves.toBeUndefined();
+  });
+
+  it("refuses to re-prove a root that has become a symlink since startup", async () => {
+    const filesystem = new MemoryFilesystem();
+    const driver = await createDriver(new ScriptedProcessRunner([]), new FakeClock(), filesystem);
+    // The case the re-proof exists for: ownership was proven at startup and the path has
+    // been swapped since, so `listManaged` now answers from somewhere else entirely.
+    filesystem.defineSymlink(deviceRoot, "/Users/someone/Library/Developer/CoreSimulator/Devices");
+
+    const failure = await driver
+      .revalidateRoot()
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(OwnedRootError);
+    expect(failure).toMatchObject({ platform: "ios", reason: "symlink" });
+  });
+
+  it("finds a pre-root device in the machine's default set, without --set", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["simctl", "list", "-j", "devices"], command: "xcrun" },
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            devices: {
+              "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+                {
+                  dataPath: `/Library/Devices/${legacyUdid}/data`,
+                  name: "simlock-old",
+                  state: "Shutdown",
+                  udid: legacyUdid,
+                },
+              ],
+            },
+          }),
+        },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.findLegacy(legacyUdid)).resolves.toMatchObject({
+      device: { deviceId: legacyUdid },
+      path: `/Library/Devices/${legacyUdid}`,
+    });
+  });
+
+  it("reports no pre-root device when the default set does not hold the udid", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["simctl", "list", "-j", "devices"], command: "xcrun" },
+        result: { code: 0, stderr: "", stdout: JSON.stringify({ devices: {} }) },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.findLegacy(legacyUdid)).resolves.toBeUndefined();
+  });
+
+  it("destroys a pre-root device through the unscoped path it actually lives on", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: { args: ["simctl", "shutdown", legacyUdid], command: "xcrun" } },
+      { match: { args: ["simctl", "delete", legacyUdid], command: "xcrun" } },
+    ]);
+    const driver = await createDriver(runner);
+
+    await driver.destroyLegacy({
+      address: legacyUdid,
+      deviceId: legacyUdid,
+      driverData: { ...driverData, udid: legacyUdid },
+    });
+
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      ["simctl", "shutdown", legacyUdid],
+      ["simctl", "delete", legacyUdid],
+    ]);
   });
 
   it("hands a lease holder the device set its simulator cannot be addressed without", async () => {

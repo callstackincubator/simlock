@@ -100,10 +100,7 @@ destroys it (registry-only, as always). The device stays visible as
 `device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
 follow-up facts (see `docs/EVENTS.md`).
 
-## Device roots are an accident boundary, not a security boundary (planned)
-
-> Status: describes the state after
-> [ADR 0001](adr/0001-simlock-owned-device-roots.md) lands.
+## Device roots are an accident boundary, not a security boundary
 
 Simlock keeps its devices in roots it owns and scopes every platform command
 to them, so Xcode, Android Studio, and a plain `simctl` / `adb` do not see
@@ -129,10 +126,38 @@ it is*, the marks prove *what happened to it*.
 (multi-tenant machines, untrusted agents) needs OS-level isolation, which is
 out of scope for a device control plane.
 
-## Simlock's adb server has to be supervised by pid (planned)
+## A root's ownership is proven at startup and trusted for the daemon's life
 
-> Status: describes the state after
-> [ADR 0001](adr/0001-simlock-owned-device-roots.md) lands.
+`ensureOwnedRoot` runs once per driver, at daemon start. Every later answer to
+"is this device Simlock's?" — `listManaged`, every `simctl --set`, every
+`ANDROID_AVD_HOME` — is computed against that path again and again, but the
+*proof* behind it is the one taken at boot and never retaken.
+
+**The pitfall:** a daemon can be up for days. In that time the path can become
+a symlink, or an `mv` can leave the user's own device set standing exactly
+where Simlock's root was. Nothing re-checks, so `listManaged` starts answering
+with the user's simulators, every one of them has no registry record, and
+`doctor` reports the lot as orphans. This is a different case from the accident
+boundary above, which is about someone deliberately reaching *into* the root;
+this one is the root being swapped *under* Simlock, and it turns a report into
+a claim over devices that were never Simlock's.
+
+**Fix, and the deliberate half-measure in it:** destroying re-proves the root
+and reporting does not. `doctor --purge-orphans` calls `Driver.revalidateRoot()`
+— the same validation `create` was judged by, with the same arguments —
+immediately before its first destroy, and abandons the whole purge if any root
+refuses. Nothing else does, and that asymmetry is the point: a stale proof
+behind a *report* costs a confusing `doctor` run, while a stale proof behind a
+`destroy` costs the user their devices. Re-validating on every reconcile tick,
+or before every `listManaged`, would buy nothing for the case that matters and
+would put a filesystem check on the reaper's path.
+
+**Status:** accepted, and bounded by design — the purge is the only destructive
+path root membership alone can authorise (safety rule 1), so it is the only one
+that needs the re-proof. Restarting the daemon re-proves everything; a driver
+whose root has gone bad then simply does not start.
+
+## Simlock's adb server has to be supervised by pid
 
 Android containment needs Simlock to run its own adb server, because `adb` has
 no equivalent of `simctl --set`. That server is started with

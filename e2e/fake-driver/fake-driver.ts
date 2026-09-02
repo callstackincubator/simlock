@@ -124,6 +124,15 @@ export class OutOfProcessFakeDriver implements Driver {
     this.#scriptPath = options.scriptPath;
   }
 
+  /**
+   * Logged like every other call, so a flow can assert the purge re-proved the root before
+   * it destroyed anything -- and refusable through `failures.revalidateRoot`, which is how
+   * a flow stages the root going bad under a running daemon.
+   */
+  async revalidateRoot(): Promise<void> {
+    await this.#beforeCall("revalidateRoot", []);
+  }
+
   async resolveSpec(
     request: DeviceRequest,
     options: { readonly allowDownload: boolean },

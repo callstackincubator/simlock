@@ -7,6 +7,7 @@ import {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type LegacyDevice,
   type ObservedRunState,
   type PassthroughCommand,
   PassthroughRefusedError,
@@ -22,7 +23,11 @@ export type FakeDriverOperation =
   | "shutdown"
   | "destroy"
   | "listManaged"
-  | "listCatalog";
+  | "listCatalog"
+  /** Recorded like every other call, so a test can pin that it precedes the first destroy. */
+  | "revalidateRoot"
+  | "findLegacy"
+  | "destroyLegacy";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -59,6 +64,12 @@ export interface FakeDriverOptions {
    */
   readonly passthrough?: (args: readonly string[]) => PassthroughCommand;
   readonly platform: Platform;
+  /**
+   * What this driver claims to find outside its root for a given device id, keyed by
+   * `driverDeviceId`. Empty by default: a driver that has never had a pre-root life finds
+   * nothing, which is what keeps every other test's missing device simply missing.
+   */
+  readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
 }
@@ -91,6 +102,7 @@ export class FakeDriver implements Driver {
   readonly #reclaimResult: "ready" | "shutdown";
   readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
+  readonly #legacyDevices: Map<string, LegacyDevice>;
   /** Bumped on every `makeReady` boot -- mirrors a real driver reassigning a port per boot. */
   readonly #bootCounts = new Map<string, number>();
   #managedReality: DriverReality | undefined;
@@ -104,6 +116,7 @@ export class FakeDriver implements Driver {
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
+    this.#legacyDevices = new Map(Object.entries(options.legacyDevices ?? {}));
     this.passthroughTool = options.passthroughTool;
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
@@ -114,6 +127,25 @@ export class FakeDriver implements Driver {
 
   get calls(): readonly FakeDriverCall[] {
     return this.#calls.map((call) => ({ ...call, arguments: [...call.arguments] }));
+  }
+
+  /**
+   * Succeeds unless a test fails it through `failOn`. A real driver re-runs the filesystem
+   * checks here; the fake only has to be refusable, since what `Doctor` does with a refusal
+   * is the behaviour under test.
+   */
+  async revalidateRoot(): Promise<void> {
+    await this.#beforeCall("revalidateRoot");
+  }
+
+  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+    await this.#beforeCall("findLegacy", driverDeviceId);
+    return this.#legacyDevices.get(driverDeviceId);
+  }
+
+  async destroyLegacy(device: DriverDevice): Promise<void> {
+    await this.#beforeCall("destroyLegacy", device);
+    this.#legacyDevices.delete(device.deviceId);
   }
 
   async resolveSpec(

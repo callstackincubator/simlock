@@ -105,6 +105,19 @@ export interface Driver {
    * around without interpreting it, the same way it carries `address`.
    */
   readonly deviceRoot: string;
+  /**
+   * Re-runs this driver's own root validation, resolving only while the root still proves
+   * ownership and rejecting with the driver's own refusal (an `OwnedRootError`) when it
+   * does not.
+   *
+   * Ownership is proven once, at startup, and then trusted for the life of the process --
+   * tolerable for reporting, not for destroying. A daemon that has been up for days is one
+   * `mv` or one symlink away from `deviceRoot` naming the user's own device set, at which
+   * point `listManaged` answers with every simulator on the machine and
+   * `doctor --purge-orphans` would destroy them. Only the driver can re-run the check,
+   * because only it knows how its root was built (architecture rule 2).
+   */
+  revalidateRoot(): Promise<void>;
   resolveSpec(
     request: DeviceRequest,
     options: { readonly allowDownload: boolean },
@@ -154,6 +167,32 @@ export interface Driver {
    * change a device's lifecycle behind the registry's back (ADR 0001, decision 7).
    */
   passthrough?(args: readonly string[]): PassthroughCommand;
+  /**
+   * Looks for a registry device in the location this platform used before Simlock owned a
+   * root, and reports it without touching it. Optional: a driver with no pre-root history
+   * has nothing to find. The core only ever asks about a device the root itself no longer
+   * holds, so a "yes" here is what separates "stranded by the migration" from "gone".
+   */
+  findLegacy?(driverDeviceId: string): Promise<LegacyDevice | undefined>;
+  /**
+   * Destroys such a device through the old, unscoped path it actually lives on. This is
+   * the only Simlock call that reaches outside an owned root, and it is permitted because
+   * the device is in the registry: registry-only destruction (safety rule 1) is satisfied
+   * by the record, not by the root (ADR 0001, Migration).
+   */
+  destroyLegacy?(device: DriverDevice): Promise<void>;
+}
+
+/**
+ * A device this driver created before Simlock owned a root, still sitting where the
+ * platform put it. Neither CoreSimulator nor the Android SDK can relocate a device, so
+ * these are reported and destroyed rather than migrated, and users re-provision.
+ */
+export interface LegacyDevice {
+  /** Addressed through the driver's unscoped path, never through the root's. */
+  readonly device: DriverDevice;
+  /** Where the driver found it, for the report. Absent when the tool does not say. */
+  readonly path?: string;
 }
 
 /**

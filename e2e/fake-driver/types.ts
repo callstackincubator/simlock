@@ -15,7 +15,9 @@ export type FakeDriverOperation =
   | "shutdown"
   | "destroy"
   | "listManaged"
-  | "listCatalog";
+  | "listCatalog"
+  /** The root re-proof `doctor --purge-orphans` takes before its first destroy. */
+  | "revalidateRoot";
 
 export type FakeDriverEstimateOperation = "provision" | "boot" | "reclaim";
 

@@ -1,6 +1,6 @@
 # 0001. Simlock-owned device roots
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-09-02
 - **Issue:** [#73](https://github.com/callstackincubator/simlock/issues/73),
   part of [#70](https://github.com/callstackincubator/simlock/issues/70)

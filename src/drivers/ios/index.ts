@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   BootTimeoutError,
@@ -10,6 +10,8 @@ import {
   type DriverEstimate,
   type DriverReality,
   ensureOwnedRoot,
+  type EnsureOwnedRootOptions,
+  type LegacyDevice,
   type ObservedDevice,
   OwnedRootError,
   type PassthroughCommand,
@@ -140,13 +142,19 @@ export class IosSimctlDriver implements Driver {
   readonly #processRunner: ProcessRunner;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
   readonly #deviceRoot: string;
+  readonly #rootOptions: EnsureOwnedRootOptions;
 
-  private constructor(options: IosSimctlDriverOptions, deviceRoot: string) {
+  private constructor(
+    options: IosSimctlDriverOptions,
+    deviceRoot: string,
+    rootOptions: EnsureOwnedRootOptions,
+  ) {
     this.#clock = options.clock;
     this.#filesystem = options.filesystem;
     this.#idGenerator = options.idGenerator;
     this.#processRunner = options.processRunner;
     this.#deviceRoot = deviceRoot;
+    this.#rootOptions = rootOptions;
   }
 
   /**
@@ -158,20 +166,32 @@ export class IosSimctlDriver implements Driver {
    * machine's default device set (safety rule 9).
    */
   static async create(options: IosSimctlDriverOptions): Promise<IosSimctlDriver> {
-    const deviceRoot = await ensureOwnedRoot({
+    const rootOptions: EnsureOwnedRootOptions = {
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       path: configuredDeviceRoot(options),
       platform: "ios",
       ...(options.uid === undefined ? {} : { uid: options.uid }),
-    });
+    };
+    const deviceRoot = await ensureOwnedRoot(rootOptions);
 
-    return new IosSimctlDriver(options, deviceRoot);
+    return new IosSimctlDriver(options, deviceRoot, rootOptions);
   }
 
   get deviceRoot(): string {
     return this.#deviceRoot;
+  }
+
+  /**
+   * The same call `create` made, with the same arguments, because the proof *is* that call:
+   * a cheaper second check here would be a second validator, free to drift from the one
+   * every start is judged by. It is asked for immediately before Simlock destroys anything
+   * inside this set, since between then and startup the path can have become a symlink, or
+   * a `mv` can have left the user's own device set standing where this one was.
+   */
+  async revalidateRoot(): Promise<void> {
+    await ensureOwnedRoot(this.#rootOptions);
   }
 
   async resolveSpec(
@@ -287,6 +307,52 @@ export class IosSimctlDriver implements Driver {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
+  }
+
+  /**
+   * Looks for a UDID in the machine's default device set -- where every simulator Simlock
+   * created before it owned one still lives. Reached only for a registry device the root no
+   * longer holds, and it reads: `simctl list` is the one unscoped call that mutates nothing.
+   */
+  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+    const result = await this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
+    const found = parseManagedDevices(JSON.parse(result.stdout) as unknown).find(
+      (device) => device.udid === driverDeviceId,
+    );
+    if (found === undefined) {
+      return undefined;
+    }
+
+    return {
+      device: {
+        address: found.udid,
+        deviceId: found.udid,
+        driverData: {
+          deviceTypeId: "",
+          name: found.name,
+          runtimeId: "",
+          udid: found.udid,
+        } satisfies IosDriverData,
+      },
+      // CoreSimulator lays every set out as `<set>/<UDID>`, data container included, so the
+      // container's parent is the device directory -- and where the *old* set is is exactly
+      // what this driver no longer knows any other way (ADR 0001, consequences).
+      ...(found.dataPath === undefined ? {} : { path: dirname(found.dataPath) }),
+    };
+  }
+
+  /**
+   * Destroys a pre-root simulator through the unscoped path it actually sits on. Permitted
+   * despite living outside this driver's root because the registry names it: registry-only
+   * destruction (safety rule 1) is satisfied by the record, not by the root. `doctor --fix`
+   * is the only caller, and it checks the lease guard before asking.
+   */
+  async destroyLegacy(device: DriverDevice): Promise<void> {
+    const { udid } = iosDriverData(device);
+    // Best effort, exactly as the scoped `#shutdown` is: a device that is already shut down
+    // reports a failure that says nothing about whether the delete can proceed.
+    await this.#invokeLegacySimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
+    await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
   }
 
   async listManaged(): Promise<DriverReality> {
@@ -548,8 +614,14 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #simctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
-    const outcome = await this.#invokeSimctl(args, timeoutMs);
+    return this.#checked(args, timeoutMs, await this.#invokeSimctl(args, timeoutMs));
+  }
 
+  async #legacySimctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
+    return this.#checked(args, timeoutMs, await this.#invokeLegacySimctl(args, timeoutMs));
+  }
+
+  #checked(args: readonly string[], timeoutMs: number, outcome: ProcessOutcome): ProcessResult {
     if (outcome.kind === "timed-out") {
       throw new DriverCrashError(`simctl ${args.join(" ")} timed out after ${timeoutMs}ms`);
     }
@@ -558,20 +630,34 @@ export class IosSimctlDriver implements Driver {
     return outcome.result;
   }
 
+  /**
+   * The single insertion point for `--set`, which scopes every subcommand to the root this
+   * driver owns and must therefore precede the subcommand. Every call in this file is
+   * spawned through here or through `#invokeLegacySimctl`, and nothing else: a scoped call
+   * that slipped past both would address the machine's default set, where Simlock can prove
+   * nothing about what it touches.
+   */
   async #invokeSimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
+    return this.#invokeXcrun(["simctl", "--set", this.#deviceRoot, ...args], timeoutMs);
+  }
+
+  /**
+   * Deliberately unscoped, and the only thing in Simlock that is: the pre-root devices
+   * `findLegacy` / `destroyLegacy` deal with are in the machine's default set, which is
+   * where a `--set` would stop reaching them. Only those two may call it, and only for a
+   * UDID a registry record names -- registry-only destruction (safety rule 1) is satisfied
+   * by that record, not by the root.
+   */
+  async #invokeLegacySimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
+    return this.#invokeXcrun(["simctl", ...args], timeoutMs);
+  }
+
+  async #invokeXcrun(argv: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
     let process;
     try {
-      // The single insertion point for `--set`, which scopes every subcommand to the root
-      // this driver owns and must therefore precede the subcommand. Nothing in this file
-      // spawns simctl any other way: a call that slipped past here would address the
-      // machine's default set, where Simlock can prove nothing about what it touches.
-      process = this.#processRunner.spawn("xcrun", ["simctl", "--set", this.#deviceRoot, ...args], {
-        timeoutMs,
-      });
+      process = this.#processRunner.spawn("xcrun", [...argv], { timeoutMs });
     } catch (error: unknown) {
-      throw new DriverCrashError(
-        `Could not start simctl ${args.join(" ")}: ${errorMessage(error)}`,
-      );
+      throw new DriverCrashError(`Could not start ${argv.join(" ")}: ${errorMessage(error)}`);
     }
 
     let resolveTimeout: (() => void) | undefined;
@@ -593,7 +679,7 @@ export class IosSimctlDriver implements Driver {
         timedOut.then(() => ({ kind: "timed-out" as const })),
       ]);
     } catch (error: unknown) {
-      throw new DriverCrashError(`simctl ${args.join(" ")} failed: ${errorMessage(error)}`);
+      throw new DriverCrashError(`${argv.join(" ")} failed: ${errorMessage(error)}`);
     } finally {
       this.#clock.cancel(timer);
     }
@@ -651,6 +737,8 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
 }
 
 interface ParsedManagedDevice {
+  /** Only `findLegacy` reads this; a scoped listing already knows where its devices are. */
+  readonly dataPath?: string;
   readonly name: string;
   readonly runState: ObservedRunState;
   readonly udid: string;
@@ -660,21 +748,25 @@ function parseManagedDevices(value: unknown): ParsedManagedDevice[] {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");
   }
-  const devices: ParsedManagedDevice[] = [];
-  for (const runtimeDevices of Object.values(value.devices)) {
-    if (!Array.isArray(runtimeDevices)) continue;
-    for (const device of runtimeDevices) {
-      if (!isRecord(device) || typeof device.name !== "string" || typeof device.udid !== "string") {
-        continue;
-      }
-      devices.push({
-        name: device.name,
-        runState: simctlRunState(device.state),
-        udid: device.udid,
-      });
-    }
+  return Object.values(value.devices).flatMap((runtimeDevices) =>
+    Array.isArray(runtimeDevices) ? runtimeDevices.flatMap(parseManagedDevice) : [],
+  );
+}
+
+/** An entry simctl reports without a name or a udid is not addressable, so it is skipped. */
+function parseManagedDevice(value: unknown): readonly ParsedManagedDevice[] {
+  if (!isRecord(value) || typeof value.name !== "string" || typeof value.udid !== "string") {
+    return [];
   }
-  return devices;
+
+  return [
+    {
+      name: value.name,
+      runState: simctlRunState(value.state),
+      udid: value.udid,
+      ...(typeof value.dataPath === "string" ? { dataPath: value.dataPath } : {}),
+    },
+  ];
 }
 
 /** `simctl` reports `Booting` / `Shutting Down` mid-transition; both must read as `transitioning`, never as drift. */

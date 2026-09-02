@@ -549,7 +549,12 @@ export class DaemonServer {
       case "doctor.run": {
         const payload = objectPayload(frame.payload);
         if (this.options.doctor === undefined) throw new Error("Doctor is unavailable");
-        return this.options.doctor.reconcile({ fix: optionalBoolean(payload, "fix") ?? false });
+        return this.options.doctor.reconcile({
+          fix: optionalBoolean(payload, "fix") ?? false,
+          // Its own flag all the way down the wire, never folded into `fix`: an older CLI
+          // that only knows `--fix` cannot ask a newer daemon to destroy anything.
+          purgeOrphans: optionalBoolean(payload, "purgeOrphans") ?? false,
+        });
       }
       case "nuke.run": {
         const payload = objectPayload(frame.payload);
