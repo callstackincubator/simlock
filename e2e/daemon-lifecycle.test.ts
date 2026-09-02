@@ -101,6 +101,35 @@ describe("daemon lifecycle & recovery", () => {
       expect(existsSync(env.logPath)).toBe(true);
     });
   });
+
+  it("stops while a detached lease is still outstanding", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+    });
+    const lease = await env.cli([
+      "lease",
+      "--platform",
+      "ios",
+      "--device",
+      "iPhone 16",
+      "--agent-id",
+      "outliving-agent",
+      "--detach",
+    ]);
+    expect(lease.code).toBe(0);
+
+    // A detached lease is deliberately left alone by shutdown -- its liveness is the TTL,
+    // not a connection -- and its armed TTL timer used to keep the process alive for the
+    // full fifteen minutes after `daemon stop` returned. Teardown's stray-process check is
+    // the assertion: it fails the test if the daemon that was told to stop is still there.
+    const stop = await env.cli(["daemon", "stop"]);
+    expect(stop.code).toBe(0);
+    await waitFor(() => !existsSync(env.socketPath), {
+      timeout: 10_000,
+      label: "daemon socket removed",
+    });
+  });
 });
 
 function countOccurrences(haystack: string, needle: string): number {
