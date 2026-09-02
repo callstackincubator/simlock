@@ -5,7 +5,7 @@ import {
   type DeviceOperationClaim,
 } from "./device-operation-claims.js";
 import type { DeviceRecord, DeviceState, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
-import type { DriverDevice } from "./driver.js";
+import { readyTransitionUpdate, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
@@ -242,11 +242,7 @@ export class ManagedDeviceLifecycle {
         event: "device.ready",
         payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
       },
-      {
-        address: ready.address,
-        driverData: ready.driverData,
-        ...(ready.featureProfile === undefined ? {} : { featureProfile: ready.featureProfile }),
-      },
+      readyTransitionUpdate(ready),
     );
   }
 
@@ -277,11 +273,7 @@ export class ManagedDeviceLifecycle {
           event: "device.ready",
           payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
         },
-        {
-          address: ready.address,
-          driverData: ready.driverData,
-          ...(ready.featureProfile === undefined ? {} : { featureProfile: ready.featureProfile }),
-        },
+        readyTransitionUpdate(ready),
       );
       if (device === undefined) {
         await this.#release(claimed);

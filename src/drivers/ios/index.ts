@@ -167,10 +167,28 @@ export interface IosSimctlDriverOptions {
 
 type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
 
-/** Result of `#applySlimLabels`: either every label was attempted (some may still have failed
- * individually, tracked in `failedLabels`), or the whole apply never ran. */
+/**
+ * Result of `#applySlimLabels`: either every chunk was attempted (individual labels may still
+ * have been rejected, tracked separately below), or the whole apply never ran.
+ *
+ * The "applied" variant deliberately splits two very different kinds of not-fully-applied into
+ * separate fields rather than one bag:
+ * - `rejectedLabels`: the in-simulator script itself rejected this label (a `simlock-slim-failed`
+ *   line), or `sanitizeSlimLabels` filtered it before the script ever ran. This is ADR point 8's
+ *   "log and continue" case, and it is PERMANENT -- the daemon that owns this label is gone or
+ *   renamed on this runtime, and retrying on every boot would never change that outcome. It must
+ *   NOT block writing the idempotence marker (see `#applySlimAndReboot`), or a runtime with one
+ *   permanently-unknown daemon would re-apply the whole label set forever and never converge.
+ * - `unattemptedLabels`: a whole chunk timed out or exited nonzero, so those labels were never
+ *   attempted at all. This is transient (the daemon script itself never ran) and MUST be retried,
+ *   which is why it blocks the idempotence marker.
+ */
 type SlimApplyOutcome =
-  | { readonly kind: "applied"; readonly failedLabels: readonly string[] }
+  | {
+      readonly kind: "applied";
+      readonly rejectedLabels: readonly string[];
+      readonly unattemptedLabels: readonly string[];
+    }
   | { readonly kind: "failed"; readonly detail: string };
 
 interface DeviceType {
@@ -693,10 +711,13 @@ export class IosSimctlDriver implements Driver {
   ): Promise<DriverDevice> {
     const resolved = resolveSlimCategories(slim.categories);
     if (resolved.categories.length === 0) {
+      // Nothing was ever attempted and no reboot happened: this device is exactly as full-featured
+      // as it was before `makeReady` was called.
       return this.#skipApply(
         device,
         data,
         `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
+        "full",
       );
     }
 
@@ -710,51 +731,75 @@ export class IosSimctlDriver implements Driver {
     const startedAt = this.#clock.now();
     const applyOutcome = await this.#applySlimLabels(data.udid, labels);
     if (applyOutcome.kind === "failed") {
-      return this.#skipApply(device, data, applyOutcome.detail);
+      // Every chunk failed to run (or nothing passed the safety filter): nothing was applied and
+      // no reboot happened, so the device is still full-featured.
+      return this.#skipApply(device, data, applyOutcome.detail, "full");
     }
 
     // The reboot below is what makes the disable entries take effect; never write the
     // idempotence marker or report `device.slimmed` on a device that hasn't actually rebooted
     // with them applied. `makeReady`'s own contract ("a failed or skipped slim never fails the
-    // lease") holds here too: a hiccup in this reboot must downgrade to the skip path rather
-    // than fail a lease that would otherwise have worked, *unless* the device has actually been
-    // left shut down by it -- see the two branches below.
-    let shutdownSucceeded = false;
+    // lease") holds here too: a hiccup here must downgrade to the skip path rather than fail a
+    // lease that would otherwise have worked -- but the shutdown call's own outcome is never a
+    // reliable signal of what the device is actually doing (see below), so it is captured, not
+    // acted on directly.
+    let shutdownError: unknown;
     try {
       await this.#shutdown(data.udid);
-      shutdownSucceeded = true;
-      await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
     } catch (error: unknown) {
-      if (!shutdownSucceeded) {
-        // The shutdown itself never completed (a non-zero exit or a timeout) -- the device is
-        // still in the state the first boot above left it in, i.e. still healthy and running.
-        // Nothing was actually rebooted, so there's nothing to commit; downgrade to skip.
-        return this.#skipApply(device, data, `slim shutdown failed: ${errorMessage(error)}`);
-      }
-      // Shutdown succeeded but the second boot didn't: the device is now genuinely shut down,
-      // not "ready" as returning it here would claim. Reporting this as a skip would hand the
-      // caller a device that isn't actually usable, so this must propagate like any other boot
-      // failure (`BootTimeoutError` / `DriverCrashError`).
-      throw error;
+      shutdownError = error;
     }
+    // Always re-establish a known-good running device, whether or not the shutdown above actually
+    // completed. `#shutdown` throws on a *timeout* of `simctl shutdown`, which is exactly the
+    // moment the shutdown is most likely to still be in progress or to have already finished --
+    // there is no reliable way to tell which from the exception alone, so this stops guessing:
+    // `boot` already tolerates an already-booted device, so the boot below reaches a known-good
+    // running device either way. A genuine inability to get it running again propagates as
+    // `BootTimeoutError` / `DriverCrashError`, as it should -- that case really does mean the
+    // device is left shut down, not "ready" as returning it would falsely claim.
+    await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
 
-    if (applyOutcome.failedLabels.length > 0) {
-      // Partial apply: at least one chunk failed to run outright, or the script itself reported
-      // an individual `launchctl disable` failure. The reboot above already happened -- the
-      // labels that did apply are worth keeping -- but the idempotence marker must NOT be
-      // written: writing it here would permanently mark this device "slim" (see
-      // `#checkAlreadySlimmed`) even though part of the disable list never took effect, and
-      // every later boot would then trust the marker and never retry the labels that failed,
-      // with no way back short of `reclaim`/`erase`. So a partial apply deliberately costs a
-      // re-attempt of the *whole* label set on the next `makeReady` instead -- applying an
-      // already-disabled label again is harmless (same comment on `#checkAlreadySlimmed`).
+    if (shutdownError !== undefined) {
+      // The shutdown call itself failed, so whether the labels' reboot actually took effect is
+      // unknown -- this is an uncertain apply, not a confirmed one. Never write the idempotence
+      // marker on it (same reasoning as the partial-apply case below), and report "reduced" (not
+      // "full") under that uncertainty: telling a caller a device is slim when it is not is
+      // benign -- it just avoids features it could have used -- while telling it a device is full
+      // when it is not makes push / Spotlight / StoreKit fail with no explanation, exactly the
+      // confusion the `slim` flag exists to prevent.
       return this.#skipApply(
         device,
         data,
-        `${String(applyOutcome.failedLabels.length)} of ${String(labels.length)} labels failed to apply`,
+        `slim shutdown failed: ${errorMessage(shutdownError)}`,
+        "reduced",
       );
     }
 
+    if (applyOutcome.unattemptedLabels.length > 0) {
+      // Partial apply: at least one chunk failed to run outright, so those labels were never even
+      // attempted. The reboot above already happened -- the labels that did apply are worth
+      // keeping -- but the idempotence marker must NOT be written: writing it here would
+      // permanently mark this device "slim" (see `#checkAlreadySlimmed`) even though part of the
+      // disable list never took effect, and every later boot would then trust the marker and
+      // never retry the labels that were never attempted, with no way back short of
+      // `reclaim`/`erase`. So a partial apply deliberately costs a re-attempt of the *whole*
+      // label set on the next `makeReady` instead -- applying an already-disabled label again is
+      // harmless (same comment on `#checkAlreadySlimmed`). "reduced" because the labels that did
+      // apply really are gone.
+      return this.#skipApply(
+        device,
+        data,
+        `${String(applyOutcome.unattemptedLabels.length)} of ${String(labels.length)} labels were never attempted (a chunk failed to run)`,
+        "reduced",
+      );
+    }
+
+    // Every chunk ran (individual labels may still have been rejected by the script itself, or
+    // filtered by `sanitizeSlimLabels` -- `rejectedLabels`, which is permanent, ADR point 8's
+    // "log and continue" case). That is not grounds to withhold the marker: doing so would make a
+    // runtime with one permanently-unknown daemon re-apply the whole label set on every boot,
+    // forever, and never converge. The rejected labels travel in `SlimmedFact.unknownLabels`
+    // instead.
     return this.#commitSlim(
       device,
       data,
@@ -768,9 +813,14 @@ export class IosSimctlDriver implements Driver {
   }
 
   /** Reports `device.slim-skipped` with reason `apply-failed` and returns the device as-is. */
-  #skipApply(device: DriverDevice, data: IosDriverData, detail: string): DriverDevice {
+  #skipApply(
+    device: DriverDevice,
+    data: IosDriverData,
+    detail: string,
+    featureProfile: "full" | "reduced",
+  ): DriverDevice {
     this.#onSlimSkipped?.({ deviceId: device.deviceId, detail, reason: "apply-failed" });
-    return this.#asIs(device, data, "full");
+    return this.#asIs(device, data, featureProfile);
   }
 
   /**
@@ -829,7 +879,7 @@ export class IosSimctlDriver implements Driver {
       durationMs: this.#clock.now() - startedAt,
       labelCount: labels.length,
       signature,
-      unknownLabels: [...resolved.unknown, ...applyOutcome.failedLabels],
+      unknownLabels: [...resolved.unknown, ...applyOutcome.rejectedLabels],
     });
 
     return {
@@ -845,9 +895,11 @@ export class IosSimctlDriver implements Driver {
    * `SLIM_CHUNK_SIZE`, one `simctl spawn` per chunk -- ~170 individual spawns would dominate the
    * slim budget (see `SLIM_CHUNK_SIZE`'s comment). Each label that `launchctl disable` itself
    * rejects (e.g. renamed/removed between runtimes) is caught by the script's own `|| echo` and
-   * reported back, never thrown (ADR point 8) -- only a chunk that fails to run at all (timeout,
-   * nonzero exit from the `sh -c` invocation itself) is treated as that chunk's labels failing
-   * outright. The whole apply is reported as failed only when *no* chunk ran successfully.
+   * reported back into `rejectedLabels`, never thrown (ADR point 8) -- only a chunk that fails to
+   * run at all (timeout, nonzero exit from the `sh -c` invocation itself) is treated as that
+   * chunk's labels never having been attempted (`unattemptedLabels`). See `SlimApplyOutcome` for
+   * why the two are tracked separately. The whole apply is reported as failed only when *no*
+   * chunk ran successfully.
    */
   async #applySlimLabels(udid: string, labels: readonly string[]): Promise<SlimApplyOutcome> {
     const { safe, rejected } = sanitizeSlimLabels(labels);
@@ -856,7 +908,11 @@ export class IosSimctlDriver implements Driver {
     }
 
     const chunks = chunk(safe, SLIM_CHUNK_SIZE);
-    const failedLabels: string[] = [...rejected];
+    // `sanitizeSlimLabels`-filtered labels never reached any chunk, so they were rejected the
+    // same way an individual `simlock-slim-failed` line is -- not merely "unattempted" (that's
+    // reserved for a whole chunk that failed to run).
+    const rejectedLabels: string[] = [...rejected];
+    const unattemptedLabels: string[] = [];
     let anyChunkSucceeded = false;
 
     for (const chunkLabels of chunks) {
@@ -869,7 +925,7 @@ export class IosSimctlDriver implements Driver {
       );
 
       if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-        failedLabels.push(...chunkLabels);
+        unattemptedLabels.push(...chunkLabels);
         continue;
       }
 
@@ -877,7 +933,7 @@ export class IosSimctlDriver implements Driver {
       for (const line of outcome.result.stdout.split("\n")) {
         const match = SLIM_FAILED_MARKER_PATTERN.exec(line.trim());
         if (match?.[1] !== undefined) {
-          failedLabels.push(match[1]);
+          rejectedLabels.push(match[1]);
         }
       }
     }
@@ -886,7 +942,7 @@ export class IosSimctlDriver implements Driver {
       return { detail: `all ${String(chunks.length)} chunk(s) failed to run`, kind: "failed" };
     }
 
-    return { failedLabels, kind: "applied" };
+    return { kind: "applied", rejectedLabels, unattemptedLabels };
   }
 
   async reclaim(

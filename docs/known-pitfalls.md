@@ -203,7 +203,23 @@ the now-narrower set on its next boot — but the `launchctl disable` overrides
 already written for the *removed* category are never undone. They live in the
 simulator's own launchd database and only disappear on `simctl erase`. The
 device keeps reporting `slim: true` and keeps missing that category's
-functionality, with no error surfaced anywhere. Workaround: after narrowing
-the category list, reclaim (or destroy) every device already running under
-the old, wider set before relying on the change — a plain reboot is not
-enough.
+functionality, with no error surfaced anywhere. The real consequence is
+stronger than the flag alone suggests: the device ends up slimmer than *any*
+configuration ever asked for — it carries both the newly-narrower disable set
+it just re-applied *and* the leftover overrides from the wider set it was
+slimmed under before, a combination no `ios.slim.categories` value on its own
+would ever produce. Workaround: after narrowing the category list, reclaim
+(or destroy) every device already running under the old, wider set before
+relying on the change — a plain reboot is not enough.
+
+**Turning `ios.slim.enabled` off leaves orphaned `--full` devices sitting in
+the pool.** `full` only earns its own pool key while the driver might
+otherwise hand back a reduced device (`Driver.reducesFeatures`); once slim
+mode is off, no newly resolved spec ever carries `full: true` again. A device
+that was provisioned for a `--full` request while slim mode was on keeps
+`full: true` on its spec in the registry, so it can no longer match anything
+a resolver produces — it becomes unmatchable by any new request. This is not
+a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
+on the same timers as any other idle device, since neither rule cares what a
+device's spec matches. Until those timers fire, though, it occupies a pool
+slot doing nothing.
