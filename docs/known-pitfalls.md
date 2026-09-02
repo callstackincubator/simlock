@@ -195,6 +195,17 @@ that means either queueing for a fresh device to provision or forcing a
 re-provision of a device already running. This is inherent to keeping pool
 matching from fragmenting on driver-level settings, not a bug to fix.
 
+**A cold slim lease outlives a default MCP request timeout.** Measured on
+one machine: a `--full` cold lease took ~28s, a cold slim lease ~160s (two
+real boots plus the disable pass). The MCP SDK's default per-request timeout
+is 60s, so an MCP client that does not reset its timeout on progress
+notifications gets `MCP error -32001: Request timed out` on the slim lease
+even though the daemon completes it. Simlock relays boot progress as MCP
+progress notifications precisely so clients can pass
+`resetTimeoutOnProgress: true` (or a longer timeout) on `lease_simulator`;
+`e2e/slow-ios-slim.test.ts` shows the call shape. The warm pool hides this
+for every lease after the first.
+
 **`launchctl disable` accepts labels that do not exist.** Verified on iOS
 26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits
 0 and writes the entry to the override database like any other. So the
