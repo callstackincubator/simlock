@@ -282,7 +282,7 @@ export interface DriverDiscoveryContext {
   readonly processRunner: ProcessRunner;
   /**
    * The iOS driver's opt-in slim mode (`ios.slim` in config). Never threaded into the Android
-   * driver -- slim is iOS-only (ADR #87, "out of scope: Android equivalent"). Omitted or
+   * driver -- slim is iOS-only (ADR 0002, out of scope: Android equivalent). Omitted or
    * undefined leaves the driver's own default (today's full-fat behaviour) untouched.
    */
   readonly slim?: {

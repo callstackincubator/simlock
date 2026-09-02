@@ -44,21 +44,24 @@ those, so slim cannot be the only mode.
 
 ```jsonc
 {
-  "drivers": {
-    "ios": {
-      "slim": {
-        "enabled": false,          // default
-        "categories": ["..."]      // optional; defaults to the full curated list
-      }
+  "ios": {
+    "slim": {
+      "enabled": false,          // default
+      "categories": ["..."],     // optional; defaults to every category the driver knows
+      "bootTimeoutMs": 600000    // boot deadline while slim is on (see 8)
     }
   }
 }
 ```
 
-`slim` is configuration of the iOS driver, not a field of `DeviceSpec`. Spec
-identity stays `{ platform, model, osVersion }`, so the warm pool, the
-acquisition planner, and the capacity policy are unchanged. The core never
-learns that slimming exists.
+`slim` is configuration of the iOS driver, threaded into the driver at
+construction. The core never learns which daemons exist or what
+"slim" means; it only learns two platform-neutral facts, described in 3
+and 6: whether a driver *may* reduce a device (`Driver.reducesFeatures`)
+and whether it *did* (`DriverDevice.featureProfile`).
+
+The default is **off** for the first release. It flips to on only once the
+label list has been exercised across several runtimes in the wild.
 
 The default is **off** for the first release. It flips to on only once the
 label list has been exercised across several runtimes in the wild.
@@ -84,23 +87,26 @@ directly would each have to re-derive those guarantees.
 
 ### 3. The pass is idempotent and self-describing
 
-`driverData` gains:
+The iOS driver's `driverData` gains two fields: `slimSignature`, a hash
+over the resolved categories *and* their labels, and `slimMarkToken`, the
+device's erasable provenance-mark token as read when slimming was applied.
+The second boot is skipped only when both match what is true now. A
+differing token is how an intervening `simctl erase` is detected; a
+differing signature means the categories or the shipped label list changed.
+Either way the pass re-runs. Existing registries without the fields are
+treated as "never slimmed"; no migration is needed.
 
-```ts
-{
-  slim?: {
-    applied: true;
-    labelSetHash: string;   // hash of the exact labels disabled
-    runtime: string;        // iOS version the labels were chosen for
-  }
-}
-```
+The marker is written only when every chunk of the disable pass actually
+ran. A chunk that failed to run leaves the marker unwritten so the whole
+set is retried on the next boot; a label the simulator itself rejected is
+recorded and does not block the marker, so a runtime with one renamed
+daemon converges in a single boot instead of re-applying forever.
 
-The second boot is skipped when the stored hash matches the hash of the
-labels the current config would produce *and* the device has not been erased
-since. A config change to `categories` changes the hash and forces a re-pass
-on the next `makeReady`. Existing registries without the field are treated as
-"never slimmed"; no migration is needed.
+Alongside the driver's private data, `DriverDevice` and `DeviceRecord`
+carry a platform-neutral `featureProfile: "full" | "reduced"`. It is set on
+every readiness transition, so a stale `"reduced"` can never outlive a boot
+that did not slim. This is what the lease response's `slim` flag (6) is
+derived from, without the core reading opaque driver data.
 
 ### 4. Runtimes older than iOS 18.5 are skipped with a warning
 
@@ -118,14 +124,25 @@ once; the user opted in.
 
 ### 6. A lease can ask for a full device
 
-`simlock acquire --full` (MCP `full: true`, HTTP `full: true`) requests a
+`simlock lease --full` (MCP `full: true`, HTTP `full: true`) requests a
 device without the slim pass. The lease response always carries
 `slim: true | false`, so an agent whose StoreKit test fails on a slim device
 sees a greppable reason rather than an inexplicable timeout.
 
-Full and slim devices under the same spec are kept apart by a pool key that
-includes the mode. A `--full` request never receives a slim device; it waits
-or triggers provisioning like any other pool miss.
+Full and slim devices are kept apart through spec identity. `DeviceSpec`
+gains an optional `full: true`, and `sameSpec` compares it (with `undefined`
+equal to `false`, so existing registries keep matching). The core stamps it
+in exactly one place, when `LeaseAcquisitionCoordinator` resolves a spec,
+and only when the resolving driver declares `reducesFeatures`, which the iOS
+driver does only while slim is enabled. A driver that never reduces
+anything, such as Android, therefore never sees its pool split. A `--full`
+request never receives a slim device; it waits or triggers provisioning like
+any other pool miss.
+
+Crash recovery is the one path that reboots a leased device. It calls
+`makeReady` with `purpose: "recover"`, and the iOS driver treats that as a
+plain boot with no slim pass and no second reboot. Safety rule 2's
+recovery exception grants a reboot and nothing more.
 
 ### 7. An unknown label is never a boot failure
 
@@ -137,9 +154,28 @@ worse than no slim pass.
 
 ### 8. The boot deadline accounts for the second boot
 
-`BootTimeoutError` thresholds are raised when slim is on. simslim uses a
-ten-minute deadline on CI runners; the driver adopts a comparable budget for
-the combined boot–slim–reboot sequence rather than for each boot separately.
+`ios.slim.bootTimeoutMs` (default ten minutes, matching simslim on CI
+runners) replaces the ordinary `bootstatus` deadline, but only for a boot
+that will actually slim: a `--full` device, a runtime below the floor, or a
+recovery boot keeps the normal deadline. `Driver.estimate` quotes the
+double-boot cost for the same boots so `doctor` does not read a slim boot
+as a stalled transition.
+
+### 9. The event is reported by the driver, after the reboot proves it
+
+`device.slimmed` is bridged from the driver's `onSlimmed` callback in the
+daemon, exactly like `component.install-*`, and fires only once the
+post-slim `bootstatus` has passed. The fact it reports is committed to the
+simulator's launchd database, not the registry, which is why the bridge
+does not wait on a registry write. A skipped or failed slim is a warning
+log line, not an event.
+
+### 10. Failure degrades to "not slimmed", never to a failed lease
+
+A failed disable pass, a shutdown that times out, or a hiccup in the slim
+reboot all return the device as-is with an honest `featureProfile`
+(conservatively `"reduced"` when the driver cannot tell), and the lease
+proceeds. Only a genuine inability to bring the device back up propagates.
 
 ## Consequences
 
@@ -172,7 +208,14 @@ the combined boot–slim–reboot sequence rather than for each boot separately.
   visible rather than fixing it.
 - **A maintained label list.** Apple's daemon set drifts; the list needs a
   refresh per iOS major. Decision 7 keeps drift from being a failure, but not
-  from being a slow leak of memory savings.
+  from being a slow leak of memory savings. Re-syncing the list changes the
+  signature and re-slims every device on its next boot, which is intended.
+- **No `launchctl enable` pass.** Narrowing `categories` re-applies the
+  narrower set but never re-enables what the wider set disabled. Devices
+  slimmed under the old list must be reclaimed before the change is trusted.
+- **Turning slim off strands `--full` devices.** Once `reducesFeatures` is
+  false no new spec carries `full: true`, so devices provisioned for a
+  `--full` request match nothing until the idle cleanup rules reap them.
 
 **Safety review.** Compatible with every invariant in
 `docs/agent-rules/safety.md`: registry-only targets, never a leased device,
@@ -181,11 +224,18 @@ attributable through `device.slimmed`.
 
 ## Alternatives considered
 
-**Make slim part of `DeviceSpec`.** Rejected. It would put a driver
-implementation detail into spec identity and split every pool, capacity
-estimate, and catalog entry in two for a property the core has no reason to
-know about. A pool key derived by the driver achieves the separation without
-leaking the concept.
+**Make the slim *configuration* part of `DeviceSpec`.** Rejected. It would
+put a driver implementation detail into spec identity and split every pool
+in two for a property the core has no reason to know about. Only the
+platform-neutral `full` opt-out is in spec identity, and only when a driver
+declares it can reduce anything, so a platform that never reduces is never
+fragmented.
+
+**Let the driver derive the pool key itself.** Rejected. Pool matching lives
+in the core, and a driver-owned key would need a new concept in the driver
+interface for one flag. Stamping `full` centrally, gated by
+`reducesFeatures`, keeps drivers unaware of request flags (architecture
+rule 3) with a two-line change.
 
 **Slim at provision time only, never on reboot.** Rejected. Overrides do not
 survive `erase`, so a provision-only pass would leave every reclaimed device

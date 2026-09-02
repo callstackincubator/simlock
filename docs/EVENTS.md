@@ -42,7 +42,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.slimmed` | device id, address, platform (ios), categories, label count, duration, signature, unknown labels | *after* the post-slim reboot's `bootstatus` succeeded -- i.e. once the `launchctl disable` overrides applied via `simctl spawn` are actually in force on the simulator | driver-diagnostics | implemented |
 
 `device.slimmed` reports a fact committed to the *simulator's own launchd database*, not to the
-Simlock registry (ADR #87, "opt-in slim iOS simulators") -- so events rule 3 ("emit post-commit
+Simlock registry (ADR 0002, `docs/adr/0002-opt-in-slim-ios-simulators.md`) -- so events rule 3 ("emit post-commit
 only") is satisfied by waiting for that commit to become observable, not by waiting on a registry
 write: the driver applies the `launchctl disable` overrides, reboots the device, and only fires
 `onSlimmed` once the second `bootstatus` has passed, proving the overrides survived the reboot and
