@@ -22,6 +22,7 @@ export type RootRejectionReason =
   | "wrong-permissions"
   | "non-empty-unowned-root";
 
+// fallow-ignore-next-line unused-type -- public shape of the on-disk ownership marker.
 export interface OwnedRootMarker {
   readonly schemaVersion: 1;
   readonly owner: "simlock";
@@ -99,9 +100,11 @@ async function createRoot(context: RootContext): Promise<boolean> {
     throw error;
   }
 
-  // `mkdir`'s mode is masked by the process umask, so the bits it asked for are not
-  // necessarily the bits it got. Setting them explicitly is what keeps a daemon started
-  // under a permissive umask from failing its own permission check on the next start.
+  // `mkdir`'s mode is a request the process umask can only subtract from: under a
+  // restrictive one (`0o277`, say) the root comes back read-only to its own owner and
+  // every device written into it afterwards fails. `chmod` is the only way to end at the
+  // permissions validation demands of this root on the next start, and it cannot
+  // over-open it either, since it sets exactly the owner-only bits.
   await filesystem.chmod(root, ROOT_MODE);
   await filesystem.writeFileAtomic(markerPath(root), serializeMarker(context));
   return true;
@@ -200,38 +203,36 @@ async function readMarker(
   context: RootContext,
   path: string,
 ): Promise<OwnedRootMarker | undefined> {
-  let contents: string;
-  try {
-    contents = await context.filesystem.readFile(path);
-  } catch {
-    return undefined;
-  }
-
+  // A marker that cannot be read and one that cannot be parsed are the same answer: this
+  // is not a root whose ownership Simlock can vouch for.
   let parsed: unknown;
   try {
-    parsed = JSON.parse(contents) as unknown;
+    parsed = JSON.parse(await context.filesystem.readFile(path)) as unknown;
   } catch {
     return undefined;
   }
 
-  if (typeof parsed !== "object" || parsed === null) {
-    return undefined;
+  return isOwnedRootMarker(parsed, context.platform) ? parsed : undefined;
+}
+
+/**
+ * The platform is part of the identity check, not just of the payload: swapping the iOS
+ * and Android roots in config would otherwise hand each driver the other's devices.
+ */
+function isOwnedRootMarker(value: unknown, platform: Platform): value is OwnedRootMarker {
+  if (typeof value !== "object" || value === null) {
+    return false;
   }
 
-  const marker = parsed as Record<string, unknown>;
-  const instanceId = marker["instanceId"];
+  const marker = value as Record<string, unknown>;
 
-  if (
-    marker["schemaVersion"] !== 1 ||
-    marker["owner"] !== "simlock" ||
-    marker["platform"] !== context.platform ||
-    typeof instanceId !== "string" ||
-    instanceId === ""
-  ) {
-    return undefined;
-  }
-
-  return { schemaVersion: 1, owner: "simlock", instanceId, platform: context.platform };
+  return (
+    marker["schemaVersion"] === 1 &&
+    marker["owner"] === "simlock" &&
+    marker["platform"] === platform &&
+    typeof marker["instanceId"] === "string" &&
+    marker["instanceId"] !== ""
+  );
 }
 
 function serializeMarker(context: RootContext): string {

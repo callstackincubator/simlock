@@ -25,21 +25,16 @@ export {
   UnknownModelError,
 } from "./driver.js";
 export { Doctor } from "./doctor.js";
-export {
-  ensureOwnedRoot,
-  type EnsureOwnedRootOptions,
-  OWNED_ROOT_MARKER_FILE,
-  OwnedRootError,
-} from "./device-root.js";
+export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./device-root.js";
+// fallow-ignore-next-line unused-type -- public options contract for the drivers that own a root.
+export type { EnsureOwnedRootOptions } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary, carried in the driver.root-rejected payload.
 export type { RootRejectionReason } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- public shape of the on-disk ownership marker.
 export type { OwnedRootMarker } from "./device-root.js";
-export {
-  InstanceIdentityError,
-  type InstanceIdentityOptions,
-  loadInstanceId,
-} from "./instance-identity.js";
+export { InstanceIdentityError, loadInstanceId } from "./instance-identity.js";
+// fallow-ignore-next-line unused-type -- public options contract for the daemon composition root.
+export type { InstanceIdentityOptions } from "./instance-identity.js";
 export {
   LeaseEngine,
   type LeaseProgress,

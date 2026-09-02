@@ -218,6 +218,7 @@ export class MemoryFilesystem implements Filesystem {
     }
   }
 
+  // fallow-ignore-next-line unused-class-member -- Filesystem.stat contract; only tests reach this implementation of it.
   async stat(path: string): Promise<FileStat> {
     const entry = this.#entryAt(path);
 
@@ -249,6 +250,7 @@ export class MemoryFilesystem implements Filesystem {
     this.#rawEntryAt(path).mode = mode & 0o777;
   }
 
+  // fallow-ignore-next-line unused-class-member -- Filesystem.realpath contract; only tests reach this implementation of it.
   async realpath(path: string): Promise<string> {
     const resolved = this.#resolveLinks(path, 0);
 
@@ -288,11 +290,13 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   /** Test-only: places a symlink at `path`, whether or not `target` exists. */
+  // fallow-ignore-next-line unused-class-member -- test-only state the port itself cannot create.
   defineSymlink(path: string, target: string): void {
     this.#entries.set(path, this.#newEntry({ kind: "symlink", target }));
   }
 
   /** Test-only: rewrites an existing entry's ownership or permission bits. */
+  // fallow-ignore-next-line unused-class-member -- test-only state the port itself cannot create.
   defineAttributes(
     path: string,
     attributes: { readonly uid?: number; readonly mode?: number },

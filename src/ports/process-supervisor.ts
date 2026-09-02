@@ -27,6 +27,7 @@ export class NodeProcessSupervisor implements ProcessSupervisor {
     }
   }
 
+  // fallow-ignore-next-line unused-class-member -- ProcessSupervisor contract; the reaping side of it.
   signal(pid: number, signal: NodeJS.Signals): void {
     try {
       process.kill(pid, signal);
