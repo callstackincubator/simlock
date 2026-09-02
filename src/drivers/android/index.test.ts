@@ -199,6 +199,13 @@ describe("AndroidDriver", () => {
 
     expect(firstDevice.driverData).toMatchObject({ avdName: "simlock_first", port: 5588 });
     expect(secondDevice.driverData).toMatchObject({ avdName: "simlock_second", port: 5590 });
+    // Occupancy is read from Simlock's own server, not the machine's shared one: an
+    // unscoped `adb devices` polls 5037, which reports the user's emulators and none of
+    // Simlock's, so every console port would read free and collide on the next boot.
+    expect(runner.calls.filter((call) => call.args[0] === "devices")).toEqual([
+      { args: ["devices"], command: binaries.adb, options: scopedOptions },
+      { args: ["devices"], command: binaries.adb, options: scopedOptions },
+    ]);
   });
 
   it("cold boots without loading or automatically saving snapshots", async () => {
@@ -253,6 +260,7 @@ describe("AndroidDriver", () => {
           kills.push(signal ?? "SIGTERM");
           kill(signal);
         },
+        unref: () => handle.unref(),
         wait: () => handle.wait(),
       };
     });
@@ -970,8 +978,12 @@ describe("AndroidDriver.create", () => {
       instanceId,
       processRunner: new ScriptedProcessRunner([
         {
-          match: { args: ["-o", "comm=", "-p", String(adbServerPid)], command: "ps" },
-          result: { code: 0, stderr: "", stdout: "adb\n" },
+          match: { args: ["-o", "args=", "-p", String(adbServerPid)], command: "ps" },
+          result: {
+            code: 0,
+            stderr: "",
+            stdout: `${binaries.adb} -P ${adbServerPort} nodaemon server\n`,
+          },
         },
       ]),
       processSupervisor,
@@ -1028,29 +1040,55 @@ describe("AndroidDriver ownership", () => {
 });
 
 describe("AndroidDriver emulator registration", () => {
-  it("announces a freshly started emulator to Simlock's own adb server", async () => {
-    const harness = await provisionedHarness();
+  it("sweeps its own console range when it takes over a server, and nobody else's", async () => {
+    // A running emulator announced itself exactly once, to a server a previous daemon has
+    // since reaped. With `ADB_EMU=0` nothing rediscovers it, so `simlock daemon stop` would
+    // otherwise orphan gigabytes of RSS the driver can no longer see, and hand the console
+    // port it is sitting on to the next emulator, which then cannot bind.
+    const filesystem = await androidFilesystem();
+    const tcpProbe = new FakeTcpProbe([adbServerPort]);
+    await createDriver(filesystem, new ScriptedProcessRunner([]), { tcpProbe });
 
-    await harness.driver.makeReady(harness.device);
+    const announced = tcpProbe.sends.map((send) => send.payload);
+    expect(announced).toHaveLength(49);
+    expect(announced[0]).toBe("0012host:emulator:5587");
+    expect(announced.at(-1)).toBe("0012host:emulator:5683");
+    // Every send goes to Simlock's own server, and every port is inside Simlock's range:
+    // one below 5587 would be adb connecting to an emulator of the user's.
+    expect(tcpProbe.sends.every((send) => send.port === adbServerPort)).toBe(true);
+  });
 
-    // The adb port is the console port + 1, and with the scanner off this announcement is
-    // what attaches the emulator at all.
-    expect(harness.tcpProbe.sends).toContainEqual({
-      payload: "0012host:emulator:5587",
-      port: adbServerPort,
-    });
+  it("finishes the sweep when a port refuses the announcement", async () => {
+    const filesystem = await androidFilesystem();
+    const tcpProbe = new FakeTcpProbe([adbServerPort]);
+    tcpProbe.failSendsWith(new Error("connect ECONNREFUSED"));
+
+    // The whole range is unreachable here; nothing about starting Android depends on it.
+    await expect(
+      createDriver(filesystem, new ScriptedProcessRunner([]), { tcpProbe }),
+    ).resolves.toBeDefined();
+    expect(tcpProbe.sends).toHaveLength(49);
   });
 
   it("re-announces an emulator that stays unreachable, since nothing else will", async () => {
     const harness = await provisionedHarness({ initialAdbFailures: 2 });
+    // Nothing is announced when an emulator is spawned: adb answers `host:emulator:<port>`
+    // by connecting out to that port, and the emulator has not opened it yet.
+    const afterSweep = harness.tcpProbe.sends.length;
     const ready = harness.driver.makeReady(harness.device);
     await vi.waitFor(() => expect(bootProbes(harness.runner)).toBe(1));
+    expect(harness.tcpProbe.sends).toHaveLength(afterSweep);
 
     // Past the grace period on the second failure: adb's own reconnect queue is drained by
     // the scanner thread, which `ADB_EMU=0` does not run.
     harness.clock.advance(6_000);
     await vi.waitFor(() => expect(bootProbes(harness.runner)).toBe(2));
-    await vi.waitFor(() => expect(harness.tcpProbe.sends).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(harness.tcpProbe.sends.slice(afterSweep)).toEqual([
+        // The adb port is the console port + 1.
+        { payload: "0012host:emulator:5587", port: adbServerPort },
+      ]),
+    );
 
     harness.clock.advance(2_000);
     await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });

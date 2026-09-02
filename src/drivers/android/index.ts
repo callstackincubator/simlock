@@ -40,8 +40,10 @@ const COLD_BOOT_ESTIMATE_MS = 31_000;
 // Android Studio cannot see, drive, or kill a Simlock emulator (ADR 0001, decision 4).
 // It also repairs the old 5554-5682 range, which was broken at both ends: the bottom
 // competed for the user's own emulators, and everything above 5585 read as free to the
-// allocator below -- which derives occupancy from `adb devices` -- because no server
-// could report a device up there. Simlock's own server scans to 5683, so it can.
+// allocator below -- which derives occupancy from `adb devices` -- because no server could
+// report a device up there. Simlock's server can, and not because it scans: with the
+// scanner off, a transport exists for every port an emulator announced itself on or
+// `#reattachRunningEmulators` swept, which is exactly this range.
 const PORT_MAX = 5682;
 const PORT_MIN = 5586;
 const PORT_POLL_INTERVAL_MS = 2_000;
@@ -224,13 +226,15 @@ export class AndroidDriver implements Driver {
     });
     await adbServer.start();
 
-    return new AndroidDriver(
+    const driver = new AndroidDriver(
       { ...options, idGenerator },
       sdk,
       deviceRoot,
       adbServer,
       adbServerPort,
     );
+    await driver.#reattachRunningEmulators();
+    return driver;
   }
 
   get sdkPath(): string {
@@ -270,6 +274,35 @@ export class AndroidDriver implements Driver {
       ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort),
       ANDROID_AVD_HOME: this.#deviceRoot,
     };
+  }
+
+  /**
+   * Announces every console port Simlock may have an emulator on to the server that was
+   * just started or adopted -- deliberately doing, for Simlock's own range only, what adb's
+   * scanner would do for everyone's.
+   *
+   * An emulator announces itself exactly once, at its own startup, to the server that
+   * existed then. A clean `daemon stop` reaps that server, and with `ADB_EMU=0` the next one
+   * has no scanner to rediscover anything -- so every emulator that survived the restart
+   * (which is by design: releasing a lease hands a device to the warm pool) would be
+   * invisible forever. Invisible is worse than gone: `listManaged` reports no process, so
+   * `doctor` can never call it an orphan and several gigabytes of RSS leak permanently; the
+   * port allocator derives occupancy from `adb devices` and hands out a console port that is
+   * already in use, whose emulator then cannot bind and is quarantined for it.
+   *
+   * `connect_emulator` is idempotent (adb keys transports by port), a port with nothing on
+   * it is a cheap failed connect, and the range is bounded and Simlock's own -- so this is
+   * safe to do unconditionally, and it never touches the user's emulators below 5586. It
+   * also makes the design independent of whether a running emulator re-announces itself.
+   */
+  async #reattachRunningEmulators(): Promise<void> {
+    const ports: number[] = [];
+    for (let consolePort = PORT_MIN; consolePort <= PORT_MAX; consolePort += 2) {
+      ports.push(consolePort);
+    }
+
+    // `#register` swallows its own failures, so one unreachable port cannot end the sweep.
+    await Promise.all(ports.map((consolePort) => this.#register(consolePort)));
   }
 
   /**
@@ -884,10 +917,11 @@ export class AndroidDriver implements Driver {
       { env: this.#env() },
     );
     state.handle = handle;
-    // Immediately, not after the boot: the emulator announces itself to the server named by
-    // `ANDROID_ADB_SERVER_PORT` as soon as it is up, and this second announcement is the
-    // one that covers a lost first one.
-    await this.#register(data.port);
+    // No announcement here, deliberately. adb answers `host:emulator:<port>` by connecting
+    // *out* to that port, and the emulator has not opened it yet a millisecond after the
+    // spawn -- so a call here could only ever fail, and with the scanner off nothing drains
+    // adb's retry queue afterwards. The announcement that can land is the one in
+    // `#waitForReadiness`, once the serial has stayed silent past the grace period.
 
     try {
       await this.#waitForReadiness(data, startedAt);

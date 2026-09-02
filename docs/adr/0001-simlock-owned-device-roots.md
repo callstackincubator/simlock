@@ -255,18 +255,44 @@ That path produces a real `emulator-<console>` transport, so `adb emu avd
 snapshot …` and `adb emu kill` keep working. The cost, also verified: the
 reconnect queue (`retry_ports`, filled by `EmulatorConnection`'s destructor) is
 drained only by the scanner thread, so with the scanner off a kicked emulator
-is never re-attached automatically — Simlock sends the same
-`host:emulator:<adbPort>` announcement itself, after starting an emulator and
-again whenever a serial stays unreachable during the readiness wait.
+is never re-attached automatically. An emulator also announces itself exactly
+once, at its own startup, to whichever server existed then — so a clean
+`simlock daemon stop`, which reaps that server, would leave every surviving
+emulator invisible to the next one: unreportable as an orphan, and sitting on a
+console port the allocator would read as free. Simlock therefore sends the same
+`host:emulator:<adbPort>` announcement itself, deliberately doing for its own
+range what the scanner would do for everyone's: once across the whole console
+range (5586–5682) after starting or adopting a server, and again whenever a
+serial stays unreachable during a readiness wait. `connect_emulator` is
+idempotent, so repeating it is free. Not immediately after spawning an emulator,
+though: adb answers the announcement by connecting *out* to that port, which the
+emulator has not opened yet.
 
-`ADB_LOCAL_TRANSPORT_MAX_PORT=5683` stays, as belt-and-braces for an adb build
-that ignores `ADB_EMU`: it bounds such a sweep to Simlock's own console range,
-and costs nothing when the scanner is off. Containment is then symmetric —
-Simlock's consoles sit above the user's 5585 ceiling so their server cannot see
-Simlock's emulators, and `ADB_EMU=0` means Simlock's server never looks at
-theirs. The server is also started with `nodaemon server` rather than
-`start-server`, so the pid recorded in `adb-server.json` is the server itself
-and not a launcher that exits immediately.
+`ADB_LOCAL_TRANSPORT_MAX_PORT=5683` stays, but not as a bound on the damage —
+that reading, in an earlier revision of this paragraph, was backwards. The sweep
+starts at the hard-coded 5555, so on a build that ignores `ADB_EMU` the default
+ceiling of 5585 already reaches the user's emulators; raising it to 5683 cannot
+prevent that and only extends the sweep upward over Simlock's own consoles.
+That is what it is for: on such a build it is the only thing that makes
+Simlock's own emulators discoverable and re-attachable by a scanner that cannot
+be turned off. Where `ADB_EMU=0` is honoured it does nothing in either
+direction. Containment is then symmetric — Simlock's consoles sit above the
+user's 5585 ceiling so their server cannot see Simlock's emulators, and
+`ADB_EMU=0` means Simlock's server never looks at theirs.
+
+The server is also started with `nodaemon server` rather than `start-server`,
+so the pid recorded in `adb-server.json` is the server itself and not a
+launcher that exits immediately. That record is written as soon as the pid
+exists, *before* the port is confirmed to be listening: the window in between
+is one a daemon can die in, and a listening server with no record on disk is
+the one state nothing automatic can recover — `adb kill-server` is refused by
+design and the next start can only report `occupied`. For the same reason the
+pid in a record is never signalled on the strength of the pid alone. Its full
+command line has to name an `adb` binary, this server's `-P <port>`, and
+`nodaemon`; a recycled pid usually belongs to *some* adb, and the machine's
+shared server is exactly the wrong thing to SIGKILL. A check that cannot
+conclude — no `ps` on the host, a stripped `PATH` — keeps the record rather
+than dropping it.
 
 ### 5. Containment replaces provenance *inference*, not the registry
 

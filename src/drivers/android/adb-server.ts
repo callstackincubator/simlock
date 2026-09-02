@@ -1,9 +1,8 @@
-import { basename } from "node:path";
-
 import type { AdbServerRejectionReason } from "../../core/index.js";
 import type {
   Clock,
   Filesystem,
+  ProcessHandle,
   ProcessRunner,
   ProcessSupervisor,
   TcpProbe,
@@ -31,9 +30,13 @@ const SHARED_ADB_SERVER_PORT = 5037;
  *   servers contending for one device. That is the accident ADR 0001 exists to prevent,
  *   running backwards. Simlock's own emulators still attach because they register
  *   themselves with `host:emulator:<adbPort>` (see `AdbRegistrar`).
- * - `ADB_LOCAL_TRANSPORT_MAX_PORT` stays as belt-and-braces: on an adb build that ignores
- *   `ADB_EMU` it bounds the sweep to Simlock's own console range instead of the user's,
- *   and it costs nothing when the scanner is off.
+ * - `ADB_LOCAL_TRANSPORT_MAX_PORT` is *not* a bound on the damage, and reading it that way
+ *   gets it backwards: the sweep starts at the hard-coded 5555, so on a build that ignores
+ *   `ADB_EMU` the user's emulators are reached at the default ceiling of 5585 already, and
+ *   5683 only extends the sweep upwards over Simlock's own consoles (5586-5682). That is
+ *   what it is for -- on such a build it is the only thing that makes Simlock's own
+ *   emulators discoverable and re-attachable by the scanner that cannot be turned off.
+ *   Where `ADB_EMU=0` is honoured it does nothing at all, in either direction.
  * - `ADB_REJECT_KILL_SERVER=1` makes `adb kill-server` refuse -- including for Simlock, which
  *   is why this server is stopped by pid and why its pid is recorded on disk.
  */
@@ -50,6 +53,12 @@ const SCOPED_ENVIRONMENT = {
 export interface AdbServerRecord {
   readonly pid: number;
   readonly port: number;
+  /**
+   * When this server was started, for a human reading the file or a bug report. Nothing
+   * decides anything from it, deliberately: identity is proven from the process's command
+   * line (`#identify`), and a timestamp compared against this daemon's own boot time would
+   * call every correctly adopted server stale, since an adopted one always predates it.
+   */
   readonly startedAt: number;
 }
 
@@ -109,15 +118,20 @@ export class AdbServerSupervisor {
     const record = await this.#liveRecord();
     if (await this.#options.tcpProbe.isListening(this.#options.port)) {
       if (record === undefined) {
+        // The one state with no automatic way out, so the message is the recovery
+        // documentation: `adb kill-server` is refused by design and the record file that
+        // would have carried the pid is not there, which leaves the port and a human.
         throw this.#unavailable(
           "occupied",
-          `something is already listening on port ${this.#options.port} and Simlock has no record of starting it`,
+          `something is already listening on port ${this.#options.port} and Simlock has no record of starting it, so it will not attach to it. ` +
+            `Either stop that server (\`lsof -nP -iTCP:${this.#options.port} -sTCP:LISTEN\` names the pid; \`adb kill-server\` will not work) ` +
+            `or move Simlock's own with \`simlock config set drivers.android.adbServerPort <port>\``,
         );
       }
 
-      // Adopted: a daemon died, its server did not. The record is the proof of ownership,
-      // so it is kept exactly as it was -- rewriting `startedAt` would erase the one hint
-      // available for spotting a recycled pid later.
+      // Adopted: a daemon died, its server did not. The record is kept byte for byte --
+      // it is what a later reap identifies this server by, and rewriting it here would
+      // replace a fact about the server with a fact about this daemon.
       this.#record = record;
       return;
     }
@@ -187,23 +201,33 @@ export class AdbServerSupervisor {
   }
 
   /**
-   * Ends the recorded process, but only once it has proven to be an adb server.
+   * Ends the recorded process, but only once it has proven to be *this* server.
    *
    * A pid alone identifies nothing. After a reboot or heavy pid churn the number in a
    * stale record belongs to somebody else's process, and `isAlive` says "yes" about it just
    * as readily -- so signalling on the strength of the record would eventually SIGKILL a
    * stranger's process on the user's machine. The identity check is repeated before the
    * SIGKILL because the process may have exited and its pid been reused in between.
+   *
+   * An inconclusive check keeps the record. The other direction looks tidier and is worse:
+   * the record is the only handle anything has on a server that refuses `adb kill-server`,
+   * and a start that finds the port listening with no record has nowhere left to go but
+   * `occupied` -- so deleting a record Simlock could not read the process table for would
+   * disable Android on that host until somebody found the pid by hand.
    */
   async #reap(record: AdbServerRecord): Promise<void> {
-    if (!(await this.#isAdbProcess(record.pid))) {
+    const identity = await this.#identify(record.pid);
+    if (identity === "unknown") {
+      return;
+    }
+    if (identity === "other") {
       await this.#forgetRecord();
       return;
     }
 
     this.#options.processSupervisor.signal(record.pid, "SIGTERM");
     if (!(await this.#waitForExit(record.pid))) {
-      if (await this.#isAdbProcess(record.pid)) {
+      if ((await this.#identify(record.pid)) === "own-server") {
         this.#options.processSupervisor.signal(record.pid, "SIGKILL");
         await this.#waitForExit(record.pid);
       }
@@ -213,28 +237,55 @@ export class AdbServerSupervisor {
   }
 
   /**
-   * Whether this pid is an adb server, read from the process table. `ps -o comm= -p` prints
-   * the command with no arguments and nothing else, and prints nothing at all for a pid
-   * that is gone; macOS reports it as a path, Linux as a bare name, so only the basename is
-   * comparable. Any failure answers "not adb", which is the fail-closed direction: it costs
-   * a leftover server, where the other direction costs somebody else's process.
+   * What the process table says this pid is, read as a full command line.
+   *
+   * `-o comm=` would be the obvious flag and is the wrong one: it strips the arguments,
+   * which are the only thing that separates Simlock's server from the machine's shared one.
+   * "Some adb" is exactly the population a recycled pid is most likely to land in on a
+   * developer's machine, and signalling on that evidence would SIGKILL the adb server
+   * Android Studio and every other tool are sharing. `-o args=` (`command` on some BSD
+   * `ps`) keeps them, so ownership can be required rather than assumed: an adb binary, the
+   * `-P <port>` this supervisor configured, and `nodaemon`.
+   *
+   * The three answers are deliberately distinct, and only a command line that was actually
+   * read counts as `"other"` -- the stale record to drop. Everything else is `"unknown"`,
+   * where the record must survive (see `#reap`): a `ps` that is missing, not on `PATH`, too
+   * slow, or too small to know `-o args=` (BusyBox) all report as failures indistinguishable
+   * from "no such pid", and guessing "gone" from an exit code would delete the record on
+   * every shutdown on such a host.
    */
-  async #isAdbProcess(pid: number): Promise<boolean> {
+  async #identify(pid: number): Promise<"own-server" | "other" | "unknown"> {
     let result;
     try {
-      result = await this.#options.processRunner.run("ps", ["-o", "comm=", "-p", String(pid)], {
+      result = await this.#options.processRunner.run("ps", ["-o", "args=", "-p", String(pid)], {
         timeoutMs: IDENTITY_TIMEOUT_MS,
       });
     } catch {
-      return false;
+      return "unknown";
     }
 
     if (result.code !== 0) {
-      return false;
+      return "unknown";
     }
 
-    const command = result.stdout.split("\n")[0]?.trim() ?? "";
-    return command !== "" && basename(command) === "adb";
+    const commandLine = result.stdout.split("\n")[0]?.trim() ?? "";
+    if (commandLine === "") {
+      return "unknown";
+    }
+
+    return this.#isOwnServerCommand(commandLine) ? "own-server" : "other";
+  }
+
+  /**
+   * Matched on the raw line rather than on split arguments because an SDK path may contain
+   * spaces, and `ps` gives no way to tell those apart from argument separators.
+   */
+  #isOwnServerCommand(commandLine: string): boolean {
+    return (
+      /(?:^|[\s/])adb(?:\.exe)?(?=\s)/.test(commandLine) &&
+      new RegExp(`(?:^|\\s)-P\\s+${this.#options.port}(?=\\s|$)`).test(commandLine) &&
+      /(?:^|\s)nodaemon(?=\s|$)/.test(commandLine)
+    );
   }
 
   async #startServer(): Promise<void> {
@@ -245,38 +296,97 @@ export class AdbServerSupervisor {
     // `stdio: "ignore"` because this child outlives every call made to it: captured output
     // would accumulate in the handle's buffers for as long as the daemon runs, and there is
     // nothing to read it. Diagnosis happens through the probe and the record instead.
-    const handle = this.#options.processRunner.spawn(
-      this.#options.adbPath,
-      ["-P", String(this.#options.port), "nodaemon", "server"],
-      {
-        env: {
-          ...this.#options.env,
-          ...SCOPED_ENVIRONMENT,
-          ANDROID_ADB_SERVER_PORT: String(this.#options.port),
+    let handle;
+    try {
+      handle = this.#options.processRunner.spawn(
+        this.#options.adbPath,
+        ["-P", String(this.#options.port), "nodaemon", "server"],
+        {
+          env: {
+            ...this.#options.env,
+            ...SCOPED_ENVIRONMENT,
+            ANDROID_ADB_SERVER_PORT: String(this.#options.port),
+          },
+          stdio: "ignore",
         },
-        stdio: "ignore",
-      },
-    );
+      );
+    } catch (error: unknown) {
+      // An `adb` that exists but cannot be executed is an Android configuration problem and
+      // must cost Android alone; letting it out untyped would take the daemon, and iOS with
+      // it, down over it.
+      throw this.#unavailable(
+        "start-failed",
+        `Simlock could not start an adb server from ${this.#options.adbPath}: ${messageOf(error)}`,
+      );
+    }
 
-    if (!(await this.#waitForListening(startedAt))) {
-      handle.kill("SIGKILL");
+    // This child is meant to outlive the daemon: it is reaped by pid, never awaited, and
+    // `nodaemon server` never exits on its own. Left referenced it would hold the event
+    // loop open forever, so a daemon that failed anywhere below would hang instead of
+    // exiting.
+    handle.unref();
+
+    const record: AdbServerRecord = { pid: handle.pid, port: this.#options.port, startedAt };
+    // Written before the wait, not after it: everything between the spawn and a listening
+    // port is a window in which this daemon can die, and without a record on disk the next
+    // one finds a listening port it has no claim on, answers `occupied`, and leaves Android
+    // dead until a human finds the pid.
+    try {
+      await this.#options.filesystem.writeFileAtomic(
+        this.#options.recordPath,
+        `${JSON.stringify(record, null, 2)}\n`,
+      );
+    } catch (error: unknown) {
+      // A server nothing can record is a server nothing can reap, so it is killed here
+      // rather than left running on the port the next start will need.
+      await this.#abandon(handle);
+      throw this.#unavailable(
+        "start-failed",
+        `Simlock started an adb server on port ${this.#options.port} but could not record it at ${this.#options.recordPath}: ${messageOf(error)}`,
+      );
+    }
+    this.#record = record;
+
+    if (!(await this.#waitForListening(startedAt, handle.pid))) {
+      this.#record = undefined;
+      await this.#abandon(handle);
       throw this.#unavailable(
         "start-failed",
         `Simlock's adb server did not start listening on port ${this.#options.port} within ${START_TIMEOUT_MS}ms`,
       );
     }
-
-    const record: AdbServerRecord = { pid: handle.pid, port: this.#options.port, startedAt };
-    this.#record = record;
-    await this.#options.filesystem.writeFileAtomic(
-      this.#options.recordPath,
-      `${JSON.stringify(record, null, 2)}\n`,
-    );
   }
 
-  async #waitForListening(startedAt: number): Promise<boolean> {
+  /**
+   * Kills a server this start is giving up on, and drops its record only once the process
+   * is confirmed gone -- while it might still be alive the record is the only handle
+   * anything has on it. A record that has since stopped naming this pid belongs to somebody
+   * else's server and is left where it is, for the same reason.
+   */
+  async #abandon(handle: ProcessHandle): Promise<void> {
+    handle.kill("SIGKILL");
+    if (!(await this.#waitForExit(handle.pid))) {
+      return;
+    }
+
+    if ((await this.#readRecord())?.pid === handle.pid) {
+      await this.#forgetRecord();
+    }
+  }
+
+  async #waitForListening(startedAt: number, pid: number): Promise<boolean> {
     while (true) {
-      if (await this.#options.tcpProbe.isListening(this.#options.port)) {
+      const listening = await this.#options.tcpProbe.isListening(this.#options.port);
+      // A loopback connect proves something is serving the port, not that it is the child
+      // just spawned. Two daemons cold-starting on one port both probe it free and both
+      // spawn; one binds, the other prints "cannot bind" and exits. Without this the loser
+      // reads the winner's server as its own success and writes a record naming its own
+      // dead pid over the winner's -- which is also how a foreign server gets adopted when
+      // two Simlock homes share a port (safety rule 9).
+      if (!this.#options.processSupervisor.isAlive(pid)) {
+        return false;
+      }
+      if (listening) {
         return true;
       }
       if (this.#options.clock.now() - startedAt >= START_TIMEOUT_MS) {
@@ -322,6 +432,10 @@ export class AdbServerSupervisor {
       this.#options.clock.setTimer(milliseconds, resolve);
     });
   }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isAdbServerRecord(value: unknown): value is AdbServerRecord {

@@ -143,11 +143,19 @@ detach every leased emulator at once.
 against its own server returns `error: kill-server rejected by remote server`,
 for the life of the process. The only way to stop it is to kill the pid.
 
-So the pid is recorded in `~/.simlock/adb-server.json` when the server starts,
-the daemon reaps it by pid on shutdown, and a daemon that crashed must find
-that file on restart and adopt-or-kill the server it names. A stale entry — the
-pid is gone, or belongs to something else now — must be treated as no server,
-not as a server to kill blindly.
+So the pid is recorded in `~/.simlock/adb-server.json` as soon as the server
+has one — before it is known to be listening, since the gap between the two is
+a window a daemon can die in and a listening server with no record is
+unrecoverable. The daemon reaps it by pid on shutdown, and a daemon that
+crashed must find that file on restart and adopt-or-kill the server it names. A
+stale entry — the pid is gone, or belongs to something else now — must be
+treated as no server, not as a server to kill blindly. "Belongs to something
+else" is decided from the process's full command line (an `adb` binary, this
+server's `-P <port>`, and `nodaemon`), never from the command name alone: a
+recycled pid most often belongs to *some* adb, and the shared server every
+other tool on the machine is talking to is precisely the wrong thing to
+SIGKILL. Where the process table cannot be read at all, the record is kept —
+deleting it would strand a live server behind an `occupied` refusal forever.
 
 The file is deliberately *not* part of `state.json`: process supervision must
 not depend on registry integrity, since a corrupt registry is exactly when you

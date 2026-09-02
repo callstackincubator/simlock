@@ -42,6 +42,7 @@ export type { TcpProbe } from "./tcp-probe.js";
 export {
   NodeProcessRunner,
   type ProcessHandle,
+  ProcessSpawnError,
   type ProcessResult,
   type ProcessRunner,
   ScriptedProcessRunner,

@@ -51,6 +51,24 @@ async function start(overrides: Partial<StartDaemonOptions> = {}) {
   return { daemon, sink };
 }
 
+/** A driver whose disposal is observable, which `FakeDriver` deliberately is not. */
+class DisposableFakeDriver extends FakeDriver {
+  constructor(
+    private readonly disposed: string[],
+    options: ConstructorParameters<typeof FakeDriver>[0],
+    private readonly failure?: Error,
+  ) {
+    super(options);
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed.push(this.platform);
+    if (this.failure !== undefined) {
+      throw this.failure;
+    }
+  }
+}
+
 describe("startDaemon", () => {
   it("writes a structured start record with version, protocol version, socket path, and effective config", async () => {
     const { daemon, sink } = await start();
@@ -87,6 +105,40 @@ describe("startDaemon", () => {
     // marked with the first one (ADR 0001, decision 2).
     expect(written.instanceId).not.toBe("");
     expect(JSON.parse(await filesystem.readFile(identityPath))).toEqual(written);
+  });
+
+  it("disposes every driver on shutdown, and reports the one that failed without stopping", async () => {
+    // The wiring, not the halves: `DaemonServer` awaiting its `dispose` option is tested in
+    // `server.test.ts` and a driver reaping its adb server in the Android driver's own, and
+    // between them sat the composition that connects the two. Losing it silently abandons
+    // Simlock's adb server on every shutdown, and only `Driver.dispose` can stop one.
+    const disposed: string[] = [];
+    const clock = new FakeClock(1_000);
+    const { daemon, sink } = await start({
+      drivers: [
+        new DisposableFakeDriver(disposed, {
+          availableOsVersions: ["26.5"],
+          clock,
+          platform: "ios",
+        }),
+        new DisposableFakeDriver(
+          disposed,
+          { availableOsVersions: ["35"], clock, platform: "android" },
+          new Error("adb server would not die"),
+        ),
+      ],
+    });
+
+    await daemon.stop("test");
+
+    expect(disposed).toEqual(["ios", "android"]);
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "Driver disposal failed",
+        fields: expect.objectContaining({ platform: "android" }),
+      }),
+    );
   });
 
   it("scopes child loggers under daemon.<module> so records are attributable", async () => {
