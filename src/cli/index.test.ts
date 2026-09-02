@@ -1036,6 +1036,7 @@ function sequence() {
 function testConfig(): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    drivers: {},
     eventBuffer: { capacity: 100 },
     health: {
       enabled: true,

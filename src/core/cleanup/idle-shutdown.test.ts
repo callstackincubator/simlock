@@ -5,6 +5,7 @@ import { idleShutdownRule } from "./idle-shutdown.js";
 
 const config: Config = {
   diskPressure: { freeBytesThreshold: 0 },
+  drivers: {},
   eventBuffer: { capacity: 1 },
   health: {
     enabled: true,

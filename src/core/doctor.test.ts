@@ -1275,6 +1275,7 @@ function sequence() {
 function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {}): Config {
   return {
     diskPressure: { freeBytesThreshold: 1 },
+    drivers: {},
     eventBuffer: { capacity: 10 },
     health: {
       enabled: true,

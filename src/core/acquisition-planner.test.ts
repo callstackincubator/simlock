@@ -11,6 +11,7 @@ const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 const config: Config = {
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
+  drivers: {},
   eventBuffer: { capacity: 100 },
   health: {
     enabled: true,
