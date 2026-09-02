@@ -39,6 +39,8 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
+| 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
+| 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` held mode only: the daemon ended the lease without the holder asking (TTL backstop, operator `release`, or an unrecoverable device) |
 
@@ -89,8 +91,24 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
-  iOS runtimes remain Xcode-managed in v1: `--allow-download` cannot install
-  them; install the runtime through Xcode first.
+  For iOS, this runs `xcodebuild -downloadPlatform iOS` under the hood and
+  only reaches back to iOS 16.0 (a floor of Xcode's own downloader); older
+  runtimes and unknown device types (which need a newer Xcode) still require
+  installing/upgrading Xcode by hand. A requested `--os` outside the
+  device's supported runtime range (e.g. iPhone Xs above iOS 18.x) fails
+  immediately — no download is ever attempted for a version that could not
+  work regardless. For Android, this runs `sdkmanager --install`; an
+  unaccepted SDK license fails naming `downloads.acceptAndroidLicenses`
+  (config) unless that flag is set, in which case licenses are accepted
+  automatically and the install retried once. Both drivers check free disk
+  space before starting either install and fail fast, naming required vs.
+  available bytes, instead of risking a full disk mid-download. Every
+  install attempt (including a license-triggered retry) emits
+  `component.install-started` / `component.installed` /
+  `component.install-failed` on the event bus (`simlock events --follow`);
+  see [EVENTS.md](EVENTS.md#components). The requester's own progress stream
+  (below) does not yet reflect an in-flight download — see
+  [known-pitfalls.md](known-pitfalls.md).
 - `--detach` — detached mode: print the lease result and exit; the lease is
   TTL-bound and must be renewed with `simlock lease renew`.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of

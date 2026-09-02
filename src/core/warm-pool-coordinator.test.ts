@@ -26,6 +26,7 @@ const config: Config = {
     stableObservations: 2,
   },
   stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+  downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
   http: { enabled: false, host: "127.0.0.1", port: 4700 },
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
   warmPool: {

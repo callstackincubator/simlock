@@ -5,6 +5,9 @@ import {
   type DeviceRequest,
   type LeaseProgress,
   type LeaseRecord,
+  effectiveAllowDownload,
+  InsufficientDiskSpaceError,
+  LicenseNotAcceptedError,
   NoCapacityError,
   NoDriverError,
   QueueTimeoutError,
@@ -563,6 +566,11 @@ export class DaemonServer {
     };
     const mode = payload.mode === "detached" ? "detached" : "held";
     const requesterId = optionalString(payload, "requesterId") ?? this.options.defaultRequesterId;
+    // The request's own flag is only the input to the policy, not the final answer: `never`
+    // overrides an explicit `true` (and is what should show up in the eventual "runtime
+    // missing" message below), `always` grants it without the caller asking.
+    const requestedAllowDownload = optionalBoolean(payload, "allowDownload") ?? false;
+    const downloadsPolicy = this.options.config.downloads.policy;
     let progressSocket: IpcConnection | undefined = connection.socket;
     const disposeProgress = () => {
       progressSocket = undefined;
@@ -572,7 +580,7 @@ export class DaemonServer {
     let grant;
     try {
       grant = await this.options.leases.request(request, {
-        allowDownload: optionalBoolean(payload, "allowDownload") ?? false,
+        allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
         mode,
         noWait: optionalBoolean(payload, "noWait") ?? false,
         onProgress: (progress) => {
@@ -583,6 +591,26 @@ export class DaemonServer {
         requesterId,
         ...(typeof payload.timeoutMs === "number" ? { timeoutMs: payload.timeoutMs } : {}),
       });
+    } catch (error: unknown) {
+      // The driver only ever sees the clamped-to-false permission, so its own
+      // RuntimeMissingError just says "missing" -- it has no way to know config is what's
+      // standing between this request and success. Recover that distinction here, the one place
+      // that saw both sides, rather than teaching the driver about config. Attach the suffix
+      // whenever the `never` policy is active, regardless of whether this particular request
+      // asked for a download: the driver's message suggests `--allow-download`, which under
+      // `never` can never help, so the suffix is the correction every caller needs to see, not
+      // just the ones that happened to ask. Still gated on `downloadable`: a request no download
+      // could ever have fixed (out of range, an installed-but-unpaired runtime, older than the
+      // download floor) must not be blamed on the download policy -- that policy was never what
+      // stood between this request and success.
+      if (
+        downloadsPolicy === "never" &&
+        error instanceof RuntimeMissingError &&
+        error.downloadable
+      ) {
+        error.message = `${error.message} (downloads are disabled by configuration: downloads.policy is "never")`;
+      }
+      throw error;
     } finally {
       connection.progressDisposers.delete(disposeProgress);
       connection.progressRequesters.delete(requesterId);
@@ -951,6 +979,12 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof UnknownModelError) {
     return "UNKNOWN_MODEL";
+  }
+  if (error instanceof InsufficientDiskSpaceError) {
+    return "INSUFFICIENT_DISK_SPACE";
+  }
+  if (error instanceof LicenseNotAcceptedError) {
+    return "LICENSE_NOT_ACCEPTED";
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";

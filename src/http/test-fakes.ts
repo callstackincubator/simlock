@@ -28,6 +28,7 @@ export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
       },
     },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     health: {
       enabled: true,

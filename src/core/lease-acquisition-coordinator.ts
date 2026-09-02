@@ -217,6 +217,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       waiter.spec = await driver.resolveSpec(request, {
         allowDownload: options.allowDownload ?? false,
+        // The waiter is the one place that knows which requester triggered this resolution;
+        // threaded through so a component install a driver ends up doing on this request's
+        // behalf can attribute its diagnostics (and the resulting `component.install-*` events)
+        // to it.
+        requesterId: options.requesterId,
       });
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {

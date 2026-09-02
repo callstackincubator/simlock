@@ -1,0 +1,43 @@
+{
+  "devicetypes": [
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+      "name": "iPhone 16",
+      "minRuntimeVersion": 917504,
+      "maxRuntimeVersion": 16777215
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-Xs",
+      "name": "iPhone Xs",
+      "minRuntimeVersion": 786432,
+      "maxRuntimeVersion": 1181184
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-7",
+      "name": "iPhone 7",
+      "minRuntimeVersion": 589824,
+      "maxRuntimeVersion": 983040
+    }
+  ],
+  "runtimes": [
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+      "name": "iOS 18.4",
+      "version": "18.4",
+      "isAvailable": true,
+      "supportedDeviceTypes": [
+        { "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16", "name": "iPhone 16" },
+        { "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-Xs", "name": "iPhone Xs" }
+      ]
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      "name": "iOS 26.5",
+      "version": "26.5",
+      "isAvailable": true,
+      "supportedDeviceTypes": [
+        { "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16", "name": "iPhone 16" }
+      ]
+    }
+  ]
+}

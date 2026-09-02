@@ -1,4 +1,11 @@
-export { type Config, type ConfigOverrides, loadConfig } from "./config.js";
+export {
+  type Config,
+  type ConfigOverrides,
+  // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
+  type DownloadPolicy,
+  effectiveAllowDownload,
+  loadConfig,
+} from "./config.js";
 export {
   type DeviceRecord,
   type DeviceSpec,
@@ -13,12 +20,15 @@ export { CleanupReaper } from "./reaper.js";
 export {
   BootTimeoutError,
   type DeviceRequest,
+  DiskSpaceGuard,
   type Driver,
   type DriverCatalogEntry,
   DriverCrashError,
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  InsufficientDiskSpaceError,
+  LicenseNotAcceptedError,
   type ObservedDevice,
   type ObservedRunState,
   RuntimeMissingError,

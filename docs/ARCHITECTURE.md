@@ -472,6 +472,55 @@ Events are emitted post-commit only; handler failures are isolated from
 emitters. See [EVENTS.md](EVENTS.md) and
 [agent-rules/events.md](agent-rules/events.md).
 
+### Driver facts reach the bus through diagnostics, never directly
+
+Drivers must never depend on the event bus (architecture rule 5 — a driver is
+not an observer of its own facts). Where a driver needs to report something
+the daemon should turn into a bus event, it reports it through its own
+`onDiagnostic` callback option instead — the Android driver already did this
+for `snapshot-cold-boot` and unreadable device-profile sources; the iOS
+driver gained the same option for component installs. `src/daemon/main.ts`
+wires each driver's `onDiagnostic` at construction time
+(`discoverDrivers`), bridging the diagnostic to `component.install-started` /
+`component.installed` / `component.install-failed` — see
+[EVENTS.md](EVENTS.md#components). This is also why those events are
+attributed to the `driver-diagnostics` emitter rather than to `IosSimctlDriver`
+or `AndroidDriver` directly: the driver only observed the fact, the daemon
+layer is what committed it to the bus. Both drivers also thread the
+requesting lease's `requesterId` (when `resolveSpec`'s caller knew one — see
+`LeaseAcquisitionCoordinator#resolveAndDrive`) through the diagnostic into
+the bridged event's payload, so a component install is attributable to the
+request that caused it.
+
+`component.installed` is a verified fact, not "the installer exited 0":
+`xcodebuild`/`sdkmanager` reporting success only means the tool claims to
+have finished, not that the thing the request actually needed — a runtime at
+the requested version, paired with the requested device type for iOS; the
+requested system image for Android — is now present. Both drivers re-scan
+their own catalog (`simctl list` / the SDK's `system-images` tree) after the
+installer returns and only report `component.installed` once that re-scan
+confirms it; a re-scan that comes up empty reports `component.install-failed`
+with that reason instead, and the caller still sees the same typed error it
+always did (`DriverCrashError` for iOS's "still not installed" case,
+`IosRuntimeUnpairedError` for a downloaded-but-unpaired runtime). Exactly one
+terminal fact fires per install attempt, matching the pre-existing
+`component.install-started` timing.
+
+Before starting either install, the driver reserves free disk space against a
+conservative per-component estimate (~8 GiB for an iOS runtime, ~2 GiB for an
+Android system image) through a `DiskSpaceGuard` shared across every driver
+(`src/daemon/main.ts` constructs one instance and passes it to each driver's
+options) rather than a bare instantaneous `Filesystem#diskFree` reading: two
+concurrent installs — an iOS runtime download racing an Android system-image
+install, or two of either — could otherwise each observe enough free space
+individually and jointly overfill the volume neither alone would have. The
+guard tracks bytes reserved but not yet released, keyed per path, and checks
+free space *minus* those outstanding reservations; the reservation is
+released once the install settles either way. A reservation that doesn't fit
+still fails fast with the same typed `InsufficientDiskSpaceError` naming
+required vs. available bytes, and no `component.install-*` diagnostic fires
+for a preflight failure, since no install was actually attempted.
+
 ## External APIs behind interfaces (ports)
 
 Every external API the app touches gets its own type/interface (a *port*),
@@ -575,10 +624,44 @@ cannot depend on `config.log` having loaded successfully, so it builds its own
 logger straight from the default log path at a fixed level, falling back to
 `console.error` only if that itself fails.
 
+`startDaemon` also subscribes `logger.child("components")` to `component.installed`
+(`wireComponentInstallLogging` in `src/daemon/main.ts`) so a component simlock
+installed on an agent's behalf stays attributable in `daemon.log` after the
+event ring buffer resets on restart — the same durable-vs-ring-buffer split as
+everything else in this section, applied to component installs specifically
+because there is no registry entry or uninstall for them to be recovered from
+otherwise (see "Out of scope" in the #67 issue). The log line carries
+`requesterId` whenever the event payload has one, so the durable record names
+which agent's request caused the install, not just that one happened.
+
 ## Device requests
 
 Required to identify a device: **platform + device model + OS version**.
-OS defaults to the newest runtime already installed on the machine. If the
-requested runtime / system image is not installed, the lease fails with a
-clear error unless `--allow-download` is passed (downloads are multi-GB and
-must never be triggered implicitly).
+OS defaults to the newest runtime already installed on the machine that can
+actually run the requested model — for iOS specifically, the newest
+installed runtime that both falls inside the device type's supported range
+(`simctl list devicetypes`' `minRuntimeVersion`/`maxRuntimeVersion`) and
+still lists the model in its `supportedDeviceTypes`, not the newest
+installed runtime overall (a newer runtime can drop a model, as iOS 26 did
+for iPhone XS/XR). This still resolves on a fresh Xcode install with zero
+simulator runtimes present at all — an empty runtime list is a normal
+starting state, not a malformed catalog, so it falls straight through to
+the same "not installed, permitted to download" path as a non-empty catalog
+that simply lacks a matching runtime. If the requested runtime / system
+image is not installed, the lease fails with a clear error unless downloads
+are permitted for that request (downloads are multi-GB and must never be
+triggered implicitly). An OS version outside a model's supported range
+fails immediately with the range named in the error — never as an attempted
+download, since no download could make it work.
+
+Permission comes from `config.downloads.policy`, resolved once, in the
+daemon, before a request ever reaches the acquisition path: `"never"`
+forbids installs outright, even over an explicit `--allow-download` /
+`allow_download`; `"always"` grants it to every explicit lease request
+without the caller having to ask; `"on-request"` (the default) defers to
+the request's own flag, which is today's behavior byte-for-byte. Only an
+explicit lease request (`LeaseEngine#request`) can carry download
+permission to a driver's `resolveSpec` — warm-pool provisioning and startup
+convergence reuse specs already committed to the registry and never call
+`resolveSpec` themselves, so neither can trigger a download regardless of
+policy.

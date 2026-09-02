@@ -75,6 +75,8 @@ describe("CLI boundary", () => {
     ["NO_CAPACITY", 11],
     ["RUNTIME_MISSING", 12],
     ["UNKNOWN_MODEL", 12],
+    ["INSUFFICIENT_DISK_SPACE", 12],
+    ["LICENSE_NOT_ACCEPTED", 12],
     ["BAD_REQUEST", 2],
     ["REQUESTER_ALREADY_LEASED", 13],
   ] as const)("maps %s daemon errors to exit %d", async (code, expected) => {
@@ -1159,6 +1161,7 @@ function testConfig(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },

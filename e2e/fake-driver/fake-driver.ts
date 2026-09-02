@@ -69,7 +69,7 @@ export class OutOfProcessFakeDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     const script = await this.#beforeCall("resolveSpec", [request, options]);
     this.#assertKnownModel(request.model, script);

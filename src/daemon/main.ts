@@ -7,13 +7,19 @@ import {
   type ConfigOverrides,
   type Driver,
   CleanupReaper,
+  DiskSpaceGuard,
   Doctor,
   LeaseEngine,
   loadConfig,
   Registry,
   Nuke,
 } from "../core/index.js";
-import { AndroidDriver, SdkMissingError } from "../drivers/android/index.js";
+import {
+  AndroidDriver,
+  SdkMissingError,
+  type AndroidDriverDiagnostic,
+} from "../drivers/android/index.js";
+import type { ComponentInstallDiagnostic } from "../drivers/diagnostics.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
 import { HttpGateway } from "../http/server.js";
@@ -89,10 +95,27 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       }),
     });
   const eventBus = new EventBus(clock, config.eventBuffer.capacity);
+  // Durable bookkeeping for component installs: `simlock events` is an in-memory ring buffer
+  // that resets on restart (see ARCHITECTURE.md "Event bus"), so a component simlock installed
+  // is only attributable later through the daemon's own log file.
+  wireComponentInstallLogging(eventBus, logger);
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
+  // One instance shared across every driver discovered below, so a disk-space reservation one
+  // driver makes is visible to the other's own preflight -- see `DiskSpaceGuard`.
+  const diskSpaceGuard = new DiskSpaceGuard();
   const drivers =
     options.drivers ??
-    (await discoverDrivers({ clock, filesystem, idGenerator, logger, processRunner }));
+    (await discoverDrivers({
+      acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
+      clock,
+      diskSpaceGuard,
+      downloadTimeoutMs: config.downloads.timeoutMs,
+      eventBus,
+      filesystem,
+      idGenerator,
+      logger,
+      processRunner,
+    }));
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -234,7 +257,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 }
 
 export interface DriverDiscoveryContext {
+  /** Threaded into the Android driver's `downloads.acceptAndroidLicenses` gate; defaults to `false` when omitted. */
+  readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  /**
+   * Threaded into the iOS driver's `xcodebuild -downloadPlatform` timeout and the Android
+   * driver's `sdkmanager --install` / `--licenses` timeout; defaults to each driver's own
+   * default (mirroring `downloads.timeoutMs`'s config default) when omitted.
+   */
+  readonly downloadTimeoutMs?: number;
+  /**
+   * Shared across every driver constructed from this context, so concurrent installs on
+   * different drivers see each other's outstanding reservations -- see `DiskSpaceGuard`.
+   * Defaults to a private instance (no sharing) when omitted, which only matters for a caller
+   * that constructs its own drivers directly rather than through `discoverDrivers`.
+   */
+  readonly diskSpaceGuard?: DiskSpaceGuard;
+  /** Bridges each driver's `component.install-*` diagnostic onto the bus -- see `emitComponentInstallDiagnostic`. */
+  readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
@@ -248,13 +288,20 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
     return loadDriversModule(driversModule, options, logger);
   }
 
+  const diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
   const drivers: Driver[] = [];
   if (process.platform === "darwin") {
     drivers.push(
       new IosSimctlDriver({
         clock: options.clock,
+        coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
+        diskSpaceGuard,
+        ...(options.downloadTimeoutMs === undefined
+          ? {}
+          : { downloadTimeoutMs: options.downloadTimeoutMs }),
         filesystem: options.filesystem,
         idGenerator: options.idGenerator,
+        onDiagnostic: emitComponentInstallDiagnostic(options.eventBus, "ios"),
         processRunner: options.processRunner,
       }),
     );
@@ -263,11 +310,17 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
   try {
     drivers.push(
       await AndroidDriver.create({
+        acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
         clock: options.clock,
+        diskSpaceGuard,
+        ...(options.downloadTimeoutMs === undefined
+          ? {}
+          : { downloadTimeoutMs: options.downloadTimeoutMs }),
         env: process.env,
         filesystem: options.filesystem,
         homeDirectory: homedir(),
         idGenerator: options.idGenerator,
+        onDiagnostic: bridgeAndroidDriverDiagnostic(options.eventBus),
         processRunner: options.processRunner,
       }),
     );
@@ -315,6 +368,115 @@ async function loadDriversModule(
     platforms: drivers.map((driver) => driver.platform),
   });
   return drivers;
+}
+
+/**
+ * Turns a driver's `component-install-*` diagnostic into the matching `component.install-*`
+ * bus event. Drivers never depend on the event bus directly (architecture rule 5 -- loose
+ * coupling via the bus is for observers only) -- this is the one place, at driver construction,
+ * that bridges the driver's diagnostic callback to a post-commit fact for observers (`simlock
+ * events`, and the durable-log subscription in `startDaemon`).
+ */
+export function emitComponentInstallDiagnostic(
+  eventBus: Pick<EventBus, "emit">,
+  platform: "android" | "ios",
+): (diagnostic: ComponentInstallDiagnostic) => void {
+  return (diagnostic) => {
+    switch (diagnostic.kind) {
+      case "component-install-started":
+        eventBus.emit(
+          "component.install-started",
+          {
+            componentId: diagnostic.componentId,
+            platform,
+            ...(diagnostic.requesterId === undefined
+              ? {}
+              : { requesterId: diagnostic.requesterId }),
+          },
+          "driver-diagnostics",
+        );
+        return;
+      case "component-installed":
+        eventBus.emit(
+          "component.installed",
+          {
+            componentId: diagnostic.componentId,
+            durationMs: diagnostic.durationMs,
+            platform,
+            ...(diagnostic.requesterId === undefined
+              ? {}
+              : { requesterId: diagnostic.requesterId }),
+          },
+          "driver-diagnostics",
+        );
+        return;
+      case "component-install-failed":
+        eventBus.emit(
+          "component.install-failed",
+          {
+            componentId: diagnostic.componentId,
+            durationMs: diagnostic.durationMs,
+            error: diagnostic.error,
+            platform,
+            ...(diagnostic.requesterId === undefined
+              ? {}
+              : { requesterId: diagnostic.requesterId }),
+          },
+          "driver-diagnostics",
+        );
+        return;
+    }
+  };
+}
+
+function isComponentInstallDiagnostic(diagnostic: {
+  readonly kind: string;
+}): diagnostic is ComponentInstallDiagnostic {
+  return (
+    diagnostic.kind === "component-install-started" ||
+    diagnostic.kind === "component-installed" ||
+    diagnostic.kind === "component-install-failed"
+  );
+}
+
+/**
+ * The Android driver's `onDiagnostic` also carries `snapshot-cold-boot` and
+ * `device-profile-source-unreadable` facts, neither wired to the bus (unchanged from before
+ * this change -- discovery never passed `onDiagnostic` to the Android driver at all, so every
+ * diagnostic it ever reported was already dropped). Only `component-install-*` is bridged here.
+ */
+export function bridgeAndroidDriverDiagnostic(
+  eventBus: Pick<EventBus, "emit">,
+): (diagnostic: AndroidDriverDiagnostic) => void {
+  const installBridge = emitComponentInstallDiagnostic(eventBus, "android");
+  return (diagnostic) => {
+    if (isComponentInstallDiagnostic(diagnostic)) {
+      installBridge(diagnostic);
+    }
+  };
+}
+
+/**
+ * Durable bookkeeping for component installs: the event ring buffer (`simlock events`) resets
+ * on daemon restart, so a component simlock installed on an agent's behalf is only attributable
+ * later through this log line -- see the `Logger` port ("Operational logging is a separate
+ * concern from the event bus" in ARCHITECTURE.md).
+ */
+export function wireComponentInstallLogging(
+  eventBus: Pick<EventBus, "subscribe">,
+  logger: Logger,
+): void {
+  const componentsLogger = logger.child("components");
+  eventBus.subscribe("component.installed", (envelope) => {
+    componentsLogger.info("Component installed", {
+      componentId: envelope.payload.componentId,
+      durationMs: envelope.payload.durationMs,
+      platform: envelope.payload.platform,
+      ...(envelope.payload.requesterId === undefined
+        ? {}
+        : { requesterId: envelope.payload.requesterId }),
+    });
+  });
 }
 
 /**

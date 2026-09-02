@@ -5,7 +5,16 @@ import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
+import {
+  type Config,
+  CleanupReaper,
+  FakeDriver,
+  InsufficientDiskSpaceError,
+  LeaseEngine,
+  Registry,
+  RuntimeMissingError,
+} from "../core/index.js";
+import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
   FakeClock,
   FakeSystemStats,
@@ -1111,6 +1120,168 @@ describe("DaemonServer lease heartbeat", () => {
   });
 });
 
+describe("DaemonServer download policy", () => {
+  it("grants download permission under the always policy without a per-request flag", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const grant = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(grant.ok).toBe(true);
+    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
+      allowDownload: true,
+      requesterId: "agent-1",
+    });
+    await client.close();
+  });
+
+  it("withholds download permission under the never policy even when the request asks for it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      allowDownload: true,
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).toContain("downloads.policy");
+    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
+      allowDownload: false,
+      requesterId: "agent-1",
+    });
+    await client.close();
+  });
+
+  it("defers to the request's own flag under the default on-request policy", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    // No allowDownload on the request and the default policy, so this fails exactly as it
+    // did before the policy existed -- and, unlike the never-policy case above, the message
+    // is not attributed to configuration, since nothing in config forced the outcome.
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+
+  it("attaches the download-policy suffix under the never policy even when the request itself never asked for a download", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    // No allowDownload on this request at all -- the driver's own message still suggests
+    // `--allow-download`, which under the never policy can never help, so the suffix must
+    // still attach as the correction.
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).toContain("downloads.policy");
+    await client.close();
+  });
+
+  it("never attaches the download-policy suffix to an undownloadable RuntimeMissingError, even under the never policy", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    // Stands in for a real out-of-range / unpaired-runtime error: no download could ever have
+    // fixed this request, so the policy is not what blocked it.
+    driver.failOn(
+      "resolveSpec",
+      1,
+      new RuntimeMissingError("ios", "12.0", { downloadable: false }),
+    );
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      allowDownload: true,
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "12.0", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+});
+
+describe("DaemonServer error code mapping", () => {
+  it("maps InsufficientDiskSpaceError to INSUFFICIENT_DISK_SPACE", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.failOn("resolveSpec", 1, new InsufficientDiskSpaceError("ios", 8 * 1024 ** 3, 0));
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "INSUFFICIENT_DISK_SPACE" });
+    await client.close();
+  });
+
+  it("maps LicenseNotAcceptedError to LICENSE_NOT_ACCEPTED", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "android" });
+    driver.failOn(
+      "resolveSpec",
+      1,
+      new AndroidLicenseNotAcceptedError("system-images;android-35;google_apis;arm64-v8a"),
+    );
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "Pixel 8", osVersion: "35", platform: "android" },
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "LICENSE_NOT_ACCEPTED" });
+    await client.close();
+  });
+});
+
 // fallow-ignore-next-line complexity -- a test harness whose branches are all trivial optional-parameter defaulting.
 async function createHarness(
   options: {
@@ -1122,6 +1293,7 @@ async function createHarness(
     readonly clock?: FakeClock;
     readonly converge?: () => Promise<void>;
     readonly dispose?: () => void;
+    readonly downloads?: Partial<Config["downloads"]>;
     readonly driver?: FakeDriver;
     readonly logger?: Logger;
     readonly settle?: () => Promise<void>;
@@ -1154,7 +1326,7 @@ async function createHarness(
       ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
       platform: "ios",
     });
-  const config = testConfig(options.lease);
+  const config = testConfig(options.lease, options.downloads);
   const engine = new LeaseEngine({
     clock,
     config,
@@ -1300,7 +1472,10 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
+function testConfig(
+  leaseOverrides?: Partial<Config["lease"]>,
+  downloadsOverrides?: Partial<Config["downloads"]>,
+): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
@@ -1313,6 +1488,12 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    downloads: {
+      policy: "on-request",
+      acceptAndroidLicenses: false,
+      timeoutMs: 1_200_000,
+      ...downloadsOverrides,
+    },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {

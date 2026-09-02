@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { EventBus } from "../bus/index.js";
 import { FakeDriver } from "../core/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
@@ -14,7 +15,14 @@ import {
   MemoryLogSink,
   ScriptedProcessRunner,
 } from "../ports/index.js";
-import { discoverDrivers, startDaemon, type StartDaemonOptions } from "./main.js";
+import {
+  bridgeAndroidDriverDiagnostic,
+  discoverDrivers,
+  emitComponentInstallDiagnostic,
+  startDaemon,
+  wireComponentInstallLogging,
+  type StartDaemonOptions,
+} from "./main.js";
 import type { DaemonServer } from "./server.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -149,6 +157,7 @@ describe("discoverDrivers", () => {
 
     const drivers = await discoverDrivers({
       clock: new FakeClock(),
+      eventBus: new EventBus(new FakeClock()),
       filesystem,
       idGenerator: new CryptoIdGenerator(),
       logger,
@@ -163,6 +172,173 @@ describe("discoverDrivers", () => {
         module: "daemon.driver-discovery",
       }),
     );
+  });
+});
+
+describe("component install diagnostic bridging", () => {
+  it("emits component.install-started/-installed/-failed for the bridged platform", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = emitComponentInstallDiagnostic(eventBus, "ios");
+
+    bridge({ componentId: "18.6", kind: "component-install-started" });
+    bridge({ componentId: "18.6", durationMs: 42_000, kind: "component-installed" });
+    bridge({
+      componentId: "18.6",
+      durationMs: 5_000,
+      error: "DriverCrashError: xcodebuild failed",
+      kind: "component-install-failed",
+    });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "component.install-started",
+        module: "driver-diagnostics",
+        payload: { componentId: "18.6", platform: "ios" },
+      }),
+      expect.objectContaining({
+        event: "component.installed",
+        module: "driver-diagnostics",
+        payload: { componentId: "18.6", durationMs: 42_000, platform: "ios" },
+      }),
+      expect.objectContaining({
+        event: "component.install-failed",
+        module: "driver-diagnostics",
+        payload: {
+          componentId: "18.6",
+          durationMs: 5_000,
+          error: "DriverCrashError: xcodebuild failed",
+          platform: "ios",
+        },
+      }),
+    ]);
+  });
+
+  it("carries requesterId onto the bridged event when the diagnostic knows one, and omits it when it doesn't", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = emitComponentInstallDiagnostic(eventBus, "ios");
+
+    bridge({ componentId: "18.6", kind: "component-install-started", requesterId: "agent-1" });
+    bridge({ componentId: "18.6", kind: "component-install-started" });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: { componentId: "18.6", platform: "ios", requesterId: "agent-1" },
+      }),
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: { componentId: "18.6", platform: "ios" },
+      }),
+    ]);
+  });
+
+  it("forwards only component-install-* diagnostics from the Android driver's broader onDiagnostic surface", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = bridgeAndroidDriverDiagnostic(eventBus);
+
+    bridge({ avdName: "simlock_1", kind: "snapshot-cold-boot", readyAfterMs: 15_000 });
+    bridge({
+      kind: "device-profile-source-unreadable",
+      path: "/x/.android/devices.xml",
+      reason: "parse-error",
+    });
+    bridge({
+      componentId: "system-images;android-35;google_apis;arm64-v8a",
+      kind: "component-install-started",
+    });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          platform: "android",
+        },
+      }),
+    ]);
+  });
+});
+
+describe("wireComponentInstallLogging", () => {
+  it('writes a durable structured log line under logger.child("components") when component.installed fires', () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "component.installed",
+      { componentId: "18.6", durationMs: 42_000, platform: "ios" },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Component installed",
+        module: "daemon.components",
+        fields: { componentId: "18.6", durationMs: 42_000, platform: "ios" },
+      }),
+    );
+  });
+
+  it("includes requesterId in the durable log line when the event carries one", () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "component.installed",
+      { componentId: "18.6", durationMs: 42_000, platform: "ios", requesterId: "agent-1" },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Component installed",
+        module: "daemon.components",
+        fields: {
+          componentId: "18.6",
+          durationMs: 42_000,
+          platform: "ios",
+          requesterId: "agent-1",
+        },
+      }),
+    );
+  });
+
+  it("does not log for component.install-started or component.install-failed", () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "component.install-started",
+      { componentId: "18.6", platform: "ios" },
+      "driver-diagnostics",
+    );
+    eventBus.emit(
+      "component.install-failed",
+      { componentId: "18.6", durationMs: 1_000, error: "boom", platform: "ios" },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toEqual([]);
   });
 });
 
@@ -189,6 +365,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
     return discoverDrivers({
       clock: new FakeClock(),
+      eventBus: new EventBus(new FakeClock()),
       filesystem: new MemoryFilesystem(),
       idGenerator: new CryptoIdGenerator(),
       logger,

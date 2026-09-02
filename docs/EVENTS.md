@@ -40,6 +40,24 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.recovered` | device id, lease id, attempts, duration | a crashed leased device was rebooted under its existing lease and passed readiness | LeaseHealthMonitor | implemented |
 | `device.recovery-failed` | device id, lease id, attempts, reason, error | recovery could not restore a leased device (absent from driver reality, provenance drift, or attempts exhausted) and its lease was released | LeaseHealthMonitor | implemented |
 
+## Components
+
+| Event | Payload (key fields) | Emitted when | Emitter | Status |
+|---|---|---|---|---|
+| `component.install-started` | platform, component id (iOS runtime version or "latest"; Android `sdkmanager` package name), requester id (when the triggering resolution knew one) | a driver is about to run `xcodebuild -downloadPlatform` / `sdkmanager --install` for a missing component, disk preflight already passed | driver-diagnostics | implemented |
+| `component.installed` | platform, component id, duration, requester id | the install succeeded **and** a post-install re-scan confirmed the component the request actually needed is present (paired with the requested device type, for iOS) — never fired on a bare exit-0 | driver-diagnostics | implemented |
+| `component.install-failed` | platform, component id, duration, stable error summary, requester id | the install failed, including a license-retry failure (exactly one `install-failed` per attempted install, never one per retry), **or** the installer exited 0 but the post-install re-scan could not confirm the component | driver-diagnostics | implemented |
+
+Drivers never touch the event bus directly (architecture rule 5): both drivers report these
+facts through their own `onDiagnostic` callback (mirroring the Android driver's pre-existing
+diagnostic pattern), and `src/daemon/main.ts` bridges that diagnostic to the bus at driver
+construction time — hence the `driver-diagnostics` emitter rather than `IosSimctlDriver` /
+`AndroidDriver`. A disk-preflight failure (`InsufficientDiskSpaceError`) happens before any
+diagnostic fires: no install was attempted, so nothing is reported as started or failed. See
+"Device requests" and "Fresh-state strategy" in [ARCHITECTURE.md](ARCHITECTURE.md) for how a
+missing component gets to this point, and `docs/known-pitfalls.md` for the requester-visible
+progress gap this leaves.
+
 ## System
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
