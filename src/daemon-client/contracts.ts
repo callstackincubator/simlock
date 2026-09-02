@@ -13,6 +13,11 @@ export interface RawLeaseGrant {
       readonly platform: "android" | "ios";
     };
   };
+  /**
+   * Scoping variables the holder needs to reach this device -- the device-set path on iOS,
+   * the adb server port on Android. Always present after parsing, `{}` at the least.
+   */
+  readonly environment: Readonly<Record<string, string>>;
   readonly lease: {
     readonly id: string;
     readonly mode: "detached" | "held";
@@ -60,6 +65,7 @@ export function parseRawLeaseGrant(value: unknown): RawLeaseGrant {
       driverDeviceId: device.driverDeviceId,
       spec: { model: spec.model, osVersion: spec.osVersion, platform: spec.platform },
     },
+    environment: parseStringRecord(grant.environment),
     lease: { id: lease.id, mode: lease.mode, ttlDeadline: lease.ttlDeadline },
     timing: {
       estimatedBootMs: timing.estimatedBootMs,
@@ -68,6 +74,45 @@ export function parseRawLeaseGrant(value: unknown): RawLeaseGrant {
       estimatedReadyMs: timing.estimatedReadyMs,
     },
   };
+}
+
+export interface RawPassthroughCommand {
+  readonly args: readonly string[];
+  readonly command: string;
+  readonly env: Readonly<Record<string, string>>;
+}
+
+/**
+ * Parses the `driver.passthrough` response. The command is spawned as-is, so the shape is
+ * checked before anything reaches a process: an argument list that is not entirely strings
+ * would otherwise stringify into whatever the tool made of it.
+ */
+export function parseRawPassthroughCommand(value: unknown): RawPassthroughCommand {
+  const payload = requireObject(value, "Daemon returned an invalid passthrough command");
+  if (
+    typeof payload.command !== "string" ||
+    payload.command === "" ||
+    !isStringArray(payload.args)
+  ) {
+    throw new Error("Daemon returned an invalid passthrough command");
+  }
+  return { args: [...payload.args], command: payload.command, env: parseStringRecord(payload.env) };
+}
+
+/**
+ * Lenient on purpose, and the one place that leniency is the right call: a daemon older
+ * than this CLI sends no `environment` with its grants at all, and a grant is still worth
+ * having without one. Refusing it would break the mixed pair over a field the client can
+ * do without, so a missing, non-object, or partly non-string value degrades to what it
+ * can carry rather than failing the whole response.
+ */
+function parseStringRecord(value: unknown): Readonly<Record<string, string>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
 }
 
 /** Parses the lease-lost push notification body pushed to the lease's holding connection. */

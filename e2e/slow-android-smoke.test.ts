@@ -85,7 +85,27 @@ describe.skipIf(!hasAndroidSdk)(
             { timeout: 240_000 },
           );
           expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
-          const grant = lease.json as { lease: string; udid: string };
+          const grant = lease.json as {
+            lease: string;
+            udid: string;
+            environment: Record<string, string>;
+          };
+
+          // Without this, a holder's `adb` talks to the shared server, which by design
+          // cannot see a Simlock emulator at all (ADR 0001, decision 7).
+          expect(grant.environment).toEqual({
+            ANDROID_ADB_SERVER_PORT: String(adbServerPort),
+          });
+
+          // `simlock adb` is the same scoping, made for the caller, and the refusals are
+          // what keep the wrapper from handing back the capability containment removed.
+          const wrapped = await env.cli(["adb", "devices"]);
+          expect(wrapped.code, `simlock adb failed: ${wrapped.stderr}`).toBe(0);
+          expect(wrapped.stdout).toContain("emulator-");
+
+          const refused = await env.cli(["adb", "kill-server"]);
+          expect(refused.code, "simlock adb kill-server must be refused, not run").toBe(2);
+          expect(refused.error?.code).toBe("USAGE");
 
           // The adb serial (e.g. "emulator-5554") is a driver-internal detail simlock
           // deliberately keeps opaque outside drivers/android (architecture.md #2) --

@@ -30,6 +30,20 @@ import {
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
+/** A minimal daemon lease response, for the tests that only care what the CLI prints. */
+const detachedGrant = {
+  device: {
+    driverDeviceId: "ABCD",
+    spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+  },
+  lease: { id: "lse_env", mode: "detached", ttlDeadline: 61_000 },
+  timing: {
+    estimatedBootMs: 0,
+    estimatedProvisionMs: 0,
+    estimatedReclaimMs: 0,
+    estimatedReadyMs: 0,
+  },
+};
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
 
@@ -634,7 +648,7 @@ describe("CLI boundary", () => {
       ),
     ).resolves.toBe(0);
     expect(detached.stdout).toBe(
-      '{"device":"iPhone 17 Pro","expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
+      '{"device":"iPhone 17 Pro","environment":{},"expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
     );
     expect(connection.closed).toBe(true);
 
@@ -651,6 +665,173 @@ describe("CLI boundary", () => {
       payload: { leaseId: "lse_9f2c", ttlMs: 60_000 },
       type: "lease.renew",
     });
+  });
+
+  it("prints shell export lines instead of the JSON grant under --export-env", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      ...detachedGrant,
+      // A device root is a user-configurable path, so it can hold a space or an
+      // apostrophe; both have to survive `eval "$(...)"` byte for byte.
+      environment: {
+        SIMLOCK_IOS_DEVICE_SET: "/Users/o'brien/My Sims/devices/ios",
+        ANDROID_ADB_SERVER_PORT: "5038",
+      },
+    });
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
+        output.environmentWith({ connect: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(
+      "export ANDROID_ADB_SERVER_PORT='5038'\n" +
+        "export SIMLOCK_IOS_DEVICE_SET='/Users/o'\\''brien/My Sims/devices/ios'\n",
+    );
+  });
+
+  it("prints nothing and succeeds when --export-env has no environment to export", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("lease.request", detachedGrant);
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
+        output.environmentWith({ connect: async () => connection }),
+      ),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe("");
+  });
+
+  it("keeps holding the lease after printing export lines in held mode", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      ...detachedGrant,
+      environment: { SIMLOCK_IOS_DEVICE_SET: "/devices/ios" },
+      lease: { id: "lse_held_env", mode: "held", ttlDeadline: 61_000 },
+    });
+    connection.response("lease.release", { leaseId: "lse_held_env" });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--export-env"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    expect(output.stdout).toBe("export SIMLOCK_IOS_DEVICE_SET='/devices/ios'\n");
+    signals.emit("SIGTERM");
+
+    await expect(run).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({
+      payload: { leaseId: "lse_held_env" },
+      type: "lease.release",
+    });
+  });
+
+  it.each([
+    ["simctl", ["install", "booted", "./MyApp.app"]],
+    ["adb", ["shell", "input", "tap", "100", "200"]],
+  ])("asks the daemon to scope a %s passthrough and runs it locally", async (tool, args) => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("driver.passthrough", {
+      args: ["-P", "5038", ...args],
+      command: "/sdk/adb",
+      env: { ANDROID_ADB_SERVER_PORT: "5038" },
+    });
+    const runPassthrough = vi.fn(async () => 0);
+
+    await expect(
+      runCli(
+        [tool, ...args],
+        output.environmentWith({ connect: async () => connection, runPassthrough }),
+      ),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({
+      payload: { args, tool },
+      type: "driver.passthrough",
+    });
+    expect(runPassthrough).toHaveBeenCalledWith({
+      args: ["-P", "5038", ...args],
+      command: "/sdk/adb",
+      env: { ANDROID_ADB_SERVER_PORT: "5038" },
+    });
+    expect(output.stdout).toBe("");
+  });
+
+  it("propagates the passthrough's own exit code rather than reporting success", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("driver.passthrough", { args: ["devices"], command: "adb", env: {} });
+
+    await expect(
+      runCli(
+        ["adb", "devices"],
+        output.environmentWith({
+          connect: async () => connection,
+          runPassthrough: async () => 42,
+        }),
+      ),
+    ).resolves.toBe(42);
+  });
+
+  it("renders a driver's refusal as a USAGE error, not as a daemon failure", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response(
+      "driver.passthrough",
+      new DaemonClientError(
+        "PASSTHROUGH_REFUSED",
+        "Refusing `simlock simctl delete`: use `simlock release` or `simlock cleanup` instead.",
+      ),
+    );
+    const runPassthrough = vi.fn(async () => 0);
+
+    await expect(
+      runCli(
+        ["simctl", "delete", "ABCD"],
+        output.environmentWith({ connect: async () => connection, runPassthrough }),
+      ),
+    ).resolves.toBe(2);
+    expect(runPassthrough).not.toHaveBeenCalled();
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: {
+        code: "USAGE",
+        message: expect.stringContaining("simlock release"),
+      },
+    });
+  });
+
+  it("passes a passthrough's own --help through to the tool rather than intercepting it", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("driver.passthrough", { args: ["--help"], command: "adb", env: {} });
+
+    await expect(
+      runCli(
+        ["adb", "--help"],
+        output.environmentWith({
+          connect: async () => connection,
+          runPassthrough: async () => 0,
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({
+      payload: { args: ["--help"], tool: "adb" },
+      type: "driver.passthrough",
+    });
+  });
+
+  it("lists both tool passthroughs in root help", async () => {
+    const output = outputCapture();
+
+    await expect(runCli([], output.environment)).resolves.toBe(0);
+    expect(output.stdout).toContain("simctl <args...>");
+    expect(output.stdout).toContain("adb <args...>");
   });
 
   it("keeps status JSON stable", async () => {

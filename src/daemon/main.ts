@@ -179,6 +179,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     }),
     leases: leaseEngine,
     logger: logger.child("server"),
+    passthrough: leaseEngine,
     queue: leaseEngine,
     reaper,
     nuke,

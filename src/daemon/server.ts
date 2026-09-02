@@ -18,12 +18,15 @@ import {
   type DriverRejection,
   type LeaseHealthMonitor,
   type Nuke,
+  PassthroughRefusedError,
   UnknownLeaseError,
+  UnknownPassthroughToolError,
 } from "../core/index.js";
 import type {
   CapacityReader,
   CatalogReader,
   LeaseCommands,
+  PassthroughResolver,
   QueueControl,
 } from "../core/lease-ports.js";
 import type { Clock, IpcConnection, Logger, TimerHandle } from "../ports/index.js";
@@ -73,6 +76,8 @@ export interface DaemonServerOptions {
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor;
   readonly nuke?: Nuke;
+  /** Builds the scoped command behind `simlock simctl` / `simlock adb`; absent in tests that never use them. */
+  readonly passthrough?: PassthroughResolver;
   readonly registry: Registry;
   readonly version: string;
   /**
@@ -561,6 +566,18 @@ export class DaemonServer {
         connection.unsubscribeEvents?.();
         connection.unsubscribeEvents = undefined;
         return { subscribed: false };
+      case "driver.passthrough": {
+        const payload = objectPayload(frame.payload);
+        if (this.options.passthrough === undefined)
+          throw new Error("Tool passthrough is unavailable");
+        // Resolution only: the daemon never runs the command. Spawning it here would
+        // attach a user's interactive `adb shell` to the daemon's stdio, and the CLI is
+        // the process that actually has a terminal.
+        return this.options.passthrough.passthrough(
+          requiredString(payload, "tool"),
+          requiredStringArray(payload, "args"),
+        );
+      }
       case "config.get":
         return this.options.config;
       case "daemon.stop":
@@ -941,6 +958,14 @@ function requiredPlatform(payload: Record<string, unknown>): "ios" | "android" {
   return platform;
 }
 
+function requiredStringArray(payload: Record<string, unknown>, key: string): readonly string[] {
+  const value = payload[key];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new ProtocolError("BAD_REQUEST", `Missing required string array: ${key}`);
+  }
+  return value as readonly string[];
+}
+
 function optionalPlatform(payload: Record<string, unknown>): "ios" | "android" | undefined {
   if (payload.platform === undefined) {
     return undefined;
@@ -973,6 +998,16 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";
+  }
+  // Its own code rather than BAD_REQUEST: the request was well formed, and the CLI turns
+  // this one into the `USAGE` line `docs/CLI.md` promises for a refused verb.
+  if (error instanceof PassthroughRefusedError) {
+    return "PASSTHROUGH_REFUSED";
+  }
+  // A tool no driver claims is the client naming something that does not exist here --
+  // `simlock adb` on a host with no Android SDK reaches exactly this.
+  if (error instanceof UnknownPassthroughToolError) {
+    return "BAD_REQUEST";
   }
   if (error instanceof StartupFailedError) {
     return "DAEMON_STARTUP_FAILED";

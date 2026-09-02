@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Driver } from "../../core/driver.js";
-import { OWNED_ROOT_MARKER_FILE, OwnedRootError } from "../../core/index.js";
+import {
+  OWNED_ROOT_MARKER_FILE,
+  OwnedRootError,
+  PassthroughRefusedError,
+} from "../../core/index.js";
 import {
   FakeClock,
   FakeProcessSupervisor,
@@ -963,6 +967,50 @@ describe("AndroidDriver.create", () => {
     expect(runner.calls[0]?.options).toEqual({
       env: { ...scopedEnv, ANDROID_ADB_SERVER_PORT: "5199" },
     });
+  });
+
+  it("points an adb passthrough at Simlock's own server, which is the only one that sees it", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    expect(driver.passthrough(["shell", "input", "tap", "100", "200"])).toEqual({
+      args: ["-P", String(adbServerPort), "shell", "input", "tap", "100", "200"],
+      command: binaries.adb,
+      env: { ANDROID_ADB_SERVER_PORT: String(adbServerPort) },
+    });
+  });
+
+  it("refuses kill-server, which would detach every leased emulator at once", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["kill-server"])).toThrow(PassthroughRefusedError);
+    expect(() => driver.passthrough(["kill-server"])).toThrow(/simlock release/);
+  });
+
+  it("refuses an emu kill pair even behind the -s serial that targets a device", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["-s", "emulator-5586", "emu", "kill"])).toThrow(
+      PassthroughRefusedError,
+    );
+    expect(() => driver.passthrough(["-s", "emulator-5586", "emu", "kill"])).toThrow(
+      /simlock cleanup/,
+    );
+  });
+
+  it("proxies the emu subcommands that do not stop a device", async () => {
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    expect(driver.passthrough(["emu", "avd", "name"]).args).toEqual([
+      "-P",
+      String(adbServerPort),
+      "emu",
+      "avd",
+      "name",
+    ]);
   });
 
   it("stops the adb server it adopted when the daemon disposes of it", async () => {

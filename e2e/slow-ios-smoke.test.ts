@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { withDaemon } from "./helpers/index.js";
+import type { TestEnv } from "./helpers/env.js";
 import { waitFor } from "./helpers/wait.js";
 
 const execFileAsync = promisify(execFile);
@@ -97,6 +98,21 @@ async function sweepStaleDeviceSets(): Promise<void> {
 
 // This lane needs the real simctl toolchain, hence darwin-only and gated on an
 // installed runtime -- it never installs one itself (no --allow-download).
+/**
+ * `simlock simctl` against a real simctl, which is the only way to know the wrapper
+ * resolves a UDID a bare simctl cannot see -- and that the lifecycle verbs it must not
+ * proxy come back as a usage error instead of destroying the leased device.
+ */
+async function expectSimctlPassthrough(env: TestEnv, udid: string): Promise<void> {
+  const wrapped = await env.cli(["simctl", "list", "devices", "-j"]);
+  expect(wrapped.code, `simlock simctl failed: ${wrapped.stderr}`).toBe(0);
+  expect(wrapped.stdout).toContain(udid);
+
+  const refused = await env.cli(["simctl", "delete", udid]);
+  expect(refused.code, "simlock simctl delete must be refused, not run").toBe(2);
+  expect(refused.error).toMatchObject({ code: "USAGE" });
+}
+
 describe.skipIf(process.platform !== "darwin")(
   "iOS smoke (real simctl)",
   { tags: ["slow", "ios"] },
@@ -149,7 +165,18 @@ describe.skipIf(process.platform !== "darwin")(
             { timeout: 120_000 },
           );
           expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
-          const grant = lease.json as { lease: string; udid: string; device: string };
+          const grant = lease.json as {
+            lease: string;
+            udid: string;
+            device: string;
+            environment: Record<string, string>;
+          };
+
+          // The grant has to say how to reach the device, because nothing else does: the
+          // UDID below resolves to nothing without this path (ADR 0001, decision 7).
+          expect(grant.environment).toEqual({ SIMLOCK_IOS_DEVICE_SET: deviceSet });
+
+          await expectSimctlPassthrough(env, grant.udid);
 
           const booted = await setDevices(deviceSet);
           const bootedDevice = booted.find((device) => device.udid === grant.udid);

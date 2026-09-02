@@ -12,6 +12,8 @@ import {
   ensureOwnedRoot,
   type ObservedDevice,
   OwnedRootError,
+  type PassthroughCommand,
+  PassthroughRefusedError,
   type ObservedRunState,
   RuntimeMissingError,
   UnknownModelError,
@@ -40,6 +42,14 @@ const COLD_BOOT_ESTIMATE_MS = 60_000;
 // at either clean level, so this is the only reclaim number the driver has.
 const ERASE_ESTIMATE_MS = 34_000;
 const MARK_FILE_NAME = "simlock-mark.json";
+/**
+ * Verbs `simlock simctl` will not proxy. Every one of them changes a device's lifecycle,
+ * which the registry -- not `simctl` -- is the record of: a device created here has no
+ * registry entry and reads as an orphan, and one erased or deleted under a live lease
+ * reads as tampering on the next reconcile. Injecting `--set` for them would hand back
+ * exactly the capability the device set exists to take away (ADR 0001, decision 7).
+ */
+const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
 
 interface IosDriverData {
   readonly deviceTypeId: string;
@@ -129,7 +139,6 @@ export class IosSimctlDriver implements Driver {
     return new IosSimctlDriver(options, deviceRoot);
   }
 
-  // fallow-ignore-next-line unused-class-member -- Driver.deviceRoot contract; read by doctor --purge-orphans to say which root an orphan came from.
   get deviceRoot(): string {
     return this.#deviceRoot;
   }
@@ -301,9 +310,32 @@ export class IosSimctlDriver implements Driver {
    * custom set a UDID resolves to nothing without it. `docs/CLI.md` publishes the variable
    * name, and `simlock simctl` reads it back.
    */
-  // fallow-ignore-next-line unused-class-member -- Driver.leaseEnvironment contract; read by the lease path when it builds a grant.
   leaseEnvironment(): Readonly<Record<string, string>> {
     return { SIMLOCK_IOS_DEVICE_SET: this.#deviceRoot };
+  }
+
+  readonly passthroughTool = "simctl";
+
+  /**
+   * `xcrun simctl --set <root> <args...>`: the same insertion `#invokeSimctl` makes, for a
+   * command the caller runs itself. The refusal looks at the first argument that is not a
+   * flag, which is where a subcommand sits in every documented `simctl` invocation. That is
+   * an accident boundary and not a security one, exactly like the device set it guards
+   * (ADR 0001, "Not a security boundary"): someone who hand-writes a leading global flag
+   * that takes a value can slide a verb past it, and someone who wants to can simply run
+   * `xcrun simctl --set` themselves.
+   */
+  passthrough(args: readonly string[]): PassthroughCommand {
+    const verb = args.find((argument) => !argument.startsWith("-"));
+    if (verb !== undefined && REFUSED_SIMCTL_VERBS.has(verb)) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock simctl ${verb}\`: it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. Use \`simlock release\` (which reclaims the device for you) or \`simlock cleanup\` instead.`,
+      );
+    }
+    // No environment: on iOS the device set only ever reaches simctl on the command line
+    // (ADR 0001 records that every candidate variable was tried and ignored).
+    return { args: ["simctl", "--set", this.#deviceRoot, ...args], command: "xcrun", env: {} };
   }
 
   /** CoreSimulator lays a set out as `<set>/<UDID>`, so no subprocess can tell us more. */

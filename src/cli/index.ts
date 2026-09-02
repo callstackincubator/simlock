@@ -23,6 +23,8 @@ import {
   parseRawDeviceUnhealthy,
   parseRawLeaseGrant,
   parseRawLeaseLost,
+  parseRawPassthroughCommand,
+  type RawPassthroughCommand,
 } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
@@ -33,6 +35,8 @@ const USAGE = `Usage: simlock <command> [options]
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config
+  simctl <args...>            Run xcrun simctl against Simlock's iOS device set
+  adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
 Run 'simlock <command> --help' for command usage.`;
 
@@ -43,6 +47,13 @@ Run 'simlock <command> --help' for command usage.`;
  * its own lease.
  */
 const LEASE_LOST_EXIT_CODE = 14;
+
+/**
+ * The daemon's answer when a driver refuses to proxy a verb. It is a usage mistake, not a
+ * daemon fault, so the CLI re-raises it as one and the caller sees the `USAGE` / exit 2
+ * contract `docs/CLI.md` documents for a refused passthrough.
+ */
+const PASSTHROUGH_REFUSED_CODE = "PASSTHROUGH_REFUSED";
 
 const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   BAD_FRAME: 2,
@@ -101,6 +112,12 @@ export interface CliEnvironment {
   readonly stderr: Output;
   readonly stdout: Output;
   readonly confirm?: (question: string) => Promise<boolean>;
+  /**
+   * Runs a daemon-resolved passthrough command and resolves with its exit code. A hook
+   * rather than a direct spawn so the `simctl` / `adb` wrappers are testable without a
+   * child process, the same way every other external effect here is injected.
+   */
+  readonly runPassthrough?: (command: RawPassthroughCommand) => Promise<number>;
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
 }
 
@@ -153,6 +170,7 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
     stderr: process.stderr,
     stdout: process.stdout,
     confirm: confirmTerminal,
+    runPassthrough: spawnPassthrough,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -196,6 +214,11 @@ export async function runCli(
         return await runDaemon(argv.slice(1), environment);
       case "config":
         return await runConfig(argv.slice(1), environment);
+      case "simctl":
+      case "adb":
+        // Every argument after the tool name is the tool's, verbatim -- including `--help`,
+        // which belongs to `simctl`/`adb` and not to Simlock. `simlock --help` lists these.
+        return await runPassthrough(argv[0], argv.slice(1), environment);
       case "mcp":
         return await runMcp(argv.slice(1), environment);
       default:
@@ -224,6 +247,31 @@ function cliErrorCode(error: unknown): string {
   if (error instanceof UsageError) return "USAGE";
   if (error instanceof DaemonClientError) return error.code;
   return "INTERNAL";
+}
+
+/**
+ * Asks the daemon which command reaches Simlock's devices for this tool, then runs it here.
+ * The split is architecture rule 8 in one function: the daemon owns the scoping (it is the
+ * process that knows which root and which adb port), and the CLI owns the terminal, so an
+ * interactive `adb shell` gets a tty and its exit code travels back to the caller's shell.
+ */
+async function runPassthrough(
+  tool: string,
+  args: readonly string[],
+  environment: CliEnvironment,
+): Promise<number> {
+  const run = environment.runPassthrough;
+  if (run === undefined) throw new Error("Tool passthrough is unavailable");
+  let response: unknown;
+  try {
+    response = await requestOnce(environment, "driver.passthrough", { args, tool });
+  } catch (error: unknown) {
+    if (error instanceof DaemonClientError && error.code === PASSTHROUGH_REFUSED_CODE) {
+      throw new UsageError(error.message);
+    }
+    throw error;
+  }
+  return run(parseRawPassthroughCommand(response));
 }
 
 async function runMcp(argv: readonly string[], environment: CliEnvironment): Promise<number> {
@@ -274,6 +322,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     "bind-pid": { type: "string" },
     detach: { type: "boolean" },
     device: { type: "string" },
+    "export-env": { type: "boolean" },
     help: { type: "boolean", short: "h" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
@@ -284,7 +333,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--allow-download] [--bind-pid <pid>]\n",
+        "                     [--allow-download] [--export-env] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -362,7 +411,13 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
     const result = leaseResult(response);
-    environment.stdout.write(`${JSON.stringify(result)}\n`);
+    // Held mode still holds after this line, whichever shape it took: `--export-env` only
+    // changes what stdout carries, never how long the lease lives.
+    environment.stdout.write(
+      values["export-env"] === true
+        ? exportEnvLines(result.environment)
+        : `${JSON.stringify(result)}\n`,
+    );
     if (detached || termination === undefined) return 0;
     await Promise.race([termination.settled, leaseLostSignal]);
     if (leaseLost) {
@@ -698,13 +753,32 @@ function commandArgs(
   }
 }
 
-function leaseResult(value: unknown): Record<string, unknown> & { readonly lease: string } {
+/**
+ * Shell `export` lines for `eval "$(simlock lease ... --export-env)"`. Single quotes because
+ * they are the only shell quoting that takes every byte literally, and `'\''` is the one way
+ * to get a literal quote back inside them -- a device-set path is a user-configurable path
+ * and may hold a space or an apostrophe. Sorted so repeated runs produce identical output.
+ */
+function exportEnvLines(environment: Readonly<Record<string, string>>): string {
+  return Object.entries(environment)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `export ${key}='${value.replaceAll("'", "'\\''")}'\n`)
+    .join("");
+}
+
+function leaseResult(value: unknown): Record<string, unknown> & {
+  readonly environment: Readonly<Record<string, string>>;
+  readonly lease: string;
+} {
   const grant = parseRawLeaseGrant(value);
   return {
     // Optional: undefined only for a device leased straight out of a pre-address `state.json`
     // without ever rebooting under this daemon -- see `DeviceRecord.address` in domain.ts.
     ...(grant.device.address === undefined ? {} : { address: grant.device.address }),
     device: grant.device.spec.model,
+    // Always present, `{}` at the least: an agent that reads it unconditionally should
+    // never have to distinguish "no scoping needed" from "an older daemon said nothing".
+    environment: grant.environment,
     expires_at_ms: grant.lease.ttlDeadline,
     lease: grant.lease.id,
     os: grant.device.spec.osVersion,
@@ -979,6 +1053,31 @@ function waitForTermination(
   });
   return { dispose: () => detach(), settled };
 }
+/**
+ * Inherited stdio, so a passthrough behaves exactly as the bare tool would: `adb shell`
+ * stays interactive, `simctl io ... screenshot` writes where it was told to, and nothing
+ * is buffered through this process. The scoped environment is layered over the CLI's own
+ * rather than replacing it -- it carries only the scoping keys, and a tool spawned without
+ * `PATH` or `ANDROID_HOME` would not find the SDK the daemon just pointed it at.
+ */
+async function spawnPassthrough(command: RawPassthroughCommand): Promise<number> {
+  const { spawn } = await import("node:child_process");
+  const { constants } = await import("node:os");
+  const child = spawn(command.command, [...command.args], {
+    env: { ...process.env, ...command.env },
+    stdio: "inherit",
+  });
+  return new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      // A child killed by a signal has no exit code; report it the way a shell does, so a
+      // passthrough interrupted with ^C is distinguishable from one that simply failed.
+      if (code !== null) resolve(code);
+      else resolve(signal === null ? 1 : 128 + (constants.signals[signal] ?? 0));
+    });
+  });
+}
+
 async function confirmTerminal(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
   const { createInterface } = await import("node:readline/promises");

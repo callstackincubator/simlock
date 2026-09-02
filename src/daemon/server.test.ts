@@ -11,6 +11,7 @@ import {
   CleanupReaper,
   FakeDriver,
   LeaseEngine,
+  PassthroughRefusedError,
   Registry,
 } from "../core/index.js";
 import {
@@ -342,6 +343,69 @@ describe("DaemonServer", () => {
       payload: { platforms: [] },
     });
     await expect(client.request("catalog.get", { platform: "foo" })).resolves.toMatchObject({
+      error: { code: "BAD_REQUEST" },
+      ok: false,
+    });
+  });
+
+  it("resolves a passthrough to its driver's command without running it here", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: (args) => ({
+        args: ["simctl", "--set", "/root", ...args],
+        command: "xcrun",
+        env: {},
+      }),
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("driver.passthrough", { args: ["list", "devices"], tool: "simctl" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { args: ["simctl", "--set", "/root", "list", "devices"], command: "xcrun" },
+    });
+  });
+
+  it("gives a refused verb its own code, so the CLI can render it as a usage error", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: () => {
+        throw new PassthroughRefusedError("simctl", "Refusing it; use `simlock release` instead.");
+      },
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("driver.passthrough", { args: ["delete", "ABCD"], tool: "simctl" }),
+    ).resolves.toMatchObject({
+      error: { code: "PASSTHROUGH_REFUSED", message: expect.stringContaining("simlock release") },
+      ok: false,
+    });
+  });
+
+  it.each([
+    [{ args: ["devices"], tool: "adb" }],
+    [{ args: "list", tool: "simctl" }],
+    [{ args: ["list"] }],
+  ])("rejects a passthrough no driver can serve as given: %s", async (payload) => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(client.request("driver.passthrough", payload)).resolves.toMatchObject({
       error: { code: "BAD_REQUEST" },
       ok: false,
     });
@@ -1296,6 +1360,7 @@ async function createHarness(
     }),
     leases: engine,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    passthrough: engine,
     queue: engine,
     reaper,
     registry,

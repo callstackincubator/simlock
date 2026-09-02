@@ -77,7 +77,7 @@ and booting, then — in held mode — keeps running to hold the lease.
 ```
 simlock lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
-              [--allow-download] [--bind-pid <pid>]
+              [--allow-download] [--export-env] [--bind-pid <pid>]
 ```
 
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime

@@ -12,6 +12,8 @@ import {
   type DriverReality,
   type ObservedDevice,
   type ObservedMark,
+  type PassthroughCommand,
+  PassthroughRefusedError,
   type ReclaimResult,
   RuntimeMissingError,
   UnknownModelError,
@@ -145,6 +147,17 @@ interface DeviceProfile {
   readonly name: string;
 }
 
+/**
+ * Verbs `simlock adb` will not proxy, both matched anywhere in the arguments rather than
+ * only in first position: `-s <serial> emu kill` is the same command with a target in
+ * front of it, and a positional scan is the only rule that catches both spellings without
+ * this module having to parse adb's own option grammar. `kill-server` would detach every
+ * leased emulator at once -- an agent's most reflexive troubleshooting step -- and
+ * `emu kill` stops a device the registry still believes is running (ADR 0001, decision 7).
+ */
+const REFUSED_ADB_VERB = "kill-server";
+const REFUSED_ADB_PAIR = ["emu", "kill"] as const;
+
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
 export class AndroidDriver implements Driver {
@@ -249,6 +262,43 @@ export class AndroidDriver implements Driver {
     // `adb` reads this variable natively, so a lease holder needs nothing else to reach the
     // device: without it their `adb` talks to the shared server, which cannot see it.
     return { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) };
+  }
+
+  readonly passthroughTool = "adb";
+
+  /**
+   * `adb -P <port> <args...>` against Simlock's own server, which is the only one that can
+   * see a Simlock emulator at all. `ANDROID_ADB_SERVER_PORT` rides along as well so any adb
+   * that re-execs itself stays on the same server; it says the same thing `-P` does, and
+   * saying it twice costs nothing.
+   */
+  passthrough(args: readonly string[]): PassthroughCommand {
+    this.#assertProxyable(args);
+    return {
+      args: ["-P", String(this.#adbServerPort), ...args],
+      command: this.#sdk.adb,
+      env: { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) },
+    };
+  }
+
+  #assertProxyable(args: readonly string[]): void {
+    if (args.includes(REFUSED_ADB_VERB)) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock adb ${REFUSED_ADB_VERB}\`: it would detach every leased emulator at once. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
+      );
+    }
+    if (
+      args.some(
+        (argument, index) =>
+          argument === REFUSED_ADB_PAIR[0] && args[index + 1] === REFUSED_ADB_PAIR[1],
+      )
+    ) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        "Refusing `simlock adb emu kill`: it stops a device Simlock still believes is running, which reports as drift on the next reconcile. Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.",
+      );
+    }
   }
 
   /**
