@@ -39,6 +39,18 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.crash-detected` | device id, lease id, platform, observed | a leased device was observed `stopped` for `health.stableObservations` consecutive ticks | LeaseHealthMonitor | implemented |
 | `device.recovered` | device id, lease id, attempts, duration | a crashed leased device was rebooted under its existing lease and passed readiness | LeaseHealthMonitor | implemented |
 | `device.recovery-failed` | device id, lease id, attempts, reason, error | recovery could not restore a leased device (absent from driver reality, provenance drift, or attempts exhausted) and its lease was released | LeaseHealthMonitor | implemented |
+| `device.slimmed` | device id, address, platform (ios), categories, label count, duration, signature, unknown labels | *after* the post-slim reboot's `bootstatus` succeeded -- i.e. once the `launchctl disable` overrides applied via `simctl spawn` are actually in force on the simulator | driver-diagnostics | implemented |
+
+`device.slimmed` reports a fact committed to the *simulator's own launchd database*, not to the
+Simlock registry (ADR 0002, `docs/adr/0002-opt-in-slim-ios-simulators.md`) -- so events rule 3 ("emit post-commit
+only") is satisfied by waiting for that commit to become observable, not by waiting on a registry
+write: the driver applies the `launchctl disable` overrides, reboots the device, and only fires
+`onSlimmed` once the second `bootstatus` has passed, proving the overrides survived the reboot and
+are actually in force. The registry's own `device.ready` for that same boot is a separate,
+later event, emitted through the normal readiness path once the driver call returns. A *skipped*
+slim -- the runtime is older than iOS 18.5, its runtime id didn't parse, or the disable pass itself
+failed -- is deliberately not an event: it isn't a fact worth putting in front of every event-bus
+consumer, just operator diagnostics, so it's a `warn` log line (`daemon.driver-discovery`) instead.
 
 ## Components
 

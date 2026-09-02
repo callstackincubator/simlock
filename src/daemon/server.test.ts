@@ -1238,6 +1238,47 @@ describe("DaemonServer download policy", () => {
   });
 });
 
+describe("DaemonServer full request flag", () => {
+  it("parses request.full: true into a spec stamped full: true", async () => {
+    // Stamping `full` is gated on the resolving driver declaring `reducesFeatures` -- without it
+    // there is nothing to opt out of, so the flag would (correctly) leave the spec untouched and
+    // this test would be asserting the wrong half of that contract.
+    const harness = await createHarness({ reducesFeatures: true });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const grant = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { full: true, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(grant.ok).toBe(true);
+    expect(
+      (grant.payload as { device: { spec: Record<string, unknown> } }).device.spec,
+    ).toMatchObject({ full: true });
+    await client.close();
+  });
+
+  it("omits full from the spec when the request does not ask for it", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const grant = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+
+    expect(grant.ok).toBe(true);
+    expect(
+      (grant.payload as { device: { spec: Record<string, unknown> } }).device.spec,
+    ).not.toHaveProperty("full");
+    await client.close();
+  });
+});
+
 describe("DaemonServer error code mapping", () => {
   it("maps InsufficientDiskSpaceError to INSUFFICIENT_DISK_SPACE", async () => {
     const clock = new FakeClock(1_000);
@@ -1296,6 +1337,8 @@ async function createHarness(
     readonly downloads?: Partial<Config["downloads"]>;
     readonly driver?: FakeDriver;
     readonly logger?: Logger;
+    /** Passed to the default `FakeDriver`; makes a `--full` request meaningful (see `Driver.reducesFeatures`). */
+    readonly reducesFeatures?: boolean;
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
@@ -1325,6 +1368,9 @@ async function createHarness(
       ...(options.estimateMs === undefined ? {} : { estimateMs: options.estimateMs }),
       ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
       platform: "ios",
+      ...(options.reducesFeatures === undefined
+        ? {}
+        : { reducesFeatures: options.reducesFeatures }),
     });
   const config = testConfig(options.lease, options.downloads);
   const engine = new LeaseEngine({
@@ -1495,6 +1541,7 @@ function testConfig(
       ...downloadsOverrides,
     },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       detachedTtlMs: 60_000,

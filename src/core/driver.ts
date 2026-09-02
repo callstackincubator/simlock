@@ -1,10 +1,17 @@
 import type { Filesystem } from "../ports/index.js";
-import type { DeviceSpec, Platform } from "./domain.js";
+import type { DeviceSpec, DeviceTransitionUpdate, Platform } from "./domain.js";
 
 export interface DeviceRequest {
   readonly platform: Platform;
   readonly model: string;
   readonly osVersion?: string;
+  /**
+   * Platform-neutral request for a device with no driver-side resource reduction -- the
+   * iOS driver happens to implement this as "do not slim"; other drivers ignore it. Never
+   * read by the core beyond stamping it onto the resolved spec (see `DeviceSpec.full` and
+   * the comment where `LeaseAcquisitionCoordinator` does that stamping).
+   */
+  readonly full?: boolean;
 }
 
 export interface DriverDevice {
@@ -18,6 +25,40 @@ export interface DriverDevice {
    * across a boot -- see `Driver.makeReady`.
    */
   readonly address: string;
+  /**
+   * What the driver actually produced for this device, as of its last `makeReady` --
+   * platform-neutral so the core can report feature loss without reading a driver's opaque
+   * `driverData`. `"reduced"` means the driver cut the device's feature set (the iOS driver's
+   * slim mode); `"full"` means it did not. `undefined` means the driver does not reduce
+   * anything at all -- today's behaviour, and every non-iOS driver.
+   */
+  readonly featureProfile?: "full" | "reduced";
+}
+
+/**
+ * Builds a `DeviceTransitionUpdate` from a driver's freshly re-read device, always including
+ * `featureProfile` -- even when the driver returned `undefined`. `transition`'s
+ * `{...record, ...update}` spread only clears a stale value when the update object *has* the
+ * key; omitting it (as a conditional spread like `...(fp === undefined ? {} : { featureProfile:
+ * fp })` does) would let a previous `"reduced"` survive a re-boot where slimming wasn't applied
+ * this time, reporting `slim: true` on a device that is actually full-fat.
+ * `DeviceTransitionUpdate["featureProfile"]` itself can't say "present but undefined" under
+ * `exactOptionalPropertyTypes`, so the object is built with the wider type and cast at the
+ * boundary -- the explicit `undefined` here is a deliberate runtime value, not a type-checking
+ * gap. Shared by every readiness path that commits a driver's post-`makeReady` result
+ * (`ManagedDeviceLifecycle`, `WarmPoolCoordinator`) so they can't drift on this.
+ */
+export function readyTransitionUpdate(readyDevice: DriverDevice): DeviceTransitionUpdate {
+  const update: {
+    readonly address: string;
+    readonly driverData: unknown;
+    readonly featureProfile: "full" | "reduced" | undefined;
+  } = {
+    address: readyDevice.address,
+    driverData: readyDevice.driverData,
+    featureProfile: readyDevice.featureProfile,
+  };
+  return update as DeviceTransitionUpdate;
 }
 
 /**
@@ -97,8 +138,30 @@ export interface DriverCatalogEntry {
   readonly defaultRuntime: string | undefined;
 }
 
+/**
+ * A configuration-level problem only the owning driver can see -- reported by `doctor`
+ * alongside its own drift findings (`src/core/doctor.ts`'s `driver-advisory` finding kind).
+ * Unlike drift, this is never something `--fix` acts on: it describes a standing condition of
+ * the driver's own configuration (e.g. a feature silently doing nothing given the installed
+ * runtimes), not a divergence between the registry and reality.
+ */
+export interface DriverAdvisory {
+  /** Short kebab-case identifier the driver owns; the core never interprets it. */
+  readonly code: string;
+  readonly message: string;
+}
+
 export interface Driver {
   readonly platform: Platform;
+  /**
+   * True when this driver may hand back devices with a reduced feature set (the iOS driver's
+   * slim mode, when actually enabled), so a caller's `full` request is meaningful and must not
+   * share a pool key with a normal one. Optional; a driver that never reduces anything -- the
+   * default, and every non-iOS driver -- omits it, equivalent to `false`. Read once per spec
+   * resolution by `LeaseAcquisitionCoordinator`, which is the only place `DeviceSpec.full` gets
+   * stamped onto a resolved spec.
+   */
+  readonly reducesFeatures?: boolean;
   resolveSpec(
     request: DeviceRequest,
     options: {
@@ -119,7 +182,21 @@ export interface Driver {
    * boot, so a device coming back from `shutdown` (or a driver restart) can land on a different
    * one. `deviceId` and the registry-relevant parts of `driverData` do not change.
    */
-  makeReady(device: DriverDevice): Promise<DriverDevice>;
+  makeReady(
+    device: DriverDevice,
+    options?: {
+      /**
+       * What this readiness call is for. `"prepare"` (the default) may do work that changes
+       * the device's configuration -- a fresh boot, a driver's own opt-in configuration pass
+       * (the iOS driver's slim apply). `"recover"` is the one caller (`ManagedDeviceLifecycle.
+       * recoverLeased`, safety rule 2's narrow crash-recovery exception) that reboots a device
+       * that is still `leased`: it must do the minimum needed to get that device running again
+       * and must never change its configuration, so a driver treats `"recover"` as "boot only,
+       * do not apply anything new".
+       */
+      readonly purpose: "prepare" | "recover";
+    },
+  ): Promise<DriverDevice>;
   reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
@@ -131,6 +208,13 @@ export interface Driver {
   /** Read-only: must never trigger a runtime / system-image download. */
   listCatalog(): Promise<DriverCatalogEntry>;
   estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
+  /**
+   * Configuration-level problems only this driver can see -- reported by `doctor` alongside its
+   * drift findings. Read-only and side-effect free (same contract as `listCatalog`): it must
+   * never trigger a download, boot, or mutate anything. Optional: a driver with nothing to
+   * advise omits it.
+   */
+  advisories?(): Promise<readonly DriverAdvisory[]>;
 }
 
 export class RuntimeMissingError extends Error {

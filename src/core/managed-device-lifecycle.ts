@@ -5,7 +5,7 @@ import {
   type DeviceOperationClaim,
 } from "./device-operation-claims.js";
 import type { DeviceRecord, DeviceState, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
-import type { DriverDevice } from "./driver.js";
+import { readyTransitionUpdate, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
@@ -67,7 +67,6 @@ export class ManagedDeviceLifecycle {
     return this.#makeReady(target, "shutdown", claim);
   }
 
-  // fallow-ignore-next-line unused-class-member -- no production caller: superseded by readyProvisionedForLease, still covered by its own tests.
   async readyProvisioned(target: DeviceRecord): Promise<DeviceRecord | undefined> {
     return this.#makeReady(target, "provisioning");
   }
@@ -82,7 +81,6 @@ export class ManagedDeviceLifecycle {
   }
 
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */
-  // fallow-ignore-next-line unused-class-member -- reached through DeviceProvisioner's lifecycle port.
   async readyProvisionedForLease(target: DeviceRecord): Promise<ReadyDeviceHandoff | undefined> {
     return this.#makeReadyForLease(target, "provisioning");
   }
@@ -139,6 +137,13 @@ export class ManagedDeviceLifecycle {
    * device stays `leased` throughout: this performs no registry transition
    * and emits no event, deliberately -- the caller (a `LeaseHealthMonitor`)
    * owns deciding what happened and telling the holder.
+   *
+   * Calls `makeReady` with `{ purpose: "recover" }` (see `Driver.makeReady`), never the
+   * default: safety rule 2 permits this exception to reboot an already-provisioned device and
+   * nothing more, so a driver must not use this reboot to apply any configuration change (the
+   * iOS driver's slim pass) it would otherwise make on a normal `"prepare"` boot -- that would
+   * be a second, unannounced reboot and a configuration change under an active lease, which is
+   * exactly the broader privilege the rule says this exception does not grant.
    */
   // fallow-ignore-next-line unused-class-member -- called through LeaseHealthMonitor's lifecycle port.
   async recoverLeased(target: DeviceRecord, leaseId: string): Promise<DeviceRecord | undefined> {
@@ -155,7 +160,7 @@ export class ManagedDeviceLifecycle {
       // still using the address from its original grant.
       await this.catalog
         .get(claimed.device.spec.platform)
-        .makeReady(toDriverDevice(claimed.device));
+        .makeReady(toDriverDevice(claimed.device), { purpose: "recover" });
     } catch (error: unknown) {
       await this.#release(claimed);
       throw error;
@@ -237,7 +242,7 @@ export class ManagedDeviceLifecycle {
         event: "device.ready",
         payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
       },
-      { address: ready.address, driverData: ready.driverData },
+      readyTransitionUpdate(ready),
     );
   }
 
@@ -268,7 +273,7 @@ export class ManagedDeviceLifecycle {
           event: "device.ready",
           payload: { bootDuration: this.clock.now() - startedAt, deviceId: claimed.device.id },
         },
-        { address: ready.address, driverData: ready.driverData },
+        readyTransitionUpdate(ready),
       );
       if (device === undefined) {
         await this.#release(claimed);

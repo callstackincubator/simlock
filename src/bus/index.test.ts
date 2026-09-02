@@ -133,6 +133,7 @@ describe("EventBus", () => {
       | "device.quarantine-stranded"
       | "device.shutdown"
       | "device.deleted"
+      | "device.slimmed"
       | "component.install-started"
       | "component.installed"
       | "component.install-failed"

@@ -19,6 +19,7 @@ import {
   bridgeAndroidDriverDiagnostic,
   discoverDrivers,
   emitComponentInstallDiagnostic,
+  emitSlimDiagnostic,
   startDaemon,
   wireComponentInstallLogging,
   type StartDaemonOptions,
@@ -268,6 +269,43 @@ describe("component install diagnostic bridging", () => {
   });
 });
 
+describe("slim diagnostic bridging", () => {
+  it("emits device.slimmed with the driver-diagnostics module for a SlimmedFact", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = emitSlimDiagnostic(eventBus);
+
+    bridge({
+      address: "simlock-ios-1-address",
+      categories: ["siri", "spotlight"],
+      deviceId: "simlock-ios-1",
+      durationMs: 12_000,
+      labelCount: 170,
+      signature: "sig-abc123",
+      unknownLabels: ["com.apple.unknown-daemon"],
+    });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "device.slimmed",
+        module: "driver-diagnostics",
+        payload: {
+          address: "simlock-ios-1-address",
+          categories: ["siri", "spotlight"],
+          deviceId: "simlock-ios-1",
+          durationMs: 12_000,
+          labelCount: 170,
+          platform: "ios",
+          signature: "sig-abc123",
+          unknownLabels: ["com.apple.unknown-daemon"],
+        },
+      }),
+    ]);
+  });
+});
+
 describe("wireComponentInstallLogging", () => {
   it('writes a durable structured log line under logger.child("components") when component.installed fires', () => {
     const clock = new FakeClock(1_000);
@@ -339,6 +377,45 @@ describe("wireComponentInstallLogging", () => {
     );
 
     expect(sink.records).toEqual([]);
+  });
+
+  it('writes a durable structured log line under logger.child("slim") when device.slimmed fires', () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "device.slimmed",
+      {
+        address: "simlock-ios-1-address",
+        categories: ["siri", "spotlight"],
+        deviceId: "simlock-ios-1",
+        durationMs: 12_000,
+        labelCount: 170,
+        platform: "ios",
+        signature: "sig-abc123",
+        unknownLabels: [],
+      },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Device slimmed",
+        module: "daemon.slim",
+        fields: {
+          categories: ["siri", "spotlight"],
+          deviceId: "simlock-ios-1",
+          durationMs: 12_000,
+          labelCount: 170,
+          signature: "sig-abc123",
+          unknownLabels: [],
+        },
+      }),
+    );
   });
 });
 

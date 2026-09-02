@@ -43,6 +43,20 @@ export type DoctorFinding =
       readonly enteredAt: number;
       readonly ageMs: number;
       readonly thresholdMs: number;
+    }
+  | {
+      /**
+       * Configuration-level information from a single driver's `advisories()`, not drift:
+       * nothing here describes a divergence between the registry and observed reality, so
+       * `--fix` never acts on it (see `#applySafeFixes`) and it is excluded from the
+       * `doctor.reconciled` event's `driftFindings` payload (see the comment at that emit
+       * call) -- it stays in `DoctorReport.findings` (what `doctor.run` returns to a caller)
+       * only.
+       */
+      readonly kind: "driver-advisory";
+      readonly platform: Platform;
+      readonly code: string;
+      readonly message: string;
     };
 
 /**
@@ -113,7 +127,12 @@ export class Doctor {
     const findings: DoctorFinding[] = [];
 
     for (const device of snapshot.devices) {
-      const deviceFindings = registryDriftFindings(device, realDeviceKeys, observedDevices);
+      const deviceFindings = registryDriftFindings(
+        device,
+        realDeviceKeys,
+        observedDevices,
+        this.options.claims,
+      );
       findings.push(...deviceFindings);
       if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
         await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
@@ -137,14 +156,57 @@ export class Doctor {
     }
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
+    findings.push(...(await this.#collectAdvisories()));
 
     const report = { findings };
     if (fix) {
       await this.#applySafeFixes(findings);
     }
     this.#emitFindingEvents(findings);
-    this.options.eventBus.emit("doctor.reconciled", { driftFindings: findings }, "doctor");
+    this.options.eventBus.emit(
+      "doctor.reconciled",
+      {
+        // `driftFindings` is a stable payload contract (events rule 6: additive changes only)
+        // that has always meant "things `--fix` might correct" -- every finding kind so far.
+        // A `driver-advisory` is neither drift nor ever actionable by `--fix` (see
+        // `#applySafeFixes`), so folding it into this field would silently redefine what an
+        // existing consumer is entitled to assume about every entry in it. It stays available
+        // through `DoctorReport.findings` (what `doctor.run` returns to a caller) but is
+        // filtered out of the event payload.
+        driftFindings: findings.filter((finding) => finding.kind !== "driver-advisory"),
+      },
+      "doctor",
+    );
     return report;
+  }
+
+  /**
+   * `advisories()` is optional, read-only, best-effort diagnostic information a single driver
+   * reports about its own configuration -- unlike `listManaged` (whose failure today aborts the
+   * whole reconcile via the unhandled rejection in the `Promise.all` above; widening that
+   * tolerance is out of scope here), a driver with no `advisories()` or one that rejects simply
+   * contributes nothing rather than failing every other driver's findings along with it.
+   */
+  async #collectAdvisories(): Promise<DoctorFinding[]> {
+    const perDriver = await Promise.all(
+      this.options.drivers.map(async (driver): Promise<DoctorFinding[]> => {
+        if (driver.advisories === undefined) {
+          return [];
+        }
+        try {
+          const advisories = await driver.advisories();
+          return advisories.map((advisory) => ({
+            code: advisory.code,
+            kind: "driver-advisory" as const,
+            message: advisory.message,
+            platform: driver.platform,
+          }));
+        } catch {
+          return [];
+        }
+      }),
+    );
+    return perDriver.flat();
   }
 
   #emitFindingEvents(findings: readonly DoctorFinding[]): void {
@@ -186,29 +248,39 @@ export class Doctor {
 
   async #applySafeFixes(findings: readonly DoctorFinding[]): Promise<void> {
     for (const finding of findings) {
-      switch (finding.kind) {
-        case "registry-device-missing":
-          await this.#fixMissingDevice(finding.deviceId);
-          break;
-        case "orphan-device":
-        case "orphan-process":
-          // Registry-only destruction: unregistered reality is report-only.
-          break;
-        case "expired-live-lease":
-          if (this.options.leaseExpirer !== undefined) {
-            await this.options.leaseExpirer.expire(finding.leaseId);
-          }
-          break;
-        case "foreign-state-change":
-          await this.#fixForeignStateChange(finding);
-          break;
-        case "foreign-provenance-change":
-          // Report-only: re-marking destroys the evidence, and the device may be leased.
-          break;
-        case "stalled-transition":
-          await this.#fixStalledTransition(finding);
-          break;
-      }
+      await this.#applySafeFix(finding);
+    }
+  }
+
+  /** One finding's `--fix` action, split out of `#applySafeFixes` so the per-kind dispatch
+   * (already at the edge of this file's complexity budget with `driver-advisory` added) doesn't
+   * also have to carry the loop. */
+  async #applySafeFix(finding: DoctorFinding): Promise<void> {
+    switch (finding.kind) {
+      case "registry-device-missing":
+        await this.#fixMissingDevice(finding.deviceId);
+        break;
+      case "orphan-device":
+      case "orphan-process":
+        // Registry-only destruction: unregistered reality is report-only.
+        break;
+      case "expired-live-lease":
+        if (this.options.leaseExpirer !== undefined) {
+          await this.options.leaseExpirer.expire(finding.leaseId);
+        }
+        break;
+      case "foreign-state-change":
+        await this.#fixForeignStateChange(finding);
+        break;
+      case "foreign-provenance-change":
+        // Report-only: re-marking destroys the evidence, and the device may be leased.
+        break;
+      case "stalled-transition":
+        await this.#fixStalledTransition(finding);
+        break;
+      case "driver-advisory":
+        // Information, not drift: `--fix` never acts on a driver advisory.
+        break;
     }
   }
 
@@ -283,26 +355,64 @@ function registryDriftFindings(
   device: DeviceRecord,
   realDeviceKeys: ReadonlySet<string>,
   observedDevices: ReadonlyMap<string, ObservedDevice>,
+  claims?: Pick<DeviceOperationClaims, "isClaimed">,
 ): DoctorFinding[] {
   const findings: DoctorFinding[] = [];
   const deviceKey = key(device.spec.platform, device.driverDeviceId);
 
-  if (device.state !== "deleted" && !realDeviceKeys.has(deviceKey)) {
-    findings.push({
-      deviceId: device.id,
-      kind: "registry-device-missing",
-      platform: device.spec.platform,
-    });
+  const missing = missingDeviceFinding(device, deviceKey, realDeviceKeys);
+  if (missing !== undefined) {
+    findings.push(missing);
   }
 
   // `expected === undefined` means the registry is mid-transition (provisioning,
   // reclaiming, deleted). Simlock is acting on the device itself in those states,
   // including erasing it, so neither run state nor marks are compared.
+  //
+  // A device this daemon holds an operation claim on is excluded the same way, the same
+  // live-versus-orphaned test `stalledTransitionFinding` already applies (see its comment). A
+  // lease-path boot from `shutdown` runs `makeReady` while the committed record still says
+  // `shutdown` -- observed reality goes `running` before the transition that would update
+  // `expectedRunState` ever commits. Without this guard a concurrent `doctor --fix` reads that
+  // as foreign drift, "fixes" the record to `ready`, and the boot's own transition commit
+  // afterwards finds the record changed underneath it and silently drops its
+  // `address`/`driverData`/`featureProfile`, dropping the waiter. The claim is held for the
+  // whole boot, so it exactly brackets the window this needs to cover -- unlike
+  // `stalledTransitionFinding`, this applies regardless of `device.state`, since the record can
+  // be `shutdown`, `ready`, or `leased` while a claimed operation is in flight against it.
   const expected = expectedRunState(device.state);
   const observed = observedDevices.get(deviceKey);
-  if (expected === undefined || observed === undefined) {
-    return findings;
+  const claimed = claims?.isClaimed(device.id) === true;
+  if (expected !== undefined && observed !== undefined && !claimed) {
+    findings.push(...liveDriftFindings(device, expected, observed));
   }
+
+  return findings;
+}
+
+function missingDeviceFinding(
+  device: DeviceRecord,
+  deviceKey: string,
+  realDeviceKeys: ReadonlySet<string>,
+): DoctorFinding | undefined {
+  if (device.state === "deleted" || realDeviceKeys.has(deviceKey)) {
+    return undefined;
+  }
+  return { deviceId: device.id, kind: "registry-device-missing", platform: device.spec.platform };
+}
+
+/**
+ * Run-state and provenance drift for a device whose registry state expects a definite run
+ * state and that has an observed-reality match. Split out of `registryDriftFindings` so the
+ * mid-transition/claim guard there is one flat condition rather than threading through this
+ * logic's own branches.
+ */
+function liveDriftFindings(
+  device: DeviceRecord,
+  expected: "running" | "stopped",
+  observed: ObservedDevice,
+): DoctorFinding[] {
+  const findings: DoctorFinding[] = [];
 
   if (observed.runState !== "transitioning" && observed.runState !== expected) {
     findings.push({

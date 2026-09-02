@@ -31,6 +31,7 @@ import type { TokenIdentity } from "./token-store.js";
 import {
   buildLeasePayload,
   isTerminalStage,
+  type LeaseRequestInput,
   LeaseRequestTracker,
   type TrackedRequestView,
 } from "./tracker.js";
@@ -68,12 +69,33 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const leaseRequestBodySchema = z.object({
   allowDownload: z.boolean().optional(),
   device: z.string().min(1),
+  full: z.boolean().optional(),
   noWait: z.boolean().optional(),
   os: z.string().min(1).optional(),
   platform: z.enum(["ios", "android"]),
   timeoutMs: z.number().int().positive().optional(),
   ttlMs: z.number().int().positive().optional(),
 });
+
+/**
+ * Validated request body -> the tracker's own input shape. Every optional key is omitted rather
+ * than passed as `undefined` so a request that did not name a flag stays byte-identical to one
+ * from before that flag existed. `allowDownload` and `full` pass through unclamped, matching the
+ * socket daemon's handling of the same flags; if a config-level policy ever gates either there,
+ * this route must gate through the same helper.
+ */
+function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
+  return {
+    device: body.device,
+    platform: body.platform,
+    ...(body.os === undefined ? {} : { os: body.os }),
+    ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
+    ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
+    ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
+    ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
+    ...(body.full === undefined ? {} : { full: body.full }),
+  };
+}
 
 /** The gateway-owned subscriptions `createHttpApp` starts, attached to the returned app so a caller can dispose them on shutdown without this module exposing the tracker/notices instances themselves. */
 export interface HttpAppDisposable {
@@ -159,22 +181,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
         );
       }
 
-      // `allowDownload` passes through unclamped, matching the socket daemon's handling of the
-      // same flag; if a config-level download policy ever gates it there, this route must gate
-      // through the same helper.
-      const outcome = await tracker.submit(
-        identity,
-        {
-          device: body.device,
-          platform: body.platform,
-          ...(body.os === undefined ? {} : { os: body.os }),
-          ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
-          ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
-          ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
-          ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
-        },
-        idempotencyKey,
-      );
+      const outcome = await tracker.submit(identity, toLeaseRequestInput(body), idempotencyKey);
       if (outcome.kind === "rejected") {
         return errorResponse(c, outcome.error);
       }

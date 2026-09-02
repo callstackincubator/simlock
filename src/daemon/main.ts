@@ -20,7 +20,7 @@ import {
   type AndroidDriverDiagnostic,
 } from "../drivers/android/index.js";
 import type { ComponentInstallDiagnostic } from "../drivers/diagnostics.js";
-import { IosSimctlDriver } from "../drivers/ios/index.js";
+import { IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
 import { HttpGateway } from "../http/server.js";
 import { TokenStore } from "../http/token-store.js";
@@ -115,6 +115,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       idGenerator,
       logger,
       processRunner,
+      slim: config.ios.slim,
     }));
   const leaseEngine = new LeaseEngine({
     clock,
@@ -279,6 +280,16 @@ export interface DriverDiscoveryContext {
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
   readonly processRunner: ProcessRunner;
+  /**
+   * The iOS driver's opt-in slim mode (`ios.slim` in config). Never threaded into the Android
+   * driver -- slim is iOS-only (ADR 0002, out of scope: Android equivalent). Omitted or
+   * undefined leaves the driver's own default (today's full-fat behaviour) untouched.
+   */
+  readonly slim?: {
+    readonly enabled: boolean;
+    readonly categories?: readonly string[];
+    readonly bootTimeoutMs: number;
+  };
 }
 
 export async function discoverDrivers(options: DriverDiscoveryContext): Promise<Driver[]> {
@@ -302,7 +313,16 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
         filesystem: options.filesystem,
         idGenerator: options.idGenerator,
         onDiagnostic: emitComponentInstallDiagnostic(options.eventBus, "ios"),
+        onSlimmed: emitSlimDiagnostic(options.eventBus),
+        onSlimSkipped: (fact) => {
+          logger.warn("Skipped iOS device slim", {
+            deviceId: fact.deviceId,
+            detail: fact.detail,
+            reason: fact.reason,
+          });
+        },
         processRunner: options.processRunner,
+        ...(options.slim === undefined ? {} : { slim: options.slim }),
       }),
     );
     logger.info("Discovered driver", { platform: "ios" });
@@ -429,6 +449,33 @@ export function emitComponentInstallDiagnostic(
   };
 }
 
+/**
+ * Turns the iOS driver's `SlimmedFact` into the matching `device.slimmed` bus event. Mirrors
+ * `emitComponentInstallDiagnostic`: the driver never depends on the event bus directly
+ * (architecture rule 5) -- this is the one place, at driver construction, that bridges the
+ * driver's `onSlimmed` callback to a post-commit fact for observers (`simlock events`, and the
+ * durable-log subscription in `startDaemon`). A *skipped* slim is deliberately not bridged here
+ * -- see `onSlimSkipped` in `discoverDrivers`, which logs it instead (see `docs/EVENTS.md`).
+ */
+export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: SlimmedFact) => void {
+  return (fact) => {
+    eventBus.emit(
+      "device.slimmed",
+      {
+        deviceId: fact.deviceId,
+        address: fact.address,
+        platform: "ios",
+        categories: fact.categories,
+        labelCount: fact.labelCount,
+        durationMs: fact.durationMs,
+        signature: fact.signature,
+        unknownLabels: fact.unknownLabels,
+      },
+      "driver-diagnostics",
+    );
+  };
+}
+
 function isComponentInstallDiagnostic(diagnostic: {
   readonly kind: string;
 }): diagnostic is ComponentInstallDiagnostic {
@@ -457,10 +504,11 @@ export function bridgeAndroidDriverDiagnostic(
 }
 
 /**
- * Durable bookkeeping for component installs: the event ring buffer (`simlock events`) resets
- * on daemon restart, so a component simlock installed on an agent's behalf is only attributable
- * later through this log line -- see the `Logger` port ("Operational logging is a separate
- * concern from the event bus" in ARCHITECTURE.md).
+ * Durable bookkeeping for component installs (and iOS slims, below): the event ring buffer
+ * (`simlock events`) resets on daemon restart, so a component simlock installed -- or a device it
+ * slimmed -- on an agent's behalf is only attributable later through this log line -- see the
+ * `Logger` port ("Operational logging is a separate concern from the event bus" in
+ * ARCHITECTURE.md).
  */
 export function wireComponentInstallLogging(
   eventBus: Pick<EventBus, "subscribe">,
@@ -475,6 +523,18 @@ export function wireComponentInstallLogging(
       ...(envelope.payload.requesterId === undefined
         ? {}
         : { requesterId: envelope.payload.requesterId }),
+    });
+  });
+
+  const slimLogger = logger.child("slim");
+  eventBus.subscribe("device.slimmed", (envelope) => {
+    slimLogger.info("Device slimmed", {
+      categories: envelope.payload.categories,
+      deviceId: envelope.payload.deviceId,
+      durationMs: envelope.payload.durationMs,
+      labelCount: envelope.payload.labelCount,
+      signature: envelope.payload.signature,
+      unknownLabels: envelope.payload.unknownLabels,
     });
   });
 }

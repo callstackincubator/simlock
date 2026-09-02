@@ -85,13 +85,21 @@ Role: `agent`. Enqueues a device request.
   "ttlMs": 900000,
   "timeoutMs": 300000,
   "noWait": false,
-  "allowDownload": false
+  "allowDownload": false,
+  "full": false
 }
 ```
 
 `platform` and `device` are required; `os` defaults to the newest installed
 runtime; `ttlMs` defaults to `lease.detachedTtlMs`; `timeoutMs` (optional) is
 enforced daemon-side so a vanished client can't hold a queue slot forever.
+`full` (optional, default `false`) opts this request out of iOS slim mode —
+platform-neutral in shape, but only the iOS driver acts on it (as "do not
+slim"); Android ignores it. A `full: true` request never matches, and never
+shares a pool key with, a slim device, so it can wait for a fresh device to
+provision or force a re-provision of one already running, even while slim
+devices sit idle in the warm pool. See [CONFIGURATION.md](CONFIGURATION.md)
+for what slim mode disables.
 An `Idempotency-Key` header (at most 200 characters) makes a replay of the
 same key, from the same requester, return the original request resource
 instead of double-queueing — held in memory with a TTL, so a replay after a
@@ -156,7 +164,7 @@ already reached a terminal state — the body names the lease id if it was
     "udid": "ABCD-...", "deviceId": "dev_1a2b",
     "createdAt": "2026-09-01T09:14:07Z",
     "expiresAt": "2026-09-01T09:29:07Z", "ttlMs": 900000,
-    "dataPlane": null
+    "dataPlane": null, "slim": true
 } }
 ```
 
@@ -164,6 +172,13 @@ already reached a terminal state — the body names the lease id if it was
 leased device remotely (the data plane) is a separate, not-yet-implemented
 concern — see [Not implemented](#not-implemented) below. It is in the schema
 now so its arrival is additive rather than a breaking shape change.
+
+`slim` is `true` when the granted device had its feature set reduced (iOS
+slim mode applied and the request did not carry `full: true`), `false`
+otherwise — always `false` for Android. It lets a client explain a
+feature-loss failure (missing push notification, Spotlight result,
+StoreKit sheet, universal link, or system picker) instead of misreading it
+as a bug.
 
 ### `GET /v1/leases/{id}`
 

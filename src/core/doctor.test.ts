@@ -500,6 +500,52 @@ describe("Doctor", () => {
     ]);
   });
 
+  it("does not report foreign-state-change for a device this daemon holds an operation claim on", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+    // A lease-path boot from `shutdown` runs `makeReady` while the committed record still
+    // says `shutdown` -- observed reality goes `running` before that boot's own transition
+    // commits. Claiming the device is what tells doctor this is in-flight work, not drift.
+    const iosDevice = await shutdownDevice(registry, "simlock-ios-1", "ios");
+
+    const iosDriver = new FakeDriver({ clock, platform: "ios" });
+    iosDriver.setManagedReality({
+      devices: [
+        {
+          address: "simlock-ios-1-address",
+          deviceId: "simlock-ios-1",
+          driverData: {},
+          runState: "running",
+        },
+      ],
+      processes: [],
+    });
+
+    const claims = new DeviceOperationClaims();
+    const claim = claims.tryClaim(iosDevice.id, "boot");
+    expect(claim).toBeDefined();
+
+    const report = await new Doctor({
+      claims,
+      clock,
+      config: config(),
+      drivers: [iosDriver],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings.filter((finding) => finding.kind === "foreign-state-change")).toEqual(
+      [],
+    );
+  });
+
   it("reports foreign-state-change for a device shut down outside Simlock, on both platforms", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
@@ -1231,6 +1277,167 @@ describe("Doctor", () => {
     expect(firstForeignStateSeq).toBeGreaterThan(lastCommitSeq);
     expect(events.at(-1)?.event).toBe("doctor.reconciled");
   });
+
+  describe("driver advisories", () => {
+    it("collects driver-advisory findings from a driver that implements advisories()", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = withAdvisories(new FakeDriver({ clock, platform: "ios" }), [
+        { code: "slim-runtime-unsupported", message: "iOS 17.0 predates the 18.5 floor" },
+      ]);
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(report.findings).toEqual([
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "iOS 17.0 predates the 18.5 floor",
+          platform: "ios",
+        },
+      ]);
+    });
+
+    it("contributes nothing from a driver that has no advisories() method", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = new FakeDriver({ clock, platform: "ios" });
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(report.findings.filter((finding) => finding.kind === "driver-advisory")).toEqual([]);
+    });
+
+    it("tolerates a rejecting advisories() without failing the rest of reconcile", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const registered = await registry.registerDevice({
+        driverData: { fakeDeviceId: "missing" },
+        driverDeviceId: "missing",
+        provisionDuration: 0,
+        spec: { model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      await registry.transitionDevice(registered.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: registered.id },
+      });
+      const driver = Object.assign(new FakeDriver({ clock, platform: "ios" }), {
+        advisories: () => Promise.reject(new Error("advisories boom")),
+      });
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      expect(report.findings.filter((finding) => finding.kind === "driver-advisory")).toEqual([]);
+      // The rest of reconcile still ran: the missing device is still reported.
+      expect(report.findings.map((finding) => finding.kind)).toContain("registry-device-missing");
+    });
+
+    it("--fix never acts on a driver-advisory finding", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = withAdvisories(new FakeDriver({ clock, platform: "ios" }), [
+        { code: "slim-runtime-unsupported", message: "detail" },
+      ]);
+
+      const report = await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile({ fix: true });
+
+      expect(report.findings).toEqual([
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "detail",
+          platform: "ios",
+        },
+      ]);
+      // Nothing in `--fix` touched the driver beyond the reconcile-time reads: no
+      // provision/makeReady/reclaim/shutdown/destroy call was made for the advisory.
+      expect(driver.calls.map((call) => call.operation)).toEqual(["listManaged"]);
+    });
+
+    it("excludes driver-advisory findings from the doctor.reconciled event's driftFindings", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: sequence(),
+        statePath: "/state.json",
+      });
+      const driver = withAdvisories(new FakeDriver({ clock, platform: "ios" }), [
+        { code: "slim-runtime-unsupported", message: "detail" },
+      ]);
+
+      await new Doctor({
+        clock,
+        config: config(),
+        drivers: [driver],
+        eventBus,
+        registry,
+      }).reconcile();
+
+      const reconciled = eventBus.replay().find((event) => event.event === "doctor.reconciled");
+      expect(reconciled).toBeDefined();
+      const payload = reconciled!.payload as {
+        readonly driftFindings: readonly { readonly kind: string }[];
+      };
+      expect(payload.driftFindings.some((finding) => finding.kind === "driver-advisory")).toBe(
+        false,
+      );
+    });
+  });
 });
 
 async function readyDevice(
@@ -1270,6 +1477,16 @@ async function shutdownDevice(
 function sequence() {
   let next = 1;
   return { generate: () => `${next++}` };
+}
+
+/** Attaches a fixed `advisories()` result to a `FakeDriver` instance -- `FakeDriver` itself
+ * never implements the optional method, so tests that need a driver reporting advisories add it
+ * ad hoc rather than growing the fake's own surface for a single test file's needs. */
+function withAdvisories(
+  driver: FakeDriver,
+  advisories: readonly { readonly code: string; readonly message: string }[],
+): FakeDriver {
+  return Object.assign(driver, { advisories: () => Promise.resolve(advisories) });
 }
 
 function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {}): Config {
@@ -1313,5 +1530,6 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
     },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
   };
 }

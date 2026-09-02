@@ -29,6 +29,7 @@ function config(maxDevices = 1): Config {
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -442,5 +443,70 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(
       harness.coordinator.request(request, { mode: "held", requesterId: "reopened" }),
     ).resolves.toMatchObject({ lease: { requesterId: "reopened" } });
+  });
+
+  it("stamps full: true onto the resolved spec centrally for a --full request against a driver that reduces features", async () => {
+    const harness = await createHarness({
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+          reducesFeatures: true,
+        }),
+      ],
+    });
+    const granted = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", requesterId: "agent" },
+    );
+
+    expect(granted.device.spec).toMatchObject({ full: true });
+  });
+
+  it("never stamps full: false onto a spec for a plain request", async () => {
+    const harness = await createHarness();
+    const granted = await harness.coordinator.request(request, {
+      mode: "held",
+      requesterId: "agent",
+    });
+
+    expect(granted.device.spec).not.toHaveProperty("full");
+  });
+
+  it("keeps a --full request from matching a warm slim device of the same spec, against a driver that reduces features", async () => {
+    const harness = await createHarness({
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+          reducesFeatures: true,
+        }),
+      ],
+      maxDevices: 2,
+    });
+    await seedReady(harness, request);
+
+    const granted = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", requesterId: "agent" },
+    );
+
+    // A fresh device was provisioned rather than the warm slim one being handed out.
+    expect(granted.device.spec).toMatchObject({ full: true });
+    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+  });
+
+  it("never stamps full: true onto a spec when the resolving driver does not reduce features, so a --full request produces a spec identical to a normal one", async () => {
+    const harness = await createHarness();
+
+    const fullRequest = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", requesterId: "agent-full" },
+    );
+
+    expect(fullRequest.device.spec).not.toHaveProperty("full");
+    expect(fullRequest.device.spec).toEqual(request);
   });
 });

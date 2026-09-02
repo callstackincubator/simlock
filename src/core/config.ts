@@ -22,6 +22,7 @@ import {
   positiveInteger,
   positiveNumber,
   requireObject,
+  stringArray,
   stringUnion,
   stringValue,
   type Validator,
@@ -81,6 +82,16 @@ export interface Config {
     readonly maxRecoveryAttempts: number;
     readonly recoveryBackoffMs: number;
     readonly maxConcurrentRecoveries: number;
+  };
+  readonly ios: {
+    readonly slim: {
+      /** Opt-in; default false. */
+      readonly enabled: boolean;
+      /** Which daemon categories to disable. Undefined means "every category the driver knows". */
+      readonly categories?: readonly string[];
+      /** Boot deadline used while slim mode is on (slim adds a second boot; CI runners are slow). */
+      readonly bootTimeoutMs: number;
+    };
   };
   readonly stalledTransition: {
     /**
@@ -289,6 +300,12 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
       recoveryBackoffMs: 5_000,
       maxConcurrentRecoveries: 1,
     },
+    ios: {
+      slim: {
+        enabled: false,
+        bootTimeoutMs: 600_000,
+      },
+    },
     stalledTransition: {
       thresholdMultiplier: 3,
       minimumThresholdMs: 60_000,
@@ -386,6 +403,13 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       maxRecoveryAttempts: positiveInteger,
       recoveryBackoffMs: positiveNumber,
       maxConcurrentRecoveries: positiveInteger,
+    }),
+    ios: objectValidator({
+      slim: objectValidator({
+        enabled: booleanValue,
+        categories: stringArray,
+        bootTimeoutMs: positiveNumber,
+      }),
     }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),

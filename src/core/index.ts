@@ -22,6 +22,7 @@ export {
   type DeviceRequest,
   DiskSpaceGuard,
   type Driver,
+  type DriverAdvisory,
   type DriverCatalogEntry,
   DriverCrashError,
   type DriverDevice,

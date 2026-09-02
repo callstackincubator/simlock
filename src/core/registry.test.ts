@@ -632,6 +632,101 @@ describe("Registry", () => {
     ).rejects.toThrow("Invalid device record in registry state");
   });
 
+  it("survives a save/reload round-trip with featureProfile set", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const options = {
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "test" },
+      statePath,
+    };
+    const registry = await Registry.load(options);
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(
+      device.id,
+      "ready",
+      { event: "device.ready", payload: { bootDuration: 5, deviceId: device.id } },
+      { featureProfile: "reduced" },
+    );
+
+    const reloaded = await Registry.load(options);
+
+    expect(reloaded.snapshot).toEqual(registry.snapshot);
+    expect(reloaded.snapshot.devices[0]).toMatchObject({ featureProfile: "reduced" });
+  });
+
+  it("leaves featureProfile absent when the persisted record never set it", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 500,
+            driverData: {},
+            driverDeviceId: "driver_no_profile",
+            id: "dev_no_profile",
+            spec,
+            state: "ready",
+          },
+        ],
+        leases: [],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "new" },
+      statePath,
+    });
+
+    expect(registry.snapshot.devices[0]).not.toHaveProperty("featureProfile");
+  });
+
+  it("drops a garbage featureProfile rather than failing the whole registry load", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 500,
+            driverData: {},
+            driverDeviceId: "driver_garbage",
+            featureProfile: "not-a-real-profile",
+            id: "dev_garbage",
+            spec,
+            state: "ready",
+          },
+        ],
+        leases: [],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "new" },
+      statePath,
+    });
+
+    expect(registry.snapshot.devices[0]).not.toHaveProperty("featureProfile");
+  });
+
   it("clears recovery markers as part of the same commit that ends a lease", async () => {
     const clock = new FakeClock(1_000);
     const suffixes = ["device", "lease"];

@@ -289,6 +289,42 @@ describe("LeaseRequestTracker.submit with allowDownload", () => {
   });
 });
 
+describe("LeaseRequestTracker.submit with full", () => {
+  it("passes full through onto the DeviceRequest, and omits it otherwise", async () => {
+    const { leases, tracker } = buildTracker();
+    await createTracked(tracker, leases, { ...body, full: true } as typeof body);
+    expect(leases.calls[0]?.request).toMatchObject({ full: true });
+
+    const { leases: leases2, tracker: tracker2 } = buildTracker();
+    await createTracked(tracker2, leases2);
+    expect(leases2.calls[0]?.request).not.toHaveProperty("full");
+  });
+});
+
+describe("LeaseRequestTracker granted lease payload", () => {
+  it("reports slim: false when the granted device's featureProfile is absent", async () => {
+    const { leases, tracker } = buildTracker();
+    const { view, callIndex } = await createTracked(tracker, leases);
+    leases.calls[callIndex]?.resolve(makeGrant());
+    await Promise.resolve();
+    await Promise.resolve();
+    const state = tracker.get(view.id)?.state;
+    if (state?.stage !== "granted") throw new Error("expected granted");
+    expect(state.lease.slim).toBe(false);
+  });
+
+  it("reports slim: true when the granted device's featureProfile is reduced", async () => {
+    const { leases, tracker } = buildTracker();
+    const { view, callIndex } = await createTracked(tracker, leases);
+    leases.calls[callIndex]?.resolve(makeGrant({ device: { featureProfile: "reduced" } }));
+    await Promise.resolve();
+    await Promise.resolve();
+    const state = tracker.get(view.id)?.state;
+    if (state?.stage !== "granted") throw new Error("expected granted");
+    expect(state.lease.slim).toBe(true);
+  });
+});
+
 describe("LeaseRequestTracker.waitForChange abort", () => {
   it("finishes immediately when the caller's signal aborts", async () => {
     const { leases, tracker } = buildTracker();

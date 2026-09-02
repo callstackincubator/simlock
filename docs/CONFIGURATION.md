@@ -30,6 +30,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `health.maxConcurrentRecoveries`  | Cap on simultaneous recovery reboots, so a machine wake (every device reads `stopped` at once) cannot start a boot storm.                                                                                                   | `1`                                                               |
 | `stalledTransition.thresholdMultiplier` | Factor applied to a driver's own `provision + boot` (for `provisioning`) or `reclaim` (for `reclaiming`) estimate to get the stall threshold for `simlock doctor`'s `stalled-transition` finding. | `3`                                                               |
 | `stalledTransition.minimumThresholdMs` | Floor under the multiplied estimate, for a driver whose estimate is near zero.                                                                                                                                | `1 minute`                                                        |
+| `ios.slim.enabled`                | Master switch for slim mode: disables iOS simulator daemon categories to cut RAM and CPU overhead per device.                                                                                                                | `false`                                                          |
+| `ios.slim.categories`             | Which daemon categories to disable when slim mode is on. Omitted means every category the driver knows.                                                                                                                      | every known category                                             |
+| `ios.slim.bootTimeoutMs`          | Boot deadline used while slim mode is on, in place of the normal boot timeout.                                                                                                                                                | `10 minutes`                                                     |
 
 All limit values must be positive integers; all durations and byte sizes
 must be non-negative numbers (milliseconds and bytes, respectively).
@@ -41,8 +44,27 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `stalledTransition.minimumThresholdMs` must be a non-negative number.
 `http.enabled` is a boolean, `http.host` a string, and `http.port` an
 integer in `1`-`65535`.
+`ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
+non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
+
+Slim mode is opt-in and iOS-only: it disables simulator daemon categories
+that most agent workloads never touch, trading some simulator functionality
+for a leaner runtime footprint. The categories are widgets, Siri/Apple
+Intelligence, Spotlight/search, iCloud, App Store, mail/calendar (PIM),
+Safari/web, Family Sharing, Health, Photos, bundled apps (News/Weather/Maps/
+Tips/games), messaging, connectivity, telemetry, and a miscellaneous group
+(`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`,
+`health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`,
+`other` -- the valid `ios.slim.categories` strings, defined in
+`src/drivers/ios/slim-labels.ts`). Measured on one simulator: ~258 -> ~70
+processes, ~4.0 GB -> ~0.9 GB. It requires iOS 18.5 or newer, since the
+underlying daemon controls are not available on older runtimes. Turning it
+on costs an extra boot per device -- the daemons are disabled between a
+first boot and a second, slower one -- which is why
+`ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
+especially on slower CI runners.
 
 ## Capacity strategies
 

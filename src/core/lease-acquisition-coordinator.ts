@@ -215,7 +215,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     try {
-      waiter.spec = await driver.resolveSpec(request, {
+      const resolved = await driver.resolveSpec(request, {
         allowDownload: options.allowDownload ?? false,
         // The waiter is the one place that knows which requester triggered this resolution;
         // threaded through so a component install a driver ends up doing on this request's
@@ -223,6 +223,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         // to it.
         requesterId: options.requesterId,
       });
+      // This is the single place a driver's `resolveSpec` result becomes the spec the core
+      // matches and provisions on -- so `full` is stamped on centrally here, rather than any
+      // driver having to know about the flag (architecture rule 3: drivers stay unaware of
+      // core-only request flags). Never stamped `false`; omitted when the request did not ask
+      // for it, so specs stay byte-identical to every request that predates this flag. Also
+      // omitted when the resolving driver doesn't declare `reducesFeatures` (finding #6, issue
+      // #87 review): a `full` request only means something -- and only earns its own pool key,
+      // never shared with a normal request's (`sameSpec`) -- against a driver that might
+      // otherwise hand back a reduced device. Stamping it regardless would fragment a platform
+      // like Android, which never reduces anything, into two identical pools for no behavioural
+      // difference.
+      waiter.spec =
+        request.full === true && driver.reducesFeatures === true
+          ? { ...resolved, full: true }
+          : resolved;
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");

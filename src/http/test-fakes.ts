@@ -40,6 +40,7 @@ export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
     },
     http: { enabled: true, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     lease: {
       detachedTtlMs: 900_000,
       heartbeatIntervalMs: 5_000,

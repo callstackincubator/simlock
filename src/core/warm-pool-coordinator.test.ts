@@ -4,7 +4,7 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats } from "../ports/index.js";
 import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
-import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
+import type { DeviceRecord, DeviceSpec, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
@@ -28,6 +28,7 @@ const config: Config = {
   stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
   downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
   http: { enabled: false, host: "127.0.0.1", port: 4700 },
+  ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
   warmPool: {
     quarantine: {
@@ -54,6 +55,7 @@ const config: Config = {
 
 class TestRegistry {
   #devices: DeviceRecord[];
+  lastUpdate: DeviceTransitionUpdate | undefined;
 
   constructor(
     devices: readonly DeviceRecord[],
@@ -81,11 +83,13 @@ class TestRegistry {
         readonly strategy: "erase" | "snapshot" | "wipe";
       };
     },
+    update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
     const current = this.#devices[index];
     if (index === -1 || current === undefined) throw new Error("missing device");
-    const updated = { ...current, state: to } as DeviceRecord;
+    this.lastUpdate = update;
+    const updated = { ...current, ...update, state: to } as DeviceRecord;
     this.#devices[index] = updated;
     this.eventBus.emit("device.reclaimed", event.payload, "test-registry");
     return updated;
@@ -237,6 +241,41 @@ describe("WarmPoolCoordinator", () => {
 
     expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
     expect(harness.driver.calls.map((call) => call.operation)).toContain("makeReady");
+  });
+
+  it("stores the driver's featureProfile when a warm re-boot slims the device", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      clock,
+      featureProfile: "reduced",
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    const harness = await createHarness({ driver });
+
+    await harness.coordinator.reclaim(released(harness.reclaiming));
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(harness.registry.lastUpdate).toMatchObject({ featureProfile: "reduced" });
+    expect(harness.registry.snapshot.devices[0]).toMatchObject({ featureProfile: "reduced" });
+  });
+
+  it("clears a stale featureProfile when a warm re-boot's makeReady reports no reduction", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
+    const staleReclaiming = {
+      ...device("reclaiming", "reclaiming", (await driver.provision(spec)).deviceId, spec),
+      featureProfile: "reduced" as const,
+    };
+    const harness = await createHarness({ devices: [staleReclaiming], driver });
+
+    await harness.coordinator.reclaim(released(staleReclaiming));
+
+    // The update object carries the key with an explicit `undefined` value so the registry's
+    // spread actually clears the stale "reduced" rather than leaving it in place (see the
+    // comment in WarmPoolCoordinator#reclaim).
+    expect(harness.registry.lastUpdate).toHaveProperty("featureProfile", undefined);
+    expect(harness.registry.snapshot.devices[0]?.featureProfile).toBeUndefined();
   });
 
   it("hands a release-time purge failure to quarantine instead of readiness-checking the device back in", async () => {

@@ -79,7 +79,7 @@ and booting, then — in held mode — keeps running to hold the lease.
 ```
 simlock lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
-              [--allow-download] [--bind-pid <pid>]
+              [--allow-download] [--full] [--bind-pid <pid>]
 ```
 
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
@@ -109,7 +109,15 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
   see [EVENTS.md](EVENTS.md#components). The requester's own progress stream
   (below) does not yet reflect an in-flight download — see
   [known-pitfalls.md](known-pitfalls.md).
-- `--detach` — detached mode: print the lease result and exit; the lease is
+- `--full` — opt this lease out of iOS slim mode (see
+  [CONFIGURATION.md](CONFIGURATION.md) for what slim mode disables). Only
+  meaningful when `ios.slim.enabled` is on; ignored otherwise, and ignored
+  for Android. A `--full` request never matches, and never shares a pool key
+  with, a slim device, so it can wait for a fresh device to provision or
+  force a re-provision of one already running, even while slim devices sit
+  idle in the warm pool.
+- `--detach` — detached mode: print the lease result (the same JSON shape as
+  held mode's grant line, below, including `slim`) and exit; the lease is
   TTL-bound and must be renewed with `simlock lease renew`.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of
   the CLI's actual parent. For a holder spawned from a short-lived subshell,
@@ -124,8 +132,14 @@ error message names the existing lease id to release first.
 As soon as the device is ready, one JSON line is printed on stdout:
 
 ```json
-{"lease":"lse_9f2c","platform":"ios","device":"iPhone 17 Pro","os":"26.5","udid":"ABCD-...","state":"leased"}
+{"lease":"lse_9f2c","platform":"ios","device":"iPhone 17 Pro","os":"26.5","udid":"ABCD-...","state":"leased","slim":true}
 ```
+
+`slim` is `true` when the granted device had its feature set reduced (iOS
+slim mode applied and this request did not pass `--full`) and `false`
+otherwise — always `false` for Android. It lets an agent explain a
+feature-loss failure (missing push notification, Spotlight result, StoreKit
+sheet, universal link, or system picker) instead of misreading it as a bug.
 
 then the process stays alive holding the lease. **Kill the process to
 release** — or let it die on its own: held mode watches its parent (the pid
@@ -317,6 +331,15 @@ responds the same way it does for a release-time purge failure — the device
 enters `quarantined` (see [#21](https://github.com/callstackincubator/simlock/issues/21))
 rather than being re-driven, since it may be mid-erase. As with every other
 `--fix` correction, a leased device is never touched.
+
+When `ios.slim.enabled` is on, `doctor` also reports a `driver-advisory`
+finding (code `slim-runtime-unsupported`) for each installed iOS runtime
+older than 18.5 — the version floor `launchctl disable` overrides need to
+survive a reboot (see [CONFIGURATION.md](CONFIGURATION.md)). Slim mode
+silently does nothing on those runtimes otherwise; this finding is what
+makes that visible. It is advisory only — there is no `--fix` for it, since
+the fix is either upgrading the runtime or narrowing `ios.slim` to the
+runtimes that support it.
 
 ## `simlock nuke [--delete-devices] [--yes]`
 

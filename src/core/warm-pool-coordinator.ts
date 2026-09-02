@@ -9,7 +9,7 @@ import {
   type Platform,
   sameSpec,
 } from "./domain.js";
-import type { Driver, DriverDevice } from "./driver.js";
+import { readyTransitionUpdate, type Driver, type DriverDevice } from "./driver.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
@@ -99,10 +99,7 @@ export class WarmPoolCoordinator {
         },
         disposition.readyDevice === undefined
           ? undefined
-          : {
-              address: disposition.readyDevice.address,
-              driverData: disposition.readyDevice.driverData,
-            },
+          : readyTransitionUpdate(disposition.readyDevice),
       );
     });
     this.options.notifyAvailability();

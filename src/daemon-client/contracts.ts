@@ -13,6 +13,12 @@ export interface RawLeaseGrant {
       readonly platform: "android" | "ios";
     };
   };
+  /**
+   * Whether the granted device had its feature set reduced (`DeviceRecord.featureProfile ===
+   * "reduced"`), so agents can explain feature-loss failures. Defaults to `false` when an
+   * older daemon never sends `featureProfile` at all -- absence is never treated as an error.
+   */
+  readonly slim: boolean;
   readonly lease: {
     readonly id: string;
     readonly mode: "detached" | "held";
@@ -41,6 +47,9 @@ export function parseRawLeaseGrant(value: unknown): RawLeaseGrant {
   if (
     typeof device.driverDeviceId !== "string" ||
     (device.address !== undefined && typeof device.address !== "string") ||
+    (device.featureProfile !== undefined &&
+      device.featureProfile !== "full" &&
+      device.featureProfile !== "reduced") ||
     typeof spec.model !== "string" ||
     typeof spec.osVersion !== "string" ||
     (spec.platform !== "ios" && spec.platform !== "android") ||
@@ -60,6 +69,9 @@ export function parseRawLeaseGrant(value: unknown): RawLeaseGrant {
       driverDeviceId: device.driverDeviceId,
       spec: { model: spec.model, osVersion: spec.osVersion, platform: spec.platform },
     },
+    // Absent on an older daemon that never sends `featureProfile` -- default to `false` rather
+    // than throwing, so an old daemon paired with a new client keeps working.
+    slim: device.featureProfile === "reduced",
     lease: { id: lease.id, mode: lease.mode, ttlDeadline: lease.ttlDeadline },
     timing: {
       estimatedBootMs: timing.estimatedBootMs,

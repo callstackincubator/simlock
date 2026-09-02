@@ -280,6 +280,73 @@ describe("CLI boundary", () => {
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
   });
 
+  it("sends full: true in the lease.request payload for --full and reports slim in the result", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        featureProfile: "full",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_full", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16", "--full"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+
+    const leaseCall = connection.calls.find((call) => call.type === "lease.request");
+    expect(leaseCall?.payload).toMatchObject({ request: { full: true } });
+    expect(JSON.parse(output.stdout)).toMatchObject({ slim: false });
+  });
+
+  it("omits full from the lease.request payload without --full", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const connection = new StubConnection();
+    connection.response("lease.request", {
+      device: {
+        driverDeviceId: "ABCD",
+        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        state: "leased",
+      },
+      lease: { id: "lse_default", mode: "held", ttlDeadline: 61_000 },
+      timing: {
+        estimatedBootMs: 0,
+        estimatedProvisionMs: 0,
+        estimatedReclaimMs: 0,
+        estimatedReadyMs: 0,
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      output.environmentWith({ connect: async () => connection, signals }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    signals.emit("SIGTERM");
+    await expect(run).resolves.toBe(0);
+
+    const leaseCall = connection.calls.find((call) => call.type === "lease.request");
+    const requestPayload = (leaseCall?.payload as { request: Record<string, unknown> } | undefined)
+      ?.request;
+    expect(requestPayload).not.toHaveProperty("full");
+    expect(JSON.parse(output.stdout)).toMatchObject({ slim: false });
+  });
+
   it("reports a post-signal release failure as a structured stderr line, not prose", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
@@ -638,7 +705,7 @@ describe("CLI boundary", () => {
       ),
     ).resolves.toBe(0);
     expect(detached.stdout).toBe(
-      '{"device":"iPhone 17 Pro","expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
+      '{"device":"iPhone 17 Pro","expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","slim":false,"state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
     );
     expect(connection.closed).toBe(true);
 
@@ -769,6 +836,77 @@ describe("CLI boundary", () => {
         "  Models: iPhone 16, iPhone 17 Pro\n" +
         "  Runtimes: 18.4, 26.5 (default: 26.5)\n",
     );
+  });
+
+  it("passes every doctor finding through to stdout as JSON, driver-advisory included", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [
+        { deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" },
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "iOS 18.4 is below the 18.5 persistent-override floor",
+          platform: "ios",
+        },
+      ],
+    });
+
+    await expect(
+      runCli(["doctor"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({ payload: { fix: false }, type: "doctor.run" });
+    expect(JSON.parse(output.stdout)).toEqual({
+      findings: [
+        { deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" },
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "iOS 18.4 is below the 18.5 persistent-override floor",
+          platform: "ios",
+        },
+      ],
+    });
+  });
+
+  it("surfaces a driver-advisory finding as a plain warning line on stderr, distinct from drift", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [
+        { deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" },
+        {
+          code: "slim-runtime-unsupported",
+          kind: "driver-advisory",
+          message: "iOS 18.4 is below the 18.5 persistent-override floor",
+          platform: "ios",
+        },
+      ],
+    });
+
+    await expect(
+      runCli(["doctor", "--fix"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(connection.calls).toContainEqual({ payload: { fix: true }, type: "doctor.run" });
+    expect(output.stderr).toBe(
+      "Warning [ios] slim-runtime-unsupported: iOS 18.4 is below the 18.5 persistent-override floor\n",
+    );
+    // Only the advisory gets a warning line -- the drift finding is not echoed to stderr.
+    expect(output.stderr).not.toContain("registry-device-missing");
+  });
+
+  it("writes nothing to stderr when doctor reports no driver-advisory findings", async () => {
+    const output = outputCapture();
+    const connection = new StubConnection();
+    connection.response("doctor.run", {
+      findings: [{ deviceId: "dev_1", kind: "registry-device-missing", platform: "ios" }],
+    });
+
+    await expect(
+      runCli(["doctor"], output.environmentWith({ connect: async () => connection })),
+    ).resolves.toBe(0);
+    expect(output.stderr).toBe("");
   });
 
   it("releases and exits when the watched parent process dies, via the same path as a signal", async () => {
@@ -1163,6 +1301,7 @@ function testConfig(): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
     capacity: {

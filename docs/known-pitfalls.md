@@ -146,3 +146,103 @@ real protocol machinery, not a small addition, so it was deliberately not
 built in stage 4. `component.install-started`'s payload already carries
 enough (`platform`, `componentId`) that a future pass wiring this through
 would mostly be plumbing, not new information to invent.
+
+## iOS slim mode: accepted costs and feature loss (#87)
+
+`ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
+daemons across simulator daemon categories to cut RAM/CPU footprint (see
+[CONFIGURATION.md](CONFIGURATION.md)). It carries four trade-offs worth
+knowing before turning it on.
+
+**Every reclaim pays two boots, indefinitely.** `IosSimctlDriver.reclaim`
+always runs `simctl erase`, which wipes the simulator's data partition —
+including the launchd overrides slimming wrote there. So a reclaimed device
+is never still slim: the next `makeReady` re-applies the full disable pass
+and reboots twice (once to boot the freshly erased device, once more for the
+overrides to take effect) rather than skipping straight to the idempotence
+check. Accepted because both reclaim and warm-pool provisioning run off the
+lease-granting critical path — the requester waiting on a device only pays
+for this when nothing pre-provisioned was available. A non-erasing
+`standard` clean level, if one is added later, would let a reclaimed device
+stay slim and remove this cost; no such level exists today.
+
+**Runtimes older than iOS 18.5 silently get nothing.** `launchctl disable`
+overrides only persist across a reboot on iOS 18.5+; older runtimes accept
+the commands and drop them on the post-slim reboot, so slimming would cost a
+second boot for no effect. `planSlimBoot` (`src/drivers/ios/index.ts`) gates
+on this and skips the apply pass entirely rather than paying that cost —
+silently, from the requester's point of view: the lease still grants, just
+with `slim: false`. `simlock doctor`'s `driver-advisory` /
+`slim-runtime-unsupported` finding is what makes an unsupported runtime
+visible to an operator instead of it only ever showing up as an unexpectedly
+non-slim lease.
+
+**Slim devices lose features that depend on the disabled daemons.** Expect
+push notifications, Spotlight/on-device search, StoreKit/App Store sheets,
+universal links, Siri/Apple Intelligence, iCloud sync, and some system
+pickers to not work on a slim device — the categories that back them are
+exactly the ones slimming disables. Mitigations: `simlock lease --full` (MCP
+`full: true`, HTTP `full: true`) opts a single lease out of slimming, and
+every lease response carries a `slim` flag so a caller can tell a
+feature-loss failure apart from an actual bug instead of guessing.
+
+**Mixing slim and full devices under one spec can make `--full` wait or
+re-provision.** `full` is part of spec identity (`DeviceSpec.full`, compared by `sameSpec`,
+see [ADR 0002](adr/0002-opt-in-slim-ios-simulators.md)), so a `--full`
+request never matches a slim device sitting warm in the pool — even when one is idle and a
+match on model/os alone would otherwise be instant. Depending on capacity,
+that means either queueing for a fresh device to provision or forcing a
+re-provision of a device already running. This is inherent to keeping pool
+matching from fragmenting on driver-level settings, not a bug to fix.
+
+**A cold slim lease outlives a default MCP request timeout.** Measured on
+one machine: a `--full` cold lease took ~28s, a cold slim lease ~160s (two
+real boots plus the disable pass). The MCP SDK's default per-request timeout
+is 60s, so an MCP client that does not reset its timeout on progress
+notifications gets `MCP error -32001: Request timed out` on the slim lease
+even though the daemon completes it. Simlock relays boot progress as MCP
+progress notifications precisely so clients can pass
+`resetTimeoutOnProgress: true` (or a longer timeout) on `lease_simulator`;
+`e2e/slow-ios-slim.test.ts` shows the call shape. The warm pool hides this
+for every lease after the first.
+
+**`launchctl disable` accepts labels that do not exist.** Verified on iOS
+26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits
+0 and writes the entry to the override database like any other. So the
+per-label `simlock-slim-failed` channel (and the `unknownLabels` field of
+`device.slimmed`) reports labels the shell-safety filter rejected or a
+`launchctl` that crashed, never a daemon Apple has renamed or removed. Drift
+in the label list is invisible at apply time; the only signal is a slim
+device that is not as slim as expected. Re-sync `slim-labels.ts` against
+upstream simslim per iOS major. Newer runtimes also print a deprecation
+warning asking for `user/foreground/<label>` instead of `system/<label>`;
+the `system/` form still takes effect and is what simslim uses.
+
+**Narrowing `ios.slim.categories` does not re-enable anything on existing
+devices.** There is no `launchctl enable` pass anywhere in the driver. When an
+operator removes a category from `ios.slim.categories`, the signature that
+gates re-applying the disable pass changes, so an existing device re-applies
+the now-narrower set on its next boot — but the `launchctl disable` overrides
+already written for the *removed* category are never undone. They live in the
+simulator's own launchd database and only disappear on `simctl erase`. The
+device keeps reporting `slim: true` and keeps missing that category's
+functionality, with no error surfaced anywhere. The real consequence is
+stronger than the flag alone suggests: the device ends up slimmer than *any*
+configuration ever asked for — it carries both the newly-narrower disable set
+it just re-applied *and* the leftover overrides from the wider set it was
+slimmed under before, a combination no `ios.slim.categories` value on its own
+would ever produce. Workaround: after narrowing the category list, reclaim
+(or destroy) every device already running under the old, wider set before
+relying on the change — a plain reboot is not enough.
+
+**Turning `ios.slim.enabled` off leaves orphaned `--full` devices sitting in
+the pool.** `full` only earns its own pool key while the driver might
+otherwise hand back a reduced device (`Driver.reducesFeatures`); once slim
+mode is off, no newly resolved spec ever carries `full: true` again. A device
+that was provisioned for a `--full` request while slim mode was on keeps
+`full: true` on its spec in the registry, so it can no longer match anything
+a resolver produces — it becomes unmatchable by any new request. This is not
+a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
+on the same timers as any other idle device, since neither rule cares what a
+device's spec matches. Until those timers fire, though, it occupies a pool
+slot doing nothing.
