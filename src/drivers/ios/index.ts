@@ -73,6 +73,8 @@ const SLIM_CHUNK_SIZE = 50;
 // generous budget instead of reusing it.
 const SLIM_CHUNK_TIMEOUT_MS = 60_000;
 const SLIM_FAILED_MARKER = "simlock-slim-failed";
+/** See the comment in `#applySlimLabels`; must stay in sync with the test's `slimScript`. */
+const SLIM_SCRIPT_PRELUDE = '[ -n "$SIMULATOR_ROOT" ] && export DYLD_ROOT_PATH="$SIMULATOR_ROOT";';
 // Built from `SLIM_FAILED_MARKER` (rather than a second hardcoded literal) so a change to the
 // constant can never silently desync the script that emits the marker from the parser that reads
 // it back -- see `#applySlimLabels`.
@@ -891,6 +893,11 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
+   * Note (verified on iOS 26.4 / 27.0): `launchctl disable` exits 0 for a label that does not
+   * exist and records it anyway, so the per-label failure line below never fires for a renamed
+   * or removed daemon -- only for a crashed `launchctl` or a filtered label. Drift in the label
+   * list is therefore silent at apply time (see docs/known-pitfalls.md).
+   *
    * Batches `launchctl disable system/<label>` calls into shell loops of at most
    * `SLIM_CHUNK_SIZE`, one `simctl spawn` per chunk -- ~170 individual spawns would dominate the
    * slim budget (see `SLIM_CHUNK_SIZE`'s comment). Each label that `launchctl disable` itself
@@ -916,8 +923,14 @@ export class IosSimctlDriver implements Driver {
     let anyChunkSucceeded = false;
 
     for (const chunkLabels of chunks) {
+      // `DYLD_ROOT_PATH` is what makes a bare `launchctl` inside the simulator load the
+      // *simulator's* dyld shared cache; `simctl spawn` sets it for the process it starts, but
+      // dyld strips `DYLD_*` from the environment of a platform binary such as `/bin/sh`, so
+      // every child `launchctl` the script runs would otherwise die with an abort trap
+      // (verified on iOS 26.4 and 27.0 simulators). Re-exporting it from `SIMULATOR_ROOT`
+      // (which survives) is exactly what simslim's own batch script does first.
       const script =
-        `for l in ${chunkLabels.join(" ")}; do launchctl disable "system/$l" ` +
+        `${SLIM_SCRIPT_PRELUDE} for l in ${chunkLabels.join(" ")}; do launchctl disable "system/$l" ` +
         `>/dev/null 2>&1 || echo "${SLIM_FAILED_MARKER} $l"; done`;
       const outcome = await this.#invokeSimctl(
         ["spawn", udid, "/bin/sh", "-c", script],

@@ -187,13 +187,25 @@ every lease response carries a `slim` flag so a caller can tell a
 feature-loss failure apart from an actual bug instead of guessing.
 
 **Mixing slim and full devices under one spec can make `--full` wait or
-re-provision.** `full` is part of the pool key (ADR "serve from a separate
-pool key"), not part of `DeviceSpec` itself, so a `--full` request never
-matches a slim device sitting warm in the pool — even when one is idle and a
+re-provision.** `full` is part of spec identity (`DeviceSpec.full`, compared by `sameSpec`,
+see [ADR 0002](adr/0002-opt-in-slim-ios-simulators.md)), so a `--full`
+request never matches a slim device sitting warm in the pool — even when one is idle and a
 match on model/os alone would otherwise be instant. Depending on capacity,
 that means either queueing for a fresh device to provision or forcing a
 re-provision of a device already running. This is inherent to keeping pool
 matching from fragmenting on driver-level settings, not a bug to fix.
+
+**`launchctl disable` accepts labels that do not exist.** Verified on iOS
+26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits
+0 and writes the entry to the override database like any other. So the
+per-label `simlock-slim-failed` channel (and the `unknownLabels` field of
+`device.slimmed`) reports labels the shell-safety filter rejected or a
+`launchctl` that crashed, never a daemon Apple has renamed or removed. Drift
+in the label list is invisible at apply time; the only signal is a slim
+device that is not as slim as expected. Re-sync `slim-labels.ts` against
+upstream simslim per iOS major. Newer runtimes also print a deprecation
+warning asking for `user/foreground/<label>` instead of `system/<label>`;
+the `system/` form still takes effect and is what simslim uses.
 
 **Narrowing `ios.slim.categories` does not re-enable anything on existing
 devices.** There is no `launchctl enable` pass anywhere in the driver. When an

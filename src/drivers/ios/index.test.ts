@@ -2451,6 +2451,7 @@ function createSlimDriver(
 /** Mirrors `#applySlimLabels`'s generated script -- keeps test expectations in sync by construction. */
 function slimScript(labels: readonly string[]): string {
   return (
+    `[ -n "$SIMULATOR_ROOT" ] && export DYLD_ROOT_PATH="$SIMULATOR_ROOT"; ` +
     `for l in ${labels.join(" ")}; do launchctl disable "system/$l" ` +
     `>/dev/null 2>&1 || echo "simlock-slim-failed $l"; done`
   );
