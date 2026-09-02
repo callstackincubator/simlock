@@ -335,6 +335,29 @@ describe("ManagedDeviceLifecycle", () => {
       const retried = await harness.lifecycle.recoverLeased(ready, lease.id);
       expect(retried).toMatchObject({ id: ready.id, state: "leased" });
     });
+
+    it("requests makeReady with purpose 'recover', never the default (finding #1, issue #87 review)", async () => {
+      // Safety rule 2's crash-recovery exception may only reboot an already-provisioned,
+      // still-leased device -- never apply any configuration change a normal "prepare" boot
+      // might (the iOS driver's slim pass). `recoverLeased` must always ask for that narrower
+      // contract explicitly; see `IosSimctlDriver.makeReady`'s dedicated coverage for what a
+      // real driver does with it.
+      const harness = await createHarness();
+      const ready = await readyDevice(harness);
+      const lease = await harness.registry.createLease({
+        deviceId: ready.id,
+        mode: "held",
+        requesterId: "agent",
+        ttlDeadline: 10_000,
+      });
+
+      await harness.lifecycle.recoverLeased(ready, lease.id);
+
+      const recoveryCall = harness.driver.calls.filter((call) => call.operation === "makeReady")[
+        harness.driver.calls.filter((call) => call.operation === "makeReady").length - 1
+      ];
+      expect(recoveryCall?.arguments[1]).toEqual({ purpose: "recover" });
+    });
   });
 
   it("persists a driver's featureProfile alongside address and driverData on boot (#makeReady path)", async () => {

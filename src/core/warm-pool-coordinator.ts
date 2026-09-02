@@ -99,10 +99,7 @@ export class WarmPoolCoordinator {
         },
         disposition.readyDevice === undefined
           ? undefined
-          : {
-              address: disposition.readyDevice.address,
-              driverData: disposition.readyDevice.driverData,
-            },
+          : readyTransitionUpdate(disposition.readyDevice),
       );
     });
     this.options.notifyAvailability();
@@ -210,6 +207,29 @@ export class WarmPoolCoordinator {
 
 function capacityDevices(devices: readonly DeviceRecord[]): readonly CapacityDevice[] {
   return devices.map((device) => ({ platform: device.spec.platform, state: device.state }));
+}
+
+/**
+ * Always includes `featureProfile`, even when the driver returned `undefined` -- `transition`'s
+ * `{...record, ...update}` spread only clears a stale value when the update object *has* the
+ * key; omitting it here (as the conditional-spread pattern elsewhere does) would let a previous
+ * "reduced" survive a re-boot where slimming wasn't applied this time, reporting `slim: true` on
+ * a device that is actually full-fat. `DeviceTransitionUpdate["featureProfile"]` itself can't say
+ * "present but undefined" under `exactOptionalPropertyTypes`, so the object is built with the
+ * wider type and cast at the boundary -- the explicit `undefined` here is a deliberate runtime
+ * value, not a type-checking gap.
+ */
+function readyTransitionUpdate(readyDevice: DriverDevice): DeviceTransitionUpdate {
+  const update: {
+    readonly address: string;
+    readonly driverData: unknown;
+    readonly featureProfile: "full" | "reduced" | undefined;
+  } = {
+    address: readyDevice.address,
+    driverData: readyDevice.driverData,
+    featureProfile: readyDevice.featureProfile,
+  };
+  return update as DeviceTransitionUpdate;
 }
 
 /**

@@ -500,6 +500,52 @@ describe("Doctor", () => {
     ]);
   });
 
+  it("does not report foreign-state-change for a device this daemon holds an operation claim on", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+    // A lease-path boot from `shutdown` runs `makeReady` while the committed record still
+    // says `shutdown` -- observed reality goes `running` before that boot's own transition
+    // commits. Claiming the device is what tells doctor this is in-flight work, not drift.
+    const iosDevice = await shutdownDevice(registry, "simlock-ios-1", "ios");
+
+    const iosDriver = new FakeDriver({ clock, platform: "ios" });
+    iosDriver.setManagedReality({
+      devices: [
+        {
+          address: "simlock-ios-1-address",
+          deviceId: "simlock-ios-1",
+          driverData: {},
+          runState: "running",
+        },
+      ],
+      processes: [],
+    });
+
+    const claims = new DeviceOperationClaims();
+    const claim = claims.tryClaim(iosDevice.id, "boot");
+    expect(claim).toBeDefined();
+
+    const report = await new Doctor({
+      claims,
+      clock,
+      config: config(),
+      drivers: [iosDriver],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings.filter((finding) => finding.kind === "foreign-state-change")).toEqual(
+      [],
+    );
+  });
+
   it("reports foreign-state-change for a device shut down outside Simlock, on both platforms", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);

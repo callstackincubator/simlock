@@ -1240,7 +1240,10 @@ describe("DaemonServer download policy", () => {
 
 describe("DaemonServer full request flag", () => {
   it("parses request.full: true into a spec stamped full: true", async () => {
-    const harness = await createHarness();
+    // Stamping `full` is gated on the resolving driver declaring `reducesFeatures` -- without it
+    // there is nothing to opt out of, so the flag would (correctly) leave the spec untouched and
+    // this test would be asserting the wrong half of that contract.
+    const harness = await createHarness({ reducesFeatures: true });
     const client = await createClient(harness.socketPath);
     await hello(client);
 
@@ -1334,6 +1337,8 @@ async function createHarness(
     readonly downloads?: Partial<Config["downloads"]>;
     readonly driver?: FakeDriver;
     readonly logger?: Logger;
+    /** Passed to the default `FakeDriver`; makes a `--full` request meaningful (see `Driver.reducesFeatures`). */
+    readonly reducesFeatures?: boolean;
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
@@ -1363,6 +1368,9 @@ async function createHarness(
       ...(options.estimateMs === undefined ? {} : { estimateMs: options.estimateMs }),
       ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
       platform: "ios",
+      ...(options.reducesFeatures === undefined
+        ? {}
+        : { reducesFeatures: options.reducesFeatures }),
     });
   const config = testConfig(options.lease, options.downloads);
   const engine = new LeaseEngine({

@@ -51,6 +51,13 @@ export interface FakeDriverOptions {
   readonly platform: Platform;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
+  /**
+   * `Driver.reducesFeatures` passthrough -- undefined by default (this fake, like every real
+   * driver except iOS with slim mode on, does not reduce anything), settable by a test that
+   * needs to exercise `LeaseAcquisitionCoordinator`'s `full`-stamping decision without a real
+   * iOS driver.
+   */
+  readonly reducesFeatures?: boolean;
 }
 
 export class FakeDriverUnknownDeviceError extends Error {
@@ -62,6 +69,7 @@ export class FakeDriverUnknownDeviceError extends Error {
 
 export class FakeDriver implements Driver {
   readonly platform: Platform;
+  readonly reducesFeatures?: boolean;
   readonly #availableOsVersions: Set<string>;
   readonly #callCounts = new Map<FakeDriverOperation, number>();
   readonly #calls: FakeDriverCall[] = [];
@@ -92,6 +100,9 @@ export class FakeDriver implements Driver {
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#latencyMs = options.latencyMs;
     this.platform = options.platform;
+    if (options.reducesFeatures !== undefined) {
+      this.reducesFeatures = options.reducesFeatures;
+    }
     this.#reclaimResult = options.reclaimResult ?? "ready";
     this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
   }
@@ -136,9 +147,17 @@ export class FakeDriver implements Driver {
     return { address: addressFor(deviceId, 0), deviceId, driverData: { fakeDeviceId: deviceId } };
   }
 
-  /** Each boot re-reads a fresh address, same as the real drivers -- never the caller's. */
-  async makeReady(device: DriverDevice): Promise<DriverDevice> {
-    await this.#beforeCall("makeReady", device);
+  /**
+   * Each boot re-reads a fresh address, same as the real drivers -- never the caller's.
+   * `options.purpose` is recorded on the call log (`calls`) so a test can assert a caller (e.g.
+   * `ManagedDeviceLifecycle.recoverLeased`) requested `"recover"`, but this fake never reduces
+   * anything regardless of purpose -- there is no configuration-changing behaviour to gate.
+   */
+  async makeReady(
+    device: DriverDevice,
+    options?: { readonly purpose: "prepare" | "recover" },
+  ): Promise<DriverDevice> {
+    await this.#beforeCall("makeReady", device, options);
     this.#requireDevice(device);
 
     if (this.#hangMakeReady) {

@@ -127,6 +127,15 @@ export interface DriverAdvisory {
 
 export interface Driver {
   readonly platform: Platform;
+  /**
+   * True when this driver may hand back devices with a reduced feature set (the iOS driver's
+   * slim mode, when actually enabled), so a caller's `full` request is meaningful and must not
+   * share a pool key with a normal one. Optional; a driver that never reduces anything -- the
+   * default, and every non-iOS driver -- omits it, equivalent to `false`. Read once per spec
+   * resolution by `LeaseAcquisitionCoordinator`, which is the only place `DeviceSpec.full` gets
+   * stamped onto a resolved spec.
+   */
+  readonly reducesFeatures?: boolean;
   resolveSpec(
     request: DeviceRequest,
     options: {
@@ -147,7 +156,21 @@ export interface Driver {
    * boot, so a device coming back from `shutdown` (or a driver restart) can land on a different
    * one. `deviceId` and the registry-relevant parts of `driverData` do not change.
    */
-  makeReady(device: DriverDevice): Promise<DriverDevice>;
+  makeReady(
+    device: DriverDevice,
+    options?: {
+      /**
+       * What this readiness call is for. `"prepare"` (the default) may do work that changes
+       * the device's configuration -- a fresh boot, a driver's own opt-in configuration pass
+       * (the iOS driver's slim apply). `"recover"` is the one caller (`ManagedDeviceLifecycle.
+       * recoverLeased`, safety rule 2's narrow crash-recovery exception) that reboots a device
+       * that is still `leased`: it must do the minimum needed to get that device running again
+       * and must never change its configuration, so a driver treats `"recover"` as "boot only,
+       * do not apply anything new".
+       */
+      readonly purpose: "prepare" | "recover";
+    },
+  ): Promise<DriverDevice>;
   reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },

@@ -194,3 +194,16 @@ match on model/os alone would otherwise be instant. Depending on capacity,
 that means either queueing for a fresh device to provision or forcing a
 re-provision of a device already running. This is inherent to keeping pool
 matching from fragmenting on driver-level settings, not a bug to fix.
+
+**Narrowing `ios.slim.categories` does not re-enable anything on existing
+devices.** There is no `launchctl enable` pass anywhere in the driver. When an
+operator removes a category from `ios.slim.categories`, the signature that
+gates re-applying the disable pass changes, so an existing device re-applies
+the now-narrower set on its next boot — but the `launchctl disable` overrides
+already written for the *removed* category are never undone. They live in the
+simulator's own launchd database and only disappear on `simctl erase`. The
+device keeps reporting `slim: true` and keeps missing that category's
+functionality, with no error surfaced anywhere. Workaround: after narrowing
+the category list, reclaim (or destroy) every device already running under
+the old, wider set before relying on the change — a plain reboot is not
+enough.

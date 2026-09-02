@@ -127,7 +127,12 @@ export class Doctor {
     const findings: DoctorFinding[] = [];
 
     for (const device of snapshot.devices) {
-      const deviceFindings = registryDriftFindings(device, realDeviceKeys, observedDevices);
+      const deviceFindings = registryDriftFindings(
+        device,
+        realDeviceKeys,
+        observedDevices,
+        this.options.claims,
+      );
       findings.push(...deviceFindings);
       if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
         await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
@@ -350,26 +355,64 @@ function registryDriftFindings(
   device: DeviceRecord,
   realDeviceKeys: ReadonlySet<string>,
   observedDevices: ReadonlyMap<string, ObservedDevice>,
+  claims?: Pick<DeviceOperationClaims, "isClaimed">,
 ): DoctorFinding[] {
   const findings: DoctorFinding[] = [];
   const deviceKey = key(device.spec.platform, device.driverDeviceId);
 
-  if (device.state !== "deleted" && !realDeviceKeys.has(deviceKey)) {
-    findings.push({
-      deviceId: device.id,
-      kind: "registry-device-missing",
-      platform: device.spec.platform,
-    });
+  const missing = missingDeviceFinding(device, deviceKey, realDeviceKeys);
+  if (missing !== undefined) {
+    findings.push(missing);
   }
 
   // `expected === undefined` means the registry is mid-transition (provisioning,
   // reclaiming, deleted). Simlock is acting on the device itself in those states,
   // including erasing it, so neither run state nor marks are compared.
+  //
+  // A device this daemon holds an operation claim on is excluded the same way, the same
+  // live-versus-orphaned test `stalledTransitionFinding` already applies (see its comment). A
+  // lease-path boot from `shutdown` runs `makeReady` while the committed record still says
+  // `shutdown` -- observed reality goes `running` before the transition that would update
+  // `expectedRunState` ever commits. Without this guard a concurrent `doctor --fix` reads that
+  // as foreign drift, "fixes" the record to `ready`, and the boot's own transition commit
+  // afterwards finds the record changed underneath it and silently drops its
+  // `address`/`driverData`/`featureProfile`, dropping the waiter. The claim is held for the
+  // whole boot, so it exactly brackets the window this needs to cover -- unlike
+  // `stalledTransitionFinding`, this applies regardless of `device.state`, since the record can
+  // be `shutdown`, `ready`, or `leased` while a claimed operation is in flight against it.
   const expected = expectedRunState(device.state);
   const observed = observedDevices.get(deviceKey);
-  if (expected === undefined || observed === undefined) {
-    return findings;
+  const claimed = claims?.isClaimed(device.id) === true;
+  if (expected !== undefined && observed !== undefined && !claimed) {
+    findings.push(...liveDriftFindings(device, expected, observed));
   }
+
+  return findings;
+}
+
+function missingDeviceFinding(
+  device: DeviceRecord,
+  deviceKey: string,
+  realDeviceKeys: ReadonlySet<string>,
+): DoctorFinding | undefined {
+  if (device.state === "deleted" || realDeviceKeys.has(deviceKey)) {
+    return undefined;
+  }
+  return { deviceId: device.id, kind: "registry-device-missing", platform: device.spec.platform };
+}
+
+/**
+ * Run-state and provenance drift for a device whose registry state expects a definite run
+ * state and that has an observed-reality match. Split out of `registryDriftFindings` so the
+ * mid-transition/claim guard there is one flat condition rather than threading through this
+ * logic's own branches.
+ */
+function liveDriftFindings(
+  device: DeviceRecord,
+  expected: "running" | "stopped",
+  observed: ObservedDevice,
+): DoctorFinding[] {
+  const findings: DoctorFinding[] = [];
 
   if (observed.runState !== "transitioning" && observed.runState !== expected) {
     findings.push({

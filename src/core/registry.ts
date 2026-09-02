@@ -560,6 +560,7 @@ const deviceRecordKeys = [
   "quarantineAttempts",
   "quarantineNextRetryAt",
   "address",
+  "featureProfile",
 ] as const;
 const leaseRecordKeys = [
   "id",
@@ -639,7 +640,7 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const { address, createdAt, driverData, driverDeviceId, id, spec, state } = value;
+  const { address, createdAt, driverData, driverDeviceId, featureProfile, id, spec, state } = value;
   if (
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
@@ -658,6 +659,7 @@ function parseDevice(value: unknown): DeviceRecord {
   return {
     ...parseOptionalDeviceNumbers(value),
     ...(address === undefined ? {} : { address }),
+    ...(isFeatureProfile(featureProfile) ? { featureProfile } : {}),
     createdAt,
     driverData,
     driverDeviceId,
@@ -665,6 +667,15 @@ function parseDevice(value: unknown): DeviceRecord {
     spec,
     state: state === "warm" ? "reclaiming" : state,
   };
+}
+
+/**
+ * Unlike `address`, a garbage `featureProfile` is dropped rather than failing the whole record --
+ * it is a derived, re-derivable-on-next-boot hint (see `domain.ts`), not load-bearing identity, so
+ * a corrupt value should not stop the registry (and every other device in it) from loading.
+ */
+function isFeatureProfile(value: unknown): value is "full" | "reduced" {
+  return value === "full" || value === "reduced";
 }
 
 function parseLease(value: unknown): LeaseRecord {

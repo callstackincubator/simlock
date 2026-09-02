@@ -116,9 +116,16 @@ export class OutOfProcessFakeDriver implements Driver {
     return { address: defaultAddress(deviceId), deviceId, driverData: { fakeDeviceId: deviceId } };
   }
 
-  /** Re-reads the script's `address` on every boot -- see `FakeDriverPlatformScript.address`. */
-  async makeReady(device: DriverDevice): Promise<DriverDevice> {
-    const script = await this.#beforeCall("makeReady", [device]);
+  /**
+   * Re-reads the script's `address` on every boot -- see `FakeDriverPlatformScript.address`.
+   * `options.purpose` is logged alongside the call but otherwise ignored -- this fake never
+   * applies any configuration a `"recover"` boot would need to skip.
+   */
+  async makeReady(
+    device: DriverDevice,
+    options?: { readonly purpose: "prepare" | "recover" },
+  ): Promise<DriverDevice> {
+    const script = await this.#beforeCall("makeReady", [device, options]);
     this.#devices.set(device.deviceId, "ready");
     return {
       address: script.address ?? defaultAddress(device.deviceId),

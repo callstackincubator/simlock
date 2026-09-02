@@ -445,8 +445,17 @@ describe("LeaseAcquisitionCoordinator", () => {
     ).resolves.toMatchObject({ lease: { requesterId: "reopened" } });
   });
 
-  it("stamps full: true onto the resolved spec centrally for a --full request", async () => {
-    const harness = await createHarness();
+  it("stamps full: true onto the resolved spec centrally for a --full request against a driver that reduces features", async () => {
+    const harness = await createHarness({
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+          reducesFeatures: true,
+        }),
+      ],
+    });
     const granted = await harness.coordinator.request(
       { ...request, full: true },
       { mode: "held", requesterId: "agent" },
@@ -465,8 +474,18 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(granted.device.spec).not.toHaveProperty("full");
   });
 
-  it("keeps a --full request from matching a warm slim device of the same spec", async () => {
-    const harness = await createHarness({ maxDevices: 2 });
+  it("keeps a --full request from matching a warm slim device of the same spec, against a driver that reduces features", async () => {
+    const harness = await createHarness({
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+          reducesFeatures: true,
+        }),
+      ],
+      maxDevices: 2,
+    });
     await seedReady(harness, request);
 
     const granted = await harness.coordinator.request(
@@ -477,5 +496,17 @@ describe("LeaseAcquisitionCoordinator", () => {
     // A fresh device was provisioned rather than the warm slim one being handed out.
     expect(granted.device.spec).toMatchObject({ full: true });
     expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+  });
+
+  it("never stamps full: true onto a spec when the resolving driver does not reduce features, so a --full request produces a spec identical to a normal one", async () => {
+    const harness = await createHarness();
+
+    const fullRequest = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", requesterId: "agent-full" },
+    );
+
+    expect(fullRequest.device.spec).not.toHaveProperty("full");
+    expect(fullRequest.device.spec).toEqual(request);
   });
 });
