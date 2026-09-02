@@ -12,9 +12,8 @@ export interface DriverDevice {
   /**
    * The opaque string platform tooling accepts right now -- a simctl UDID for iOS, an adb
    * serial (`emulator-<port>`) for Android. The core carries it without interpreting it; only
-   * the owning driver module knows what it means. Unlike `deviceId` (Simlock's own, stable
-   * `simlock-`/`simlock_`-prefixed name proving Simlock created the device), this can change
-   * across a boot -- see `Driver.makeReady`.
+   * the owning driver module knows what it means. Unlike `deviceId`, which identifies the
+   * device for as long as it exists, this can change across a boot -- see `Driver.makeReady`.
    */
   readonly address: string;
 }
@@ -58,9 +57,9 @@ export interface ObservedDevice extends DriverDevice {
 
 /** Reality observable by a driver without trusting the registry. */
 export interface DriverReality {
-  /** Devices whose platform-owned name proves that Simlock created them. */
+  /** Devices whose membership in the driver's root proves that Simlock created them. */
   readonly devices: readonly ObservedDevice[];
-  /** Running, Simlock-attributable device processes not necessarily in the registry. */
+  /** Running device processes from that same root, not necessarily in the registry. */
   readonly processes: readonly DriverDevice[];
 }
 
@@ -98,6 +97,12 @@ export interface DriverCatalogEntry {
 
 export interface Driver {
   readonly platform: Platform;
+  /**
+   * Absolute path of the root this driver owns and scopes every platform command to.
+   * Membership in it is what proves a device is Simlock's; the core carries the string
+   * around without interpreting it, the same way it carries `address`.
+   */
+  readonly deviceRoot: string;
   resolveSpec(
     request: DeviceRequest,
     options: { readonly allowDownload: boolean },
@@ -121,6 +126,32 @@ export interface Driver {
   /** Read-only: must never trigger a runtime / system-image download. */
   listCatalog(): Promise<DriverCatalogEntry>;
   estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
+  /**
+   * Opaque environment a lease holder needs to reach a device in this driver's root --
+   * containment cuts both ways, so a grant that did not carry it would hand out a device
+   * nobody could address. The core forwards it verbatim; no key here means anything to it.
+   */
+  leaseEnvironment(): Readonly<Record<string, string>>;
+}
+
+/**
+ * Why a driver could not start. A driver that refuses to start fails closed and takes only
+ * its own platform with it (safety rule 9), so the daemon has to be able to report the
+ * refusal without understanding it: the driver module names the event and builds the
+ * payload, and the core carries both to the bus and to `doctor` unread.
+ */
+export interface DriverRejection {
+  readonly platform: Platform;
+  readonly event: "driver.root-rejected" | "driver.adb-server-rejected";
+  readonly payload: Readonly<Record<string, string | number>>;
+  /**
+   * The refusal's vocabulary term (`missing-marker`, `occupied`, ...), stated separately
+   * rather than read back out of `payload`, which is a wire contract the core does not
+   * open. `doctor` reports it as the failing reason.
+   */
+  readonly reason: string;
+  /** One line, for `doctor` output and the startup log. */
+  readonly summary: string;
 }
 
 export class RuntimeMissingError extends Error {

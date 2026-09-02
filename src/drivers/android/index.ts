@@ -114,6 +114,14 @@ const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
 export class AndroidDriver implements Driver {
   readonly platform = "android" as const;
+  /**
+   * Placeholder until this driver owns a validated AVD home and a private adb server
+   * (ADR 0001, decision 4). Deliberately not `#avdDirectory`: that is wherever the user's
+   * own AVDs already live, and naming it here would claim an ownership Simlock has not
+   * proven for it. Nothing reads either member yet.
+   */
+  // fallow-ignore-next-line unused-class-member -- Driver.deviceRoot contract; read by doctor --purge-orphans to say which root an orphan came from.
+  readonly deviceRoot = "/simlock-android-device-root-pending";
   readonly #clock: Clock;
   readonly #devices = new Map<string, DeviceState>();
   readonly #filesystem: Filesystem;
@@ -148,6 +156,11 @@ export class AndroidDriver implements Driver {
 
   get sdkPath(): string {
     return this.#sdk.root;
+  }
+
+  // fallow-ignore-next-line unused-class-member -- Driver.leaseEnvironment contract; read by the lease path when it builds a grant.
+  leaseEnvironment(): Readonly<Record<string, string>> {
+    return {};
   }
 
   async resolveSpec(

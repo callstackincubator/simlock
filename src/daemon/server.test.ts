@@ -5,7 +5,14 @@ import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
+import {
+  type Config,
+  type DriverRejection,
+  CleanupReaper,
+  FakeDriver,
+  LeaseEngine,
+  Registry,
+} from "../core/index.js";
 import {
   FakeClock,
   FakeSystemStats,
@@ -748,6 +755,43 @@ function deferred<T>(): {
   return { promise, reject, resolve };
 }
 
+describe("DaemonServer driver rejections", () => {
+  it("publishes one event per platform that refused to start, after the daemon is up", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          payload: { platform: "ios", reason: "wrong-instance", root: "/Devices" },
+          platform: "ios",
+          reason: "wrong-instance",
+          summary: "Refusing the ios device root /Devices: it belongs to another instance",
+        },
+      ],
+    });
+
+    const events = harness.eventBus.replay();
+    const rejected = events.filter((event) => event.event === "driver.root-rejected");
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        module: "daemon",
+        payload: { platform: "ios", reason: "wrong-instance", root: "/Devices" },
+      }),
+    ]);
+    // The daemon did come up -- the refusal costs one platform, not the process -- and
+    // the buffer says so in that order.
+    const started = events.find((event) => event.event === "daemon.started");
+    expect(started?.seq).toBeLessThan(rejected[0]?.seq ?? 0);
+  });
+
+  it("publishes nothing when every driver started", async () => {
+    const harness = await createHarness();
+
+    expect(harness.eventBus.replay().filter((event) => event.event.startsWith("driver."))).toEqual(
+      [],
+    );
+  });
+});
+
 describe("DaemonServer lease heartbeat", () => {
   it("slides a held lease's deadline past the backstop while its holder keeps ponging, and stops sliding once it stops", async () => {
     const harness = await createHarness({
@@ -1085,6 +1129,7 @@ async function createHarness(
     readonly converge?: () => Promise<void>;
     readonly dispose?: () => void;
     readonly driver?: FakeDriver;
+    readonly driverRejections?: readonly DriverRejection[];
     readonly logger?: Logger;
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
@@ -1143,6 +1188,9 @@ async function createHarness(
     clock,
     config,
     ...(options.converge === undefined ? {} : { converge: options.converge }),
+    ...(options.driverRejections === undefined
+      ? {}
+      : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
     host: new DaemonEndpointHost({

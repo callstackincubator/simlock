@@ -61,6 +61,12 @@ export interface FakeDriverPlatformScript {
   readonly failures?: Partial<Record<FakeDriverOperation, FakeDriverErrorSpec>>;
   readonly managedReality?: ScriptedManagedReality;
   /**
+   * Environment the grant for this platform's devices should carry, standing in for the
+   * device-set path / adb port a real driver contributes. Read on every operation like
+   * everything else here, so a test can set it before the lease it wants to assert on.
+   */
+  readonly leaseEnvironment?: Readonly<Record<string, string>>;
+  /**
    * Overrides the `address` a `makeReady` boot returns (the script is re-read fresh on every
    * call, so a test can change this between two boots of the same device to simulate the real
    * drivers reassigning it -- e.g. Android's console port on a `shutdown` -> boot cycle).

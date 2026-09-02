@@ -50,7 +50,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `disk.pressure-detected` | free bytes, threshold | free disk crossed under the configured threshold (edge-triggered: once per crossing, not once per tick while it persists) | CleanupReaper | implemented |
 | `cleanup.executed` | rule name, action, target, reason | cleanup executor committed a proposed action | CleanupExecutor | implemented |
 | `doctor.reconciled` | drift findings | daemon reconciliation completed | Doctor | implemented |
-| `driver.root-rejected` | platform, root path, reason (not-absolute/missing-marker/invalid-marker/wrong-instance/symlink/wrong-owner/wrong-permissions/non-empty-unowned-root/unreadable) | a driver's device root failed ownership validation at startup, so that platform's driver did not start | DaemonServer | planned |
+| `driver.root-rejected` | platform, root path, reason (not-absolute/missing-marker/invalid-marker/wrong-instance/symlink/wrong-owner/wrong-permissions/non-empty-unowned-root/unreadable) | a driver's device root failed ownership validation at startup, so that platform's driver did not start | DaemonServer | implemented |
 | `driver.adb-server-rejected` | port, reason | Simlock's configured adb server port was occupied by a server it does not own, so the Android driver did not start | DaemonServer | planned |
 
 ## Conventions recap

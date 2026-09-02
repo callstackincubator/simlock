@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
@@ -13,12 +14,33 @@ interface SimctlDevice {
   readonly state: string;
 }
 
-async function simctlDevices(): Promise<SimctlDevice[]> {
+/**
+ * Devices in one device set. Every simctl call here carries `--set`, exactly as the
+ * driver's do: a device in a custom set is not addressable, or even listable, without it.
+ * Omitting the flag is how this lane checks the *other* half of containment -- see
+ * `defaultSetDevices`.
+ */
+async function setDevices(deviceSet: string): Promise<SimctlDevice[]> {
+  const { stdout } = await execFileAsync("xcrun", [
+    "simctl",
+    "--set",
+    deviceSet,
+    "list",
+    "devices",
+    "-j",
+  ]);
+  const parsed = JSON.parse(stdout) as { devices: Record<string, SimctlDevice[]> };
+  return Object.values(parsed.devices).flat();
+}
+
+/** The machine's own device set -- the one Xcode shows. Simlock's devices must never be in it. */
+async function defaultSetDevices(): Promise<SimctlDevice[]> {
   const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "-j"]);
   const parsed = JSON.parse(stdout) as { devices: Record<string, SimctlDevice[]> };
   return Object.values(parsed.devices).flat();
 }
 
+/** Runtimes are global: a custom set lists the same ones the default set does. */
 async function simctlRuntimes(): Promise<string[]> {
   const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "runtimes", "-j"]);
   const parsed = JSON.parse(stdout) as {
@@ -27,12 +49,16 @@ async function simctlRuntimes(): Promise<string[]> {
   return parsed.runtimes.filter((runtime) => runtime.isAvailable).map((runtime) => runtime.version);
 }
 
-async function deleteStraySimlockSimulators(): Promise<void> {
-  const devices = await simctlDevices();
-  for (const device of devices) {
-    if (device.name.startsWith("simlock-")) {
-      await execFileAsync("xcrun", ["simctl", "delete", device.udid]).catch(() => undefined);
-    }
+/**
+ * Everything in the set, by membership rather than by name: the set is Simlock's own, so
+ * nothing else can be in it, and CoreSimulator has to be told to forget these devices
+ * before the temporary home holding them is removed.
+ */
+async function deleteSetDevices(deviceSet: string): Promise<void> {
+  for (const device of await setDevices(deviceSet).catch(() => [])) {
+    await execFileAsync("xcrun", ["simctl", "--set", deviceSet, "delete", device.udid]).catch(
+      () => undefined,
+    );
   }
 }
 
@@ -43,7 +69,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "catalog agrees with simctl, a cold lease boots a real Booted simulator with matching provenance, release keeps it warm, and nuke leaves no simlock- simulator",
+      "catalog agrees with simctl, a cold lease boots a real Booted simulator inside Simlock's own device set with matching provenance, release keeps it warm, and nuke empties the set",
       { timeout: 300_000 },
       async () => {
         const availableRuntimes = await simctlRuntimes();
@@ -52,6 +78,7 @@ describe.skipIf(process.platform !== "darwin")(
         }
 
         const env = await withDaemon({ driver: "real" });
+        const deviceSet = join(env.home, "devices", "ios");
         try {
           const catalog = await env.cli(["catalog", "--json", "--platform", "ios"]);
           expect(catalog.code).toBe(0);
@@ -90,14 +117,24 @@ describe.skipIf(process.platform !== "darwin")(
           expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
           const grant = lease.json as { lease: string; udid: string; device: string };
 
-          const booted = await simctlDevices();
+          const booted = await setDevices(deviceSet);
           const bootedDevice = booted.find((device) => device.udid === grant.udid);
-          expect(bootedDevice, `simctl does not know about udid ${grant.udid}`).toBeDefined();
+          expect(
+            bootedDevice,
+            `simctl --set ${deviceSet} does not know about udid ${grant.udid}`,
+          ).toBeDefined();
           expect(bootedDevice?.state).toBe("Booted");
+          // The naming is a label with no authority behind it (safety rule 8) -- what
+          // proves ownership is the set the device was just found in -- but it is still
+          // what a human reads in the simulator window title, so it stays checked.
           expect(
             bootedDevice?.name.startsWith("simlock-"),
             "device name must carry the simlock- prefix",
           ).toBe(true);
+          expect(
+            (await defaultSetDevices()).some((device) => device.udid === grant.udid),
+            "a Simlock simulator must be invisible in the machine's default device set",
+          ).toBe(false);
 
           // Provenance: both marks exist with the same token. `doctor` is the
           // documented way to observe this -- a foreign-provenance-change finding
@@ -119,6 +156,10 @@ describe.skipIf(process.platform !== "darwin")(
             ),
             "expected no provenance drift for a device simlock just created",
           ).toBe(false);
+          expect(
+            findings.some((finding) => finding.kind === "driver-unavailable"),
+            "the iOS driver must have started, with a root it owns",
+          ).toBe(false);
 
           const release = await env.cli(["release", grant.lease]);
           expect(release.code).toBe(0);
@@ -135,19 +176,18 @@ describe.skipIf(process.platform !== "darwin")(
             },
             { timeout: 60_000, label: "device returns to ready after release" },
           );
-          const stillBooted = await simctlDevices();
+          const stillBooted = await setDevices(deviceSet);
           expect(stillBooted.find((device) => device.udid === grant.udid)?.state).toBe("Booted");
 
           const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
           expect(nuke.code).toBe(0);
 
-          await waitFor(
-            async () =>
-              !(await simctlDevices()).some((device) => device.name.startsWith("simlock-")),
-            { timeout: 60_000, label: "no simlock- simulator remains after nuke --delete-devices" },
-          );
+          await waitFor(async () => (await setDevices(deviceSet)).length === 0, {
+            timeout: 60_000,
+            label: "no simulator remains in Simlock's device set after nuke --delete-devices",
+          });
         } finally {
-          await deleteStraySimlockSimulators();
+          await deleteSetDevices(deviceSet);
         }
       },
     );

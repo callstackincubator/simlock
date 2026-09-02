@@ -114,6 +114,13 @@ export interface EventMap {
     readonly reason: string;
   };
   "doctor.reconciled": { readonly driftFindings: unknown };
+  /** Payloads owned by the driver module that refused the root; see `DriverRejection`. */
+  "driver.root-rejected": {
+    readonly platform: string;
+    readonly root: string;
+    readonly reason: string;
+  };
+  "driver.adb-server-rejected": { readonly port: number; readonly reason: string };
 }
 
 export type EventName = keyof EventMap;

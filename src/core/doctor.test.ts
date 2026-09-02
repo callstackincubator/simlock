@@ -6,6 +6,7 @@ import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { Doctor } from "./doctor.js";
+import type { DriverRejection } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseEngine } from "./lease-engine.js";
@@ -1231,7 +1232,71 @@ describe("Doctor", () => {
     expect(firstForeignStateSeq).toBeGreaterThan(lastCommitSeq);
     expect(events.at(-1)?.event).toBe("doctor.reconciled");
   });
+
+  it("reports a platform whose driver refused to start, with the reason it refused", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [],
+      driverRejections: [rootRejection()],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings).toEqual([
+      {
+        detail: "Refusing the ios device root /Devices: it carries no marker",
+        kind: "driver-unavailable",
+        platform: "ios",
+        reason: "missing-marker",
+      },
+    ]);
+  });
+
+  it("leaves a refused driver alone under --fix, since adopting it is the refusal's point", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [],
+      driverRejections: [rootRejection()],
+      eventBus,
+      registry,
+    }).reconcile({ fix: true });
+
+    expect(report.findings.map((finding) => finding.kind)).toEqual(["driver-unavailable"]);
+    expect(registry.snapshot.devices).toEqual([]);
+  });
 });
+
+function rootRejection(): DriverRejection {
+  return {
+    event: "driver.root-rejected",
+    payload: { platform: "ios", reason: "missing-marker", root: "/Devices" },
+    platform: "ios",
+    reason: "missing-marker",
+    summary: "Refusing the ios device root /Devices: it carries no marker",
+  };
+}
 
 async function readyDevice(
   registry: Registry,

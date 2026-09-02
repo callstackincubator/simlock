@@ -9,7 +9,13 @@ import {
   transitionEnteredAt,
 } from "./domain.js";
 import type { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { Driver, DriverDevice, ObservedDevice, ObservedMark } from "./driver.js";
+import type {
+  Driver,
+  DriverDevice,
+  DriverRejection,
+  ObservedDevice,
+  ObservedMark,
+} from "./driver.js";
 import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
 
@@ -34,6 +40,13 @@ export type DoctorFinding =
       readonly deviceId: string;
       readonly platform: Platform;
       readonly detail: ProvenanceDrift;
+    }
+  | {
+      /** A platform Simlock is running without, because its driver refused to start. */
+      readonly kind: "driver-unavailable";
+      readonly platform: Platform;
+      readonly reason: string;
+      readonly detail: string;
     }
   | {
       readonly kind: "stalled-transition";
@@ -79,6 +92,12 @@ export interface DoctorOptions {
    * backgrounded reclaim from being read as a stall -- see `stalledTransitionFinding`.
    */
   readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
+  /**
+   * Drivers that refused to start, as reported once at daemon startup. They are findings
+   * on every run, not just the first: the daemon has been serving without that platform
+   * ever since, and `doctor` is where `docs/CLI.md` promises the reason turns up.
+   */
+  readonly driverRejections?: readonly DriverRejection[];
   readonly registry: Registry;
 }
 
@@ -135,6 +154,7 @@ export class Doctor {
         findings.push(stalled);
       }
     }
+    findings.push(...driverUnavailableFindings(this.options.driverRejections ?? []));
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
 
@@ -184,6 +204,7 @@ export class Doctor {
     }
   }
 
+  // fallow-ignore-next-line complexity -- one exhaustive arm per finding kind, each a single call or a documented no-op.
   async #applySafeFixes(findings: readonly DoctorFinding[]): Promise<void> {
     for (const finding of findings) {
       switch (finding.kind) {
@@ -204,6 +225,10 @@ export class Doctor {
           break;
         case "foreign-provenance-change":
           // Report-only: re-marking destroys the evidence, and the device may be leased.
+          break;
+        case "driver-unavailable":
+          // Nothing here can repair a refused root or an occupied port without doing the
+          // one thing failing closed exists to prevent: adopting what it refused.
           break;
         case "stalled-transition":
           await this.#fixStalledTransition(finding);
@@ -428,6 +453,15 @@ function provenanceDrift(mark: ObservedMark): ProvenanceDrift | undefined {
     return "erased";
   }
   return mark.erasable === mark.durable ? undefined : "mark-mismatch";
+}
+
+function driverUnavailableFindings(rejections: readonly DriverRejection[]): DoctorFinding[] {
+  return rejections.map((rejection) => ({
+    detail: rejection.summary,
+    kind: "driver-unavailable" as const,
+    platform: rejection.platform,
+    reason: rejection.reason,
+  }));
 }
 
 function orphanFindings(

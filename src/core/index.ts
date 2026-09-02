@@ -19,6 +19,7 @@ export {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type DriverRejection,
   type ObservedDevice,
   type ObservedRunState,
   RuntimeMissingError,

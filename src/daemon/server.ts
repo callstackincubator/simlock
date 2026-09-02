@@ -1,4 +1,4 @@
-import { type EventBus, type EventEnvelope } from "../bus/index.js";
+import { type EventBus, type EventEnvelope, type EventMap } from "../bus/index.js";
 import {
   type Config,
   type DeviceRecord,
@@ -15,6 +15,7 @@ import {
   UnknownModelError,
   type CleanupReaper,
   type Doctor,
+  type DriverRejection,
   type LeaseHealthMonitor,
   type Nuke,
   UnknownLeaseError,
@@ -57,6 +58,12 @@ export interface DaemonServerOptions {
   readonly config: Config;
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
+  /**
+   * Platforms whose driver refused to start. The daemon serves without them rather than
+   * refusing to come up (safety rule 9), so the refusal has to be visible somewhere: one
+   * event each lands in the ring buffer here, and `Doctor` reports the same list.
+   */
+  readonly driverRejections?: readonly DriverRejection[];
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
   readonly leases: LeaseCommands;
@@ -198,6 +205,18 @@ export class DaemonServer {
       { configSnapshot: this.options.config, version: this.options.version },
       "daemon",
     );
+    // After `daemon.started`, because these are facts about the daemon that just started
+    // and a subscriber reading the buffer in order should see it come up first.
+    for (const rejection of this.options.driverRejections ?? []) {
+      // The driver module owns the name/payload pair; `EventMap` cannot check a pairing
+      // chosen at runtime, so the one assertion lives here, at the only place that
+      // forwards one, rather than being spread over the drivers that produce them.
+      this.options.eventBus.emit(
+        rejection.event,
+        rejection.payload as EventMap[typeof rejection.event],
+        "daemon",
+      );
+    }
     this.#logger.info("Daemon started", {
       config: this.options.config,
       protocolVersion: this.#protocolVersion,

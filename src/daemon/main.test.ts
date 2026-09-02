@@ -66,6 +66,25 @@ describe("startDaemon", () => {
     expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
   });
 
+  it("establishes the instance identity once, and reuses it on the next start", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-identity-"));
+    temporaryDirectories.push(directory);
+    const filesystem = new MemoryFilesystem();
+    const identityPath = join(directory, "instance.json");
+
+    const first = await start({ dataDirectory: directory, filesystem });
+    const written = JSON.parse(await filesystem.readFile(identityPath)) as {
+      readonly instanceId: string;
+    };
+    await first.daemon.stop("test");
+    await start({ dataDirectory: directory, filesystem });
+
+    // Never regenerated: a second id would strand every device already sitting in a root
+    // marked with the first one (ADR 0001, decision 2).
+    expect(written.instanceId).not.toBe("");
+    expect(JSON.parse(await filesystem.readFile(identityPath))).toEqual(written);
+  });
+
   it("scopes child loggers under daemon.<module> so records are attributable", async () => {
     const { sink } = await start();
 
@@ -147,12 +166,15 @@ describe("discoverDrivers", () => {
     const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
     const filesystem = new MemoryFilesystem();
 
-    const drivers = await discoverDrivers({
+    const { drivers } = await discoverDrivers({
       clock: new FakeClock(),
+      driversConfig: {},
       filesystem,
       idGenerator: new CryptoIdGenerator(),
+      instanceId: "instance-1",
       logger,
       processRunner: new ScriptedProcessRunner([]),
+      simlockHome: "/home/.simlock",
     });
 
     expect(drivers.some((driver) => driver.platform === "android")).toBe(false);
@@ -189,10 +211,13 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
     return discoverDrivers({
       clock: new FakeClock(),
+      driversConfig: {},
       filesystem: new MemoryFilesystem(),
       idGenerator: new CryptoIdGenerator(),
+      instanceId: "instance-1",
       logger,
       processRunner: new ScriptedProcessRunner([]),
+      simlockHome: "/home/.simlock",
     });
   }
 
@@ -204,9 +229,10 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     );
     const sink = new MemoryLogSink();
 
-    const drivers = await discover(sink);
+    const { drivers, rejections } = await discover(sink);
 
     expect(drivers).toEqual([{ platform: "ios", fromModule: true, sawContext: true }]);
+    expect(rejections).toEqual([]);
     expect(sink.records).toContainEqual(
       expect.objectContaining({
         level: "info",
@@ -229,7 +255,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       `export function createDrivers() { return []; }`,
     );
 
-    await expect(discover(new MemoryLogSink())).resolves.toEqual([]);
+    await expect(discover(new MemoryLogSink())).resolves.toEqual({ drivers: [], rejections: [] });
   });
 
   it("fails loudly when the module has no createDrivers export", async () => {

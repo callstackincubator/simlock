@@ -32,6 +32,8 @@ export interface FakeDriverCall {
 export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   readonly clock: Clock;
+  /** Stands in for a real driver's owned root; nothing here validates or creates it. */
+  readonly deviceRoot?: string;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
   /**
    * Reclaim estimate for a `full` clean, when a test needs the two clean levels priced apart
@@ -41,6 +43,8 @@ export interface FakeDriverOptions {
   readonly fullCleanReclaimEstimateMs?: number;
   readonly knownModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
+  /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
+  readonly leaseEnvironment?: Readonly<Record<string, string>>;
   readonly platform: Platform;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
@@ -55,6 +59,7 @@ export class FakeDriverUnknownDeviceError extends Error {
 
 export class FakeDriver implements Driver {
   readonly platform: Platform;
+  readonly deviceRoot: string;
   readonly #availableOsVersions: Set<string>;
   readonly #callCounts = new Map<FakeDriverOperation, number>();
   readonly #calls: FakeDriverCall[] = [];
@@ -65,6 +70,7 @@ export class FakeDriver implements Driver {
   #hangMakeReady = false;
   readonly #knownModels: Set<string> | undefined;
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
+  readonly #leaseEnvironment: Readonly<Record<string, string>>;
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
   readonly #reclaimResult: "ready" | "shutdown";
@@ -82,7 +88,9 @@ export class FakeDriver implements Driver {
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#latencyMs = options.latencyMs;
+    this.#leaseEnvironment = options.leaseEnvironment ?? {};
     this.platform = options.platform;
+    this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
     this.#reclaimResult = options.reclaimResult ?? "ready";
     this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
   }
@@ -214,6 +222,10 @@ export class FakeDriver implements Driver {
     return this.#estimateMs?.[estimate.operation] ?? 0;
   }
 
+  leaseEnvironment(): Readonly<Record<string, string>> {
+    return this.#leaseEnvironment;
+  }
+
   failOn(operation: FakeDriverOperation, callNumber: number, error: Error): void {
     this.#failures.set(failureKey(operation, callNumber), error);
   }
@@ -229,12 +241,14 @@ export class FakeDriver implements Driver {
     }
   }
 
+  /**
+   * Stages what `listManaged` reports. Everything passed in is reported back, name and
+   * all: a real driver answers from what sits inside the root it owns, so a double that
+   * screened entries by prefix would be modelling ownership Simlock stopped inferring
+   * (safety rule 8).
+   */
   setManagedReality(reality: DriverReality): void {
-    const managed = {
-      devices: reality.devices.filter(isSimlockManaged),
-      processes: reality.processes.filter(isSimlockManaged),
-    };
-    this.#managedReality = cloneReality(managed);
+    this.#managedReality = cloneReality(reality);
     for (const device of reality.devices) {
       this.#devices.set(device.deviceId, statusFor(device.runState));
     }
@@ -282,10 +296,6 @@ export class FakeDriver implements Driver {
 
 function addressFor(deviceId: string, bootCount: number): string {
   return `${deviceId}-addr-${bootCount}`;
-}
-
-function isSimlockManaged(device: DriverDevice): boolean {
-  return device.deviceId.startsWith("simlock-") || device.deviceId.startsWith("simlock_");
 }
 
 function runStateFor(status: "provisioned" | "ready" | "shutdown"): ObservedRunState {
