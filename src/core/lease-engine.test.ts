@@ -1204,4 +1204,21 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
     expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
   });
+
+  it("leaves no armed timer behind for a detached lease it is disposed with", async () => {
+    const harness = await createHarness({ lease: { detachedTtlMs: 900_000 } });
+    await harness.engine.request(request, { mode: "detached", requesterId: "detached-holder" });
+    expect(harness.clock.pendingTimerCount).toBeGreaterThan(0);
+
+    harness.engine.dispose();
+
+    // A real `setTimeout` holds the event loop open, so a timer surviving disposal is a
+    // daemon that has decided to stop and cannot: `daemon stop` used to hang for the
+    // fifteen minutes of an outstanding detached lease's TTL. Held leases hid it, because
+    // shutdown releases them and releasing cancels the timer.
+    expect(harness.clock.pendingTimerCount).toBe(0);
+    // The lease itself is untouched -- disposal cancels a timer, it does not expire a
+    // lease, which is what lets a detached lease survive the restart.
+    expect(harness.registry.snapshot.leases).toHaveLength(1);
+  });
 });

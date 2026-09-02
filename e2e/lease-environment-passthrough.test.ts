@@ -66,9 +66,9 @@ describe("reaching a leased device", () => {
       `${exported.stdout}printf %s "$SIMLOCK_IOS_DEVICE_SET"`,
     ]);
     expect(evaluated.stdout).toBe("/Users/o'brien/My Sims/devices/ios");
-    // Released rather than left to the TTL because an outstanding detached lease keeps the
-    // daemon from exiting on `daemon stop` -- a defect that predates this work (it
-    // reproduces on the branch this stack is based on) and is not this test's subject.
+    // Released rather than left to the TTL: this flow is about the grant, and leaving a
+    // lease outstanding would make it share a failure mode with the shutdown flow that
+    // covers that case deliberately (`daemon lifecycle & recovery`).
     const exportedGrant = JSON.parse((await env.cli(["status", "--json"])).stdout) as {
       readonly leases: readonly { readonly id: string }[];
     };
