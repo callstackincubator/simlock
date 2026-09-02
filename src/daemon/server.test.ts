@@ -1495,6 +1495,7 @@ function testConfig(
       ...downloadsOverrides,
     },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       detachedTtlMs: 60_000,

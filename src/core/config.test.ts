@@ -83,6 +83,7 @@ describe("loadConfig", () => {
         },
       },
       stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+      ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
@@ -492,6 +493,94 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow(path);
+  });
+
+  it("defaults ios.slim to disabled with no categories and a slim boot timeout", async () => {
+    const config = await loadConfig({
+      configPath,
+      filesystem: new MemoryFilesystem(),
+      systemStats: createStats(),
+    });
+
+    expect(config.ios.slim).toEqual({ enabled: false, bootTimeoutMs: 600_000 });
+    expect(config.ios.slim.categories).toBeUndefined();
+    expect("categories" in config.ios.slim).toBe(false);
+  });
+
+  it("applies a file-level ios.slim override, including an explicit category list", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        ios: {
+          slim: { enabled: true, categories: ["logging", "diagnostics"], bootTimeoutMs: 900_000 },
+        },
+      }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.ios.slim).toEqual({
+      enabled: true,
+      categories: ["logging", "diagnostics"],
+      bootTimeoutMs: 900_000,
+    });
+  });
+
+  it("rejects a non-boolean ios.slim.enabled", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ ios: { slim: { enabled: "yes" } } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("ios.slim.enabled");
+  });
+
+  it.each([
+    [{ ios: { slim: { bootTimeoutMs: 0 } } }, "ios.slim.bootTimeoutMs"],
+    [{ ios: { slim: { bootTimeoutMs: -1 } } }, "ios.slim.bootTimeoutMs"],
+    [{ ios: { slim: { bootTimeoutMs: "600000" } } }, "ios.slim.bootTimeoutMs"],
+  ])("rejects a non-positive or malformed ios.slim.bootTimeoutMs", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it.each([
+    [{ ios: { slim: { categories: "logging" } } }],
+    [{ ios: { slim: { categories: [1, 2] } } }],
+    [{ ios: { slim: { categories: [""] } } }],
+  ])("rejects a malformed ios.slim.categories", async (contents) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("ios.slim.categories");
+  });
+
+  it("warns about an unknown key nested under ios.slim without rejecting the file", async () => {
+    const filesystem = new MemoryFilesystem();
+    const warn = vi.fn();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ ios: { slim: { turboMode: true } } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.turboMode"');
   });
 
   it("applies a file-level stalledTransition override", async () => {

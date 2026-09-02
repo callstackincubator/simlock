@@ -112,6 +112,17 @@ export function integerInRange(minimum: number, maximum: number): Validator {
   };
 }
 
+export function stringArray(value: unknown, path: string): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string" && item.length > 0)
+  ) {
+    throw invalidValue(path, "an array of strings");
+  }
+
+  return value as readonly string[];
+}
+
 export function stringUnion<Value extends string>(
   allowed: readonly Value[],
   describe: (allowed: readonly Value[]) => string = (values) =>

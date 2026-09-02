@@ -26,6 +26,7 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
