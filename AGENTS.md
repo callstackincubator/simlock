@@ -15,7 +15,13 @@ changes in this repo:
   (`subject.past-tense-fact`), post-commit emission, payload contracts,
   keeping EVENTS.md in sync.
 - [safety.md](docs/agent-rules/safety.md) — registry-only destruction, never
-  touch leased devices, no implicit downloads.
+  touch leased devices, no implicit downloads, ownership proven not inferred,
+  root validation fails closed.
+
+So are the accepted records in [docs/adr/](docs/adr/). An ADR marked
+_Accepted — not yet implemented_ means the documentation already describes the
+decided end state while the code has not caught up: treat the docs as the
+specification, and do not "fix" them back to match current behaviour.
 
 ## Documentation
 
@@ -27,3 +33,4 @@ Useful documentation lives in [docs/](docs/):
 - [EVENTS.md](docs/EVENTS.md) — catalog of business events
 - [IDEAS.md](docs/IDEAS.md) — post-v1 ideas; don't implement these unless asked
 - [known-pitfalls.md](docs/known-pitfalls.md) — accepted gaps and their planned fixes
+- [adr/](docs/adr/) — architecture decision records and their status

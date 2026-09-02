@@ -27,6 +27,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `health.maxConcurrentRecoveries`  | Cap on simultaneous recovery reboots, so a machine wake (every device reads `stopped` at once) cannot start a boot storm.                                                                                                   | `1`                                                               |
 | `stalledTransition.thresholdMultiplier` | Factor applied to a driver's own `provision + boot` (for `provisioning`) or `reclaim` (for `reclaiming`) estimate to get the stall threshold for `simlock doctor`'s `stalled-transition` finding. | `3`                                                               |
 | `stalledTransition.minimumThresholdMs` | Floor under the multiplied estimate, for a driver whose estimate is near zero.                                                                                                                                | `1 minute`                                                        |
+| `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `${SIMLOCK_HOME}/devices/ios`                                    |
+| `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `${SIMLOCK_HOME}/devices/android`                                |
+| `drivers.android.adbServerPort`   | TCP port for Simlock's own adb server. Must not be the shared server's `5037`. Startup fails closed if it is occupied.                                                                                       | `5038`                                                            |
 
 All limit values must be positive integers; all durations and byte sizes
 must be non-negative numbers (milliseconds and bytes, respectively).
@@ -38,6 +41,70 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `stalledTransition.minimumThresholdMs` must be a non-negative number.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
+
+## Device roots
+
+Simlock keeps every device it creates inside a root it owns, one per platform,
+and scopes every platform command to that root. A simulator or emulator in a
+Simlock root does not appear in Xcode, in Android Studio, or in a plain
+`simctl list` / `adb devices`, and Simlock in turn cannot reach anything
+outside it. See [ADR 0001](adr/0001-simlock-owned-device-roots.md) for why.
+
+```
+~/.simlock/devices/
+├── ios/                    # drivers.ios.deviceRoot     → xcrun simctl --set
+│   ├── .simlock-owned.json
+│   └── <UDID>/
+└── android/                # drivers.android.deviceRoot → ANDROID_AVD_HOME
+    ├── .simlock-owned.json
+    ├── simlock_<n>.ini
+    └── simlock_<n>.avd/
+```
+
+Both roots default under `SIMLOCK_HOME`, so pointing `SIMLOCK_HOME` somewhere
+else moves the devices with it. Override a single platform when its data
+belongs on another volume — device data runs to tens of gigabytes:
+
+```json
+{
+  "drivers": {
+    "ios": { "deviceRoot": "/Volumes/scratch/simlock-ios" }
+  }
+}
+```
+
+Roots hold device instances only. Runtimes and system images stay where Xcode
+and the Android SDK put them.
+
+### Ownership markers
+
+Each root carries a `.simlock-owned.json` marker naming the Simlock instance
+that owns it. Simlock creates the marker **only** for a root it creates empty
+itself, and refuses any existing root that is unmarked, marked for another
+instance, symlinked, or wrongly owned or permissioned. It never adopts a
+directory it did not create. The instance identity lives in
+`${SIMLOCK_HOME}/instance.json`, written once on first start.
+
+A root that fails validation stops that platform's driver at startup — Simlock
+fails closed rather than falling back to the default device location. `simlock
+doctor` reports the reason.
+
+### Simlock's adb server
+
+Android containment needs one more thing, because `adb` has no equivalent of
+`simctl --set`: Simlock runs its own adb server on `drivers.android.adbServerPort`
+and gives its emulators console ports above the range a default adb server
+scans. That server is started with USB and mDNS disabled, so it never competes
+with the shared server for physical devices or network targets, and it refuses
+`adb kill-server`.
+
+Consequence worth knowing: your own `adb` will not see Simlock's emulators.
+A lease hands you the port to use — see
+[CLI.md](CLI.md#reaching-a-leased-device).
+
+Running two Simlock instances on one machine now needs distinct
+`drivers.android.adbServerPort` values as well as distinct `SIMLOCK_HOME`
+values.
 
 ## Capacity strategies
 

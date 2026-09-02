@@ -99,3 +99,63 @@ destroys it (registry-only, as always). The device stays visible as
 `device.purge-failed` still fires as before; `device.quarantined`,
 `device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
 follow-up facts (see `docs/EVENTS.md`).
+
+## Device roots are an accident boundary, not a security boundary (planned)
+
+> Status: describes the state after
+> [ADR 0001](adr/0001-simlock-owned-device-roots.md) lands.
+
+Simlock keeps its devices in roots it owns and scopes every platform command
+to them, so Xcode, Android Studio, and a plain `simctl` / `adb` do not see
+them. This is what makes ownership provable: nothing outside Simlock can put a
+device in a Simlock root, so a device found there is Simlock's without needing
+to guess from its name.
+
+**The pitfall:** it is tempting to read that as isolation. It is not. A user
+who passes `xcrun simctl --set <path>` or raises
+`ADB_LOCAL_TRANSPORT_MAX_PORT` on their own adb server reaches straight into
+the root. Nothing about the mechanism resists a *deliberate* actor — it only
+makes accidental interference very unlikely, which is the actual goal, since
+the thing being prevented is a developer or another tool wiping a device an
+agent is mid-lease on.
+
+This is exactly why the durable/erasable provenance marks survive the change:
+they detect a device erased or deleted out from under a live lease, which
+containment makes rare but cannot make impossible. Do not remove them on the
+grounds that the root already proves ownership — the root proves *whose device
+it is*, the marks prove *what happened to it*.
+
+**Status:** accepted by design. Anything that needs a real trust boundary
+(multi-tenant machines, untrusted agents) needs OS-level isolation, which is
+out of scope for a device control plane.
+
+## Simlock's adb server has to be supervised by pid (planned)
+
+> Status: describes the state after
+> [ADR 0001](adr/0001-simlock-owned-device-roots.md) lands.
+
+Android containment needs Simlock to run its own adb server, because `adb` has
+no equivalent of `simctl --set`. That server is started with
+`ADB_REJECT_KILL_SERVER=1` so an agent's reflexive `adb kill-server` cannot
+detach every leased emulator at once.
+
+**The pitfall:** that protection applies to Simlock too. `adb kill-server`
+against its own server returns `error: kill-server rejected by remote server`,
+for the life of the process. The only way to stop it is to kill the pid.
+
+So the pid is recorded in `~/.simlock/adb-server.json` when the server starts,
+the daemon reaps it by pid on shutdown, and a daemon that crashed must find
+that file on restart and adopt-or-kill the server it names. A stale entry — the
+pid is gone, or belongs to something else now — must be treated as no server,
+not as a server to kill blindly.
+
+The file is deliberately *not* part of `state.json`: process supervision must
+not depend on registry integrity, since a corrupt registry is exactly when you
+would need to clean up a leftover server.
+
+**Related:** unix-domain sockets are not available for the adb server on
+macOS (`unix:`, `localfilesystem:`, and `localabstract:` are all rejected), so
+this has to be a TCP port and cannot live as a socket file inside
+`~/.simlock/` the way `daemon.sock` does. That is why
+`drivers.android.adbServerPort` exists and why two Simlock instances on one
+machine need distinct values for it.

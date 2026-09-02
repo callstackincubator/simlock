@@ -8,6 +8,20 @@ never enforce them only inside an individual rule or driver.
    devices, AVDs, snapshots, and runtimes that exist in its own registry
    (i.e. that simlock created). Everything else on the machine is strictly
    read-only. This includes `doctor --fix` and `nuke`.
+
+   There is exactly one exception, and it is opt-in: `doctor --purge-orphans`
+   may destroy a device that sits inside a *validly-marked Simlock device root*
+   but has no registry record (see
+   [ADR 0001](../adr/0001-simlock-owned-device-roots.md)). Root membership is a
+   second, independent proof of ownership — nothing outside Simlock can put a
+   device in that root, and Simlock never adopts a root it did not create
+   empty. The exception is deliberately narrow: it is reachable only from that
+   explicit command, never from the reaper, a cleanup rule, an idle tier, or
+   `doctor --fix`. The reason is structural, not stylistic — every central
+   safety filter in the reaper is written over registry records, and an orphan
+   has none, so an orphan proposal would bypass the entire safety net rather
+   than be checked by it. Keep marker validation off every unattended
+   destruction path.
 2. **Never touch a leased device.** No cleanup rule, reclaim, or reconcile
    action may target a device in `leased` state. The reaper filters this
    centrally; rules must not rely on their own checks. There is exactly one
@@ -35,4 +49,19 @@ never enforce them only inside an individual rule or driver.
 7. **Reconcile before trusting state.** On daemon startup (and in `doctor`),
    compare the registry against `simctl`/`adb` reality before acting on it;
    registry entries whose device vanished are marked, not silently recreated
-   or re-deleted.
+   or re-deleted. "Reality" means the contents of Simlock's own device roots,
+   scoped by `simctl --set` and `ANDROID_AVD_HOME` — never the machine's
+   default device locations.
+8. **Ownership is proven, never inferred.** A device is Simlock's because it
+   lives inside a validly-marked Simlock root, not because of what it is
+   called. `Driver.listManaged()` must answer from root membership; the
+   `simlock-` / `simlock_` naming is a cosmetic label with no authority behind
+   it. Never treat a name, a prefix, or a serial-to-name attribution as
+   evidence of ownership — a user can create a device with any name.
+9. **Root validation fails closed.** If a device root is missing its marker,
+   carries another instance's marker, is a symlink, or has the wrong owner or
+   permissions, that platform's driver does not start and Simlock reports why.
+   Never fall back to the default device location, and never adopt or mark a
+   root Simlock did not create empty itself. The same applies to Simlock's adb
+   server port: if it is occupied, the Android driver fails rather than
+   attaching to whatever server is already listening there.
