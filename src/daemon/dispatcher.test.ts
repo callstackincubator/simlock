@@ -6,9 +6,11 @@ import {
   Doctor,
   FakeDriver,
   LeaseEngine,
+  Nuke,
   Registry,
   type Config,
 } from "../core/index.js";
+import type { CatalogReader } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
   FakeClock,
@@ -35,6 +37,15 @@ async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
     readonly awaitReady?: () => Promise<void>;
+    /** Overrides the `catalog` dependency -- used only to force `#parseOutput`'s failure path
+     * (see "Dispatcher: #parseOutput") with a fake that returns a payload violating the
+     * contract's output schema, something no real `CatalogReader` implementation would do. */
+    readonly catalog?: CatalogReader;
+    /** ADR §3: `nuke.run` is admin-only and destructive (`safety.md` rules 1/5). `false` by
+     * default -- matching `DispatcherOptions.nuke`'s own undefined default, so most tests don't
+     * pay for wiring one -- since a real `Nuke` needs this function's own `engine`/`registry`,
+     * it is built here (rather than passed in) when a test opts in. */
+    readonly includeNuke?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -90,13 +101,14 @@ async function buildDispatcher(
   const dispatcher = new Dispatcher({
     awaitReady: overrides.awaitReady ?? (() => Promise.resolve()),
     capacity: engine,
-    catalog: engine,
+    catalog: overrides.catalog ?? engine,
     clock,
     config,
     doctor,
     eventBus,
     health: () => "running",
     leases: engine,
+    ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
     queue: engine,
     reaper,
     registry,
@@ -377,6 +389,129 @@ describe("Dispatcher: ownership", () => {
     ).resolves.toMatchObject({ result: "cancelled" });
 
     await expect(queuedRequest).rejects.toThrow();
+  });
+});
+
+// Review finding S9: `Dispatcher#leaseReleaseAll` and `#nukeRun` were exercised by no test
+// anywhere (`nuke.run` appeared in `server.test.ts` only inside a comment) -- both are
+// admin-only and destructive, which is exactly what `docs/agent-rules/safety.md` rules 1
+// ("registry-only destruction") and 5 ("destructive CLI commands confirm or require --yes") are
+// about. `--yes`/confirmation is a CLI-layer concern (not this dispatcher's), but role
+// enforcement and "it actually destroys only what it should" are, and neither had coverage.
+describe("Dispatcher: lease.release-all", () => {
+  it("rejects an agent session with FORBIDDEN, without releasing anything", async () => {
+    const { dispatcher, registry } = await buildDispatcher();
+    await dispatcher.dispatch(
+      "lease.request",
+      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_owner" }),
+    );
+
+    await expect(
+      dispatcher.dispatch("lease.release-all", {}, session({ role: "agent" })),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // The lease this agent session doesn't even own must still be untouched -- a rejected
+    // `lease.release-all` released nothing, it didn't just fail to report what it released.
+    expect(registry.snapshot.leases).toHaveLength(1);
+  });
+
+  it("admin releases every held lease, regardless of owner, and reports every released id", async () => {
+    const { dispatcher, registry } = await buildDispatcher();
+    const first = await dispatcher.dispatch(
+      "lease.request",
+      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_owner_1" }),
+    );
+    const second = await dispatcher.dispatch(
+      "lease.request",
+      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_owner_2" }),
+    );
+    expect(registry.snapshot.leases).toHaveLength(2);
+
+    const result = await dispatcher.dispatch(
+      "lease.release-all",
+      {},
+      session({ principal: "tok_admin", role: "admin" }),
+    );
+
+    expect(new Set(result.leaseIds)).toEqual(new Set([first.lease.id, second.lease.id]));
+    expect(registry.snapshot.leases).toHaveLength(0);
+  });
+});
+
+describe("Dispatcher: nuke.run", () => {
+  it("rejects an agent session with FORBIDDEN, without deleting anything", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ includeNuke: true });
+    await dispatcher.dispatch(
+      "lease.request",
+      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_owner" }),
+    );
+
+    await expect(
+      dispatcher.dispatch("nuke.run", {}, session({ role: "agent" })),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(registry.snapshot.leases).toHaveLength(1);
+  });
+
+  it("admin can run it, releasing every lease and reporting the deleteDevices flag it ran with", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ includeNuke: true });
+    await dispatcher.dispatch(
+      "lease.request",
+      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_owner" }),
+    );
+    expect(registry.snapshot.leases).toHaveLength(1);
+
+    const result = await dispatcher.dispatch(
+      "nuke.run",
+      { deleteDevices: false },
+      session({ role: "admin" }),
+    );
+
+    expect(result.releasedLeaseIds).toHaveLength(1);
+    expect(registry.snapshot.leases).toHaveLength(0);
+  });
+
+  it("throws NukeUnavailableError when the dispatcher was built with no Nuke wired -- an admin cannot bypass this", async () => {
+    const { dispatcher } = await buildDispatcher();
+    await expect(
+      dispatcher.dispatch("nuke.run", {}, session({ role: "admin" })),
+    ).rejects.toMatchObject({ name: "NukeUnavailableError" });
+  });
+});
+
+describe("Dispatcher: #parseOutput", () => {
+  // ADR §1's central claim -- "the daemon maps its own records onto contract types in exactly
+  // one place ... this is what keeps private types out of the public package surface" -- names
+  // `#parseOutput` as the enforcement mechanism (see `schemas.ts`'s module doc). It had no test
+  // of its own failure path: every other dispatcher test exercises a handler whose real output
+  // already satisfies its schema, so `#parseOutput`'s `safeParse` always took the success
+  // branch. This forces the failure branch with a `catalog: CatalogReader` fake that returns a
+  // payload no real `CatalogReader` implementation would -- one that does not satisfy
+  // `platformCatalogSchema` -- and checks the dispatcher does not leak that malformed payload
+  // out, or the underlying zod issue detail, to the caller.
+  it("fails closed with an opaque Internal error when a handler's output violates its contract schema, instead of leaking the malformed payload", async () => {
+    const badCatalog: CatalogReader = {
+      // `platformCatalogSchema` requires (among other fields) `platform`/`models`/`runtimes` --
+      // this satisfies none of them.
+      listCatalog: async () => [{ notAValidCatalogEntry: true } as never],
+    };
+    const { dispatcher } = await buildDispatcher({ catalog: badCatalog });
+
+    await expect(dispatcher.dispatch("catalog.get", {}, session())).rejects.toThrow(
+      /does not match its contract output schema/,
+    );
+    try {
+      await dispatcher.dispatch("catalog.get", {}, session());
+      expect.unreachable();
+    } catch (error: unknown) {
+      // Fails closed, generically -- not the raw zod issues (which could describe internal
+      // shape) and not the malformed payload itself.
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).not.toContain("notAValidCatalogEntry");
+    }
   });
 });
 
