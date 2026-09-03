@@ -9,6 +9,7 @@ import { FakeDriver } from "../core/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
+  CryptoTokenSecrets,
   FakeClock,
   JsonLinesLogger,
   MemoryFilesystem,
@@ -151,6 +152,90 @@ describe("startDaemon startup readiness", () => {
     }
   });
 });
+
+describe("startDaemon HTTP gateway startup readiness", () => {
+  // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
+  // being refused." Mirrors the socket-side test above (same FakeDriver latency trick to hold
+  // convergence open on the FakeClock), but drives a real HTTP request instead of a socket
+  // frame -- proving the gateway is actually listening (and its request actually parks) before
+  // convergence finishes, not just that `dispatch()` would park it in principle.
+  it("parks an HTTP request until convergence completes, instead of refusing the connection", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-slow-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const secrets = new CryptoTokenSecrets();
+    const secret = "slk_test_agent";
+    await filesystem.mkdirp(directory);
+    await filesystem.writeFileAtomic(
+      join(directory, "tokens.json"),
+      JSON.stringify([
+        { id: "tok_agent", hash: secrets.hash(secret), role: "agent", createdAt: 0 },
+      ]),
+    );
+    const port = 47_011;
+
+    const startPromise = startDaemon({
+      clock,
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      dataDirectory: directory,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock,
+          latencyMs: { listManaged: 30_000 },
+          platform: "ios",
+        }),
+      ],
+      filesystem,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions).then((daemon) => {
+      runningDaemons.push(daemon);
+      return daemon;
+    });
+
+    // Polls rather than a fixed delay: the gateway binds asynchronously (`onSocketClaimed`
+    // fires once the socket claim resolves, then `gateway.start()` itself awaits a real
+    // `listen()`), so there is no single microtask boundary to await here the way the
+    // socket-side test above can just retry-connect on the unix socket.
+    const statusBeforeConvergence = await pollUntilListening(port, secret);
+    expect(statusBeforeConvergence).toMatchObject({ health: "starting" });
+
+    const parkedStatusPromise = fetch(`http://127.0.0.1:${port}/v1/leases`, {
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    let settled = false;
+    void parkedStatusPromise.then(() => {
+      settled = true;
+    });
+    // Give the parked request's own microtasks a chance to run before asserting it hasn't --
+    // it must still be awaiting `dispatch()`'s startup-readiness gate, not merely slow.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    clock.advance(30_000);
+    const daemon = await startPromise;
+    expect(daemon).toBeDefined();
+
+    const parkedResponse = await parkedStatusPromise;
+    expect(parkedResponse.status).toBe(200);
+  });
+});
+
+async function pollUntilListening(port: number, secret: string): Promise<unknown> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
+        headers: { authorization: `Bearer ${secret}` },
+      });
+      return await response.json();
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error("HTTP gateway never started listening");
+}
 
 describe("discoverDrivers", () => {
   it("logs a skip when the Android SDK cannot be found, without throwing", async () => {

@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { NoCapacityError, RequesterAlreadyLeasedError } from "../core/index.js";
+import { DispatchError } from "../daemon/dispatcher.js";
+import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
-  FakeCapacityReader,
-  FakeCatalogReader,
-  FakeLeaseCommands,
-  FakeQueueControl,
+  FakeDispatcher,
   FakeRegistry,
   FakeTokenVerifier,
   makeDevice,
@@ -16,17 +15,15 @@ import {
   makeLease,
   sequenceIdGenerator,
   testConfig,
-  waitForCall,
+  waitForDispatch,
 } from "./test-fakes.js";
 
 function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const leases = new FakeLeaseCommands();
-  const queue = new FakeQueueControl();
-  const capacity = new FakeCapacityReader();
-  const catalog = new FakeCatalogReader();
+  const dispatcher = new FakeDispatcher();
   const registry = new FakeRegistry();
+  const ownerRoutedFacts = new OwnerRoutedFactBus(eventBus, registry);
   const tokens = new FakeTokenVerifier();
   tokens.register("slk_agent", { requesterId: "tok_agent", role: "agent" });
   tokens.register("slk_other", { requesterId: "tok_other", role: "agent" });
@@ -35,22 +32,29 @@ function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] }
   const logger = new JsonLinesLogger({ clock, sink: logSink });
   const config = overrides.config ?? testConfig();
 
+  // Default `lease.list` behaviour mirrors the real dispatcher's handler (agent sees its own
+  // leases by `ownerId`, admin sees all) -- most lease-detail routes go through it via
+  // `findOwnedLease`, so tests that don't care about ownership specifically don't each need to
+  // register their own handler.
+  dispatcher.handlers["lease.list"] = (_input, session) => ({
+    leases: registry.leases.filter(
+      (lease) => session.role === "admin" || lease.ownerId === session.principal,
+    ),
+  });
+
   const app = createHttpApp({
-    capacity,
-    catalog,
     clock,
     config,
-    daemonHealth: () => "running",
+    dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     eventBus,
     idGenerator: sequenceIdGenerator("gw"),
-    leases,
     logger,
-    queue,
+    ownerRoutedFacts,
     registry,
     tokens,
   });
 
-  return { app, clock, config, eventBus, leases, logSink, queue, registry, tokens };
+  return { app, clock, config, dispatcher, eventBus, logSink, registry, tokens };
 }
 
 type App = ReturnType<typeof buildHarness>["app"];
@@ -76,20 +80,19 @@ function postLeaseRequest(
 
 /**
  * Drives a `POST /v1/lease-requests` through to its 201 response and returns the created
- * request's id. `LeaseRequestTracker.submit` never settles until `LeaseCommands.request`'s
- * first `onProgress` call (or its own grant/rejection) -- see `tracker.ts` -- so this scripts
- * one `queued` progress event rather than awaiting the response before that call exists.
+ * request's id. `LeaseRequestTracker.submit` never settles until the `lease.request` dispatch's
+ * first `onProgress` call (or its own grant/rejection) -- see `tracker.ts`.
  */
 async function createLeaseRequest(
   app: App,
-  leases: FakeLeaseCommands,
+  dispatcher: FakeDispatcher,
   body: Record<string, unknown> = defaultBody,
   headers: Record<string, string> = agentAuth,
 ): Promise<{ readonly id: string; readonly callIndex: number }> {
-  const callIndex = leases.calls.length;
   const responsePromise = postLeaseRequest(app, body, headers);
-  await waitForCall(leases, callIndex);
-  leases.calls[callIndex]?.options.onProgress?.({ queuePosition: 1, stage: "queued" });
+  const call = await waitForDispatch(dispatcher, "lease.request");
+  const callIndex = dispatcher.calls.indexOf(call);
+  call.session.onProgress?.({ queuePosition: 1, stage: "queued" });
   const response = await responsePromise;
   const { request } = (await response.json()) as { request: { id: string } };
   return { callIndex, id: request.id };
@@ -150,50 +153,80 @@ describe("GET /v1/healthz", () => {
   });
 });
 
-describe("authentication and ownership", () => {
+describe("authentication and role/ownership (via the shared dispatcher)", () => {
   it("401s a protected route with no token", async () => {
     const { app } = buildHarness();
     const response = await app.request("/v1/status");
     expect(response.status).toBe(401);
   });
 
-  it("403s an agent token reaching an operator-only route", async () => {
-    const { app } = buildHarness();
-    const response = await app.request("/v1/leases", { headers: agentAuth });
+  it("403s an agent token whose dispatched operation is admin-only -- ADR: role gating moved to the shared dispatcher, not an HTTP-only minRole check", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["list.get"] = () => {
+      throw new DispatchError("FORBIDDEN", "Operation list.get requires role admin");
+    };
+    const response = await app.request("/v1/devices", { headers: agentAuth });
     expect(response.status).toBe(403);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
   });
 
-  it("403s an agent reaching another requester's lease request", async () => {
-    const { app, leases } = buildHarness();
-    const { id } = await createLeaseRequest(app, leases);
+  it("admits an operator token on the same admin-only route", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["list.get"] = () => [];
+    const response = await app.request("/v1/devices", { headers: operatorAuth });
+    expect(response.status).toBe(200);
+  });
+
+  it("403s an agent reaching another requester's lease request (HTTP-only tracker resource guard)", async () => {
+    const { app, dispatcher } = buildHarness();
+    const { id } = await createLeaseRequest(app, dispatcher);
 
     const response = await app.request(`/v1/lease-requests/${id}`, { headers: otherAgentAuth });
     expect(response.status).toBe(403);
   });
+
+  it("404s (not 403) an agent fetching another requester's lease -- ownership is lease.list's own filter now, not a separate check", async () => {
+    const { app, registry } = buildHarness();
+    registry.devices = [makeDevice({ id: "dev_1" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_other" })];
+
+    const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
+    expect(response.status).toBe(404);
+  });
 });
 
 describe("GET /v1/status, /v1/catalog", () => {
-  it("reports status shaped like the daemon's status.get", async () => {
-    const { app, registry } = buildHarness();
-    registry.devices = [makeDevice({ id: "dev_1", state: "ready" })];
-    registry.leases = [];
+  it("passes the dispatched status.get response straight through", async () => {
+    const { app, dispatcher } = buildHarness();
+    const status = {
+      capacity: {},
+      devices: [{ id: "dev_1" }],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    };
+    dispatcher.handlers["status.get"] = () => status;
 
     const response = await app.request("/v1/status", { headers: agentAuth });
     expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      health: string;
-      queueDepth: number;
-      devices: unknown[];
-      capacity: { ios: { warm: number } };
-    };
-    expect(body.health).toBe("running");
-    expect(body.queueDepth).toBe(0);
-    expect(body.devices).toHaveLength(1);
-    expect(body.capacity.ios.warm).toBe(1);
+    expect(await response.json()).toEqual(status);
   });
 
   it("filters the catalog by platform query", async () => {
-    const { app } = buildHarness();
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["catalog.get"] = (input) => {
+      expect(input).toEqual({ platform: "ios" });
+      return {
+        platforms: [
+          {
+            defaultRuntime: "26.5",
+            models: ["iPhone 17 Pro"],
+            platform: "ios",
+            runtimes: ["26.5"],
+          },
+        ],
+      };
+    };
     const response = await app.request("/v1/catalog?platform=ios", { headers: agentAuth });
     expect(await response.json()).toEqual({
       platforms: [
@@ -202,8 +235,11 @@ describe("GET /v1/status, /v1/catalog", () => {
     });
   });
 
-  it("400s an invalid platform query", async () => {
-    const { app } = buildHarness();
+  it("400s an invalid platform query, before ever dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["catalog.get"] = () => {
+      throw new Error("should not be called");
+    };
     const response = await app.request("/v1/catalog?platform=windows", { headers: agentAuth });
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
@@ -212,10 +248,10 @@ describe("GET /v1/status, /v1/catalog", () => {
 
 describe("POST /v1/lease-requests", () => {
   it("creates a request resource, 201 with a Location header", async () => {
-    const { app, leases } = buildHarness();
+    const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, defaultBody);
-    await waitForCall(leases);
-    leases.calls[0]?.options.onProgress?.({ queuePosition: 2, stage: "queued" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.session.onProgress?.({ queuePosition: 2, stage: "queued" });
     const response = await responsePromise;
 
     expect(response.status).toBe(201);
@@ -227,18 +263,18 @@ describe("POST /v1/lease-requests", () => {
     expect(body.request.queuePosition).toBe(2);
   });
 
-  it("400s a malformed body before ever calling LeaseCommands", async () => {
-    const { app, leases } = buildHarness();
+  it("400s a malformed body before ever dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
     const response = await postLeaseRequest(app, { platform: "ios" });
     expect(response.status).toBe(400);
-    expect(leases.calls).toHaveLength(0);
+    expect(dispatcher.calls).toHaveLength(0);
   });
 
   it("maps a fast RequesterAlreadyLeasedError to 409, naming the existing lease", async () => {
-    const { app, leases } = buildHarness();
+    const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, defaultBody);
-    await waitForCall(leases);
-    leases.calls[0]?.reject(new RequesterAlreadyLeasedError("tok_agent", "lse_existing"));
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.reject(new RequesterAlreadyLeasedError("tok_agent", "lse_existing"));
     const response = await responsePromise;
 
     expect(response.status).toBe(409);
@@ -252,19 +288,19 @@ describe("POST /v1/lease-requests", () => {
   });
 
   it("maps a fast NoCapacityError (noWait) to 503 with Retry-After", async () => {
-    const { app, leases } = buildHarness();
+    const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, { ...defaultBody, noWait: true });
-    await waitForCall(leases);
-    leases.calls[0]?.reject(new NoCapacityError());
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.reject(new NoCapacityError());
     const response = await responsePromise;
 
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBeTruthy();
   });
 
-  it("replays an identical Idempotency-Key without a second LeaseCommands.request call", async () => {
-    const { app, leases } = buildHarness();
-    const { id: firstId } = await createLeaseRequest(app, leases, defaultBody, {
+  it("replays an identical Idempotency-Key without a second dispatch call", async () => {
+    const { app, dispatcher } = buildHarness();
+    const { id: firstId } = await createLeaseRequest(app, dispatcher, defaultBody, {
       ...agentAuth,
       "idempotency-key": "abc",
     });
@@ -275,17 +311,27 @@ describe("POST /v1/lease-requests", () => {
     });
     expect(second.status).toBe(201);
     const secondBody = (await second.json()) as { request: { id: string } };
-    expect(leases.calls).toHaveLength(1);
+    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
     expect(secondBody.request.id).toBe(firstId);
+  });
+
+  it("passes a caller-supplied ttlMs straight onto the dispatch input -- no separate renew call (ADR §9)", async () => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, { ...defaultBody, ttlMs: 60_000 });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ mode: "detached", ttlMs: 60_000 });
+    call.resolve(makeGrant({ lease: { grantedAt: 1_000, id: "lse_1", ttlDeadline: 61_000 } }));
+    await responsePromise;
+    expect(dispatcher.calls.filter((c) => c.operation === "lease.renew")).toHaveLength(0);
   });
 });
 
 describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
   it("progresses queued -> booting -> granted, observable through GET", async () => {
-    const { app, leases } = buildHarness();
-    const { id, callIndex } = await createLeaseRequest(app, leases);
+    const { app, dispatcher } = buildHarness();
+    const { id, callIndex } = await createLeaseRequest(app, dispatcher);
 
-    leases.calls[callIndex]?.options.onProgress?.({ etaMs: 30_000, stage: "booting" });
+    dispatcher.calls[callIndex]?.session.onProgress?.({ etaMs: 30_000, stage: "booting" });
     const midway = await app.request(`/v1/lease-requests/${id}`, { headers: agentAuth });
     expect(
       ((await midway.json()) as { request: { state: string; etaSeconds: number } }).request,
@@ -296,7 +342,7 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
       state: "booting",
     });
 
-    leases.calls[callIndex]?.resolve(makeGrant({ lease: { id: "lse_final" } }));
+    dispatcher.calls[callIndex]?.resolve(makeGrant({ lease: { id: "lse_final" } }));
     const final = await app.request(`/v1/lease-requests/${id}`, { headers: agentAuth });
     const finalBody = (await final.json()) as {
       request: { state: string; lease: { id: string; dataPlane: unknown } };
@@ -307,21 +353,21 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
   });
 
   it("long-polls: ?wait returns early on a state change", async () => {
-    const { app, leases } = buildHarness();
-    const { id, callIndex } = await createLeaseRequest(app, leases);
+    const { app, dispatcher } = buildHarness();
+    const { id, callIndex } = await createLeaseRequest(app, dispatcher);
 
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=30`, { headers: agentAuth });
     await Promise.resolve();
     await Promise.resolve();
-    leases.calls[callIndex]?.options.onProgress?.({ etaMs: 10_000, stage: "provisioning" });
+    dispatcher.calls[callIndex]?.session.onProgress?.({ etaMs: 10_000, stage: "provisioning" });
     const response = await waitPromise;
     const body = (await response.json()) as { request: { state: string } };
     expect(body.request.state).toBe("provisioning");
   });
 
   it("long-polls: ?wait returns the unchanged state once the timer elapses", async () => {
-    const { app, clock, leases } = buildHarness();
-    const { id } = await createLeaseRequest(app, leases);
+    const { app, clock, dispatcher } = buildHarness();
+    const { id } = await createLeaseRequest(app, dispatcher);
 
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=5`, { headers: agentAuth });
     await Promise.resolve();
@@ -333,8 +379,8 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
   });
 
   it("streams SSE progress events, ending with the terminal granted event", async () => {
-    const { app, leases } = buildHarness();
-    const { id, callIndex } = await createLeaseRequest(app, leases);
+    const { app, dispatcher } = buildHarness();
+    const { id, callIndex } = await createLeaseRequest(app, dispatcher);
 
     const streamResponse = await app.request(`/v1/lease-requests/${id}/events`, {
       headers: agentAuth,
@@ -342,8 +388,8 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     expect(streamResponse.headers.get("content-type")).toContain("text/event-stream");
 
     const framesPromise = readSseFrames(streamResponse, 3);
-    leases.calls[callIndex]?.options.onProgress?.({ etaMs: 20_000, stage: "provisioning" });
-    leases.calls[callIndex]?.resolve(makeGrant({ lease: { id: "lse_sse" } }));
+    dispatcher.calls[callIndex]?.session.onProgress?.({ etaMs: 20_000, stage: "provisioning" });
+    dispatcher.calls[callIndex]?.resolve(makeGrant({ lease: { id: "lse_sse" } }));
     const frames = await framesPromise;
 
     expect(frames.map((frame) => frame.event)).toEqual(["queued", "provisioning", "granted"]);
@@ -363,10 +409,10 @@ describe("DELETE /v1/lease-requests/:id", () => {
   });
 
   it("204s when the request was still queued and cancellable", async () => {
-    const { app, leases, queue } = buildHarness();
-    const { id } = await createLeaseRequest(app, leases);
+    const { app, dispatcher } = buildHarness();
+    const { id } = await createLeaseRequest(app, dispatcher);
 
-    queue.cancelOutcome = "cancelled";
+    dispatcher.handlers["lease.cancel"] = () => ({ result: "cancelled" });
     const response = await app.request(`/v1/lease-requests/${id}`, {
       headers: agentAuth,
       method: "DELETE",
@@ -375,10 +421,10 @@ describe("DELETE /v1/lease-requests/:id", () => {
   });
 
   it("409s not-cancellable once device work is in flight", async () => {
-    const { app, leases, queue } = buildHarness();
-    const { id } = await createLeaseRequest(app, leases);
+    const { app, dispatcher } = buildHarness();
+    const { id } = await createLeaseRequest(app, dispatcher);
 
-    queue.cancelOutcome = "not-cancellable";
+    dispatcher.handlers["lease.cancel"] = () => ({ result: "not-cancellable" });
     const response = await app.request(`/v1/lease-requests/${id}`, {
       headers: agentAuth,
       method: "DELETE",
@@ -389,11 +435,11 @@ describe("DELETE /v1/lease-requests/:id", () => {
     );
   });
 
-  it("409s not-cancellable naming the lease id once already granted", async () => {
-    const { app, leases } = buildHarness();
+  it("409s not-cancellable naming the lease id once already granted -- caught before dispatching lease.cancel at all", async () => {
+    const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, defaultBody);
-    await waitForCall(leases);
-    leases.calls[0]?.resolve(makeGrant({ lease: { id: "lse_granted" } }));
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.resolve(makeGrant({ lease: { id: "lse_granted" } }));
     const created = await responsePromise;
     const { request } = (await created.json()) as { request: { id: string } };
 
@@ -416,7 +462,7 @@ describe("lease routes", () => {
   it("GET /v1/leases/:id returns the acquisition-shaped lease object", async () => {
     const { app, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
 
     const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
     expect(response.status).toBe(200);
@@ -437,27 +483,18 @@ describe("lease routes", () => {
     expect(response.status).toBe(404);
   });
 
-  it("403s an agent fetching another requester's lease", async () => {
-    const { app, registry } = buildHarness();
-    registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_other" })];
-
-    const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
-    expect(response.status).toBe(403);
-  });
-
   it("POST /v1/leases/:id/renew drains buffered device-health notices", async () => {
-    const { app, eventBus, leases, registry } = buildHarness();
+    const { app, dispatcher, eventBus, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
-    leases.renewImpl = async (leaseId, ttlMs) => ({
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+    dispatcher.handlers["lease.renew"] = (input) => ({
       deviceId: "dev_1",
       grantedAt: 1_000,
-      id: leaseId,
+      id: (input as { leaseId: string }).leaseId,
       mode: "detached",
       ownerId: "tok_agent",
       requesterId: "tok_agent",
-      ttlDeadline: 2_000 + (ttlMs ?? 900_000),
+      ttlDeadline: 2_000 + ((input as { ttlMs?: number }).ttlMs ?? 900_000),
     });
 
     eventBus.emit(
@@ -483,29 +520,30 @@ describe("lease routes", () => {
       { event: "device_unhealthy" },
       { attempts: 1, event: "device_recovered" },
     ]);
-    expect(leases.renewCalls).toEqual([{ leaseId: "lse_1", ttlMs: 120_000 }]);
   });
 
   it("POST /v1/leases/:id/renew accepts an empty body", async () => {
-    const { app, leases, registry } = buildHarness();
+    const { app, dispatcher, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
-    leases.renewImpl = async (leaseId) => ({
-      deviceId: "dev_1",
-      grantedAt: 1_000,
-      id: leaseId,
-      mode: "detached",
-      ownerId: "tok_agent",
-      requesterId: "tok_agent",
-      ttlDeadline: 2_000,
-    });
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+    dispatcher.handlers["lease.renew"] = (input) => {
+      expect(input).toEqual({ leaseId: "lse_1" });
+      return {
+        deviceId: "dev_1",
+        grantedAt: 1_000,
+        id: "lse_1",
+        mode: "detached",
+        ownerId: "tok_agent",
+        requesterId: "tok_agent",
+        ttlDeadline: 2_000,
+      };
+    };
 
     const response = await app.request("/v1/leases/lse_1/renew", {
       headers: agentAuth,
       method: "POST",
     });
     expect(response.status).toBe(200);
-    expect(leases.renewCalls).toEqual([{ leaseId: "lse_1" }]);
   });
 
   it("404s a renew for an unknown lease", async () => {
@@ -517,10 +555,10 @@ describe("lease routes", () => {
     expect(response.status).toBe(404);
   });
 
-  it("streams live lease notices over SSE, ending on lease_lost", async () => {
+  it("streams live lease notices over SSE, ending on lease_lost -- fed by the owner-routed fact bus, not a direct eventBus subscription", async () => {
     const { app, eventBus, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
 
     const streamResponse = await app.request("/v1/leases/lse_1/events", { headers: agentAuth });
     const framesPromise = readSseFrames(streamResponse, 2);
@@ -541,14 +579,16 @@ describe("lease routes", () => {
   });
 
   it("DELETE /v1/leases/:id releases and answers 202 with the device's post-release state", async () => {
-    const { app, leases, registry } = buildHarness();
+    const { app, dispatcher, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1", state: "leased" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
-    leases.releaseImpl = async (leaseId) => {
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+    dispatcher.handlers["lease.release"] = (input) => {
+      const leaseId = (input as { leaseId: string }).leaseId;
       registry.leases = registry.leases.filter((lease) => lease.id !== leaseId);
       registry.devices = registry.devices.map((device) =>
         device.id === "dev_1" ? { ...device, state: "reclaiming" } : device,
       );
+      return { leaseId };
     };
 
     const response = await app.request("/v1/leases/lse_1", {
@@ -560,13 +600,15 @@ describe("lease routes", () => {
       device: { id: "dev_1", state: "reclaiming" },
       released: true,
     });
-    expect(leases.releaseCalls).toEqual([{ leaseId: "lse_1", reason: "explicit" }]);
   });
 
-  it("an operator may release another requester's lease", async () => {
-    const { app, registry } = buildHarness();
+  it("an operator may release another requester's lease (lease.list's own admin bypass)", async () => {
+    const { app, dispatcher, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+    dispatcher.handlers["lease.release"] = (input) => ({
+      leaseId: (input as { leaseId: string }).leaseId,
+    });
 
     const response = await app.request("/v1/leases/lse_1", {
       headers: operatorAuth,
@@ -576,51 +618,71 @@ describe("lease routes", () => {
   });
 });
 
-describe("operator surface", () => {
-  it("GET /v1/leases lists every lease", async () => {
+describe("operator-only listing routes", () => {
+  it("GET /v1/leases (dispatches lease.list; an agent only sees its own)", async () => {
     const { app, registry } = buildHarness();
     registry.leases = [
-      makeLease({ id: "lse_1" }),
-      makeLease({ id: "lse_2", requesterId: "tok_other" }),
+      makeLease({ id: "lse_1", ownerId: "tok_agent" }),
+      makeLease({ id: "lse_2", ownerId: "tok_other" }),
     ];
 
-    const response = await app.request("/v1/leases", { headers: operatorAuth });
-    const body = (await response.json()) as { leases: Array<{ id: string }> };
-    expect(body.leases.map((lease) => lease.id).sort()).toEqual(["lse_1", "lse_2"]);
+    const asAgent = await app.request("/v1/leases", { headers: agentAuth });
+    const agentBody = (await asAgent.json()) as { leases: Array<{ id: string }> };
+    expect(agentBody.leases.map((lease) => lease.id)).toEqual(["lse_1"]);
+
+    const asOperator = await app.request("/v1/leases", { headers: operatorAuth });
+    const operatorBody = (await asOperator.json()) as { leases: Array<{ id: string }> };
+    expect(operatorBody.leases.map((lease) => lease.id).sort()).toEqual(["lse_1", "lse_2"]);
   });
 
-  it("GET /v1/devices lists every device", async () => {
-    const { app, registry } = buildHarness();
-    registry.devices = [makeDevice({ id: "dev_1" }), makeDevice({ id: "dev_2" })];
+  it("GET /v1/devices dispatches list.get(kind: devices)", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["list.get"] = (input) => {
+      expect(input).toEqual({ kind: "devices" });
+      return [{ id: "dev_1" }, { id: "dev_2" }];
+    };
 
     const response = await app.request("/v1/devices", { headers: operatorAuth });
     const body = (await response.json()) as { devices: Array<{ id: string }> };
     expect(body.devices.map((device) => device.id).sort()).toEqual(["dev_1", "dev_2"]);
   });
 
-  it("GET /v1/events replays the ring buffer, optionally filtered by ?since", async () => {
-    const { app, clock, eventBus } = buildHarness();
-    eventBus.emit("daemon.started", { configSnapshot: {}, version: "1" }, "test");
-    clock.advance(10_000);
-    eventBus.emit("daemon.stopping", { reason: "test" }, "test");
+  it("GET /v1/events replays via events.replay, translating ?since to an absolute sinceTs", async () => {
+    const { app, clock, dispatcher } = buildHarness();
+    dispatcher.handlers["events.replay"] = (input) => {
+      const sinceTs = (input as { sinceTs?: number }).sinceTs;
+      if (sinceTs === undefined) return [{ event: "daemon.started" }, { event: "daemon.stopping" }];
+      expect(sinceTs).toBe(clock.now() - 5_000);
+      return [{ event: "daemon.stopping" }];
+    };
 
     const all = await app.request("/v1/events", { headers: operatorAuth });
     expect(((await all.json()) as { events: unknown[] }).events).toHaveLength(2);
 
     const recent = await app.request("/v1/events?since=5s", { headers: operatorAuth });
     const recentBody = (await recent.json()) as { events: Array<{ event: string }> };
-    expect(recentBody.events).toEqual([expect.objectContaining({ event: "daemon.stopping" })]);
+    expect(recentBody.events).toEqual([{ event: "daemon.stopping" }]);
   });
 
-  it("400s an invalid ?since duration", async () => {
-    const { app } = buildHarness();
+  it("400s an invalid ?since duration, before dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["events.replay"] = () => {
+      throw new Error("should not be called");
+    };
     const response = await app.request("/v1/events?since=nonsense", { headers: operatorAuth });
     expect(response.status).toBe(400);
   });
 
-  it("GET /v1/events/stream follows the event bus live", async () => {
-    const { app, eventBus } = buildHarness();
+  it("GET /v1/events/stream dispatches events.subscribe then follows the raw event bus live", async () => {
+    const { app, dispatcher, eventBus } = buildHarness();
+    dispatcher.handlers["events.subscribe"] = (_input, session) => ({
+      subscribed: true,
+      subscriptionId: session.manageEventSubscription(true),
+    });
     const streamResponse = await app.request("/v1/events/stream", { headers: operatorAuth });
+    // `dispatch("events.subscribe", ...)` is awaited before the SSE stream opens, so it has
+    // already run by the time `app.request` resolves.
+    expect(dispatcher.calls.some((c) => c.operation === "events.subscribe")).toBe(true);
     const framesPromise = readSseFrames(streamResponse, 1);
     await Promise.resolve();
     eventBus.emit("daemon.stopping", { reason: "live" }, "test");
@@ -640,8 +702,8 @@ describe("hardening from review", () => {
   });
 
   it("clamps an oversized ?wait to the 60s ceiling", async () => {
-    const { app, clock, leases } = buildHarness();
-    const { id } = await createLeaseRequest(app, leases);
+    const { app, clock, dispatcher } = buildHarness();
+    const { id } = await createLeaseRequest(app, dispatcher);
 
     const waitPromise = app.request(`/v1/lease-requests/${id}?wait=999999`, {
       headers: agentAuth,
@@ -658,7 +720,7 @@ describe("hardening from review", () => {
   it("reports the mode-default ttlMs for a lease the tracker has no record of", async () => {
     const { app, config, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", requesterId: "tok_agent" })];
+    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
 
     const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
     const body = (await response.json()) as { lease: { ttlMs: number } };
