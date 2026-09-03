@@ -74,10 +74,11 @@ describe("sliding TTL and heartbeat", () => {
     try {
       const leaseResult = await mcp.client.callTool({
         name: "lease_simulator",
-        arguments: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+        arguments: { platform: "ios", device: "iPhone 16", os: "18.4" },
       });
       const mcpLease = leaseResult.structuredContent as {
-        lease: { id: string; ttlDeadline: number };
+        lease_id: string;
+        expires_at_ms: number;
       };
 
       const cliGrant = JSON.parse(await cliHeld.firstStdoutLine()) as {
@@ -111,7 +112,7 @@ describe("sliding TTL and heartbeat", () => {
       );
 
       const rowsAfterExpiry = await leaseRows(env);
-      const mcpRow = rowsAfterExpiry.find((row) => row.id === mcpLease.lease.id);
+      const mcpRow = rowsAfterExpiry.find((row) => row.id === mcpLease.lease_id);
       const cliRow = rowsAfterExpiry.find((row) => row.id === cliGrant.lease.id);
       expect(
         mcpRow,
@@ -121,21 +122,22 @@ describe("sliding TTL and heartbeat", () => {
         cliRow,
         "CLI held lease should have survived past the detached lease's expiry",
       ).toBeDefined();
-      expect(mcpRow?.ttlDeadline).toBeGreaterThan(mcpLease.lease.ttlDeadline);
+      expect(mcpRow?.ttlDeadline).toBeGreaterThan(mcpLease.expires_at_ms);
       expect(mcpRow?.lastHeartbeatAt).toBeGreaterThan(0);
       expect(cliRow?.ttlDeadline).toBeGreaterThan(cliGrant.lease.ttlDeadline);
       expect(cliRow?.lastHeartbeatAt).toBeGreaterThan(0);
 
       const statusResult = await mcp.client.callTool({ name: "lease_status", arguments: {} });
-      const statusExpiry = (statusResult.structuredContent as { ttlDeadline: number }).ttlDeadline;
-      expect(statusExpiry).toBeGreaterThan(mcpLease.lease.ttlDeadline);
+      const statusExpiry = (statusResult.structuredContent as { expires_at_ms: number })
+        .expires_at_ms;
+      expect(statusExpiry).toBeGreaterThan(mcpLease.expires_at_ms);
 
       const recorded = await env.events();
       expect(
         recorded.filter(
           (entry) =>
             entry.event === "lease.renewed" &&
-            (entry.payload as { leaseId?: string }).leaseId === mcpLease.lease.id,
+            (entry.payload as { leaseId?: string }).leaseId === mcpLease.lease_id,
         ).length,
         "expected repeated lease.renewed events for the heartbeating MCP lease",
       ).toBeGreaterThan(1);
@@ -156,7 +158,7 @@ describe("sliding TTL and heartbeat", () => {
 
       await mcp.client.callTool({
         name: "release_simulator",
-        arguments: { leaseId: mcpLease.lease.id },
+        arguments: { lease_id: mcpLease.lease_id },
       });
     } finally {
       cliHeld.kill("SIGKILL");
