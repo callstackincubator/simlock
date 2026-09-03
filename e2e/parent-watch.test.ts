@@ -42,7 +42,7 @@ describe("parent-watch", () => {
         "--bind-pid",
         String(fakeAgent.pid),
       ]);
-      const grant = JSON.parse(await held.firstStdoutLine()) as { lease: string; udid: string };
+      const grant = JSON.parse(await held.firstStdoutLine()) as { lease: { id: string } };
       await waitForLeaseCount(env, 1);
 
       fakeAgent.kill("SIGKILL");
@@ -58,7 +58,7 @@ describe("parent-watch", () => {
       expect(recorded).toContainEqual(
         expect.objectContaining({
           event: "lease.released",
-          payload: expect.objectContaining({ leaseId: grant.lease, reason: "explicit" }),
+          payload: expect.objectContaining({ leaseId: grant.lease.id, reason: "explicit" }),
         }),
       );
     } finally {
