@@ -1,0 +1,333 @@
+/**
+ * Zod schemas re-declaring today's wire shapes for the contract module (ADR 0003 §1).
+ *
+ * These schemas deliberately do NOT import their "real" counterparts from `src/core` --
+ * `DeviceRecord`, `LeaseRecord`, `Config`, `DoctorFinding`, `Proposal`, `EventEnvelope`, and so
+ * on are core-private types. Re-declaring their fields here, by hand, is exactly what keeps
+ * private domain records off the public package surface (the daemon maps its own records onto
+ * these shapes in exactly one place -- `src/daemon/server.ts`). If a core type's shape changes
+ * without a matching edit here, that is a compile-time or (for shapes structurally compatible
+ * but semantically different) a runtime output-validation failure at the daemon boundary --
+ * see `DaemonServer`'s output parsing -- not a silent drift.
+ *
+ * This module must never import from src/core, src/daemon, src/drivers, src/http, src/cli,
+ * src/mcp, or src/ports -- enforced by a test, see `boundary.test.ts`.
+ */
+import { z } from "zod";
+
+export const platformSchema = z.enum(["ios", "android"]);
+export type Platform = z.infer<typeof platformSchema>;
+
+const deviceStateSchema = z.enum([
+  "provisioning",
+  "ready",
+  "leased",
+  "reclaiming",
+  "quarantined",
+  "shutdown",
+  "deleted",
+]);
+
+const featureProfileSchema = z.enum(["full", "reduced"]);
+
+const deviceSpecSchema = z.object({
+  platform: platformSchema,
+  model: z.string(),
+  osVersion: z.string(),
+  full: z.boolean().optional(),
+});
+
+/** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, plus the `status`/`list`
+ * decoration's derived `transitionAgeMs` (see `DaemonServer#decorateDevice`). */
+export const deviceRecordSchema = z.object({
+  id: z.string(),
+  driverDeviceId: z.string(),
+  spec: deviceSpecSchema,
+  state: deviceStateSchema,
+  driverData: z.unknown(),
+  createdAt: z.number(),
+  lastLeaseEndedAt: z.number().optional(),
+  foreignStateDetectedAt: z.number().optional(),
+  foreignProvenanceDetectedAt: z.number().optional(),
+  recoveringSince: z.number().optional(),
+  recoveryAttempts: z.number().optional(),
+  quarantinedAt: z.number().optional(),
+  quarantineAttempts: z.number().optional(),
+  quarantineNextRetryAt: z.number().optional(),
+  address: z.string().optional(),
+  featureProfile: featureProfileSchema.optional(),
+  /** Decoration added by `status.get`/`list.get`; absent for a device not mid-transition. */
+  transitionAgeMs: z.number().optional(),
+});
+
+export const leaseModeSchema = z.enum(["held", "detached"]);
+
+/**
+ * Mirrors `LeaseRecord` (src/core/domain.ts) plus the `status`/`list` decoration's derived
+ * `lastHeartbeatAt` (see `DaemonServer#decorateLease`). Deliberately does NOT include
+ * `ownerId` -- that field, and the ownership semantics behind it, are PR 2's job (ADR §4).
+ */
+export const leaseRecordSchema = z.object({
+  id: z.string(),
+  deviceId: z.string(),
+  requesterId: z.string(),
+  mode: leaseModeSchema,
+  grantedAt: z.number(),
+  ttlDeadline: z.number(),
+  lastHeartbeatAt: z.number().optional(),
+});
+
+const leaseTimingSchema = z.object({
+  estimatedProvisionMs: z.number(),
+  estimatedBootMs: z.number(),
+  estimatedReclaimMs: z.number(),
+  estimatedReadyMs: z.number(),
+});
+
+export const leaseGrantSchema = z.object({
+  device: deviceRecordSchema,
+  lease: leaseRecordSchema,
+  timing: leaseTimingSchema,
+});
+
+export const leaseProgressSchema = z.discriminatedUnion("stage", [
+  z.object({ stage: z.literal("queued"), queuePosition: z.number() }),
+  z.object({ stage: z.literal("provisioning"), etaMs: z.number() }),
+  z.object({ stage: z.literal("booting"), etaMs: z.number() }),
+  z.object({ stage: z.literal("reclaiming"), etaMs: z.number() }),
+]);
+
+const runningCapacityEntrySchema = z.object({
+  running: z.number(),
+  maxRunning: z.number(),
+  reserved: z.number(),
+  overLimit: z.boolean(),
+});
+
+export const statusCapacitySchema = z.object({
+  ios: runningCapacityEntrySchema.extend({ limit: z.number(), warm: z.number(), used: z.number() }),
+  android: runningCapacityEntrySchema.extend({
+    limit: z.number(),
+    warm: z.number(),
+    used: z.number(),
+  }),
+  global: runningCapacityEntrySchema.extend({ warm: z.number() }),
+});
+
+export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
+
+export const platformCatalogSchema = z.object({
+  platform: platformSchema,
+  models: z.array(z.string()),
+  runtimes: z.array(z.string()),
+  defaultRuntime: z.string().optional(),
+});
+
+export const proposalSchema = z.object({
+  action: z.enum(["shutdown", "destroy"]),
+  reason: z.string(),
+  rule: z.string(),
+  target: z.string(),
+});
+
+export const cleanupRuleSummarySchema = z.object({ name: z.string() });
+
+/** Mirrors `DriverDevice` (src/core/driver.ts) -- `driverData` stays opaque `unknown` on
+ * purpose, exactly as the core treats it. */
+const driverDeviceSchema = z.object({
+  deviceId: z.string(),
+  driverData: z.unknown(),
+  address: z.string(),
+  featureProfile: featureProfileSchema.optional(),
+});
+
+/** Mirrors the `DoctorFinding` discriminated union (src/core/doctor.ts) field for field. */
+const doctorFindingSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("registry-device-missing"),
+    deviceId: z.string(),
+    platform: platformSchema,
+  }),
+  z.object({
+    kind: z.literal("orphan-device"),
+    device: driverDeviceSchema,
+    platform: platformSchema,
+  }),
+  z.object({
+    kind: z.literal("orphan-process"),
+    device: driverDeviceSchema,
+    platform: platformSchema,
+  }),
+  z.object({ kind: z.literal("expired-live-lease"), leaseId: z.string(), deviceId: z.string() }),
+  z.object({
+    kind: z.literal("foreign-state-change"),
+    deviceId: z.string(),
+    platform: platformSchema,
+    expected: z.enum(["running", "stopped"]),
+    observed: z.enum(["running", "stopped"]),
+  }),
+  z.object({
+    kind: z.literal("foreign-provenance-change"),
+    deviceId: z.string(),
+    platform: platformSchema,
+    detail: z.enum(["erased", "mark-mismatch", "durable-mark-missing"]),
+  }),
+  z.object({
+    kind: z.literal("stalled-transition"),
+    deviceId: z.string(),
+    platform: platformSchema,
+    state: z.enum(["provisioning", "reclaiming"]),
+    enteredAt: z.number(),
+    ageMs: z.number(),
+    thresholdMs: z.number(),
+  }),
+  z.object({
+    kind: z.literal("driver-advisory"),
+    platform: platformSchema,
+    code: z.string(),
+    message: z.string(),
+  }),
+]);
+
+export const doctorReportSchema = z.object({ findings: z.array(doctorFindingSchema) });
+
+export const nukeReportSchema = z.object({
+  deletedDevices: z.array(z.string()),
+  releasedLeaseIds: z.array(z.string()),
+});
+
+/**
+ * Mirrors `EventEnvelope` (src/bus/index.ts) at the envelope level only. `event` stays a plain
+ * string and `payload` stays `z.unknown()` rather than redeclaring all ~30 `EventMap` payload
+ * shapes here -- see docs/EVENTS.md for the authoritative catalog. This is a deliberate,
+ * documented simplification: re-declaring every business event's payload shape a second time,
+ * next to `events.md`'s existing documentation requirement, is a lot of near-duplicate surface
+ * for a channel this PR does not change the routing of. Tightening this (e.g. a discriminated
+ * union keyed on `event`) is left as follow-up work; flagged in the PR description.
+ */
+export const eventEnvelopeSchema = z.object({
+  seq: z.number(),
+  timestamp: z.number(),
+  event: z.string(),
+  payload: z.unknown(),
+  module: z.string(),
+});
+
+// ---- config.get -----------------------------------------------------------------------------
+
+const platformCapacityOptionsSchema = z.object({
+  maxDevices: z.number().optional(),
+  maxRunning: z.number().optional(),
+});
+
+const fixedCapacityConfigSchema = z.object({
+  strategy: z.literal("fixed"),
+  config: z.object({
+    maxRunning: z.number(),
+    ios: platformCapacityOptionsSchema.optional(),
+    android: platformCapacityOptionsSchema.optional(),
+  }),
+});
+
+const capacityLimitsSchema = z.object({
+  maxRunning: z.number(),
+  ios: z.object({ maxDevices: z.number(), maxRunning: z.number() }),
+  android: z.object({ maxDevices: z.number(), maxRunning: z.number() }),
+});
+
+const resourceCapacityConfigSchema = z.object({
+  strategy: z.literal("resource"),
+  config: z.object({
+    limits: capacityLimitsSchema,
+    ramBudget: z.object({
+      iosBytesPerDevice: z.number(),
+      androidBytesPerDevice: z.number(),
+    }),
+  }),
+});
+
+/**
+ * Mirrors `CapacityConfig` (src/core/capacity/strategies/index.ts), discriminated on
+ * `strategy` exactly as the core type is. Adding a third strategy needs a matching edit here --
+ * there is no way around that with a hand-declared contract; it is the same trade-off the ADR
+ * accepts for every other core-private shape.
+ */
+const capacityConfigSchema = z.discriminatedUnion("strategy", [
+  fixedCapacityConfigSchema,
+  resourceCapacityConfigSchema,
+]);
+
+/** Mirrors `Config` (src/core/config.ts) field for field. */
+export const configSchema = z.object({
+  capacity: capacityConfigSchema,
+  downloads: z.object({
+    policy: z.enum(["never", "on-request", "always"]),
+    acceptAndroidLicenses: z.boolean(),
+    timeoutMs: z.number(),
+  }),
+  idle: z.object({
+    shutdownAfterMs: z.number(),
+    deleteAfterMs: z.number(),
+  }),
+  warmPool: z.object({
+    quarantine: z.object({
+      maxRetries: z.number(),
+      retryBackoffMs: z.number(),
+      retryBackoffMultiplier: z.number(),
+      maxRetryBackoffMs: z.number(),
+    }),
+  }),
+  lease: z.object({
+    heldTtlBackstopMs: z.number(),
+    detachedTtlMs: z.number(),
+    heartbeatIntervalMs: z.number(),
+  }),
+  diskPressure: z.object({ freeBytesThreshold: z.number() }),
+  eventBuffer: z.object({ capacity: z.number() }),
+  log: z.object({
+    level: z.enum(["debug", "info", "warn", "error"]),
+    rotateBytes: z.number(),
+  }),
+  http: z.object({
+    enabled: z.boolean(),
+    host: z.string(),
+    port: z.number(),
+  }),
+  health: z.object({
+    enabled: z.boolean(),
+    probeIntervalMs: z.number(),
+    stableObservations: z.number(),
+    maxRecoveryAttempts: z.number(),
+    recoveryBackoffMs: z.number(),
+    maxConcurrentRecoveries: z.number(),
+  }),
+  ios: z.object({
+    slim: z.object({
+      enabled: z.boolean(),
+      categories: z.array(z.string()).optional(),
+      bootTimeoutMs: z.number(),
+    }),
+  }),
+  stalledTransition: z.object({
+    thresholdMultiplier: z.number(),
+    minimumThresholdMs: z.number(),
+  }),
+});
+
+// ---- tokens -----------------------------------------------------------------------------------
+
+/**
+ * `TokenRole` (agent/operator token store roles, src/http/token-store.ts) is a deliberately
+ * different vocabulary from the daemon session `Role` (agent/admin, see `roles.ts`) -- a
+ * `token.create --role operator` mints a credential that *resolves to* the admin session role
+ * at `hello` (ADR §5), it is not itself that role. Keeping the two enums textually distinct
+ * here (rather than reusing `roleSchema`) is deliberate, not an oversight.
+ */
+export const tokenRoleSchema = z.enum(["agent", "operator"]);
+
+export const tokenRecordSchema = z.object({
+  id: z.string(),
+  role: tokenRoleSchema,
+  label: z.string().optional(),
+  createdAt: z.number(),
+});
