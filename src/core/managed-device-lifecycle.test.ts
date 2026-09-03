@@ -136,6 +136,7 @@ describe("ManagedDeviceLifecycle", () => {
       deviceId: ready.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 2_000,
     });
     expect(await harness.lifecycle.shutdown(ready, "test", "cleanup")).toBeUndefined();
@@ -211,6 +212,7 @@ describe("ManagedDeviceLifecycle", () => {
         deviceId: ready.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 10_000,
       });
       await harness.driver.shutdown({
@@ -234,6 +236,7 @@ describe("ManagedDeviceLifecycle", () => {
         deviceId: ready.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 10_000,
       });
       const makeReadyCallsBefore = harness.driver.calls.filter(
@@ -276,6 +279,7 @@ describe("ManagedDeviceLifecycle", () => {
         deviceId: ready.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 10_000,
       });
       harness.driver.hangMakeReady();
@@ -300,6 +304,7 @@ describe("ManagedDeviceLifecycle", () => {
         deviceId: ready.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 10_000,
       });
       const claim = harness.claims.tryClaim(ready.id, "cleanup");
@@ -325,6 +330,7 @@ describe("ManagedDeviceLifecycle", () => {
         deviceId: ready.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 10_000,
       });
       harness.driver.failOn("makeReady", 2, new DriverCrashError("boot failed"));
@@ -348,6 +354,7 @@ describe("ManagedDeviceLifecycle", () => {
         deviceId: ready.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 10_000,
       });
 

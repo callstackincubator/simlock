@@ -90,6 +90,7 @@ async function grant(
     deviceId: device.id,
     mode,
     requesterId: `agent_${device.id}`,
+    ownerId: `agent_${device.id}`,
   });
   return result;
 }

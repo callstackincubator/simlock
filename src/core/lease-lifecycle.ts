@@ -12,6 +12,7 @@ export interface LeaseLifecycleRegistry {
   createLease(input: {
     readonly deviceId: string;
     readonly requesterId: string;
+    readonly ownerId: string;
     readonly mode: LeaseRecord["mode"];
     readonly ttlDeadline: number;
   }): Promise<LeaseRecord>;
@@ -48,11 +49,15 @@ export class LeaseLifecycle {
   async grant(input: {
     readonly deviceId: string;
     readonly mode: LeaseRecord["mode"];
+    readonly ownerId: string;
     readonly requesterId: string;
+    /** ADR 0003 §9: overrides the mode-aware default for a detached lease's initial TTL. */
+    readonly ttlMs?: number;
   }): Promise<LeaseLifecycleGrant> {
+    const { ttlMs, ...createInput } = input;
     const lease = await this.options.registry.createLease({
-      ...input,
-      ttlDeadline: this.options.clock.now() + this.#ttlFor(input.mode),
+      ...createInput,
+      ttlDeadline: this.options.clock.now() + (ttlMs ?? this.#ttlFor(input.mode)),
     });
     const device = this.options.registry.snapshot.devices.find(
       (candidate) => candidate.id === lease.deviceId,
@@ -131,13 +136,22 @@ export class LeaseLifecycle {
     if (reason === "expired") {
       this.options.eventBus.emit(
         "lease.expired",
-        { deviceId: released.lease.deviceId, leaseId: released.lease.id },
+        {
+          deviceId: released.lease.deviceId,
+          leaseId: released.lease.id,
+          ownerId: released.lease.ownerId,
+        },
         "lease-lifecycle",
       );
     } else {
       this.options.eventBus.emit(
         "lease.released",
-        { deviceId: released.lease.deviceId, leaseId: released.lease.id, reason },
+        {
+          deviceId: released.lease.deviceId,
+          leaseId: released.lease.id,
+          ownerId: released.lease.ownerId,
+          reason,
+        },
         "lease-lifecycle",
       );
     }

@@ -38,6 +38,7 @@ describe("Doctor", () => {
       deviceId: registered.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 9_000,
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -156,6 +157,7 @@ describe("Doctor", () => {
       deviceId: device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 99_000,
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -284,6 +286,7 @@ describe("Doctor", () => {
       deviceId: device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 99_000,
     });
     await registry.beginRelease(lease.id);
@@ -399,6 +402,7 @@ describe("Doctor", () => {
       deviceId: device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 9_000,
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -669,6 +673,7 @@ describe("Doctor", () => {
       deviceId: reclaiming.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 999_999,
     });
     await registry.beginRelease(lease.id);
@@ -864,6 +869,7 @@ describe("Doctor", () => {
         deviceId: device.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 999_999,
       });
       await registry.beginRelease(lease.id);
@@ -916,6 +922,7 @@ describe("Doctor", () => {
         deviceId: device.id,
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 999_999,
       });
       await registry.beginRelease(lease.id);
@@ -1074,6 +1081,7 @@ describe("Doctor", () => {
               id: "lse_1",
               mode: "held",
               requesterId: "agent",
+              ownerId: "agent",
               ttlDeadline: 999_999,
             },
           ],
@@ -1166,6 +1174,7 @@ describe("Doctor", () => {
       deviceId: device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 999_999,
     });
 
