@@ -20,6 +20,16 @@ export interface AuthorizeContext {
   readonly principal: string;
   readonly role: Role;
   readonly ownerId: (id: string) => string | undefined;
+  /** ADR §4/§9: the session principal that created the pending request identified by
+   * `requesterId` -- looked up against the live wait queue, the same "lookup, not a value"
+   * shape as `ownerId` above and for the same reason (the only identifier available at
+   * `authorize` time is whatever the input schema already validated). Used by `lease.cancel`
+   * so a proxy connection (one principal, many `requesterId`s) can cancel what it created,
+   * rather than comparing the caller-suppliable `requesterId` to the principal directly.
+   * Returns `undefined` for a `requesterId` with no pending request, which `lease.cancel`'s
+   * `authorize` hook treats as authorized on purpose -- same convention as `ownsLease` -- so
+   * the handler's own `not-found` surfaces instead of a misleading `FORBIDDEN`. */
+  readonly pendingRequestOwner: (requesterId: string) => string | undefined;
 }
 
 /**

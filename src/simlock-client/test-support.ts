@@ -93,15 +93,24 @@ export class ScriptedConnection implements IpcConnection {
 }
 
 /** Replies to the connection's `hello` frame with a normal, matching-protocol, given-role
- * response -- the common setup step for every test that needs a connected client. */
+ * response -- the common setup step for every test that needs a connected client.
+ * `principal` defaults to whatever the client itself sent (ADR §4: the daemon's default when
+ * `hello` omits one is out of this test double's scope, so a test exercising that specific
+ * fallback -- see `server.test.ts` -- passes an explicit `principal` here instead). */
 export function completeHello(
   connection: ScriptedConnection,
-  options: { readonly role?: "agent" | "admin"; readonly version?: string } = {},
+  options: {
+    readonly role?: "agent" | "admin";
+    readonly version?: string;
+    readonly principal?: string;
+  } = {},
 ): void {
   const hello = connection.lastSentOf("hello");
   if (hello === undefined) throw new Error("Expected the client to have sent hello already");
+  const sentPrincipal = (hello.payload as { principal?: string }).principal;
   connection.reply(hello.id, {
     daemonProtocolRange: { max: 3, min: 3 },
+    principal: options.principal ?? sentPrincipal ?? "default-principal",
     protocolVersion: 3,
     role: options.role ?? "agent",
     version: options.version ?? "0.3.0",

@@ -696,6 +696,11 @@ export class DaemonServer {
         daemonProtocolRange: this.#protocolRange,
         version: this.options.version,
         role: connection.role,
+        // ADR §4: report the resolved principal back -- see `helloReplySchema`'s comment. Read
+        // from `connection.principal`, set a few lines above from `payload.principal` or the
+        // daemon's own default, so this is always the same value every subsequent dispatched
+        // request is authorized against.
+        principal: connection.principal,
       },
       "hello",
     );
