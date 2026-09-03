@@ -134,6 +134,17 @@ export const leaseCancel = defineOperation({
   role: "agent",
   input: z.object({ requesterId: z.string().optional() }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
+  /**
+   * ADR §9: "cancels this principal's pending request by requester id" -- not any pending
+   * request, keyed by a `requesterId` the caller can pass arbitrarily. Deliberately not
+   * `ownsLease` (that hook resolves a *lease's* recorded `ownerId` from the registry; a
+   * pending, not-yet-granted request has no lease yet to look up). `requesterId` defaults to
+   * the principal the same way the handler's own default does (see `dispatcher.ts`'s
+   * `#leaseCancel`), so an omitted `requesterId` always passes -- only an explicit, *different*
+   * `requesterId` is gated, and only admin may supply one.
+   */
+  authorize: (input, context) =>
+    context.role === "admin" || (input.requesterId ?? context.principal) === context.principal,
 });
 
 // ---- lease.renew ----------------------------------------------------------------------------
