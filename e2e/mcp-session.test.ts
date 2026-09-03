@@ -29,10 +29,10 @@ describe("MCP session semantics", () => {
 
       const leaseResult = await mcp.client.callTool({
         name: "lease_simulator",
-        arguments: { platform: "ios", device: "iPhone 16", os: "18.4" },
+        arguments: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
         _meta: { progressToken: "flow7-token" },
       });
-      const leased = leaseResult.structuredContent as { lease_id: string; device_id: string };
+      const leased = leaseResult.structuredContent as { lease: { id: string } };
 
       const progress = mcp.progressNotifications();
       expect(progress.length, "expected at least one notifications/progress frame").toBeGreaterThan(
@@ -50,20 +50,23 @@ describe("MCP session semantics", () => {
       const statusAfter = await mcp.client.callTool({ name: "lease_status", arguments: {} });
       expect(statusAfter.structuredContent).toMatchObject({
         held: true,
-        lease_id: leased.lease_id,
+        id: leased.lease.id,
       });
 
       const released = await mcp.client.callTool({
         name: "release_simulator",
-        arguments: { lease_id: leased.lease_id },
+        arguments: { leaseId: leased.lease.id },
       });
-      expect(released.structuredContent).toEqual({ lease_id: leased.lease_id, released: true });
+      expect(released.structuredContent).toEqual({
+        leaseId: leased.lease.id,
+        released: true,
+      });
     } finally {
       await mcp.close();
     }
   });
 
-  it("relays a force-release from the CLI as a logging warning, then LEASE_NOT_OWNED is a clean tool error, and the server stays usable", async () => {
+  it("relays a force-release from the CLI as a logging warning, then FORBIDDEN is a clean tool error, and the server stays usable", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
@@ -73,9 +76,9 @@ describe("MCP session semantics", () => {
     try {
       const leaseResult = await mcp.client.callTool({
         name: "lease_simulator",
-        arguments: { platform: "ios", device: "iPhone 16", os: "18.4" },
+        arguments: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       });
-      const leased = leaseResult.structuredContent as { lease_id: string; device_id: string };
+      const leased = leaseResult.structuredContent as { lease: { id: string } };
 
       const forceRelease = await env.cli(["release", "--all", "--yes"]);
       expect(forceRelease.code).toBe(0);
@@ -83,33 +86,33 @@ describe("MCP session semantics", () => {
       const warning = await mcp.waitForNotification((notification) => {
         if (notification.kind !== "logging") return undefined;
         const data = notification.params.data as
-          | { lease_id?: string; device_id?: string; reason?: string }
+          | { deviceId?: string; leaseId?: string; reason?: string }
           | undefined;
-        return data?.lease_id === leased.lease_id ? notification.params : undefined;
+        return data?.leaseId === leased.lease.id ? notification.params : undefined;
       });
       expect(warning.logger).toBe("simlock");
       expect(warning.level).toBe("warning");
-      // The daemon push carries its own internal registry device id, not the
-      // driver-opaque `device_id` (udid) the MCP lease result reports -- only assert
-      // it names *a* device, plus the lease id and reason, which do match exactly.
       expect(warning.data).toMatchObject({
-        lease_id: leased.lease_id,
-        device_id: expect.any(String),
+        deviceId: expect.any(String),
+        leaseId: leased.lease.id,
         reason: "explicit",
       });
 
       const statusAfter = await mcp.client.callTool({ name: "lease_status", arguments: {} });
       expect(statusAfter.structuredContent).toEqual({ held: false });
 
+      // The daemon's own ownership rule now answers, not a client-side pre-check (ADR
+      // 0003 §11): a stale release for a lease this session no longer owns/holds is
+      // FORBIDDEN, exactly the same as it would be for a lease this session never held.
       const staleRelease = await mcp.client.callTool({
         name: "release_simulator",
-        arguments: { lease_id: leased.lease_id },
+        arguments: { leaseId: leased.lease.id },
       });
       expect(staleRelease.isError).toBe(true);
       const errorPayload = JSON.parse(
         (staleRelease.content as { text: string }[])[0]?.text ?? "{}",
       ) as McpErrorPayload;
-      expect(errorPayload.code).toBe("LEASE_NOT_OWNED");
+      expect(errorPayload.code).toBe("FORBIDDEN");
 
       // Still usable: a clean tool error must not have wedged the session/transport.
       const devices = await mcp.client.callTool({ name: "list_devices", arguments: {} });
@@ -133,14 +136,14 @@ describe("MCP session semantics", () => {
     try {
       const leaseResult = await mcp.client.callTool({
         name: "lease_simulator",
-        arguments: { platform: "ios", device: "iPhone 16", os: "18.4" },
+        arguments: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       });
-      const leased = leaseResult.structuredContent as { lease_id: string };
+      const leased = leaseResult.structuredContent as { lease: { id: string } };
 
       const lostNotice = mcp.waitForNotification((notification) => {
         if (notification.kind !== "logging") return undefined;
-        const data = notification.params.data as { lease_id?: string; reason?: string } | undefined;
-        return data?.lease_id === leased.lease_id ? data.reason : undefined;
+        const data = notification.params.data as { leaseId?: string; reason?: string } | undefined;
+        return data?.leaseId === leased.lease.id ? data.reason : undefined;
       });
 
       await env.restartDaemon();
