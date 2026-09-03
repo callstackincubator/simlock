@@ -145,8 +145,10 @@ type AnyHandler = (input: never, session: DispatchSession) => Promise<unknown> |
  * already happened by the time a handler's function body runs.
  *
  * Deliberately excludes `hello` (protocol-level, answered before a session exists) and
- * `daemon.stop` (ADR §6's frozen exception, answered before hello/role even matter) -- both
- * stay in `DaemonServer`, same as before this PR.
+ * `daemon.stop` (ADR §6's frozen exception -- scoped to the protocol-version gate only, so it
+ * stays reachable across a version mismatch; still requires a completed handshake and the
+ * `admin` role, checked in `DaemonServer#dispatchLine` itself) -- both stay in `DaemonServer`,
+ * same as before this PR.
  */
 export class Dispatcher {
   readonly #logger: Logger;

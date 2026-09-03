@@ -28,7 +28,7 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
-import type { SessionRoleResolver } from "./session.js";
+import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
 
 const gibibyte = 1024 ** 3;
@@ -1439,6 +1439,142 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const response = await client.request("list.get", {});
     expect(response.ok).toBe(true);
     await client.close();
+  });
+
+  // ADR 0003 §6's "frozen exception" for `daemon.stop` is scoped to the protocol-version gate
+  // only -- it must still require a completed handshake and the `admin` role, per §3's operation
+  // matrix and the ADR's Context section ("Any local connection can release any lease, nuke, or
+  // stop the daemon" is named as the defect this ADR fixes).
+  describe("daemon.stop authorization (ADR 0003 §3, §5, §6)", () => {
+    it("refuses daemon.stop from an agent-role connection with FORBIDDEN", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        error: { code: "FORBIDDEN" },
+        ok: false,
+      });
+      expect(harness.daemon.health).toBe("running");
+      await client.close();
+    });
+
+    it("refuses daemon.stop from a connection that never sent hello", async () => {
+      const harness = await createHarness();
+      const client = await createClient(harness.socketPath);
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        error: { code: "HANDSHAKE_REQUIRED" },
+        ok: false,
+      });
+      expect(harness.daemon.health).toBe("running");
+      await client.close();
+    });
+
+    it("lets an admin connection stop the daemon", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { stopping: true },
+      });
+      await expect.poll(() => harness.daemon.health).toBe("running");
+    });
+
+    it("still fails the handshake outright on a wrong credential, and daemon.stop never runs on that connection", async () => {
+      const harness = await createHarness({
+        resolveRole: {
+          resolve: (helloPayload) => {
+            if (helloPayload.credential === undefined) return "agent";
+            if (helloPayload.credential === "correct-secret") return "admin";
+            throw new AdminAuthenticationFailedError();
+          },
+        },
+      });
+      const client = await createClient(harness.socketPath);
+      const socketClosed = new Promise<void>((resolve) => client.socket.once("close", resolve));
+
+      await expect(
+        client.request("hello", {
+          clientVersion: "test",
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+          credential: "wrong-secret",
+        }),
+      ).resolves.toMatchObject({
+        error: { code: "ADMIN_AUTHENTICATION_FAILED" },
+        ok: false,
+      });
+
+      // The handshake failed outright: `#handleHello` closes the connection right after the
+      // rejected credential, before `connection.helloReceived` is ever set. `daemon.stop` --
+      // despite ADR §6's frozen exception, which is scoped to protocol version only -- never
+      // gets a chance to run on this connection: there is no connection left to run it on.
+      await socketClosed;
+      expect(harness.daemon.health).toBe("running");
+    });
+
+    it("lets an admin connection stop the daemon even when its own hello's protocol negotiation failed, and refuses every other operation on it with the version error", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+      const client = await createClient(harness.socketPath);
+
+      const mismatchedHello = await client.request("hello", {
+        clientVersion: "test",
+        protocolVersion: DAEMON_PROTOCOL_VERSION + 1,
+      });
+      expect(mismatchedHello).toMatchObject({
+        error: {
+          code: "PROTOCOL_VERSION_UNSUPPORTED",
+          details: {
+            client: { min: DAEMON_PROTOCOL_VERSION + 1, max: DAEMON_PROTOCOL_VERSION + 1 },
+            daemon: PROTOCOL_VERSION_RANGE,
+          },
+        },
+        ok: false,
+      });
+
+      // Every other operation on this mismatched connection is refused the same way, repeatedly.
+      await expect(client.request("status.get", {})).resolves.toMatchObject({
+        error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
+        ok: false,
+      });
+      await expect(client.request("list.get", {})).resolves.toMatchObject({
+        error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
+        ok: false,
+      });
+
+      // But `daemon.stop` -- the ADR §6 frozen exception -- still works, because the role was
+      // resolved from the handshake before the version check ran, and this connection's role is
+      // admin.
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { stopping: true },
+      });
+      await expect.poll(() => harness.daemon.health).toBe("running");
+    });
+
+    it("still refuses daemon.stop with FORBIDDEN on a version-mismatched connection whose role is agent", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+      const client = await createClient(harness.socketPath);
+
+      await expect(
+        client.request("hello", {
+          clientVersion: "test",
+          protocolVersion: DAEMON_PROTOCOL_VERSION + 1,
+        }),
+      ).resolves.toMatchObject({
+        error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
+        ok: false,
+      });
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        error: { code: "FORBIDDEN" },
+        ok: false,
+      });
+      expect(harness.daemon.health).toBe("running");
+      await client.close();
+    });
   });
 
   it("still lets an agent call doctor.run with fix:false, but not fix:true (input-dependent role)", async () => {

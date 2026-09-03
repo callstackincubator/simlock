@@ -88,6 +88,14 @@ interface Connection {
    * principal, and lets every other owning connection's push through undisturbed.
    */
   readonly selfInitiatedReleases: Set<string>;
+  /** Set by `#handleHello` only when this connection's `hello` failed protocol-version
+   * negotiation (ADR 0003 §6). `principal`/`role` are still resolved and fixed as normal --
+   * the frozen exception is scoped to the protocol-version gate, not to authentication or role
+   * (see the comment on `#dispatchLine`'s `daemon.stop` handling). While set, every operation on
+   * this connection except `daemon.stop` is refused by replaying this same error, so a client
+   * whose range does not overlap the daemon's still learns why on every attempt, not just the
+   * first. */
+  protocolMismatch: { readonly message: string; readonly details: unknown } | undefined;
   unsubscribeEvents: (() => void) | undefined;
   /** Set while this connection has an active `events.subscribe`; correlates `event` pushes
    * (ADR 0003 §8). Minted per-subscription from `#eventSubscriptionSeq` rather than injected --
@@ -441,6 +449,7 @@ export class DaemonServer {
       role: "agent",
       progressDisposers: new Set(),
       progressRequesters: new Set(),
+      protocolMismatch: undefined,
       selfInitiatedReleases: new Set(),
       socket,
       releasing: undefined,
@@ -486,6 +495,7 @@ export class DaemonServer {
     void dispatched.finally(() => this.#parkedDispatches.delete(dispatched));
   }
 
+  // fallow-ignore-next-line complexity -- frame parsing, the handshake gate, the daemon.stop frozen exception (ADR §6) and its role check, the protocol-mismatch gate, and the stopping gate are one sequential ordering contract; splitting it would scatter early-returns that must stay in this order.
   async #dispatchLine(connection: Connection, line: string): Promise<void> {
     let frame: RequestFrame;
     try {
@@ -508,24 +518,51 @@ export class DaemonServer {
       return;
     }
 
-    // `daemon.stop` is a frozen exception (ADR 0003 §6): accepted at any protocol version the
-    // daemon has ever spoken, before `hello`, during a version-mismatch standoff, even while
-    // already `#stopping`. This bypasses the handshake and protocol-version gate entirely --
-    // deliberately, not an oversight -- so that `npm upgrade` against a still-running old
-    // daemon (leases held) can always be stopped without releasing every held lease on the
-    // machine by restarting it instead (see ADR §6's "the client never restarts the daemon on
-    // mismatch"). It is intentionally idempotent: `stop()` itself dedups concurrent callers via
+    if (!connection.helloReceived) {
+      await this.#handleHello(connection, frame);
+      return;
+    }
+
+    // `daemon.stop` is a frozen exception (ADR 0003 §6), but only with respect to the
+    // *protocol-version* gate: "the daemon accepts it at any protocol version it has ever
+    // spoken". It is not frozen with respect to authentication or role -- §3's operation matrix
+    // assigns `daemon.stop` role `admin` like any other admin operation, and the ADR's Context
+    // section names exactly this gap ("Any local connection can release any lease, nuke, or
+    // stop the daemon") as the defect being fixed. So this still requires a completed,
+    // successfully authenticated handshake (guaranteed by `connection.helloReceived` above --
+    // a rejected credential never reaches here, see `#handleHello`) and the resolved role being
+    // `admin`, but -- unlike every other operation -- it is checked here, ahead of the
+    // `protocolMismatch` and `#stopping` gates below, so it stays reachable: during a version
+    // mismatch (`npm upgrade` against a still-running old daemon with leases held -- see §6's
+    // "the client never restarts the daemon on mismatch") and while the daemon is already
+    // `#stopping`. It is intentionally idempotent: `stop()` itself dedups concurrent callers via
     // `#stopPromise`, so a second `daemon.stop` here just gets the same success reply again.
     if (frame.type === "daemon.stop") {
+      if (connection.role !== "admin") {
+        await this.#respondError(
+          connection.socket,
+          frame.id,
+          "FORBIDDEN",
+          "Operation daemon.stop requires role admin",
+        );
+        return;
+      }
       await writeFrame(connection.socket, { id: frame.id, ok: true, payload: { stopping: true } });
       void this.stop("requested");
       return;
     }
 
-    if (!connection.helloReceived) {
-      await this.#handleHello(connection, frame);
+    if (connection.protocolMismatch) {
+      await this.#respondError(
+        connection.socket,
+        frame.id,
+        "PROTOCOL_VERSION_UNSUPPORTED",
+        connection.protocolMismatch.message,
+        connection.protocolMismatch.details,
+      );
       return;
     }
+
     if (this.#stopping) {
       await this.#respondError(
         connection.socket,
@@ -584,21 +621,15 @@ export class DaemonServer {
     const clientRange: ProtocolRange =
       payload.protocolRange ?? normalizeProtocolVersion(payload.protocolVersion as number);
     const negotiated = negotiateProtocolVersion(clientRange, this.#protocolRange);
-    if (negotiated === undefined) {
-      await this.#respondError(
-        connection.socket,
-        frame.id,
-        "PROTOCOL_VERSION_UNSUPPORTED",
-        `No overlapping protocol version: client supports ${clientRange.min}-${clientRange.max}, daemon supports ${this.#protocolRange.min}-${this.#protocolRange.max}`,
-        { client: clientRange, daemon: this.#protocolRange, daemonVersion: this.options.version },
-      );
-      await connection.socket.close();
-      return;
-    }
     // ADR §5's seam: `#resolveRole` is `resolveAgentRole` (always "agent") until PR 2 supplies
     // a real credential-checking resolver -- see `session.ts`. A resolver that rejects a bad
     // credential throws here, before `connection.helloReceived` is ever set, which is why this
-    // whole block is wrapped: nothing after it should be able to run for a rejected `hello`.
+    // whole block is wrapped: nothing after it should be able to run for a rejected `hello` --
+    // including the version-mismatch path just below. Credential verification and role
+    // resolution run *before* the version check, and independently of its outcome: ADR §6's
+    // frozen exception exempts `daemon.stop` from the protocol-version gate only, never from
+    // authentication, so a wrong credential must fail the handshake outright here regardless of
+    // whether the versions would otherwise have matched.
     let role: Role;
     try {
       role = await this.#resolveRole.resolve({
@@ -610,13 +641,43 @@ export class DaemonServer {
       await connection.socket.close();
       return;
     }
-    connection.helloReceived = true;
     connection.heartbeatCapability = payload.capabilities?.heartbeat === true;
     // ADR §4: the principal is fixed for the connection's lifetime from here on. Falls back to
     // `defaultRequesterId` when `hello` omits one -- today's CLI/MCP frontends don't send a
     // principal yet (PR 4 moves them onto the typed client, which always will).
     connection.principal = payload.principal ?? this.options.defaultRequesterId;
     connection.role = role;
+    if (negotiated === undefined) {
+      const details = {
+        client: clientRange,
+        daemon: this.#protocolRange,
+        daemonVersion: this.options.version,
+      };
+      const message = `No overlapping protocol version: client supports ${clientRange.min}-${clientRange.max}, daemon supports ${this.#protocolRange.min}-${this.#protocolRange.max}`;
+      // `helloReceived` is still set: the handshake completed (credential verified, role
+      // resolved) even though negotiation failed. `protocolMismatch` is what `#dispatchLine`
+      // checks to refuse every subsequent operation except `daemon.stop` with this same error
+      // (ADR §6). The socket is deliberately left open -- closing it here is what today's bug
+      // fixes: an admin client whose range does not overlap the daemon's must still be able to
+      // send `daemon.stop` on this connection instead of restarting the daemon (§6: "the client
+      // never restarts the daemon on mismatch").
+      connection.helloReceived = true;
+      connection.protocolMismatch = { message, details };
+      this.#logger.info("Connection opened with unsupported protocol version", {
+        clientVersion: payload.clientVersion,
+        principal: connection.principal,
+        role: connection.role,
+      });
+      await this.#respondError(
+        connection.socket,
+        frame.id,
+        "PROTOCOL_VERSION_UNSUPPORTED",
+        message,
+        details,
+      );
+      return;
+    }
+    connection.helloReceived = true;
     this.#logger.info("Connection opened", {
       clientVersion: payload.clientVersion,
       heartbeatCapability: connection.heartbeatCapability,
@@ -767,8 +828,9 @@ export class DaemonServer {
           this.#session(connection),
         );
       // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
-      // before hello/dispatch entirely, as the frozen exception ADR §6 describes, so it never
-      // reaches `#handleRequest`.
+      // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
+      // scoped to protocol version only -- still gated on a completed handshake and the `admin`
+      // role there), so it never reaches `#handleRequest`.
       default:
         throw new ProtocolError("UNKNOWN_REQUEST", `Unknown request type: ${frame.type}`);
     }
