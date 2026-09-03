@@ -37,6 +37,9 @@ export interface HelloResult {
   readonly daemonProtocolRange: ProtocolRange;
   readonly daemonVersion: string;
   readonly role: Role;
+  /** ADR §4: the connection's resolved, fixed-for-its-lifetime principal -- see
+   * `helloReplySchema`'s comment. */
+  readonly principal: string;
 }
 
 interface PendingCall {
@@ -128,6 +131,7 @@ export class SimlockWire {
     return {
       daemonProtocolRange: parsed.data.daemonProtocolRange,
       daemonVersion: parsed.data.version,
+      principal: parsed.data.principal,
       protocolVersion: parsed.data.protocolVersion,
       role: parsed.data.role,
     };

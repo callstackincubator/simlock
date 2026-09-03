@@ -124,6 +124,20 @@ export const leaseRequest = defineOperation({
   role: "agent",
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
+  /**
+   * Deliberately no `authorize` hook, and not an oversight to pair with `lease.cancel`'s: ADR
+   * §4 is explicit that any agent session may request a lease under an arbitrary
+   * `requesterId` -- that is the whole mechanism behind "one connection (the host, acting as
+   * a proxy for many agents) holds many leases by passing one requester id per session". The
+   * lease's actual `ownerId` is never client-supplied (always `session.principal`, see the
+   * dispatcher's `#leaseRequest`), so this does not let one session take over another's
+   * lease -- only choose the attribution label on a lease it will itself own. `lease.cancel`
+   * used to look inconsistent next to this (forbidding a `requesterId` that did not equal the
+   * principal, on an operation that has none of `lease.request`'s ownership protection to
+   * begin with) -- fixed by gating `lease.cancel` on the pending request's recorded owner
+   * (`pendingRequestOwner`, see its own `authorize` hook below) instead, which is consistent
+   * with this operation's design rather than in tension with it.
+   */
 });
 
 // ---- lease.cancel (new, ADR §9) --------------------------------------------------------------
@@ -135,16 +149,25 @@ export const leaseCancel = defineOperation({
   input: z.object({ requesterId: z.string().optional() }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
-   * ADR §9: "cancels this principal's pending request by requester id" -- not any pending
-   * request, keyed by a `requesterId` the caller can pass arbitrarily. Deliberately not
-   * `ownsLease` (that hook resolves a *lease's* recorded `ownerId` from the registry; a
-   * pending, not-yet-granted request has no lease yet to look up). `requesterId` defaults to
-   * the principal the same way the handler's own default does (see `dispatcher.ts`'s
-   * `#leaseCancel`), so an omitted `requesterId` always passes -- only an explicit, *different*
-   * `requesterId` is gated, and only admin may supply one.
+   * ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
+   * request's *recorded owner* (`pendingRequestOwner`, ADR §4's `ownerId` -- always the
+   * creating session's principal, never the caller-suppliable `requesterId`), not on comparing
+   * `requesterId` to the principal directly -- that comparison would forbid exactly the case
+   * ADR §4 exists for: one connection (`principal: "host"`) proxying many agents, each under
+   * its own `requesterId` (`"agent-7"`). Deliberately not `ownsLease` (that hook resolves a
+   * *lease's* recorded `ownerId` from the registry; a pending, not-yet-granted request has no
+   * lease yet to look up -- `pendingRequestOwner` is the wait-queue equivalent). An omitted
+   * `requesterId` defaults to the principal the same way the handler's own default does (see
+   * `dispatcher.ts`'s `#leaseCancel`), so it always resolves to a request this principal owns.
+   * A `requesterId` with no pending request resolves `pendingRequestOwner` to `undefined`,
+   * which is treated as authorized (same convention as `ownsLease`) so the handler's own
+   * `not-found` surfaces instead of a misleading `FORBIDDEN`.
    */
-  authorize: (input, context) =>
-    context.role === "admin" || (input.requesterId ?? context.principal) === context.principal,
+  authorize: (input, context) => {
+    if (context.role === "admin") return true;
+    const owner = context.pendingRequestOwner(input.requesterId ?? context.principal);
+    return owner === undefined || owner === context.principal;
+  },
 });
 
 // ---- lease.renew ----------------------------------------------------------------------------

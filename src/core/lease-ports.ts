@@ -22,6 +22,12 @@ export interface QueueControl {
   readonly queueDepth: number;
   detachQueuedProgress(requesterId: string): Promise<void>;
   cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable">;
+  /** ADR §4: the session principal a pending request was created under -- always the creating
+   * session's principal (`LeaseRequestOptions.ownerId`), never the caller-suppliable
+   * `requesterId`. `undefined` when no pending request exists for this requester id. Used by
+   * `lease.cancel`'s `authorize` hook so a proxy connection (one principal, many
+   * `requesterId`s) can cancel what it created, per ADR §4/§9. */
+  pendingRequestOwner(requesterId: string): string | undefined;
 }
 
 /** Read-only capacity view used by daemon status. */

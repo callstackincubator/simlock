@@ -221,6 +221,7 @@ export class Dispatcher {
       const context: AuthorizeContext = {
         ownerId: (leaseId) =>
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId,
+        pendingRequestOwner: (requesterId) => this.options.queue.pendingRequestOwner(requesterId),
         principal: session.principal,
         role: session.role,
       };

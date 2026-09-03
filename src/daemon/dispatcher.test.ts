@@ -282,16 +282,19 @@ describe("Dispatcher: ownership", () => {
     expect(admin.leases).toHaveLength(1);
   });
 
-  it("lease.cancel: rejects an agent naming a different requesterId with FORBIDDEN, admits an admin", async () => {
+  it("lease.cancel: naming a requesterId with no pending request always passes (not-found), admin bypasses too", async () => {
     const { dispatcher } = await buildDispatcher();
 
+    // A requesterId nobody has a pending request under: not gated, since there is no owner to
+    // compare against -- `pendingRequestOwner` resolves `undefined`, and `not-found` is what
+    // surfaces (the same convention `ownsLease` uses for an unknown lease id).
     await expect(
       dispatcher.dispatch(
         "lease.cancel",
         { requesterId: "tok_other" },
         session({ principal: "tok_agent", role: "agent" }),
       ),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    ).resolves.toMatchObject({ result: "not-found" });
 
     // An omitted requesterId always passes (defaults to the principal) -- see the operation's
     // `authorize` hook doc in `operations.ts`.
@@ -306,6 +309,74 @@ describe("Dispatcher: ownership", () => {
         session({ principal: "tok_admin", role: "admin" }),
       ),
     ).resolves.toMatchObject({ result: "not-found" });
+  });
+
+  it("lease.cancel: gated on the pending request's recorded owner (ADR §4), not the requesterId -- so a proxy connection can cancel what it created", async () => {
+    const { dispatcher, engine } = await buildDispatcher();
+
+    // Fill iOS capacity (maxRunning: 2, see testConfig) so a third request queues instead of
+    // granting immediately -- cancellability requires a still-`queued` waiter.
+    await dispatcher.dispatch(
+      "lease.request",
+      {
+        model: "iPhone 17 Pro",
+        mode: "detached",
+        requesterId: "tok_owner1",
+        osVersion: "26.5",
+        platform: "ios",
+      },
+      session({ principal: "tok_owner1" }),
+    );
+    await dispatcher.dispatch(
+      "lease.request",
+      {
+        model: "iPhone 17 Pro",
+        mode: "detached",
+        requesterId: "tok_owner2",
+        osVersion: "26.5",
+        platform: "ios",
+      },
+      session({ principal: "tok_owner2" }),
+    );
+
+    // ADR §4's proxy case: one connection, principal "host", requesting under a different
+    // requesterId ("agent-7") than its own principal.
+    const queuedRequest = dispatcher.dispatch(
+      "lease.request",
+      {
+        model: "iPhone 17 Pro",
+        mode: "held",
+        requesterId: "agent-7",
+        osVersion: "26.5",
+        platform: "ios",
+      },
+      session({ principal: "host" }),
+    );
+    await expect.poll(() => engine.queueDepth).toBe(1);
+
+    // Naming "agent-7" from a session that is neither "host" (the recorded owner) nor admin is
+    // FORBIDDEN, even though "agent-7" is the pending request's own requesterId -- the ADR
+    // incoherence this fixes: `lease.cancel` is no longer gated on `requesterId === principal`.
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { requesterId: "agent-7" },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    // The owning principal ("host") cancels what it created, under the requesterId it created
+    // it with -- this is the case the old `requesterId === principal` comparison forbade
+    // outright.
+    await expect(
+      dispatcher.dispatch(
+        "lease.cancel",
+        { requesterId: "agent-7" },
+        session({ principal: "host", role: "agent" }),
+      ),
+    ).resolves.toMatchObject({ result: "cancelled" });
+
+    await expect(queuedRequest).rejects.toThrow();
   });
 });
 
