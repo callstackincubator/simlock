@@ -10,16 +10,21 @@ import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from ".
 import {
   CryptoTokenSecrets,
   FakeClock,
+  FakeDaemonLauncher,
   FakeParentWatch,
   MemoryFilesystem,
+  MemoryIpcTransport,
   NodeFilesystem,
   NodeIpcTransport,
+  type Filesystem,
   type IdGenerator,
 } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import { TokenStore } from "../http/token-store.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
+import { AdminSecretManager } from "../daemon/admin-secret.js";
+import { createCredentialRoleResolver } from "../daemon/session.js";
 import { SimlockError, type AnySimlockError } from "../contract/index.js";
 import type {
   CatalogGetOutput,
@@ -35,12 +40,14 @@ import type {
 } from "../simlock-client/client.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import {
+  buildCliEnvironment,
   errorExitCode,
   fallbackRequesterId,
   parseDuration,
   readLogFile,
   runCli,
   type CliEnvironment,
+  type CliEnvironmentPorts,
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
@@ -129,8 +136,10 @@ describe("CLI: exit codes", () => {
         ["status"],
         output.environmentWith({
           readAdminTokenFile: async () => "a-token",
-          connectAdmin: async () =>
-            fakeClient({ getStatus: () => Promise.reject(simlockError("NO_CAPACITY")) }),
+          connectAdmin: async (resolveCredential) => {
+            await resolveCredential();
+            return fakeClient({ getStatus: () => Promise.reject(simlockError("NO_CAPACITY")) });
+          },
         }),
       ),
     ).resolves.toBe(11);
@@ -157,8 +166,8 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       output.environmentWith({
         adminTokenFromEnv: "from-env",
         readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (credential) => {
-          seen = credential;
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
           return fakeClient();
         },
       }),
@@ -175,8 +184,8 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       output.environmentWith({
         adminTokenFromEnv: "from-env",
         readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (credential) => {
-          seen = credential;
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
           return fakeClient();
         },
       }),
@@ -191,8 +200,8 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ["status"],
       output.environmentWith({
         readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (credential) => {
-          seen = credential;
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
           return fakeClient();
         },
       }),
@@ -212,8 +221,8 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
           reads += 1;
           return reads < 3 ? undefined : "from-file-after-retry";
         },
-        connectAdmin: async (credential) => {
-          seen = credential;
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
           return fakeClient();
         },
       }),
@@ -230,8 +239,8 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ["status"],
       output.environmentWith({
         readAdminTokenFile: async () => undefined,
-        connectAdmin: async (credential) => {
-          seen = credential;
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
           return fakeClient();
         },
       }),
@@ -240,6 +249,168 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
     expect(output.stderr.trim().split("\n")).toHaveLength(1);
     const notice: unknown = JSON.parse(output.stderr);
     expect((notice as { notice: string }).notice).toMatch(/agent/i);
+  });
+
+  it("does not read the admin.token file at all when --token is given (B2 ordering)", async () => {
+    // The file source must never be consulted -- let alone before the connection exists -- when
+    // a higher-priority source already answered. Also guards against a regression back to
+    // resolving credentials before `connectAdmin` is even called.
+    const output = outputCapture();
+    let fileReads = 0;
+    await runCli(
+      ["--token", "from-flag", "status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => {
+          fileReads += 1;
+          return "from-file";
+        },
+        connectAdmin: async (resolveCredential) => {
+          await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(fileReads).toBe(0);
+  });
+
+  it("B1: degrades to an agent session with a stderr notice when the daemon rejects the credential", async () => {
+    const output = outputCapture();
+    let attempt = 0;
+    let seenOnRetry: string | undefined | "unset" = "unset";
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => "stale-secret",
+        connectAdmin: async (resolveCredential) => {
+          attempt += 1;
+          if (attempt === 1) {
+            const credential = await resolveCredential();
+            expect(credential).toBe("stale-secret");
+            throw simlockError("ADMIN_AUTHENTICATION_FAILED");
+          }
+          seenOnRetry = await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(attempt).toBe(2);
+    expect(seenOnRetry).toBeUndefined();
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    const notice = JSON.parse(output.stderr) as { notice: string };
+    expect(notice.notice).toMatch(/admin\.token/i);
+    expect(notice.notice).toMatch(/agent/i);
+  });
+
+  it("B1: does not retry, and propagates the error, when the connection already had no credential", async () => {
+    const output = outputCapture();
+    let attempts = 0;
+    const exitCode = await runCli(
+      ["status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => undefined,
+        connectAdmin: async (resolveCredential) => {
+          attempts += 1;
+          await resolveCredential();
+          throw simlockError("ADMIN_AUTHENTICATION_FAILED");
+        },
+      }),
+    );
+    expect(attempts).toBe(1);
+    expect(exitCode).not.toBe(0);
+    expect(JSON.parse(output.stderr).error.code).toBe("ADMIN_AUTHENTICATION_FAILED");
+  });
+
+  it("B1: an explicit but wrong --token also degrades to agent, with a generic (not file-specific) notice", async () => {
+    const output = outputCapture();
+    let attempt = 0;
+    await runCli(
+      ["--token", "wrong", "status"],
+      output.environmentWith({
+        connectAdmin: async (resolveCredential) => {
+          attempt += 1;
+          const credential = await resolveCredential();
+          if (attempt === 1) {
+            expect(credential).toBe("wrong");
+            throw simlockError("ADMIN_AUTHENTICATION_FAILED");
+          }
+          expect(credential).toBeUndefined();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(attempt).toBe(2);
+    const notice = JSON.parse(output.stderr) as { notice: string };
+    expect(notice.notice).not.toMatch(/admin\.token/i);
+    expect(notice.notice).toMatch(/agent/i);
+  });
+
+  it("B2: reaches admin on a cold start, on the very first invocation, no daemon running yet", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipcTransport = new MemoryIpcTransport();
+    const socketPath = "/simlock/daemon.sock";
+    const adminTokenPath = "/simlock/admin.token";
+    const launcher = new FakeDaemonLauncher(async () => {
+      await startInMemoryDaemon({ adminTokenPath, filesystem, ipcTransport, socketPath });
+    });
+    const output = outputCapture({
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+      ipc: ipcTransport,
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith(),
+    );
+    expect(exitCode).toBe(0);
+    expect(launcher.launches).toBe(1);
+    const grant = JSON.parse(output.stdout) as LeaseGrant & { role: string };
+    expect(grant.role).toBe("admin");
+    // Provisioning progress pushes are expected noise on stderr; the agent-fallback notice is
+    // the thing that must be absent.
+    expect(output.stderr).not.toContain("notice");
+  });
+
+  it("B1: a stale admin.token degrades to an agent session instead of bricking the invocation", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipcTransport = new MemoryIpcTransport();
+    const socketPath = "/simlock/daemon.sock";
+    const adminTokenPath = "/simlock/admin.token";
+    // A daemon actually runs and persists its own secret first, then the file is overwritten
+    // with a value that hashes to nothing the running daemon recognizes -- exactly what a
+    // `kill -9`'d daemon's leftover `admin.token` looks like to the *next* daemon incarnation,
+    // which never touches a file it did not itself just persist.
+    await startInMemoryDaemon({ adminTokenPath, filesystem, ipcTransport, socketPath });
+    await filesystem.writeFileAtomic(adminTokenPath, "stale-secret-from-a-killed-daemon\n");
+    const launcher = new FakeDaemonLauncher();
+    const output = outputCapture({
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+      ipc: ipcTransport,
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith(),
+    );
+    expect(exitCode).toBe(0);
+    // The daemon was already running -- a bad credential must never trigger an auto-launch.
+    expect(launcher.launches).toBe(0);
+    const grant = JSON.parse(output.stdout) as LeaseGrant & { role: string };
+    expect(grant.role).toBe("agent");
+    expect(output.stderr).toContain("admin.token");
   });
 });
 
@@ -346,6 +517,83 @@ describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
       ),
     ).resolves.toBe(0);
     expect(written).toEqual({ downloads: { policy: "never" } });
+  });
+});
+
+describe("CLI: config set validates with the real config loader (ADR 0003 §11, B9)", () => {
+  it("rejects an unknown config key instead of silently dropping it", async () => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let wrote = false;
+    const exitCode = await runCli(
+      ["config", "set", "capacty.limits.ios.maxDevices", "2"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async () => {
+          wrote = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(2);
+    expect(wrote).toBe(false);
+    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+  });
+
+  it("rejects a mistyped key (missing the Ms suffix) instead of validating clean", async () => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let wrote = false;
+    const exitCode = await runCli(
+      ["config", "set", "lease.heldTtlBackstop", "60000"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async () => {
+          wrote = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(2);
+    expect(wrote).toBe(false);
+  });
+
+  it("still writes a genuinely valid key", async () => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let written: Record<string, unknown> | undefined;
+    const exitCode = await runCli(
+      // Well above the default heartbeat interval (5 min) * 4, so this doesn't also trip
+      // `validateHeartbeatInterval` -- this test is only about the key itself validating clean.
+      ["config", "set", "lease.heldTtlBackstopMs", "2400000"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async (contents) => {
+          written = contents;
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(written).toEqual({ lease: { heldTtlBackstopMs: 2400000 } });
+  });
+
+  it("does not let a stray file at the scratch validation path change the outcome", async () => {
+    // Guards against B9's second bug: the validation scratch path must never be able to read a
+    // real file, whether one happens to already exist there or not.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/");
+    await filesystem.writeFileAtomic(
+      "/config-set-validation.json",
+      `${JSON.stringify({ totally: { bogus: true } })}\n`,
+    );
+    const output = outputCapture(realCliEnvironmentPorts(filesystem));
+    let wrote = false;
+    const exitCode = await runCli(
+      ["config", "set", "downloads.policy", "never"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async () => {
+          wrote = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(wrote).toBe(true);
   });
 });
 
@@ -470,13 +718,15 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
     const { socketPath } = await startTestDaemon();
     const ipc = new NodeIpcTransport();
     const environment = outputCapture().environmentWith({
-      connectAdmin: (credential) =>
-        connectSimlockAdmin({
+      connectAdmin: async (resolveCredential) => {
+        const credential = await resolveCredential();
+        return connectSimlockAdmin({
           ipc,
           endpoint: socketPath,
           principal: "smoke-test",
           ...(credential === undefined ? {} : { credential }),
-        }),
+        });
+      },
     });
 
     const leaseOut = outputCapture();
@@ -655,30 +905,56 @@ interface OutputCapture {
   environmentWith(overrides?: Partial<CliEnvironment>): CliEnvironment;
 }
 
-function outputCapture(): OutputCapture {
+/**
+ * `ports` is `undefined` for the fully-mocked default every other suite uses (a bare object
+ * literal, `connectAdmin` etc. never call their argument unless a test's override does).
+ * Passing `ports` (built with `realCliEnvironmentPorts`, or by hand for the cold-start/B1
+ * suites) routes `environmentWith` through the real `buildCliEnvironment` instead -- the only
+ * way to exercise the production credential-resolution ordering (B2) and the real config
+ * validator (B9) rather than re-testing a test double.
+ */
+function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
   const capture: OutputCapture = {
     stdout: "",
     stderr: "",
     environmentWith(overrides = {}) {
-      return {
-        configPath: "/simlock/config.json",
-        requesterId: "test-requester",
-        now: () => 0,
-        connectAdmin: async () => fakeClient(),
-        connectExistingAdmin: async () => fakeClient(),
-        readAdminTokenFile: async () => undefined,
-        sleep: async () => {},
-        readConfigFile: async () => ({}),
-        writeConfigFile: async () => {},
-        validateConfig: async () => {},
-        readLogFile: async () => "",
-        signals: new EventEmitter() as unknown as CliEnvironment["signals"],
-        parentWatch: new FakeParentWatch(),
-        stderr: { write: (value: string) => (capture.stderr += value) },
-        stdout: { write: (value: string) => (capture.stdout += value) },
-        confirm: async () => true,
-        ...overrides,
-      };
+      const stderrOut = { write: (value: string) => (capture.stderr += value) };
+      const stdoutOut = { write: (value: string) => (capture.stdout += value) };
+      if (ports === undefined) {
+        return {
+          configPath: "/simlock/config.json",
+          requesterId: "test-requester",
+          now: () => 0,
+          connectAdmin: async () => fakeClient(),
+          connectExistingAdmin: async () => fakeClient(),
+          readAdminTokenFile: async () => undefined,
+          sleep: async () => {},
+          readConfigFile: async () => ({}),
+          writeConfigFile: async () => {},
+          validateConfig: async () => {},
+          readLogFile: async () => "",
+          signals: new EventEmitter() as unknown as CliEnvironment["signals"],
+          parentWatch: new FakeParentWatch(),
+          stderr: stderrOut,
+          stdout: stdoutOut,
+          confirm: async () => true,
+          ...overrides,
+        };
+      }
+      const base = buildCliEnvironment(
+        {
+          ...ports,
+          signals:
+            ports.signals ??
+            (new EventEmitter() as unknown as NonNullable<CliEnvironmentPorts["signals"]>),
+          parentWatch: ports.parentWatch ?? new FakeParentWatch(),
+          confirm: ports.confirm ?? (async () => true),
+          stderr: stderrOut,
+          stdout: stdoutOut,
+        },
+        {},
+      );
+      return { ...base, ...overrides };
     },
   };
   return capture;
@@ -759,6 +1035,115 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
   runningDaemons.push(daemon);
   await daemon.start();
   return { socketPath, daemon };
+}
+
+/** Bare-minimum ports for exercising `buildCliEnvironment`'s real `validateConfig` (B9) without
+ * a daemon connection -- `config set` never calls `connectAdmin`, so `ipc`/`launcher` are inert
+ * placeholders. */
+function realCliEnvironmentPorts(
+  filesystem: Filesystem = new MemoryFilesystem(),
+): CliEnvironmentPorts {
+  return {
+    filesystem,
+    clock: new FakeClock(0),
+    systemStats: new FakeSystemStats({
+      cpuCount: 8,
+      freeRamBytes: 32 * gibibyte,
+      totalRamBytes: 32 * gibibyte,
+    }),
+    ipc: new MemoryIpcTransport(),
+    launcher: new FakeDaemonLauncher(),
+    dataDirectory: "/simlock",
+  };
+}
+
+/**
+ * A real `DaemonServer` wired against in-memory ports (`MemoryFilesystem` + `MemoryIpcTransport`
+ * shared with the CLI environment under test), with the genuine credential handshake
+ * (`AdminSecretManager` + `createCredentialRoleResolver`) instead of `startTestDaemon`'s
+ * `resolveRole: { resolve: () => "admin" }` shortcut -- B1 and B2 both hinge on that handshake
+ * actually running.
+ */
+async function startInMemoryDaemon(options: {
+  readonly filesystem: MemoryFilesystem;
+  readonly ipcTransport: MemoryIpcTransport;
+  readonly socketPath: string;
+  readonly adminTokenPath: string;
+}): Promise<{ daemon: DaemonServer; adminSecret: AdminSecretManager }> {
+  const { adminTokenPath, filesystem, ipcTransport, socketPath } = options;
+  const clock = new FakeClock(1_000);
+  const eventBus = new EventBus(clock);
+  const registry = await Registry.load({
+    clock,
+    eventBus,
+    filesystem,
+    idGenerator: sequence(),
+    statePath: "/state.json",
+  });
+  const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+  const config = testConfig();
+  const engine = new LeaseEngine({
+    clock,
+    config,
+    drivers: [driver],
+    eventBus,
+    idGenerator: sequence(),
+    registry,
+    systemStats: new FakeSystemStats({
+      cpuCount: 8,
+      freeRamBytes: 32 * gibibyte,
+      totalRamBytes: 32 * gibibyte,
+    }),
+  });
+  const reaper = new CleanupReaper({
+    clock,
+    config,
+    eventBus,
+    executor: engine.cleanup,
+    filesystem,
+    registry,
+  });
+  const tokens = new TokenStore({
+    clock,
+    filesystem,
+    idGenerator: sequence(),
+    path: "/tokens.json",
+    secrets: new CryptoTokenSecrets(),
+  });
+  const adminSecret = new AdminSecretManager({
+    filesystem,
+    secrets: new CryptoTokenSecrets(),
+    path: adminTokenPath,
+  });
+  const resolveRole = createCredentialRoleResolver({
+    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
+    verifyAdminSecret: (secret) => adminSecret.verify(secret),
+  });
+  const daemon = new DaemonServer({
+    adminSecret,
+    capacity: engine,
+    catalog: engine,
+    clock,
+    config,
+    defaultRequesterId: "test-process",
+    eventBus,
+    host: new DaemonEndpointHost({
+      connector: ipcTransport,
+      endpoint: socketPath,
+      filesystem,
+      listenerFactory: ipcTransport,
+    }),
+    leases: engine,
+    queue: engine,
+    reaper,
+    registry,
+    resolveRole,
+    tokens,
+    version: "test",
+  });
+  runningDaemons.push(daemon);
+  await daemon.start();
+  return { daemon, adminSecret };
 }
 
 function testConfig(): Config {
