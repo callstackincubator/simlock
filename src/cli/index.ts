@@ -350,12 +350,16 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
   // of pinging forever. Detached mode never holds a connection, so it keeps
   // relying purely on its own TTL.
   const connection = await environment.connect(detached ? undefined : { heartbeat: true });
-  // Set once the daemon says this connection's lease ended without us asking. The
-  // daemon only pushes lease-lost to the connection that holds the lease, and a held
-  // CLI holds exactly one, so there is nothing to match it against -- checking it
-  // against the grant would only open a window where a push that arrives in the same
-  // read as the grant response is dropped.
+  // Set once the daemon says this connection's lease ended without us asking. ADR 0003 §8:
+  // lease-scoped pushes now go to every live connection sharing the lease's owner, not only
+  // the one holding it -- until the CLI sends a real per-process principal at `hello` (PR 4),
+  // two CLI connections started without `--agent-id`/`SIMLOCK_AGENT_ID` share the daemon's
+  // fallback principal, so a lease-lost push meant for one can reach the other. Filtered by
+  // `leaseId` below against this connection's own granted lease (unset until the grant
+  // response lands, in which case any push is necessarily for someone else's lease -- nothing
+  // this connection holds could have already been lost).
   let leaseLost = false;
+  let ourLeaseId: string | undefined;
   let notifyLeaseLost: (() => void) | undefined;
   const leaseLostSignal = new Promise<void>((resolve) => {
     notifyLeaseLost = resolve;
@@ -383,6 +387,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
       } catch {
         return;
       }
+      if (line.lease !== ourLeaseId) return;
       environment.stderr.write(`${JSON.stringify(line)}\n`);
       leaseLost = true;
       notifyLeaseLost?.();
@@ -405,6 +410,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
     const result = leaseResult(response);
+    ourLeaseId = result.lease;
     environment.stdout.write(`${JSON.stringify(result)}\n`);
     if (detached || termination === undefined) return 0;
     await Promise.race([termination.settled, leaseLostSignal]);
