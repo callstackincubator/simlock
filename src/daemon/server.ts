@@ -3,12 +3,8 @@ import { z } from "zod";
 import { type EventBus, type EventEnvelope } from "../bus/index.js";
 import {
   type Config,
-  type DeviceRecord,
-  type DeviceRequest,
-  type LeaseProgress,
-  type LeaseRecord,
-  effectiveAllowDownload,
   InsufficientDiskSpaceError,
+  type LeaseProgress,
   LicenseNotAcceptedError,
   NoCapacityError,
   NoDriverError,
@@ -16,7 +12,6 @@ import {
   type Registry,
   RequesterAlreadyLeasedError,
   RuntimeMissingError,
-  transitionEnteredAt,
   UnknownModelError,
   type CleanupReaper,
   type Doctor,
@@ -34,32 +29,26 @@ import type { Clock, IpcConnection, Logger, TimerHandle } from "../ports/index.j
 import { NoopLogger } from "../ports/index.js";
 import { parseRequestFrame, serializeFrame, type RequestFrame } from "../daemon-protocol/index.js";
 import {
-  catalogGet,
-  cleanupRun,
-  configGet,
-  doctorRun,
-  eventsReplay,
-  eventsSubscribe,
-  eventsUnsubscribe,
   helloRequestSchema,
   helloReplySchema,
-  leaseCancel,
-  leaseHeartbeat,
-  leaseList,
   leaseRelease,
-  leaseReleaseAll,
-  leaseRenew,
   leaseRequest,
-  listGet,
   negotiateProtocolVersion,
   normalizeProtocolVersion,
-  nukeRun,
   PROTOCOL_VERSION_RANGE,
   PUSH_SCHEMAS,
-  statusGet,
   type ProtocolRange,
+  type Role,
 } from "../contract/index.js";
 import type { ConnectionHost } from "./connection-host.js";
+import {
+  Dispatcher,
+  DispatchError,
+  DoctorUnavailableError,
+  NukeUnavailableError,
+  type DispatchSession,
+} from "./dispatcher.js";
+import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
 
 type RequestId = string | number;
 
@@ -72,6 +61,25 @@ interface Connection {
   helloReceived: boolean;
   heartbeatCapability: boolean;
   closed: boolean;
+  /** ADR 0003 §4: fixed at `hello` for the connection's lifetime. `principal` defaults to
+   * `options.defaultRequesterId` when `hello` omits one (today's CLI/MCP -- PR 4 moves them
+   * onto the typed client, which always sends one). `role` comes from `options.resolveRole`,
+   * the seam PR 2's credential handshake replaces -- see `session.ts`. */
+  principal: string;
+  role: Role;
+  /**
+   * Lease ids this connection is *currently* explicitly releasing (`lease.release`/
+   * `lease.release-all`), added right before the dispatched call and consumed by
+   * `#notifyLeaseLost`. ADR §8 says a client "never fires `onLeaseLost` for a release the same
+   * client asked for" -- stated as the *client's* dedup rule (a future PR), but with pushes now
+   * owner-routed to every connection sharing a principal (not just the single held-lease
+   * holder), the daemon can no longer rely on `heldLeaseIds` membership alone to skip the
+   * asking connection: that would also wrongly skip every *other* live connection with the
+   * same principal, which is exactly the fan-out this PR adds. So the daemon still suppresses
+   * the self-push for the one connection that asked, by connection identity rather than by
+   * principal, and lets every other owning connection's push through undisturbed.
+   */
+  readonly selfInitiatedReleases: Set<string>;
   unsubscribeEvents: (() => void) | undefined;
   /** Set while this connection has an active `events.subscribe`; correlates `event` pushes
    * (ADR 0003 §8). Minted per-subscription from `#eventSubscriptionSeq` rather than injected --
@@ -101,6 +109,10 @@ export interface DaemonServerOptions {
   readonly nuke?: Nuke;
   readonly registry: Registry;
   readonly version: string;
+  /** ADR §5's seam (see `session.ts`): resolves a session's role from `hello`'s payload.
+   * Defaults to `resolveAgentRole` (every session is "agent") -- PR 2's credential handshake
+   * supplies a real resolver here without changing anything else in this class. */
+  readonly resolveRole?: SessionRoleResolver;
   /**
    * Startup recovery work (doctor reconciliation, running-capacity convergence) run
    * *after* the socket is claimed, so reachability never depends on it. `hello` and
@@ -148,6 +160,8 @@ export class DaemonServer {
    * `start()`.
    */
   readonly #parkedDispatches = new Set<Promise<void>>();
+  readonly #dispatcher: Dispatcher;
+  readonly #resolveRole: SessionRoleResolver;
 
   constructor(private readonly options: DaemonServerOptions) {
     this.#protocolRange =
@@ -155,6 +169,23 @@ export class DaemonServer {
         ? PROTOCOL_VERSION_RANGE
         : normalizeProtocolVersion(options.protocolVersion);
     this.#logger = options.logger ?? new NoopLogger();
+    this.#resolveRole = options.resolveRole ?? resolveAgentRole;
+    this.#dispatcher = new Dispatcher({
+      awaitReady: () => this.#awaitReady(),
+      capacity: options.capacity,
+      catalog: options.catalog,
+      clock: options.clock,
+      config: options.config,
+      ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
+      eventBus: options.eventBus,
+      health: () => this.#health,
+      leases: options.leases,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
+      queue: options.queue,
+      reaper: options.reaper,
+      registry: options.registry,
+    });
   }
 
   // fallow-ignore-next-line unused-class-member -- retained as a daemon compatibility facade.
@@ -221,13 +252,19 @@ export class DaemonServer {
     // -- the same "nothing emitted during convergence needs a push" argument holds.
     this.#unsubscribeLeaseLost.push(
       this.options.eventBus.subscribe("lease.expired", (envelope) =>
-        this.#notifyLeaseLost(envelope.payload.leaseId, envelope.payload.deviceId, "expired"),
+        this.#notifyLeaseLost(
+          envelope.payload.leaseId,
+          envelope.payload.deviceId,
+          "expired",
+          envelope.payload.ownerId,
+        ),
       ),
       this.options.eventBus.subscribe("lease.released", (envelope) =>
         this.#notifyLeaseLost(
           envelope.payload.leaseId,
           envelope.payload.deviceId,
           envelope.payload.reason,
+          envelope.payload.ownerId,
         ),
       ),
       this.options.eventBus.subscribe("device.crash-detected", (envelope) =>
@@ -337,8 +374,14 @@ export class DaemonServer {
       helloReceived: false,
       heartbeatCapability: false,
       heldLeaseIds: new Set(),
+      // Overwritten by `#handleHello` before any dispatched request can read them -- every
+      // path that reaches `#handleRequest` has `connection.helloReceived === true` by
+      // construction (`#dispatchLine` routes to `#handleHello` until then).
+      principal: "",
+      role: "agent",
       progressDisposers: new Set(),
       progressRequesters: new Set(),
+      selfInitiatedReleases: new Set(),
       socket,
       releasing: undefined,
       subscriptionId: undefined,
@@ -451,6 +494,7 @@ export class DaemonServer {
     }
   }
 
+  // fallow-ignore-next-line complexity -- handshake validation, version negotiation, and role resolution are one sequential gate; splitting it would scatter the early-return contract.
   async #handleHello(connection: Connection, frame: RequestFrame): Promise<void> {
     if (frame.type !== "hello") {
       await this.#respondError(
@@ -491,164 +535,177 @@ export class DaemonServer {
       await connection.socket.close();
       return;
     }
+    // ADR §5's seam: `#resolveRole` is `resolveAgentRole` (always "agent") until PR 2 supplies
+    // a real credential-checking resolver -- see `session.ts`. A resolver that rejects a bad
+    // credential throws here, before `connection.helloReceived` is ever set, which is why this
+    // whole block is wrapped: nothing after it should be able to run for a rejected `hello`.
+    let role: Role;
+    try {
+      role = await this.#resolveRole.resolve({
+        ...(payload.principal === undefined ? {} : { principal: payload.principal }),
+        ...(payload.credential === undefined ? {} : { credential: payload.credential }),
+      });
+    } catch (error: unknown) {
+      await this.#respondError(connection.socket, frame.id, errorCode(error), errorMessage(error));
+      await connection.socket.close();
+      return;
+    }
     connection.helloReceived = true;
     connection.heartbeatCapability = payload.capabilities?.heartbeat === true;
+    // ADR §4: the principal is fixed for the connection's lifetime from here on. Falls back to
+    // `defaultRequesterId` when `hello` omits one -- today's CLI/MCP frontends don't send a
+    // principal yet (PR 4 moves them onto the typed client, which always will).
+    connection.principal = payload.principal ?? this.options.defaultRequesterId;
+    connection.role = role;
     this.#logger.info("Connection opened", {
       clientVersion: payload.clientVersion,
       heartbeatCapability: connection.heartbeatCapability,
+      principal: connection.principal,
       protocolVersion: negotiated,
+      role: connection.role,
     });
-    // `role` is fixed to "agent" until PR 2 resolves it from a real credential (ADR §5); the
-    // reply shape carries the field now so a client can start asserting against it early.
     const reply = this.#parseOutput(
       helloReplySchema,
       {
         protocolVersion: negotiated,
         daemonProtocolRange: this.#protocolRange,
         version: this.options.version,
-        role: "agent",
+        role: connection.role,
       },
       "hello",
     );
     await writeFrame(connection.socket, { id: frame.id, ok: true, payload: reply });
   }
 
-  // fallow-ignore-next-line complexity -- command dispatch is intentionally centralized at the protocol boundary.
+  /**
+   * The request switch that used to live here moved to `Dispatcher` (ADR §2): this method now
+   * only does what the ADR says stays with `DaemonServer` around the shared `dispatch()` call --
+   * held-lease tracking (`lease.request`/`lease.release`/`lease.release-all`) and building the
+   * per-call `DispatchSession` (ADR §2/§4) from this connection's fixed principal/role plus
+   * whatever is call-specific (progress delivery, event-subscription management).
+   */
+  // fallow-ignore-next-line complexity -- held-lease bookkeeping around each dispatched operation is one transaction per case.
   async #handleRequest(connection: Connection, frame: RequestFrame): Promise<unknown> {
-    if (frame.type !== "status.get") {
-      await this.#awaitReady();
-    }
     switch (frame.type) {
       case "lease.request":
         return this.#requestLease(connection, frame.id, frame.payload);
       case "lease.release": {
         const input = parseInput(leaseRelease.input, frame.payload);
-        // Clear before the request commits so a lease-lost push (triggered by the
-        // resulting lease.released event) does not also fire back at this same
-        // connection for the release it just asked for itself.
+        // Clear before the request commits so held-lease bookkeeping does not try to release
+        // this lease again on a later connection close. Marked in `selfInitiatedReleases` too,
+        // for `#notifyLeaseLost` to suppress the self-push -- see that set's comment.
         const wasHeld = connection.heldLeaseIds.delete(input.leaseId);
+        connection.selfInitiatedReleases.add(input.leaseId);
         try {
-          await this.options.leases.release(input.leaseId, "explicit");
+          return await this.#dispatcher.dispatch(
+            "lease.release",
+            frame.payload,
+            this.#session(connection),
+          );
         } catch (error: unknown) {
           if (wasHeld) connection.heldLeaseIds.add(input.leaseId);
           throw error;
+        } finally {
+          connection.selfInitiatedReleases.delete(input.leaseId);
         }
-        return this.#parseOutput(leaseRelease.output, { leaseId: input.leaseId }, "lease.release");
       }
       case "lease.release-all": {
-        parseInput(leaseReleaseAll.input, frame.payload ?? {});
         const previouslyHeld = [...connection.heldLeaseIds];
         connection.heldLeaseIds.clear();
+        for (const leaseId of previouslyHeld) connection.selfInitiatedReleases.add(leaseId);
         try {
-          const leaseIds = await this.options.leases.releaseAll("explicit");
-          return this.#parseOutput(leaseReleaseAll.output, { leaseIds }, "lease.release-all");
+          return await this.#dispatcher.dispatch(
+            "lease.release-all",
+            frame.payload ?? {},
+            this.#session(connection),
+          );
         } catch (error: unknown) {
           for (const leaseId of previouslyHeld) connection.heldLeaseIds.add(leaseId);
           throw error;
+        } finally {
+          for (const leaseId of previouslyHeld) connection.selfInitiatedReleases.delete(leaseId);
         }
       }
-      case "lease.renew": {
-        const input = parseInput(leaseRenew.input, frame.payload);
-        // Omitted ttlMs falls back to the lease's own mode-aware default (core's
-        // `#ttlFor`) rather than always assuming detached -- substituting the detached
-        // TTL here would silently shorten a held lease's hour-long backstop to 15m.
-        const record = await this.options.leases.renew(input.leaseId, input.ttlMs);
-        return this.#parseOutput(leaseRenew.output, record, "lease.renew");
-      }
-      case "lease.cancel": {
-        const input = parseInput(leaseCancel.input, frame.payload ?? {});
-        const requesterId = input.requesterId ?? this.options.defaultRequesterId;
-        const result = await this.options.queue.cancelPending(requesterId);
-        return this.#parseOutput(leaseCancel.output, { result }, "lease.cancel");
-      }
-      case "lease.list": {
-        parseInput(leaseList.input, frame.payload ?? {});
-        const leases = this.options.registry.snapshot.leases.map((lease) =>
-          this.#decorateLease(lease),
+      case "lease.renew":
+        return this.#dispatcher.dispatch("lease.renew", frame.payload, this.#session(connection));
+      case "lease.cancel":
+        return this.#dispatcher.dispatch(
+          "lease.cancel",
+          frame.payload ?? {},
+          this.#session(connection),
         );
-        return this.#parseOutput(leaseList.output, { leases }, "lease.list");
-      }
-      case "lease.heartbeat": {
-        parseInput(leaseHeartbeat.input, frame.payload ?? {});
-        if (!connection.heartbeatCapability) {
-          throw new ProtocolError(
-            "BAD_REQUEST",
-            "Connection did not declare the heartbeat capability",
-          );
-        }
-        const leases = await this.#heartbeatHeldLeases(connection);
-        return this.#parseOutput(leaseHeartbeat.output, { leases }, "lease.heartbeat");
-      }
-      case "status.get": {
-        parseInput(statusGet.input, frame.payload ?? {});
-        return this.#parseOutput(statusGet.output, this.#status(), "status.get");
-      }
-      case "list.get": {
-        const input = parseInput(listGet.input, frame.payload ?? {});
-        return this.#parseOutput(listGet.output, this.#list(input), "list.get");
-      }
-      case "catalog.get": {
-        const input = parseInput(catalogGet.input, frame.payload ?? {});
-        const result = { platforms: await this.options.catalog.listCatalog(input.platform) };
-        return this.#parseOutput(catalogGet.output, result, "catalog.get");
-      }
-      case "cleanup.run": {
-        const input = parseInput(cleanupRun.input, frame.payload ?? {});
-        const result = await this.options.reaper.run({
-          dryRun: input.dryRun ?? false,
-          ...(input.rule === undefined ? {} : { rule: input.rule }),
-        });
-        return this.#parseOutput(cleanupRun.output, result, "cleanup.run");
-      }
-      case "doctor.run": {
-        const input = parseInput(doctorRun.input, frame.payload ?? {});
-        if (this.options.doctor === undefined) throw new DoctorUnavailableError();
-        const report = await this.options.doctor.reconcile({ fix: input.fix ?? false });
-        return this.#parseOutput(doctorRun.output, report, "doctor.run");
-      }
-      case "nuke.run": {
-        const input = parseInput(nukeRun.input, frame.payload ?? {});
-        if (this.options.nuke === undefined) throw new NukeUnavailableError();
-        const result = await this.options.nuke.run({ deleteDevices: input.deleteDevices ?? false });
-        return this.#parseOutput(nukeRun.output, result, "nuke.run");
-      }
-      case "events.replay": {
-        const input = parseInput(eventsReplay.input, frame.payload ?? {});
-        const result = this.options.eventBus.replay(
-          input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs },
+      case "lease.list":
+        return this.#dispatcher.dispatch(
+          "lease.list",
+          frame.payload ?? {},
+          this.#session(connection),
         );
-        return this.#parseOutput(eventsReplay.output, result, "events.replay");
-      }
-      case "events.subscribe": {
-        parseInput(eventsSubscribe.input, frame.payload ?? {});
-        connection.unsubscribeEvents?.();
-        this.#eventSubscriptionSeq += 1;
-        const subscriptionId = `sub_${this.#eventSubscriptionSeq}`;
-        connection.subscriptionId = subscriptionId;
-        connection.unsubscribeEvents = this.options.eventBus.subscribeAll((event) => {
-          void this.#pushEvent(connection.socket, subscriptionId, event);
-        });
-        return this.#parseOutput(
-          eventsSubscribe.output,
-          { subscribed: true, subscriptionId },
+      case "lease.heartbeat":
+        return this.#dispatcher.dispatch(
+          "lease.heartbeat",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "status.get":
+        return this.#dispatcher.dispatch(
+          "status.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "list.get":
+        return this.#dispatcher.dispatch(
+          "list.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "catalog.get":
+        return this.#dispatcher.dispatch(
+          "catalog.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "cleanup.run":
+        return this.#dispatcher.dispatch(
+          "cleanup.run",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "doctor.run":
+        return this.#dispatcher.dispatch(
+          "doctor.run",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "nuke.run":
+        return this.#dispatcher.dispatch(
+          "nuke.run",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "events.replay":
+        return this.#dispatcher.dispatch(
+          "events.replay",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "events.subscribe":
+        return this.#dispatcher.dispatch(
           "events.subscribe",
+          frame.payload ?? {},
+          this.#session(connection),
         );
-      }
-      case "events.unsubscribe": {
-        parseInput(eventsUnsubscribe.input, frame.payload ?? {});
-        connection.unsubscribeEvents?.();
-        connection.unsubscribeEvents = undefined;
-        connection.subscriptionId = undefined;
-        return this.#parseOutput(
-          eventsUnsubscribe.output,
-          { subscribed: false },
+      case "events.unsubscribe":
+        return this.#dispatcher.dispatch(
           "events.unsubscribe",
+          frame.payload ?? {},
+          this.#session(connection),
         );
-      }
-      case "config.get": {
-        parseInput(configGet.input, frame.payload ?? {});
-        return this.#parseOutput(configGet.output, this.options.config, "config.get");
-      }
+      case "config.get":
+        return this.#dispatcher.dispatch(
+          "config.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // before hello/dispatch entirely, as the frozen exception ADR §6 describes, so it never
       // reaches `#handleRequest`.
@@ -657,122 +714,88 @@ export class DaemonServer {
     }
   }
 
-  // fallow-ignore-next-line complexity -- lease payload validation and held-connection lifecycle are one transaction.
+  /** Builds the ADR §2/§4 session for one dispatched call from this connection's fixed
+   * principal/role plus its currently-held leases and heartbeat capability. `onProgress` is
+   * unset here -- only `#requestLease` needs one, and builds its own session inline so the
+   * closure can see that specific call's `requestId`. */
+  #session(connection: Connection): DispatchSession {
+    return {
+      heartbeatCapability: connection.heartbeatCapability,
+      heldLeaseIds: connection.heldLeaseIds,
+      manageEventSubscription: (subscribe) => this.#manageEventSubscription(connection, subscribe),
+      principal: connection.principal,
+      role: connection.role,
+    };
+  }
+
+  /** Connection-scoped: tears down any existing `events.subscribe` unconditionally (matches
+   * the pre-dispatcher behaviour -- a second `subscribe` replaces the first), then, if asked,
+   * wires a fresh one that pushes every bus event to this connection. Kept in `DaemonServer`
+   * because event delivery is a push (ADR §2: pushes stay with the transport); the dispatcher's
+   * `events.subscribe`/`events.unsubscribe` handlers do nothing but call this. */
+  #manageEventSubscription(connection: Connection, subscribe: boolean): string | undefined {
+    connection.unsubscribeEvents?.();
+    connection.unsubscribeEvents = undefined;
+    connection.subscriptionId = undefined;
+    if (!subscribe) return undefined;
+    this.#eventSubscriptionSeq += 1;
+    const subscriptionId = `sub_${this.#eventSubscriptionSeq}`;
+    connection.subscriptionId = subscriptionId;
+    connection.unsubscribeEvents = this.options.eventBus.subscribeAll((event) => {
+      void this.#pushEvent(connection.socket, subscriptionId, event);
+    });
+    return subscriptionId;
+  }
+
+  /**
+   * The held-lease tracking and progress-delivery wiring ADR §2 keeps in `DaemonServer`
+   * ("DaemonServer keeps framing, connection lifecycle, held-lease tracking, and pushes; it
+   * loses the request switch"). The actual lease acquisition is `Dispatcher`'s
+   * `lease.request` handler; this method's job is everything around that call that depends on
+   * *this connection* rather than on the operation itself.
+   */
   async #requestLease(
     connection: Connection,
     requestId: RequestId,
     value: unknown,
   ): Promise<unknown> {
-    const input = parseInput(leaseRequest.input, value ?? {});
-    const request: DeviceRequest = {
-      model: input.model,
-      platform: input.platform,
-      ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-      ...(input.full ? { full: true } : {}),
-    };
-    const mode = input.mode ?? "held";
-    const requesterId = input.requesterId ?? this.options.defaultRequesterId;
-    // The request's own flag is only the input to the policy, not the final answer: `never`
-    // overrides an explicit `true` (and is what should show up in the eventual "runtime
-    // missing" message below), `always` grants it without the caller asking.
-    const requestedAllowDownload = input.allowDownload ?? false;
-    const downloadsPolicy = this.options.config.downloads.policy;
     let progressSocket: IpcConnection | undefined = connection.socket;
     const disposeProgress = () => {
       progressSocket = undefined;
     };
     connection.progressDisposers.add(disposeProgress);
+    // `requesterId` is only meaningful after input parsing, which `dispatch()` below also
+    // does -- parsed again here (cheap, side-effect-free) purely so `progressRequesters`
+    // tracks the same id the dispatcher's handler will actually use, and a connection close
+    // mid-request detaches progress from the right queued waiter. A parse failure here just
+    // falls back to the connection's principal; `dispatch()` throws `BAD_REQUEST` before any
+    // waiter is created, so no queue entry will ever exist to detach.
+    const parsedForTracking = leaseRequest.input.safeParse(value ?? {});
+    const requesterId =
+      (parsedForTracking.success ? parsedForTracking.data.requesterId : undefined) ??
+      connection.principal;
     connection.progressRequesters.add(requesterId);
     let grant;
     try {
-      grant = await this.options.leases.request(request, {
-        allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
-        mode,
-        noWait: input.noWait ?? false,
+      grant = await this.#dispatcher.dispatch("lease.request", value ?? {}, {
+        ...this.#session(connection),
         onProgress: (progress) => {
           if (progressSocket !== undefined) {
             void this.#pushProgress(progressSocket, requestId, progress);
           }
         },
-        requesterId,
-        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-        // NOTE: `input.ttlMs` is validated by the contract (BAD_REQUEST for a held lease, via
-        // `leaseRequestInputSchema`'s `superRefine`) but not forwarded here --
-        // `LeaseRequestOptions` (src/core/wait-queue.ts) has no `ttlMs` field yet. Threading an
-        // initial TTL for a detached lease through core (`WaitQueue`/`LeaseEngine`) is later-PR
-        // plumbing, beyond this PR's "daemon validates inputs" scope -- see the PR description.
       });
-    } catch (error: unknown) {
-      // The driver only ever sees the clamped-to-false permission, so its own
-      // RuntimeMissingError just says "missing" -- it has no way to know config is what's
-      // standing between this request and success. Recover that distinction here, the one place
-      // that saw both sides, rather than teaching the driver about config. Attach the suffix
-      // whenever the `never` policy is active, regardless of whether this particular request
-      // asked for a download: the driver's message suggests `--allow-download`, which under
-      // `never` can never help, so the suffix is the correction every caller needs to see, not
-      // just the ones that happened to ask. Still gated on `downloadable`: a request no download
-      // could ever have fixed (out of range, an installed-but-unpaired runtime, older than the
-      // download floor) must not be blamed on the download policy -- that policy was never what
-      // stood between this request and success.
-      if (
-        downloadsPolicy === "never" &&
-        error instanceof RuntimeMissingError &&
-        error.downloadable
-      ) {
-        error.message = `${error.message} (downloads are disabled by configuration: downloads.policy is "never")`;
-      }
-      throw error;
     } finally {
       connection.progressDisposers.delete(disposeProgress);
       connection.progressRequesters.delete(requesterId);
       disposeProgress();
     }
-    if (mode === "held" && (connection.closed || this.#stopping)) {
+    if (grant.lease.mode === "held" && (connection.closed || this.#stopping)) {
       await this.options.leases.release(grant.lease.id, "closed");
-    } else if (mode === "held") {
+    } else if (grant.lease.mode === "held") {
       connection.heldLeaseIds.add(grant.lease.id);
     }
-    return this.#parseOutput(leaseRequest.output, grant, "lease.request");
-  }
-
-  #list(input: { readonly kind?: "devices" | "leases" | "rules" | undefined }): unknown {
-    const snapshot = this.options.registry.snapshot;
-    switch (input.kind) {
-      case "leases":
-        return snapshot.leases.map((lease) => this.#decorateLease(lease));
-      case "rules":
-        return this.options.reaper.rules;
-      case "devices":
-      case undefined:
-        return snapshot.devices.map((device) => this.#decorateDevice(device));
-    }
-  }
-
-  #status(): unknown {
-    const snapshot = this.options.registry.snapshot;
-    const running = this.options.capacity.runningCapacity;
-    const warmDevices = snapshot.devices.filter((device) => device.state === "ready");
-    const capacity = Object.fromEntries(
-      (["ios", "android"] as const).map((platform) => [
-        platform,
-        {
-          limit: this.options.capacity.deviceLimit(platform),
-          ...running[platform],
-          warm: warmDevices.filter((device) => device.spec.platform === platform).length,
-          used: snapshot.devices.filter(
-            (device) => device.spec.platform === platform && device.state !== "deleted",
-          ).length,
-        },
-      ]),
-    );
-    return {
-      ...snapshot,
-      devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
-      leases: snapshot.leases.map((lease) => this.#decorateLease(lease)),
-      capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
-      health: this.#health,
-      queueDepth: this.options.queue.queueDepth,
-    };
+    return grant;
   }
 
   /**
@@ -798,31 +821,6 @@ export class DaemonServer {
     throw new Error(
       `Internal: ${operationName} produced a response that does not match its contract output schema`,
     );
-  }
-
-  /**
-   * Adds a derived `lastHeartbeatAt` for held leases, without a new `LeaseRecord` field:
-   * since `heartbeat()` writes through the registry, `ttlDeadline - heldTtlBackstopMs` is
-   * exactly the moment of the most recent slide (or grant, if there hasn't been one yet).
-   */
-  #decorateLease(lease: LeaseRecord): LeaseRecord & { readonly lastHeartbeatAt?: number } {
-    if (lease.mode !== "held") return lease;
-    return {
-      ...lease,
-      lastHeartbeatAt: lease.ttlDeadline - this.options.config.lease.heldTtlBackstopMs,
-    };
-  }
-
-  /**
-   * Adds a derived `transitionAgeMs` for a `provisioning`/`reclaiming` device -- how long
-   * it has been mid-transition, the same age Doctor compares against its stall threshold
-   * (see `stalledTransitionFinding` in doctor.ts) -- so `status`/`list --devices` can show
-   * it without the CLI needing its own notion of "now".
-   */
-  #decorateDevice(device: DeviceRecord): DeviceRecord & { readonly transitionAgeMs?: number } {
-    const enteredAt = transitionEnteredAt(device);
-    if (enteredAt === undefined) return device;
-    return { ...device, transitionAgeMs: this.options.clock.now() - enteredAt };
   }
 
   /** ADR §8: `progress` carries the originating request's frame id, so a client with more than
@@ -886,35 +884,26 @@ export class DaemonServer {
   }
 
   /**
-   * Slides every lease this connection holds. A lease that raced to expiry or release
-   * between the push and this pong is skipped rather than failing the whole heartbeat.
+   * Pushes a lease-ended fact to every live connection whose principal owns `leaseId` (ADR
+   * §8: "every live connection whose principal owns the lease, in either mode" -- not just the
+   * held-lease holder, which is the bug this PR fixes: a detached holder used to learn of a
+   * crash only when a renew failed). Also stops tracking the lease as held on whichever
+   * connection had it in `heldLeaseIds` (there is at most one), so a later connection close
+   * does not try to release it again -- the held set survives this PR for exactly that
+   * bookkeeping, nothing else (ADR §8: "The held set is kept only for release-on-close").
+   * Reacts to the existing post-commit lease.expired / lease.released facts (observer-only; no
+   * transaction waits on this). `ownerId` comes from the event payload, not a registry lookup:
+   * by the time this fires the lease has already been removed from the registry.
    */
-  async #heartbeatHeldLeases(
-    connection: Connection,
-  ): Promise<Array<{ readonly leaseId: string; readonly ttlDeadline: number }>> {
-    const acked: Array<{ readonly leaseId: string; readonly ttlDeadline: number }> = [];
-    for (const leaseId of connection.heldLeaseIds) {
-      try {
-        const renewed = await this.options.leases.heartbeat(leaseId);
-        acked.push({ leaseId: renewed.id, ttlDeadline: renewed.ttlDeadline });
-      } catch (error: unknown) {
-        if (!(error instanceof UnknownLeaseError)) throw error;
-      }
-    }
-    return acked;
-  }
-
-  /**
-   * Pushes a lease-ended fact to the connection currently holding `leaseId`, if any,
-   * and stops tracking that lease as held so a later connection close does not try
-   * to release it again. Reacts to the existing post-commit lease.expired /
-   * lease.released facts (observer-only; no transaction waits on this).
-   */
-  #notifyLeaseLost(leaseId: string, deviceId: string, reason: string): void {
+  #notifyLeaseLost(leaseId: string, deviceId: string, reason: string, ownerId: string): void {
     for (const connection of this.#connections) {
-      if (!connection.heldLeaseIds.delete(leaseId)) continue;
+      connection.heldLeaseIds.delete(leaseId);
+      // Suppresses the push for exactly the connection that asked for this release itself
+      // (see `selfInitiatedReleases`'s comment) -- every other connection sharing the owner
+      // still gets pushed, which is the owner-routed fan-out this PR adds.
+      if (connection.selfInitiatedReleases.delete(leaseId)) continue;
+      if (connection.principal !== ownerId) continue;
       void this.#pushLeaseLost(connection.socket, { deviceId, leaseId, reason });
-      return;
     }
   }
 
@@ -929,25 +918,23 @@ export class DaemonServer {
   }
 
   /**
-   * Finds the connection currently holding `leaseId`, without touching `heldLeaseIds`.
-   * Unlike `#notifyLeaseLost`, a crash/recovery notice does not end the lease -- it is
-   * still held, and the connection must still release it on close -- so this is a
-   * deliberate sibling rather than a shared helper `#notifyLeaseLost` could be
-   * parameterised into: reusing that one here would risk someone later adding a flag
-   * that forgets to keep a live lease in the set.
+   * `device.crash-detected` / `device.recovered` fire for a lease that is still active (not
+   * released), so unlike `#notifyLeaseLost` its owner can be read straight from the live
+   * registry rather than needing to travel on the event payload.
    */
-  #connectionHolding(leaseId: string): Connection | undefined {
-    for (const connection of this.#connections) {
-      if (connection.heldLeaseIds.has(leaseId)) return connection;
-    }
-    return undefined;
+  #leaseOwner(leaseId: string): string | undefined {
+    return this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId;
   }
 
-  /** Reacts to the post-commit `device.crash-detected` fact; observer-only, nothing awaits this. */
+  /** Reacts to the post-commit `device.crash-detected` fact; observer-only, nothing awaits
+   * this. Routed to every live connection owning the lease (ADR §8), same as lease-lost. */
   #notifyDeviceUnhealthy(leaseId: string, deviceId: string): void {
-    const connection = this.#connectionHolding(leaseId);
-    if (connection === undefined) return;
-    void this.#pushDeviceUnhealthy(connection.socket, { deviceId, leaseId, reason: "crashed" });
+    const ownerId = this.#leaseOwner(leaseId);
+    if (ownerId === undefined) return;
+    for (const connection of this.#connections) {
+      if (connection.principal !== ownerId) continue;
+      void this.#pushDeviceUnhealthy(connection.socket, { deviceId, leaseId, reason: "crashed" });
+    }
   }
 
   async #pushDeviceUnhealthy(
@@ -964,11 +951,15 @@ export class DaemonServer {
     });
   }
 
-  /** Reacts to the post-commit `device.recovered` fact; observer-only, nothing awaits this. */
+  /** Reacts to the post-commit `device.recovered` fact; observer-only, nothing awaits this.
+   * Routed to every live connection owning the lease (ADR §8), same as lease-lost. */
   #notifyDeviceRecovered(leaseId: string, deviceId: string, attempts: number): void {
-    const connection = this.#connectionHolding(leaseId);
-    if (connection === undefined) return;
-    void this.#pushDeviceRecovered(connection.socket, { attempts, deviceId, leaseId });
+    const ownerId = this.#leaseOwner(leaseId);
+    if (ownerId === undefined) return;
+    for (const connection of this.#connections) {
+      if (connection.principal !== ownerId) continue;
+      void this.#pushDeviceRecovered(connection.socket, { attempts, deviceId, leaseId });
+    }
   }
 
   async #pushDeviceRecovered(
@@ -1071,27 +1062,6 @@ class StartupFailedError extends Error {
   }
 }
 
-/**
- * `doctor.run`/`nuke.run` used to throw a plain `new Error("... is unavailable")` when their
- * optional collaborator was never wired up, which `errorCode()` had no choice but to map to
- * `INTERNAL` -- indistinguishable from a real bug. Real, typed errors give these their own
- * codes in the contract's closed set (`DOCTOR_UNAVAILABLE`/`NUKE_UNAVAILABLE`), per ADR §7 ("one
- * error class, closed codes").
- */
-class DoctorUnavailableError extends Error {
-  constructor() {
-    super("Doctor is unavailable");
-    this.name = "DoctorUnavailableError";
-  }
-}
-
-class NukeUnavailableError extends Error {
-  constructor() {
-    super("Nuke is unavailable");
-    this.name = "NukeUnavailableError";
-  }
-}
-
 /** Parses a request payload through its contract input schema, translating a validation
  * failure into the daemon's own `ProtocolError("BAD_REQUEST", ...)` rather than letting a raw
  * `ZodError` escape (its shape is not part of the wire contract). */
@@ -1107,6 +1077,13 @@ function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
 // fallow-ignore-next-line complexity -- preserves stable protocol error mapping.
 function errorCode(error: unknown): string {
   if (error instanceof ProtocolError) {
+    return error.code;
+  }
+  // `DispatchError` is `Dispatcher`'s own protocol-shaped rejection (BAD_REQUEST from input
+  // parsing, FORBIDDEN from the role/authorize check, UNKNOWN_REQUEST, INTERNAL) -- same
+  // `{code, message}` shape as `ProtocolError`, deliberately a separate class rather than the
+  // same one so `dispatcher.ts` does not need to import a `DaemonServer`-private type.
+  if (error instanceof DispatchError) {
     return error.code;
   }
   if (error instanceof NoCapacityError) {

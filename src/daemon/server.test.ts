@@ -28,6 +28,7 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
+import type { SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
 
 const gibibyte = 1024 ** 3;
@@ -520,10 +521,14 @@ describe("DaemonServer", () => {
 
   it("ignores lease-lost facts for leases with no currently connected holder without breaking the daemon", async () => {
     const harness = await createHarness();
-    harness.eventBus.emit("lease.expired", { deviceId: "device-x", leaseId: "lease-x" }, "test");
+    harness.eventBus.emit(
+      "lease.expired",
+      { deviceId: "device-x", leaseId: "lease-x", ownerId: "test-process" },
+      "test",
+    );
     harness.eventBus.emit(
       "lease.released",
-      { deviceId: "device-y", leaseId: "lease-y", reason: "killed" },
+      { deviceId: "device-y", leaseId: "lease-y", ownerId: "test-process", reason: "killed" },
       "test",
     );
 
@@ -641,7 +646,7 @@ describe("DaemonServer", () => {
     // push of its own.
     harness.eventBus.emit(
       "lease.released",
-      { deviceId: deviceId as string, leaseId, reason: "device-lost" },
+      { deviceId: deviceId as string, leaseId, ownerId: "test-process", reason: "device-lost" },
       "test",
     );
     await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
@@ -1410,6 +1415,257 @@ describe("DaemonServer error code mapping", () => {
   });
 });
 
+describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
+  it("rejects an admin-only operation from an agent session with FORBIDDEN, and reports the resolved role at hello", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const client = await createClient(harness.socketPath);
+    const helloReply = await client.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
+    expect(helloReply.payload).toMatchObject({ role: "agent" });
+
+    const response = await client.request("list.get", {});
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "FORBIDDEN" });
+    await client.close();
+  });
+
+  it("allows an admin session to call the same admin-only operation", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("list.get", {});
+    expect(response.ok).toBe(true);
+    await client.close();
+  });
+
+  it("still lets an agent call doctor.run with fix:false, but not fix:true (input-dependent role)", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(client.request("doctor.run", { fix: false })).resolves.toMatchObject({
+      // No `doctor` collaborator wired into this harness, so a fix:false call clears the
+      // role gate and fails DOCTOR_UNAVAILABLE downstream -- proof the rejection was not
+      // FORBIDDEN, which is the only thing this test cares about.
+      error: { code: "DOCTOR_UNAVAILABLE" },
+      ok: false,
+    });
+    await expect(client.request("doctor.run", { fix: true })).resolves.toMatchObject({
+      error: { code: "FORBIDDEN" },
+      ok: false,
+    });
+    await client.close();
+  });
+
+  it("denies lease.renew/lease.release to a session whose principal does not own the lease, and allows the owner", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const owner = await createClient(harness.socketPath);
+    await helloAs(owner, "alice");
+    const grant = await owner.request("lease.request", {
+      mode: "held",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(grant.ok).toBe(true);
+    const leaseId = leaseIdOf(grant);
+    expect((grant.payload as { lease: { ownerId: string } }).lease.ownerId).toBe("alice");
+
+    const other = await createClient(harness.socketPath);
+    await helloAs(other, "bob");
+    await expect(other.request("lease.renew", { leaseId })).resolves.toMatchObject({
+      error: { code: "FORBIDDEN" },
+      ok: false,
+    });
+    await expect(other.request("lease.release", { leaseId })).resolves.toMatchObject({
+      error: { code: "FORBIDDEN" },
+      ok: false,
+    });
+
+    await expect(owner.request("lease.renew", { leaseId })).resolves.toMatchObject({ ok: true });
+    await owner.close();
+    await other.close();
+  });
+
+  it("lets admin renew/release a lease it does not own", async () => {
+    const harness = await createHarness({
+      resolveRole: { resolve: (payload) => (payload.principal === "operator" ? "admin" : "agent") },
+    });
+    const owner = await createClient(harness.socketPath);
+    await helloAs(owner, "alice");
+    const grant = await owner.request("lease.request", {
+      mode: "held",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const leaseId = leaseIdOf(grant);
+
+    const admin = await createClient(harness.socketPath);
+    await helloAs(admin, "operator");
+    await expect(admin.request("lease.release", { leaseId })).resolves.toMatchObject({ ok: true });
+    await owner.close();
+    await admin.close();
+  });
+
+  it("lease.list returns only the caller's own leases for an agent, and every lease for admin", async () => {
+    const harness = await createHarness({
+      iosMaxDevices: 2,
+      resolveRole: { resolve: (payload) => (payload.principal === "operator" ? "admin" : "agent") },
+    });
+    const alice = await createClient(harness.socketPath);
+    await helloAs(alice, "alice");
+    const aliceGrant = await alice.request("lease.request", {
+      mode: "detached",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const bob = await createClient(harness.socketPath);
+    await helloAs(bob, "bob");
+    await bob.request("lease.request", {
+      mode: "detached",
+      requesterId: "bob-2",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    const aliceList = await alice.request("lease.list", {});
+    expect(aliceList.ok).toBe(true);
+    expect((aliceList.payload as { leases: readonly { id: string }[] }).leases).toMatchObject([
+      { id: leaseIdOf(aliceGrant), ownerId: "alice", requesterId: "alice" },
+    ]);
+
+    const admin = await createClient(harness.socketPath);
+    await helloAs(admin, "operator");
+    const adminList = await admin.request("lease.list", {});
+    expect((adminList.payload as { leases: readonly unknown[] }).leases).toHaveLength(2);
+
+    await alice.close();
+    await bob.close();
+    await admin.close();
+  });
+
+  it("forwards ttlMs as the initial TTL for a detached lease, and rejects it for a held one", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const detached = await client.request("lease.request", {
+      mode: "detached",
+      ttlMs: 30_000,
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(detached.ok).toBe(true);
+    expect(
+      (detached.payload as { lease: { grantedAt: number; ttlDeadline: number } }).lease,
+    ).toMatchObject({ grantedAt: 1_000, ttlDeadline: 1_000 + 30_000 });
+
+    const held = await client.request("lease.request", {
+      mode: "held",
+      ttlMs: 30_000,
+      requesterId: "held-with-ttl",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(held.ok).toBe(false);
+    expect(held.error).toMatchObject({ code: "BAD_REQUEST" });
+    await client.close();
+  });
+
+  it("cancels a still-queued lease.cancel without closing the connection, and the original request settles rather than hanging", async () => {
+    // Default harness capacity is one iOS device (see `testConfig`), so a second held request
+    // for the same spec queues behind the first without any extra configuration.
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const held = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(held.ok).toBe(true);
+
+    const waiter = await createClient(harness.socketPath);
+    await hello(waiter);
+    const queuedRequest = waiter.request("lease.request", {
+      mode: "held",
+      requesterId: "waiter",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    await expect.poll(() => harness.engine.queueDepth).toBe(1);
+
+    const cancel = await waiter.request("lease.cancel", { requesterId: "waiter" });
+    expect(cancel).toMatchObject({ ok: true, payload: { result: "cancelled" } });
+
+    await expect(queuedRequest).resolves.toMatchObject({ ok: false });
+    // The connection is still alive and usable after cancelling -- ADR §9: "Cancellation no
+    // longer means closing the connection."
+    await expect(waiter.request("status.get", {})).resolves.toMatchObject({ ok: true });
+
+    await holder.close();
+    await waiter.close();
+  });
+
+  it("pushes lease-lost to every live connection sharing the lease's owner, including a detached holder on another connection (ADR 0003 §8)", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const requester = await createClient(harness.socketPath);
+    await helloAs(requester, "alice");
+    const grant = await requester.request("lease.request", {
+      mode: "detached",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const leaseId = leaseIdOf(grant);
+
+    // A second, otherwise-idle connection sharing the same principal -- today's bug (fixed by
+    // this PR) is that only the connection holding the lease ever learned of its end; a
+    // detached lease has no "holding" connection at all, so this second connection previously
+    // learned nothing.
+    const observer = await createClient(harness.socketPath);
+    await helloAs(observer, "alice");
+
+    await expect(requester.request("lease.release", { leaseId })).resolves.toMatchObject({
+      ok: true,
+    });
+
+    const push = await observer.nextFrame((frame) => frame.push === "lease-lost");
+    expect(push.payload).toMatchObject({ leaseId, reason: "explicit" });
+    // The releasing connection itself does not get a redundant self-push.
+    expect(requester.frames().filter((frame) => frame.push === "lease-lost")).toEqual([]);
+
+    await requester.close();
+    await observer.close();
+  });
+});
+
+async function helloAs(
+  client: Client,
+  principal: string,
+  capabilities?: Record<string, unknown>,
+): Promise<void> {
+  await expect(
+    client.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal,
+      ...(capabilities === undefined ? {} : { capabilities }),
+    }),
+  ).resolves.toMatchObject({ ok: true });
+}
+
 // fallow-ignore-next-line complexity -- a test harness whose branches are all trivial optional-parameter defaulting.
 async function createHarness(
   options: {
@@ -1426,9 +1682,17 @@ async function createHarness(
     readonly logger?: Logger;
     /** Passed to the default `FakeDriver`; makes a `--full` request meaningful (see `Driver.reducesFeatures`). */
     readonly reducesFeatures?: boolean;
+    /** Overrides the default single-iOS-device capacity limit; a test that needs two
+     * concurrent iOS leases granted (rather than one queued behind the other) sets this. */
+    readonly iosMaxDevices?: number;
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
+    /** ADR 0003 §5's seam (see `session.ts`): defaults every session in this harness to
+     * "admin" -- this suite predates roles and exercises every operation freely, the same
+     * access a pre-ADR-0003 connection always had. Tests that specifically exercise role
+     * enforcement (ADR §3) override this to get an "agent" (or mixed) session instead. */
+    readonly resolveRole?: SessionRoleResolver;
   } = {},
 ) {
   const directory =
@@ -1459,7 +1723,7 @@ async function createHarness(
         ? {}
         : { reducesFeatures: options.reducesFeatures }),
     });
-  const config = testConfig(options.lease, options.downloads);
+  const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
   const engine = new LeaseEngine({
     clock,
     config,
@@ -1500,6 +1764,7 @@ async function createHarness(
     queue: engine,
     reaper,
     registry,
+    resolveRole: options.resolveRole ?? { resolve: () => "admin" },
     settle: options.settle ?? (async () => engine.settle()),
     ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
     ...(options.stopAuxiliary === undefined ? {} : { stopAuxiliary: options.stopAuxiliary }),
@@ -1608,6 +1873,7 @@ function sequence() {
 function testConfig(
   leaseOverrides?: Partial<Config["lease"]>,
   downloadsOverrides?: Partial<Config["downloads"]>,
+  iosMaxDevices = 1,
 ): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -1641,8 +1907,8 @@ function testConfig(
       config: {
         limits: {
           android: { maxDevices: 1, maxRunning: 1 },
-          ios: { maxDevices: 1, maxRunning: 1 },
-          maxRunning: 1 + 1,
+          ios: { maxDevices: iosMaxDevices, maxRunning: iosMaxDevices },
+          maxRunning: iosMaxDevices + 1,
         },
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
