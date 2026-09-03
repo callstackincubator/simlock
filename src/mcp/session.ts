@@ -1,35 +1,28 @@
 import {
-  parseRawCatalog,
-  parseRawDeviceRecovered,
-  parseRawDeviceUnhealthy,
-  parseRawLeaseGrant,
-  parseRawLeaseHeartbeatAck,
-  parseRawLeaseLost,
-  parseRawLeaseProgress,
-  type RawLeaseGrant,
-  type RawLeaseProgress,
-} from "../daemon-client/contracts.js";
-import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
+  isSimlockError,
+  SimlockError,
+  type LeaseProgress,
+  type LeaseRequestInput,
+  type SimlockClient,
+} from "../client/index.js";
 import type {
-  HeldLeaseStatus,
   LeaseSimulatorInput,
   LeaseSimulatorOutput,
   LeaseStatusOutput,
   ListDevicesInput,
   ListDevicesOutput,
-  NoLeaseStatus,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
 } from "./contracts.js";
-import {
-  leaseSimulatorOutputSchema,
-  listDevicesOutputSchema,
-  MAX_TIMEOUT_SECONDS,
-} from "./contracts.js";
 
 export interface McpSessionOptions {
-  readonly connect: () => Promise<DaemonConnection>;
-  readonly requesterId: string;
+  /**
+   * Opens one connection and completes the `hello` handshake, fixing this session's principal
+   * for the connection's lifetime (ADR §4). Called again -- building a brand new client, never
+   * reusing or repairing the dead one -- on lazy reconnect: the typed client "does not
+   * reconnect and does not retry" (ADR §10), so that policy has to live here.
+   */
+  readonly connect: () => Promise<SimlockClient>;
 }
 
 export interface McpErrorResult {
@@ -64,22 +57,7 @@ export type DeviceHealthNotice =
     };
 
 /** Delivered to a `lease()` call's own `onProgress` callback while that request is in flight. */
-export type LeaseProgressNotice = RawLeaseProgress;
-
-interface OwnedLease {
-  readonly device: string;
-  readonly deviceId: string;
-  readonly expiresAtMs: number;
-  readonly leaseId: string;
-  readonly os: string;
-  readonly platform: "android" | "ios";
-}
-
-interface LeaseAbortWatch {
-  readonly cancelled: Promise<never>;
-  cleanup(): Promise<void> | undefined;
-  dispose(): void;
-}
+export type LeaseProgressNotice = LeaseProgress;
 
 class McpSessionError extends Error {
   constructor(
@@ -92,100 +70,84 @@ class McpSessionError extends Error {
 }
 
 export function toMcpErrorResult(error: unknown): McpErrorResult {
-  if (error instanceof DaemonClientError || error instanceof McpSessionError) {
-    return { code: error.code, message: error.message };
-  }
+  if (isSimlockError(error)) return { code: error.code, message: error.message };
+  if (error instanceof McpSessionError) return { code: error.code, message: error.message };
   return { code: "INTERNAL", message: "Simlock could not complete the request" };
 }
 
+/**
+ * MCP's own connection lifecycle and tool surface (ADR §11: "MCP keeps only connection
+ * lifecycle (lazy reconnect, tool-call serialization) and its MCP-only relays"). Everything
+ * that used to be hand-built payload construction, response parsing, and a session-local
+ * owned-lease cache is gone -- `#client` (a `SimlockClient`, ADR §10) does all of that now.
+ * `lease_status` is one `lease.list` call, not a cache read (ADR §9); releasing a lease this
+ * session does not own surfaces the daemon's own `FORBIDDEN` rather than a client-side guard
+ * pre-empting it (ADR §11).
+ */
 export class McpSession {
-  readonly #connect: () => Promise<DaemonConnection>;
-  readonly #requesterId: string;
-  #connection: DaemonConnection | undefined;
-  #connecting: Promise<DaemonConnection> | undefined;
+  readonly #connect: () => Promise<SimlockClient>;
+  #client: SimlockClient | undefined;
+  #connecting: Promise<SimlockClient> | undefined;
   #closed = false;
-  #closedConnections = new Set<DaemonConnection>();
+  readonly #closedClients = new Set<SimlockClient>();
   #closePromise: Promise<void> | undefined;
-  #rejectClosed!: (reason: McpSessionError) => void;
-  #sessionClosed: Promise<never>;
-  #ownedLease: OwnedLease | undefined;
-  #pushUnsubscribe: (() => void) | undefined;
-  #closeUnsubscribe: (() => void) | undefined;
-  /** Scoped to the in-flight `lease()` call; cleared once that call settles or the session closes. */
-  #leaseProgressListener: ((progress: LeaseProgressNotice) => void) | undefined;
+  #clientUnsubscribers: Array<() => void> = [];
   readonly #leaseLostListeners = new Set<(notice: LeaseLostNotice) => void>();
   readonly #deviceHealthListeners = new Set<(notice: DeviceHealthNotice) => void>();
+  /** Serializes every mutating (and `listDevices`/`status`, for simplicity) tool call on this
+   * session so concurrent `lease_simulator`/`release_simulator` calls never interleave. */
   #mutations: Promise<void> = Promise.resolve();
 
   constructor(options: McpSessionOptions) {
     this.#connect = options.connect;
-    this.#requesterId = options.requesterId;
-    this.#sessionClosed = new Promise<never>((_resolve, reject) => {
-      this.#rejectClosed = reject;
-    });
-    void this.#sessionClosed.catch(() => undefined);
   }
 
-  /**
-   * `onProgress` is scoped to this call only: it receives queue/provisioning/boot updates for
-   * this request while it is in flight, and is torn down on completion, error, cancellation, or
-   * session close. It never leaks across sequential lease requests.
-   */
   lease(
     input: LeaseSimulatorInput,
     signal?: AbortSignal,
     onProgress?: (progress: LeaseProgressNotice) => void,
   ): Promise<LeaseSimulatorOutput> {
-    return this.#mutate(() => {
+    return this.#mutate(async () => {
       this.#throwIfClosed();
-      return this.#lease(input, signal, onProgress);
+      const client = await this.#clientForUse();
+      const request: LeaseRequestInput = { ...input, mode: "held" };
+      return client.requestLease(request, {
+        ...(onProgress === undefined ? {} : { onProgress }),
+        ...(signal === undefined ? {} : { signal }),
+      });
     });
   }
 
   release(input: ReleaseSimulatorInput): Promise<ReleaseSimulatorOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
-      if (this.#ownedLease?.leaseId !== input.lease_id) {
-        throw new McpSessionError("LEASE_NOT_OWNED", "This session does not own that lease");
-      }
-      const connection = await this.#connectionForUse();
-      try {
-        await Promise.race([
-          connection.request("lease.release", { leaseId: input.lease_id }),
-          this.#sessionClosed,
-        ]);
-      } catch (error: unknown) {
-        if (isNoLongerActiveLease(error)) this.#ownedLease = undefined;
-        throw error;
-      }
-      this.#ownedLease = undefined;
-      return { lease_id: input.lease_id, released: true };
+      const client = await this.#clientForUse();
+      const result = await client.releaseLease(input);
+      return { ...result, released: true };
     });
   }
 
   listDevices(input: ListDevicesInput): Promise<ListDevicesOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
-      const response = await this.#requestReadOnly(
-        "catalog.get",
-        input.platform === undefined ? {} : { platform: input.platform },
-      );
-      const catalog = parseRawCatalog(response);
-      return listDevicesOutputSchema.parse({
-        platforms: catalog.platforms.map((entry) => ({
-          default_runtime: entry.defaultRuntime,
-          models: entry.models,
-          platform: entry.platform,
-          runtimes: entry.runtimes,
-        })),
-      });
+      const client = await this.#clientForUse();
+      return client.getCatalog(input);
     });
   }
 
-  /** This session's current lease, or an explicit "no lease held" result. Cheap, local, and safe to poll. */
-  status(): LeaseStatusOutput {
-    this.#throwIfClosed();
-    return this.#ownedLease === undefined ? noLeaseStatus() : heldLeaseStatus(this.#ownedLease);
+  /**
+   * This session's current lease, or an explicit "no lease held" result -- one `lease.list`
+   * call (ADR §9), never a local cache. This session only ever requests `mode: "held"` leases
+   * under one requester id (its fixed principal), so `leases` holds at most one entry.
+   */
+  status(): Promise<LeaseStatusOutput> {
+    return this.#mutate(async () => {
+      this.#throwIfClosed();
+      const client = await this.#clientForUse();
+      const { leases } = await client.listLeases();
+      const lease = leases[0];
+      return lease === undefined ? { held: false } : { ...lease, held: true };
+    });
   }
 
   /** Notifies when this session's held lease ends elsewhere (expiry or a force-release). */
@@ -206,334 +168,103 @@ export class McpSession {
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    this.#ownedLease = undefined;
-    this.#leaseProgressListener = undefined;
-    this.#pushUnsubscribe?.();
-    this.#pushUnsubscribe = undefined;
-    this.#closeUnsubscribe?.();
-    this.#closeUnsubscribe = undefined;
-    this.#rejectClosed(new McpSessionError("SESSION_CLOSED", "MCP session is closed"));
-    const connection = this.#connection;
-    this.#connection = undefined;
+    this.#unwireClient();
+    const client = this.#client;
+    this.#client = undefined;
     if (this.#connecting !== undefined) {
-      void this.#connecting
-        .then((nextConnection) => this.#closeDaemonConnection(nextConnection))
-        .catch(noop);
+      void this.#connecting.then((next) => this.#closeClient(next)).catch(noop);
     }
-    this.#closePromise =
-      connection === undefined ? Promise.resolve() : this.#closeDaemonConnection(connection);
+    this.#closePromise = client === undefined ? Promise.resolve() : this.#closeClient(client);
     return this.#closePromise;
   }
 
-  async #lease(
-    input: LeaseSimulatorInput,
-    signal?: AbortSignal,
-    onProgress?: (progress: LeaseProgressNotice) => void,
-  ): Promise<LeaseSimulatorOutput> {
-    throwIfAborted(signal);
-
-    const abortWatch = this.#watchLeaseAbort(signal);
-    this.#leaseProgressListener = onProgress;
-    let responseReceived = false;
-    try {
-      const connection = await this.#connectionForUse();
-      await this.#throwIfCancelledBeforeRequest(signal);
-      const response = await this.#requestLease(connection, input, abortWatch.cancelled);
-      responseReceived = true;
-      return await this.#mapLeaseResponse(connection, response, signal, abortWatch);
-    } catch (error: unknown) {
-      await this.#cleanupFailedLease(responseReceived, abortWatch.cleanup());
-      throw error;
-    } finally {
-      this.#leaseProgressListener = undefined;
-      abortWatch.dispose();
-    }
-  }
-
-  #watchLeaseAbort(signal: AbortSignal | undefined): LeaseAbortWatch {
-    let cleanup: Promise<void> | undefined;
-    let reject: ((reason: McpSessionError) => void) | undefined;
-    const cancelled = new Promise<never>((_resolve, nextReject) => {
-      reject = nextReject;
-    });
-    void cancelled.catch(() => undefined);
-    const abort = () => {
-      cleanup ??= this.#closeConnection().catch(() => undefined);
-      reject?.(new McpSessionError("CANCELLED", "Lease request cancelled"));
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-    return {
-      cancelled,
-      cleanup: () => cleanup,
-      dispose: () => signal?.removeEventListener("abort", abort),
-    };
-  }
-
-  async #throwIfCancelledBeforeRequest(signal: AbortSignal | undefined): Promise<void> {
-    if (!signal?.aborted) return;
-    await this.#closeConnection().catch(() => undefined);
-    throw new McpSessionError("CANCELLED", "Lease request cancelled");
-  }
-
-  #requestLease(
-    connection: DaemonConnection,
-    input: LeaseSimulatorInput,
-    cancelled: Promise<never>,
-  ): Promise<unknown> {
-    return Promise.race([
-      connection.request("lease.request", daemonLeaseRequest(input, this.#requesterId)),
-      cancelled,
-      this.#sessionClosed,
-    ]);
-  }
-
-  async #mapLeaseResponse(
-    connection: DaemonConnection,
-    response: unknown,
-    signal: AbortSignal | undefined,
-    abortWatch: LeaseAbortWatch,
-  ): Promise<LeaseSimulatorOutput> {
-    const grant = parseRawLeaseGrant(response);
-    this.#throwIfClosed();
-    if (signal?.aborted) {
-      await abortWatch.cleanup();
-      throw new McpSessionError("CANCELLED", "Lease request cancelled");
-    }
-    if (grant.lease.mode !== "held") {
-      await this.#releaseUnexpectedLease(connection, grant.lease.id);
-      throw new McpSessionError("INVALID_LEASE_GRANT", "Daemon returned a non-held lease grant");
-    }
-    const output = leaseSimulatorOutputSchema.parse(leaseSimulatorOutput(grant));
-    this.#ownedLease = {
-      device: output.device,
-      deviceId: output.device_id,
-      expiresAtMs: output.expires_at_ms,
-      leaseId: output.lease_id,
-      os: output.os,
-      platform: output.platform,
-    };
-    return output;
-  }
-
-  async #releaseUnexpectedLease(connection: DaemonConnection, leaseId: string): Promise<void> {
-    try {
-      await connection.request("lease.release", { leaseId });
-    } catch {
-      // The connection close below remains the daemon-side held-lease cleanup fallback.
-    } finally {
-      await this.#closeConnection().catch(() => undefined);
-    }
-  }
-
-  async #cleanupFailedLease(
-    responseReceived: boolean,
-    abortCleanup: Promise<void> | undefined,
-  ): Promise<void> {
-    if (abortCleanup !== undefined) await abortCleanup;
-    else if (responseReceived) await this.#closeConnection().catch(() => undefined);
-  }
-
   /**
-   * Reconnects lazily: a dead `#connection` (cleared by `#handleConnectionClosed`, below) makes
-   * the next call re-run `#connect()`, which auto-starts the daemon exactly as the CLI does and
-   * re-negotiates capabilities (e.g. the heartbeat) at `hello`, free of charge.
+   * Reconnects lazily: a dead `#client` (cleared by the client's own `onConnectionLost`, below)
+   * makes the next call re-run `#connect()`, building a brand new `SimlockClient` -- the typed
+   * client itself never reconnects (ADR §10), so constructing a fresh one here on every dead
+   * connection is what keeps MCP's process-outlives-a-connection lifecycle working.
    */
-  async #connectionForUse(): Promise<DaemonConnection> {
-    if (this.#connection !== undefined) return this.#connection;
+  async #clientForUse(): Promise<SimlockClient> {
+    if (this.#client !== undefined) return this.#client;
     this.#connecting ??= this.#connect();
     const connecting = this.#connecting;
     try {
-      const connection = await connecting;
+      const client = await connecting;
       if (this.#closed) {
-        await this.#closeDaemonConnection(connection);
+        await this.#closeClient(client);
         this.#throwIfClosed();
       }
-      this.#connection = connection;
-      this.#pushUnsubscribe = connection.onPush((kind, payload) => this.#handlePush(kind, payload));
-      this.#closeUnsubscribe = connection.onClose(() => this.#handleConnectionClosed(connection));
-      return connection;
+      this.#client = client;
+      this.#wireClient(client);
+      return client;
     } catch (error: unknown) {
       this.#throwIfClosed();
-      if (error instanceof DaemonClientError || error instanceof McpSessionError) throw error;
-      throw new DaemonClientError("DAEMON_UNAVAILABLE", errorMessage(error));
+      // `#connect` is expected to reject with a `SimlockError` (the real implementation always
+      // does -- see `main.ts`'s `connectWithAutoLaunch`), but this is a defensive fallback for
+      // any other injected `connect` so a caller never sees a bare, un-coded exception.
+      throw isSimlockError(error)
+        ? error
+        : new SimlockError(
+            "DAEMON_CONNECTION_LOST",
+            "transport",
+            error instanceof Error ? error.message : String(error),
+            {},
+          );
     } finally {
       if (this.#connecting === connecting) this.#connecting = undefined;
     }
   }
 
-  async #closeConnection(): Promise<void> {
-    const connection = this.#connection;
-    this.#connection = undefined;
-    this.#pushUnsubscribe?.();
-    this.#pushUnsubscribe = undefined;
-    this.#closeUnsubscribe?.();
-    this.#closeUnsubscribe = undefined;
-    if (connection !== undefined) await this.#closeDaemonConnection(connection);
-  }
-
   /**
-   * The invariant this relies on: a dead connection means the held lease is already gone
-   * daemon-side, by one of three paths — a graceful `daemon stop` releases held leases before
-   * exiting, an ordinary connection close releases that connection's held leases the same way,
-   * and an ungraceful death leaves the lease persisted for the startup path to release as
-   * `orphaned`. So this never asks the daemon; it just stops believing the lease is ours and
-   * tells the agent (#15's `onLeaseLost` channel) so it can decide whether to re-lease.
+   * Relays a freshly-connected client's pushes to this session's own listeners (which survive
+   * across a reconnect, unlike the client itself), and drops `#client` the moment this
+   * connection dies so the next call reconnects. The client already synthesizes `onLeaseLost`
+   * for every lease it held when its connection dies (ADR §10), so nothing extra is needed
+   * here for that case.
    */
-  #handleConnectionClosed(connection: DaemonConnection): void {
-    if (this.#connection !== connection) return;
-    this.#connection = undefined;
-    this.#pushUnsubscribe?.();
-    this.#pushUnsubscribe = undefined;
-    this.#closeUnsubscribe = undefined;
-    if (this.#ownedLease === undefined) return;
-    const lease = this.#ownedLease;
-    this.#ownedLease = undefined;
-    for (const listener of this.#leaseLostListeners) {
-      listener({
-        deviceId: lease.deviceId,
-        leaseId: lease.leaseId,
-        reason: "daemon-connection-lost",
-      });
-    }
+  #wireClient(client: SimlockClient): void {
+    this.#clientUnsubscribers = [
+      client.onLeaseLost((push) => {
+        for (const listener of this.#leaseLostListeners) listener(push);
+      }),
+      client.onDeviceUnhealthy((push) => {
+        for (const listener of this.#deviceHealthListeners) {
+          listener({
+            deviceId: push.deviceId,
+            kind: "unhealthy",
+            leaseId: push.leaseId,
+            reason: "crashed",
+          });
+        }
+      }),
+      client.onDeviceRecovered((push) => {
+        for (const listener of this.#deviceHealthListeners) {
+          listener({
+            attempts: push.attempts,
+            deviceId: push.deviceId,
+            kind: "recovered",
+            leaseId: push.leaseId,
+          });
+        }
+      }),
+      client.onConnectionLost(() => {
+        if (this.#client === client) {
+          this.#client = undefined;
+          this.#unwireClient();
+        }
+      }),
+    ];
   }
 
-  /**
-   * Retries at most once, and only for idempotent, read-only requests. A `lease.request` must
-   * never go through here: retrying it after a mid-request connection death could provision and
-   * grant a *second* device, which would violate "reconnecting never implicitly acquires one".
-   */
-  async #requestReadOnly(type: string, payload: unknown): Promise<unknown> {
-    const connection = await this.#connectionForUse();
-    try {
-      return await Promise.race([connection.request(type, payload), this.#sessionClosed]);
-    } catch (error: unknown) {
-      if (!(error instanceof DaemonClientError) || error.code !== "DAEMON_CONNECTION_LOST") {
-        throw error;
-      }
-      // The close listener may not have run yet -- `IpcDaemonConnection.request()` also
-      // rejects synchronously once it observes the transport already closed, ahead of the
-      // underlying `onClose` propagating back to `#handleConnectionClosed`. Don't trust that
-      // ordering: if this is still the connection that just failed, drop it explicitly so
-      // `#connectionForUse()` is forced to build a fresh one instead of handing back the same
-      // dead connection.
-      if (this.#connection === connection) await this.#closeConnection().catch(() => undefined);
-      const retryConnection = await this.#connectionForUse();
-      return await Promise.race([retryConnection.request(type, payload), this.#sessionClosed]);
-    }
+  #unwireClient(): void {
+    for (const unsubscribe of this.#clientUnsubscribers) unsubscribe();
+    this.#clientUnsubscribers = [];
   }
 
-  /**
-   * Relays a daemon push to this session's own listeners (lease-lost facts, in-flight lease
-   * progress, and the heartbeat ack that keeps `#ownedLease.expiresAtMs` truthful under the
-   * sliding TTL — see `IpcDaemonConnection`, which turns the server's `lease.heartbeat` push
-   * into an answered request and re-surfaces its ack here under the same push kind).
-   */
-  #handlePush(kind: string, payload: unknown): void {
-    switch (kind) {
-      case "progress":
-        this.#handleLeaseProgress(payload);
-        return;
-      case "lease.heartbeat":
-        this.#handleHeartbeatAck(payload);
-        return;
-      case "lease-lost":
-        this.#handleLeaseLost(payload);
-        return;
-      case "device-unhealthy":
-        this.#handleDeviceUnhealthy(payload);
-        return;
-      case "device-recovered":
-        this.#handleDeviceRecovered(payload);
-        return;
-    }
-  }
-
-  /** Relays a lease-lost push to `#leaseLostListeners`, if it names this session's own lease. */
-  #handleLeaseLost(payload: unknown): void {
-    let notice: LeaseLostNotice;
-    try {
-      notice = parseRawLeaseLost(payload);
-    } catch {
-      return;
-    }
-    if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== notice.leaseId) return;
-    this.#ownedLease = undefined;
-    for (const listener of this.#leaseLostListeners) listener(notice);
-  }
-
-  /** Relays a device-unhealthy push to `#deviceHealthListeners`, if it names this session's lease. */
-  #handleDeviceUnhealthy(payload: unknown): void {
-    let raw: ReturnType<typeof parseRawDeviceUnhealthy>;
-    try {
-      raw = parseRawDeviceUnhealthy(payload);
-    } catch {
-      return;
-    }
-    if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== raw.leaseId) return;
-    for (const listener of this.#deviceHealthListeners) {
-      listener({
-        deviceId: raw.deviceId,
-        kind: "unhealthy",
-        leaseId: raw.leaseId,
-        reason: "crashed",
-      });
-    }
-  }
-
-  /** Relays a device-recovered push to `#deviceHealthListeners`, if it names this session's lease. */
-  #handleDeviceRecovered(payload: unknown): void {
-    let raw: ReturnType<typeof parseRawDeviceRecovered>;
-    try {
-      raw = parseRawDeviceRecovered(payload);
-    } catch {
-      return;
-    }
-    if (this.#ownedLease === undefined || this.#ownedLease.leaseId !== raw.leaseId) return;
-    for (const listener of this.#deviceHealthListeners) {
-      listener({
-        attempts: raw.attempts,
-        deviceId: raw.deviceId,
-        kind: "recovered",
-        leaseId: raw.leaseId,
-      });
-    }
-  }
-
-  /**
-   * `lease_status` reads `#ownedLease.expiresAtMs` locally, with no daemon round-trip
-   * (deliberate — see PR #25). Under a sliding TTL that cache would otherwise go stale the
-   * moment a heartbeat renews the lease elsewhere; this keeps it truthful without adding a
-   * round-trip to `status()` itself.
-   */
-  #handleHeartbeatAck(payload: unknown): void {
-    if (this.#ownedLease === undefined) return;
-    let ack: ReturnType<typeof parseRawLeaseHeartbeatAck>;
-    try {
-      ack = parseRawLeaseHeartbeatAck(payload);
-    } catch {
-      return;
-    }
-    const slid = ack.leases.find((lease) => lease.leaseId === this.#ownedLease?.leaseId);
-    if (slid === undefined) return;
-    this.#ownedLease = { ...this.#ownedLease, expiresAtMs: slid.ttlDeadline };
-  }
-
-  /** Relays a daemon progress push to the in-flight `lease()` call's own `onProgress`, if any. */
-  #handleLeaseProgress(payload: unknown): void {
-    if (this.#leaseProgressListener === undefined) return;
-    let progress: LeaseProgressNotice;
-    try {
-      progress = parseRawLeaseProgress(payload);
-    } catch {
-      return;
-    }
-    this.#leaseProgressListener(progress);
-  }
-
-  async #closeDaemonConnection(connection: DaemonConnection): Promise<void> {
-    if (this.#closedConnections.has(connection)) return;
-    this.#closedConnections.add(connection);
-    await connection.close();
+  async #closeClient(client: SimlockClient): Promise<void> {
+    if (this.#closedClients.has(client)) return;
+    this.#closedClients.add(client);
+    await client.close();
   }
 
   #throwIfClosed(): void {
@@ -550,97 +281,4 @@ export class McpSession {
   }
 }
 
-function isNoLongerActiveLease(error: unknown): boolean {
-  return (
-    error instanceof DaemonClientError &&
-    (error.code === "UNKNOWN_LEASE" || error.code === "LEASE_EXPIRED")
-  );
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new McpSessionError("CANCELLED", "Lease request cancelled");
-}
-
 function noop(): void {}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Flat fields, not the legacy `device`/`os` aliases or a nested `request` wrapper -- the wire
- * moved to protocol 3 with no compatibility shim (ADR 0003 "Consequences"). Deriving this from
- * the contract's `lease.request` input schema (ADR 0003 §11: "MCP tool schemas are derived from
- * the contract schemas") is PR 4's job; this is only the minimal payload-shape fix needed to
- * keep MCP working against this PR's daemon.
- */
-function daemonLeaseRequest(
-  input: LeaseSimulatorInput,
-  requesterId: string,
-): Record<string, unknown> {
-  return {
-    allowDownload: input.allow_download,
-    mode: "held",
-    noWait: input.no_wait,
-    requesterId,
-    model: input.device,
-    ...(input.os === undefined ? {} : { osVersion: input.os }),
-    platform: input.platform,
-    ...(input.full ? { full: true } : {}),
-    ...(input.timeout_seconds === undefined
-      ? {}
-      : { timeoutMs: timeoutMilliseconds(input.timeout_seconds) }),
-  };
-}
-
-function timeoutMilliseconds(timeoutSeconds: number): number {
-  if (
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds < 0 ||
-    timeoutSeconds > MAX_TIMEOUT_SECONDS
-  ) {
-    throw new McpSessionError(
-      "INVALID_TIMEOUT",
-      "timeout_seconds is too large to convert safely to milliseconds",
-    );
-  }
-  return timeoutSeconds * 1_000;
-}
-
-function noLeaseStatus(): NoLeaseStatus {
-  return { held: false };
-}
-
-function heldLeaseStatus(lease: OwnedLease): HeldLeaseStatus {
-  return {
-    device: lease.device,
-    device_id: lease.deviceId,
-    expires_at_ms: lease.expiresAtMs,
-    held: true,
-    lease_id: lease.leaseId,
-    os: lease.os,
-    platform: lease.platform,
-    state: "leased",
-  };
-}
-
-function leaseSimulatorOutput(grant: RawLeaseGrant): LeaseSimulatorOutput {
-  return {
-    address: grant.device.address,
-    device: grant.device.spec.model,
-    device_id: grant.device.driverDeviceId,
-    expires_at_ms: grant.lease.ttlDeadline,
-    lease_id: grant.lease.id,
-    mode: "held",
-    os: grant.device.spec.osVersion,
-    platform: grant.device.spec.platform,
-    slim: grant.slim,
-    state: "leased",
-    timing: {
-      estimated_boot_ms: grant.timing.estimatedBootMs,
-      estimated_provision_ms: grant.timing.estimatedProvisionMs,
-      estimated_reclaim_ms: grant.timing.estimatedReclaimMs,
-      estimated_ready_ms: grant.timing.estimatedReadyMs,
-    },
-  };
-}
