@@ -35,15 +35,16 @@ describe("contract module boundary", () => {
 
   it.each(sourceFiles)("%s imports nothing outside the contract module", (fileName) => {
     const contents = readFileSync(join(contractDir, fileName), "utf8");
-    const importLines = contents
-      .split("\n")
-      .filter((line) => /^\s*import\s/.test(line) || /^\s*export\s+\*\s+from/.test(line));
 
-    for (const line of importLines) {
-      const match = /from\s+["']([^"']+)["']/.exec(line);
-      if (match === null) continue;
-      const specifier: string | undefined = match[1];
-      if (specifier === undefined) continue;
+    // Scanned over the *whole* file text (comments stripped first), not line-by-line filtered
+    // to lines matching `^\s*import\s`: the project's formatter breaks any import with more
+    // than one named binding across multiple lines (e.g. `import {\n  Foo,\n  Bar,\n} from
+    // "../core/index.js";`), and for such an import the `import {` line carries no `from` while
+    // the `} from "../core/index.js";` line never starts with `import` at all -- a line-based
+    // filter is blind to exactly the import style this repo writes. Comments are stripped so a
+    // `from "../core/..."` mentioned only in prose (e.g. this file's own doc comments) cannot
+    // produce a false positive.
+    for (const specifier of importSpecifiers(stripComments(contents))) {
       if (specifier.startsWith(".")) {
         // Relative imports must stay inside this directory (e.g. "./schemas.js"), never climb
         // out to a sibling module.
@@ -56,3 +57,25 @@ describe("contract module boundary", () => {
     }
   });
 });
+
+/** Strips `/* ... *\/` block comments and `// ...` line comments so a specifier that appears
+ * only in prose (a doc comment illustrating a forbidden import) is never mistaken for a real
+ * one. Good enough for this repo's source, which never puts `//` inside an import specifier
+ * string. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
+/** Every `from "…"` (or `from '…'`) specifier anywhere in the (comment-stripped) text --
+ * catches both single-line and formatter-wrapped multi-line `import { ... } from "…"` /
+ * `export * from "…"` statements, since the `from "…"` clause always lands on one line even
+ * when the binding list above it does not. */
+function importSpecifiers(contents: string): string[] {
+  const specifiers: string[] = [];
+  const pattern = /from\s*["']([^"']+)["']/g;
+  for (const match of contents.matchAll(pattern)) {
+    const specifier = match[1];
+    if (specifier !== undefined) specifiers.push(specifier);
+  }
+  return specifiers;
+}
