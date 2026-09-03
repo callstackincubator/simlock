@@ -147,6 +147,77 @@ built in stage 4. `component.install-started`'s payload already carries
 enough (`platform`, `componentId`) that a future pass wiring this through
 would mostly be plumbing, not new information to invent.
 
+## True cancellation during provisioning is not implemented (ADR 0003 §10)
+
+`simlock/client`'s `requestLease` takes an `AbortSignal`. When device work is
+already in flight (provisioning, booting, reclaiming) and the caller aborts,
+the client sends `lease.cancel`, which answers `not-cancellable` at that
+stage — the daemon keeps doing the work. What the client does instead:
+it waits for the request's real outcome, and if a grant still lands, releases
+it immediately so the caller never ends up holding a device it already
+walked away from, then surfaces `CANCELLED` either way.
+
+**The pitfall:** this is release-on-arrival, not interruption. The
+provisioning/boot/reclaim work the abort was meant to stop keeps running to
+completion (or failure) on its own, consuming the time and driver resources
+it would have anyway, and the released device pays a purge (see "Release
+hands the purge off" in [ARCHITECTURE.md](ARCHITECTURE.md)) before it's
+usable by anyone else. A caller that aborts expecting the operation to
+actually stop gets a device that is unavailable for roughly as long as an
+uncancelled request would have taken, just without ending up holding it.
+
+**Status:** known and accepted for this release, deliberately out of scope
+per the ADR ("True cancellation during provisioning is deliberately out of
+scope here"). Actually interrupting driver work mid-flight would mean
+threading cancellation through `Driver.provision`/`makeReady`/`reclaim`
+themselves — real protocol and driver-interface machinery across both
+platforms, not a client-side change.
+
+**Possible future fix:** none planned yet. A caller that needs to bound the
+cost of an abandoned request should set `timeoutMs`/`--timeout` tightly
+rather than relying on abort to cut a request short once device work has
+started.
+
+## The HTTP tracker and notice buffer are the last frontend-held state (#72)
+
+ADR 0003 moved request handling into one shared, transport-independent
+dispatcher (`src/daemon/dispatcher.ts`) that both the unix socket and HTTP
+call — but two pieces of state still live in the HTTP frontend rather than
+the daemon's core:
+
+- **`LeaseRequestTracker`** (`src/http/tracker.ts`) — the in-memory registry
+  behind `POST /v1/lease-requests` and the resource it returns
+  (`GET`/`DELETE /v1/lease-requests/{id}`, its SSE stream, `Idempotency-Key`
+  replay). This is what lets HTTP offer an async-resource-shaped API
+  (`202`-then-poll) on top of the core's request/grant flow, which itself
+  has no notion of a durable, independently-addressable "request resource."
+- **`LeaseNoticeBuffer`** (`src/http/notices.ts`) — buffers owner-routed
+  device-health facts (`device_unhealthy`, `device_recovered`) per lease so
+  a polling-only HTTP client (no open connection to push to) can drain them
+  on its next `renew` or SSE reconnect instead of missing them entirely.
+
+**The pitfall:** both reset on a daemon restart (in-memory, no persistence),
+and both are HTTP-specific reimplementations of "track something about a
+request/lease across calls" that the socket frontends don't need because
+they hold a live connection instead. A daemon restart loses in-flight
+lease-request tracking state and buffered notices the same way it always
+did pre-ADR 0003 — see [Lifecycle semantics](HTTP-API.md#lifecycle-semantics)
+for the documented recovery loop (`404` → re-request → maybe `409` → `GET`),
+which exists specifically because the tracker does not survive a restart.
+
+**Status:** known, and explicitly called out as the ADR's own unfinished
+seam, not an oversight: "the HTTP tracker and notice buffer remain the known
+stateful leftovers in a frontend." The ADR's dispatcher work "prepares the
+seam... but does not do that work" of removing them.
+
+**Planned fix:** [#72](https://github.com/callstackincubator/simlock/issues/72),
+re-scoped by this ADR to core durability and idempotency — moving durable,
+idempotent lease requests into the core registry itself, so a lease request
+becomes a first-class, restart-surviving core concept instead of a resource
+HTTP alone tracks. Once that lands, `LeaseRequestTracker` and
+`LeaseNoticeBuffer` should be able to shrink to thin views over core state
+rather than independent bookkeeping.
+
 ## iOS slim mode: accepted costs and feature loss (#87)
 
 `ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
@@ -183,8 +254,12 @@ universal links, Siri/Apple Intelligence, iCloud sync, and some system
 pickers to not work on a slim device — the categories that back them are
 exactly the ones slimming disables. Mitigations: `simlock lease --full` (MCP
 `full: true`, HTTP `full: true`) opts a single lease out of slimming, and
-every lease response carries a `slim` flag so a caller can tell a
-feature-loss failure apart from an actual bug instead of guessing.
+every lease response carries a feature-profile signal so a caller can tell a
+feature-loss failure apart from an actual bug instead of guessing —
+`device.featureProfile === "reduced"` on the CLI/MCP/client contract shape
+(`slim` as a top-level boolean grant field is gone as of 0.3.0, ADR 0003
+§11), or HTTP's own `lease.slim` boolean, which is still derived from the
+same underlying signal.
 
 **Mixing slim and full devices under one spec can make `--full` wait or
 re-provision.** `full` is part of spec identity (`DeviceSpec.full`, compared by `sameSpec`,
