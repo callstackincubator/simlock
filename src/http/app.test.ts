@@ -455,6 +455,7 @@ describe("lease routes", () => {
       grantedAt: 1_000,
       id: leaseId,
       mode: "detached",
+      ownerId: "tok_agent",
       requesterId: "tok_agent",
       ttlDeadline: 2_000 + (ttlMs ?? 900_000),
     });
@@ -494,6 +495,7 @@ describe("lease routes", () => {
       grantedAt: 1_000,
       id: leaseId,
       mode: "detached",
+      ownerId: "tok_agent",
       requesterId: "tok_agent",
       ttlDeadline: 2_000,
     });
@@ -528,7 +530,11 @@ describe("lease routes", () => {
       { deviceId: "dev_1", leaseId: "lse_1", observed: "x", platform: "ios" },
       "test",
     );
-    eventBus.emit("lease.expired", { deviceId: "dev_1", leaseId: "lse_1" }, "test");
+    eventBus.emit(
+      "lease.expired",
+      { deviceId: "dev_1", leaseId: "lse_1", ownerId: "tok_agent" },
+      "test",
+    );
     const frames = await framesPromise;
 
     expect(frames.map((frame) => frame.event)).toEqual(["device_unhealthy", "lease_lost"]);

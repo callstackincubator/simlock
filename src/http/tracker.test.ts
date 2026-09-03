@@ -131,6 +131,7 @@ describe("LeaseRequestTracker.submit", () => {
       grantedAt: 1_000,
       id: leaseId,
       mode: "detached",
+      ownerId: "tok_agent",
       requesterId: "tok_agent",
       ttlDeadline: 1_000 + (ttlMs ?? 0),
     });

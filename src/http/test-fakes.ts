@@ -88,6 +88,7 @@ export function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
     grantedAt: 1_000,
     id: "lse_1",
     mode: "detached",
+    ownerId: "tok_agent",
     requesterId: "tok_agent",
     ttlDeadline: 1_000 + 900_000,
     ...overrides,

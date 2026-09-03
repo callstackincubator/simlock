@@ -218,6 +218,12 @@ export class LeaseRequestTracker {
           this.#applyProgress(record, progress);
           settleCreated();
         },
+        // ADR 0003 §4: `ownerId` is the session principal, which HTTP does not have a real
+        // notion of yet -- it calls the engine directly, in-process, with no dispatcher/session
+        // in between (that move is the next PR's job). `requesterId` is the closest thing HTTP
+        // has today, same as a migrated pre-`ownerId` record defaults to it (`registry.ts`'s
+        // `parseLease`).
+        ownerId: identity.requesterId,
         requesterId: identity.requesterId,
         ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
         ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
