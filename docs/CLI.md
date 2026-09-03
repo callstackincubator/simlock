@@ -120,8 +120,9 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
   force a re-provision of one already running, even while slim devices sit
   idle in the warm pool.
 - `--detach` — detached mode: print the lease result (the same JSON shape as
-  held mode's grant line, below, including `slim`) and exit; the lease is
-  TTL-bound and must be renewed with `simlock lease renew`.
+  held mode's grant line, below, including `device.featureProfile`) and
+  exit; the lease is TTL-bound and must be renewed with `simlock lease
+  renew`.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of
   the CLI's actual parent. For a holder spawned from a short-lived subshell,
   the immediate parent can die (and get reaped) while the owning agent is
@@ -138,11 +139,17 @@ serialized as-is, plus the one field the CLI adds on top, the connection's
 resolved `role` (ADR 0003 §5):
 
 ```json
-{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"state":"leased","address":"...","featureProfile":"reduced", "...":"..."},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","mode":"held","grantedAt":1735689600000,"ttlDeadline":1735689660000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
+{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","mode":"held","grantedAt":1735689600000,"ttlDeadline":1735689660000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
 ```
 
-`device.featureProfile` is `"reduced"` when the granted device had its
-feature set reduced (iOS slim mode applied and this request did not pass
+`device` is a **projection** of the registry's device record — `id`,
+`driverDeviceId`, `spec`, `address?`, `featureProfile?` — not the full
+record `status.get`/`list.get` return to an admin caller. Internal
+bookkeeping fields (`driverData`, `quarantine*`, `foreign*`, `recovering*`,
+the derived `transitionAgeMs`) never appear on a grant; a caller that wants
+those needs the admin-role `list.get`/`status.get`, not `lease.request`'s
+output. `device.featureProfile` is `"reduced"` when the granted device had
+its feature set reduced (iOS slim mode applied and this request did not pass
 `--full`), and `"full"` or absent otherwise — always absent for Android. It
 lets an agent explain a feature-loss failure (missing push notification,
 Spotlight result, StoreKit sheet, universal link, or system picker) instead
@@ -268,6 +275,35 @@ The requester identity for leases made through this server is
 [Agent identity](#agent-identity). Set a distinct `SIMLOCK_AGENT_ID` per MCP
 server process (one per agent session) so the one-lease-per-agent rule is
 meaningful.
+
+### Breaking in 0.3.0: tool schemas are now the contract's own field names
+
+Tool names are unchanged. Every tool's input/output schema is now derived
+directly from `src/contract`'s zod schemas (`src/mcp/contracts.ts`) instead
+of a hand-maintained snake_case shape — one vocabulary across CLI, MCP,
+HTTP, and `simlock/client`, not a fourth one. Two changes in here are easy
+to miss and will silently produce wrong behavior if you don't update a
+caller:
+
+- **`lease_simulator`'s `timeout_seconds` is now `timeoutMs` — a unit
+  change, not just a rename.** A caller that keeps sending the old field
+  name under the new one (`{"timeoutMs": 30}` meaning "30 seconds", the old
+  convention) waits 1000× longer than intended before timing out. This is
+  the single highest-risk change in this release — it does not fail loudly,
+  it just waits far too long. Update every caller's timeout field name *and*
+  multiply its value by 1000.
+- **The top-level `slim: boolean` on a grant is gone; it's now
+  `device.featureProfile`** (`"full" | "reduced" | undefined`, undefined
+  meaning "not applicable" — always undefined for Android). A caller
+  checking `result.slim === true` now silently never sees a feature-loss
+  signal at all — `result.slim` is simply `undefined` on every response,
+  which is falsy, not an error. Check `result.device.featureProfile ===
+  "reduced"` instead.
+
+Every other field keeps the contract's own camelCase names it already had
+under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
+`allowDownload`, `requesterId`, ...); those did not change shape, only their
+schema's source of truth.
 
 ## `simlock status`
 
