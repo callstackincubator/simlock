@@ -43,6 +43,7 @@ import {
   type Role,
 } from "../contract/index.js";
 import type { ConnectionHost } from "./connection-host.js";
+import type { TokenStore } from "../http/token-store.js";
 import {
   Dispatcher,
   DispatchError,
@@ -124,6 +125,8 @@ export interface DaemonServerOptions {
   readonly healthMonitor?: LeaseHealthMonitor;
   readonly nuke?: Nuke;
   readonly registry: Registry;
+  /** ADR 0003 §11: threaded straight into the `Dispatcher` for `token.create|list|revoke`. */
+  readonly tokens?: TokenStore;
   readonly version: string;
   /** ADR §5's seam (see `session.ts`): resolves a session's role from `hello`'s payload.
    * Defaults to `resolveAgentRole` (every session is "agent") -- PR 2's credential handshake
@@ -224,6 +227,7 @@ export class DaemonServer {
       queue: options.queue,
       reaper: options.reaper,
       registry: options.registry,
+      ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
     });
   }
 
@@ -827,6 +831,16 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "token.create":
+        return this.#dispatcher.dispatch("token.create", frame.payload, this.#session(connection));
+      case "token.list":
+        return this.#dispatcher.dispatch(
+          "token.list",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "token.revoke":
+        return this.#dispatcher.dispatch("token.revoke", frame.payload, this.#session(connection));
       // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`

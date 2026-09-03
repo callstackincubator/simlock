@@ -31,6 +31,7 @@ import {
   type AuthorizeContext,
   type Role,
 } from "../contract/index.js";
+import type { TokenStore } from "../http/token-store.js";
 
 /**
  * ADR 0003 §2's "session" argument to `dispatch`. Constructed fresh per call by the transport
@@ -102,6 +103,13 @@ export interface DispatcherOptions {
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly registry: Registry;
+  /**
+   * ADR 0003 §11: "token create|list|revoke become daemon operations. The daemon is the only
+   * owner of tokens.json." Optional so tests that don't exercise `token.*` (the overwhelming
+   * majority) don't need to fabricate one -- `#tokenCreate`/`#tokenList`/`#tokenRevoke` throw a
+   * clear `DispatchError` when it is missing rather than crashing on `undefined.create(...)`.
+   */
+  readonly tokens?: TokenStore;
   /** Reports current daemon health for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
   /**
@@ -174,8 +182,11 @@ export class Dispatcher {
       "events.replay": this.#eventsReplay,
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
-      // "daemon.stop" and "token.*" deliberately absent -- see the class comment; `DaemonServer`
-      // never calls `dispatch()` for a frame type this map has no entry for.
+      "token.create": this.#tokenCreate,
+      "token.list": this.#tokenList,
+      "token.revoke": this.#tokenRevoke,
+      // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
+      // `dispatch()` for a frame type this map has no entry for.
     };
   }
 
@@ -391,6 +402,29 @@ export class Dispatcher {
   };
 
   #configGet: Handler<"config.get"> = () => this.options.config;
+
+  /**
+   * ADR §11: the daemon is the only owner of `tokens.json` -- `TokenStore.create` never
+   * persists the plaintext `secret`, only its hash, exactly as it did when the CLI called it
+   * directly.
+   */
+  #tokenCreate: Handler<"token.create"> = async (input) => {
+    const { record, secret } = await this.#requireTokens().create(input.role, input.label);
+    return { secret, token: record };
+  };
+
+  #tokenList: Handler<"token.list"> = async () => ({ tokens: await this.#requireTokens().list() });
+
+  #tokenRevoke: Handler<"token.revoke"> = async (input) => ({
+    revoked: await this.#requireTokens().revoke(input.id),
+  });
+
+  #requireTokens(): TokenStore {
+    if (this.options.tokens === undefined) {
+      throw new DispatchError("INTERNAL", "Token store is unavailable");
+    }
+    return this.options.tokens;
+  }
 
   /**
    * Adds a derived `lastHeartbeatAt` for held leases, without a new `LeaseRecord` field: since
