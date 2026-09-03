@@ -305,6 +305,22 @@ export class DaemonServer {
       throw error;
     }
 
+    // Convergence succeeded, but a `stop()` may have run to completion while it was in
+    // flight -- `daemon.stop` is accepted during startup (see `#dispatchLine`), and an
+    // auxiliary frontend that fails to start asks for a stop of its own. Everything below
+    // this point arms live machinery: it subscribes to the fact bus, emits `daemon.started`,
+    // schedules the heartbeat tick, and starts the health monitor. Running any of that
+    // against an already-disposed engine would leave timers armed on a dead daemon and would
+    // emit `daemon.started` after `daemon.stopping` -- a fact that is not true when emitted,
+    // which `docs/agent-rules/events.md` rule 3 forbids. Bail out instead; the stop that
+    // already ran owns the teardown, so there is nothing left for this call to undo.
+    if (this.#stopping) {
+      this.#logger.info("Daemon converged after a stop was requested; not arming", {
+        socketPath: this.options.host.endpoint,
+      });
+      return;
+    }
+
     // Subscribed only now, after convergence, not before `start()` claimed the
     // socket: the only thing that emits `lease.released` during convergence is
     // `convergeRunningCapacity()`'s own orphaned-held-lease release, and by
