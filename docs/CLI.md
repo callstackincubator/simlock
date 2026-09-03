@@ -44,7 +44,10 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` held mode only: the daemon ended the lease without the holder asking (TTL backstop, operator `release`, or an unrecoverable device) |
 
-Every row but 14 matches `DAEMON_ERROR_EXIT_CODES` in `src/cli/index.ts` exactly; 14 is not a daemon error code but an outcome of held mode, so it lives beside the table's other `lease` outcome, 0.
+Every row but 14 matches the `cliExitCode` column of the contract's error
+table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
+maintain a second mapping; 14 is not a daemon error code but an outcome of
+held mode, so it lives beside the table's other `lease` outcome, 0.
 A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
 surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code.
@@ -129,17 +132,24 @@ have a request queued fails with `REQUESTER_ALREADY_LEASED` (exit 13); the
 error message names the existing lease id to release first.
 
 **Held mode (default):** intended to be run in the background by the agent.
-As soon as the device is ready, one JSON line is printed on stdout:
+As soon as the device is ready, one JSON line is printed on stdout — the
+contract's `lease.request` output (`LeaseGrant`: `device`, `lease`, `timing`)
+serialized as-is, plus the one field the CLI adds on top, the connection's
+resolved `role` (ADR 0003 §5):
 
 ```json
-{"lease":"lse_9f2c","platform":"ios","device":"iPhone 17 Pro","os":"26.5","udid":"ABCD-...","state":"leased","slim":true}
+{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"state":"leased","address":"...","featureProfile":"reduced", "...":"..."},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","mode":"held","grantedAt":1735689600000,"ttlDeadline":1735689660000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
 ```
 
-`slim` is `true` when the granted device had its feature set reduced (iOS
-slim mode applied and this request did not pass `--full`) and `false`
-otherwise — always `false` for Android. It lets an agent explain a
-feature-loss failure (missing push notification, Spotlight result, StoreKit
-sheet, universal link, or system picker) instead of misreading it as a bug.
+`device.featureProfile` is `"reduced"` when the granted device had its
+feature set reduced (iOS slim mode applied and this request did not pass
+`--full`), and `"full"` or absent otherwise — always absent for Android. It
+lets an agent explain a feature-loss failure (missing push notification,
+Spotlight result, StoreKit sheet, universal link, or system picker) instead
+of misreading it as a bug. See `src/contract/schemas.ts`
+(`deviceRecordSchema`, `leaseRecordSchema`, `leaseGrantSchema`) for the full
+field list — this is the one vocabulary every frontend (CLI, MCP, HTTP, the
+`simlock/client` package) now shares.
 
 then the process stays alive holding the lease. **Kill the process to
 release** — or let it die on its own: held mode watches its parent (the pid
@@ -150,11 +160,14 @@ action selected for that request. A queued request reports its position
 without speculative work stages; reclaiming work is reported separately:
 
 ```json
-{"event":"queued","queue_position":1}
-{"event":"provisioning","eta_seconds":90}
-{"event":"booting","eta_seconds":60}
-{"event":"reclaiming","eta_seconds":34}
+{"push":"progress","stage":"queued","queuePosition":1}
+{"push":"progress","stage":"provisioning","etaMs":90000}
+{"push":"progress","stage":"booting","etaMs":60000}
+{"push":"progress","stage":"reclaiming","etaMs":34000}
 ```
+
+`push` is the one field the CLI adds to identify the line's kind; everything
+else is the contract's `LeaseProgress` push, serialized as-is (ADR 0003 §11).
 
 `reclaiming` follows `queued` when the device the request is waiting on is
 being purged for its previous holder: the position alone would not say that
@@ -168,12 +181,12 @@ leased device for as long as the connection holds it, on the same stderr
 stream:
 
 ```json
-{"event":"device_unhealthy","lease":"lse_9f2c","device_id":"dev_1a2b"}
-{"event":"device_recovered","lease":"lse_9f2c","device_id":"dev_1a2b","attempts":1}
+{"push":"device-unhealthy","leaseId":"lse_9f2c","deviceId":"dev_1a2b"}
+{"push":"device-recovered","leaseId":"lse_9f2c","deviceId":"dev_1a2b","attempts":1}
 ```
 
-`device_unhealthy` means the device stopped running outside simlock and a
-reboot is in progress under the same lease; `device_recovered` means that
+`device-unhealthy` means the device stopped running outside simlock and a
+reboot is in progress under the same lease; `device-recovered` means that
 reboot passed readiness. The lease itself is untouched by either — it is
 still held and must still be released the normal way. Recovery can instead
 give up (the device vanished, its provenance no longer checks out, or reboot
@@ -181,12 +194,12 @@ attempts ran out); giving up is not itself one of these lines — it ends the
 lease, which surfaces as the same line any other lease loss does:
 
 ```json
-{"event":"lease_lost","lease":"lse_9f2c","device_id":"dev_1a2b","reason":"device-lost"}
+{"push":"lease-lost","leaseId":"lse_9f2c","deviceId":"dev_1a2b","reason":"device-lost"}
 ```
 
-In all three lines `device_id` is the registry device id — the `id` column of
+In all three lines `deviceId` is the registry device id — the `id` column of
 `simlock list --devices`, and the same identifier the event bus uses — not the
-driver-level `udid` the grant returns on stdout. A `lease_lost` line is
+driver-level `udid` the grant returns on stdout. A `lease-lost` line is
 terminal for held mode: there is no longer a lease to
 hold, so the process writes that line and exits `14` rather than waiting for a
 signal, and it does not try to release a lease the daemon has already taken
@@ -355,7 +368,14 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 ## `simlock daemon <start|stop|status|logs>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand;
-`daemon` exists for operators and debugging. `logs` tails daemon logs.
+`daemon` exists for operators and debugging. `logs` tails daemon logs and
+works even when the daemon is dead — it reads the log file directly, no
+connection attempted. `status` never auto-starts the daemon and distinguishes
+two failure shapes: `{"status":"stopped"}` when nothing is listening on the
+socket at all, versus `{"status":"handshake-refused","error":{"code":...}}`
+(exit 1) when a daemon answered but refused the connection (a bad admin
+credential, or a protocol version mismatch) — the two used to be reported
+identically as "stopped".
 
 The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields) covering startup (version,
@@ -377,11 +397,37 @@ under `capacity.config` — see
 is running, both a global and a per-platform running limit must have room
 before Simlock provisions or boots a shutdown device.
 
+## Admin credential resolution
+
+Several commands (`list`, `cleanup`, `nuke`, `events`, `config get`,
+`daemon stop`, `token create|list|revoke`, and cross-process `release`) need
+the daemon's `admin` role. The CLI resolves a credential to send at
+handshake, in order:
+
+1. `--token <secret>` — accepted anywhere on the command line.
+2. `SIMLOCK_ADMIN_TOKEN` — the environment variable.
+3. the local `admin.token` file the daemon writes under `SIMLOCK_HOME` at
+   startup (read is retried briefly, to ride out the daemon still writing it
+   after a fresh `daemon start`).
+
+When none of the three resolves (a different OS user, or the file genuinely
+missing), the CLI connects as `agent` instead and writes a one-line stderr
+notice; admin-only operations then fail with `FORBIDDEN` from the daemon,
+same as any other role violation. `simlock lease`'s output JSON includes the
+connection's resolved `role` so a caller can tell which one it got.
+
+This is also why `simlock lease --detach` followed later by
+`simlock release <lease-id>` from a different invocation works even though
+each CLI process has a different pid-derived identity: both commands connect
+as admin (when the local file is readable), and admin bypasses the
+per-connection ownership check that would otherwise apply.
+
 ## `simlock token create --role <agent|operator> [--label <text>]` / `list` / `revoke <token-id>`
 
-Mint and manage bearer tokens for the HTTP API. Operates on
-`~/.simlock/tokens.json` directly (under `SIMLOCK_HOME`) — no daemon
-round-trip, like `config` reading its file.
+Mint and manage bearer tokens for the HTTP API. `token.create|list|revoke`
+are daemon operations (admin role) — the daemon is the only process that
+ever reads or writes `tokens.json`; the CLI is a thin client over the same
+`simlock/admin` connection every other admin command uses.
 
 `create` prints the minted secret **once**, alongside the token record:
 
@@ -395,8 +441,9 @@ id doubles as the requester identity over HTTP — one token is one requester,
 same as the CLI's `--agent-id`.
 
 `list` prints `{"tokens":[...]}` — the same record shape as `create`, minus
-the secret and its hash. `revoke <token-id>` prints `{"revoked":true}`, or a
-structured `UNKNOWN_TOKEN` error (exit 1) for an id that does not exist.
+the secret and its hash. `revoke <token-id>` prints `{"revoked":true}` or
+`{"revoked":false}` for an id that does not exist — the daemon's
+`token.revoke` operation does not treat an unknown id as an error.
 
 ## Environment variables
 
@@ -410,6 +457,13 @@ agent's environment repoints every command at an isolated data directory —
 useful for running multiple independent simlock instances on one machine, or
 for tests. When the CLI or MCP server auto-starts the daemon, the daemon
 process inherits the variable like the rest of the environment.
+
+### `SIMLOCK_ADMIN_TOKEN`
+
+The second source in [admin credential resolution](#admin-credential-resolution)
+— an operator token (`simlock token create --role operator`) or the daemon's
+per-start `admin.token` secret, either works. Set it once in a supervisor's
+environment to avoid every admin command reading `admin.token` off disk.
 
 ### `SIMLOCK_DRIVERS_MODULE` (advanced / testing hook)
 
