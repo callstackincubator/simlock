@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { loadConfig, type ConfigOverrides } from "../core/index.js";
 import {
   IpcError,
+  MemoryFilesystem,
   NodeDaemonLauncher,
   NodeFilesystem,
   NodeIpcTransport,
@@ -19,6 +20,7 @@ import {
   type IpcConnector,
   type ParentWatch,
   type ParentWatchHandle,
+  type SystemStats,
 } from "../ports/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import {
@@ -96,16 +98,24 @@ export interface CliEnvironment {
    * principal": `--agent-id` overrides `lease.request`'s `requesterId` field, never this. */
   readonly requesterId: string;
   readonly now?: () => number;
-  /** Connects (auto-launching the daemon if it is not already running) with the given
-   * credential, or none (ADR §5's agent fallback). */
+  /**
+   * Connects (auto-launching the daemon if it is not already running) and completes `hello`
+   * with whatever `resolveCredential` resolves to.
+   *
+   * `resolveCredential` is called only *after* the raw connection is established -- which is
+   * also where auto-launch happens (ADR §5: "written atomically after the socket claim
+   * succeeds"). A caller resolving the local `admin.token` file before the connection exists
+   * (the pre-fix bug: B2) races the whole daemon spawn instead of just the narrow
+   * claim-to-persist window the file-retry loop is meant for. See `readAdminTokenFileWithRetry`.
+   */
   readonly connectAdmin: (
-    credential: string | undefined,
+    resolveCredential: () => Promise<string | undefined>,
     options?: { readonly heartbeat?: boolean },
   ) => Promise<SimlockAdminClient>;
   /** Same as `connectAdmin` but never auto-launches -- `daemon stop`/`daemon status` must not
    * start a daemon just to ask whether one is running. */
   readonly connectExistingAdmin: (
-    credential: string | undefined,
+    resolveCredential: () => Promise<string | undefined>,
     options?: { readonly heartbeat?: boolean },
   ) => Promise<SimlockAdminClient>;
   /** `SIMLOCK_ADMIN_TOKEN`, ADR §5's second resolution source. */
@@ -147,22 +157,16 @@ export function fallbackRequesterId(env: NodeJS.ProcessEnv): string {
  * socket (reachable) and `admin.token` landing on disk (`DaemonServer#start` awaits the socket
  * claim, *then* `adminSecret.persist()`). A CLI invocation that races a fresh `daemon start`
  * retries a few times, briefly, rather than either blocking indefinitely or giving up on the
- * first empty read.
+ * first empty read. This only ever runs *after* the connection is already established (see
+ * `connectAdmin`'s doc) -- so the race it covers is the narrow claim-to-persist window, not the
+ * whole daemon spawn.
  */
 const ADMIN_TOKEN_FILE_READ_ATTEMPTS = 3;
 const ADMIN_TOKEN_FILE_RETRY_DELAY_MS = 50;
 
-/** ADR §5's resolution order: `--token`, then `SIMLOCK_ADMIN_TOKEN`, then the local
- * `admin.token` file (briefly retried). `undefined` means every source came up empty --
- * callers fall back to an agent-role connection with a stderr notice. */
-async function resolveAdminCredential(
+async function readAdminTokenFileWithRetry(
   environment: CliEnvironment,
-  tokenFlag: string | undefined,
 ): Promise<string | undefined> {
-  if (tokenFlag !== undefined && tokenFlag !== "") return tokenFlag;
-  if (environment.adminTokenFromEnv !== undefined && environment.adminTokenFromEnv !== "") {
-    return environment.adminTokenFromEnv;
-  }
   for (let attempt = 0; attempt < ADMIN_TOKEN_FILE_READ_ATTEMPTS; attempt++) {
     const token = await environment.readAdminTokenFile();
     if (token !== undefined) return token;
@@ -173,31 +177,79 @@ async function resolveAdminCredential(
   return undefined;
 }
 
+/** Where a resolved admin credential came from -- distinguishes an explicit-but-wrong
+ * credential (flag/env) from a stale local file (B1) for the fallback notice, and "none" for
+ * "every source came up empty" (unchanged from before). */
+type CredentialSource = "flag" | "env" | "file" | "none";
+
+function isAdminAuthFailure(error: unknown): boolean {
+  return isSimlockError(error) && error.code === "ADMIN_AUTHENTICATION_FAILED";
+}
+
+/** ADR §5's fallback: "an agent session with a stderr notice." B1 extends this to a credential
+ * the daemon actively rejected (not just one that was never found), and calls out a stale
+ * `admin.token` by name -- the actionable case a generic notice would otherwise bury. */
+function writeAgentFallbackNotice(environment: CliEnvironment, source: CredentialSource): void {
+  const notice =
+    source === "file"
+      ? "local admin.token credential was rejected by the daemon (stale after an unclean " +
+        "shutdown or restart?); connecting as agent (admin-only commands will fail with FORBIDDEN)"
+      : source === "none"
+        ? "admin credential unavailable; connecting as agent (admin-only commands will fail with FORBIDDEN)"
+        : "admin credential was rejected by the daemon; connecting as agent (admin-only " +
+          "commands will fail with FORBIDDEN)";
+  environment.stderr.write(`${JSON.stringify({ notice })}\n`);
+}
+
 /**
  * The one connection helper every daemon-touching command uses (ADR §5's "the CLI is the
- * operator interface"). Resolves the admin credential, writes a stderr notice when none was
- * found (ADR §5's fallback), then connects -- auto-launching the daemon unless `launch: false`.
+ * operator interface").
+ *
+ * ADR §5's resolution order -- `--token`, then `SIMLOCK_ADMIN_TOKEN`, then the local
+ * `admin.token` file (briefly retried, see `readAdminTokenFileWithRetry`) -- is implemented as
+ * a resolver passed to `connectAdmin`/`connectExistingAdmin`, not resolved up front: the file
+ * source must not be read until the connection (and any auto-launch it triggers) has already
+ * settled (B2), since the daemon only writes it after claiming its socket.
+ *
+ * B1: a credential the daemon actively rejects (`ADMIN_AUTHENTICATION_FAILED` -- most commonly
+ * a stale `admin.token` left behind by an unclean shutdown) degrades to a fresh agent-role
+ * connection with a stderr notice, exactly like "no credential found" does, instead of failing
+ * the whole invocation. Retried at most once, and only when a credential was actually offered --
+ * an agent connection legitimately failing `hello` for an unrelated reason still propagates.
  */
 async function connectDaemonClient(
   environment: CliEnvironment,
   tokenFlag: string | undefined,
   options: { readonly launch?: boolean; readonly heartbeat?: boolean } = {},
 ): Promise<SimlockAdminClient> {
-  const credential = await resolveAdminCredential(environment, tokenFlag);
-  if (credential === undefined) {
-    environment.stderr.write(
-      `${JSON.stringify({
-        notice:
-          "admin credential unavailable; connecting as agent (admin-only commands will fail with FORBIDDEN)",
-      })}\n`,
-    );
-  }
   const connect =
     options.launch === false ? environment.connectExistingAdmin : environment.connectAdmin;
-  return connect(
-    credential,
-    options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat },
-  );
+  const connectOptions = options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat };
+
+  let source: CredentialSource = "none";
+  const resolveCredential = async (): Promise<string | undefined> => {
+    if (tokenFlag !== undefined && tokenFlag !== "") {
+      source = "flag";
+      return tokenFlag;
+    }
+    if (environment.adminTokenFromEnv !== undefined && environment.adminTokenFromEnv !== "") {
+      source = "env";
+      return environment.adminTokenFromEnv;
+    }
+    const fileToken = await readAdminTokenFileWithRetry(environment);
+    source = fileToken === undefined ? "none" : "file";
+    return fileToken;
+  };
+
+  try {
+    const client = await connect(resolveCredential, connectOptions);
+    if (source === "none") writeAgentFallbackNotice(environment, "none");
+    return client;
+  } catch (error: unknown) {
+    if (!isAdminAuthFailure(error) || source === "none") throw error;
+    writeAgentFallbackNotice(environment, source);
+    return connect(async () => undefined, connectOptions);
+  }
 }
 
 /** Auto-launches the daemon on a refused/missing socket, mirroring
@@ -243,43 +295,69 @@ function isUnavailable(error: unknown): boolean {
   );
 }
 
-function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
-  const dataDirectory = resolveSimlockHome(env);
-  const filesystem = new NodeFilesystem();
-  const clock = new SystemClock();
-  const systemStats = new NodeSystemStats();
-  const ipc = new NodeIpcTransport();
+/** The infrastructure `defaultCliEnvironment` wires up. Factored out so tests can build the
+ * exact same environment logic (credential-resolution ordering, `config set` validation)
+ * against in-memory ports instead of the real filesystem/socket/subprocess -- see
+ * `src/cli/index.test.ts`'s cold-start and stale-token suites. */
+export interface CliEnvironmentPorts {
+  readonly filesystem: Filesystem;
+  readonly clock: Clock;
+  readonly systemStats: SystemStats;
+  readonly ipc: IpcConnector;
+  readonly launcher: DaemonLauncher;
+  readonly dataDirectory: string;
+  readonly parentWatch?: ParentWatch;
+  readonly signals?: Signals;
+  readonly stderr?: Output;
+  readonly stdout?: Output;
+  readonly confirm?: (question: string) => Promise<boolean>;
+  readonly parentPid?: number;
+}
+
+/**
+ * Builds a `CliEnvironment` from an explicit set of ports (see `CliEnvironmentPorts`) plus the
+ * bits still read straight from `env`/`process` (the requester id default, `SIMLOCK_ADMIN_TOKEN`,
+ * `process.ppid`). `defaultCliEnvironment` is this with real Node ports; tests call it directly
+ * with in-memory ones.
+ */
+export function buildCliEnvironment(
+  ports: CliEnvironmentPorts,
+  env: NodeJS.ProcessEnv = process.env,
+): CliEnvironment {
+  const { clock, dataDirectory, filesystem, ipc, launcher, systemStats } = ports;
   const socketPath = join(dataDirectory, "daemon.sock");
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
   const requesterId = fallbackRequesterId(env);
-  const launcher = new NodeDaemonLauncher({
-    args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
-    command: process.execPath,
-    logPath,
-  });
   const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher);
 
-  const connect = (
+  // ADR §5 / B2: the raw connection (and, for `connectAdmin`, any auto-launch it triggers) is
+  // established *before* `resolveCredential` is ever called -- `admin.token` is written only
+  // after the daemon claims its socket, so reading it any earlier races the whole daemon spawn
+  // instead of the narrow claim-to-persist window `readAdminTokenFileWithRetry` covers.
+  const connect = async (
     connector: IpcConnector,
-    credential: string | undefined,
+    resolveCredential: () => Promise<string | undefined>,
     options?: { readonly heartbeat?: boolean },
-  ): Promise<SimlockAdminClient> =>
-    connectSimlockAdmin({
-      ipc: connector,
-      endpoint: socketPath,
+  ): Promise<SimlockAdminClient> => {
+    const connection = await connector.connect(socketPath);
+    const credential = await resolveCredential();
+    return connectSimlockAdmin({
+      connection,
       principal: requesterId,
       ...(credential === undefined ? {} : { credential }),
       ...(options?.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
     });
+  };
 
   return {
     configPath,
     requesterId,
     now: () => clock.now(),
-    connectAdmin: (credential, options) => connect(autoLaunchIpc, credential, options),
-    connectExistingAdmin: (credential, options) => connect(ipc, credential, options),
+    connectAdmin: (resolveCredential, options) =>
+      connect(autoLaunchIpc, resolveCredential, options),
+    connectExistingAdmin: (resolveCredential, options) => connect(ipc, resolveCredential, options),
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}
       : { adminTokenFromEnv: env.SIMLOCK_ADMIN_TOKEN }),
@@ -287,8 +365,8 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
     sleep: (milliseconds) => new Promise<void>((resolve) => clock.setTimer(milliseconds, resolve)),
     // Captured once at process startup, before anything can reparent this
     // process -- `--bind-pid` overrides it per invocation.
-    parentPid: process.ppid,
-    parentWatch: new NodeParentWatch(),
+    parentPid: ports.parentPid ?? process.ppid,
+    parentWatch: ports.parentWatch ?? new NodeParentWatch(),
     readConfigFile: async () => {
       if (!(await filesystem.exists(configPath))) return {};
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
@@ -297,22 +375,56 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
     },
+    // ADR §11 part D: "validates the merged file through the config loader before writing."
+    // B9: two things the pre-fix version got wrong --
+    //  - `warn` was never passed, so `validateConfigLayer`'s default no-op silently dropped
+    //    unknown/mistyped keys instead of rejecting them. Collected here and thrown when any
+    //    "Unknown config key" warning fires -- but not for a legacy-spelling warning (still
+    //    valid config, just deprecated), so a legitimate legacy `config set` keeps working.
+    //  - `configPath` pointed at a sentinel file inside the *real* data directory, which a
+    //    stray file there could turn into a false pass or fail, despite the comment's claim
+    //    that the path was "never read" -- `loadConfig`'s `readConfigFile` does read it when it
+    //    exists. A fresh `MemoryFilesystem` makes that literally true: nothing can ever exist
+    //    at this path.
     validateConfig: async (merged) => {
+      const unknownKeyWarnings: string[] = [];
       await loadConfig({
-        // Never read: the point is to validate `merged` (the full post-edit file content) as
-        // its own layer, not to re-merge it over whatever is still on disk at `configPath`.
-        configPath: join(dataDirectory, ".config-set-validation-scratch.json"),
-        filesystem,
+        configPath: "/config-set-validation.json",
+        filesystem: new MemoryFilesystem(),
         overrides: merged as ConfigOverrides,
         systemStats,
+        warn: (message) => {
+          if (message.startsWith("Unknown config key:")) unknownKeyWarnings.push(message);
+        },
       });
+      if (unknownKeyWarnings.length > 0) throw new Error(unknownKeyWarnings.join("; "));
     },
     readLogFile: async () => readLogFile(filesystem, logPath),
-    signals: process,
-    stderr: process.stderr,
-    stdout: process.stdout,
-    confirm: confirmTerminal,
+    signals: ports.signals ?? process,
+    stderr: ports.stderr ?? process.stderr,
+    stdout: ports.stdout ?? process.stdout,
+    confirm: ports.confirm ?? confirmTerminal,
   };
+}
+
+function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
+  const dataDirectory = resolveSimlockHome(env);
+  const logPath = join(dataDirectory, "daemon.log");
+  return buildCliEnvironment(
+    {
+      filesystem: new NodeFilesystem(),
+      clock: new SystemClock(),
+      systemStats: new NodeSystemStats(),
+      ipc: new NodeIpcTransport(),
+      launcher: new NodeDaemonLauncher({
+        args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
+        command: process.execPath,
+        logPath,
+      }),
+      dataDirectory,
+    },
+    env,
+  );
 }
 
 async function readAdminTokenFile(
