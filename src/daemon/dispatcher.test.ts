@@ -9,7 +9,13 @@ import {
   Registry,
   type Config,
 } from "../core/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import {
+  CryptoTokenSecrets,
+  FakeClock,
+  FakeSystemStats,
+  MemoryFilesystem,
+} from "../ports/index.js";
+import { TokenStore } from "../http/token-store.js";
 import type { DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 
@@ -74,6 +80,13 @@ async function buildDispatcher(
     quarantine: engine,
     registry,
   });
+  const tokens = new TokenStore({
+    clock,
+    filesystem,
+    idGenerator: sequence(),
+    path: "/tokens.json",
+    secrets: new CryptoTokenSecrets(),
+  });
   const dispatcher = new Dispatcher({
     awaitReady: overrides.awaitReady ?? (() => Promise.resolve()),
     capacity: engine,
@@ -87,8 +100,9 @@ async function buildDispatcher(
     queue: engine,
     reaper,
     registry,
+    tokens,
   });
-  return { clock, dispatcher, driver, engine, eventBus, registry };
+  return { clock, dispatcher, driver, engine, eventBus, registry, tokens };
 }
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
@@ -123,11 +137,48 @@ describe("Dispatcher: parsing", () => {
 
   it("rejects an operation this dispatcher has no handler for with UNKNOWN_REQUEST", async () => {
     const { dispatcher } = await buildDispatcher();
-    // "token.create" is a declared contract operation (ADR §11) with no daemon-side handler
-    // yet -- see `dispatcher.ts`'s class doc.
+    // "daemon.stop" is ADR §6's frozen exception -- `DaemonServer#dispatchLine` intercepts it
+    // before it ever reaches a `Dispatcher`, so this dispatcher genuinely has no handler for it.
     await expect(
-      dispatcher.dispatch("token.create", { role: "agent" }, session({ role: "admin" })),
+      dispatcher.dispatch("daemon.stop", {}, session({ role: "admin" })),
     ).rejects.toMatchObject({ code: "UNKNOWN_REQUEST" });
+  });
+});
+
+describe("Dispatcher: token.create | token.list | token.revoke", () => {
+  it("creates a token, lists it, then revokes it -- admin only", async () => {
+    const { dispatcher, tokens } = await buildDispatcher();
+    const admin = session({ role: "admin" });
+
+    await expect(
+      dispatcher.dispatch("token.create", { role: "agent" }, session({ role: "agent" })),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const created = await dispatcher.dispatch(
+      "token.create",
+      { role: "operator", label: "ci" },
+      admin,
+    );
+    expect(created.token.role).toBe("operator");
+    expect(created.token.label).toBe("ci");
+    expect(typeof created.secret).toBe("string");
+
+    const listed = await dispatcher.dispatch("token.list", {}, admin);
+    expect(listed.tokens.map((token) => token.id)).toEqual([created.token.id]);
+
+    const revoked = await dispatcher.dispatch("token.revoke", { id: created.token.id }, admin);
+    expect(revoked.revoked).toBe(true);
+    expect((await tokens.list()).length).toBe(0);
+  });
+
+  it("revoking an unknown token id returns revoked: false rather than throwing", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const result = await dispatcher.dispatch(
+      "token.revoke",
+      { id: "tok_does-not-exist" },
+      session({ role: "admin" }),
+    );
+    expect(result.revoked).toBe(false);
   });
 });
 

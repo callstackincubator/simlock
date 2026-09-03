@@ -207,6 +207,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
     resolveRole,
     adminSecret,
+    tokens,
     version: options.version ?? "1.0.0",
     // Runs after the socket is claimed (see DaemonServer#start): reachability no
     // longer depends on doctor reconciliation or running-capacity convergence.
