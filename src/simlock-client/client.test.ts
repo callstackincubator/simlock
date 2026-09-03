@@ -43,9 +43,9 @@ function sampleGrant(
 }
 
 describe("connectSimlock: handshake", () => {
-  it("rejects a version mismatch before any other request is sent", async () => {
+  it("a version mismatch leaves the connection open and usable for stopDaemon() only (ADR §6)", async () => {
     const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection });
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
     await flushMicrotasks();
     const hello = connection.lastSentOf("hello");
     expect(hello).toBeDefined();
@@ -55,28 +55,56 @@ describe("connectSimlock: handshake", () => {
       daemonVersion: "9.9.9",
     });
 
-    await expect(connectPromise).rejects.toMatchObject({
+    // The daemon deliberately keeps this connection open after a failed range negotiation
+    // (ADR §6, see the comments in `daemon/server.ts#handleHello`) so an admin client can
+    // still send `daemon.stop` on it instead of restarting the daemon -- closing here, what
+    // this client used to do unconditionally, made that escape hatch dead on arrival.
+    const client = await connectPromise;
+    expect(connection.closed).toBe(false);
+
+    // Every other operation rejects with the captured mismatch error, never reaching the wire.
+    const before = connection.sent.length;
+    await expect(client.getStatus()).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
-      details: { daemon: { max: 5, min: 5 }, daemonVersion: "9.9.9" },
     });
-    expect(connection.sent).toHaveLength(1);
+    await expect(client.runCleanup()).rejects.toMatchObject({
+      code: "PROTOCOL_VERSION_UNSUPPORTED",
+    });
+    expect(connection.sent).toHaveLength(before);
+
+    const stopPromise = client.stopDaemon();
+    await flushMicrotasks();
+    const stopCall = connection.lastSentOf("daemon.stop")!;
+    expect(stopCall).toBeDefined();
+    connection.reply(stopCall.id, { stopping: true });
+    await expect(stopPromise).resolves.toEqual({ stopping: true });
+
+    await client.close();
+    expect(connection.closed).toBe(true);
   });
 
-  it("maps a legacy protocol-2 daemon's mismatch code onto the contract's shape", async () => {
+  it("maps a legacy protocol-2 daemon's mismatch code onto the contract's shape, and still leaves the connection open (ADR §6)", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
     const hello = connection.lastSentOf("hello")!;
     connection.fail(hello.id, "PROTOCOL_VERSION_MISMATCH", "old daemon says no");
 
-    await expect(connectPromise).rejects.toMatchObject({
+    // Resolves rather than rejects: this maps onto the same `PROTOCOL_VERSION_UNSUPPORTED`
+    // code as a modern range mismatch, so it gets the same ADR §6 treatment -- the connection
+    // stays open, and the returned client's every operation rejects with the mapped error.
+    const client = await connectPromise;
+    expect(connection.closed).toBe(false);
+    expect(connection.sent).toHaveLength(1);
+
+    await expect(client.getStatus()).rejects.toMatchObject({
       code: "PROTOCOL_VERSION_UNSUPPORTED",
       details: { daemon: { max: 2, min: 2 }, daemonVersion: "unknown" },
     });
     expect(connection.sent).toHaveLength(1);
   });
 
-  it("a bad admin credential causes zero requests after hello", async () => {
+  it("a bad admin credential causes zero requests after hello, and closes the connection", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection, credential: "wrong" });
     await flushMicrotasks();
@@ -86,6 +114,9 @@ describe("connectSimlock: handshake", () => {
 
     await expect(connectPromise).rejects.toMatchObject({ code: "ADMIN_AUTHENTICATION_FAILED" });
     expect(connection.sent).toHaveLength(1);
+    // Unlike a protocol-version mismatch (ADR §6's frozen exception), a bad credential is not
+    // the escape hatch -- the connection closes and serves nothing.
+    expect(connection.closed).toBe(true);
   });
 
   it("agent role: a FORBIDDEN reply from the daemon surfaces as a typed error", async () => {
@@ -379,6 +410,146 @@ describe("requestLease abort (ADR §10)", () => {
 
     // No lease.cancel was ever sent for an already-resolved request.
     expect(connection.sent).toHaveLength(before);
+  });
+});
+
+describe("principal resolution (ADR §4, B3)", () => {
+  it('adopts the daemon-resolved principal from hello\'s reply, never defaulting to ""', async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    const hello = connection.lastSentOf("hello")!;
+    // No principal was supplied -- the daemon resolves its own default (a pid, in practice).
+    expect((hello.payload as { principal?: string }).principal).toBeUndefined();
+    connection.reply(hello.id, {
+      daemonProtocolRange: { max: 3, min: 3 },
+      principal: "48213",
+      protocolVersion: 3,
+      role: "agent",
+      version: "0.3.0",
+    });
+    const client = await connectPromise;
+
+    expect(client.principal).toBe("48213");
+  });
+});
+
+describe("requestLease abort: ADR §4 identity cases (B3)", () => {
+  it("no principal supplied: abort while queued cancels with the daemon-resolved principal, and leaves no lease held", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    const hello = connection.lastSentOf("hello")!;
+    connection.reply(hello.id, {
+      daemonProtocolRange: { max: 3, min: 3 },
+      principal: "48213",
+      protocolVersion: 3,
+      role: "agent",
+      version: "0.3.0",
+    });
+    const client = await connectPromise;
+
+    const controller = new AbortController();
+    const leasePromise = client.requestLease(
+      { model: "iPhone 17", platform: "ios" },
+      { signal: controller.signal },
+    );
+    await flushMicrotasks();
+    const requestCall = connection.lastSentOf("lease.request")!;
+
+    controller.abort();
+    await flushMicrotasks();
+    const cancelCall = connection.lastSentOf("lease.cancel")!;
+    // Before this fix, this was always "" -- the daemon fixes the connection's principal to
+    // its own default, and the client had no way to learn it. Sent as the resolved principal
+    // now, never "".
+    expect((cancelCall.payload as { requesterId?: string }).requesterId).toBe("48213");
+
+    connection.reply(cancelCall.id, { result: "cancelled" });
+    await flushMicrotasks();
+    connection.fail(requestCall.id, "QUEUE_TIMEOUT", "cancelled by request");
+
+    await expect(leasePromise).rejects.toMatchObject({ code: "CANCELLED" });
+
+    // No lease is held: connection death fires no onLeaseLost for anything.
+    const leaseLost = vi.fn();
+    client.onLeaseLost(leaseLost);
+    connection.simulateDeath();
+    await flushMicrotasks();
+    expect(leaseLost).not.toHaveBeenCalled();
+  });
+
+  it('ADR §4 proxy case (principal "host", requesterId "agent-7"): abort in flight releases the grant and leaves no lease held', async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection, principal: "host" });
+    await flushMicrotasks();
+    completeHello(connection, { principal: "host" });
+    const client = await connectPromise;
+    expect(client.principal).toBe("host");
+
+    const controller = new AbortController();
+    const leasePromise = client.requestLease(
+      { model: "iPhone 17", platform: "ios", requesterId: "agent-7" },
+      { signal: controller.signal },
+    );
+    await flushMicrotasks();
+    const requestCall = connection.lastSentOf("lease.request")!;
+
+    controller.abort();
+    await flushMicrotasks();
+    const cancelCall = connection.lastSentOf("lease.cancel")!;
+    // Before this fix, the daemon's `authorize` hook compared this `requesterId` straight to
+    // the principal and rejected FORBIDDEN outright -- exactly ADR §4's proxy case. The
+    // request is still sent with the proxied requesterId (attribution); the daemon now
+    // authorizes the cancel against the pending request's recorded *owner* instead.
+    expect((cancelCall.payload as { requesterId?: string }).requesterId).toBe("agent-7");
+    connection.reply(cancelCall.id, { result: "not-cancellable" });
+    await flushMicrotasks();
+
+    connection.reply(requestCall.id, sampleGrant({ leaseId: "lease_proxy_abandoned" }));
+    await flushMicrotasks();
+    const releaseCall = connection.lastSentOf("lease.release")!;
+    expect((releaseCall.payload as { leaseId: string }).leaseId).toBe("lease_proxy_abandoned");
+    connection.reply(releaseCall.id, { leaseId: "lease_proxy_abandoned" });
+
+    await expect(leasePromise).rejects.toMatchObject({ code: "CANCELLED" });
+
+    // Already released via the abandoned-grant path -- not tracked as held any more.
+    const leaseLost = vi.fn();
+    client.onLeaseLost(leaseLost);
+    connection.simulateDeath();
+    await flushMicrotasks();
+    expect(leaseLost).not.toHaveBeenCalled();
+  });
+
+  it("a FORBIDDEN from the abort's lease.cancel surfaces instead of being read as a dead connection", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const controller = new AbortController();
+    const leasePromise = client.requestLease(
+      { model: "iPhone 17", platform: "ios" },
+      { signal: controller.signal },
+    );
+    await flushMicrotasks();
+
+    controller.abort();
+    await flushMicrotasks();
+    const cancelCall = connection.lastSentOf("lease.cancel")!;
+    connection.fail(cancelCall.id, "FORBIDDEN", "not authorized");
+
+    await expect(leasePromise).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Not misread as the connection dying -- it's still alive and usable for another call.
+    expect(connection.closed).toBe(false);
+    const anotherCall = client.cancelLease();
+    await flushMicrotasks();
+    const anotherCancelCall = connection.lastSentOf("lease.cancel")!;
+    expect(anotherCancelCall.id).not.toBe(cancelCall.id);
+    connection.reply(anotherCancelCall.id, { result: "not-found" });
+    await expect(anotherCall).resolves.toMatchObject({ result: "not-found" });
   });
 });
 

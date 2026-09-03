@@ -124,6 +124,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return this.options.queue.depth;
   }
 
+  /**
+   * The session principal a pending request was created under (ADR §4: `ownerId` on
+   * `LeaseRequestOptions`, always the session principal, never the caller-suppliable
+   * `requesterId`). `undefined` when no pending request exists for this requester id --
+   * `cancelPending`'s own `not-found` outcome is what surfaces that, not this lookup, so a
+   * caller cancelling a request that already settled (or never existed) is not authorized on
+   * a manufactured owner. A synchronous read like `queueDepth`, not routed through
+   * `decisions.run`: no state is asserted or mutated, and `#leaseCancel`'s contract-level
+   * `authorize` hook (ADR §2 step 3) runs before the handler, so it cannot go through the
+   * handler's own serialized decision anyway.
+   */
+  pendingRequestOwner(requesterId: string): string | undefined {
+    return this.options.queue.findPendingWaiter(requesterId)?.options.ownerId;
+  }
+
   get queueHeadSpec(): DeviceSpec | undefined {
     return (this.options.queue.head as AcquisitionWaiter | undefined)?.spec;
   }

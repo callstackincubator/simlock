@@ -207,16 +207,102 @@ export async function connectSimlockClient(
       capabilities: { heartbeat: options.heartbeat ?? true },
     });
   } catch (error: unknown) {
+    // ADR §6: a `PROTOCOL_VERSION_UNSUPPORTED` `hello` rejection is the one handshake failure
+    // the daemon deliberately keeps the connection open for -- an admin client whose range
+    // does not overlap the daemon's must still be able to send `daemon.stop` on *this*
+    // connection instead of restarting it (see the comments around the mismatch reply in
+    // `daemon/server.ts#handleHello`, and `#dispatchLine`'s `daemon.stop`-ahead-of-the-mismatch-
+    // gate check). Closing here -- every other handshake failure, a bad credential
+    // (`ADMIN_AUTHENTICATION_FAILED`) included -- still closes and serves nothing.
+    if (isSimlockError(error) && error.code === "PROTOCOL_VERSION_UNSUPPORTED") {
+      return buildDegradedClient(wire, error, options.principal ?? "", admin);
+    }
     await connection.close();
     throw error;
   }
-  const impl = new SimlockClientImpl(
-    wire,
-    hello.role,
-    options.principal ?? "",
-    hello.daemonVersion,
-  );
+  const impl = new SimlockClientImpl(wire, hello.role, hello.principal, hello.daemonVersion);
   return admin ? impl.asAdmin() : impl;
+}
+
+/**
+ * ADR §6's escape hatch, on the client side: everything but `stopDaemon()` and `close()`
+ * rejects with the captured `PROTOCOL_VERSION_UNSUPPORTED` error (never sent to the daemon --
+ * every other operation requires a completed handshake this connection never got); `close()`
+ * still works so a caller that decides not to stop the daemon can tidy up. `stopDaemon()` calls
+ * straight through the wire: the daemon accepts `daemon.stop` "at any protocol version it has
+ * ever spoken" (ADR §6), ahead of its own mismatch gate, specifically so this is reachable.
+ *
+ * `role`/`principal` cannot be the connection's real resolved values -- the daemon resolves
+ * them before the mismatch check but the failed `hello` never reports them back (see the PR
+ * report's weak-spots list) -- so `role` reflects which entry point the caller used
+ * (`connectSimlock` vs. `connectSimlockAdmin`) rather than a verified fact, and `principal` is
+ * whatever the caller supplied (or `""` when it supplied none). Neither is load-bearing here:
+ * the only operation this client permits (`daemon.stop`) is gated by the daemon's own role
+ * check on the credential it already verified, not by anything this object reports about
+ * itself.
+ */
+function buildDegradedClient(
+  wire: SimlockWire,
+  error: SimlockError<"PROTOCOL_VERSION_UNSUPPORTED">,
+  principal: string,
+  admin: boolean,
+): SimlockClient | SimlockAdminClient {
+  const rejected = <T>(): Promise<T> => Promise.reject(error);
+  const client: SimlockAdminClient = {
+    principal,
+    role: admin ? "admin" : "agent",
+    daemonVersion: error.details.daemonVersion,
+
+    getCatalog: () => rejected(),
+    getStatus: () => rejected(),
+    requestLease: () => rejected(),
+    cancelLease: () => rejected(),
+    renewLease: () => rejected(),
+    releaseLease: () => rejected(),
+    listLeases: () => rejected(),
+    heartbeat: () => rejected(),
+    runDoctor: () => rejected(),
+
+    onLeaseLost: () => () => {},
+    onDeviceUnhealthy: () => () => {},
+    onDeviceRecovered: () => () => {},
+    // The one live fact this connection can still report: it can still die later even though
+    // `hello` never fully succeeded (e.g. the daemon exits while this degraded client sits
+    // idle).
+    onConnectionLost: (listener) => wire.onDeath(listener),
+
+    close: () => wire.close(),
+
+    releaseAllLeases: () => rejected(),
+    list: () => rejected(),
+    runCleanup: () => rejected(),
+    runNuke: () => rejected(),
+    getConfig: () => rejected(),
+    stopDaemon: () =>
+      wire.call("daemon.stop", {}).then(
+        (payload) => {
+          const result = OPERATIONS["daemon.stop"].output.safeParse(payload);
+          if (!result.success) {
+            throw new SimlockError(
+              "BAD_FRAME",
+              "protocol",
+              "Daemon's daemon.stop response did not match the contract output schema",
+              {},
+            );
+          }
+          return result.data;
+        },
+        (callError: unknown) => {
+          throw toSimlockError(callError);
+        },
+      ),
+    replayEvents: () => rejected(),
+    subscribeEvents: () => rejected(),
+    createToken: () => rejected(),
+    listTokens: () => rejected(),
+    revokeToken: () => rejected(),
+  };
+  return client;
 }
 
 async function resolveConnection(options: ConnectOptions): Promise<IpcConnection> {
@@ -451,12 +537,18 @@ class SimlockClientImpl {
     let outcome: LeaseCancelOutput["result"];
     try {
       outcome = (await this.#call("lease.cancel", { requesterId })).result;
-    } catch {
-      // The connection itself may have died mid-cancel; fall through and let awaiting
+    } catch (error: unknown) {
+      // Only a connection that actually died mid-cancel falls through to let awaiting
       // `requestPromise` below surface whatever that produces (most likely
-      // `DAEMON_CONNECTION_LOST`, which is a more accurate rejection than a manufactured
-      // `CANCELLED` would be here).
-      return requestPromise;
+      // `DAEMON_CONNECTION_LOST`, a more accurate rejection than a manufactured `CANCELLED`
+      // would be here). Every other rejection -- `FORBIDDEN`, `BAD_REQUEST` -- is a real
+      // answer from the daemon and must surface as-is: this `catch` used to swallow those
+      // unconditionally, which is what let an aborted `requestLease` silently resolve with a
+      // real grant instead of `CANCELLED` (see the PR report's B3).
+      if (isSimlockError(error) && error.kind === "transport") {
+        return requestPromise;
+      }
+      throw error;
     }
 
     if (outcome === "not-found") {
