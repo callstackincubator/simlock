@@ -87,8 +87,8 @@ another one. Progress streams as JSON lines on stderr while it happens, and
 the lease result lands on stdout the moment the new device is ready:
 
 ```json
-{"push":"progress","requestId":"2","progress":{"stage":"provisioning","etaMs":5000}}
-{"push":"progress","requestId":"2","progress":{"stage":"booting","etaMs":30000}}
+{"push":"progress","stage":"provisioning","etaMs":5000}
+{"push":"progress","stage":"booting","etaMs":30000}
 ```
 
 ```json
