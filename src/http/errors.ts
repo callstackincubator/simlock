@@ -12,6 +12,14 @@ export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503;
  * Uniform `{status, code}` pair a route or middleware raises directly (auth, ownership,
  * validation, not-found on gateway-owned resources like lease requests). Thrown core errors
  * are mapped separately by `mapError` -- this class is for facts only the HTTP layer knows.
+ *
+ * `UNAUTHENTICATED`, `UNKNOWN_LEASE_REQUEST`, `REQUEST_NOT_CANCELLABLE`, and
+ * `REQUEST_CANCELLED` (below) are gateway-local codes with no row in the contract's closed
+ * `SimlockErrorCode` union (`src/contract/errors.ts`) -- ADR §7's "a code the client does not
+ * know wraps as `UNKNOWN_DAEMON_ERROR`" applies here: a typed client built against the contract
+ * cannot narrow on any of these four today, only on the raw string inside
+ * `UNKNOWN_DAEMON_ERROR`'s `details`. See `docs/known-pitfalls.md` ("HTTP error codes outside
+ * the closed contract union") for the exact rows this needs.
  */
 export class HttpApiError extends Error {
   constructor(
@@ -37,8 +45,18 @@ export function badRequest(message: string): HttpApiError {
   return new HttpApiError(400, "BAD_REQUEST", message);
 }
 
+/** Gateway-local code for "no such lease-*request* resource" (`POST /v1/lease-requests`, ADR
+ * §11's HTTP-only envelope kept until #72). Deliberately **not** `UNKNOWN_REQUEST` -- that code
+ * is the contract's (`src/contract/errors.ts`), meaning "unknown operation name" at 400
+ * (`DispatchError` in `dispatcher.ts`, thrown for a request naming an operation the dispatcher
+ * has no handler for). Reusing it here for a different resource at a different status (404)
+ * meant a client branching on `error.code` alone could not tell "no such request id" from "no
+ * such operation" -- ADR §7 makes codes contract, not message text (S8). `UNKNOWN_LEASE_REQUEST`
+ * is outside the contract's closed union like `UNAUTHENTICATED`/`REQUEST_NOT_CANCELLABLE`/
+ * `REQUEST_CANCELLED` below; see `docs/known-pitfalls.md` for what a closed-union fix would
+ * need. */
 export function unknownRequest(id: string): HttpApiError {
-  return new HttpApiError(404, "UNKNOWN_REQUEST", `Unknown lease request: ${id}`);
+  return new HttpApiError(404, "UNKNOWN_LEASE_REQUEST", `Unknown lease request: ${id}`);
 }
 
 export function unknownLease(id: string): HttpApiError {

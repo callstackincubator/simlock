@@ -111,12 +111,12 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   const notices = new LeaseNoticeBuffer(deps.ownerRoutedFacts);
   // Replaces the tracker's own former direct `eventBus.subscribe("lease.released"/"lease.expired",
   // ...)` -- ADR §8's "consumes the owner-routed facts" applies here too, not just to `notices`.
-  const unsubscribeLeaseBookkeeping = deps.eventBus.subscribe("lease.released", (envelope) =>
-    tracker.forgetLease(envelope.payload.leaseId),
-  );
-  const unsubscribeExpiryBookkeeping = deps.eventBus.subscribe("lease.expired", (envelope) =>
-    tracker.forgetLease(envelope.payload.leaseId),
-  );
+  // `OwnerRoutedFactBus` already folds both events into a `lease-lost` fact carrying the lease
+  // id (`src/daemon/owner-routed-facts.ts`), so this is one subscription to that seam rather
+  // than two direct subscriptions to the raw bus.
+  const unsubscribeLeaseBookkeeping = deps.ownerRoutedFacts.subscribe((fact) => {
+    if (fact.type === "lease-lost") tracker.forgetLease(fact.leaseId);
+  });
 
   const agentAuth = requireAuth(deps.tokens);
 
@@ -279,20 +279,23 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   app.post("/v1/leases/:id/renew", agentAuth, async (c) => {
     const identity = c.get("identity");
     const session = buildHttpSession(identity);
-    const current = await findOwnedLease(deps, session, c.req.param("id"));
-    const id = current.id;
+    const id = c.req.param("id");
 
     const ttlMs = await parseRenewBody(c);
     if (ttlMs !== undefined && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
       throw badRequest("ttlMs must be a positive number");
     }
 
+    // Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
+    // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
+    // socket transport, rather than the `UNKNOWN_LEASE`/404 a `lease.list` filter would produce
+    // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself.
     const renewed = await deps.dispatch(
       "lease.renew",
       { leaseId: id, ...(ttlMs === undefined ? {} : { ttlMs }) },
       session,
     );
-    tracker.recordLeaseTtl(id, ttlMs ?? modeDefaultTtlMs(current, deps.config));
+    tracker.recordLeaseTtl(id, ttlMs ?? modeDefaultTtlMs(renewed, deps.config));
 
     return c.json({
       expiresAt: new Date(renewed.ttlDeadline).toISOString(),
@@ -318,13 +321,23 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   app.delete("/v1/leases/:id", agentAuth, async (c) => {
     const identity = c.get("identity");
     const session = buildHttpSession(identity);
-    const lease = await findOwnedLease(deps, session, c.req.param("id"));
+    const id = c.req.param("id");
 
-    await deps.dispatch("lease.release", { leaseId: lease.id }, session);
+    // Best-effort lookup, only to decorate the response with the device id/state --
+    // `lease.release`'s output schema is `{ leaseId }` alone (no `deviceId`), so this is still
+    // needed for the response body. It is *not* the authorization decision: `lease.release`
+    // below is dispatched directly and is the sole source of truth for whether this request is
+    // allowed (S6). Its `ownsLease` hook answers `FORBIDDEN`/403 for someone else's lease and
+    // the handler answers `UNKNOWN_LEASE`/404 for a nonexistent one, matching the socket
+    // transport exactly -- unlike the `lease.list`-filtered `findOwnedLease`, which always
+    // answered 404 for both cases.
+    const deviceId = await findLeaseDeviceId(deps, session, id);
 
-    const device = findDevice(deps, lease.deviceId);
+    await deps.dispatch("lease.release", { leaseId: id }, session);
+
+    const device = deviceId === undefined ? undefined : findDevice(deps, deviceId);
     return c.json(
-      { device: { id: lease.deviceId, state: device?.state ?? "reclaiming" }, released: true },
+      { device: { id: deviceId ?? id, state: device?.state ?? "reclaiming" }, released: true },
       202,
     );
   });
@@ -391,7 +404,6 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   return Object.assign(app, {
     dispose: () => {
       unsubscribeLeaseBookkeeping();
-      unsubscribeExpiryBookkeeping();
       tracker.dispose();
       notices.dispose();
     },
@@ -408,10 +420,15 @@ function requireOwnRequest(identity: TokenIdentity, requesterId: string): void {
   throw forbidden("Not permitted to access another requester's resource");
 }
 
-/** `lease.list`'s dispatcher handler already filters to the session's own leases (admin sees
- * all) -- reusing it here for a single-lease lookup means an unauthorized id simply isn't in
- * the list, so `unknownLease` covers both "doesn't exist" and "not yours" the same way
- * `lease.list` itself does not distinguish them. */
+/** Read-only single-lease lookup for `GET /v1/leases/:id` and `GET /v1/leases/:id/events`.
+ * There is no `lease.get` operation in the contract -- only `lease.renew`/`lease.release`
+ * carry an `ownsLease` authorize hook to compare against -- so these two routes stay on
+ * `lease.list`'s own filter (own leases; admin sees all): an unauthorized id simply isn't in
+ * the list, and `unknownLease` covers both "doesn't exist" and "not yours" the same way
+ * `lease.list` itself does not distinguish them, at 404. This is a deliberate, narrower
+ * divergence than the one S6 fixed for the mutating routes below -- see
+ * `docs/known-pitfalls.md` ("HTTP single-lease reads answer 404, not 403, for an unowned
+ * lease"). */
 async function findOwnedLease(
   deps: HttpGatewayDeps,
   session: ReturnType<typeof buildHttpSession>,
@@ -421,6 +438,19 @@ async function findOwnedLease(
   const lease = leases.find((candidate) => candidate.id === id);
   if (lease === undefined) throw unknownLease(id);
   return lease;
+}
+
+/** Best-effort `deviceId` lookup for a lease id, scoped to what the session's `lease.list`
+ * would show it (own leases; admin sees all) -- used only to decorate a response after an
+ * authoritative dispatch has already decided whether the request is allowed. Never used to
+ * gate access itself (see the `DELETE /v1/leases/:id` route). */
+async function findLeaseDeviceId(
+  deps: HttpGatewayDeps,
+  session: ReturnType<typeof buildHttpSession>,
+  id: string,
+): Promise<string | undefined> {
+  const { leases } = await deps.dispatch("lease.list", {}, session);
+  return leases.find((candidate) => candidate.id === id)?.deviceId;
 }
 
 function serializeRequest(

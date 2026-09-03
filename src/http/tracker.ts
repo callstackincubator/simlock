@@ -344,9 +344,8 @@ export class LeaseRequestTracker {
   }
 
   /** Drops the tracked ttl/request-id bookkeeping for a lease that just ended -- called from the
-   * HTTP app on the same owner-routed fact stream `LeaseNoticeBuffer` consumes, replacing the
-   * direct `eventBus.subscribe("lease.released"/"lease.expired", ...)` this class used to do
-   * itself. */
+   * HTTP app on the same owner-routed fact stream (`OwnerRoutedFacts`, `lease-lost`)
+   * `LeaseNoticeBuffer` consumes, not from a direct `eventBus.subscribe` on this class. */
   forgetLease(leaseId: string): void {
     this.#leaseRequestId.delete(leaseId);
     this.#leaseTtlMs.delete(leaseId);
