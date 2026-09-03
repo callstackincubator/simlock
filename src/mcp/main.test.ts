@@ -2,10 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { DaemonConnection } from "../daemon-client/protocol.js";
+import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { startMcpStdio, type McpTransport } from "./main.js";
+
+const { connectWithAutoLaunch } = vi.hoisted(() => ({ connectWithAutoLaunch: vi.fn() }));
+vi.mock("./connect.js", () => ({ connectWithAutoLaunch }));
 
 describe("MCP stdio lifecycle", () => {
   it.each(["transport", "SIGINT", "SIGTERM"])("closes once on %s", async (cause) => {
@@ -66,78 +69,79 @@ describe("MCP stdio lifecycle", () => {
     expect(transport.closeCalls).toBe(1);
   });
 
-  it("closes the lease-owning session when its transport ends", async () => {
-    const connection = new LeaseConnection();
+  it("closes the lease-owning session's client when its transport ends", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const runner = await startMcpStdio({
-      connect: async () => connection,
+      connect: async () => client,
       createTransport: () => serverTransport,
       requesterId: "mcp-test",
       signals: new FakeSignals(),
     });
-    const client = new Client({ name: "test", version: "1.0.0" });
-    await client.connect(clientTransport);
-    await client.request(
+    const mcpClient = new Client({ name: "test", version: "1.0.0" });
+    await mcpClient.connect(clientTransport);
+    await mcpClient.request(
       {
         method: "tools/call",
-        params: { arguments: { device: "iPhone", platform: "ios" }, name: "lease_simulator" },
+        params: { arguments: { model: "iPhone", platform: "ios" }, name: "lease_simulator" },
       },
       CallToolResultSchema,
     );
 
     serverTransport.onclose?.();
     await runner.finished;
-    expect(connection.closeCalls).toBe(1);
-    await client.close();
+    expect(client.closeCalls).toBe(1);
+    await mcpClient.close();
   });
 
-  it("sources the requester id from SIMLOCK_AGENT_ID when none is given explicitly", async () => {
-    const connection = new LeaseConnection();
+  it("sources the connection principal from SIMLOCK_AGENT_ID when no requesterId is given explicitly", async () => {
+    connectWithAutoLaunch.mockReset().mockResolvedValue(new FakeSimlockClient());
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const runner = await startMcpStdio({
-      connect: async () => connection,
       createTransport: () => serverTransport,
       env: { SIMLOCK_AGENT_ID: "agent-from-env" },
       signals: new FakeSignals(),
     });
-    const client = new Client({ name: "test", version: "1.0.0" });
-    await client.connect(clientTransport);
-    await client.request(
-      {
-        method: "tools/call",
-        params: { arguments: { device: "iPhone", platform: "ios" }, name: "lease_simulator" },
-      },
-      CallToolResultSchema,
-    );
+    const mcpClient = new Client({ name: "test", version: "1.0.0" });
+    await mcpClient.connect(clientTransport);
+    await mcpClient
+      .request(
+        { method: "tools/call", params: { arguments: {}, name: "lease_status" } },
+        CallToolResultSchema,
+      )
+      .catch(() => undefined);
 
-    expect(connection.lastRequesterId).toBe("agent-from-env");
+    expect(connectWithAutoLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: "agent-from-env" }),
+    );
+    await mcpClient.close();
     await runner.shutdown();
-    await client.close();
   });
 
   it("prefers an explicit requesterId over SIMLOCK_AGENT_ID", async () => {
-    const connection = new LeaseConnection();
+    connectWithAutoLaunch.mockReset().mockResolvedValue(new FakeSimlockClient());
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const runner = await startMcpStdio({
-      connect: async () => connection,
       createTransport: () => serverTransport,
       env: { SIMLOCK_AGENT_ID: "agent-from-env" },
       requesterId: "explicit-agent",
       signals: new FakeSignals(),
     });
-    const client = new Client({ name: "test", version: "1.0.0" });
-    await client.connect(clientTransport);
-    await client.request(
-      {
-        method: "tools/call",
-        params: { arguments: { device: "iPhone", platform: "ios" }, name: "lease_simulator" },
-      },
-      CallToolResultSchema,
-    );
+    const mcpClient = new Client({ name: "test", version: "1.0.0" });
+    await mcpClient.connect(clientTransport);
+    await mcpClient
+      .request(
+        { method: "tools/call", params: { arguments: {}, name: "lease_status" } },
+        CallToolResultSchema,
+      )
+      .catch(() => undefined);
 
-    expect(connection.lastRequesterId).toBe("explicit-agent");
+    expect(connectWithAutoLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: "explicit-agent" }),
+    );
+    await mcpClient.close();
     await runner.shutdown();
-    await client.close();
   });
 
   it("closes once when stdin reaches EOF", async () => {
@@ -239,37 +243,6 @@ class FakeSignals {
   }
   emit(signal: string): void {
     this.listeners.get(signal)?.();
-  }
-}
-
-class LeaseConnection implements DaemonConnection {
-  closeCalls = 0;
-  lastRequesterId: unknown;
-  async close(): Promise<void> {
-    this.closeCalls += 1;
-  }
-  onPush(): () => void {
-    return () => undefined;
-  }
-
-  onClose(): () => void {
-    return () => undefined;
-  }
-  async request(_type: string, payload: unknown): Promise<unknown> {
-    this.lastRequesterId = (payload as { readonly requesterId?: unknown }).requesterId;
-    return {
-      device: {
-        driverDeviceId: "SIM-1",
-        spec: { model: "iPhone", osVersion: "26", platform: "ios" },
-      },
-      lease: { id: "lease-1", mode: "held", ttlDeadline: 10 },
-      timing: {
-        estimatedBootMs: 1,
-        estimatedProvisionMs: 1,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 2,
-      },
-    };
   }
 }
 

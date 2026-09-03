@@ -1,66 +1,75 @@
 import { describe, expect, it } from "vitest";
 
+import { OPERATIONS } from "../contract/index.js";
 import {
   leaseSimulatorInputSchema,
   leaseSimulatorOutputSchema,
-  MAX_TIMEOUT_SECONDS,
+  leaseStatusOutputSchema,
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
 } from "./contracts.js";
 
 describe("MCP contracts", () => {
-  it("applies safe lease input defaults", () => {
-    expect(leaseSimulatorInputSchema.parse({ device: "iPhone 17 Pro", platform: "ios" })).toEqual({
-      allow_download: false,
-      device: "iPhone 17 Pro",
-      full: false,
-      no_wait: false,
+  it("accepts a minimal lease input and omits the session-controlled fields", () => {
+    expect(leaseSimulatorInputSchema.parse({ model: "iPhone 17 Pro", platform: "ios" })).toEqual({
+      model: "iPhone 17 Pro",
       platform: "ios",
     });
   });
 
-  it("accepts an explicit full: true lease input", () => {
-    expect(
-      leaseSimulatorInputSchema.parse({ device: "iPhone 17 Pro", full: true, platform: "ios" }),
-    ).toMatchObject({ full: true });
+  it("rejects requesterId, mode, and ttlMs -- those are the session's job, not the caller's", () => {
+    for (const extra of [{ requesterId: "someone-else" }, { mode: "detached" }, { ttlMs: 1_000 }]) {
+      expect(() =>
+        leaseSimulatorInputSchema.parse({ model: "iPhone 17 Pro", platform: "ios", ...extra }),
+      ).toThrow();
+    }
   });
 
-  it.each([
-    [{ device: "", platform: "ios" }],
-    [{ device: "Pixel", os: "", platform: "android" }],
-    [{ device: "Pixel", platform: "android", timeout_seconds: -1 }],
-    [{ device: "Pixel", platform: "android", timeout_seconds: Number.POSITIVE_INFINITY }],
-    [{ device: "Pixel", platform: "android", timeout_seconds: MAX_TIMEOUT_SECONDS + 1 }],
-  ])("rejects invalid lease inputs", (input) => {
-    expect(() => leaseSimulatorInputSchema.parse(input)).toThrow();
+  it("is the same schema the contract validates lease.request input against, minus those fields", () => {
+    const full = OPERATIONS["lease.request"].input.innerType();
+    expect(Object.keys(leaseSimulatorInputSchema.shape).sort()).toEqual(
+      Object.keys(full.shape)
+        .filter((key) => !["mode", "requesterId", "ttlMs"].includes(key))
+        .sort(),
+    );
   });
 
-  it("validates public success results", () => {
-    expect(
-      leaseSimulatorOutputSchema.parse({
-        device: "iPhone 17 Pro",
-        device_id: "ABCD",
-        expires_at_ms: 61_000,
-        lease_id: "lse_9f2c",
-        mode: "held",
-        os: "26.5",
-        platform: "ios",
-        slim: false,
+  it("validates a lease grant, release, and lease-status shape using contract field names", () => {
+    const grant = leaseSimulatorOutputSchema.parse({
+      device: {
+        createdAt: 0,
+        driverData: null,
+        driverDeviceId: "SIM-1",
+        id: "device-1",
+        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
         state: "leased",
-        timing: {
-          estimated_boot_ms: 20,
-          estimated_provision_ms: 10,
-          estimated_reclaim_ms: 0,
-          estimated_ready_ms: 30,
-        },
-      }),
-    ).toMatchObject({ lease_id: "lse_9f2c", slim: false, state: "leased" });
-    expect(releaseSimulatorInputSchema.parse({ lease_id: "lse_9f2c" })).toEqual({
-      lease_id: "lse_9f2c",
+      },
+      lease: {
+        deviceId: "device-1",
+        grantedAt: 0,
+        id: "lease-1",
+        mode: "held",
+        ownerId: "mcp:1",
+        requesterId: "mcp:1",
+        ttlDeadline: 61_000,
+      },
+      timing: {
+        estimatedBootMs: 20,
+        estimatedProvisionMs: 10,
+        estimatedReadyMs: 30,
+        estimatedReclaimMs: 0,
+      },
     });
-    expect(releaseSimulatorOutputSchema.parse({ lease_id: "lse_9f2c", released: true })).toEqual({
-      lease_id: "lse_9f2c",
+    expect(grant.lease.id).toBe("lease-1");
+
+    expect(releaseSimulatorInputSchema.parse({ leaseId: "lease-1" })).toEqual({
+      leaseId: "lease-1",
+    });
+    expect(releaseSimulatorOutputSchema.parse({ leaseId: "lease-1", released: true })).toEqual({
+      leaseId: "lease-1",
       released: true,
     });
+
+    expect(leaseStatusOutputSchema.parse({ held: false })).toEqual({ held: false });
   });
 });
