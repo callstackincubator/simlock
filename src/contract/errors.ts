@@ -64,6 +64,12 @@ export interface ErrorDetailsMap {
    * daemon) wraps as this instead of throwing a parse failure. Never sent by a daemon this
    * version of the contract can produce -- purely a client-side wrapping target. */
   UNKNOWN_DAEMON_ERROR: { readonly code: string; readonly message: string };
+
+  /** ADR §10: the outcome `requestLease`'s `AbortSignal` surfaces for all four abort paths.
+   * Never sent by the daemon over the wire -- purely a client-side construction, the same way
+   * `UNKNOWN_DAEMON_ERROR` is. Kept in the closed set (rather than a separate ad hoc class) so
+   * callers can `isSimlockError(e) && e.code === "CANCELLED"` exactly like any other outcome. */
+  CANCELLED: Record<string, never>;
 }
 
 export type SimlockErrorCode = keyof ErrorDetailsMap;
@@ -156,6 +162,10 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 1,
     httpStatus: 500,
   },
+  // Never sent over the wire (see the field comment on `ErrorDetailsMap.CANCELLED`); the
+  // `httpStatus` follows the conventional "client closed request" code even though HTTP never
+  // actually produces this error today.
+  CANCELLED: { code: "CANCELLED", kind: "domain", cliExitCode: 1, httpStatus: 499 },
 };
 
 /**
