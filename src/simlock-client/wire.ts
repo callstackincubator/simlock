@@ -75,15 +75,27 @@ export class SimlockWire {
   readonly #leaseScopedListeners = new Set<(push: LeaseScopedPush) => void>();
   readonly #eventListeners = new Set<(payload: unknown) => void>();
   readonly #closeListeners = new Set<(error: AnySimlockError) => void>();
-  /** Lease ids this client itself asked to release -- suppresses the matching `lease-lost`
-   * push exactly once (ADR §8: "never fires onLeaseLost for a release the same client asked
-   * for"), then is removed so a *later*, unrelated crash for a reused lease id is not silently
-   * eaten forever. */
-  readonly #selfInitiatedReleases = new Set<string>();
-  /** De-dup key (`${kind}:${leaseId}`) for lease-scoped pushes already delivered, so a
-   * redundant re-push (the owner-routed fan-out can in principle reach the same connection
-   * twice for one fact) does not fire a listener twice for the same fact. */
-  readonly #deliveredLeaseScoped = new Set<string>();
+  /** Lease ids for which a `lease-lost` push has already been delivered -- kept forever
+   * because loss is terminal (ADR §8): a lease id is never reused, and the owner-routed
+   * fan-out can in principle reach this connection twice for the same fact.
+   *
+   * Suppressing the `lease-lost` push for a release *this* client itself asked for (ADR §8:
+   * "never fires onLeaseLost for a release the same client asked for") is the daemon's job,
+   * not this class's: `DaemonServer` marks the lease id in its own per-connection
+   * `selfInitiatedReleases` set right before dispatching `lease.release`/`lease.release-all`
+   * and clears it in a `finally` regardless of outcome (`daemon/server.ts` around
+   * `#notifyLeaseLost`), so the push is never sent to the releasing connection in the first
+   * place. Mirroring that bookkeeping here too was redundant on a successful release and
+   * actively harmful on a failed one: marked before the call and never rolled back, it
+   * permanently muted the real `lease-lost` push that arrives when the lease later expires
+   * for real. */
+  readonly #deliveredLeaseLost = new Set<string>();
+  /** Last lease-scoped health kind delivered per lease id, so `device-unhealthy` and
+   * `device-recovered` toggle: delivering one clears the other's suppression, so an
+   * unhealthy → recovered → unhealthy cycle (a real second crash) delivers all three, while a
+   * duplicate push of the *same* state in a row (the owner-routed fan-out re-delivering one
+   * fact) is still suppressed. */
+  readonly #lastHealthKind = new Map<string, "device-unhealthy" | "device-recovered">();
   #buffer = "";
   #nextId = 1;
   #dead: AnySimlockError | undefined;
@@ -193,12 +205,6 @@ export class SimlockWire {
     return () => this.#closeListeners.delete(listener);
   }
 
-  /** A lease this client itself is releasing: the next matching `lease-lost` push is
-   * swallowed rather than surfaced as a loss. */
-  markSelfInitiatedRelease(leaseId: string): void {
-    this.#selfInitiatedReleases.add(leaseId);
-  }
-
   async close(): Promise<void> {
     this.#die(
       new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Client closed the connection", {}),
@@ -279,8 +285,6 @@ export class SimlockWire {
       case "lease-lost": {
         const parsed = PUSH_SCHEMAS["lease-lost"].safeParse(payload);
         if (!parsed.success) return;
-        const suppressed = this.#selfInitiatedReleases.delete(parsed.data.leaseId);
-        if (suppressed) return;
         this.#emitLeaseScoped({
           deviceId: parsed.data.deviceId,
           kind: "lease-lost",
@@ -329,9 +333,13 @@ export class SimlockWire {
   }
 
   #emitLeaseScoped(push: LeaseScopedPush): void {
-    const key = `${push.kind}:${push.leaseId}`;
-    if (this.#deliveredLeaseScoped.has(key)) return;
-    this.#deliveredLeaseScoped.add(key);
+    if (push.kind === "lease-lost") {
+      if (this.#deliveredLeaseLost.has(push.leaseId)) return;
+      this.#deliveredLeaseLost.add(push.leaseId);
+    } else {
+      if (this.#lastHealthKind.get(push.leaseId) === push.kind) return;
+      this.#lastHealthKind.set(push.leaseId, push.kind);
+    }
     for (const listener of this.#leaseScopedListeners) listener(push);
   }
 

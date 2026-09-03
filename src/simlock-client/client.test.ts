@@ -254,7 +254,7 @@ describe("pushes", () => {
     expect(onProgress).toHaveBeenCalledTimes(1);
   });
 
-  it("de-duplicates lease-scoped pushes by lease id", async () => {
+  it("de-duplicates a repeated device-unhealthy push for the same lease (same state twice in a row)", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
@@ -278,7 +278,76 @@ describe("pushes", () => {
     expect(unhealthy).toHaveBeenCalledTimes(1);
   });
 
-  it("never fires onLeaseLost for a release this client itself asked for", async () => {
+  it("delivers a second device-unhealthy for the same lease once a device-recovered came between the two (S2: a second crash is not a duplicate)", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const unhealthy = vi.fn();
+    const recovered = vi.fn();
+    client.onDeviceUnhealthy(unhealthy);
+    client.onDeviceRecovered(recovered);
+
+    connection.push("device-unhealthy", {
+      deviceId: "device_1",
+      leaseId: "lease_1",
+      reason: "crashed",
+    });
+    connection.push("device-recovered", { attempts: 1, deviceId: "device_1", leaseId: "lease_1" });
+    // A genuine second crash on the same lease -- `LeaseHealthMonitor` clears its recovery
+    // bookkeeping after a successful recovery, so this is a real, distinct fact, not a
+    // redundant re-push of the first one.
+    connection.push("device-unhealthy", {
+      deviceId: "device_1",
+      leaseId: "lease_1",
+      reason: "crashed",
+    });
+
+    expect(unhealthy).toHaveBeenCalledTimes(2);
+    expect(recovered).toHaveBeenCalledTimes(1);
+  });
+
+  it("still de-duplicates a repeated device-recovered push for the same lease", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const recovered = vi.fn();
+    client.onDeviceRecovered(recovered);
+
+    connection.push("device-unhealthy", {
+      deviceId: "device_1",
+      leaseId: "lease_1",
+      reason: "crashed",
+    });
+    connection.push("device-recovered", { attempts: 1, deviceId: "device_1", leaseId: "lease_1" });
+    // The owner-routed fan-out re-delivering the same recovered fact must still be suppressed.
+    connection.push("device-recovered", { attempts: 1, deviceId: "device_1", leaseId: "lease_1" });
+
+    expect(recovered).toHaveBeenCalledTimes(1);
+  });
+
+  it("de-duplicates a repeated lease-lost push for the same lease (permanent -- loss is terminal)", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const leaseLost = vi.fn();
+    client.onLeaseLost(leaseLost);
+
+    connection.push("lease-lost", { deviceId: "device_1", leaseId: "lease_1", reason: "crashed" });
+    connection.push("lease-lost", { deviceId: "device_1", leaseId: "lease_1", reason: "crashed" });
+
+    expect(leaseLost).toHaveBeenCalledTimes(1);
+  });
+
+  it("a successful release never fires onLeaseLost, because the daemon suppresses the push at the source (ADR §8)", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
@@ -299,13 +368,94 @@ describe("pushes", () => {
     const releasePromise = client.releaseLease({ leaseId: "lease_1" });
     await flushMicrotasks();
     const releaseCall = connection.lastSentOf("lease.release")!;
-    // The daemon pushes lease-lost for the same release the client itself just asked for --
-    // this must be swallowed, not surfaced.
-    connection.push("lease-lost", { deviceId: "device_1", leaseId: "lease_1", reason: "explicit" });
+    // Unlike the real daemon (which never sends this push to the releasing connection), the
+    // scripted connection sends nothing here either -- this asserts the client does not
+    // itself need to remember and swallow a self-initiated release.
     connection.reply(releaseCall.id, { leaseId: "lease_1" });
     await releasePromise;
 
     expect(leaseLost).not.toHaveBeenCalled();
+  });
+
+  it("S3: a lease-lost push for a lease id whose earlier release attempt failed is still delivered, not permanently muted", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const leaseLost = vi.fn();
+    client.onLeaseLost(leaseLost);
+
+    const grantPromise = client.requestLease({ model: "iPhone 17", platform: "ios" });
+    await flushMicrotasks();
+    connection.reply(
+      connection.lastSentOf("lease.request")!.id,
+      sampleGrant({ leaseId: "lease_1" }),
+    );
+    await grantPromise;
+
+    // The release itself fails -- e.g. an agent-role client hitting FORBIDDEN.
+    const releasePromise = client.releaseLease({ leaseId: "lease_1" });
+    await flushMicrotasks();
+    const releaseCall = connection.lastSentOf("lease.release")!;
+    connection.fail(releaseCall.id, "FORBIDDEN", "not authorized");
+    await expect(releasePromise).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    // The lease later genuinely expires/crashes -- this is a real loss the client must
+    // still surface, not residue from the earlier failed release attempt.
+    connection.push("lease-lost", {
+      deviceId: "device_1",
+      leaseId: "lease_1",
+      reason: "expired",
+    });
+
+    expect(leaseLost).toHaveBeenCalledWith({
+      deviceId: "device_1",
+      leaseId: "lease_1",
+      reason: "expired",
+    });
+  });
+
+  it("answers a lease.heartbeat push with a fire-and-forget request frame carrying the same payload", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    await connectPromise;
+
+    connection.push("lease.heartbeat", { nonce: 12345 });
+    await flushMicrotasks();
+
+    const pong = connection.lastSentOf("lease.heartbeat")!;
+    expect(pong).toBeDefined();
+    expect(pong.payload).toEqual({ nonce: 12345 });
+  });
+
+  it("silently drops malformed lease-scoped and event pushes instead of throwing", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const leaseLost = vi.fn();
+    const unhealthy = vi.fn();
+    const recovered = vi.fn();
+    client.onLeaseLost(leaseLost);
+    client.onDeviceUnhealthy(unhealthy);
+    client.onDeviceRecovered(recovered);
+
+    expect(() => connection.push("lease-lost", { leaseId: "lease_1" })).not.toThrow();
+    expect(() => connection.push("device-unhealthy", { leaseId: "lease_1" })).not.toThrow();
+    expect(() =>
+      connection.push("device-recovered", { deviceId: "device_1", leaseId: "lease_1" }),
+    ).not.toThrow();
+    expect(() => connection.push("event", { not: "a valid event shape" })).not.toThrow();
+
+    expect(leaseLost).not.toHaveBeenCalled();
+    expect(unhealthy).not.toHaveBeenCalled();
+    expect(recovered).not.toHaveBeenCalled();
   });
 });
 
@@ -567,5 +717,45 @@ describe("simlock/admin", () => {
     const stopCall = connection.lastSentOf("daemon.stop")!;
     connection.reply(stopCall.id, { stopping: true });
     await expect(stopPromise).resolves.toEqual({ stopping: true });
+  });
+
+  it("releaseAllLeases clears every held lease id and connection death afterwards fires no onLeaseLost", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const admin = await connectPromise;
+
+    const firstGrant = admin.requestLease({ model: "iPhone 17", platform: "ios" });
+    await flushMicrotasks();
+    connection.reply(
+      connection.lastSentOf("lease.request")!.id,
+      sampleGrant({ leaseId: "lease_a" }),
+    );
+    await firstGrant;
+
+    const secondGrant = admin.requestLease({ model: "iPhone 17", platform: "ios" });
+    await flushMicrotasks();
+    connection.reply(
+      connection.lastSentOf("lease.request")!.id,
+      sampleGrant({ leaseId: "lease_b" }),
+    );
+    await secondGrant;
+
+    const releaseAllPromise = admin.releaseAllLeases();
+    await flushMicrotasks();
+    const releaseAllCall = connection.lastSentOf("lease.release-all")!;
+    connection.reply(releaseAllCall.id, { leaseIds: ["lease_a", "lease_b"] });
+    await expect(releaseAllPromise).resolves.toMatchObject({
+      leaseIds: ["lease_a", "lease_b"],
+    });
+
+    // Both leases are no longer tracked as held -- a later connection death synthesizes no
+    // onLeaseLost for either of them.
+    const leaseLost = vi.fn();
+    admin.onLeaseLost(leaseLost);
+    connection.simulateDeath();
+    await flushMicrotasks();
+    expect(leaseLost).not.toHaveBeenCalled();
   });
 });
