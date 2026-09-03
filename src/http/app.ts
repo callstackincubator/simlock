@@ -3,23 +3,15 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
-import {
-  type Config,
-  type DeviceRecord,
-  type LeaseRecord,
-  transitionEnteredAt,
-} from "../core/index.js";
-import type {
-  CapacityReader,
-  CatalogReader,
-  LeaseCommands,
-  QueueControl,
-} from "../core/lease-ports.js";
+import type { Config, DeviceRecord } from "../core/index.js";
+import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
-import { type AuthEnv, requireAuth, requireOwnership } from "./auth.js";
+import { type AuthEnv, requireAuth } from "./auth.js";
+import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
 import {
   badRequest,
   errorResponse,
+  forbidden,
   mapError,
   requestNotCancellable,
   unknownLease,
@@ -36,27 +28,28 @@ import {
   type TrackedRequestView,
 } from "./tracker.js";
 
-/** Minimal structural read surface -- narrower than importing the `Registry` class itself. */
+/** Minimal structural read surface -- narrower than importing the `Registry` class itself. Kept
+ * for the one thing dispatcher operations don't hand back: a device record for a specific
+ * lease's `GET /v1/leases/:id` decoration (there is no per-id device operation). */
 export interface HttpRegistryReader {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];
-    readonly leases: readonly LeaseRecord[];
   };
 }
 
 export interface HttpGatewayDeps {
-  readonly leases: LeaseCommands;
-  readonly queue: QueueControl;
-  readonly capacity: CapacityReader;
-  readonly catalog: CatalogReader;
+  /** ADR 0003 §2: the exact same shared `Dispatcher` the socket path uses -- see
+   * `dispatcher-session.ts`'s `HttpDispatch`. */
+  readonly dispatch: HttpDispatch;
   readonly registry: HttpRegistryReader;
   readonly eventBus: EventBus;
+  /** ADR §8: fed to `LeaseNoticeBuffer` instead of it subscribing to `eventBus` itself. */
+  readonly ownerRoutedFacts: OwnerRoutedFacts;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
   readonly config: Config;
   readonly tokens: { verify(secret: string): Promise<TokenIdentity | undefined> };
-  readonly daemonHealth: () => "starting" | "running";
 }
 
 type Env = AuthEnv;
@@ -77,13 +70,6 @@ const leaseRequestBodySchema = z.object({
   ttlMs: z.number().int().positive().optional(),
 });
 
-/**
- * Validated request body -> the tracker's own input shape. Every optional key is omitted rather
- * than passed as `undefined` so a request that did not name a flag stays byte-identical to one
- * from before that flag existed. `allowDownload` and `full` pass through unclamped, matching the
- * socket daemon's handling of the same flags; if a config-level policy ever gates either there,
- * this route must gate through the same helper.
- */
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
   return {
     device: body.device,
@@ -102,7 +88,15 @@ export interface HttpAppDisposable {
   readonly dispose: () => void;
 }
 
-/** Pure `Request -> Response` app: no `node:http`, no `serve()` -- see `server.ts` for that. */
+/**
+ * `Request -> Response` app: no `node:http`, no `serve()` -- see `server.ts` for that. ADR
+ * 0003 §2: "the HTTP app becomes routing plus a bearer-token-to-session adapter, calling the
+ * same dispatcher in-process". Every route that maps onto a daemon operation calls
+ * `deps.dispatch(...)`, which runs the exact same input parsing, role check, `authorize` hook,
+ * and startup-readiness parking the socket path gets -- this file no longer re-implements any
+ * of those. What's left here: HTTP routing, request/response (de)serialization, and the
+ * lease-request resource tracker/notice buffer ADR §11 keeps HTTP-specific until #72.
+ */
 // fallow-ignore-next-line complexity -- route wiring for one focused resource surface; splitting it would scatter the shared closures (tracker, notices) across files for no clarity gain.
 export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposable {
   const app = new Hono<Env>();
@@ -110,16 +104,21 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   const tracker = new LeaseRequestTracker({
     clock: deps.clock,
     defaultTtlMs: deps.config.lease.detachedTtlMs,
-    eventBus: deps.eventBus,
+    dispatch: deps.dispatch,
     idGenerator: deps.idGenerator,
-    leases: deps.leases,
     logger,
-    queue: deps.queue,
   });
-  const notices = new LeaseNoticeBuffer(deps.eventBus);
+  const notices = new LeaseNoticeBuffer(deps.ownerRoutedFacts);
+  // Replaces the tracker's own former direct `eventBus.subscribe("lease.released"/"lease.expired",
+  // ...)` -- ADR §8's "consumes the owner-routed facts" applies here too, not just to `notices`.
+  const unsubscribeLeaseBookkeeping = deps.eventBus.subscribe("lease.released", (envelope) =>
+    tracker.forgetLease(envelope.payload.leaseId),
+  );
+  const unsubscribeExpiryBookkeeping = deps.eventBus.subscribe("lease.expired", (envelope) =>
+    tracker.forgetLease(envelope.payload.leaseId),
+  );
 
   const agentAuth = requireAuth(deps.tokens);
-  const operatorAuth = requireAuth(deps.tokens, "operator");
 
   // The one error boundary. Hono's `compose` catches a thrown error at the layer that threw
   // it and hands it to `app.onError` right there -- it never propagates up through an outer
@@ -152,15 +151,21 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
 
   app.get("/v1/healthz", (c) => c.json({ ok: true }));
 
-  app.get("/v1/status", agentAuth, (c) => c.json(buildStatus(deps)));
+  app.get("/v1/status", agentAuth, async (c) =>
+    c.json(await deps.dispatch("status.get", {}, buildHttpSession(c.get("identity")))),
+  );
 
   app.get("/v1/catalog", agentAuth, async (c) => {
     const platform = c.req.query("platform");
     if (platform !== undefined && platform !== "ios" && platform !== "android") {
       throw badRequest("platform must be ios or android");
     }
-    const platforms = await deps.catalog.listCatalog(platform);
-    return c.json({ platforms });
+    const result = await deps.dispatch(
+      "catalog.get",
+      platform === undefined ? {} : { platform },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json(result);
   });
 
   app.post(
@@ -194,7 +199,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const id = c.req.param("id");
     const initial = tracker.get(id);
     if (initial === undefined) throw unknownRequest(id);
-    requireOwnership(c.get("identity"), initial.requesterId);
+    requireOwnRequest(c.get("identity"), initial.requesterId);
 
     const waitParam = c.req.query("wait");
     if (waitParam !== undefined) {
@@ -216,7 +221,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const id = c.req.param("id");
     const initial = tracker.get(id);
     if (initial === undefined) throw unknownRequest(id);
-    requireOwnership(c.get("identity"), initial.requesterId);
+    requireOwnRequest(c.get("identity"), initial.requesterId);
 
     return pipeSse(c, deps.clock, {
       subscribe(send, end) {
@@ -239,9 +244,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const id = c.req.param("id");
     const existing = tracker.get(id);
     if (existing === undefined) throw unknownRequest(id);
-    requireOwnership(c.get("identity"), existing.requesterId);
+    requireOwnRequest(c.get("identity"), existing.requesterId);
 
-    const outcome = await tracker.cancel(id);
+    const outcome = await tracker.cancel(id, c.get("identity"));
     if (outcome.kind === "cancelled") return c.body(null, 204);
     if (outcome.kind === "not-found") throw unknownRequest(id);
     if (outcome.leaseId !== undefined) {
@@ -255,15 +260,13 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     );
   });
 
-  app.get("/v1/leases/:id", agentAuth, (c) => {
-    const lease = requireOwnedLease(c.get("identity"), deps, c.req.param("id"));
+  app.get("/v1/leases/:id", agentAuth, async (c) => {
+    const identity = c.get("identity");
+    const session = buildHttpSession(identity);
+    const lease = await findOwnedLease(deps, session, c.req.param("id"));
     const device = findDevice(deps, lease.deviceId);
     if (device === undefined) throw unknownLease(lease.id);
     const requestId = tracker.requestIdForLease(lease.id);
-    // The tracker's record is gone after a daemon restart; the mode default is then the
-    // interval that will actually be in force from the next default renew on. `expiresAt`
-    // stays the authoritative deadline either way -- never derive ttlMs from `grantedAt`,
-    // which does not move on renewal.
     const ttlMs = tracker.effectiveTtlMs(lease.id) ?? modeDefaultTtlMs(lease, deps.config);
     return c.json({
       lease: buildLeasePayload(device, lease, {
@@ -274,7 +277,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   });
 
   app.post("/v1/leases/:id/renew", agentAuth, async (c) => {
-    const current = requireOwnedLease(c.get("identity"), deps, c.req.param("id"));
+    const identity = c.get("identity");
+    const session = buildHttpSession(identity);
+    const current = await findOwnedLease(deps, session, c.req.param("id"));
     const id = current.id;
 
     const ttlMs = await parseRenewBody(c);
@@ -282,7 +287,11 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       throw badRequest("ttlMs must be a positive number");
     }
 
-    const renewed = await deps.leases.renew(id, ttlMs);
+    const renewed = await deps.dispatch(
+      "lease.renew",
+      { leaseId: id, ...(ttlMs === undefined ? {} : { ttlMs }) },
+      session,
+    );
     tracker.recordLeaseTtl(id, ttlMs ?? modeDefaultTtlMs(current, deps.config));
 
     return c.json({
@@ -292,8 +301,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     });
   });
 
-  app.get("/v1/leases/:id/events", agentAuth, (c) => {
-    const lease = requireOwnedLease(c.get("identity"), deps, c.req.param("id"));
+  app.get("/v1/leases/:id/events", agentAuth, async (c) => {
+    const identity = c.get("identity");
+    const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.param("id"));
 
     return pipeSse(c, deps.clock, {
       subscribe(send, end) {
@@ -306,9 +316,11 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   });
 
   app.delete("/v1/leases/:id", agentAuth, async (c) => {
-    const lease = requireOwnedLease(c.get("identity"), deps, c.req.param("id"));
+    const identity = c.get("identity");
+    const session = buildHttpSession(identity);
+    const lease = await findOwnedLease(deps, session, c.req.param("id"));
 
-    await deps.leases.release(lease.id, "explicit");
+    await deps.dispatch("lease.release", { leaseId: lease.id }, session);
 
     const device = findDevice(deps, lease.deviceId);
     return c.json(
@@ -317,45 +329,98 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     );
   });
 
-  app.get("/v1/leases", operatorAuth, (c) =>
-    c.json({
-      leases: deps.registry.snapshot.leases.map((lease) => decorateLease(lease, deps.config)),
-    }),
+  app.get("/v1/leases", agentAuth, async (c) =>
+    c.json(await deps.dispatch("lease.list", {}, buildHttpSession(c.get("identity")))),
   );
 
-  app.get("/v1/devices", operatorAuth, (c) =>
-    c.json({
-      devices: deps.registry.snapshot.devices.map((device) => decorateDevice(device, deps.clock)),
-    }),
-  );
-
-  app.get("/v1/events", operatorAuth, (c) => {
-    const since = c.req.query("since");
-    const sinceTs = since === undefined ? undefined : deps.clock.now() - parseDuration(since);
-    return c.json({ events: deps.eventBus.replay(sinceTs === undefined ? {} : { sinceTs }) });
+  app.get("/v1/devices", agentAuth, async (c) => {
+    const devices = await deps.dispatch(
+      "list.get",
+      { kind: "devices" },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json({ devices });
   });
 
-  app.get("/v1/events/stream", operatorAuth, (c) =>
-    pipeSse(c, deps.clock, {
+  app.get("/v1/events", agentAuth, async (c) => {
+    const since = c.req.query("since");
+    const sinceTs = since === undefined ? undefined : deps.clock.now() - parseDuration(since);
+    const events = await deps.dispatch(
+      "events.replay",
+      sinceTs === undefined ? {} : { sinceTs },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json({ events });
+  });
+
+  app.get("/v1/events/stream", agentAuth, async (c) => {
+    const identity = c.get("identity");
+    let unsubscribeBus: (() => void) | undefined;
+    const session = buildHttpSession(identity, {
+      manageEventSubscription: (subscribe) => {
+        if (!subscribe) {
+          unsubscribeBus?.();
+          unsubscribeBus = undefined;
+          return undefined;
+        }
+        return "http-sse";
+      },
+    });
+    // Role check + startup-readiness parking, same as every other dispatched operation; the
+    // actual live feed is wired below via `subscribe()`'s own return, since HTTP has no
+    // persistent connection for the dispatcher's push mechanism to write through (ADR §8: "the
+    // HTTP notice buffer stays, because a polling client has no connection to push to" --
+    // this route is the same story for the full event bus).
+    await deps.dispatch("events.subscribe", {}, session);
+    return pipeSse(c, deps.clock, {
       subscribe(send) {
-        return deps.eventBus.subscribeAll((envelope) => {
+        unsubscribeBus = deps.eventBus.subscribeAll((envelope) => {
           send({ data: envelope, event: envelope.event });
         });
+        return () => {
+          unsubscribeBus?.();
+          unsubscribeBus = undefined;
+        };
       },
-    }),
-  );
+    });
+  });
 
-  // `tracker`/`notices` both subscribe to `deps.eventBus` for the app's lifetime -- exposed
-  // here rather than left to leak, so a caller composing this app into a longer-lived process
-  // (the daemon) can unsubscribe them on shutdown. Attached to the app object itself instead
-  // of changing this function's return shape to a `{app, dispose}` pair, which would ripple
-  // into every existing call site.
+  // `tracker`/`notices` both hold subscriptions for the app's lifetime -- exposed here rather
+  // than left to leak, so a caller composing this app into a longer-lived process (the daemon)
+  // can unsubscribe them on shutdown.
   return Object.assign(app, {
     dispose: () => {
+      unsubscribeLeaseBookkeeping();
+      unsubscribeExpiryBookkeeping();
       tracker.dispose();
       notices.dispose();
     },
   });
+}
+
+/** HTTP-only guard for the lease-request tracker's resource (ADR §11: the envelope stays
+ * HTTP-specific until #72, so there is no dispatcher `authorize` hook to reuse here the way
+ * `lease.renew`/`lease.release`/`lease.cancel` do for core resources). Deliberately distinct
+ * from the deleted general-purpose `requireOwnership` HTTP used to export from `auth.ts` --
+ * every *core* resource's ownership now goes through the shared dispatcher instead. */
+function requireOwnRequest(identity: TokenIdentity, requesterId: string): void {
+  if (identity.role === "operator" || identity.requesterId === requesterId) return;
+  throw forbidden("Not permitted to access another requester's resource");
+}
+
+/** `lease.list`'s dispatcher handler already filters to the session's own leases (admin sees
+ * all) -- reusing it here for a single-lease lookup means an unauthorized id simply isn't in
+ * the list, so `unknownLease` covers both "doesn't exist" and "not yours" the same way
+ * `lease.list` itself does not distinguish them. */
+async function findOwnedLease(
+  deps: HttpGatewayDeps,
+  session: ReturnType<typeof buildHttpSession>,
+  id: string,
+) {
+  const { leases } = await deps.dispatch("lease.list", {}, session);
+  const lease = leases.find((candidate) => candidate.id === id);
+  if (lease === undefined) throw unknownLease(id);
+  return lease;
 }
 
 function serializeRequest(
@@ -379,24 +444,8 @@ function serializeRequest(
 }
 
 /** The interval a default (body-less) renew of this lease applies -- its mode's configured TTL. */
-function modeDefaultTtlMs(lease: LeaseRecord, config: Config): number {
+function modeDefaultTtlMs(lease: { readonly mode: "held" | "detached" }, config: Config): number {
   return lease.mode === "held" ? config.lease.heldTtlBackstopMs : config.lease.detachedTtlMs;
-}
-
-/** Shared preamble of every `/v1/leases/:id` route: resolve the lease, then gate on ownership. */
-function requireOwnedLease(
-  identity: TokenIdentity,
-  deps: HttpGatewayDeps,
-  id: string,
-): LeaseRecord {
-  const lease = findLease(deps, id);
-  if (lease === undefined) throw unknownLease(id);
-  requireOwnership(identity, lease.requesterId);
-  return lease;
-}
-
-function findLease(deps: HttpGatewayDeps, id: string): LeaseRecord | undefined {
-  return deps.registry.snapshot.leases.find((lease) => lease.id === id);
 }
 
 function findDevice(deps: HttpGatewayDeps, id: string): DeviceRecord | undefined {
@@ -421,52 +470,9 @@ async function parseRenewBody(c: {
   return ttlMs;
 }
 
-/** Mirrors `DaemonServer#status` exactly -- see server.ts's `#status` -- so `--json` parity holds. */
-function buildStatus(deps: HttpGatewayDeps): unknown {
-  const snapshot = deps.registry.snapshot;
-  const running = deps.capacity.runningCapacity;
-  const warmDevices = snapshot.devices.filter((device) => device.state === "ready");
-  const capacity = Object.fromEntries(
-    (["ios", "android"] as const).map((platform) => [
-      platform,
-      {
-        limit: deps.capacity.deviceLimit(platform),
-        ...running[platform],
-        used: snapshot.devices.filter(
-          (device) => device.spec.platform === platform && device.state !== "deleted",
-        ).length,
-        warm: warmDevices.filter((device) => device.spec.platform === platform).length,
-      },
-    ]),
-  );
-  return {
-    ...snapshot,
-    capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
-    devices: snapshot.devices.map((device) => decorateDevice(device, deps.clock)),
-    health: deps.daemonHealth(),
-    leases: snapshot.leases.map((lease) => decorateLease(lease, deps.config)),
-    queueDepth: deps.queue.queueDepth,
-  };
-}
-
-function decorateDevice(
-  device: DeviceRecord,
-  clock: Clock,
-): DeviceRecord & { readonly transitionAgeMs?: number } {
-  const enteredAt = transitionEnteredAt(device);
-  if (enteredAt === undefined) return device;
-  return { ...device, transitionAgeMs: clock.now() - enteredAt };
-}
-
-function decorateLease(
-  lease: LeaseRecord,
-  config: Config,
-): LeaseRecord & { readonly lastHeartbeatAt?: number } {
-  if (lease.mode !== "held") return lease;
-  return { ...lease, lastHeartbeatAt: lease.ttlDeadline - config.lease.heldTtlBackstopMs };
-}
-
-/** Local re-implementation of the CLI's `parseDuration` -- the HTTP layer never imports `src/cli`. */
+/** HTTP-only sugar translating `?since=5m` into the absolute `sinceTs` `events.replay` takes --
+ * not a duplicate of any daemon-side logic (the operation itself takes an absolute timestamp),
+ * so it is not one of the re-implementations ADR §2 says fall away with the dispatcher move. */
 function parseDuration(value: string): number {
   const match = /^(\d+)(ms|s|m|h)?$/.exec(value);
   if (match === null) throw badRequest(`Invalid duration: ${value}`);

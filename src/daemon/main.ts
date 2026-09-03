@@ -46,6 +46,8 @@ import {
 } from "../ports/index.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
+import { AdminSecretManager } from "./admin-secret.js";
+import { createCredentialRoleResolver } from "./session.js";
 
 export interface StartDaemonOptions {
   readonly clock?: Clock;
@@ -150,10 +152,36 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     registry,
   });
   const nuke = new Nuke({ executor: leaseEngine, registry });
-  // Reassigned once the HTTP gateway actually starts (after `daemon.start()` resolves
-  // below), but must exist as a stable closure now: `stopAuxiliary` is fixed at
-  // `DaemonServer` construction time, before the gateway itself exists.
+  // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
+  // token is a socket-hello credential too, so the daemon must be able to verify one against
+  // the token store regardless of whether the HTTP gateway is running. Previously this was
+  // only ever constructed inside the `config.http.enabled` block below; it is reused there now
+  // instead of being built twice.
+  const tokens = new TokenStore({
+    clock,
+    filesystem,
+    idGenerator,
+    path: join(dataDirectory, "tokens.json"),
+    secrets: new CryptoTokenSecrets(),
+  });
+  const adminSecret = new AdminSecretManager({
+    filesystem,
+    secrets: new CryptoTokenSecrets(),
+    path: join(dataDirectory, "admin.token"),
+  });
+  const resolveRole = createCredentialRoleResolver({
+    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
+    verifyAdminSecret: (secret) => adminSecret.verify(secret),
+  });
+  // Reassigned once the HTTP gateway actually starts, but must exist as a stable closure now:
+  // `stopAuxiliary` is fixed at `DaemonServer` construction time, before the gateway itself
+  // exists. `httpStopRequested` closes the narrow race `onSocketClaimed`'s doc calls out: if
+  // `stop()` runs (e.g. convergence failed) *while* the gateway is still mid-`start()` below,
+  // `stopHttpGateway` isn't assigned yet for `stopAuxiliary` to call -- this flag lets the
+  // gateway's own startup continuation notice and stop itself the moment it finishes, instead
+  // of leaking a listening HTTP server past a daemon that has already torn everything else down.
   let stopHttpGateway: (() => Promise<void>) | undefined;
+  let httpStopRequested = false;
   const daemon = new DaemonServer({
     capacity: leaseEngine,
     catalog: leaseEngine,
@@ -177,6 +205,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     reaper,
     nuke,
     registry,
+    resolveRole,
+    adminSecret,
     version: options.version ?? "1.0.0",
     // Runs after the socket is claimed (see DaemonServer#start): reachability no
     // longer depends on doctor reconciliation or running-capacity convergence.
@@ -194,34 +224,40 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     settle: async () => leaseEngine.settle(),
     dispose: () => leaseEngine.dispose(),
-    stopAuxiliary: () => stopHttpGateway?.() ?? Promise.resolve(),
+    stopAuxiliary: () => {
+      httpStopRequested = true;
+      return stopHttpGateway?.() ?? Promise.resolve();
+    },
+    // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
+    // being refused". Firing the gateway's own `start()` from here (not after `daemon.start()`
+    // resolves, as before this PR) is what makes that true: the gateway is listening, and every
+    // route calls `daemon.dispatch(...)`, which parks on the same startup-readiness gate a
+    // socket request does. A bind failure (occupied port, invalid host) here can no longer fail
+    // `startDaemon()` itself the way it used to -- by the time it's discovered, `daemon.start()`
+    // may already have resolved to its caller -- so it's logged and the daemon is stopped
+    // best-effort instead; see this PR's report for this as a known behavioural narrowing.
+    ...(config.http.enabled
+      ? {
+          onSocketClaimed: () => {
+            void startHttpGateway().catch((error: unknown) => {
+              logger.error("HTTP gateway failed to start", { message: errorMessage(error) });
+              void daemon.stop("http-start-failed").catch(() => undefined);
+            });
+          },
+        }
+      : {}),
   });
-  await daemon.start();
 
-  if (config.http.enabled) {
+  async function startHttpGateway(): Promise<void> {
     const httpLogger = logger.child("http");
-    const tokens = new TokenStore({
-      clock,
-      filesystem,
-      idGenerator,
-      path: join(dataDirectory, "tokens.json"),
-      secrets: new CryptoTokenSecrets(),
-    });
     const app = createHttpApp({
-      capacity: leaseEngine,
-      catalog: leaseEngine,
       clock,
       config,
-      // Only ever read once `daemon.start()` above has resolved (the gateway starts
-      // strictly after it, see the comment below), so this is always "running" -- the
-      // "failed" arm of the underlying `#health` state can only be observed during
-      // convergence, which is over by the time any HTTP request reaches this closure.
-      daemonHealth: () => daemon.health as "starting" | "running",
+      dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
       eventBus,
       idGenerator,
-      leases: leaseEngine,
       logger: httpLogger,
-      queue: leaseEngine,
+      ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
       tokens,
     });
@@ -230,31 +266,23 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       logger: httpLogger,
       port: config.http.port,
     });
-    // Started strictly after `daemon.start()` resolves, i.e. after convergence: a
-    // socket-daemon request parks on `#awaitReady` until convergence completes, but
-    // HTTP routes call the role interfaces (leaseEngine, registry) directly with no
-    // equivalent gate, so serving before convergence completes could let a remote
-    // client observe half-converged state. A connection refused while the daemon is
-    // still starting up is accepted v1 behavior -- there is no HTTP-level "starting"
-    // response to mirror the socket protocol's parked dispatch.
-    try {
-      await gateway.start();
-    } catch (error: unknown) {
-      // The daemon is already fully started (socket claimed, timers armed) by this point.
-      // A bind failure -- an occupied port, an invalid host -- must not strand it as a
-      // half-configured zombie that startDaemon's caller believes failed to start: tear it
-      // down before rethrowing, so failure means *nothing* is left running.
-      app.dispose();
-      await daemon.stop("http-start-failed").catch(() => undefined);
-      throw error;
-    }
+    await gateway.start();
     stopHttpGateway = async () => {
       await gateway.stop();
       app.dispose();
     };
+    // Closes the race `stopAuxiliary`'s doc above and `onSocketClaimed`'s own doc on
+    // `DaemonServerOptions` call out: `stop()` may already have run (and found
+    // `stopHttpGateway` still unassigned) by the time this async function finally gets here.
+    if (httpStopRequested) await stopHttpGateway();
   }
 
+  await daemon.start();
   return daemon;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export interface DriverDiscoveryContext {
