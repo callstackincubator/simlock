@@ -50,9 +50,10 @@ describe("McpSession", () => {
         payload: {
           allowDownload: false,
           mode: "held",
+          model: "iPhone 17 Pro",
           noWait: false,
+          platform: "ios",
           requesterId: "mcp-session-1",
-          request: { model: "iPhone 17 Pro", platform: "ios" },
         },
         type: "lease.request",
       },
@@ -77,10 +78,12 @@ describe("McpSession", () => {
       {
         payload: {
           allowDownload: false,
+          full: true,
           mode: "held",
+          model: "iPhone 17 Pro",
           noWait: false,
+          platform: "ios",
           requesterId: "mcp-session-1",
-          request: { full: true, model: "iPhone 17 Pro", platform: "ios" },
         },
         type: "lease.request",
       },
@@ -107,9 +110,11 @@ describe("McpSession", () => {
     expect(connection.requests[0]?.payload).toEqual({
       allowDownload: true,
       mode: "held",
+      model: "iPhone 17 Pro",
       noWait: true,
+      osVersion: "26.5",
+      platform: "ios",
       requesterId: "mcp-session-1",
-      request: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       timeoutMs: 1_250,
     });
   });
@@ -1048,8 +1053,14 @@ class StubConnection implements DaemonConnection {
     for (const listener of this.#listeners) listener("device-recovered", payload);
   }
 
+  /**
+   * Wraps the given stage payload under `{requestId, progress}` -- ADR 0003 §8's push
+   * correlation shape (see `DaemonServer#pushProgress`) -- so callers can keep passing the bare
+   * stage object `parseRawLeaseProgress` ultimately unwraps this back to.
+   */
   pushProgress(payload: unknown): void {
-    for (const listener of this.#listeners) listener("progress", payload);
+    for (const listener of this.#listeners)
+      listener("progress", { progress: payload, requestId: "test-request" });
   }
 
   /**
