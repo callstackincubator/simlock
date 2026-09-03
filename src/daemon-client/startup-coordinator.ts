@@ -41,6 +41,15 @@ function delay(clock: Clock, milliseconds: number): Promise<void> {
   return new Promise((resolve) => clock.setTimer(milliseconds, resolve));
 }
 
+/**
+ * True only for "nothing is listening yet" -- a refused/missing socket. A `hello` failure for
+ * any other reason (including a protocol version mismatch: `DaemonClientError` with code
+ * `PROTOCOL_VERSION_MISMATCH`/`PROTOCOL_VERSION_UNSUPPORTED`, never an `IpcError`) is NOT
+ * unavailable and propagates straight out of `connect()` without ever reaching
+ * `launcher.launch()` below. This is what ADR 0003 §6 means by "the client never restarts the
+ * daemon on mismatch": `DaemonStartupCoordinator` only ever launches when the socket itself
+ * could not be reached, never when a daemon answered and refused the handshake.
+ */
 function isUnavailable(error: unknown): boolean {
   return (
     error instanceof IpcError &&

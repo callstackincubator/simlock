@@ -159,8 +159,17 @@ export type RawLeaseProgress =
   | { readonly stage: "provisioning" | "booting" | "reclaiming"; readonly etaMs: number };
 
 /** Parses a "progress" push frame delivered to the requesting connection while a lease is in flight. */
+/**
+ * ADR 0003 §8: the `progress` push now wraps the stage payload under `progress`, alongside a
+ * `requestId` correlating it to the request that caused it -- see `DaemonServer#pushProgress`.
+ * `requestId` is not read here yet: nothing on this side of the wire multiplexes progress by
+ * request id today (both the CLI and MCP have at most one lease request in flight per
+ * connection), so unwrapping straight to the stage union is enough for now. Routing by
+ * `requestId` is later-PR work per the ADR's own sequencing (the dispatcher/typed client).
+ */
 export function parseRawLeaseProgress(value: unknown): RawLeaseProgress {
-  const payload = requireObject(value, "Daemon sent an invalid progress notification");
+  const envelope = requireObject(value, "Daemon sent an invalid progress notification");
+  const payload = requireObject(envelope.progress, "Daemon sent an invalid progress notification");
   if (payload.stage === "queued") {
     if (typeof payload.queuePosition !== "number") {
       throw new Error("Daemon sent an invalid progress notification");
