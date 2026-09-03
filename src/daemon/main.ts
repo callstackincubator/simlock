@@ -191,6 +191,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // wait for, so this resolves immediately.
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
+  /** Whether `onSocketClaimed` ever fired, i.e. whether anything will ever settle
+   * `gatewayStarted`. See the `finally` on `daemon.start()` below. */
+  let socketClaimed = false;
   const gatewayStarted: Promise<void> = config.http.enabled
     ? new Promise<void>((resolve, reject) => {
         resolveGatewayStarted = resolve;
@@ -263,6 +266,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     ...(config.http.enabled
       ? {
           onSocketClaimed: () => {
+            socketClaimed = true;
             void startHttpGateway().then(
               () => resolveGatewayStarted?.(),
               (error: unknown) => {
@@ -309,7 +313,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // finishes starting or fails to. Both are already running concurrently by the time this line
   // is reached (the gateway since `onSocketClaimed` fired partway through `daemon.start()`), so
   // this changes nothing about when either finishes -- only what `startDaemon()` itself reports.
-  const [daemonResult, gatewayResult] = await Promise.allSettled([daemon.start(), gatewayStarted]);
+  // `gatewayStarted` is settled only from inside `onSocketClaimed`'s handler, and `start()`
+  // fires that callback only once the socket claim (and the admin-secret write) has succeeded.
+  // A daemon that loses the start race therefore rejects without the callback ever running, so
+  // nothing would settle `gatewayStarted` and the join below would hang forever rather than
+  // reporting the failure. Release it here on that path -- resolving an already-settled promise
+  // is a no-op, so this cannot pre-empt a real bind result, and the `socketClaimed` guard keeps
+  // it from resolving early while a claimed daemon's gateway is still binding.
+  const daemonStarted = daemon.start().finally(() => {
+    if (!socketClaimed) resolveGatewayStarted?.();
+  });
+  const [daemonResult, gatewayResult] = await Promise.allSettled([daemonStarted, gatewayStarted]);
   if (gatewayResult.status === "rejected" && daemonResult.status === "fulfilled") {
     // The daemon itself came all the way up -- convergence succeeded, `daemon.started` was
     // already emitted -- but its HTTP gateway never bound. Tear the whole thing down now,
