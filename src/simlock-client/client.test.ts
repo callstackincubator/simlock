@@ -20,12 +20,9 @@ function sampleGrant(
   const deviceId = overrides.deviceId ?? "device_1";
   return {
     device: {
-      createdAt: 0,
-      driverData: null,
       driverDeviceId: "sim-1",
       id: deviceId,
       spec: { model: "iPhone 17", osVersion: "18.0", platform: "ios" },
-      state: "leased",
     },
     lease: {
       deviceId,
