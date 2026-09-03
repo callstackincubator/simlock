@@ -11,6 +11,7 @@ import {
   NodeParentWatch,
   resolveSimlockHome,
   SystemClock,
+  type Clock,
   type Filesystem,
   type ParentWatch,
   type ParentWatchHandle,
@@ -20,6 +21,7 @@ import {
   connectDaemon,
   connectExistingDaemon,
   type DaemonClientCapabilities,
+  type ResolveCredential,
 } from "../daemon-client/client.js";
 import {
   parseRawDeviceRecovered,
@@ -143,6 +145,102 @@ export function fallbackRequesterId(env: NodeJS.ProcessEnv): string {
   return env.SIMLOCK_AGENT_ID ?? String(process.pid);
 }
 
+/**
+ * ADR 0003 §5's credential resolution, in resolution order: `SIMLOCK_ADMIN_TOKEN`, then the
+ * local `admin.token` file in the daemon's data directory. (`--token` arrives with the typed
+ * client; this is the intermediate seam that lets role enforcement land without breaking the
+ * CLI, which is the operator interface -- without it every admin command, `daemon stop`
+ * included, answers FORBIDDEN.)
+ *
+ * Read *after* the socket is reachable, never before: the daemon writes `admin.token` just
+ * after claiming its socket, so on a cold start with auto-launch the file cannot exist until
+ * the connection succeeds. The short retry covers the remaining gap -- the socket is
+ * connectable a moment before `persist()` lands the file.
+ *
+ * Never throws and never logs the credential: an unreadable file (a different OS user, or no
+ * daemon-written file at all) degrades to an agent session with a one-line stderr notice,
+ * exactly as §5 requires.
+ */
+function makeCredentialResolver(
+  filesystem: Filesystem,
+  clock: Clock,
+  adminTokenPath: string,
+  env: NodeJS.ProcessEnv,
+  stderr: Output,
+): ResolveCredential {
+  return async () => {
+    const fromEnv = env.SIMLOCK_ADMIN_TOKEN?.trim();
+    if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const contents = (await filesystem.readFile(adminTokenPath)).trim();
+        if (contents !== "") return contents;
+      } catch {
+        // Not written yet, or not ours to read -- fall through to the retry/notice below.
+      }
+      if (attempt < 2) await delay(clock, 50);
+    }
+    stderr.write(
+      `${JSON.stringify({
+        notice: "admin-credential-unavailable",
+        message:
+          "Could not read admin.token; connecting as an agent session. Admin-only commands will fail with FORBIDDEN.",
+      })}\n`,
+    );
+    return undefined;
+  };
+}
+
+function delay(clock: Clock, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    clock.setTimer(ms, resolve);
+  });
+}
+
+/**
+ * ADR §5's agent fallback, extended to a credential the daemon *rejects* rather than only to
+ * an absent one. `admin.token` is removed on a graceful stop but survives a `kill -9` or a
+ * power loss, so the next invocation reads a secret the freshly started daemon has never
+ * minted and `hello` fails `ADMIN_AUTHENTICATION_FAILED`. Without this retry that failure is
+ * terminal for *every* command -- including `catalog` and `lease`, which need no admin at all
+ * -- until someone deletes the file by hand.
+ *
+ * Retries exactly once, and only when a credential was actually offered, so a genuine
+ * handshake failure on an already-agent session still surfaces instead of looping.
+ */
+async function connectWithAgentFallback(
+  attempt: (resolveCredential: ResolveCredential) => Promise<DaemonConnection>,
+  resolveCredential: ResolveCredential,
+  stderr: Output,
+): Promise<DaemonConnection> {
+  let offered = false;
+  try {
+    return await attempt(async () => {
+      const credential = await resolveCredential();
+      offered = credential !== undefined;
+      return credential;
+    });
+  } catch (error: unknown) {
+    if (!offered || credentialRejected(error) !== true) throw error;
+    stderr.write(
+      `${JSON.stringify({
+        notice: "admin-credential-rejected",
+        message:
+          "The daemon rejected the stored admin credential (admin.token is probably stale after an ungraceful stop); connecting as an agent session.",
+      })}\n`,
+    );
+    return attempt(async () => undefined);
+  }
+}
+
+function credentialRejected(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "ADMIN_AUTHENTICATION_FAILED"
+  );
+}
+
 function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
   const dataDirectory = resolveSimlockHome(env);
   const filesystem = new NodeFilesystem();
@@ -158,21 +256,39 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
     path: join(dataDirectory, "tokens.json"),
     secrets: new CryptoTokenSecrets(),
   });
+  const resolveCredential = makeCredentialResolver(
+    filesystem,
+    clock,
+    join(dataDirectory, "admin.token"),
+    env,
+    process.stderr,
+  );
   return {
     configPath,
     connect: (capabilities) =>
-      connectDaemon({
-        ...(capabilities === undefined ? {} : { capabilities }),
-        clock,
-        ipc,
-        launcher: new NodeDaemonLauncher({
-          args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
-          command: process.execPath,
-          logPath,
-        }),
-        socketPath,
-      }),
-    connectExisting: () => connectExistingDaemon(socketPath, ipc),
+      connectWithAgentFallback(
+        (resolve) =>
+          connectDaemon({
+            ...(capabilities === undefined ? {} : { capabilities }),
+            clock,
+            ipc,
+            launcher: new NodeDaemonLauncher({
+              args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
+              command: process.execPath,
+              logPath,
+            }),
+            resolveCredential: resolve,
+            socketPath,
+          }),
+        resolveCredential,
+        process.stderr,
+      ),
+    connectExisting: () =>
+      connectWithAgentFallback(
+        (resolve) => connectExistingDaemon(socketPath, ipc, undefined, resolve),
+        resolveCredential,
+        process.stderr,
+      ),
     now: () => clock.now(),
     // Captured once at process startup, before anything can reparent this
     // process -- `--bind-pid` overrides it per invocation.
