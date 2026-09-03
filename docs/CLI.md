@@ -285,13 +285,20 @@ HTTP, and `simlock/client`, not a fourth one. Two changes in here are easy
 to miss and will silently produce wrong behavior if you don't update a
 caller:
 
-- **`lease_simulator`'s `timeout_seconds` is now `timeoutMs` — a unit
-  change, not just a rename.** A caller that keeps sending the old field
-  name under the new one (`{"timeoutMs": 30}` meaning "30 seconds", the old
-  convention) waits 1000× longer than intended before timing out. This is
-  the single highest-risk change in this release — it does not fail loudly,
-  it just waits far too long. Update every caller's timeout field name *and*
-  multiply its value by 1000.
+- **`lease_simulator`'s `timeout_seconds` is now `timeoutMs`.** This is a
+  rename, not a silent unit change: every tool input schema is
+  `.strict()` (`src/contract/operations.ts`), so a caller that keeps
+  sending the old `timeout_seconds` key gets a hard `BAD_REQUEST` — loud,
+  immediate, and impossible to miss. The real, narrower hazard is a caller
+  that migrates the field *name* but not its *value*: sending
+  `{"timeoutMs": 30}` meaning "30 seconds" (the old convention) is valid
+  input, so nothing rejects it — the request just times out in 30
+  milliseconds instead of 30 seconds, roughly 1000× *sooner* than intended,
+  not longer. That surfaces immediately as `QUEUE_TIMEOUT` (CLI exit code
+  10), not as a silent hang, but it can still read as "the daemon is
+  broken" rather than "my timeout value is three orders of magnitude too
+  small" unless you know to check the unit. Update every caller's timeout
+  field name *and* multiply its value by 1000.
 - **The top-level `slim: boolean` on a grant is gone; it's now
   `device.featureProfile`** (`"full" | "reduced" | undefined`, undefined
   meaning "not applicable" — always undefined for Android). A caller

@@ -19,10 +19,13 @@ breaking release for every frontend's wire vocabulary; see below.
 - **MCP:** tool names are unchanged, but every tool's input/output schema is
   now derived from the contract instead of hand-declared. Two field changes
   need every caller updated:
-  - `lease_simulator`'s `timeout_seconds` is now `timeoutMs` — **a unit
-    change, not just a rename.** A caller that keeps the old field name
-    under the new key silently waits 1000× too long before timing out; this
-    is the single highest-risk change in this release.
+  - `lease_simulator`'s `timeout_seconds` is now `timeoutMs`. The input
+    schema is `.strict()`, so a caller still sending the old key gets a
+    hard `BAD_REQUEST`, not a silent failure. The real hazard is a caller
+    that renames the field but not its value: `{"timeoutMs": 30}` meaning
+    "30 seconds" is valid input, and times out ~1000× _sooner_ than
+    intended (`QUEUE_TIMEOUT`, exit 10) rather than later — update the
+    field name **and** multiply the value by 1000.
   - The top-level `slim: boolean` on a grant is gone; it is now
     `device.featureProfile` (`"full" | "reduced" | undefined`). A caller
     still checking `result.slim === true` silently never sees a
@@ -40,9 +43,15 @@ breaking release for every frontend's wire vocabulary; see below.
   aliases and the nested `request` wrapper the pre-0.3.0 daemon accepted;
   an old client sending them now gets `BAD_REQUEST` instead of those keys
   silently vanishing.
-- **HTTP:** `GET /v1/leases/:id` (and `renew`/`events`/`DELETE` on the same
-  resource) now returns `404 UNKNOWN_LEASE` instead of `403 FORBIDDEN` for
-  another requester's lease — see `docs/HTTP-API.md#get-v1leasesid`.
+- **HTTP:** `GET /v1/leases/:id` and `GET /v1/leases/:id/events` now return
+  `404 UNKNOWN_LEASE` instead of `403 FORBIDDEN` for another requester's
+  still-live lease — there is no dispatcher operation for a single-lease
+  read to defer to, so both fall back to `lease.list`'s own filter, which
+  does not distinguish "unknown" from "not yours" either. `POST
+/v1/leases/:id/renew` and `DELETE /v1/leases/:id` dispatch
+  `lease.renew`/`lease.release` directly instead and keep answering `403
+FORBIDDEN` for the same case, matching the socket transport exactly — see
+  `docs/HTTP-API.md#get-v1leasesid`.
 - **`token create|list|revoke`** are now daemon operations (admin role) —
   the daemon is the sole owner of `tokens.json`. `config set` and
   `daemon logs` remain file operations.
@@ -64,6 +73,11 @@ breaking release for every frontend's wire vocabulary; see below.
 - **contract:** restrict `lease.cancel` to the calling principal (only
   admin may cancel on another principal's behalf).
 - **daemon:** require the admin role for `daemon.stop`.
+- **http:** `GET /v1/lease-requests/{id}` and friends now answer `404
+UNKNOWN_LEASE_REQUEST`, not `404 UNKNOWN_REQUEST` — the latter collided
+  with the contract's own `UNKNOWN_REQUEST` (a 400 protocol error for an
+  unrecognized operation name), so a client branching on `error.code` alone
+  could not tell "no such request id" from "no such operation".
 
 ### Features
 

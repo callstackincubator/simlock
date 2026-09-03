@@ -218,6 +218,76 @@ HTTP alone tracks. Once that lands, `LeaseRequestTracker` and
 `LeaseNoticeBuffer` should be able to shrink to thin views over core state
 rather than independent bookkeeping.
 
+## HTTP single-lease reads answer 404, not 403, for an unowned lease
+
+`GET /v1/leases/:id` and `GET /v1/leases/:id/events` resolve their lease
+through `findOwnedLease` (`src/http/app.ts`), which calls `lease.list` and
+filters to the id in question. `lease.list`'s own scoping (own leases; admin
+sees all) means an id owned by a different agent simply is not in the list —
+indistinguishable, at that point, from an id that does not exist at all. Both
+answer `UNKNOWN_LEASE`/404.
+
+Over the socket there is no equivalent read: `lease.list` is the only
+operation that can answer "what does this session see", and it does not
+distinguish "unknown" from "not yours" either — it just omits the row. So
+these two routes are not actually diverging from a socket answer; there is no
+`lease.get` operation with an `ownsLease` authorize hook to diverge from.
+
+This is deliberately narrower than the fix applied to the two *mutating*
+single-lease routes, `POST /v1/leases/:id/renew` and `DELETE /v1/leases/:id`,
+which used to go through the same `findOwnedLease` helper and therefore used
+to answer 404 for an unowned lease where the socket's `lease.renew`/
+`lease.release` (via their `ownsLease` authorize hook) answer `FORBIDDEN`/403.
+Those two routes now dispatch directly and let the shared error table answer,
+matching the socket exactly. The two read routes above were left on
+`lease.list`-filtered 404 because there is no dispatcher operation for them to
+match — 404-as-anti-enumeration is the *table's* answer here too, just via
+`lease.list`'s own filter rather than a per-op `authorize` hook.
+
+**If a `lease.get` operation with an `ownsLease` hook is ever added to the
+contract**, these two routes should move onto it and start answering 403 for
+an unowned lease, the same way the mutating routes do today.
+
+## HTTP error codes outside the closed contract union
+
+ADR §7: `SimlockError` has a `code` from the contract's closed union, and "a code the client
+does not know... wraps as `UNKNOWN_DAEMON_ERROR`". Four codes the HTTP gateway answers with
+today (`src/http/errors.ts`) have no row in that union
+(`src/contract/errors.ts`'s `ERROR_TABLE`), so a typed client built against the contract can
+only ever see them as `UNKNOWN_DAEMON_ERROR` with the real code buried in `details`:
+
+| Code | Status | Meaning | Where thrown |
+|---|---|---|---|
+| `UNAUTHENTICATED` | 401 | Missing/invalid bearer token | `errors.ts:37` |
+| `UNKNOWN_LEASE_REQUEST` | 404 | No such lease-*request* resource (`POST /v1/lease-requests`'s HTTP-only envelope, ADR §11, kept until #72) | `errors.ts:59` |
+| `REQUEST_NOT_CANCELLABLE` | 409 | `DELETE /v1/lease-requests/:id` on a request already granted or past cancellable state | `errors.ts:70` |
+| `REQUEST_CANCELLED` | 500 | Defensive-only: `RequestCancelledError` reaching `mapError` should never happen in practice (the tracker consumes it internally) | `errors.ts:123` |
+
+`UNKNOWN_LEASE_REQUEST` used to be minted as `UNKNOWN_REQUEST` — the same code the contract
+already declares, but for a different meaning at a different status: the contract's
+`UNKNOWN_REQUEST` is a *protocol* error ("unknown operation name") at 400, thrown by
+`DispatchError` in `src/daemon/dispatcher.ts` for a request naming an operation the dispatcher
+has no handler for. Reusing it for "no such lease-request id" at 404 meant a client branching
+on `error.code` alone could not distinguish the two (S8, adversarial review). Renamed to
+`UNKNOWN_LEASE_REQUEST` so it no longer collides, but that only fixes the collision — it does
+not add a contract row, so it still wraps as `UNKNOWN_DAEMON_ERROR` for a typed client.
+
+**What the contract needs** (out of scope here — `src/contract/` is owned elsewhere): four new
+rows in `ERROR_TABLE` (`src/contract/errors.ts`), each with a `kind` and the `httpStatus`/
+`cliExitCode` columns this table already has for every other code:
+
+```ts
+UNAUTHENTICATED: Record<string, never>;             // kind: "protocol", httpStatus: 401
+UNKNOWN_LEASE_REQUEST: Record<string, never>;        // kind: "domain",   httpStatus: 404
+REQUEST_NOT_CANCELLABLE: { readonly leaseId?: string }; // kind: "domain", httpStatus: 409
+REQUEST_CANCELLED: Record<string, never>;            // kind: "domain",   httpStatus: 500
+```
+
+Once those exist, `src/http/errors.ts` should stop constructing ad hoc `HttpApiError`s for
+these four and instead go through the same `ERROR_TABLE`-driven path `mapError` already uses
+for every contract-declared code, the same way `UNKNOWN_LEASE`/`FORBIDDEN`/`BAD_REQUEST` do
+today.
+
 ## iOS slim mode: accepted costs and feature loss (#87)
 
 `ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd

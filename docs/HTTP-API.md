@@ -167,7 +167,7 @@ Role: `agent` (ownership as above). Cancel a pending request.
 → `204` if it was still cancellable (no device work claimed for it yet).
 `409 REQUEST_NOT_CANCELLABLE` once device work is in flight, or the request
 already reached a terminal state — the body names the lease id if it was
-`granted` (release that instead). `404 UNKNOWN_REQUEST` if unknown.
+`granted` (release that instead). `404 UNKNOWN_LEASE_REQUEST` if unknown.
 
 ### The lease object
 
@@ -198,15 +198,25 @@ as a bug.
 
 Role: `agent` (own lease; `operator` any). Re-fetches the lease — a client
 that restarts mid-lease recovers its state instead of leaking the lease.
-`404 UNKNOWN_LEASE` once it has expired or been released, **and now also for
-another requester's own, still-live lease** (bug fix, 0.3.0: this used to be
-`403 FORBIDDEN`, which told an unauthorized caller a lease id was valid).
-Every route under `/v1/leases/{id}` (this one, `renew`, `events`, `DELETE`)
-resolves the lease the same way `lease.list`'s dispatcher handler already
-filters leases — to the session's own set, admin sees all — so an id outside
-that set simply isn't in the list; `404` covers "doesn't exist" and "not
-yours" identically, the same way `lease.list` itself does not distinguish
-them. This is different from the lease-*request* routes below
+`404 UNKNOWN_LEASE` both once it has expired or been released, and for
+another requester's own, still-live lease: this route (and `GET
+/v1/leases/{id}/events` below) has no dispatcher operation to defer to for a
+single-lease read, so it resolves the lease the same way `lease.list`'s
+handler already filters leases — to the session's own set, admin sees all —
+and an id outside that set simply isn't in the list. `404` covers "doesn't
+exist" and "not yours" identically, the same way `lease.list` itself does
+not distinguish them.
+
+`POST /v1/leases/{id}/renew` and `DELETE /v1/leases/{id}` are different:
+both dispatch `lease.renew`/`lease.release` directly, so another requester's
+own, still-live lease answers `403 FORBIDDEN` from those two routes — the
+same answer the socket transport gives, via the same operation's `ownsLease`
+authorize hook. (0.3.0 briefly had all four routes answering `404` here;
+that overcorrected the lease-*request* routes' old `403` and is why renew
+and release were moved off the `lease.list`-filtered lookup — see
+`docs/known-pitfalls.md`.)
+
+This is different again from the lease-*request* routes below
 (`/v1/lease-requests/{id}` and friends), which are still HTTP's own resource
 and still answer `403 FORBIDDEN` for another requester's request — that
 envelope stays HTTP-specific until
@@ -270,8 +280,8 @@ Every failure is the same shape the daemon protocol uses:
 |---|---|
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
-| 403 | `FORBIDDEN` (role doesn't permit the route; or a `/v1/lease-requests/*` route whose request belongs to another requester) |
-| 404 | `UNKNOWN_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or a `/v1/leases/*` route naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
+| 403 | `FORBIDDEN` (role doesn't permit the route; a `/v1/lease-requests/*` route whose request belongs to another requester; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}` naming another requester's still-live lease) |
+| 404 | `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`) |
@@ -280,7 +290,7 @@ Every failure is the same shape the daemon protocol uses:
 
 - **Daemon restart.** In-flight lease requests are in-memory and do not
   survive, same as the socket protocol's queue today. A client polling a
-  request id from before the restart gets `404 UNKNOWN_REQUEST`; if its
+  request id from before the restart gets `404 UNKNOWN_LEASE_REQUEST`; if its
   grant had actually landed before the crash, the persisted detached lease
   answers a retried `POST` with `409 REQUESTER_ALREADY_LEASED` naming the
   lease id, which the client then `GET`s to recover its state. This is the
