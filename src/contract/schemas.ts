@@ -5,7 +5,11 @@
  * `DeviceRecord`, `LeaseRecord`, `Config`, `DoctorFinding`, `Proposal`, `EventEnvelope`, and so
  * on are core-private types. Re-declaring their fields here, by hand, is exactly what keeps
  * private domain records off the public package surface (the daemon maps its own records onto
- * these shapes in exactly one place -- `src/daemon/server.ts`). If a core type's shape changes
+ * these shapes in exactly one place -- `DaemonDispatcher#dispatch`'s `#parseOutput` call in
+ * `src/daemon/dispatcher.ts`, which parses every handler's result through the operation's
+ * output schema before it reaches a transport, stripping any field (such as `DeviceRecord`'s
+ * quarantine/foreign/recovery bookkeeping) that a narrower output schema like
+ * `grantedDeviceSchema` does not declare). If a core type's shape changes
  * without a matching edit here, that is a compile-time or (for shapes structurally compatible
  * but semantically different) a runtime output-validation failure at the daemon boundary --
  * see `DaemonServer`'s output parsing -- not a silent drift.
@@ -60,6 +64,45 @@ export const deviceRecordSchema = z.object({
   transitionAgeMs: z.number().optional(),
 });
 
+/**
+ * The device a `lease.request`/`lease.renew` grant carries -- deliberately narrower than
+ * `deviceRecordSchema` (ADR 0003 §1: "the daemon maps [core records] onto contract types in
+ * exactly one place"). A grant is agent-facing, not an admin inspection of the registry, so it
+ * carries only what a caller needs to drive the device it was just handed:
+ *
+ * - `id`: the lease-facing device identity (what `lease.list`/`lease.renew` correlate against).
+ * - `driverDeviceId`: the driver address a caller actually drives (simctl UDID / adb serial).
+ * - `spec`, `address`, `featureProfile`: same meanings as on `DeviceRecord` (src/core/domain.ts).
+ *
+ * Everything else on `DeviceRecord` -- `driverData` (opaque driver-private blob), `state`,
+ * `createdAt`, every `quarantine*`/`foreign*`/`recovering*` field, and the `status`/`list`
+ * decoration's `transitionAgeMs` -- is internal reclamation/health bookkeeping a grant recipient
+ * has no business seeing, and stays off this shape. `list.get`/`status.get` (admin-only) still
+ * return the full `deviceRecordSchema` -- an operator inspecting the registry legitimately wants
+ * the whole record.
+ */
+export const grantedDeviceSchema = z.object({
+  id: z.string(),
+  driverDeviceId: z.string(),
+  spec: deviceSpecSchema,
+  /**
+   * The driver-reported address (see `DriverDevice.address`), current as of this device's
+   * last `ready` transition. Undefined for a device still `provisioning` (never made ready
+   * yet) and, as an upgrade path, for a record written by a pre-address daemon -- `state.json`
+   * from before this field existed loads without one rather than failing to start. It becomes
+   * defined the next time the device is made ready (`boot`/`readyProvisioned`); nothing here
+   * ever guesses at a value it wasn't told.
+   */
+  address: z.string().optional(),
+  /**
+   * Mirrors `DriverDevice.featureProfile` (see `driver.ts`), current as of this device's last
+   * `ready` transition. Undefined for a device still `provisioning` (never made ready yet)
+   * and for any driver that does not reduce anything -- today's behaviour, and every non-iOS
+   * driver.
+   */
+  featureProfile: featureProfileSchema.optional(),
+});
+
 export const leaseModeSchema = z.enum(["held", "detached"]);
 
 /**
@@ -87,7 +130,7 @@ const leaseTimingSchema = z.object({
 });
 
 export const leaseGrantSchema = z.object({
-  device: deviceRecordSchema,
+  device: grantedDeviceSchema,
   lease: leaseRecordSchema,
   timing: leaseTimingSchema,
 });
