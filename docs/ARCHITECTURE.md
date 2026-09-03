@@ -28,49 +28,179 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
                                                                                 emulator/adb)
 ```
 
-- **CLI, stdio MCP server, and HTTP gateway**: sibling thin frontends. The
+- **CLI, stdio MCP server, and HTTP gateway**: sibling thin frontends over one
+  typed contract (ADR 0003; see "Contract, dispatcher, and roles" below). The
   core never knows which frontend made a request. The CLI and MCP server sit
-  over the shared daemon client and unix socket; the CLI is the full operator
+  over `simlock/client`/`simlock/admin` (the typed daemon client, see
+  [CLIENT.md](CLIENT.md)) and the unix socket; the CLI is the full operator
   interface, and the MCP server intentionally limits its tool surface to
   leasing and releasing for an agent session. The HTTP gateway is different in
   kind, not just transport: it is the one frontend meant to be reached over a
-  real network, so it calls the same role interfaces (`LeaseCommands`,
-  `QueueControl`, `CapacityReader`, `CatalogReader`) in-process rather than
-  going through the unix socket, requires a bearer token on every route but
-  `GET /v1/healthz`, and only ever grants detached-style, TTL-renewed leases —
-  "held lease = live connection" does not survive a real network the way it
-  does a local process. It starts only after the daemon's own startup
-  convergence completes (see "Startup: claim first, converge after" below),
-  so unlike the socket protocol's parked-request behavior during that window,
-  a request arriving before then is simply refused. See
-  [HTTP-API.md](HTTP-API.md) for the full route reference.
+  real network, so it calls the daemon's dispatcher **in-process** — the exact
+  same one the socket path calls — rather than going through the unix socket
+  at all, requires a bearer token on every route but `GET /v1/healthz`, and
+  only ever grants detached-style, TTL-renewed leases — "held lease = live
+  connection" does not survive a real network the way it does a local
+  process. Its listener now starts right after the socket claim, the same
+  moment the unix socket itself starts accepting connections and before
+  startup convergence runs (`DaemonServer`'s `onSocketClaimed` hook, see
+  "Startup: claim first, converge after" below) — a bug fix from the pre-ADR
+  gateway, which started only once convergence had already finished and so
+  never needed to park anything. A request that arrives before convergence
+  completes now waits on the shared dispatcher's readiness gate exactly like
+  a socket request, instead of being refused. See [HTTP-API.md](HTTP-API.md)
+  for the full route reference.
 - **CLI**: in the default *held* mode it acquires a lease, prints one JSON
   result line on stdout, then stays alive holding the daemon connection; the
   connection is the lease heartbeat. Progress streams as JSON lines on stderr.
 - **stdio MCP server**: its process owns one agent session and exposes MCP over
-  stdin/stdout. A lease is held by that process's daemon connection until the
-  session explicitly releases it or the MCP transport disconnects, at which
-  point the connection closes and releases the lease. Like the CLI, it relays
-  the daemon's progress pushes for the in-flight `lease_simulator` request —
-  as MCP `notifications/progress` instead of stderr JSON lines, and only when
-  the client supplied a progress token. Unlike the CLI, this process outlives
-  any single daemon connection: `McpSession` does not cache a dead connection.
-  `DaemonConnection#onClose` (`src/daemon-client/protocol.ts`) tells the
-  session the moment its connection dies — from a graceful `daemon stop`, a
-  crash, or `kill -9` — and the next tool call reconnects lazily, auto-starting
-  the daemon exactly as the CLI does. A held lease never survives its
-  connection dying (the daemon releases it on graceful close, and
-  `StartupConverger` sweeps any orphaned lease from an ungraceful death at its
-  own startup — see "Lease subsystem boundaries and wiring" above), so the
-  session never asks the daemon whether its old lease survived; it clears
-  `#ownedLease` and fires `onLeaseLost` (reason
-  `daemon-connection-lost`) so the agent hears the fact instead of silently
-  reacquiring a device. A dead connection surfaces as typed
-  `DAEMON_CONNECTION_LOST` (mid-request) or `DAEMON_UNAVAILABLE` (a failed
-  reconnect), not the opaque `INTERNAL`; only idempotent, read-only requests
-  (`catalog.get`) retry once, never `lease.request`.
+  stdin/stdout. `McpSession` (`src/mcp/session.ts`) holds one `simlock/client`
+  connection at a time and does nothing today's typed client does not already
+  do (ADR §11: MCP keeps only "connection lifecycle ... and its MCP-only
+  relays"): tool calls are serialized onto it, `lease_status` is one
+  `lease.list` call rather than a session-local cache, and a release the
+  session does not own surfaces the daemon's own `FORBIDDEN` rather than a
+  client-side guard pre-empting it. A lease is held by that connection until
+  the session explicitly releases it or the connection dies. Like the CLI, it
+  relays the daemon's progress pushes for the in-flight `lease_simulator`
+  request — as MCP `notifications/progress` instead of stderr JSON lines, and
+  only when the client supplied a progress token. Unlike the CLI, this
+  process outlives any single daemon connection: the typed client itself
+  never reconnects (ADR §10), so `McpSession` builds a brand new one lazily,
+  on the next tool call, once its current client's `onConnectionLost` fires
+  — auto-starting the daemon exactly as the CLI does
+  (`connectWithAutoLaunch`, `src/mcp/connect.ts`), and never on a version
+  mismatch or a refused handshake, only on "nothing is listening". A held
+  lease never survives its connection dying (the daemon releases it on
+  graceful close, and `StartupConverger` sweeps any orphaned lease from an
+  ungraceful death at its own startup — see "Lease subsystem boundaries and
+  wiring" above): the client already synthesizes `onLeaseLost` (reason
+  `daemon-connection-lost`) for every lease it held the moment its connection
+  dies, so the session relays that straight through rather than asking the
+  daemon whether its old lease survived.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
+
+## Contract, dispatcher, and roles (ADR 0003)
+
+Every daemon operation is declared exactly once, in `src/contract/`: a name
+(`lease.request`, `daemon.stop`, ...), a role, a zod input schema, a zod
+output schema, and an optional `authorize` hook. Public TypeScript types are
+inferred from those schemas, never hand-written a second time. The contract
+module imports nothing from `core`, `daemon`, or `drivers` (enforced by
+`src/contract/boundary.test.ts`) — core's own domain records
+(`DeviceRecord`, `LeaseRecord`, `LeaseGrant`) stay private, and the daemon
+maps them onto the contract's shapes in exactly one place
+(`src/daemon/dispatcher.ts`'s handlers). If a core type's shape changes
+without a matching edit in `src/contract/schemas.ts`, that surfaces as a
+compile error or, for a structurally-compatible-but-different shape, a
+runtime output-validation failure at the dispatcher boundary — never silent
+drift onto the wire.
+
+**One dispatcher (`src/daemon/dispatcher.ts`) serves every transport.**
+`Dispatcher#dispatch(operation, input, session)` runs, in order: parse the
+input against the operation's schema, reject a session whose role is below
+the operation's with `FORBIDDEN`, run the `authorize` hook if the operation
+declares one, park on startup readiness (every operation but `status.get`),
+call the handler, parse the output. Handlers never see a raw payload or run
+a role check themselves. The unix socket server (`DaemonServer`) is framing
+plus connection/session lifecycle around this one dispatcher instance; the
+HTTP gateway (`src/http/app.ts`) calls the **exact same dispatcher
+in-process** — `DaemonServer` exposes it as the one privileged seam an
+auxiliary frontend gets — via a bearer-token-to-`DispatchSession` adapter
+(`src/http/dispatcher-session.ts`). **HTTP never routes through the unix
+socket, or through a second `Dispatcher` instance built with
+equivalent-looking options; it is the same object, called directly.** Parity
+between the socket and HTTP frontends is a consequence of that sharing, not
+of a shared wire format — and every socket-side fix (the download policy in
+`config.downloads.policy`, startup-readiness parking, error mapping)
+applies to HTTP automatically because there is only one code path to fix.
+
+**Two roles**, `agent` and `admin`, declared in `src/contract/roles.ts`.
+Read-only and lease-lifecycle operations are `agent`; anything that reads or
+mutates state outside the caller's own leases (`list.get`, `cleanup.run`,
+`nuke.run`, `config.get`, `daemon.stop`, `events.*`, `token.*`) is `admin`.
+`doctor.run` is the one operation whose role is a function of its input
+rather than a fixed value: `fix: false` is agent-visible (read-only, but it
+shells out per device); `fix: true` is admin-only.
+
+**Principal, requester, and owner are three different things** (ADR §4):
+
+- The **principal** is the session identity declared once at `hello` and
+  fixed for the connection's lifetime — for HTTP, the bearer token's
+  requester id.
+- The **requester id** is per-request attribution. `lease.request` accepts
+  an optional `requesterId`, defaulting to the principal; core's
+  one-lease-per-requester rule stays keyed on it. This is what lets one
+  connection (a host process proxying several agents) hold many leases, one
+  per requester id, without the socket needing per-agent identity.
+- The **owner id** is a field persisted on the lease record, set from the
+  session principal at grant time. `lease.renew`/`lease.release`/`lease.list`
+  compare `ownerId` to the calling principal (`ownsLease` in
+  `src/contract/roles.ts`); `admin` bypasses. A record written before this
+  field existed loads with `ownerId` defaulted to `requesterId`.
+
+### Security model: cooperative identity, not a hostile-process boundary
+
+**Socket identity is cooperative, and the docs say so plainly because the
+code doesn't hide it either.** Every peer connecting to the unix socket is
+the same OS user — file permissions on the socket and on `~/.simlock/*`
+already establish that as the real trust boundary. Ownership checks
+(`ownsLease`, the principal/requester/owner split above) protect against
+*accidents* — releasing a guessed lease id, one agent's request colliding
+with another's — not against a hostile local process, which could always
+just open the socket itself and claim to be anyone. Real per-connection
+identity (a token on every socket connection, not just HTTP's) was
+considered and rejected for exactly this reason: it would kill the
+zero-setup local experience for the one trust boundary that already exists,
+without adding real protection against the thing socket identity cannot
+stop anyway (see the ADR's "Alternatives considered").
+
+**Admin authority comes only from a credential presented at `hello`, never
+from the socket itself.** Two credentials are accepted, checked in this
+order:
+
+1. **An operator token**, minted with `simlock token create --role
+   operator` and stored (hashed) in `tokens.json`. Long-lived, revocable —
+   what a supervisor process uses.
+2. **The daemon's per-start admin secret.** Generated fresh on every daemon
+   start; only its hash is kept in memory. The plaintext is written to
+   `admin.token` under the data directory *after* the socket claim succeeds
+   (temp file, then atomic rename — a daemon that loses the start race never
+   touches the real file), with owner-only permissions (`0o600`) set at
+   creation, and removed on graceful stop. `hello` verifies against the
+   in-memory hash, so a credential can be checked before the file has even
+   landed on disk.
+
+A missing or wrong credential fails the handshake with
+`ADMIN_AUTHENTICATION_FAILED` before any other request on that connection
+runs. The credential is never logged, never returned by any operation,
+never read from a config file, and never inferred from the socket path or a
+client-declared role. How a caller supplies it, in resolution order: the
+`credential` connect option (`simlock/admin`'s `connectSimlockAdmin`),
+`--token` (CLI flag), `SIMLOCK_ADMIN_TOKEN` (CLI env var), the local
+`admin.token` file (CLI, briefly retried to ride out a daemon still writing
+it). **The CLI connects as admin whenever the local `admin.token` file is
+readable** — that's what keeps `simlock lease --detach` followed later by
+`simlock release <id>` working across two separate CLI invocations with
+different pid-derived identities, since both connect as admin and admin
+bypasses the per-connection ownership check that would otherwise apply.
+When none of the four sources resolves (a different OS user, or the file
+genuinely missing), the CLI falls back to an agent-role session with a
+one-line stderr notice, and `simlock lease`'s output JSON includes the
+connection's resolved `role` so a caller can tell which one it got.
+
+**`doctor.run` without `fix` is agent-visible and read-only, but it still
+shells out per device** (`simctl`/`adb`) to compare registry state against
+driver reality — worth knowing before calling it from a tight loop or a
+context where that per-device process-spawn cost is unwelcome. `fix: true`
+requires the admin role because it can quarantine or destroy devices.
+
+See [CLIENT.md](CLIENT.md) for how `simlock/client`/`simlock/admin` expose
+`credential` and role at connect time, [CLI.md](CLI.md#admin-credential-resolution)
+for the CLI's own walkthrough of the same resolution order, and
+[HTTP-API.md](HTTP-API.md#authentication) for how HTTP's bearer-token roles
+map onto `agent`/`admin`.
 
 ## Core vs. drivers
 
