@@ -37,6 +37,8 @@ import {
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
   PUSH_SCHEMAS,
+  type OperationName,
+  type OPERATIONS,
   type ProtocolRange,
   type Role,
 } from "../contract/index.js";
@@ -48,7 +50,13 @@ import {
   NukeUnavailableError,
   type DispatchSession,
 } from "./dispatcher.js";
-import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
+import {
+  AdminAuthenticationFailedError,
+  resolveAgentRole,
+  type SessionRoleResolver,
+} from "./session.js";
+import type { AdminSecretManager } from "./admin-secret.js";
+import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 
 type RequestId = string | number;
 
@@ -114,6 +122,12 @@ export interface DaemonServerOptions {
    * supplies a real resolver here without changing anything else in this class. */
   readonly resolveRole?: SessionRoleResolver;
   /**
+   * ADR §5's per-start admin secret. Undefined is a legitimate default for tests that don't
+   * exercise the admin handshake at all -- `start()`/`#stop()` simply skip the persist/remove
+   * calls below when it is absent, same style as `doctor`/`nuke`.
+   */
+  readonly adminSecret?: AdminSecretManager;
+  /**
    * Startup recovery work (doctor reconciliation, running-capacity convergence) run
    * *after* the socket is claimed, so reachability never depends on it. `hello` and
    * `status.get` answer immediately; every other request type parks on this promise.
@@ -136,6 +150,17 @@ export interface DaemonServerOptions {
    * no auxiliary frontend is running.
    */
   readonly stopAuxiliary?: () => Promise<void>;
+  /**
+   * ADR 0003 §2's "an HTTP request during startup now waits like a socket request instead of
+   * being refused" needs the HTTP gateway actually listening *before* convergence finishes --
+   * otherwise there is nothing for a request to park against, it just gets connection-refused
+   * the way it always did. Called synchronously right after `#readyPromise` is assigned (so any
+   * request `dispatch()` serves as a result of this callback already parks correctly) and after
+   * the socket claim and the admin-secret write, but *before* awaiting convergence -- an
+   * auxiliary frontend started from here must not itself assume convergence is done. A no-op
+   * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
+   */
+  readonly onSocketClaimed?: () => void;
 }
 
 type DaemonHealth = "starting" | "running" | "failed";
@@ -162,6 +187,7 @@ export class DaemonServer {
   readonly #parkedDispatches = new Set<Promise<void>>();
   readonly #dispatcher: Dispatcher;
   readonly #resolveRole: SessionRoleResolver;
+  readonly #ownerRoutedFacts: OwnerRoutedFactBus;
 
   constructor(private readonly options: DaemonServerOptions) {
     this.#protocolRange =
@@ -170,6 +196,11 @@ export class DaemonServer {
         : normalizeProtocolVersion(options.protocolVersion);
     this.#logger = options.logger ?? new NoopLogger();
     this.#resolveRole = options.resolveRole ?? resolveAgentRole;
+    // ADR §8: the same translation `#notifyLeaseLost`/`#notifyDeviceUnhealthy`/
+    // `#notifyDeviceRecovered` below route from is what the HTTP gateway's `LeaseNoticeBuffer`
+    // consumes too (see `ownerRoutedFacts` getter and `main.ts`) -- one bus subscription
+    // per raw event, not one per consumer.
+    this.#ownerRoutedFacts = new OwnerRoutedFactBus(options.eventBus, options.registry);
     this.#dispatcher = new Dispatcher({
       awaitReady: () => this.#awaitReady(),
       capacity: options.capacity,
@@ -193,9 +224,34 @@ export class DaemonServer {
     return this.options.host.endpoint;
   }
 
-  /** Public read of `#health` for an auxiliary frontend (e.g. the HTTP gateway's `daemonHealth`) that needs it without becoming a privileged internal itself. */
+  /** Public read of `#health`, kept for tests and any future auxiliary frontend that needs it without becoming a privileged internal itself. */
+  // fallow-ignore-next-line unused-class-member -- public surface exercised directly by server.test.ts; `status.get` itself reads `#health` through the dispatcher's own `health()` closure, not this getter.
   get health(): DaemonHealth {
     return this.#health;
+  }
+
+  /**
+   * ADR 0003 §2: "the HTTP app ... calls the same dispatcher in-process. Nothing routes HTTP
+   * through the loopback socket; the parity comes from the shared dispatcher, not from a
+   * shared wire." This is that seam -- the one privileged thing an in-process auxiliary
+   * frontend (today: `createHttpApp`, see `main.ts`) is allowed to reach into `DaemonServer`
+   * for, so that it gets the exact same input parsing, role check, `authorize` hook, and
+   * startup-readiness parking as every socket request, from the exact same `Dispatcher`
+   * instance -- not a second one constructed with equivalent-looking options.
+   */
+  /** Shared with the HTTP gateway (`main.ts`) so its `LeaseNoticeBuffer` consumes the same
+   * owner-routed facts this class's own socket pushes do, instead of subscribing to the raw
+   * event bus a second time -- see `owner-routed-facts.ts`'s module doc. */
+  get ownerRoutedFacts(): OwnerRoutedFacts {
+    return this.#ownerRoutedFacts;
+  }
+
+  dispatch<Op extends OperationName>(
+    operation: Op,
+    input: unknown,
+    session: DispatchSession,
+  ): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
+    return this.#dispatcher.dispatch(operation, input, session);
   }
 
   /**
@@ -209,8 +265,19 @@ export class DaemonServer {
    */
   async start(): Promise<void> {
     await this.options.host.start((connection) => this.#accept(connection));
+    // ADR §5: written only after the socket claim above has succeeded -- a daemon that loses
+    // the start race throws out of `host.start()` and never reaches this line, so it never
+    // touches `admin.token`. Awaited before convergence starts (not raced with it): the file
+    // landing is not itself gated on convergence -- `hello` already verifies the in-memory
+    // hash regardless -- but there is no reason to let two startup-time writes race each other
+    // for no benefit.
+    await this.options.adminSecret?.persist();
     const readyPromise = this.#converge();
     this.#readyPromise = readyPromise;
+    // See `onSocketClaimed`'s doc: fired only after `#readyPromise` is assigned, so a request
+    // the auxiliary frontend starts serving as an immediate result of this call already parks
+    // on it correctly via `#awaitReady()`.
+    this.options.onSocketClaimed?.();
     try {
       await readyPromise;
     } catch (error: unknown) {
@@ -251,32 +318,19 @@ export class DaemonServer {
     // `DaemonServer` startup wiring), so neither can fire during this window either
     // -- the same "nothing emitted during convergence needs a push" argument holds.
     this.#unsubscribeLeaseLost.push(
-      this.options.eventBus.subscribe("lease.expired", (envelope) =>
-        this.#notifyLeaseLost(
-          envelope.payload.leaseId,
-          envelope.payload.deviceId,
-          "expired",
-          envelope.payload.ownerId,
-        ),
-      ),
-      this.options.eventBus.subscribe("lease.released", (envelope) =>
-        this.#notifyLeaseLost(
-          envelope.payload.leaseId,
-          envelope.payload.deviceId,
-          envelope.payload.reason,
-          envelope.payload.ownerId,
-        ),
-      ),
-      this.options.eventBus.subscribe("device.crash-detected", (envelope) =>
-        this.#notifyDeviceUnhealthy(envelope.payload.leaseId, envelope.payload.deviceId),
-      ),
-      this.options.eventBus.subscribe("device.recovered", (envelope) =>
-        this.#notifyDeviceRecovered(
-          envelope.payload.leaseId,
-          envelope.payload.deviceId,
-          envelope.payload.attempts,
-        ),
-      ),
+      this.#ownerRoutedFacts.subscribe((fact) => {
+        switch (fact.type) {
+          case "lease-lost":
+            this.#notifyLeaseLost(fact.leaseId, fact.deviceId, fact.reason, fact.ownerId);
+            return;
+          case "device-unhealthy":
+            this.#notifyDeviceUnhealthy(fact.leaseId, fact.deviceId, fact.ownerId);
+            return;
+          case "device-recovered":
+            this.#notifyDeviceRecovered(fact.leaseId, fact.deviceId, fact.attempts, fact.ownerId);
+            return;
+        }
+      }),
     );
 
     this.options.eventBus.emit(
@@ -347,6 +401,7 @@ export class DaemonServer {
       this.#heartbeatTimer = undefined;
     }
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
+    this.#ownerRoutedFacts.dispose();
     this.options.reaper.dispose();
     this.options.healthMonitor?.dispose();
     await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
@@ -360,6 +415,11 @@ export class DaemonServer {
       await connection.socket.close();
     }
     await this.options.host.stop();
+    // ADR §5: removed on graceful stop, mirroring the socket file itself (`host.stop()` just
+    // above). A daemon that never persisted it (lost the start race, see `start()`) has no
+    // adminSecret to remove -- `#stop()` on the loser's own `DaemonServer` instance is never
+    // reached, since that instance's `start()` already threw.
+    await this.options.adminSecret?.remove();
     this.#logger.info("Daemon stopped", { reason });
   }
 
@@ -917,20 +977,10 @@ export class DaemonServer {
     });
   }
 
-  /**
-   * `device.crash-detected` / `device.recovered` fire for a lease that is still active (not
-   * released), so unlike `#notifyLeaseLost` its owner can be read straight from the live
-   * registry rather than needing to travel on the event payload.
-   */
-  #leaseOwner(leaseId: string): string | undefined {
-    return this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId;
-  }
-
-  /** Reacts to the post-commit `device.crash-detected` fact; observer-only, nothing awaits
-   * this. Routed to every live connection owning the lease (ADR §8), same as lease-lost. */
-  #notifyDeviceUnhealthy(leaseId: string, deviceId: string): void {
-    const ownerId = this.#leaseOwner(leaseId);
-    if (ownerId === undefined) return;
+  /** Reacts to the post-commit `device.crash-detected` fact (already translated, with
+   * `ownerId`, by `#ownerRoutedFacts`); observer-only, nothing awaits this. Routed to every
+   * live connection owning the lease (ADR §8), same as lease-lost. */
+  #notifyDeviceUnhealthy(leaseId: string, deviceId: string, ownerId: string): void {
     for (const connection of this.#connections) {
       if (connection.principal !== ownerId) continue;
       void this.#pushDeviceUnhealthy(connection.socket, { deviceId, leaseId, reason: "crashed" });
@@ -951,11 +1001,15 @@ export class DaemonServer {
     });
   }
 
-  /** Reacts to the post-commit `device.recovered` fact; observer-only, nothing awaits this.
-   * Routed to every live connection owning the lease (ADR §8), same as lease-lost. */
-  #notifyDeviceRecovered(leaseId: string, deviceId: string, attempts: number): void {
-    const ownerId = this.#leaseOwner(leaseId);
-    if (ownerId === undefined) return;
+  /** Reacts to the post-commit `device.recovered` fact (already translated, with `ownerId`,
+   * by `#ownerRoutedFacts`); observer-only, nothing awaits this. Routed to every live
+   * connection owning the lease (ADR §8), same as lease-lost. */
+  #notifyDeviceRecovered(
+    leaseId: string,
+    deviceId: string,
+    attempts: number,
+    ownerId: string,
+  ): void {
     for (const connection of this.#connections) {
       if (connection.principal !== ownerId) continue;
       void this.#pushDeviceRecovered(connection.socket, { attempts, deviceId, leaseId });
@@ -1085,6 +1139,9 @@ function errorCode(error: unknown): string {
   // same one so `dispatcher.ts` does not need to import a `DaemonServer`-private type.
   if (error instanceof DispatchError) {
     return error.code;
+  }
+  if (error instanceof AdminAuthenticationFailedError) {
+    return "ADMIN_AUTHENTICATION_FAILED";
   }
   if (error instanceof NoCapacityError) {
     return "NO_CAPACITY";
