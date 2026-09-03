@@ -64,13 +64,15 @@ export const leaseModeSchema = z.enum(["held", "detached"]);
 
 /**
  * Mirrors `LeaseRecord` (src/core/domain.ts) plus the `status`/`list` decoration's derived
- * `lastHeartbeatAt` (see `DaemonServer#decorateLease`). Deliberately does NOT include
- * `ownerId` -- that field, and the ownership semantics behind it, are PR 2's job (ADR §4).
+ * `lastHeartbeatAt` (see `DaemonServer#decorateLease`). Includes `ownerId` (ADR §4): the
+ * session principal that requested the lease, distinct from `requesterId` (attribution,
+ * defaults to the principal but may differ per request on the same connection).
  */
 export const leaseRecordSchema = z.object({
   id: z.string(),
   deviceId: z.string(),
   requesterId: z.string(),
+  ownerId: z.string(),
   mode: leaseModeSchema,
   grantedAt: z.number(),
   ttlDeadline: z.number(),
