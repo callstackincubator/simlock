@@ -65,6 +65,50 @@ export const deviceRecordSchema = z.object({
 });
 
 /**
+ * The device shape `status.get` returns (ADR §3: `status.get` is `role: "agent"`, with no
+ * ownership check -- it reports on every device in the registry, not just ones the caller
+ * leases). Deliberately narrower than `deviceRecordSchema`, for the same reason
+ * `grantedDeviceSchema` is narrower than it: an agent is not an operator inspecting the
+ * registry, and `deviceRecordSchema`'s `driverData` is an opaque, driver-defined blob whose
+ * contents this contract cannot bound -- handing it to every agent for every device
+ * (including devices other principals hold) is exactly the leak this schema exists to close.
+ *
+ * What stays, and why: `status.get` is what `simlock status` renders for a human (ADR §11,
+ * "Human-readable status ... formatting stays"), and that rendering legitimately surfaces
+ * device health, not just identity --
+ *
+ * - `id`, `spec`: which device this is.
+ * - `state`: the human-status line's primary content (`Device <id>: <state>`).
+ * - `foreignStateDetectedAt`, `foreignProvenanceDetectedAt`: surfaced as "foreign state/
+ *   provenance change" markers -- an agent legitimately wants to know a device it might be
+ *   about to request was tampered with outside simlock.
+ * - `quarantineAttempts`, `quarantineNextRetryAt`: surfaced as purge-retry progress for a
+ *   quarantined device, so a caller waiting on capacity can see why a slot isn't freeing up.
+ * - `transitionAgeMs`: the mid-transition decoration, surfaced as "mid-transition <ms>".
+ *
+ * What stays off, and why: `driverDeviceId` (the driver address of a device the caller does
+ * not hold is not actionable -- a non-owning agent cannot drive it, and a holder already gets
+ * it on their grant), `driverData` (opaque driver-private blob, unbounded contents),
+ * `createdAt`/`lastLeaseEndedAt` (internal bookkeeping timestamps the human formatter never
+ * reads), `recoveringSince`/`recoveryAttempts` (crash-recovery bookkeeping -- `safety.md` rule
+ * 2 scopes that privilege narrowly, and broadcasting its progress to every agent is not part of
+ * that scope), `quarantinedAt` (superseded by `quarantineAttempts`/`quarantineNextRetryAt` for
+ * what a caller needs), and `address`/`featureProfile` (only meaningful to whoever is driving
+ * the device, i.e. the lease holder, who gets them on the grant).
+ */
+export const statusDeviceSchema = z.object({
+  id: z.string(),
+  spec: deviceSpecSchema,
+  state: deviceStateSchema,
+  foreignStateDetectedAt: z.number().optional(),
+  foreignProvenanceDetectedAt: z.number().optional(),
+  quarantineAttempts: z.number().optional(),
+  quarantineNextRetryAt: z.number().optional(),
+  /** Decoration added by `status.get`; absent for a device not mid-transition. */
+  transitionAgeMs: z.number().optional(),
+});
+
+/**
  * The device a `lease.request`/`lease.renew` grant carries -- deliberately narrower than
  * `deviceRecordSchema` (ADR 0003 §1: "the daemon maps [core records] onto contract types in
  * exactly one place"). A grant is agent-facing, not an admin inspection of the registry, so it
@@ -77,9 +121,10 @@ export const deviceRecordSchema = z.object({
  * Everything else on `DeviceRecord` -- `driverData` (opaque driver-private blob), `state`,
  * `createdAt`, every `quarantine*`/`foreign*`/`recovering*` field, and the `status`/`list`
  * decoration's `transitionAgeMs` -- is internal reclamation/health bookkeeping a grant recipient
- * has no business seeing, and stays off this shape. `list.get`/`status.get` (admin-only) still
- * return the full `deviceRecordSchema` -- an operator inspecting the registry legitimately wants
- * the whole record.
+ * has no business seeing, and stays off this shape. `list.get` (admin-only) still returns the
+ * full `deviceRecordSchema` -- an operator inspecting the registry legitimately wants the whole
+ * record. `status.get` (agent-role, ADR §3) is narrower still -- see `statusDeviceSchema` below,
+ * which is what it actually returns.
  */
 export const grantedDeviceSchema = z.object({
   id: z.string(),

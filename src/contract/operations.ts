@@ -25,6 +25,7 @@ import {
   platformSchema,
   proposalSchema,
   statusCapacitySchema,
+  statusDeviceSchema,
   tokenRecordSchema,
   tokenRoleSchema,
 } from "./schemas.js";
@@ -72,7 +73,11 @@ export const statusGet = defineOperation({
   role: "agent",
   input: z.object({}),
   output: z.object({
-    devices: z.array(deviceRecordSchema),
+    // Agent-role, no ownership check (ADR §3) -- every device in the registry, not just ones
+    // the caller leases. `statusDeviceSchema`, not `deviceRecordSchema`, is what keeps
+    // `driverData` and reclamation/recovery bookkeeping off this response; see its doc comment
+    // in schemas.ts. `list.get` (admin-only) is the operation that returns the full record.
+    devices: z.array(statusDeviceSchema),
     leases: z.array(leaseRecordSchema),
     capacity: statusCapacitySchema,
     health: daemonHealthSchema,
