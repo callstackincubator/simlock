@@ -1,15 +1,7 @@
 import type { Context } from "hono";
 
-import {
-  NoCapacityError,
-  NoDriverError,
-  QueueTimeoutError,
-  RequestCancelledError,
-  RequesterAlreadyLeasedError,
-  RuntimeMissingError,
-  UnknownLeaseError,
-  UnknownModelError,
-} from "../core/index.js";
+import { RequestCancelledError, RequesterAlreadyLeasedError } from "../core/index.js";
+import { classifyError } from "../daemon/error-code.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 
@@ -70,12 +62,32 @@ export interface MappedError {
   readonly extra?: Record<string, unknown>;
 }
 
+/** Looks a code up in `ERROR_TABLE`, defensively -- every code `classifyError` returns is a
+ * real key by construction, except `DispatchError`'s (a runtime-supplied string, trusted but
+ * not verified -- see `dispatcher.ts`); this is the one guard against that ever indexing to
+ * `undefined` and throwing instead of degrading to `INTERNAL`. */
+function tableEntry(code: SimlockErrorCode): (typeof ERROR_TABLE)[SimlockErrorCode] {
+  return (
+    (ERROR_TABLE as Record<string, (typeof ERROR_TABLE)[SimlockErrorCode]>)[code] ??
+    ERROR_TABLE.INTERNAL
+  );
+}
+
 /**
  * Maps a thrown error to the response shape the issue's error table specifies. Never echoes
  * a stack trace; an error this function doesn't recognize collapses to 500 `INTERNAL` with a
  * generic message rather than leaking implementation detail into the response body.
+ *
+ * ADR 0003 §7: "CLI exit codes and HTTP status codes are columns of the same error table, not
+ * second mappings." `classifyError` (shared with the socket transport's `errorCode` in
+ * `daemon/server.ts`) is the one place that turns a thrown error into a `SimlockErrorCode`; this
+ * function's own job is only to read `ERROR_TABLE`'s `httpStatus` column for whatever code comes
+ * back -- never a second, HTTP-only guess. Review finding B5: before `classifyError` existed,
+ * this function had its own hand-written `instanceof` chain for the core domain errors, and it
+ * silently drifted from the socket transport's -- `InsufficientDiskSpaceError`,
+ * `LicenseNotAcceptedError`, a startup-convergence failure, and doctor/nuke unavailability all
+ * fell through to `INTERNAL` here while the socket reported the real code.
  */
-// fallow-ignore-next-line complexity -- one exhaustive table beats scattering this mapping across routes.
 export function mapError(error: unknown): MappedError {
   if (error instanceof HttpApiError) {
     return {
@@ -85,59 +97,26 @@ export function mapError(error: unknown): MappedError {
       ...(error.extra === undefined ? {} : { extra: error.extra }),
     };
   }
-  // ADR 0003 §7: "CLI exit codes and HTTP status codes are columns of the same error table, not
-  // second mappings". `DispatchError` is the shared dispatcher's own protocol-shaped rejection
-  // (bad input, role/`authorize` failure, unknown operation, a rejected credential) -- every
-  // code it can carry is declared in the contract's closed `ERROR_TABLE`, so its HTTP status
-  // comes from that table's `httpStatus` column rather than a second HTTP-only guess. Falls
-  // back to 500 `INTERNAL` only for a code this table somehow doesn't recognize, which would
-  // itself be a contract bug (every `DispatchError` code is a `SimlockErrorCode` by construction
-  // -- see `dispatcher.ts`).
-  if (error instanceof DispatchError) {
-    const entry = (ERROR_TABLE as Record<string, (typeof ERROR_TABLE)[SimlockErrorCode]>)[
-      error.code
-    ];
-    return {
-      status: (entry?.httpStatus ?? 500) as HttpStatus,
-      code: error.code,
-      message: error.message,
-    };
-  }
-  if (error instanceof RequesterAlreadyLeasedError) {
-    return {
-      status: 409,
-      code: "REQUESTER_ALREADY_LEASED",
-      message: error.message,
-      ...(error.existingLeaseId === undefined
-        ? {}
-        : { extra: { existingLeaseId: error.existingLeaseId } }),
-    };
-  }
-  if (error instanceof NoCapacityError) {
-    return { status: 503, code: "NO_CAPACITY", message: error.message };
-  }
-  if (error instanceof UnknownModelError) {
-    return { status: 422, code: "UNKNOWN_MODEL", message: error.message };
-  }
-  if (error instanceof RuntimeMissingError) {
-    return { status: 422, code: "RUNTIME_MISSING", message: error.message };
-  }
-  if (error instanceof NoDriverError) {
-    return { status: 422, code: "NO_DRIVER", message: error.message };
-  }
-  if (error instanceof UnknownLeaseError) {
-    return { status: 404, code: "UNKNOWN_LEASE", message: error.message };
-  }
-  // Neither of these is expected to reach a route handler as a live rejection -- the tracker
-  // consumes both internally and turns them into a terminal request state -- but map them
-  // rather than falling through to INTERNAL if that invariant is ever wrong.
-  if (error instanceof QueueTimeoutError) {
-    return { status: 500, code: "QUEUE_TIMEOUT", message: error.message };
-  }
+  // Never sent over the wire (see `wait-queue.ts`) and has no `ERROR_TABLE` row of its own --
+  // the tracker consumes it internally and turns it into a terminal request state, so this is
+  // purely defensive: map it rather than falling through to a generic `INTERNAL` if that
+  // invariant is ever wrong.
   if (error instanceof RequestCancelledError) {
     return { status: 500, code: "REQUEST_CANCELLED", message: error.message };
   }
-  return { status: 500, code: "INTERNAL", message: "Internal error" };
+  const code = classifyError(error) ?? "INTERNAL";
+  const recognized = code !== "INTERNAL" || error instanceof DispatchError;
+  const entry = tableEntry(code);
+  const extra =
+    error instanceof RequesterAlreadyLeasedError && error.existingLeaseId !== undefined
+      ? { existingLeaseId: error.existingLeaseId }
+      : undefined;
+  return {
+    status: entry.httpStatus as HttpStatus,
+    code: entry.code,
+    message: recognized && error instanceof Error ? error.message : "Internal error",
+    ...(extra === undefined ? {} : { extra }),
+  };
 }
 
 /** Writes `mapError`'s result as the standard `{"error":{...}}` body, plus `Retry-After` for NO_CAPACITY. */
