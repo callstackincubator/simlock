@@ -102,8 +102,12 @@ describe("MCP session semantics", () => {
       expect(statusAfter.structuredContent).toEqual({ held: false });
 
       // The daemon's own ownership rule now answers, not a client-side pre-check (ADR
-      // 0003 §11): a stale release for a lease this session no longer owns/holds is
-      // FORBIDDEN, exactly the same as it would be for a lease this session never held.
+      // 0003 §11) -- but `ownsLease` (src/contract/roles.ts) treats an id its registry
+      // lookup does not recognize as authorized on purpose, precisely so the handler's own
+      // "unknown resource" error surfaces instead of a misleading FORBIDDEN. A force-release
+      // fully removes the lease from the registry (`LeaseCommands#releaseAll`), so a stale
+      // release for it is UNKNOWN_LEASE, not FORBIDDEN -- FORBIDDEN is reserved for a lease
+      // that still exists but is owned by someone else.
       const staleRelease = await mcp.client.callTool({
         name: "release_simulator",
         arguments: { leaseId: leased.lease.id },
@@ -112,7 +116,7 @@ describe("MCP session semantics", () => {
       const errorPayload = JSON.parse(
         (staleRelease.content as { text: string }[])[0]?.text ?? "{}",
       ) as McpErrorPayload;
-      expect(errorPayload.code).toBe("FORBIDDEN");
+      expect(errorPayload.code).toBe("UNKNOWN_LEASE");
 
       // Still usable: a clean tool error must not have wedged the session/transport.
       const devices = await mcp.client.callTool({ name: "list_devices", arguments: {} });
