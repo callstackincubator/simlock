@@ -83,6 +83,12 @@ export function toMcpErrorResult(error: unknown): McpErrorResult {
  * `lease_status` is one `lease.list` call, not a cache read (ADR §9); releasing a lease this
  * session does not own surfaces the daemon's own `FORBIDDEN` rather than a client-side guard
  * pre-empting it (ADR §11).
+ *
+ * `#heldLeaseId` is the one piece of state this class keeps between calls, and it is not a
+ * cache of lease *state* (§11's point): it is only the id of the lease this session's own
+ * `lease()` last obtained, kept so `status()` can tell that lease apart from any other lease
+ * `lease.list` happens to return under the same owner principal -- see `status()`'s doc
+ * comment for why that distinction is load-bearing.
  */
 export class McpSession {
   readonly #connect: () => Promise<SimlockClient>;
@@ -97,6 +103,10 @@ export class McpSession {
   /** Serializes every mutating (and `listDevices`/`status`, for simplicity) tool call on this
    * session so concurrent `lease_simulator`/`release_simulator` calls never interleave. */
   #mutations: Promise<void> = Promise.resolve();
+  /** The id of the lease this session's own `lease()` call last obtained, or `undefined` if
+   * none is outstanding. See the class doc comment and `status()` for why `lease.list` alone
+   * cannot answer `lease_status` correctly. */
+  #heldLeaseId: string | undefined;
 
   constructor(options: McpSessionOptions) {
     this.#connect = options.connect;
@@ -111,10 +121,12 @@ export class McpSession {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
       const request: LeaseRequestInput = { ...input, mode: "held" };
-      return client.requestLease(request, {
+      const grant = await client.requestLease(request, {
         ...(onProgress === undefined ? {} : { onProgress }),
         ...(signal === undefined ? {} : { signal }),
       });
+      this.#heldLeaseId = grant.lease.id;
+      return grant;
     });
   }
 
@@ -123,6 +135,7 @@ export class McpSession {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
       const result = await client.releaseLease(input);
+      if (result.leaseId === this.#heldLeaseId) this.#heldLeaseId = undefined;
       return { ...result, released: true };
     });
   }
@@ -137,15 +150,24 @@ export class McpSession {
 
   /**
    * This session's current lease, or an explicit "no lease held" result -- one `lease.list`
-   * call (ADR §9), never a local cache. This session only ever requests `mode: "held"` leases
-   * under one requester id (its fixed principal), so `leases` holds at most one entry.
+   * call (ADR §9), never a cache of lease state. `lease.list` filters by **owner principal
+   * only** (no mode filter, no connection filter -- see `src/daemon/dispatcher.ts`'s
+   * `lease.list` handler), so it can return leases this connection never requested: a
+   * `detached` lease the CLI holds under the same `SIMLOCK_AGENT_ID` principal, or a stale
+   * `held` lease left over from an earlier session under that principal. Taking `leases[0]`
+   * unconditionally would report a lease this session neither holds nor will release on close.
+   * Filtering to `mode === "held"` **and** `id === #heldLeaseId` scopes the answer to the one
+   * lease this session's own `lease()` call actually obtained; `leases` itself is always
+   * re-fetched, never cached.
    */
   status(): Promise<LeaseStatusOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
       const { leases } = await client.listLeases();
-      const lease = leases[0];
+      const lease = leases.find((candidate) => {
+        return candidate.mode === "held" && candidate.id === this.#heldLeaseId;
+      });
       return lease === undefined ? { held: false } : { ...lease, held: true };
     });
   }
@@ -225,6 +247,7 @@ export class McpSession {
   #wireClient(client: SimlockClient): void {
     this.#clientUnsubscribers = [
       client.onLeaseLost((push) => {
+        if (push.leaseId === this.#heldLeaseId) this.#heldLeaseId = undefined;
         for (const listener of this.#leaseLostListeners) listener(push);
       }),
       client.onDeviceUnhealthy((push) => {
