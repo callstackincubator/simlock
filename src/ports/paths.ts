@@ -18,3 +18,44 @@ export function resolveSimlockHome(env: NodeJS.ProcessEnv = process.env): string
   const configured = env.SIMLOCK_HOME;
   return configured === undefined ? join(homedir(), ".simlock") : resolve(configured);
 }
+
+/**
+ * The longest AF_UNIX socket path the kernel accepts, in bytes, excluding the trailing
+ * NUL: `sun_path` is 104 bytes on macOS and the BSDs and 108 on Linux. Windows named
+ * pipes have no such limit.
+ */
+function maxSocketPathLength(platform: NodeJS.Platform = process.platform): number {
+  if (platform === "win32") return Number.POSITIVE_INFINITY;
+  return (platform === "linux" ? 108 : 104) - 1;
+}
+
+/** A `SIMLOCK_HOME` so deep that no socket can be bound or connected under it. */
+export class SocketPathTooLongError extends Error {
+  constructor(
+    readonly path: string,
+    readonly maxLength: number,
+  ) {
+    super(
+      `Daemon socket path is ${Buffer.byteLength(path)} bytes, but this platform allows at most ${maxLength}: ${path}. ` +
+        `Point SIMLOCK_HOME at a shorter directory.`,
+    );
+    this.name = "SocketPathTooLongError";
+  }
+}
+
+/**
+ * Where the daemon listens under a data directory. Checked here, once, for every process
+ * that derives it: a path past the kernel's limit otherwise fails on connect as a bare
+ * `EINVAL`, which says nothing about `SIMLOCK_HOME` being the cause.
+ */
+export function resolveDaemonSocketPath(
+  dataDirectory: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const socketPath = join(dataDirectory, "daemon.sock");
+  const maxLength = maxSocketPathLength(platform);
+  if (Buffer.byteLength(socketPath) > maxLength) {
+    throw new SocketPathTooLongError(socketPath, maxLength);
+  }
+  return socketPath;
+}

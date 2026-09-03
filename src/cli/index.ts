@@ -7,7 +7,9 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NodeParentWatch,
+  resolveDaemonSocketPath,
   resolveSimlockHome,
+  SocketPathTooLongError,
   SystemClock,
   type Filesystem,
   type ParentWatch,
@@ -145,7 +147,7 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
   const filesystem = new NodeFilesystem();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
-  const socketPath = join(dataDirectory, "daemon.sock");
+  const socketPath = resolveDaemonSocketPath(dataDirectory);
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   return {
@@ -258,7 +260,7 @@ function writeError(environment: CliEnvironment, error: unknown): void {
 }
 
 function cliErrorCode(error: unknown): string {
-  if (error instanceof UsageError) return "USAGE";
+  if (error instanceof UsageError || error instanceof SocketPathTooLongError) return "USAGE";
   if (error instanceof DaemonClientError) return error.code;
   return "INTERNAL";
 }

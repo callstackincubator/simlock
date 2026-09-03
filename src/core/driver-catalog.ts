@@ -36,6 +36,12 @@ export class DriverCatalog {
     return driver;
   }
 
+  /** Whether a driver started for this platform; false for one discovery refused. */
+  // fallow-ignore-next-line unused-class-member -- reached through StartupDriverAvailability by StartupConverger.
+  has(platform: Platform): boolean {
+    return this.#drivers.has(platform);
+  }
+
   /**
    * Routes `simlock <tool> <args>` to whichever driver claims that tool name. Routing is
    * all this does: which flag scopes the tool, which verbs it refuses, and what its

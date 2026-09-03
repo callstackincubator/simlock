@@ -939,6 +939,18 @@ describe("LeaseEngine", () => {
     ).resolves.toMatchObject({ lease: { requesterId: "agent-1" } });
   });
 
+  it("cancels a detached lease's expiry timer on dispose, so a stopped daemon can exit", async () => {
+    const harness = await createHarness({ lease: { detachedTtlMs: 15 * 60_000 } });
+    await harness.engine.request(request, { mode: "detached", requesterId: "agent-1" });
+    expect(harness.clock.pendingTimerCount).toBe(1);
+
+    harness.engine.dispose();
+
+    expect(harness.clock.pendingTimerCount).toBe(0);
+    // The lease itself is untouched: a restart restores its timer from the registry.
+    expect(harness.registry.snapshot.leases).toHaveLength(1);
+  });
+
   it("retries after a provision failure without leaking capacity", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });

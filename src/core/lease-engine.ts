@@ -194,6 +194,7 @@ export class LeaseEngine {
       claims: this.#claims,
       cleanup: this.cleanup,
       decisions: this.#decisions,
+      drivers: this.#drivers,
       interruptedReclaimRecovery: {
         recoverInterruptedReclaim: async (device) => {
           await this.#warmPool.recoverInterrupted(device.id);
@@ -262,9 +263,14 @@ export class LeaseEngine {
     await this.#releaseCoordinator.settleBackgroundReclaims();
   }
 
-  /** Cancels the quarantine coordinator's armed retry timers on daemon shutdown. */
+  /**
+   * Cancels every timer the engine armed on daemon shutdown: quarantine retries and lease
+   * TTL expiries. A detached lease's expiry timer is otherwise still pending after
+   * "Daemon stopped", holding the process open until the TTL runs out.
+   */
   dispose(): void {
     this.#quarantine.dispose();
+    this.#expiry.dispose();
   }
 
   /** Read-only device catalog; a platform without a registered driver is omitted. */

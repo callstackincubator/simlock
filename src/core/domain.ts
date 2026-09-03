@@ -107,6 +107,14 @@ export function transition(
     throw new IllegalTransition(record.state, to);
   }
 
+  if (to === "shutdown" || to === "quarantined") {
+    // Nothing is running at the old address once the device stops: Android hands the
+    // console port to the next boot, so keeping it would let `list --devices` show two
+    // records claiming one port. The next `makeReady` supplies a fresh one.
+    const { address: _stale, ...stopped } = record;
+    return { ...stopped, ...update, state: to };
+  }
+
   return { ...record, ...update, state: to };
 }
 
