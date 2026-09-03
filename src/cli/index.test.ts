@@ -28,6 +28,8 @@ import { createCredentialRoleResolver } from "../daemon/session.js";
 import { SimlockError, type AnySimlockError } from "../contract/index.js";
 import type {
   CatalogGetOutput,
+  DeviceRecoveredPush,
+  DeviceUnhealthyPush,
   DoctorReport,
   LeaseGrant,
   LeaseListOutput,
@@ -93,15 +95,21 @@ describe("readLogFile", () => {
  * -- the CLI's own -- keeps: exit-code mapping off `ERROR_TABLE` (not a second map), the
  * admin-credential resolution order and its agent-fallback notice (ADR §5), `daemon status`'s
  * absent-vs-refused distinction (ADR §11), `config set`'s validate-before-write, `--json` shape
- * (no snake_case renderings), and the `--yes`/confirm guards on destructive commands (safety
- * rule 5). Deleted from the pre-ADR suite: every test that only re-walked a daemon operation's
- * request/response shape through the CLI (lease grant field-by-field, doctor findings,
- * cleanup/nuke proposals, catalog/list passthrough, events replay/follow wire format, renew,
- * lease-lost/device-health push parsing, `--bind-pid`/parent-watch termination races) -- that
- * behaviour is the daemon's contract now, covered once at `daemon/dispatcher.test.ts`, and
- * `SimlockClientImpl`'s own suite in `simlock-client/client.test.ts`; re-asserting it a third
- * time through the CLI tested only that this module still calls `client.foo()`, which the
- * TypeScript compiler already guarantees against `SimlockAdminClient`'s interface.
+ * (no snake_case renderings), the `--yes`/confirm guards on destructive commands (safety rule
+ * 5), and (see "CLI: lease pushes and exit codes" / "CLI: mcp command" / "CLI: daemon logs"
+ * below) the CLI's own process-lifecycle and stderr-rendering behaviour that no other suite
+ * exercises: the lost-lease exit code and its non-re-release, the `{push:...}` stderr lines
+ * including the own-lease-id filter, the `--full`/`--no-wait` flag mapping, the `mcp` command's
+ * lazy module load and startup-failure reporting, and `daemon logs` working without a
+ * connection. Deleted from the pre-ADR suite: every test that only re-walked a daemon
+ * operation's request/response shape through the CLI (lease grant field-by-field, doctor
+ * findings, cleanup/nuke proposals, catalog/list passthrough, events replay/follow wire format,
+ * renew) -- that behaviour is the daemon's contract now, covered once at
+ * `daemon/dispatcher.test.ts`, and `SimlockClientImpl`'s own suite in
+ * `simlock-client/client.test.ts`; re-asserting it a third time through the CLI tested only that
+ * this module still calls `client.foo()`, which the TypeScript compiler already guarantees
+ * against `SimlockAdminClient`'s interface. `--bind-pid`/parent-watch termination races are not
+ * covered by any suite in `pnpm run test` -- they survive only in the real-hardware e2e lanes.
  */
 describe("CLI: exit codes", () => {
   it.each([
@@ -710,6 +718,317 @@ describe("CLI: token operations never write tokens.json directly", () => {
     await runCli(["token", "list"], environment);
     await runCli(["token", "revoke", "tok_1"], environment);
     expect(calls).toEqual(["create", "list", "revoke"]);
+  });
+});
+
+describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", () => {
+  it("exits 14 on a lost lease and does not attempt to re-release it", async () => {
+    const output = outputCapture();
+    let leaseLostListener:
+      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
+      | undefined;
+    let released = false;
+    const client = fakeClient({
+      onLeaseLost: (listener) => {
+        leaseLostListener = listener;
+        return () => {};
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    // Let requestLease resolve and runLease reach the `Promise.race` wait point before firing
+    // the push -- otherwise the listener registered by `client.onLeaseLost` may not exist yet.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    leaseLostListener?.({ leaseId: "lse_1", deviceId: "dev_1", reason: "ttl-backstop" });
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(14);
+    // The daemon already released it -- asking again would only raise UNKNOWN_LEASE.
+    expect(released).toBe(false);
+  });
+
+  it("ignores a lease-lost push for a lease this connection does not hold (own-lease-id filter)", async () => {
+    const output = outputCapture();
+    let leaseLostListener:
+      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
+      | undefined;
+    let released = false;
+    const signals = new EventEmitter();
+    const client = fakeClient({
+      onLeaseLost: (listener) => {
+        leaseLostListener = listener;
+        return () => {};
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // A push for another lease this same principal owns (e.g. an earlier `--detach`'d lease) --
+    // must not be treated as this invocation's own lease being lost.
+    leaseLostListener?.({ leaseId: "some-other-lease", deviceId: "dev_2", reason: "ttl-backstop" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    signals.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(0);
+    expect(released).toBe(true);
+    expect(output.stderr).not.toContain("lease-lost");
+  });
+
+  it("writes {push:...} stderr lines for progress, device-unhealthy, and device-recovered as contract values", async () => {
+    const output = outputCapture();
+    let unhealthyListener: ((push: DeviceUnhealthyPush) => void) | undefined;
+    let recoveredListener: ((push: DeviceRecoveredPush) => void) | undefined;
+    const client = fakeClient({
+      onDeviceUnhealthy: (listener) => {
+        unhealthyListener = listener;
+        return () => {};
+      },
+      onDeviceRecovered: (listener) => {
+        recoveredListener = listener;
+        return () => {};
+      },
+      requestLease: (_input, options) => {
+        options?.onProgress?.({ stage: "provisioning", etaMs: 1_500 });
+        unhealthyListener?.({ leaseId: "lse_1", deviceId: "dev_1" });
+        recoveredListener?.({ leaseId: "lse_1", deviceId: "dev_1", attempts: 2 });
+        return Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "detached",
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    const lines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toContainEqual({ push: "progress", stage: "provisioning", etaMs: 1_500 });
+    expect(lines).toContainEqual({
+      push: "device-unhealthy",
+      leaseId: "lse_1",
+      deviceId: "dev_1",
+    });
+    expect(lines).toContainEqual({
+      push: "device-recovered",
+      leaseId: "lse_1",
+      deviceId: "dev_1",
+      attempts: 2,
+    });
+  });
+
+  it("maps --full and --no-wait onto the contract's full/noWait input fields", async () => {
+    const output = outputCapture();
+    let capturedInput: Record<string, unknown> | undefined;
+    const client = fakeClient({
+      requestLease: (input) => {
+        capturedInput = input as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "detached",
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    await runCli(
+      [
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 17 Pro",
+        "--detach",
+        "--full",
+        "--no-wait",
+      ],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    expect(capturedInput?.full).toBe(true);
+    expect(capturedInput?.noWait).toBe(true);
+  });
+
+  it("omits full and reports noWait: false when neither flag is given", async () => {
+    const output = outputCapture();
+    let capturedInput: Record<string, unknown> | undefined;
+    const client = fakeClient({
+      requestLease: (input) => {
+        capturedInput = input as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "detached",
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    expect(capturedInput?.full).toBeUndefined();
+    expect(capturedInput?.noWait).toBe(false);
+  });
+});
+
+describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
+  it("does not load the MCP stdio module unless the mcp command runs", async () => {
+    const output = outputCapture();
+    let loaded = false;
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient(),
+        loadMcpStdio: async () => {
+          loaded = true;
+          return async () => {};
+        },
+      }),
+    );
+    expect(loaded).toBe(false);
+  });
+
+  it("loads and runs the stdio runner when the mcp command is dispatched", async () => {
+    const output = outputCapture();
+    let ran = false;
+    const exitCode = await runCli(
+      ["mcp"],
+      output.environmentWith({
+        loadMcpStdio: async () => async () => {
+          ran = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(ran).toBe(true);
+  });
+
+  it("reports a startup failure as a structured error instead of throwing raw", async () => {
+    const output = outputCapture();
+    const exitCode = await runCli(
+      ["mcp"],
+      output.environmentWith({
+        loadMcpStdio: async () => {
+          throw new Error("cannot bind mcp stdio transport");
+        },
+      }),
+    );
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "INTERNAL", message: "cannot bind mcp stdio transport" },
+    });
+  });
+});
+
+describe("CLI: daemon logs (ADR 0003 §11 -- must work when the daemon is dead)", () => {
+  it("reads the log file without connecting to the daemon at all", async () => {
+    const output = outputCapture();
+    let connected = false;
+    const exitCode = await runCli(
+      ["daemon", "logs"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        connectExistingAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        readLogFile: async () => "line one\nline two\n",
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(output.stdout).toBe("line one\nline two\n");
+  });
+
+  it("--json wraps the log tail under a logs key, still with no connection attempted", async () => {
+    const output = outputCapture();
+    let connected = false;
+    const exitCode = await runCli(
+      ["daemon", "logs", "--json"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        connectExistingAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        readLogFile: async () => "only line\n",
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(JSON.parse(output.stdout)).toEqual({ logs: "only line" });
   });
 });
 
