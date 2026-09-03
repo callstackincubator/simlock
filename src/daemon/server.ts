@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { type EventBus, type EventEnvelope } from "../bus/index.js";
 import {
   type Config,
@@ -30,12 +32,33 @@ import type {
 } from "../core/lease-ports.js";
 import type { Clock, IpcConnection, Logger, TimerHandle } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
+import { parseRequestFrame, serializeFrame, type RequestFrame } from "../daemon-protocol/index.js";
 import {
-  DAEMON_PROTOCOL_VERSION,
-  parseRequestFrame,
-  serializeFrame,
-  type RequestFrame,
-} from "../daemon-protocol/index.js";
+  catalogGet,
+  cleanupRun,
+  configGet,
+  doctorRun,
+  eventsReplay,
+  eventsSubscribe,
+  eventsUnsubscribe,
+  helloRequestSchema,
+  helloReplySchema,
+  leaseCancel,
+  leaseHeartbeat,
+  leaseList,
+  leaseRelease,
+  leaseReleaseAll,
+  leaseRenew,
+  leaseRequest,
+  listGet,
+  negotiateProtocolVersion,
+  normalizeProtocolVersion,
+  nukeRun,
+  PROTOCOL_VERSION_RANGE,
+  PUSH_SCHEMAS,
+  statusGet,
+  type ProtocolRange,
+} from "../contract/index.js";
 import type { ConnectionHost } from "./connection-host.js";
 
 type RequestId = string | number;
@@ -50,6 +73,11 @@ interface Connection {
   heartbeatCapability: boolean;
   closed: boolean;
   unsubscribeEvents: (() => void) | undefined;
+  /** Set while this connection has an active `events.subscribe`; correlates `event` pushes
+   * (ADR 0003 §8). Minted per-subscription from `#eventSubscriptionSeq` rather than injected --
+   * `DaemonServer` has no `IdGenerator` dependency today, and this only needs to be unique per
+   * connection lifetime, not globally unpredictable. */
+  subscriptionId: string | undefined;
   releasing: Promise<void> | undefined;
 }
 
@@ -64,7 +92,9 @@ export interface DaemonServerOptions {
   readonly host: ConnectionHost;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
-  readonly protocolVersion?: number;
+  /** Overrides the daemon's advertised protocol range (ADR 0003 §6); defaults to
+   * `PROTOCOL_VERSION_RANGE`. A bare number is normalized to `{n, n}`, same as a client's. */
+  readonly protocolVersion?: number | ProtocolRange;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor;
@@ -100,11 +130,12 @@ type DaemonHealth = "starting" | "running" | "failed";
 
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
-  readonly #protocolVersion: number;
+  readonly #protocolRange: ProtocolRange;
   readonly #unsubscribeLeaseLost: Array<() => void> = [];
   readonly #logger: Logger;
   #heartbeatTimer: TimerHandle | undefined;
   #heartbeatNonce = 0;
+  #eventSubscriptionSeq = 0;
   #stopping = false;
   #stopPromise: Promise<void> | undefined;
   #health: DaemonHealth = "starting";
@@ -119,7 +150,10 @@ export class DaemonServer {
   readonly #parkedDispatches = new Set<Promise<void>>();
 
   constructor(private readonly options: DaemonServerOptions) {
-    this.#protocolVersion = options.protocolVersion ?? DAEMON_PROTOCOL_VERSION;
+    this.#protocolRange =
+      options.protocolVersion === undefined
+        ? PROTOCOL_VERSION_RANGE
+        : normalizeProtocolVersion(options.protocolVersion);
     this.#logger = options.logger ?? new NoopLogger();
   }
 
@@ -215,7 +249,8 @@ export class DaemonServer {
     );
     this.#logger.info("Daemon started", {
       config: this.options.config,
-      protocolVersion: this.#protocolVersion,
+      protocolVersion: this.#protocolRange.max,
+      protocolRange: this.#protocolRange,
       socketPath: this.options.host.endpoint,
       version: this.options.version,
     });
@@ -306,6 +341,7 @@ export class DaemonServer {
       progressRequesters: new Set(),
       socket,
       releasing: undefined,
+      subscriptionId: undefined,
       unsubscribeEvents: undefined,
     };
     this.#connections.add(connection);
@@ -369,6 +405,20 @@ export class DaemonServer {
       return;
     }
 
+    // `daemon.stop` is a frozen exception (ADR 0003 §6): accepted at any protocol version the
+    // daemon has ever spoken, before `hello`, during a version-mismatch standoff, even while
+    // already `#stopping`. This bypasses the handshake and protocol-version gate entirely --
+    // deliberately, not an oversight -- so that `npm upgrade` against a still-running old
+    // daemon (leases held) can always be stopped without releasing every held lease on the
+    // machine by restarting it instead (see ADR §6's "the client never restarts the daemon on
+    // mismatch"). It is intentionally idempotent: `stop()` itself dedups concurrent callers via
+    // `#stopPromise`, so a second `daemon.stop` here just gets the same success reply again.
+    if (frame.type === "daemon.stop") {
+      await writeFrame(connection.socket, { id: frame.id, ok: true, payload: { stopping: true } });
+      void this.stop("requested");
+      return;
+    }
+
     if (!connection.helloReceived) {
       await this.#handleHello(connection, frame);
       return;
@@ -386,9 +436,6 @@ export class DaemonServer {
     try {
       const payload = await this.#handleRequest(connection, frame);
       await writeFrame(connection.socket, { id: frame.id, ok: true, payload });
-      if (frame.type === "daemon.stop") {
-        void this.stop("requested");
-      }
     } catch (error: unknown) {
       const code = errorCode(error);
       if (code === "INTERNAL") {
@@ -415,40 +462,55 @@ export class DaemonServer {
       await connection.socket.close();
       return;
     }
-    const payload = objectPayload(frame.payload);
-    if (typeof payload.clientVersion !== "string") {
+    const parsedHello = helloRequestSchema.safeParse(frame.payload);
+    if (!parsedHello.success) {
       await this.#respondError(
         connection.socket,
         frame.id,
         "BAD_REQUEST",
-        "hello requires a clientVersion string",
+        parsedHello.error.issues.map((issue) => issue.message).join("; "),
       );
       await connection.socket.close();
       return;
     }
-    if (payload.protocolVersion !== this.#protocolVersion) {
+    const payload = parsedHello.data;
+    // ADR 0003 §6: the daemon prefers the client's `protocolRange` when present, and treats a
+    // bare `protocolVersion` as `{n, n}` only when it is not -- `helloRequestSchema` already
+    // guarantees at least one of the two is present.
+    const clientRange: ProtocolRange =
+      payload.protocolRange ?? normalizeProtocolVersion(payload.protocolVersion as number);
+    const negotiated = negotiateProtocolVersion(clientRange, this.#protocolRange);
+    if (negotiated === undefined) {
       await this.#respondError(
         connection.socket,
         frame.id,
-        "PROTOCOL_VERSION_MISMATCH",
-        `Protocol version ${String(payload.protocolVersion)} is not supported`,
+        "PROTOCOL_VERSION_UNSUPPORTED",
+        `No overlapping protocol version: client supports ${clientRange.min}-${clientRange.max}, daemon supports ${this.#protocolRange.min}-${this.#protocolRange.max}`,
+        { client: clientRange, daemon: this.#protocolRange, daemonVersion: this.options.version },
       );
       await connection.socket.close();
       return;
     }
     connection.helloReceived = true;
-    connection.heartbeatCapability = isObject(payload.capabilities)
-      ? payload.capabilities.heartbeat === true
-      : false;
+    connection.heartbeatCapability = payload.capabilities?.heartbeat === true;
     this.#logger.info("Connection opened", {
       clientVersion: payload.clientVersion,
       heartbeatCapability: connection.heartbeatCapability,
+      protocolVersion: negotiated,
     });
-    await writeFrame(connection.socket, {
-      id: frame.id,
-      ok: true,
-      payload: { protocolVersion: this.#protocolVersion, version: this.options.version },
-    });
+    // `role` is fixed to "agent" until PR 2 resolves it from a real credential (ADR §5); the
+    // reply shape carries the field now so a client can start asserting against it early.
+    const reply = this.#parseOutput(
+      helloReplySchema,
+      {
+        protocolVersion: negotiated,
+        daemonProtocolRange: this.#protocolRange,
+        version: this.options.version,
+        role: "agent",
+      },
+      "hello",
+    );
+    await writeFrame(connection.socket, { id: frame.id, ok: true, payload: reply });
   }
 
   // fallow-ignore-next-line complexity -- command dispatch is intentionally centralized at the protocol boundary.
@@ -458,120 +520,162 @@ export class DaemonServer {
     }
     switch (frame.type) {
       case "lease.request":
-        return this.#requestLease(connection, frame.payload);
+        return this.#requestLease(connection, frame.id, frame.payload);
       case "lease.release": {
-        const leaseId = requiredString(objectPayload(frame.payload), "leaseId");
+        const input = parseInput(leaseRelease.input, frame.payload);
         // Clear before the request commits so a lease-lost push (triggered by the
         // resulting lease.released event) does not also fire back at this same
         // connection for the release it just asked for itself.
-        const wasHeld = connection.heldLeaseIds.delete(leaseId);
+        const wasHeld = connection.heldLeaseIds.delete(input.leaseId);
         try {
-          await this.options.leases.release(leaseId, "explicit");
+          await this.options.leases.release(input.leaseId, "explicit");
         } catch (error: unknown) {
-          if (wasHeld) connection.heldLeaseIds.add(leaseId);
+          if (wasHeld) connection.heldLeaseIds.add(input.leaseId);
           throw error;
         }
-        return { leaseId };
+        return this.#parseOutput(leaseRelease.output, { leaseId: input.leaseId }, "lease.release");
       }
       case "lease.release-all": {
+        parseInput(leaseReleaseAll.input, frame.payload ?? {});
         const previouslyHeld = [...connection.heldLeaseIds];
         connection.heldLeaseIds.clear();
         try {
           const leaseIds = await this.options.leases.releaseAll("explicit");
-          return { leaseIds };
+          return this.#parseOutput(leaseReleaseAll.output, { leaseIds }, "lease.release-all");
         } catch (error: unknown) {
           for (const leaseId of previouslyHeld) connection.heldLeaseIds.add(leaseId);
           throw error;
         }
       }
       case "lease.renew": {
-        const payload = objectPayload(frame.payload);
-        const leaseId = requiredString(payload, "leaseId");
+        const input = parseInput(leaseRenew.input, frame.payload);
         // Omitted ttlMs falls back to the lease's own mode-aware default (core's
         // `#ttlFor`) rather than always assuming detached -- substituting the detached
         // TTL here would silently shorten a held lease's hour-long backstop to 15m.
-        const ttlMs = payload.ttlMs === undefined ? undefined : requiredNumber(payload, "ttlMs");
-        return this.options.leases.renew(leaseId, ttlMs);
+        const record = await this.options.leases.renew(input.leaseId, input.ttlMs);
+        return this.#parseOutput(leaseRenew.output, record, "lease.renew");
+      }
+      case "lease.cancel": {
+        const input = parseInput(leaseCancel.input, frame.payload ?? {});
+        const requesterId = input.requesterId ?? this.options.defaultRequesterId;
+        const result = await this.options.queue.cancelPending(requesterId);
+        return this.#parseOutput(leaseCancel.output, { result }, "lease.cancel");
+      }
+      case "lease.list": {
+        parseInput(leaseList.input, frame.payload ?? {});
+        const leases = this.options.registry.snapshot.leases.map((lease) =>
+          this.#decorateLease(lease),
+        );
+        return this.#parseOutput(leaseList.output, { leases }, "lease.list");
       }
       case "lease.heartbeat": {
+        parseInput(leaseHeartbeat.input, frame.payload ?? {});
         if (!connection.heartbeatCapability) {
           throw new ProtocolError(
             "BAD_REQUEST",
             "Connection did not declare the heartbeat capability",
           );
         }
-        return { leases: await this.#heartbeatHeldLeases(connection) };
+        const leases = await this.#heartbeatHeldLeases(connection);
+        return this.#parseOutput(leaseHeartbeat.output, { leases }, "lease.heartbeat");
       }
-      case "status.get":
-        return this.#status();
-      case "list.get":
-        return this.#list(objectPayload(frame.payload));
+      case "status.get": {
+        parseInput(statusGet.input, frame.payload ?? {});
+        return this.#parseOutput(statusGet.output, this.#status(), "status.get");
+      }
+      case "list.get": {
+        const input = parseInput(listGet.input, frame.payload ?? {});
+        return this.#parseOutput(listGet.output, this.#list(input), "list.get");
+      }
       case "catalog.get": {
-        const payload = objectPayload(frame.payload);
-        return { platforms: await this.options.catalog.listCatalog(optionalPlatform(payload)) };
+        const input = parseInput(catalogGet.input, frame.payload ?? {});
+        const result = { platforms: await this.options.catalog.listCatalog(input.platform) };
+        return this.#parseOutput(catalogGet.output, result, "catalog.get");
       }
       case "cleanup.run": {
-        const payload = objectPayload(frame.payload);
-        return this.options.reaper.run({
-          dryRun: optionalBoolean(payload, "dryRun") ?? false,
-          ...(typeof payload.rule === "string" ? { rule: payload.rule } : {}),
+        const input = parseInput(cleanupRun.input, frame.payload ?? {});
+        const result = await this.options.reaper.run({
+          dryRun: input.dryRun ?? false,
+          ...(input.rule === undefined ? {} : { rule: input.rule }),
         });
+        return this.#parseOutput(cleanupRun.output, result, "cleanup.run");
       }
       case "doctor.run": {
-        const payload = objectPayload(frame.payload);
-        if (this.options.doctor === undefined) throw new Error("Doctor is unavailable");
-        return this.options.doctor.reconcile({ fix: optionalBoolean(payload, "fix") ?? false });
+        const input = parseInput(doctorRun.input, frame.payload ?? {});
+        if (this.options.doctor === undefined) throw new DoctorUnavailableError();
+        const report = await this.options.doctor.reconcile({ fix: input.fix ?? false });
+        return this.#parseOutput(doctorRun.output, report, "doctor.run");
       }
       case "nuke.run": {
-        const payload = objectPayload(frame.payload);
-        if (this.options.nuke === undefined) throw new Error("Nuke is unavailable");
-        return this.options.nuke.run({
-          deleteDevices: optionalBoolean(payload, "deleteDevices") ?? false,
-        });
+        const input = parseInput(nukeRun.input, frame.payload ?? {});
+        if (this.options.nuke === undefined) throw new NukeUnavailableError();
+        const result = await this.options.nuke.run({ deleteDevices: input.deleteDevices ?? false });
+        return this.#parseOutput(nukeRun.output, result, "nuke.run");
       }
       case "events.replay": {
-        const payload = objectPayload(frame.payload);
-        return this.options.eventBus.replay(
-          typeof payload.sinceTs === "number" ? { sinceTs: payload.sinceTs } : {},
+        const input = parseInput(eventsReplay.input, frame.payload ?? {});
+        const result = this.options.eventBus.replay(
+          input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs },
+        );
+        return this.#parseOutput(eventsReplay.output, result, "events.replay");
+      }
+      case "events.subscribe": {
+        parseInput(eventsSubscribe.input, frame.payload ?? {});
+        connection.unsubscribeEvents?.();
+        this.#eventSubscriptionSeq += 1;
+        const subscriptionId = `sub_${this.#eventSubscriptionSeq}`;
+        connection.subscriptionId = subscriptionId;
+        connection.unsubscribeEvents = this.options.eventBus.subscribeAll((event) => {
+          void this.#pushEvent(connection.socket, subscriptionId, event);
+        });
+        return this.#parseOutput(
+          eventsSubscribe.output,
+          { subscribed: true, subscriptionId },
+          "events.subscribe",
         );
       }
-      case "events.subscribe":
-        connection.unsubscribeEvents?.();
-        connection.unsubscribeEvents = this.options.eventBus.subscribeAll((event) => {
-          void this.#pushEvent(connection.socket, event);
-        });
-        return { subscribed: true };
-      case "events.unsubscribe":
+      case "events.unsubscribe": {
+        parseInput(eventsUnsubscribe.input, frame.payload ?? {});
         connection.unsubscribeEvents?.();
         connection.unsubscribeEvents = undefined;
-        return { subscribed: false };
-      case "config.get":
-        return this.options.config;
-      case "daemon.stop":
-        return { stopping: true };
+        connection.subscriptionId = undefined;
+        return this.#parseOutput(
+          eventsUnsubscribe.output,
+          { subscribed: false },
+          "events.unsubscribe",
+        );
+      }
+      case "config.get": {
+        parseInput(configGet.input, frame.payload ?? {});
+        return this.#parseOutput(configGet.output, this.options.config, "config.get");
+      }
+      // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
+      // before hello/dispatch entirely, as the frozen exception ADR §6 describes, so it never
+      // reaches `#handleRequest`.
       default:
         throw new ProtocolError("UNKNOWN_REQUEST", `Unknown request type: ${frame.type}`);
     }
   }
 
   // fallow-ignore-next-line complexity -- lease payload validation and held-connection lifecycle are one transaction.
-  async #requestLease(connection: Connection, value: unknown): Promise<unknown> {
-    const payload = objectPayload(value);
-    const requestPayload = isObject(payload.request) ? payload.request : payload;
-    const osVersion = optionalString(requestPayload, "osVersion", "os");
-    const full = optionalBoolean(requestPayload, "full") ?? false;
+  async #requestLease(
+    connection: Connection,
+    requestId: RequestId,
+    value: unknown,
+  ): Promise<unknown> {
+    const input = parseInput(leaseRequest.input, value ?? {});
     const request: DeviceRequest = {
-      model: requiredString(requestPayload, "model", "device"),
-      platform: requiredPlatform(requestPayload),
-      ...(osVersion === undefined ? {} : { osVersion }),
-      ...(full ? { full: true } : {}),
+      model: input.model,
+      platform: input.platform,
+      ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
+      ...(input.full ? { full: true } : {}),
     };
-    const mode = payload.mode === "detached" ? "detached" : "held";
-    const requesterId = optionalString(payload, "requesterId") ?? this.options.defaultRequesterId;
+    const mode = input.mode ?? "held";
+    const requesterId = input.requesterId ?? this.options.defaultRequesterId;
     // The request's own flag is only the input to the policy, not the final answer: `never`
     // overrides an explicit `true` (and is what should show up in the eventual "runtime
     // missing" message below), `always` grants it without the caller asking.
-    const requestedAllowDownload = optionalBoolean(payload, "allowDownload") ?? false;
+    const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
     let progressSocket: IpcConnection | undefined = connection.socket;
     const disposeProgress = () => {
@@ -584,14 +688,19 @@ export class DaemonServer {
       grant = await this.options.leases.request(request, {
         allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
         mode,
-        noWait: optionalBoolean(payload, "noWait") ?? false,
+        noWait: input.noWait ?? false,
         onProgress: (progress) => {
           if (progressSocket !== undefined) {
-            void this.#pushProgress(progressSocket, progress);
+            void this.#pushProgress(progressSocket, requestId, progress);
           }
         },
         requesterId,
-        ...(typeof payload.timeoutMs === "number" ? { timeoutMs: payload.timeoutMs } : {}),
+        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+        // NOTE: `input.ttlMs` is validated by the contract (BAD_REQUEST for a held lease, via
+        // `leaseRequestInputSchema`'s `superRefine`) but not forwarded here --
+        // `LeaseRequestOptions` (src/core/wait-queue.ts) has no `ttlMs` field yet. Threading an
+        // initial TTL for a detached lease through core (`WaitQueue`/`LeaseEngine`) is later-PR
+        // plumbing, beyond this PR's "daemon validates inputs" scope -- see the PR description.
       });
     } catch (error: unknown) {
       // The driver only ever sees the clamped-to-false permission, so its own
@@ -623,12 +732,12 @@ export class DaemonServer {
     } else if (mode === "held") {
       connection.heldLeaseIds.add(grant.lease.id);
     }
-    return grant;
+    return this.#parseOutput(leaseRequest.output, grant, "lease.request");
   }
 
-  #list(payload: Record<string, unknown>): unknown {
+  #list(input: { readonly kind?: "devices" | "leases" | "rules" | undefined }): unknown {
     const snapshot = this.options.registry.snapshot;
-    switch (payload.kind) {
+    switch (input.kind) {
       case "leases":
         return snapshot.leases.map((lease) => this.#decorateLease(lease));
       case "rules":
@@ -636,8 +745,6 @@ export class DaemonServer {
       case "devices":
       case undefined:
         return snapshot.devices.map((device) => this.#decorateDevice(device));
-      default:
-        throw new ProtocolError("BAD_REQUEST", "list kind must be devices, leases, or rules");
     }
   }
 
@@ -669,6 +776,31 @@ export class DaemonServer {
   }
 
   /**
+   * Validates a handler's return value against its contract output schema before it goes on
+   * the wire. A mismatch here is always a daemon-side bug (the schema or the mapping is wrong,
+   * per the PR brief -- never loosen the schema to whatever happens to be emitted), so it is
+   * logged at error level with the full issue list, then rethrown as a plain `Error` (maps to
+   * `INTERNAL` in `errorCode`). Two things follow from throwing rather than silently coercing:
+   * a unit test that asserts a happy-path response fails loudly the moment a handler and its
+   * schema drift, and a production caller gets a controlled `INTERNAL` response instead of
+   * either a malformed payload or an unhandled exception tearing down the connection. `.parse`
+   * (not `.strict()`) is deliberately non-strict here: an additive field a handler starts
+   * returning before its schema is updated to include it is silently dropped, not a failure --
+   * only a missing/mistyped *declared* field is a bug worth failing loudly over.
+   */
+  #parseOutput<Output>(schema: z.ZodType<Output>, value: unknown, operationName: string): Output {
+    const result = schema.safeParse(value);
+    if (result.success) return result.data;
+    this.#logger.error("Operation output failed contract validation", {
+      operation: operationName,
+      issues: result.error.issues,
+    });
+    throw new Error(
+      `Internal: ${operationName} produced a response that does not match its contract output schema`,
+    );
+  }
+
+  /**
    * Adds a derived `lastHeartbeatAt` for held leases, without a new `LeaseRecord` field:
    * since `heartbeat()` writes through the registry, `ttlDeadline - heldTtlBackstopMs` is
    * exactly the moment of the most recent slide (or grant, if there hasn't been one yet).
@@ -693,15 +825,29 @@ export class DaemonServer {
     return { ...device, transitionAgeMs: this.options.clock.now() - enteredAt };
   }
 
-  async #pushProgress(socket: IpcConnection, progress: LeaseProgress): Promise<void> {
+  /** ADR §8: `progress` carries the originating request's frame id, so a client with more than
+   * one lease request in flight on the same connection can route each push to its own call. */
+  async #pushProgress(
+    socket: IpcConnection,
+    requestId: RequestId,
+    progress: LeaseProgress,
+  ): Promise<void> {
     return writeFrame(socket, {
       push: "progress",
-      payload: progress,
+      payload: this.#parseOutput(PUSH_SCHEMAS.progress, { requestId, progress }, "push:progress"),
     });
   }
 
-  async #pushEvent(socket: IpcConnection, event: EventEnvelope): Promise<void> {
-    await writeFrame(socket, { push: "event", payload: event });
+  /** ADR §8: `event` carries the subscribing connection's subscription id. */
+  async #pushEvent(
+    socket: IpcConnection,
+    subscriptionId: string,
+    event: EventEnvelope,
+  ): Promise<void> {
+    await writeFrame(socket, {
+      push: "event",
+      payload: this.#parseOutput(PUSH_SCHEMAS.event, { subscriptionId, event }, "push:event"),
+    });
   }
 
   /**
@@ -729,7 +875,14 @@ export class DaemonServer {
   }
 
   async #pushHeartbeat(socket: IpcConnection, nonce: number): Promise<void> {
-    await writeFrame(socket, { push: "lease.heartbeat", payload: { nonce } });
+    await writeFrame(socket, {
+      push: "lease.heartbeat",
+      payload: this.#parseOutput(
+        PUSH_SCHEMAS["lease.heartbeat"],
+        { nonce },
+        "push:lease.heartbeat",
+      ),
+    });
   }
 
   /**
@@ -769,7 +922,10 @@ export class DaemonServer {
     socket: IpcConnection,
     payload: { readonly deviceId: string; readonly leaseId: string; readonly reason: string },
   ): Promise<void> {
-    await writeFrame(socket, { push: "lease-lost", payload });
+    await writeFrame(socket, {
+      push: "lease-lost",
+      payload: this.#parseOutput(PUSH_SCHEMAS["lease-lost"], payload, "push:lease-lost"),
+    });
   }
 
   /**
@@ -798,7 +954,14 @@ export class DaemonServer {
     socket: IpcConnection,
     payload: { readonly deviceId: string; readonly leaseId: string; readonly reason: "crashed" },
   ): Promise<void> {
-    await writeFrame(socket, { push: "device-unhealthy", payload });
+    await writeFrame(socket, {
+      push: "device-unhealthy",
+      payload: this.#parseOutput(
+        PUSH_SCHEMAS["device-unhealthy"],
+        payload,
+        "push:device-unhealthy",
+      ),
+    });
   }
 
   /** Reacts to the post-commit `device.recovered` fact; observer-only, nothing awaits this. */
@@ -812,7 +975,14 @@ export class DaemonServer {
     socket: IpcConnection,
     payload: { readonly attempts: number; readonly deviceId: string; readonly leaseId: string },
   ): Promise<void> {
-    await writeFrame(socket, { push: "device-recovered", payload });
+    await writeFrame(socket, {
+      push: "device-recovered",
+      payload: this.#parseOutput(
+        PUSH_SCHEMAS["device-recovered"],
+        payload,
+        "push:device-recovered",
+      ),
+    });
   }
 
   async #respondError(
@@ -820,8 +990,13 @@ export class DaemonServer {
     id: RequestId | null,
     code: string,
     message: string,
+    details?: unknown,
   ): Promise<void> {
-    await writeFrame(socket, { error: { code, message }, id, ok: false });
+    await writeFrame(socket, {
+      error: { code, message, ...(details === undefined ? {} : { details }) },
+      id,
+      ok: false,
+    });
   }
 
   #closeConnection(connection: Connection): void {
@@ -896,67 +1071,37 @@ class StartupFailedError extends Error {
   }
 }
 
-function objectPayload(value: unknown): Record<string, unknown> {
-  if (!isObject(value)) {
-    throw new ProtocolError("BAD_REQUEST", "Payload must be an object");
+/**
+ * `doctor.run`/`nuke.run` used to throw a plain `new Error("... is unavailable")` when their
+ * optional collaborator was never wired up, which `errorCode()` had no choice but to map to
+ * `INTERNAL` -- indistinguishable from a real bug. Real, typed errors give these their own
+ * codes in the contract's closed set (`DOCTOR_UNAVAILABLE`/`NUKE_UNAVAILABLE`), per ADR §7 ("one
+ * error class, closed codes").
+ */
+class DoctorUnavailableError extends Error {
+  constructor() {
+    super("Doctor is unavailable");
+    this.name = "DoctorUnavailableError";
   }
-  return value;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+class NukeUnavailableError extends Error {
+  constructor() {
+    super("Nuke is unavailable");
+    this.name = "NukeUnavailableError";
+  }
 }
 
-function requiredString(payload: Record<string, unknown>, ...keys: string[]): string {
-  const value = optionalString(payload, ...keys);
-  if (value === undefined) {
-    throw new ProtocolError("BAD_REQUEST", `Missing required string: ${keys[0]}`);
-  }
-  return value;
-}
-
-function optionalString(payload: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = payload[key];
-    if (typeof value === "string") {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function requiredNumber(payload: Record<string, unknown>, key: string): number {
-  const value = payload[key];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new ProtocolError("BAD_REQUEST", `Missing required number: ${key}`);
-  }
-  return value;
-}
-
-function optionalBoolean(payload: Record<string, unknown>, key: string): boolean | undefined {
-  const value = payload[key];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "boolean") {
-    throw new ProtocolError("BAD_REQUEST", `Expected boolean: ${key}`);
-  }
-  return value;
-}
-
-function requiredPlatform(payload: Record<string, unknown>): "ios" | "android" {
-  const platform = payload.platform;
-  if (platform !== "ios" && platform !== "android") {
-    throw new ProtocolError("BAD_REQUEST", "platform must be ios or android");
-  }
-  return platform;
-}
-
-function optionalPlatform(payload: Record<string, unknown>): "ios" | "android" | undefined {
-  if (payload.platform === undefined) {
-    return undefined;
-  }
-  return requiredPlatform(payload);
+/** Parses a request payload through its contract input schema, translating a validation
+ * failure into the daemon's own `ProtocolError("BAD_REQUEST", ...)` rather than letting a raw
+ * `ZodError` escape (its shape is not part of the wire contract). */
+function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  const description = result.error.issues
+    .map((issue) => `${issue.path.length > 0 ? `${issue.path.join(".")}: ` : ""}${issue.message}`)
+    .join("; ");
+  throw new ProtocolError("BAD_REQUEST", description);
 }
 
 // fallow-ignore-next-line complexity -- preserves stable protocol error mapping.
@@ -993,6 +1138,12 @@ function errorCode(error: unknown): string {
   }
   if (error instanceof StartupFailedError) {
     return "DAEMON_STARTUP_FAILED";
+  }
+  if (error instanceof DoctorUnavailableError) {
+    return "DOCTOR_UNAVAILABLE";
+  }
+  if (error instanceof NukeUnavailableError) {
+    return "NUKE_UNAVAILABLE";
   }
   return "INTERNAL";
 }

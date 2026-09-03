@@ -14,6 +14,7 @@ import {
   Registry,
   RuntimeMissingError,
 } from "../core/index.js";
+import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
   FakeClock,
@@ -76,7 +77,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     expect(grant.ok).toBe(true);
     expect(harness.registry.snapshot.leases).toHaveLength(1);
@@ -106,6 +109,12 @@ describe("DaemonServer", () => {
     });
     await missingHello.close();
 
+    // ADR 0003 §6: protocol versions are now negotiated as ranges. A bare `protocolVersion`
+    // with no overlap against the daemon's range is `PROTOCOL_VERSION_UNSUPPORTED`, carrying
+    // both ranges and the daemon version -- there is no more exact-match
+    // `PROTOCOL_VERSION_MISMATCH` on this daemon (a real protocol-2 daemon out in the world
+    // still answers with the old code; see `contract/protocol.test.ts`'s
+    // `mapLegacyProtocolMismatch` for how a client maps that).
     const wrongVersion = await createClient(harness.socketPath);
     await expect(
       wrongVersion.request("hello", {
@@ -113,14 +122,22 @@ describe("DaemonServer", () => {
         protocolVersion: DAEMON_PROTOCOL_VERSION + 1,
       }),
     ).resolves.toMatchObject({
-      error: { code: "PROTOCOL_VERSION_MISMATCH" },
+      error: {
+        code: "PROTOCOL_VERSION_UNSUPPORTED",
+        details: {
+          client: { min: DAEMON_PROTOCOL_VERSION + 1, max: DAEMON_PROTOCOL_VERSION + 1 },
+          daemon: PROTOCOL_VERSION_RANGE,
+        },
+      },
       ok: false,
     });
   });
 
   // Protocol 2 added the `heartbeat` capability and the sliding held-lease TTL that
   // depends on it, and shipped without back-compat shims. Rejecting v1 is therefore a
-  // deliberate product decision, not just arithmetic on the current constant.
+  // deliberate product decision, not just arithmetic on the current constant. Protocol 3
+  // (ADR 0003) widened the rejection to a range check, but a v1 client (no overlap with
+  // `PROTOCOL_VERSION_RANGE`) is still rejected outright, now as `PROTOCOL_VERSION_UNSUPPORTED`.
   it("rejects a protocol v1 client outright rather than serving it without heartbeats", async () => {
     const harness = await createHarness();
     const legacy = await createClient(harness.socketPath);
@@ -128,7 +145,7 @@ describe("DaemonServer", () => {
     await expect(
       legacy.request("hello", { clientVersion: "test", protocolVersion: 1 }),
     ).resolves.toMatchObject({
-      error: { code: "PROTOCOL_VERSION_MISMATCH" },
+      error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
       ok: false,
     });
   });
@@ -142,13 +159,17 @@ describe("DaemonServer", () => {
     await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     const queuedGrant = waiter.request("lease.request", {
       mode: "held",
       requesterId: "waiter",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     await expect
       .poll(() => harness.eventBus.replay().some((event) => event.event === "lease.queued"))
@@ -168,16 +189,22 @@ describe("DaemonServer", () => {
     await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     const queuedGrant = waiter.request("lease.request", {
       mode: "held",
       requesterId: "waiter",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
+    // ADR 0003 §8: `progress` now carries the originating request's frame id alongside the
+    // progress payload, under `progress`, rather than the bare stage object at the top level.
     await expect(waiter.nextFrame((frame) => frame.push === "progress")).resolves.toMatchObject({
-      payload: { queuePosition: 1, stage: "queued" },
+      payload: { progress: { queuePosition: 1, stage: "queued" } },
       push: "progress",
     });
 
@@ -187,7 +214,8 @@ describe("DaemonServer", () => {
         .filter(
           (frame) =>
             frame.push === "progress" &&
-            (frame.payload as { readonly stage?: unknown } | undefined)?.stage === "queued",
+            (frame.payload as { readonly progress?: { readonly stage?: unknown } } | undefined)
+              ?.progress?.stage === "queued",
         ),
     ).toEqual([]);
     await holder.close();
@@ -224,7 +252,9 @@ describe("DaemonServer", () => {
       .request("lease.request", {
         mode: "detached",
         requesterId: "agent-1",
-        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
       })
       .then((response) => {
         requestSettled = true;
@@ -234,7 +264,7 @@ describe("DaemonServer", () => {
     await expect(
       client.nextFrame((frame) => frame.push === "progress" && frame.payload !== undefined),
     ).resolves.toMatchObject({
-      payload: { etaMs: 60, stage: "provisioning" },
+      payload: { progress: { etaMs: 60, stage: "provisioning" } },
       push: "progress",
     });
     expect(requestSettled).toBe(false);
@@ -312,7 +342,9 @@ describe("DaemonServer", () => {
     const grant = await client.request("lease.request", {
       mode: "detached",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = (grant.payload as { readonly lease: { readonly id: string } }).lease.id;
     await expect(client.request("lease.renew", { leaseId, ttlMs: 120_000 })).resolves.toMatchObject(
@@ -385,7 +417,9 @@ describe("DaemonServer", () => {
     await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     await expect(client.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
@@ -403,7 +437,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -434,7 +470,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -464,7 +502,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -500,7 +540,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -533,7 +575,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -582,7 +626,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -707,7 +753,9 @@ describe("DaemonServer startup readiness", () => {
     const parkedGrant = holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     converge.resolve();
@@ -767,7 +815,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     expect((grant.payload as { lease: { ttlDeadline: number } }).lease.ttlDeadline).toBe(1_040);
@@ -809,7 +859,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -843,7 +895,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = (grant.payload as { device: { id: string } }).device.id;
@@ -890,7 +944,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -1001,7 +1057,9 @@ describe("DaemonServer lease heartbeat", () => {
       await holder.request("lease.request", {
         mode: "held",
         requesterId: "holder",
-        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
       });
 
       const stopping = harness.daemon.stop("test-drain");
@@ -1035,7 +1093,9 @@ describe("DaemonServer lease heartbeat", () => {
       await holder.request("lease.request", {
         mode: "held",
         requesterId: "holder",
-        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
       });
 
       await harness.daemon.stop("test-stop-auxiliary");
@@ -1079,7 +1139,12 @@ describe("DaemonServer lease heartbeat", () => {
       );
     });
 
-    it("logs an unhandled request error at error level", async () => {
+    // `doctor.run`/`nuke.run` used to surface an unconfigured collaborator as a plain `Error`,
+    // which `errorCode()` had no choice but to map to `INTERNAL` -- logged at error level
+    // indistinguishably from a real bug. `DoctorUnavailableError`/`NukeUnavailableError` (ADR
+    // 0003 §7: "one error class, closed codes") give this its own typed code, so it is now a
+    // *handled*, debug-level error like any other expected domain refusal.
+    it("logs an unconfigured doctor as a handled DOCTOR_UNAVAILABLE, not an unhandled error", async () => {
       const { logger: log, sink } = logger();
       const harness = await createHarness({ logger: log });
       const client = await createClient(harness.socketPath);
@@ -1089,10 +1154,13 @@ describe("DaemonServer lease heartbeat", () => {
 
       expect(sink.records).toContainEqual(
         expect.objectContaining({
-          level: "error",
-          message: "Unhandled request error",
-          fields: expect.objectContaining({ type: "doctor.run" }),
+          level: "debug",
+          message: "Handled request error",
+          fields: { code: "DOCTOR_UNAVAILABLE", type: "doctor.run" },
         }),
+      );
+      expect(sink.records).not.toContainEqual(
+        expect.objectContaining({ level: "error", message: "Unhandled request error" }),
       );
       await client.close();
     });
@@ -1131,7 +1199,9 @@ describe("DaemonServer download policy", () => {
     const grant = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     expect(grant.ok).toBe(true);
@@ -1153,7 +1223,9 @@ describe("DaemonServer download policy", () => {
       allowDownload: true,
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     expect(response.ok).toBe(false);
@@ -1179,7 +1251,9 @@ describe("DaemonServer download policy", () => {
     const response = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     expect(response.ok).toBe(false);
@@ -1201,7 +1275,9 @@ describe("DaemonServer download policy", () => {
     const response = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     expect(response.ok).toBe(false);
@@ -1228,7 +1304,9 @@ describe("DaemonServer download policy", () => {
       allowDownload: true,
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "12.0", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "12.0",
+      platform: "ios",
     });
 
     expect(response.ok).toBe(false);
@@ -1250,7 +1328,10 @@ describe("DaemonServer full request flag", () => {
     const grant = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { full: true, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      full: true,
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     expect(grant.ok).toBe(true);
@@ -1268,7 +1349,9 @@ describe("DaemonServer full request flag", () => {
     const grant = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     expect(grant.ok).toBe(true);
@@ -1291,7 +1374,9 @@ describe("DaemonServer error code mapping", () => {
     const response = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     expect(response.ok).toBe(false);
@@ -1314,7 +1399,9 @@ describe("DaemonServer error code mapping", () => {
     const response = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "Pixel 8", osVersion: "35", platform: "android" },
+      model: "Pixel 8",
+      osVersion: "35",
+      platform: "android",
     });
 
     expect(response.ok).toBe(false);
