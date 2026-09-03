@@ -288,7 +288,6 @@ export class LeaseEngine {
     return this.#drivers.listCatalog(platform);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer.
   get queueDepth(): number {
     return this.#acquisition.queueDepth;
   }
@@ -310,7 +309,7 @@ export class LeaseEngine {
   }
 
   /** Stops client feedback for a queued request without affecting its lease outcome. */
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling queueDepth).
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by the dispatcher (same as the sibling queueDepth).
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.#acquisition.detachQueuedProgress(requesterId);
   }

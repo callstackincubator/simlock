@@ -20,10 +20,10 @@ import {
 import { parseDaemonResponse, serializeFrame } from "../daemon-protocol/index.js";
 import type { LeaseProgress } from "./types.js";
 
-/** The one legacy code a protocol-2 daemon answers `hello` with (see
- * `src/daemon-client/startup-coordinator.ts`'s comment, the only place in this repo that names
- * it -- there is no live protocol-2 daemon to negotiate with, so this constant documents a
- * historical fact rather than something exercised against a real peer). */
+/** The one legacy code a protocol-2 daemon answers `hello` with. There is no live protocol-2
+ * daemon left in this repository to negotiate against, so this constant documents the historical
+ * fact ADR §6's compatibility note depends on rather than something exercised against a real
+ * peer. */
 const LEGACY_MISMATCH_CODE = "PROTOCOL_VERSION_MISMATCH";
 
 export interface HelloOptions {
@@ -311,8 +311,9 @@ export class SimlockWire {
         return;
       }
       case "lease.heartbeat": {
-        // Reactive pong, same behavior as today's `daemon-client/connection.ts`: answer with
-        // an ordinary request frame carrying the same payload (nonce), fire-and-forget.
+        // Reactive pong: answer with an ordinary request frame carrying the same payload
+        // (nonce), fire-and-forget. Only a connection that declared the heartbeat capability
+        // at `hello` ever receives this push, so this handler is otherwise inert.
         void this.#send("lease.heartbeat", payload).catch(() => undefined);
         return;
       }

@@ -375,7 +375,7 @@ Conclusions baked into the drivers:
   `lease.heartbeatIntervalMs` to a connection only if it (a) holds at least one
   lease and (b) declared `capabilities: { heartbeat: true }` at `hello`
   (`src/daemon/server.ts`). `IpcDaemonConnection` answers automatically with a
-  `lease.heartbeat` request (`src/daemon-client/connection.ts`), so any
+  `lease.heartbeat` request (`src/simlock-client/wire.ts`), so any
   frontend inherits ponging for free just by declaring the capability — no
   frontend-specific pong code. The daemon slides every lease the connection
   holds through `LeaseLifecycle.heartbeat()`, which goes through

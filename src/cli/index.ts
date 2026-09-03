@@ -252,11 +252,11 @@ async function connectDaemonClient(
   }
 }
 
-/** Auto-launches the daemon on a refused/missing socket, mirroring
- * `daemon-client/startup-coordinator.ts`'s behaviour at the raw `IpcConnector` level instead of
- * the legacy typed-connection level -- `simlock/admin`'s `connector` option accepts any
- * `IpcConnector`, so this is the entire seam needed to keep `lease`'s "start the daemon if it
- * isn't running" behaviour with the typed client. */
+/** Auto-launches the daemon on a refused/missing socket, at the raw `IpcConnector` level:
+ * `simlock/admin`'s `connector` option accepts any `IpcConnector`, so this is the entire seam
+ * needed to keep `lease`'s "start the daemon if it isn't running" behaviour with a typed client
+ * that deliberately does no starting of its own (ADR §10). MCP has its own copy in
+ * `src/mcp/connect.ts`; the two differ in launch policy and are kept separate on purpose. */
 class AutoLaunchIpcConnector implements IpcConnector {
   constructor(
     private readonly ipc: IpcConnector,
