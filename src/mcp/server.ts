@@ -166,9 +166,9 @@ export function createMcpServer(session: McpSession): McpServer {
       inputSchema: leaseStatusInputSchema,
       outputSchema: leaseStatusOutputSchema,
     },
-    () => {
+    async () => {
       try {
-        return success(session.status());
+        return success(await session.status());
       } catch (error: unknown) {
         return failure(error);
       }
@@ -178,8 +178,8 @@ export function createMcpServer(session: McpSession): McpServer {
   session.onLeaseLost((notice) => {
     void server.server.sendLoggingMessage({
       data: {
-        device_id: notice.deviceId,
-        lease_id: notice.leaseId,
+        deviceId: notice.deviceId,
+        leaseId: notice.leaseId,
         message: "Simlock lease ended; this session no longer holds the device.",
         reason: notice.reason,
       },
@@ -208,8 +208,8 @@ function deviceHealthLoggingMessage(notice: DeviceHealthNotice): {
   if (notice.kind === "unhealthy") {
     return {
       data: {
-        device_id: notice.deviceId,
-        lease_id: notice.leaseId,
+        deviceId: notice.deviceId,
+        leaseId: notice.leaseId,
         message:
           "Simlock's device crashed outside simlock; anything running inside it (apps, log streams, automation sessions, port forwards) is gone. Recovery is in progress under the same lease.",
         reason: notice.reason,
@@ -221,8 +221,8 @@ function deviceHealthLoggingMessage(notice: DeviceHealthNotice): {
   return {
     data: {
       attempts: notice.attempts,
-      device_id: notice.deviceId,
-      lease_id: notice.leaseId,
+      deviceId: notice.deviceId,
+      leaseId: notice.leaseId,
       message: "Simlock's device was rebooted and is ready again under the same lease.",
     },
     level: "info",
