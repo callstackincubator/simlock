@@ -181,12 +181,9 @@ export function sampleGrant(overrides: { readonly leaseId?: string } = {}): Leas
   const leaseId = overrides.leaseId ?? "lease-1";
   return {
     device: {
-      createdAt: 0,
-      driverData: null,
       driverDeviceId: "SIM-1",
       id: "device-1",
       spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
-      state: "leased",
     },
     lease: {
       deviceId: "device-1",

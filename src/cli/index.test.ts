@@ -844,9 +844,6 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       id: "dev_1",
       driverDeviceId: "dev_1",
       spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
-      state: "leased",
-      driverData: undefined,
-      createdAt: 0,
     },
     lease: {
       id: "lse_1",
