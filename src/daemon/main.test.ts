@@ -324,6 +324,58 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
   });
 });
 
+describe("startDaemon socket race with HTTP enabled", () => {
+  // Review finding V1: `gatewayStarted` is settled only from inside `onSocketClaimed`'s
+  // handler, and `start()` fires that callback only after the socket claim succeeds. A daemon
+  // that loses the start race therefore rejected without the callback ever running, so nothing
+  // settled `gatewayStarted` and `Promise.allSettled` waited on it forever -- `startDaemon()`
+  // hung instead of reporting the lost race, with no rejection and no non-zero exit code.
+  // Reachable by racing `simlock daemon start`, or by the CLI's own auto-launch.
+  it("rejects rather than hanging when the socket is already claimed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-socket-race-"));
+    temporaryDirectories.push(directory);
+    const filesystem = new MemoryFilesystem();
+    const statePath = join(directory, "state.json");
+    const options = (port: number): StartDaemonOptions =>
+      ({
+        clock: new FakeClock(1_000),
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [
+          new FakeDriver({
+            availableOsVersions: ["26.5"],
+            clock: new FakeClock(1_000),
+            platform: "ios",
+          }),
+        ],
+        filesystem,
+        logger: new JsonLinesLogger({
+          clock: new FakeClock(1_000),
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
+        statePath,
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+
+    const first = await startDaemon(options(47_013));
+    try {
+      // A distinct port, so the only thing that can fail is the socket claim itself.
+      const second = startDaemon(options(47_014));
+      const outcome = await Promise.race([
+        second.then(
+          () => "resolved" as const,
+          () => "rejected" as const,
+        ),
+        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 3_000)),
+      ]);
+      expect(outcome).toBe("rejected");
+    } finally {
+      await first.stop("test-cleanup").catch(() => undefined);
+    }
+  });
+});
+
 describe("startDaemon HTTP gateway bind failure", () => {
   // Review finding B6: before this fix, an HTTP bind failure (occupied port) logged and
   // stopped the daemon from inside `onSocketClaimed`'s handler without `startDaemon()` itself
