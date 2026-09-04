@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { MemoryIpcTransport } from "../ports/index.js";
 import { IpcDaemonConnector } from "./connector.js";
@@ -17,7 +18,13 @@ describe("IpcDaemonConnector", () => {
     });
     const connection = await new IpcDaemonConnector(ipc, "/daemon.sock").connect();
     await connection.close();
-    expect(payload).toEqual({ clientVersion: "1.0.0", protocolVersion: DAEMON_PROTOCOL_VERSION });
+    // Sends both the legacy exact protocolVersion and the new range (ADR 0003 §6), so an old
+    // protocol-2 daemon (which only ever reads the former) still answers intelligibly.
+    expect(payload).toEqual({
+      clientVersion: "1.0.0",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      protocolRange: PROTOCOL_VERSION_RANGE,
+    });
   });
 
   it("declares capabilities at hello only when given some, per capability negotiation rules", async () => {

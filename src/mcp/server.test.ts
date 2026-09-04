@@ -398,8 +398,11 @@ class StubConnection implements DaemonConnection {
     for (const listener of this.#listeners) listener("lease-lost", payload);
   }
 
+  /** Wraps the given stage payload under `{requestId, progress}` -- ADR 0003 §8's push
+   * correlation shape -- so callers can keep passing the bare stage object. */
   pushProgress(payload: unknown): void {
-    for (const listener of this.#listeners) listener("progress", payload);
+    for (const listener of this.#listeners)
+      listener("progress", { progress: payload, requestId: "test-request" });
   }
 
   pushDeviceUnhealthy(payload: unknown): void {

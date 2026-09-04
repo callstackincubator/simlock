@@ -126,7 +126,9 @@ describe("startDaemon startup readiness", () => {
 
       const parkedLease = client.request("lease.request", {
         mode: "detached",
-        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
       });
       let leaseSettled = false;
       void parkedLease.then(() => {

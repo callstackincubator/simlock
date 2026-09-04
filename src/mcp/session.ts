@@ -567,6 +567,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Flat fields, not the legacy `device`/`os` aliases or a nested `request` wrapper -- the wire
+ * moved to protocol 3 with no compatibility shim (ADR 0003 "Consequences"). Deriving this from
+ * the contract's `lease.request` input schema (ADR 0003 §11: "MCP tool schemas are derived from
+ * the contract schemas") is PR 4's job; this is only the minimal payload-shape fix needed to
+ * keep MCP working against this PR's daemon.
+ */
 function daemonLeaseRequest(
   input: LeaseSimulatorInput,
   requesterId: string,
@@ -576,12 +583,10 @@ function daemonLeaseRequest(
     mode: "held",
     noWait: input.no_wait,
     requesterId,
-    request: {
-      model: input.device,
-      ...(input.os === undefined ? {} : { osVersion: input.os }),
-      platform: input.platform,
-      ...(input.full ? { full: true } : {}),
-    },
+    model: input.device,
+    ...(input.os === undefined ? {} : { osVersion: input.os }),
+    platform: input.platform,
+    ...(input.full ? { full: true } : {}),
     ...(input.timeout_seconds === undefined
       ? {}
       : { timeoutMs: timeoutMilliseconds(input.timeout_seconds) }),

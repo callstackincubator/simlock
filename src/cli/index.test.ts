@@ -309,7 +309,7 @@ describe("CLI boundary", () => {
     await expect(run).resolves.toBe(0);
 
     const leaseCall = connection.calls.find((call) => call.type === "lease.request");
-    expect(leaseCall?.payload).toMatchObject({ request: { full: true } });
+    expect(leaseCall?.payload).toMatchObject({ full: true });
     expect(JSON.parse(output.stdout)).toMatchObject({ slim: false });
   });
 
@@ -341,9 +341,7 @@ describe("CLI boundary", () => {
     await expect(run).resolves.toBe(0);
 
     const leaseCall = connection.calls.find((call) => call.type === "lease.request");
-    const requestPayload = (leaseCall?.payload as { request: Record<string, unknown> } | undefined)
-      ?.request;
-    expect(requestPayload).not.toHaveProperty("full");
+    expect(leaseCall?.payload).not.toHaveProperty("full");
     expect(JSON.parse(output.stdout)).toMatchObject({ slim: false });
   });
 

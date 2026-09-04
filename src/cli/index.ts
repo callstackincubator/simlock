@@ -389,17 +389,19 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     }
   });
   try {
+    // Flat fields, not the legacy `device`/`os` aliases or a nested `request` wrapper -- the
+    // wire moved to protocol 3 with no compatibility shim (ADR 0003 "Consequences"). Moving
+    // this onto the typed `simlock/client` (ADR 0003 §10-11) is PR 4's job; this is only the
+    // minimal payload-shape fix needed to keep the CLI working against this PR's daemon.
     const response = await connection.request("lease.request", {
       allowDownload: values["allow-download"] ?? false,
       mode: detached ? "detached" : "held",
       noWait: values["no-wait"] ?? false,
       requesterId,
-      request: {
-        model: values.device,
-        ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
-        platform: values.platform,
-        ...(values.full === true ? { full: true } : {}),
-      },
+      model: values.device,
+      ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
+      platform: values.platform,
+      ...(values.full === true ? { full: true } : {}),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
     const result = leaseResult(response);
@@ -882,7 +884,11 @@ function progressLine(value: unknown): {
   readonly eta_seconds?: number;
   readonly queue_position?: number;
 } {
-  const progress = requireObject(value);
+  // ADR 0003 §8: `progress` pushes now wrap the stage payload under `progress`, alongside a
+  // `requestId` this CLI does not yet need (it never has more than one lease request in flight
+  // per connection).
+  const envelope = requireObject(value);
+  const progress = requireObject(envelope.progress);
   if (progress.stage === "queued" && typeof progress.queuePosition === "number") {
     return { event: "queued", queue_position: progress.queuePosition };
   }
