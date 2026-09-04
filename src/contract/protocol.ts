@@ -86,10 +86,17 @@ export const helloRequestSchema = z
  * What the daemon replies with. `role` is declared now (every field a client will eventually
  * need to assert it got what it asked for, per ADR §5) but is a fixed value until PR 2 resolves
  * it from a real credential -- see `DaemonServer#handleHello`.
+ *
+ * `principal` is the connection's resolved, fixed-for-its-lifetime identity (ADR §4): what a
+ * `hello` request supplied, or the daemon's own default (today: `defaultRequesterId`) when it
+ * omitted one. Without this the client cannot learn its own principal in that fallback case, and
+ * would otherwise have to guess -- see the abort-authorization defect this closes in
+ * `simlock-client/client.ts`.
  */
 export const helloReplySchema = z.object({
   protocolVersion: z.number().int(),
   daemonProtocolRange: protocolRangeSchema,
   version: z.string(),
   role: z.enum(["agent", "admin"]),
+  principal: z.string(),
 });

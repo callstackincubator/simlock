@@ -321,6 +321,13 @@ export class LeaseEngine {
     return this.#acquisition.cancelPending(requesterId);
   }
 
+  /** The session principal that owns a pending request, for `lease.cancel`'s owner-aware
+   * `authorize` hook (ADR §4). See the coordinator method's own comment. */
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by the dispatcher's authorize context (same as the sibling cancelPending).
+  pendingRequestOwner(requesterId: string): string | undefined {
+    return this.#acquisition.pendingRequestOwner(requesterId);
+  }
+
   // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer (same as the sibling heartbeat).
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     return this.#releaseCoordinator.renew(leaseId, ttlMs);

@@ -1431,6 +1431,27 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await client.close();
   });
 
+  it("hello reports the resolved principal: the client-supplied one verbatim, or the daemon's default when omitted (ADR §4)", async () => {
+    const harness = await createHarness();
+
+    const explicit = await createClient(harness.socketPath);
+    const explicitReply = await explicit.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal: "host",
+    });
+    expect(explicitReply.payload).toMatchObject({ principal: "host" });
+    await explicit.close();
+
+    const omitted = await createClient(harness.socketPath);
+    const omittedReply = await omitted.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
+    expect(omittedReply.payload).toMatchObject({ principal: "test-process" });
+    await omitted.close();
+  });
+
   it("allows an admin session to call the same admin-only operation", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
     const client = await createClient(harness.socketPath);
