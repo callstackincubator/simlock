@@ -387,7 +387,8 @@ class SimlockClientImpl {
 
   async releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput> {
     const parsed = this.#parseInput("lease.release", input);
-    this.#wire.markSelfInitiatedRelease(parsed.leaseId);
+    // The daemon suppresses the matching `lease-lost` push to this connection itself (ADR
+    // §8) -- see the comment on `SimlockWire`'s `#deliveredLeaseLost`. Nothing to mark here.
     const result = await this.#call("lease.release", parsed);
     this.#heldLeaseIds.delete(parsed.leaseId);
     return result;
@@ -432,7 +433,6 @@ class SimlockClientImpl {
   // ---- admin-only operations ------------------------------------------------------------------
 
   releaseAllLeases(): Promise<LeaseReleaseAllOutput> {
-    for (const leaseId of this.#heldLeaseIds.keys()) this.#wire.markSelfInitiatedRelease(leaseId);
     return this.#call("lease.release-all", {}).then((result) => {
       this.#heldLeaseIds.clear();
       return result;
