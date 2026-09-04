@@ -20,6 +20,7 @@ export {
   type DriverEstimate,
   type DriverReality,
   type DriverRejection,
+  type LegacyDevice,
   type ObservedDevice,
   type ObservedRunState,
   type PassthroughCommand,
@@ -32,7 +33,6 @@ export { UnknownPassthroughToolError } from "./driver-catalog.js";
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor } from "./doctor.js";
 export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./device-root.js";
-// fallow-ignore-next-line unused-type -- public options contract for the drivers that own a root.
 export type { EnsureOwnedRootOptions } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary, carried in the driver.root-rejected payload.
 export type { RootRejectionReason } from "./device-root.js";

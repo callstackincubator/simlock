@@ -379,7 +379,7 @@ each rule *would* take (rule name, target, reason) without executing.
 `--rule` restricts to a single named rule (e.g. `--rule idle-destroy`); see
 `simlock list --rules` for the registered rules.
 
-## `simlock doctor [--fix] [--purge-orphans]`
+## `simlock doctor [--fix] [--purge-orphans] [--yes]`
 
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries
@@ -392,9 +392,18 @@ record — almost always a daemon that died between creating a device and writin
 it down. Because it is inside a root Simlock provably owns, it cannot be a
 device of yours, so it is safe to destroy; but `--fix` never touches it.
 Destroying orphans requires `--purge-orphans`, which asks for confirmation
-unless `--yes` is given. Keeping it on its own flag means a `doctor --fix`
-already running unattended in CI does not start deleting things after an
-upgrade.
+unless `--yes` is given, and refuses (exit 2, `USAGE`) when confirmation is
+declined or there is no terminal to ask at. Keeping it on its own flag means a
+`doctor --fix` already running unattended in CI does not start deleting things
+after an upgrade.
+
+Before the first device of a purge is destroyed, each root the purge is about
+to reach into is re-validated — ownership is proven at startup and then trusted
+for the life of the daemon, which is fine for reporting and not fine for
+destroying (see [known-pitfalls.md](known-pitfalls.md)). A root that no longer
+proves ownership abandons the whole purge and leaves every finding standing. So
+does a device that could not be destroyed: it stays reported, and the rest of
+the run continues.
 
 Registry devices left behind in the *old* pre-device-root locations are
 reported the same way and are destroyed by `--fix`, since they are in the

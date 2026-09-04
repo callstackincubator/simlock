@@ -18,7 +18,12 @@ import {
   RuntimeMissingError,
   UnknownModelError,
 } from "../../core/driver.js";
-import { ensureOwnedRoot, OwnedRootError } from "../../core/index.js";
+import {
+  ensureOwnedRoot,
+  type EnsureOwnedRootOptions,
+  type LegacyDevice,
+  OwnedRootError,
+} from "../../core/index.js";
 import type {
   Clock,
   Filesystem,
@@ -212,6 +217,7 @@ export class AndroidDriver implements Driver {
   readonly #filesystem: Filesystem;
   readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
+  readonly #legacyAvdHome: string;
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -219,12 +225,14 @@ export class AndroidDriver implements Driver {
   readonly #profiles = new Map<string, DeviceProfile>();
   readonly #readinessTimeoutMs: number;
   readonly #registrar: AdbRegistrar;
+  readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
 
   private constructor(
     options: AndroidDriverOptions,
     sdk: AndroidSdkPaths,
     deviceRoot: string,
+    rootOptions: EnsureOwnedRootOptions,
     adbServer: AdbServerSupervisor,
     adbServerPort: number,
   ) {
@@ -240,7 +248,14 @@ export class AndroidDriver implements Driver {
     this.#processRunner = options.processRunner;
     this.#readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     this.#registrar = new AdbRegistrar({ serverPort: adbServerPort, tcp: options.tcpProbe });
+    this.#rootOptions = rootOptions;
     this.#sdk = sdk;
+    // Where an AVD Simlock made before it owned a root still sits: the AVD home the user
+    // had configured then, or the SDK's own default. Read only by `findLegacy` /
+    // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
+    // because a stranded device cannot be found anywhere else (ADR 0001, Migration).
+    this.#legacyAvdHome =
+      options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
   }
 
@@ -259,14 +274,15 @@ export class AndroidDriver implements Driver {
     // provenance tokens all come from the same generator, so a caller that injected one
     // controls all three rather than two of them.
     const idGenerator = options.idGenerator ?? new SequentialIdGenerator();
-    const deviceRoot = await ensureOwnedRoot({
+    const rootOptions: EnsureOwnedRootOptions = {
       filesystem: options.filesystem,
       idGenerator,
       instanceId: options.instanceId,
       path: configuredDeviceRoot(options),
       platform: "android",
       ...(options.uid === undefined ? {} : { uid: options.uid }),
-    });
+    };
+    const deviceRoot = await ensureOwnedRoot(rootOptions);
     const adbServer = new AdbServerSupervisor({
       adbPath: sdk.adb,
       clock: options.clock,
@@ -284,6 +300,7 @@ export class AndroidDriver implements Driver {
       { ...options, idGenerator },
       sdk,
       deviceRoot,
+      rootOptions,
       adbServer,
       adbServerPort,
     );
@@ -297,6 +314,65 @@ export class AndroidDriver implements Driver {
 
   get deviceRoot(): string {
     return this.#deviceRoot;
+  }
+
+  /**
+   * The same call `create` made, with the same arguments, because the proof *is* that call:
+   * a cheaper second check here would be a second validator, free to drift from the one
+   * every start is judged by. It is asked for immediately before Simlock destroys anything
+   * inside this root, since between then and startup the path can have become a symlink, or
+   * a `mv` can have left the user's own AVD home standing where this root was.
+   */
+  async revalidateRoot(): Promise<void> {
+    await ensureOwnedRoot(this.#rootOptions);
+  }
+
+  /**
+   * Looks for an AVD Simlock created before it owned a root, in the AVD home it would have
+   * used then. Reached only for a registry device this root no longer holds, and it only
+   * reads the filesystem. A legacy home that *is* the root means there is nothing pre-root
+   * about the device -- it is simply gone -- and must never be answered through the
+   * unscoped path below.
+   */
+  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+    if (this.#legacyAvdHome === this.#deviceRoot) {
+      return undefined;
+    }
+    const path = join(this.#legacyAvdHome, `${driverDeviceId}.avd`);
+    if (!(await this.#filesystem.exists(path))) {
+      return undefined;
+    }
+
+    return {
+      device: {
+        address: driverDeviceId,
+        deviceId: driverDeviceId,
+        // A stranded AVD has no console port and no serial: it is not running on Simlock's
+        // server, and it is not this driver's business to look for it on anyone else's.
+        driverData: {
+          avdName: driverDeviceId,
+          configHash: "",
+          port: 0,
+          serial: "",
+        } satisfies AndroidDriverData,
+      },
+      path,
+    };
+  }
+
+  /**
+   * Deletes a pre-root AVD through the AVD home it actually lives in. Permitted despite
+   * sitting outside this driver's root because the registry names it: registry-only
+   * destruction (safety rule 1) is satisfied by the record, not by the root. The
+   * environment points at the legacy home and deliberately not at Simlock's adb server --
+   * an AVD that is somehow still running is running on the user's, and stopping devices on
+   * a server Simlock does not own is not something this may do.
+   */
+  async destroyLegacy(device: DriverDevice): Promise<void> {
+    const { avdName } = this.#dataFor(device);
+    await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", avdName], {
+      env: { ...this.#baseEnv, ANDROID_AVD_HOME: this.#legacyAvdHome },
+    });
   }
 
   leaseEnvironment(): Readonly<Record<string, string>> {
@@ -1111,9 +1187,15 @@ export class AndroidDriver implements Driver {
   async #runOrThrow(
     command: string,
     args: readonly string[],
-    options: { readonly timeoutMs?: number } = {},
+    options: { readonly timeoutMs?: number; readonly env?: NodeJS.ProcessEnv } = {},
   ) {
-    const result = await this.#processRunner.run(command, args, { ...options, env: this.#env() });
+    // The scoped environment unless a caller supplies its own, which only the two legacy
+    // methods do -- pointing a command at a root this driver does not own is the whole of
+    // what they are for, and nothing else here may.
+    const result = await this.#processRunner.run(command, args, {
+      ...options,
+      env: options.env ?? this.#env(),
+    });
     if (result.code !== 0) {
       throw new DriverCrashError(
         `${command} ${args.join(" ")} failed: ${result.stderr || result.stdout}`,

@@ -90,6 +90,15 @@ platform command to it: iOS through `xcrun simctl --set`, Android through
 `ANDROID_AVD_HOME` plus a private adb server on a port the shared server does
 not scan. Devices inside a root are invisible to Xcode, Android Studio, and a
 plain `simctl` / `adb`; conversely Simlock cannot address anything outside it.
+There is one deliberate exception: a device stranded in the pre-root location
+by the migration, which `doctor` reports and `--fix` destroys through the old
+unscoped path — permitted because a registry record names it, which is what
+registry-only destruction asks for.
+
+Ownership is proven when the driver starts, and re-proven
+(`Driver.revalidateRoot()`) immediately before `doctor --purge-orphans`
+destroys anything in a root: reporting can live with a proof taken days ago,
+destroying cannot (see [known-pitfalls.md](known-pitfalls.md)).
 
 This is what lets `listManaged()` answer from membership rather than from a
 name prefix — the difference between *proving* ownership and *guessing* it.
