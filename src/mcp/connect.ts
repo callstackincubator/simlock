@@ -3,12 +3,10 @@
  * (lazy reconnect, tool-call serialization)"). `simlock/client`'s `connectSimlock` deliberately
  * does not start the daemon itself -- it only ever connects to an already-listening socket
  * (ADR §10: the client "does not reconnect and does not retry"). MCP is the one frontend spawned
- * with no separate "start the daemon first" step, so it is the frontend that needs this, the
- * same way `src/daemon-client/startup-coordinator.ts`'s `DaemonStartupCoordinator` gives the
- * (now superseded, daemon-client-based) old MCP client this behaviour. That coordinator is not
- * reused directly -- it is typed against `daemon-client`'s `DaemonConnector`/`DaemonConnection`,
- * not `simlock-client`'s connection-less `connectSimlock` -- so the same launch-then-retry
- * policy is re-implemented here, against the typed client, instead.
+ * with no separate "start the daemon first" step, so it is the frontend that needs this. The
+ * launch-then-retry policy lives here, next to its one caller, rather than inside the typed
+ * client: ADR §10 keeps the client to a single connection that never reconnects, and auto-start
+ * is precisely the kind of frontend concern it pushes back out.
  */
 import {
   connectSimlock,

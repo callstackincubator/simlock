@@ -66,6 +66,7 @@ describe("McpSession", () => {
 
   it("answers lease_status with one lease.list call each time, not a cache", async () => {
     const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
     let call = 0;
     client.listLeasesImpl = () => {
       call += 1;
@@ -90,6 +91,7 @@ describe("McpSession", () => {
     const session = new McpSession({ connect: async () => client });
 
     await expect(session.status()).resolves.toEqual({ held: false });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
     await expect(session.status()).resolves.toEqual({
       deviceId: "device-1",
       grantedAt: 0,
@@ -101,6 +103,57 @@ describe("McpSession", () => {
       ttlDeadline: 5_000,
     });
     expect(client.calls.filter((c) => c.method === "listLeases")).toHaveLength(2);
+  });
+
+  it("does not report a foreign lease under the same owner principal that this session never requested (B8)", async () => {
+    // `lease.list` filters by owner principal only -- no mode, no connection filter -- so it
+    // can return a lease this session's connection never asked for: here, a `detached` lease
+    // the CLI holds under the same `SIMLOCK_AGENT_ID` principal. `lease_status` must not report
+    // it as held, since this session never requested it and will not release it on close.
+    const client = new FakeSimlockClient();
+    client.listLeasesImpl = () =>
+      Promise.resolve({
+        leases: [
+          {
+            deviceId: "device-9",
+            grantedAt: 0,
+            id: "lse_foreign",
+            mode: "detached" as const,
+            ownerId: "mcp-test",
+            requesterId: "mcp-test",
+            ttlDeadline: 99_999,
+          },
+        ],
+      });
+    const session = new McpSession({ connect: async () => client });
+
+    await expect(session.status()).resolves.toEqual({ held: false });
+  });
+
+  it("stops reporting a lease as held once lease.release-lost or a lease-lost push arrives", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.listLeasesImpl = () =>
+      Promise.resolve({
+        leases: [
+          {
+            deviceId: "device-1",
+            grantedAt: 0,
+            id: "lease-1",
+            mode: "held" as const,
+            ownerId: "mcp-test",
+            requesterId: "mcp-test",
+            ttlDeadline: 5_000,
+          },
+        ],
+      });
+    const session = new McpSession({ connect: async () => client });
+
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+    await expect(session.status()).resolves.toMatchObject({ held: true, id: "lease-1" });
+
+    client.emitLeaseLost({ deviceId: "device-1", leaseId: "lease-1", reason: "expired" });
+    await expect(session.status()).resolves.toEqual({ held: false });
   });
 
   it("reconnects lazily: builds a new client only after the current one's connection is lost", async () => {

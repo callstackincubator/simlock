@@ -53,10 +53,13 @@ export const releaseSimulatorOutputSchema = OPERATIONS["lease.release"].output.e
 export const leaseStatusInputSchema = OPERATIONS["lease.list"].input;
 
 /**
- * `lease.list` returns `{leases: LeaseRecord[]}`; this session ever holds at most one lease (one
- * requester id, always `mode: "held"`), so the tool flattens that array's first entry (or none)
- * onto a `held` discriminant. Flat and all-optional -- not a discriminated union -- because the
- * MCP SDK validates `structuredContent` against `outputSchema` as a plain object shape.
+ * `lease.list` returns `{leases: LeaseRecord[]}`, filtered by the daemon to the owner
+ * principal only -- it can include leases this session never requested (see
+ * `McpSession#status`'s doc comment). `session.ts` narrows that array down to at most one
+ * entry -- the lease this session's own `lease()` call obtained, if any -- before this schema
+ * flattens it onto a `held` discriminant. Flat and all-optional -- not a discriminated union --
+ * because the MCP SDK validates `structuredContent` against `outputSchema` as a plain object
+ * shape.
  */
 export const leaseStatusOutputSchema = leaseRecordSchema.partial().extend({ held: z.boolean() });
 
