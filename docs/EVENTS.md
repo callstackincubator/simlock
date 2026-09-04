@@ -51,7 +51,7 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `cleanup.executed` | rule name, action, target, reason | cleanup executor committed a proposed action | CleanupExecutor | implemented |
 | `doctor.reconciled` | drift findings | daemon reconciliation completed | Doctor | implemented |
 | `driver.root-rejected` | platform, root path, reason (not-absolute/missing-marker/invalid-marker/wrong-instance/symlink/wrong-owner/wrong-permissions/non-empty-unowned-root/unreadable) | a driver's device root failed ownership validation at startup, so that platform's driver did not start | DaemonServer | implemented |
-| `driver.adb-server-rejected` | port, reason | Simlock's configured adb server port was occupied by a server it does not own, so the Android driver did not start | DaemonServer | planned |
+| `driver.adb-server-rejected` | port, reason (occupied/start-failed/invalid-port) | Simlock's own adb server could not be established — the port was occupied by a server it does not own, the server it started never began listening, or the configured port is not usable — so the Android driver did not start | DaemonServer | implemented |
 
 ## Conventions recap
 

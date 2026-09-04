@@ -99,10 +99,32 @@ doctor` reports the reason.
 
 Android containment needs one more thing, because `adb` has no equivalent of
 `simctl --set`: Simlock runs its own adb server on `drivers.android.adbServerPort`
-and gives its emulators console ports above the range a default adb server
-scans. That server is started with USB and mDNS disabled, so it never competes
-with the shared server for physical devices or network targets, and it refuses
-`adb kill-server`.
+and gives its emulators console ports (5586–5682) above the range a default adb
+server scans. That server is started with USB and mDNS disabled, so it never
+competes with the shared server for physical devices or network targets, and it
+refuses `adb kill-server`.
+
+Containment runs in both directions, and the second half is easy to get wrong.
+Simlock's server also has its emulator scanner turned off (`ADB_EMU=0`), because
+the scan's lower bound is hard-coded at 5555: a server allowed to scan high
+enough to find Simlock's emulators would also connect to *yours*, leaving two
+adb servers driving one device. Simlock's emulators still attach, because an
+emulator announces itself to the server it was told about — once, at its own
+startup. Simlock re-sends that announcement itself for its own console range
+(5586–5682) whenever it starts or adopts a server, and again for an emulator
+that stays unreachable while booting; that is what keeps emulators that
+outlived a `simlock daemon stop` visible to the daemon that comes next. Your
+emulators are never announced, so they stay yours, and Simlock's stay
+Simlock's.
+
+If `drivers.android.adbServerPort` is occupied by a server Simlock did not
+start, or is not a usable port, the Android driver does not start and `simlock
+doctor` reports why (`occupied`, `start-failed`, `invalid-port`). Simlock never
+attaches to a server it did not start. `occupied` is the one of those with no
+automatic way out — `adb kill-server` is refused by design — so the error names
+the two ways out: stop whatever holds the port (`lsof -nP -iTCP:<port>
+-sTCP:LISTEN` names the pid), or move Simlock's own server with `simlock config
+set drivers.android.adbServerPort <port>`.
 
 Consequence worth knowing: your own `adb` will not see Simlock's emulators.
 A lease hands you the port to use — see

@@ -156,6 +156,7 @@ function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "c
           args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
           command: process.execPath,
           logPath,
+          simlockHome: dataDirectory,
         }),
         socketPath,
       }),

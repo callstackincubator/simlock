@@ -16,9 +16,12 @@ const ANDROID_HOME =
 const hasAndroidSdk =
   existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
 
-async function adbDevices(): Promise<string[]> {
+/** Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
+async function adbDevices(serverPort: number): Promise<string[]> {
   const adb = join(ANDROID_HOME, "platform-tools", "adb");
-  const { stdout } = await execFileAsync(adb, ["devices"]).catch(() => ({ stdout: "" }));
+  const { stdout } = await execFileAsync(adb, ["-P", String(serverPort), "devices"]).catch(() => ({
+    stdout: "",
+  }));
   return stdout
     .split("\n")
     .slice(1)
@@ -50,6 +53,10 @@ describe.skipIf(!hasAndroidSdk)(
           driver: "real",
           configOverrides: { idle: { shutdownAfterMs: 300 } },
         });
+        const { adbServerPort } = env;
+        if (adbServerPort === undefined) {
+          throw new Error("the real-SDK lane must allocate its own adb server port");
+        }
         try {
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
@@ -84,17 +91,23 @@ describe.skipIf(!hasAndroidSdk)(
           // deliberately keeps opaque outside drivers/android (architecture.md #2) --
           // `grant.udid` is simlock's own AVD name, not the adb serial, so this only
           // asserts that *an* emulator is actually online, not which one by serial.
-          const onlineSerials = await adbDevices();
+          const onlineSerials = await adbDevices(adbServerPort);
           expect(
             onlineSerials.length,
-            "expected at least one booted emulator visible to adb",
+            "expected at least one booted emulator visible to Simlock's own adb server",
           ).toBeGreaterThan(0);
 
+          // Ownership is root membership, not a name: the AVD must be inside the root this
+          // env's Simlock owns, and must not be in the user's own AVD home at all.
+          expect(
+            existsSync(join(env.home, "devices", "android", `${grant.udid}.avd`)),
+            "expected the AVD to live inside Simlock's own device root",
+          ).toBe(true);
           const avdNames = await avdManagerList();
           expect(
-            avdNames.some((name) => name.startsWith("simlock_")),
-            "expected a simlock_-prefixed AVD",
-          ).toBe(true);
+            avdNames.includes(grant.udid),
+            "a Simlock AVD must not appear in the user's own AVD home",
+          ).toBe(false);
 
           await env.cli(["release", grant.lease]);
 

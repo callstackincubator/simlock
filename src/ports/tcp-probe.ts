@@ -8,6 +8,17 @@ import { createConnection, type Socket } from "node:net";
 export interface TcpProbe {
   /** True when something is accepting connections on `127.0.0.1:<port>` right now. */
   isListening(port: number, timeoutMs?: number): Promise<boolean>;
+  /**
+   * Writes `payload` to `127.0.0.1:<port>` and resolves with whatever came back before the
+   * peer closed or the timeout elapsed -- an empty string when it answered nothing.
+   *
+   * Deliberately dumb: what the bytes mean belongs to the caller (adb's host-service
+   * framing is the Android driver's business), while opening a loopback socket is an
+   * external API and so belongs behind a port like every other one (architecture rule 9).
+   * Rejects only when the connection itself failed, because a caller cannot tell "the
+   * server said nothing" from "there was no server" if both resolve the same way.
+   */
+  send(port: number, payload: string, timeoutMs?: number): Promise<string>;
 }
 
 /**
@@ -46,10 +57,59 @@ export class NodeTcpProbe implements TcpProbe {
       socket.once("error", () => settle(false));
     });
   }
+
+  async send(
+    port: number,
+    payload: string,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      let socket: Socket;
+      try {
+        socket = createConnection({ host: "127.0.0.1", port });
+      } catch (error: unknown) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+
+      let received = "";
+      let settled = false;
+      const settle = (outcome: () => void): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        socket.destroy();
+        outcome();
+      };
+
+      socket.setEncoding("utf8");
+      socket.setTimeout(timeoutMs);
+      socket.once("connect", () => socket.write(payload));
+      socket.on("data", (chunk: string) => {
+        received += chunk;
+      });
+      // A peer that answers and then holds the connection open is the normal case for the
+      // one service this carries, so the timeout is a completion condition rather than a
+      // failure: whatever arrived by then is the answer.
+      socket.once("timeout", () => settle(() => resolve(received)));
+      socket.once("close", () => settle(() => resolve(received)));
+      socket.once("error", (error) => settle(() => reject(error)));
+    });
+  }
+}
+
+export interface FakeSend {
+  readonly port: number;
+  readonly payload: string;
 }
 
 export class FakeTcpProbe implements TcpProbe {
+  /** Every `send` this probe was asked to make, in order. */
+  readonly sends: FakeSend[] = [];
   readonly #listening = new Set<number>();
+  #reply = "";
+  #sendFailure: Error | undefined;
 
   constructor(listeningPorts: readonly number[] = []) {
     for (const port of listeningPorts) {
@@ -59,6 +119,24 @@ export class FakeTcpProbe implements TcpProbe {
 
   async isListening(port: number): Promise<boolean> {
     return this.#listening.has(port);
+  }
+
+  async send(port: number, payload: string): Promise<string> {
+    this.sends.push({ payload, port });
+
+    if (this.#sendFailure !== undefined) {
+      throw this.#sendFailure;
+    }
+
+    return this.#reply;
+  }
+
+  replyWith(reply: string): void {
+    this.#reply = reply;
+  }
+
+  failSendsWith(error: Error): void {
+    this.#sendFailure = error;
   }
 
   startListening(port: number): void {

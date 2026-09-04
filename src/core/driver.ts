@@ -1,4 +1,5 @@
 import type { EventMap } from "../bus/index.js";
+import type { RootRejectionReason } from "./device-root.js";
 import type { DeviceSpec, Platform } from "./domain.js";
 
 export interface DeviceRequest {
@@ -133,10 +134,35 @@ export interface Driver {
    * nobody could address. The core forwards it verbatim; no key here means anything to it.
    */
   leaseEnvironment(): Readonly<Record<string, string>>;
+  /**
+   * Releases whatever this driver holds outside its own process -- Android supervises an
+   * adb server it must reap by pid, since nothing else can (`docs/known-pitfalls.md`).
+   * Optional because most drivers hold nothing; the daemon calls it on every shutdown
+   * path and never lets a failure here abort the rest of one.
+   */
+  dispose?(): Promise<void>;
 }
 
 /** The events a driver may refuse to start with; each pairs with its own payload below. */
 type DriverRejectionEvent = "driver.root-rejected" | "driver.adb-server-rejected";
+
+/**
+ * Why Simlock's own adb server could not be established. Wire-visible, like the root
+ * reasons: these travel in the `driver.adb-server-rejected` payload and are listed in
+ * `docs/EVENTS.md`, so the vocabulary is fixed and closed.
+ *
+ * It sits beside the event names rather than in `drivers/android` because the two are one
+ * contract: the core publishes neither without the other, and a driver module cannot be
+ * the place a core type is defined. Nothing here interprets a term (architecture rule 2).
+ */
+export type AdbServerRejectionReason = "occupied" | "start-failed" | "invalid-port";
+
+/**
+ * Every term a refusal may report. Typed rather than a bare `string` so a reason that no
+ * documented vocabulary contains cannot reach `doctor` output or the bus: the whole value
+ * of publishing these words is that a user who reads one can look it up.
+ */
+export type DriverRejectionReason = RootRejectionReason | AdbServerRejectionReason;
 
 /**
  * One refusal, with the payload the event it names is published with.
@@ -156,7 +182,7 @@ interface DriverRefusal<Event extends DriverRejectionEvent> {
    * rather than read back out of `payload`, which is a wire contract the core does not
    * open. `doctor` reports it as the failing reason.
    */
-  readonly reason: string;
+  readonly reason: DriverRejectionReason;
   /** One line, for `doctor` output and the startup log. */
   readonly summary: string;
 }
