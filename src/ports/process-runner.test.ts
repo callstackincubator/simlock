@@ -145,6 +145,25 @@ describe("NodeProcessRunner", () => {
     ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
   });
 
+  // Real end-to-end coverage of the SIGTERM -> SIGKILL escalation: a child that installs a
+  // no-op SIGTERM handler survives the initial signal `run()` sends on timeout, so this only
+  // resolves at all if the follow-up SIGKILL actually lands once the grace period elapses.
+  // `SIGTERM_TO_SIGKILL_GRACE_MS` is a fixed 10s (see process-runner.ts), hence the generous
+  // per-test timeout below -- there is no faster way to prove the real runner's own timers
+  // actually escalate without mocking out `child_process`, which every other test in this
+  // `describe` block deliberately avoids.
+  it("escalates to SIGKILL when a timed-out process ignores SIGTERM", async () => {
+    const runner = new NodeProcessRunner();
+
+    await expect(
+      runner.run(
+        process.execPath,
+        ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000)"],
+        { timeoutMs: 100 },
+      ),
+    ).resolves.toEqual({ code: null, stderr: "", stdout: "" });
+  }, 15_000);
+
   it("settles wait() when a detached grandchild keeps the stdio pipe open after the process exits", async () => {
     const runner = new NodeProcessRunner();
     // The child forks its own detached grandchild that inherits our pipe's write

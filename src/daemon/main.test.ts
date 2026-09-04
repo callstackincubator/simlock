@@ -1,14 +1,16 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect } from "node:net";
+import { connect, createServer, Server } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FakeDriver, OWNED_ROOT_MARKER_FILE, type OwnedRootError } from "../core/index.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
+import { EventBus } from "../bus/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
+  CryptoTokenSecrets,
   FakeClock,
   FakeProcessSupervisor,
   FakeTcpProbe,
@@ -18,7 +20,15 @@ import {
   ScriptedProcessRunner,
   type IdGenerator,
 } from "../ports/index.js";
-import { discoverDrivers, startDaemon, type StartDaemonOptions } from "./main.js";
+import {
+  bridgeAndroidDriverDiagnostic,
+  discoverDrivers,
+  emitComponentInstallDiagnostic,
+  emitSlimDiagnostic,
+  startDaemon,
+  wireComponentInstallLogging,
+  type StartDaemonOptions,
+} from "./main.js";
 import type { DaemonServer } from "./server.js";
 
 const runningDaemons: DaemonServer[] = [];
@@ -192,7 +202,9 @@ describe("startDaemon startup readiness", () => {
 
       const parkedLease = client.request("lease.request", {
         mode: "detached",
-        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
       });
       let leaseSettled = false;
       void parkedLease.then(() => {
@@ -216,6 +228,291 @@ describe("startDaemon startup readiness", () => {
   });
 });
 
+describe("startDaemon HTTP gateway startup readiness", () => {
+  // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
+  // being refused." Mirrors the socket-side test above (same FakeDriver latency trick to hold
+  // convergence open on the FakeClock), but drives a real HTTP request instead of a socket
+  // frame -- proving the gateway is actually listening (and its request actually parks) before
+  // convergence finishes, not just that `dispatch()` would park it in principle.
+  it("parks an HTTP request until convergence completes, instead of refusing the connection", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-slow-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const secrets = new CryptoTokenSecrets();
+    const secret = "slk_test_agent";
+    await filesystem.mkdirp(directory);
+    await filesystem.writeFileAtomic(
+      join(directory, "tokens.json"),
+      JSON.stringify([
+        { id: "tok_agent", hash: secrets.hash(secret), role: "agent", createdAt: 0 },
+      ]),
+    );
+    const port = 47_011;
+
+    const startPromise = startDaemon({
+      clock,
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      dataDirectory: directory,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock,
+          latencyMs: { listManaged: 30_000 },
+          platform: "ios",
+        }),
+      ],
+      filesystem,
+      statePath: join(directory, "state.json"),
+      version: "1.2.3",
+    } as StartDaemonOptions).then((daemon) => {
+      runningDaemons.push(daemon);
+      return daemon;
+    });
+
+    // Polls rather than a fixed delay: the gateway binds asynchronously (`onSocketClaimed`
+    // fires once the socket claim resolves, then `gateway.start()` itself awaits a real
+    // `listen()`), so there is no single microtask boundary to await here the way the
+    // socket-side test above can just retry-connect on the unix socket.
+    const statusBeforeConvergence = await pollUntilListening(port, secret);
+    expect(statusBeforeConvergence).toMatchObject({ health: "starting" });
+
+    const parkedStatusPromise = fetch(`http://127.0.0.1:${port}/v1/leases`, {
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    let settled = false;
+    void parkedStatusPromise.then(() => {
+      settled = true;
+    });
+    // Give the parked request's own microtasks a chance to run before asserting it hasn't --
+    // it must still be awaiting `dispatch()`'s startup-readiness gate, not merely slow.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    clock.advance(30_000);
+    const daemon = await startPromise;
+    expect(daemon).toBeDefined();
+
+    const parkedResponse = await parkedStatusPromise;
+    expect(parkedResponse.status).toBe(200);
+  });
+});
+
+describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", () => {
+  // Before this fix, `stopAuxiliary` (this file's `stopAuxiliary` closure passed to
+  // `DaemonServer`) returned immediately whenever the concurrently-started HTTP gateway
+  // (`onSocketClaimed` -> `startHttpGateway()`) hadn't finished its own `listen()` yet --
+  // `stopHttpGateway` isn't assigned until it does. `#stop()` (server.ts) awaits
+  // `stopAuxiliary()` first, so it would go on to release leases, settle, and dispose while the
+  // gateway was still binding, then start accepting HTTP requests -- against a torn-down engine
+  // -- once its own `listen()` finally resolved. The fix makes `stopAuxiliary` await
+  // `gatewayStarted` (settled only once the gateway's own bind attempt finishes, one way or the
+  // other) before doing anything else.
+  //
+  // The window this reproduces (`onSocketClaimed` firing to the gateway's `listen()` actually
+  // resolving) is normally a handful of real milliseconds -- reachable, per the review, via
+  // `simlock daemon stop` during startup, but not something a test can land inside reliably by
+  // just racing real I/O against real I/O. So this test holds the window open deterministically
+  // instead: it patches `net.Server.prototype.listen` (restored in `finally`) to delay only a
+  // TCP bind (the gateway's) by 200ms, leaving the daemon's own Unix-socket `listen()` (a string
+  // first argument, not a port) untouched -- so the socket claims and answers `daemon.stop`
+  // long before the patched gateway bind is even allowed to start.
+  it("never lets the HTTP gateway outlive full teardown when daemon.stop lands while the gateway is still mid-bind", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-race-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const filesystem = new MemoryFilesystem();
+    const port = 47_013;
+    const socketPath = join(directory, "daemon.sock");
+
+    const restoreListen = delayTcpListen(200);
+    try {
+      const startPromise = startDaemon({
+        clock,
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+        filesystem,
+        logger,
+        socketPath,
+        statePath: join(directory, "state.json"),
+        version: "1.2.3",
+      } as StartDaemonOptions);
+      // `stop()` is idempotent, so it is safe for `afterEach` to also stop whatever this
+      // resolves to (it will, once the delayed gateway bind above finishes settling).
+      void startPromise.then((daemon) => runningDaemons.push(daemon)).catch(() => undefined);
+
+      // Connects and authenticates as admin, then sends `daemon.stop` -- comfortably inside the
+      // 200ms window the patch above holds the gateway's own bind open for. The admin secret is
+      // written (`AdminSecretManager#persist`) before `onSocketClaimed` fires, so it is already
+      // there by the time the socket itself is reachable.
+      const client = await connectRetrying(socketPath);
+      const secret = (await readFileRetrying(filesystem, join(directory, "admin.token"))).trim();
+      await client.request("hello", {
+        clientVersion: "test",
+        credential: secret,
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      const stopReply = await client.request("daemon.stop", {});
+      expect(stopReply.ok).toBe(true);
+      client.socket.end();
+
+      // Lets the delayed gateway bind actually fire and settle (one way or the other) before
+      // this test reads the log for it.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      const stoppingIndex = sink.records.findIndex(
+        (record) => record.message === "Daemon stopping",
+      );
+      expect(stoppingIndex).toBeGreaterThanOrEqual(0);
+      const gatewayStoppedIndex = sink.records.findIndex(
+        (record) => record.message === "HTTP gateway stopped",
+      );
+      const gatewayListeningIndex = sink.records.findIndex(
+        (record) => record.message === "HTTP gateway listening",
+      );
+      // The gateway actually got to bind (it does here -- the port is free and 200ms is ample
+      // real time for a loopback `listen()`), so this asserts the meaningful case directly
+      // rather than treating it as merely possible: it bound, and it was stopped, and both
+      // happened strictly before "Daemon stopping" (logged only once `stopAuxiliary` resolves --
+      // see `server.ts#stop`). Before the fix, `stoppingIndex` would be *smaller* than both of
+      // these -- `stopAuxiliary` returned immediately, so "Daemon stopping" logged right away,
+      // well before the (patch-delayed) gateway bind even started.
+      expect(gatewayListeningIndex).toBeGreaterThanOrEqual(0);
+      expect(gatewayListeningIndex).toBeLessThan(stoppingIndex);
+      expect(gatewayStoppedIndex).toBeGreaterThanOrEqual(0);
+      expect(gatewayStoppedIndex).toBeLessThan(stoppingIndex);
+
+      // And the port must never be reachable once the daemon has finished stopping -- the
+      // gateway did not outlive teardown just because it bound after `stop()` was requested.
+      await expect(
+        fetch(`http://127.0.0.1:${port}/v1/status`, {
+          headers: { authorization: "Bearer irrelevant" },
+          signal: AbortSignal.timeout(200),
+        }),
+      ).rejects.toThrow();
+    } finally {
+      restoreListen();
+    }
+  });
+});
+
+describe("startDaemon socket race with HTTP enabled", () => {
+  // Review finding V1: `gatewayStarted` is settled only from inside `onSocketClaimed`'s
+  // handler, and `start()` fires that callback only after the socket claim succeeds. A daemon
+  // that loses the start race therefore rejected without the callback ever running, so nothing
+  // settled `gatewayStarted` and `Promise.allSettled` waited on it forever -- `startDaemon()`
+  // hung instead of reporting the lost race, with no rejection and no non-zero exit code.
+  // Reachable by racing `simlock daemon start`, or by the CLI's own auto-launch.
+  it("rejects rather than hanging when the socket is already claimed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-socket-race-"));
+    temporaryDirectories.push(directory);
+    const filesystem = new MemoryFilesystem();
+    const statePath = join(directory, "state.json");
+    const options = (port: number): StartDaemonOptions =>
+      ({
+        clock: new FakeClock(1_000),
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [
+          new FakeDriver({
+            availableOsVersions: ["26.5"],
+            clock: new FakeClock(1_000),
+            platform: "ios",
+          }),
+        ],
+        filesystem,
+        logger: new JsonLinesLogger({
+          clock: new FakeClock(1_000),
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
+        statePath,
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+
+    const first = await startDaemon(options(47_013));
+    try {
+      // A distinct port, so the only thing that can fail is the socket claim itself.
+      const second = startDaemon(options(47_014));
+      const outcome = await Promise.race([
+        second.then(
+          () => "resolved" as const,
+          () => "rejected" as const,
+        ),
+        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 3_000)),
+      ]);
+      expect(outcome).toBe("rejected");
+    } finally {
+      await first.stop("test-cleanup").catch(() => undefined);
+    }
+  });
+});
+
+describe("startDaemon HTTP gateway bind failure", () => {
+  // Review finding B6: before this fix, an HTTP bind failure (occupied port) logged and
+  // stopped the daemon from inside `onSocketClaimed`'s handler without `startDaemon()` itself
+  // ever seeing it -- the daemon's own `start()` would go on to resolve successfully once
+  // convergence finished, so the CLI reported success (exit code 0) with no socket, no HTTP,
+  // and no daemon actually running. This proves `startDaemon()` now rejects instead, and that
+  // the daemon never reports having started after it already reported stopping.
+  it("rejects startDaemon() when the configured HTTP port is already in use, without emitting a started record after a stopping one", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-bind-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const filesystem = new MemoryFilesystem();
+    const port = 47_012;
+
+    const occupier = createServer();
+    await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+    try {
+      await expect(
+        startDaemon({
+          clock,
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+          dataDirectory: directory,
+          drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          filesystem,
+          logger,
+          statePath: join(directory, "state.json"),
+          version: "1.2.3",
+        } as StartDaemonOptions),
+      ).rejects.toThrow(/EADDRINUSE|address already in use/i);
+    } finally {
+      await new Promise((resolve) => occupier.close(resolve));
+    }
+
+    const startedIndex = sink.records.findIndex((record) => record.message === "Daemon started");
+    const stoppingIndex = sink.records.findIndex((record) => record.message === "Daemon stopping");
+    expect(stoppingIndex).toBeGreaterThanOrEqual(0);
+    // Either "Daemon started" never appears (the common case: the bind failure is discovered
+    // and the whole thing torn down without convergence ever seeing readiness), or -- if
+    // convergence happened to finish first -- it appears strictly before "Daemon stopping",
+    // never after (ADR events rule 3: a fact must be true when emitted).
+    if (startedIndex >= 0) {
+      expect(startedIndex).toBeLessThan(stoppingIndex);
+    }
+  });
+});
+
+async function pollUntilListening(port: number, secret: string): Promise<unknown> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/status`, {
+        headers: { authorization: `Bearer ${secret}` },
+      });
+      return await response.json();
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error("HTTP gateway never started listening");
+}
+
 describe("discoverDrivers", () => {
   it("logs a skip when the Android SDK cannot be found, without throwing", async () => {
     const sink = new MemoryLogSink();
@@ -225,6 +522,7 @@ describe("discoverDrivers", () => {
     const { drivers } = await discoverDrivers({
       clock: new FakeClock(),
       driversConfig: {},
+      eventBus: new EventBus(new FakeClock()),
       filesystem,
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
@@ -394,6 +692,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     return discoverDrivers({
       clock: new FakeClock(),
       driversConfig: {},
+      eventBus: new EventBus(new FakeClock()),
       filesystem,
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
@@ -461,6 +760,7 @@ function discoverIos(
   return discoverDrivers({
     clock: new FakeClock(),
     driversConfig: {},
+    eventBus: new EventBus(new FakeClock()),
     filesystem: overrides.filesystem ?? new MemoryFilesystem(),
     hostPlatform: overrides.hostPlatform ?? "darwin",
     idGenerator: overrides.idGenerator ?? new CryptoIdGenerator(),
@@ -476,6 +776,249 @@ function discoverIos(
     tcpProbe: new FakeTcpProbe(),
   });
 }
+
+describe("component install diagnostic bridging", () => {
+  it("emits component.install-started/-installed/-failed for the bridged platform", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = emitComponentInstallDiagnostic(eventBus, "ios");
+
+    bridge({ componentId: "18.6", kind: "component-install-started" });
+    bridge({ componentId: "18.6", durationMs: 42_000, kind: "component-installed" });
+    bridge({
+      componentId: "18.6",
+      durationMs: 5_000,
+      error: "DriverCrashError: xcodebuild failed",
+      kind: "component-install-failed",
+    });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "component.install-started",
+        module: "driver-diagnostics",
+        payload: { componentId: "18.6", platform: "ios" },
+      }),
+      expect.objectContaining({
+        event: "component.installed",
+        module: "driver-diagnostics",
+        payload: { componentId: "18.6", durationMs: 42_000, platform: "ios" },
+      }),
+      expect.objectContaining({
+        event: "component.install-failed",
+        module: "driver-diagnostics",
+        payload: {
+          componentId: "18.6",
+          durationMs: 5_000,
+          error: "DriverCrashError: xcodebuild failed",
+          platform: "ios",
+        },
+      }),
+    ]);
+  });
+
+  it("carries requesterId onto the bridged event when the diagnostic knows one, and omits it when it doesn't", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = emitComponentInstallDiagnostic(eventBus, "ios");
+
+    bridge({ componentId: "18.6", kind: "component-install-started", requesterId: "agent-1" });
+    bridge({ componentId: "18.6", kind: "component-install-started" });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: { componentId: "18.6", platform: "ios", requesterId: "agent-1" },
+      }),
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: { componentId: "18.6", platform: "ios" },
+      }),
+    ]);
+  });
+
+  it("forwards only component-install-* diagnostics from the Android driver's broader onDiagnostic surface", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = bridgeAndroidDriverDiagnostic(eventBus);
+
+    bridge({ avdName: "simlock_1", kind: "snapshot-cold-boot", readyAfterMs: 15_000 });
+    bridge({
+      kind: "device-profile-source-unreadable",
+      path: "/x/.android/devices.xml",
+      reason: "parse-error",
+    });
+    bridge({
+      componentId: "system-images;android-35;google_apis;arm64-v8a",
+      kind: "component-install-started",
+    });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "component.install-started",
+        payload: {
+          componentId: "system-images;android-35;google_apis;arm64-v8a",
+          platform: "android",
+        },
+      }),
+    ]);
+  });
+});
+
+describe("slim diagnostic bridging", () => {
+  it("emits device.slimmed with the driver-diagnostics module for a SlimmedFact", () => {
+    const clock = new FakeClock(1_000);
+    const eventBus = new EventBus(clock);
+    const seen: unknown[] = [];
+    eventBus.subscribeAll((envelope) => seen.push(envelope));
+    const bridge = emitSlimDiagnostic(eventBus);
+
+    bridge({
+      address: "simlock-ios-1-address",
+      categories: ["siri", "spotlight"],
+      deviceId: "simlock-ios-1",
+      durationMs: 12_000,
+      labelCount: 170,
+      signature: "sig-abc123",
+      unknownLabels: ["com.apple.unknown-daemon"],
+    });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        event: "device.slimmed",
+        module: "driver-diagnostics",
+        payload: {
+          address: "simlock-ios-1-address",
+          categories: ["siri", "spotlight"],
+          deviceId: "simlock-ios-1",
+          durationMs: 12_000,
+          labelCount: 170,
+          platform: "ios",
+          signature: "sig-abc123",
+          unknownLabels: ["com.apple.unknown-daemon"],
+        },
+      }),
+    ]);
+  });
+});
+
+describe("wireComponentInstallLogging", () => {
+  it('writes a durable structured log line under logger.child("components") when component.installed fires', () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "component.installed",
+      { componentId: "18.6", durationMs: 42_000, platform: "ios" },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Component installed",
+        module: "daemon.components",
+        fields: { componentId: "18.6", durationMs: 42_000, platform: "ios" },
+      }),
+    );
+  });
+
+  it("includes requesterId in the durable log line when the event carries one", () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "component.installed",
+      { componentId: "18.6", durationMs: 42_000, platform: "ios", requesterId: "agent-1" },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Component installed",
+        module: "daemon.components",
+        fields: {
+          componentId: "18.6",
+          durationMs: 42_000,
+          platform: "ios",
+          requesterId: "agent-1",
+        },
+      }),
+    );
+  });
+
+  it("does not log for component.install-started or component.install-failed", () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "component.install-started",
+      { componentId: "18.6", platform: "ios" },
+      "driver-diagnostics",
+    );
+    eventBus.emit(
+      "component.install-failed",
+      { componentId: "18.6", durationMs: 1_000, error: "boom", platform: "ios" },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toEqual([]);
+  });
+
+  it('writes a durable structured log line under logger.child("slim") when device.slimmed fires', () => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const eventBus = new EventBus(clock);
+
+    wireComponentInstallLogging(eventBus, logger);
+    eventBus.emit(
+      "device.slimmed",
+      {
+        address: "simlock-ios-1-address",
+        categories: ["siri", "spotlight"],
+        deviceId: "simlock-ios-1",
+        durationMs: 12_000,
+        labelCount: 170,
+        platform: "ios",
+        signature: "sig-abc123",
+        unknownLabels: [],
+      },
+      "driver-diagnostics",
+    );
+
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: "Device slimmed",
+        module: "daemon.slim",
+        fields: {
+          categories: ["siri", "spotlight"],
+          deviceId: "simlock-ios-1",
+          durationMs: 12_000,
+          labelCount: 170,
+          signature: "sig-abc123",
+          unknownLabels: [],
+        },
+      }),
+    );
+  });
+});
 
 describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
   const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
@@ -501,6 +1044,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     return discoverDrivers({
       clock: new FakeClock(),
       driversConfig: {},
+      eventBus: new EventBus(new FakeClock()),
       filesystem: new MemoryFilesystem(),
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
@@ -619,6 +1163,52 @@ async function connectRetrying(socketPath: string, timeoutMs = 2_000): Promise<M
     } catch (error: unknown) {
       if (Date.now() >= deadline) throw error;
       await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+}
+
+/** Delays every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) by
+ * `delayMs`, real time, via `setTimeout` -- but passes a Unix-socket `listen(path, callback)`
+ * call (a string first argument) straight through unpatched. Used only by the S5 race test
+ * above to hold the HTTP gateway's own bind open deterministically without touching `src/http`
+ * -- `@hono/node-server`'s `serve()` ultimately calls `http.Server#listen`, which is `net.Server`'s
+ * own method (Node's `http` module does not override it), so patching it here reaches the
+ * gateway's real bind call. Returns a restorer; always call it, even on failure. */
+function delayTcpListen(delayMs: number): () => void {
+  const original = Server.prototype.listen;
+  type ListenFn = (...callArgs: unknown[]) => Server;
+  Server.prototype.listen = function patchedListen(this: Server, ...args: unknown[]) {
+    const isTcp =
+      typeof args[0] === "number" ||
+      (typeof args[0] === "object" && args[0] !== null && !("path" in (args[0] as object)));
+    if (!isTcp) {
+      return (original as ListenFn).apply(this, args);
+    }
+    setTimeout(() => {
+      (original as ListenFn).apply(this, args);
+    }, delayMs);
+    return this;
+  } as typeof Server.prototype.listen;
+  return () => {
+    Server.prototype.listen = original;
+  };
+}
+
+/** Polls a `MemoryFilesystem` path with no backoff -- used to read `admin.token` the moment
+ * `AdminSecretManager#persist` lands it, without adding artificial delay to a test that is
+ * deliberately racing that write's timing against something else (see the S5 race test). */
+async function readFileRetrying(
+  filesystem: MemoryFilesystem,
+  path: string,
+  timeoutMs = 2_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return await filesystem.readFile(path);
+    } catch (error: unknown) {
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
 }

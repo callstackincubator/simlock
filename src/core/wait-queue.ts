@@ -4,11 +4,20 @@ import type { DeviceRequest } from "./driver.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
+  /** ADR 0003 §4: the session principal the resulting lease is owned by -- distinct from
+   * `requesterId`, which is attribution and defaults to the principal but may be set to
+   * something else per request. Required: every caller of `LeaseCommands.request` (the daemon
+   * dispatcher) always knows its own session's principal. */
+  readonly ownerId: string;
   readonly mode: "held" | "detached";
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
   readonly onProgress?: (progress: LeaseProgress) => void;
+  /** ADR 0003 §9: initial TTL for a *detached* lease. The contract rejects this for a `held`
+   * lease as `BAD_REQUEST` before it ever reaches here (held TTL is the backstop, not the
+   * caller's to shorten) -- this type does not re-enforce that, it trusts the caller. */
+  readonly ttlMs?: number;
 }
 
 /** Request-scoped progress for the lease action currently being performed. */
@@ -41,6 +50,13 @@ export class QueueTimeoutError extends Error {
   constructor(readonly requestId: string) {
     super(`Timed out waiting for a device: ${requestId}`);
     this.name = "QueueTimeoutError";
+  }
+}
+
+export class RequestCancelledError extends Error {
+  constructor(readonly requestId: string) {
+    super(`Lease request cancelled: ${requestId}`);
+    this.name = "RequestCancelledError";
   }
 }
 
@@ -117,6 +133,19 @@ export class WaitQueue {
 
   hasPendingRequester(requesterId: string): boolean {
     return this.#pendingRequesters.has(requesterId);
+  }
+
+  /**
+   * Finds a requester's waiter across every non-terminal state, not just the FIFO list -- a
+   * waiter driven straight to `processing` on its first attempt never gets enqueued at all, so
+   * a caller deciding cancellability needs this broader membership, unlike `detachProgress`
+   * which only ever needs to reach an already-queued entry.
+   */
+  findPendingWaiter(requesterId: string): Waiter | undefined {
+    for (const waiter of this.#pendingWaiters) {
+      if (waiter.options.requesterId === requesterId) return waiter;
+    }
+    return undefined;
   }
 
   create(request: DeviceRequest, requestOptions: LeaseRequestOptions): Waiter {

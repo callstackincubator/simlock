@@ -101,19 +101,21 @@ describe("error and exit-code table", () => {
       "--agent-id",
       "flow4-held",
     ]);
-    const grant = JSON.parse(await held.firstStdoutLine()) as { lease: string };
+    const grant = JSON.parse(await held.firstStdoutLine()) as { lease: { id: string } };
 
     try {
       const rows = await waitForLeaseCount(env, 1);
-      const before = rows.find((row) => row.id === grant.lease);
-      if (before === undefined) throw new Error(`lease ${grant.lease} not found before renew`);
+      const before = rows.find((row) => row.id === grant.lease.id);
+      if (before === undefined) {
+        throw new Error(`lease ${grant.lease.id} not found before renew`);
+      }
       const beforeDeadline = before.ttlDeadline as number;
 
-      const result = await env.cli(["lease", "renew", grant.lease]);
+      const result = await env.cli(["lease", "renew", grant.lease.id]);
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
       const renewed = result.json as { id: string; mode: string; ttlDeadline: number };
-      expect(renewed.id).toBe(grant.lease);
+      expect(renewed.id).toBe(grant.lease.id);
       expect(renewed.mode).toBe("held");
       // A held-mode lease used to have no escape hatch: renewal now resets its
       // backstop deadline exactly like a detached lease's, instead of rejecting.

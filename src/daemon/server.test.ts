@@ -10,11 +10,16 @@ import {
   type DriverRejection,
   CleanupReaper,
   FakeDriver,
+  InsufficientDiskSpaceError,
   LeaseEngine,
   PassthroughRefusedError,
   Registry,
+  RuntimeMissingError,
 } from "../core/index.js";
+import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
+import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
+  CryptoTokenSecrets,
   FakeClock,
   FakeSystemStats,
   JsonLinesLogger,
@@ -26,7 +31,9 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
+import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
+import { AdminSecretManager } from "./admin-secret.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -75,7 +82,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     expect(grant.ok).toBe(true);
     expect(harness.registry.snapshot.leases).toHaveLength(1);
@@ -105,6 +114,12 @@ describe("DaemonServer", () => {
     });
     await missingHello.close();
 
+    // ADR 0003 §6: protocol versions are now negotiated as ranges. A bare `protocolVersion`
+    // with no overlap against the daemon's range is `PROTOCOL_VERSION_UNSUPPORTED`, carrying
+    // both ranges and the daemon version -- there is no more exact-match
+    // `PROTOCOL_VERSION_MISMATCH` on this daemon (a real protocol-2 daemon out in the world
+    // still answers with the old code; see `contract/protocol.test.ts`'s
+    // `mapLegacyProtocolMismatch` for how a client maps that).
     const wrongVersion = await createClient(harness.socketPath);
     await expect(
       wrongVersion.request("hello", {
@@ -112,14 +127,22 @@ describe("DaemonServer", () => {
         protocolVersion: DAEMON_PROTOCOL_VERSION + 1,
       }),
     ).resolves.toMatchObject({
-      error: { code: "PROTOCOL_VERSION_MISMATCH" },
+      error: {
+        code: "PROTOCOL_VERSION_UNSUPPORTED",
+        details: {
+          client: { min: DAEMON_PROTOCOL_VERSION + 1, max: DAEMON_PROTOCOL_VERSION + 1 },
+          daemon: PROTOCOL_VERSION_RANGE,
+        },
+      },
       ok: false,
     });
   });
 
   // Protocol 2 added the `heartbeat` capability and the sliding held-lease TTL that
   // depends on it, and shipped without back-compat shims. Rejecting v1 is therefore a
-  // deliberate product decision, not just arithmetic on the current constant.
+  // deliberate product decision, not just arithmetic on the current constant. Protocol 3
+  // (ADR 0003) widened the rejection to a range check, but a v1 client (no overlap with
+  // `PROTOCOL_VERSION_RANGE`) is still rejected outright, now as `PROTOCOL_VERSION_UNSUPPORTED`.
   it("rejects a protocol v1 client outright rather than serving it without heartbeats", async () => {
     const harness = await createHarness();
     const legacy = await createClient(harness.socketPath);
@@ -127,7 +150,7 @@ describe("DaemonServer", () => {
     await expect(
       legacy.request("hello", { clientVersion: "test", protocolVersion: 1 }),
     ).resolves.toMatchObject({
-      error: { code: "PROTOCOL_VERSION_MISMATCH" },
+      error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
       ok: false,
     });
   });
@@ -141,13 +164,17 @@ describe("DaemonServer", () => {
     await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     const queuedGrant = waiter.request("lease.request", {
       mode: "held",
       requesterId: "waiter",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     await expect
       .poll(() => harness.eventBus.replay().some((event) => event.event === "lease.queued"))
@@ -167,16 +194,22 @@ describe("DaemonServer", () => {
     await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     const queuedGrant = waiter.request("lease.request", {
       mode: "held",
       requesterId: "waiter",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
+    // ADR 0003 §8: `progress` now carries the originating request's frame id alongside the
+    // progress payload, under `progress`, rather than the bare stage object at the top level.
     await expect(waiter.nextFrame((frame) => frame.push === "progress")).resolves.toMatchObject({
-      payload: { queuePosition: 1, stage: "queued" },
+      payload: { progress: { queuePosition: 1, stage: "queued" } },
       push: "progress",
     });
 
@@ -186,7 +219,8 @@ describe("DaemonServer", () => {
         .filter(
           (frame) =>
             frame.push === "progress" &&
-            (frame.payload as { readonly stage?: unknown } | undefined)?.stage === "queued",
+            (frame.payload as { readonly progress?: { readonly stage?: unknown } } | undefined)
+              ?.progress?.stage === "queued",
         ),
     ).toEqual([]);
     await holder.close();
@@ -223,7 +257,9 @@ describe("DaemonServer", () => {
       .request("lease.request", {
         mode: "detached",
         requesterId: "agent-1",
-        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
       })
       .then((response) => {
         requestSettled = true;
@@ -233,7 +269,7 @@ describe("DaemonServer", () => {
     await expect(
       client.nextFrame((frame) => frame.push === "progress" && frame.payload !== undefined),
     ).resolves.toMatchObject({
-      payload: { etaMs: 60, stage: "provisioning" },
+      payload: { progress: { etaMs: 60, stage: "provisioning" } },
       push: "progress",
     });
     expect(requestSettled).toBe(false);
@@ -311,7 +347,9 @@ describe("DaemonServer", () => {
     const grant = await client.request("lease.request", {
       mode: "detached",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = (grant.payload as { readonly lease: { readonly id: string } }).lease.id;
     await expect(client.request("lease.renew", { leaseId, ttlMs: 120_000 })).resolves.toMatchObject(
@@ -440,6 +478,64 @@ describe("DaemonServer", () => {
     expect(first.daemon.socketPath).toBe(socketPath);
   });
 
+  // Review finding S1: `AdminSecretManager`'s own doc (`admin-secret.ts`) asserts "a daemon
+  // that loses the start race never calls `persist()` at all ... so the file an
+  // already-running daemon wrote is never touched by the loser" -- untested anywhere before
+  // this. Mirrors the "recovers a stale socket file" test above (two harnesses racing for the
+  // same socket path), but gives each its own real `AdminSecretManager` over its own
+  // `MemoryFilesystem` so this can assert on the filesystem directly, rather than trusting a
+  // stub. In production both instances would target the *same* real `admin.token` path (see
+  // `main.ts`); separate filesystems here isolate what each instance actually did, without that
+  // shared path letting a wrongly-invoked `remove()` on the loser silently clean up after a
+  // wrongly-invoked `persist()` and mask the very bug this test exists to catch.
+  it("never touches admin.token on the daemon instance that loses the start race", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-stale-admin-"));
+    temporaryDirectories.push(directory);
+    const socketPath = join(directory, "daemon.sock");
+    await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
+
+    const secrets = new CryptoTokenSecrets();
+    const winnerFilesystem = new MemoryFilesystem();
+    // Not bound to a name: `createHarness` already registers its daemon in `runningDaemons`
+    // for `afterEach` to stop, and this test only needs the winner alive on `socketPath` (so
+    // the loser's own `start()` below actually loses) plus its filesystem.
+    await createHarness({
+      adminSecret: new AdminSecretManager({
+        filesystem: winnerFilesystem,
+        path: "/admin.token",
+        secrets,
+      }),
+      socketPath,
+    });
+    // The winner (the only one whose `start()` actually reached `host.start()`'s success path)
+    // did persist its secret.
+    await expect(winnerFilesystem.readFile("/admin.token")).resolves.toContain("\n");
+
+    const loserFilesystem = new MemoryFilesystem();
+    const second = await createHarness({
+      adminSecret: new AdminSecretManager({
+        filesystem: loserFilesystem,
+        path: "/admin.token",
+        secrets,
+      }),
+      socketPath,
+      start: false,
+    });
+    await expect(second.daemon.start()).rejects.toMatchObject({
+      name: "DaemonAlreadyRunningError",
+    });
+    // The claim under test: the loser's own filesystem was never written to, because its
+    // `start()` threw before reaching `adminSecret.persist()`. `startDaemon()` (`main.ts`)
+    // never calls `stop()` on a `daemon.start()` rejection like this one either, so this
+    // asserts the state exactly as production leaves it, before any test-hygiene cleanup below.
+    await expect(loserFilesystem.readFile("/admin.token")).rejects.toThrow();
+
+    await second.daemon.stop("failed-start");
+    const client = await createClient(socketPath);
+    await hello(client);
+    await client.close();
+  });
+
   it("gracefully stops by releasing held leases and persisting the final registry", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
@@ -447,7 +543,9 @@ describe("DaemonServer", () => {
     await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     await expect(client.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
@@ -465,7 +563,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -496,7 +596,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -526,7 +628,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -542,10 +646,14 @@ describe("DaemonServer", () => {
 
   it("ignores lease-lost facts for leases with no currently connected holder without breaking the daemon", async () => {
     const harness = await createHarness();
-    harness.eventBus.emit("lease.expired", { deviceId: "device-x", leaseId: "lease-x" }, "test");
+    harness.eventBus.emit(
+      "lease.expired",
+      { deviceId: "device-x", leaseId: "lease-x", ownerId: "test-process" },
+      "test",
+    );
     harness.eventBus.emit(
       "lease.released",
-      { deviceId: "device-y", leaseId: "lease-y", reason: "killed" },
+      { deviceId: "device-y", leaseId: "lease-y", ownerId: "test-process", reason: "killed" },
       "test",
     );
 
@@ -562,7 +670,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -595,7 +705,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -644,7 +756,9 @@ describe("DaemonServer", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = harness.registry.snapshot.leases.find(
@@ -657,7 +771,7 @@ describe("DaemonServer", () => {
     // push of its own.
     harness.eventBus.emit(
       "lease.released",
-      { deviceId: deviceId as string, leaseId, reason: "device-lost" },
+      { deviceId: deviceId as string, leaseId, ownerId: "test-process", reason: "device-lost" },
       "test",
     );
     await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
@@ -751,6 +865,30 @@ describe("DaemonServer startup readiness", () => {
     });
   });
 
+  it("does not arm live machinery when a stop completes while convergence is still running", async () => {
+    // `daemon.stop` is accepted during startup (see `#dispatchLine`), and an auxiliary
+    // frontend that fails to bind asks for a stop of its own -- so a stop can run to
+    // completion before convergence resolves. `start()` must then bail rather than
+    // subscribe to a disposed bus, schedule a heartbeat tick on a dead daemon, and emit
+    // `daemon.started` after `daemon.stopping` (a fact untrue when emitted, which
+    // `docs/agent-rules/events.md` rule 3 forbids).
+    const converge = deferred<void>();
+    const harness = await createHarness({ converge: () => converge.promise, start: false });
+    const emitted: string[] = [];
+    harness.eventBus.subscribeAll((event) => {
+      if (event.event === "daemon.started" || event.event === "daemon.stopping") {
+        emitted.push(event.event);
+      }
+    });
+    const startPromise = harness.daemon.start();
+
+    await harness.daemon.stop("requested");
+    converge.resolve();
+    await startPromise;
+
+    expect(emitted).toEqual(["daemon.stopping"]);
+  });
+
   it("has lease-lost subscriptions wired before a lease.request parked on convergence proceeds", async () => {
     // Guards the invariant documented in `start()`: subscriptions are set up only
     // after convergence resolves, and a parked request must never observe a window
@@ -769,7 +907,9 @@ describe("DaemonServer startup readiness", () => {
     const parkedGrant = holder.request("lease.request", {
       mode: "held",
       requesterId: "holder",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
 
     converge.resolve();
@@ -987,7 +1127,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     expect((grant.payload as { lease: { ttlDeadline: number } }).lease.ttlDeadline).toBe(1_040);
@@ -1029,7 +1171,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -1063,7 +1207,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
     const deviceId = (grant.payload as { device: { id: string } }).device.id;
@@ -1110,7 +1256,9 @@ describe("DaemonServer lease heartbeat", () => {
     const grant = await holder.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
 
@@ -1223,7 +1371,9 @@ describe("DaemonServer lease heartbeat", () => {
       await holder.request("lease.request", {
         mode: "held",
         requesterId: "holder",
-        request: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
       });
 
       const stopping = harness.daemon.stop("test-drain");
@@ -1265,6 +1415,48 @@ describe("DaemonServer lease heartbeat", () => {
       expect(disposed).toBe(true);
     });
 
+    it("stops an auxiliary frontend before releasing held leases and draining settle", async () => {
+      const order: string[] = [];
+      const harness = await createHarness({
+        dispose: () => {
+          order.push("dispose");
+        },
+        settle: async () => {
+          order.push("settle");
+        },
+        stopAuxiliary: async () => {
+          order.push("stopAuxiliary");
+        },
+      });
+      const holder = await createClient(harness.socketPath);
+      await hello(holder);
+      await holder.request("lease.request", {
+        mode: "held",
+        requesterId: "holder",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+      });
+
+      await harness.daemon.stop("test-stop-auxiliary");
+
+      expect(order).toEqual(["stopAuxiliary", "settle", "dispose"]);
+      // The held lease was still released as part of the same stop -- stopping the
+      // auxiliary frontend first doesn't skip the socket protocol's own teardown.
+      expect(harness.registry.snapshot.leases).toHaveLength(0);
+    });
+
+    it("reports health via the public accessor across the startup/stop lifecycle", async () => {
+      const harness = await createHarness({ start: false });
+      expect(harness.daemon.health).toBe("starting");
+
+      await harness.daemon.start();
+      expect(harness.daemon.health).toBe("running");
+
+      await harness.daemon.stop("test-health");
+      expect(harness.daemon.health).toBe("running");
+    });
+
     it("logs a clean shutdown", async () => {
       const { logger: log, sink } = logger();
       const harness = await createHarness({ logger: log });
@@ -1287,7 +1479,12 @@ describe("DaemonServer lease heartbeat", () => {
       );
     });
 
-    it("logs an unhandled request error at error level", async () => {
+    // `doctor.run`/`nuke.run` used to surface an unconfigured collaborator as a plain `Error`,
+    // which `errorCode()` had no choice but to map to `INTERNAL` -- logged at error level
+    // indistinguishably from a real bug. `DoctorUnavailableError`/`NukeUnavailableError` (ADR
+    // 0003 §7: "one error class, closed codes") give this its own typed code, so it is now a
+    // *handled*, debug-level error like any other expected domain refusal.
+    it("logs an unconfigured doctor as a handled DOCTOR_UNAVAILABLE, not an unhandled error", async () => {
       const { logger: log, sink } = logger();
       const harness = await createHarness({ logger: log });
       const client = await createClient(harness.socketPath);
@@ -1297,10 +1494,13 @@ describe("DaemonServer lease heartbeat", () => {
 
       expect(sink.records).toContainEqual(
         expect.objectContaining({
-          level: "error",
-          message: "Unhandled request error",
-          fields: expect.objectContaining({ type: "doctor.run" }),
+          level: "debug",
+          message: "Handled request error",
+          fields: { code: "DOCTOR_UNAVAILABLE", type: "doctor.run" },
         }),
+      );
+      expect(sink.records).not.toContainEqual(
+        expect.objectContaining({ level: "error", message: "Unhandled request error" }),
       );
       await client.close();
     });
@@ -1328,6 +1528,636 @@ describe("DaemonServer lease heartbeat", () => {
   });
 });
 
+describe("DaemonServer download policy", () => {
+  it("grants download permission under the always policy without a per-request flag", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const grant = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(grant.ok).toBe(true);
+    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
+      allowDownload: true,
+      requesterId: "agent-1",
+    });
+    await client.close();
+  });
+
+  it("withholds download permission under the never policy even when the request asks for it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      allowDownload: true,
+      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).toContain("downloads.policy");
+    expect(driver.calls.find((call) => call.operation === "resolveSpec")?.arguments[1]).toEqual({
+      allowDownload: false,
+      requesterId: "agent-1",
+    });
+    await client.close();
+  });
+
+  it("defers to the request's own flag under the default on-request policy", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    // No allowDownload on the request and the default policy, so this fails exactly as it
+    // did before the policy existed -- and, unlike the never-policy case above, the message
+    // is not attributed to configuration, since nothing in config forced the outcome.
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+
+  it("attaches the download-policy suffix under the never policy even when the request itself never asked for a download", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    // No allowDownload on this request at all -- the driver's own message still suggests
+    // `--allow-download`, which under the never policy can never help, so the suffix must
+    // still attach as the correction.
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).toContain("downloads.policy");
+    await client.close();
+  });
+
+  it("never attaches the download-policy suffix to an undownloadable RuntimeMissingError, even under the never policy", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    // Stands in for a real out-of-range / unpaired-runtime error: no download could ever have
+    // fixed this request, so the policy is not what blocked it.
+    driver.failOn(
+      "resolveSpec",
+      1,
+      new RuntimeMissingError("ios", "12.0", { downloadable: false }),
+    );
+    const harness = await createHarness({ clock, downloads: { policy: "never" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      allowDownload: true,
+      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "12.0",
+      platform: "ios",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
+    expect(response.error?.message).not.toContain("downloads.policy");
+    await client.close();
+  });
+});
+
+describe("DaemonServer full request flag", () => {
+  it("parses request.full: true into a spec stamped full: true", async () => {
+    // Stamping `full` is gated on the resolving driver declaring `reducesFeatures` -- without it
+    // there is nothing to opt out of, so the flag would (correctly) leave the spec untouched and
+    // this test would be asserting the wrong half of that contract.
+    const harness = await createHarness({ reducesFeatures: true });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const grant = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      full: true,
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(grant.ok).toBe(true);
+    expect(
+      (grant.payload as { device: { spec: Record<string, unknown> } }).device.spec,
+    ).toMatchObject({ full: true });
+    await client.close();
+  });
+
+  it("omits full from the spec when the request does not ask for it", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const grant = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(grant.ok).toBe(true);
+    expect(
+      (grant.payload as { device: { spec: Record<string, unknown> } }).device.spec,
+    ).not.toHaveProperty("full");
+    await client.close();
+  });
+});
+
+describe("DaemonServer error code mapping", () => {
+  it("maps InsufficientDiskSpaceError to INSUFFICIENT_DISK_SPACE", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.failOn("resolveSpec", 1, new InsufficientDiskSpaceError("ios", 8 * 1024 ** 3, 0));
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "INSUFFICIENT_DISK_SPACE" });
+    await client.close();
+  });
+
+  it("maps LicenseNotAcceptedError to LICENSE_NOT_ACCEPTED", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "android" });
+    driver.failOn(
+      "resolveSpec",
+      1,
+      new AndroidLicenseNotAcceptedError("system-images;android-35;google_apis;arm64-v8a"),
+    );
+    const harness = await createHarness({ clock, downloads: { policy: "always" }, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "Pixel 8",
+      osVersion: "35",
+      platform: "android",
+    });
+
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "LICENSE_NOT_ACCEPTED" });
+    await client.close();
+  });
+});
+
+describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
+  it("rejects an admin-only operation from an agent session with FORBIDDEN, and reports the resolved role at hello", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const client = await createClient(harness.socketPath);
+    const helloReply = await client.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
+    expect(helloReply.payload).toMatchObject({ role: "agent" });
+
+    const response = await client.request("list.get", {});
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "FORBIDDEN" });
+    await client.close();
+  });
+
+  it("hello reports the resolved principal: the client-supplied one verbatim, or the daemon's default when omitted (ADR §4)", async () => {
+    const harness = await createHarness();
+
+    const explicit = await createClient(harness.socketPath);
+    const explicitReply = await explicit.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal: "host",
+    });
+    expect(explicitReply.payload).toMatchObject({ principal: "host" });
+    await explicit.close();
+
+    const omitted = await createClient(harness.socketPath);
+    const omittedReply = await omitted.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
+    expect(omittedReply.payload).toMatchObject({ principal: "test-process" });
+    await omitted.close();
+  });
+
+  it("allows an admin session to call the same admin-only operation", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("list.get", {});
+    expect(response.ok).toBe(true);
+    await client.close();
+  });
+
+  // ADR 0003 §6's "frozen exception" for `daemon.stop` is scoped to the protocol-version gate
+  // only -- it must still require a completed handshake and the `admin` role, per §3's operation
+  // matrix and the ADR's Context section ("Any local connection can release any lease, nuke, or
+  // stop the daemon" is named as the defect this ADR fixes).
+  describe("daemon.stop authorization (ADR 0003 §3, §5, §6)", () => {
+    it("refuses daemon.stop from an agent-role connection with FORBIDDEN", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        error: { code: "FORBIDDEN" },
+        ok: false,
+      });
+      expect(harness.daemon.health).toBe("running");
+      await client.close();
+    });
+
+    it("refuses daemon.stop from a connection that never sent hello", async () => {
+      const harness = await createHarness();
+      const client = await createClient(harness.socketPath);
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        error: { code: "HANDSHAKE_REQUIRED" },
+        ok: false,
+      });
+      expect(harness.daemon.health).toBe("running");
+      await client.close();
+    });
+
+    it("lets an admin connection stop the daemon", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { stopping: true },
+      });
+      await expect.poll(() => harness.daemon.health).toBe("running");
+    });
+
+    it("still fails the handshake outright on a wrong credential, and daemon.stop never runs on that connection", async () => {
+      const harness = await createHarness({
+        resolveRole: {
+          resolve: (helloPayload) => {
+            if (helloPayload.credential === undefined) return "agent";
+            if (helloPayload.credential === "correct-secret") return "admin";
+            throw new AdminAuthenticationFailedError();
+          },
+        },
+      });
+      const client = await createClient(harness.socketPath);
+      const socketClosed = new Promise<void>((resolve) => client.socket.once("close", resolve));
+
+      await expect(
+        client.request("hello", {
+          clientVersion: "test",
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+          credential: "wrong-secret",
+        }),
+      ).resolves.toMatchObject({
+        error: { code: "ADMIN_AUTHENTICATION_FAILED" },
+        ok: false,
+      });
+
+      // The handshake failed outright: `#handleHello` closes the connection right after the
+      // rejected credential, before `connection.helloReceived` is ever set. `daemon.stop` --
+      // despite ADR §6's frozen exception, which is scoped to protocol version only -- never
+      // gets a chance to run on this connection: there is no connection left to run it on.
+      await socketClosed;
+      expect(harness.daemon.health).toBe("running");
+    });
+
+    it("lets an admin connection stop the daemon even when its own hello's protocol negotiation failed, and refuses every other operation on it with the version error", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+      const client = await createClient(harness.socketPath);
+
+      const mismatchedHello = await client.request("hello", {
+        clientVersion: "test",
+        protocolVersion: DAEMON_PROTOCOL_VERSION + 1,
+      });
+      expect(mismatchedHello).toMatchObject({
+        error: {
+          code: "PROTOCOL_VERSION_UNSUPPORTED",
+          details: {
+            client: { min: DAEMON_PROTOCOL_VERSION + 1, max: DAEMON_PROTOCOL_VERSION + 1 },
+            daemon: PROTOCOL_VERSION_RANGE,
+          },
+        },
+        ok: false,
+      });
+
+      // Every other operation on this mismatched connection is refused the same way, repeatedly.
+      await expect(client.request("status.get", {})).resolves.toMatchObject({
+        error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
+        ok: false,
+      });
+      await expect(client.request("list.get", {})).resolves.toMatchObject({
+        error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
+        ok: false,
+      });
+
+      // But `daemon.stop` -- the ADR §6 frozen exception -- still works, because the role was
+      // resolved from the handshake before the version check ran, and this connection's role is
+      // admin.
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { stopping: true },
+      });
+      await expect.poll(() => harness.daemon.health).toBe("running");
+    });
+
+    it("still refuses daemon.stop with FORBIDDEN on a version-mismatched connection whose role is agent", async () => {
+      const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+      const client = await createClient(harness.socketPath);
+
+      await expect(
+        client.request("hello", {
+          clientVersion: "test",
+          protocolVersion: DAEMON_PROTOCOL_VERSION + 1,
+        }),
+      ).resolves.toMatchObject({
+        error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
+        ok: false,
+      });
+
+      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
+        error: { code: "FORBIDDEN" },
+        ok: false,
+      });
+      expect(harness.daemon.health).toBe("running");
+      await client.close();
+    });
+  });
+
+  it("still lets an agent call doctor.run with fix:false, but not fix:true (input-dependent role)", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(client.request("doctor.run", { fix: false })).resolves.toMatchObject({
+      // No `doctor` collaborator wired into this harness, so a fix:false call clears the
+      // role gate and fails DOCTOR_UNAVAILABLE downstream -- proof the rejection was not
+      // FORBIDDEN, which is the only thing this test cares about.
+      error: { code: "DOCTOR_UNAVAILABLE" },
+      ok: false,
+    });
+    await expect(client.request("doctor.run", { fix: true })).resolves.toMatchObject({
+      error: { code: "FORBIDDEN" },
+      ok: false,
+    });
+    await client.close();
+  });
+
+  it("denies lease.renew/lease.release to a session whose principal does not own the lease, and allows the owner", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const owner = await createClient(harness.socketPath);
+    await helloAs(owner, "alice");
+    const grant = await owner.request("lease.request", {
+      mode: "held",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(grant.ok).toBe(true);
+    const leaseId = leaseIdOf(grant);
+    expect((grant.payload as { lease: { ownerId: string } }).lease.ownerId).toBe("alice");
+
+    const other = await createClient(harness.socketPath);
+    await helloAs(other, "bob");
+    await expect(other.request("lease.renew", { leaseId })).resolves.toMatchObject({
+      error: { code: "FORBIDDEN" },
+      ok: false,
+    });
+    await expect(other.request("lease.release", { leaseId })).resolves.toMatchObject({
+      error: { code: "FORBIDDEN" },
+      ok: false,
+    });
+
+    await expect(owner.request("lease.renew", { leaseId })).resolves.toMatchObject({ ok: true });
+    await owner.close();
+    await other.close();
+  });
+
+  it("lets admin renew/release a lease it does not own", async () => {
+    const harness = await createHarness({
+      resolveRole: { resolve: (payload) => (payload.principal === "operator" ? "admin" : "agent") },
+    });
+    const owner = await createClient(harness.socketPath);
+    await helloAs(owner, "alice");
+    const grant = await owner.request("lease.request", {
+      mode: "held",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const leaseId = leaseIdOf(grant);
+
+    const admin = await createClient(harness.socketPath);
+    await helloAs(admin, "operator");
+    await expect(admin.request("lease.release", { leaseId })).resolves.toMatchObject({ ok: true });
+    await owner.close();
+    await admin.close();
+  });
+
+  it("lease.list returns only the caller's own leases for an agent, and every lease for admin", async () => {
+    const harness = await createHarness({
+      iosMaxDevices: 2,
+      resolveRole: { resolve: (payload) => (payload.principal === "operator" ? "admin" : "agent") },
+    });
+    const alice = await createClient(harness.socketPath);
+    await helloAs(alice, "alice");
+    const aliceGrant = await alice.request("lease.request", {
+      mode: "detached",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const bob = await createClient(harness.socketPath);
+    await helloAs(bob, "bob");
+    await bob.request("lease.request", {
+      mode: "detached",
+      requesterId: "bob-2",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    const aliceList = await alice.request("lease.list", {});
+    expect(aliceList.ok).toBe(true);
+    expect((aliceList.payload as { leases: readonly { id: string }[] }).leases).toMatchObject([
+      { id: leaseIdOf(aliceGrant), ownerId: "alice", requesterId: "alice" },
+    ]);
+
+    const admin = await createClient(harness.socketPath);
+    await helloAs(admin, "operator");
+    const adminList = await admin.request("lease.list", {});
+    expect((adminList.payload as { leases: readonly unknown[] }).leases).toHaveLength(2);
+
+    await alice.close();
+    await bob.close();
+    await admin.close();
+  });
+
+  it("forwards ttlMs as the initial TTL for a detached lease, and rejects it for a held one", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const detached = await client.request("lease.request", {
+      mode: "detached",
+      ttlMs: 30_000,
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(detached.ok).toBe(true);
+    expect(
+      (detached.payload as { lease: { grantedAt: number; ttlDeadline: number } }).lease,
+    ).toMatchObject({ grantedAt: 1_000, ttlDeadline: 1_000 + 30_000 });
+
+    const held = await client.request("lease.request", {
+      mode: "held",
+      ttlMs: 30_000,
+      requesterId: "held-with-ttl",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(held.ok).toBe(false);
+    expect(held.error).toMatchObject({ code: "BAD_REQUEST" });
+    await client.close();
+  });
+
+  it("cancels a still-queued lease.cancel without closing the connection, and the original request settles rather than hanging", async () => {
+    // Default harness capacity is one iOS device (see `testConfig`), so a second held request
+    // for the same spec queues behind the first without any extra configuration.
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const held = await holder.request("lease.request", {
+      mode: "held",
+      requesterId: "holder",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(held.ok).toBe(true);
+
+    const waiter = await createClient(harness.socketPath);
+    await hello(waiter);
+    const queuedRequest = waiter.request("lease.request", {
+      mode: "held",
+      requesterId: "waiter",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    await expect.poll(() => harness.engine.queueDepth).toBe(1);
+
+    const cancel = await waiter.request("lease.cancel", { requesterId: "waiter" });
+    expect(cancel).toMatchObject({ ok: true, payload: { result: "cancelled" } });
+
+    await expect(queuedRequest).resolves.toMatchObject({ ok: false });
+    // The connection is still alive and usable after cancelling -- ADR §9: "Cancellation no
+    // longer means closing the connection."
+    await expect(waiter.request("status.get", {})).resolves.toMatchObject({ ok: true });
+
+    await holder.close();
+    await waiter.close();
+  });
+
+  it("pushes lease-lost to every live connection sharing the lease's owner, including a detached holder on another connection (ADR 0003 §8)", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const requester = await createClient(harness.socketPath);
+    await helloAs(requester, "alice");
+    const grant = await requester.request("lease.request", {
+      mode: "detached",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const leaseId = leaseIdOf(grant);
+
+    // A second, otherwise-idle connection sharing the same principal -- today's bug (fixed by
+    // this PR) is that only the connection holding the lease ever learned of its end; a
+    // detached lease has no "holding" connection at all, so this second connection previously
+    // learned nothing.
+    const observer = await createClient(harness.socketPath);
+    await helloAs(observer, "alice");
+
+    await expect(requester.request("lease.release", { leaseId })).resolves.toMatchObject({
+      ok: true,
+    });
+
+    const push = await observer.nextFrame((frame) => frame.push === "lease-lost");
+    expect(push.payload).toMatchObject({ leaseId, reason: "explicit" });
+    // The releasing connection itself does not get a redundant self-push.
+    expect(requester.frames().filter((frame) => frame.push === "lease-lost")).toEqual([]);
+
+    await requester.close();
+    await observer.close();
+  });
+});
+
+async function helloAs(
+  client: Client,
+  principal: string,
+  capabilities?: Record<string, unknown>,
+): Promise<void> {
+  await expect(
+    client.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal,
+      ...(capabilities === undefined ? {} : { capabilities }),
+    }),
+  ).resolves.toMatchObject({ ok: true });
+}
+
 // fallow-ignore-next-line complexity -- a test harness whose branches are all trivial optional-parameter defaulting.
 async function createHarness(
   options: {
@@ -1342,8 +2172,26 @@ async function createHarness(
     readonly driver?: FakeDriver;
     readonly driverRejections?: readonly DriverRejection[];
     readonly logger?: Logger;
+    /** Passed to the default `FakeDriver`; makes a `--full` request meaningful (see `Driver.reducesFeatures`). */
+    readonly reducesFeatures?: boolean;
+    /** Overrides the default single-iOS-device capacity limit; a test that needs two
+     * concurrent iOS leases granted (rather than one queued behind the other) sets this. */
+    readonly iosMaxDevices?: number;
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
+    readonly stopAuxiliary?: () => Promise<void>;
+    /** ADR 0003 §5's per-start admin secret (`AdminSecretManager`). Undefined by default, same
+     * as `DaemonServer`'s own default -- most of this suite doesn't exercise the credential
+     * handshake at all. A test that needs to observe `persist()`/`remove()` calls (or their
+     * absence -- see the "loses the start race" test) injects a spy here. */
+    readonly adminSecret?: AdminSecretManager;
+    /** ADR 0003 §5's seam (see `session.ts`): defaults every session in this harness to
+     * "admin" -- this suite predates roles and exercises every operation freely, the same
+     * access a pre-ADR-0003 connection always had. Tests that specifically exercise role
+     * enforcement (ADR §3) override this to get an "agent" (or mixed) session instead. */
+    readonly resolveRole?: SessionRoleResolver;
+    /** Overrides the `downloads` config block for tests that exercise the download policy. */
+    readonly downloads?: Partial<Config["downloads"]>;
   } = {},
 ) {
   const directory =
@@ -1370,8 +2218,11 @@ async function createHarness(
       ...(options.estimateMs === undefined ? {} : { estimateMs: options.estimateMs }),
       ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
       platform: "ios",
+      ...(options.reducesFeatures === undefined
+        ? {}
+        : { reducesFeatures: options.reducesFeatures }),
     });
-  const config = testConfig(options.lease);
+  const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
   const engine = new LeaseEngine({
     clock,
     config,
@@ -1394,6 +2245,7 @@ async function createHarness(
     registry,
   });
   const daemon = new DaemonServer({
+    ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
     catalog: engine,
     clock,
@@ -1416,8 +2268,10 @@ async function createHarness(
     queue: engine,
     reaper,
     registry,
+    resolveRole: options.resolveRole ?? { resolve: () => "admin" },
     settle: options.settle ?? (async () => engine.settle()),
     ...(options.dispose === undefined ? {} : { dispose: options.dispose }),
+    ...(options.stopAuxiliary === undefined ? {} : { stopAuxiliary: options.stopAuxiliary }),
     version: "test",
   });
   runningDaemons.push(daemon);
@@ -1520,7 +2374,11 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
+function testConfig(
+  leaseOverrides?: Partial<Config["lease"]>,
+  downloadsOverrides?: Partial<Config["downloads"]>,
+  iosMaxDevices = 1,
+): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},
@@ -1534,6 +2392,14 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    downloads: {
+      policy: "on-request",
+      acceptAndroidLicenses: false,
+      timeoutMs: 1_200_000,
+      ...downloadsOverrides,
+    },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       detachedTtlMs: 60_000,
@@ -1546,8 +2412,8 @@ function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
       config: {
         limits: {
           android: { maxDevices: 1, maxRunning: 1 },
-          ios: { maxDevices: 1, maxRunning: 1 },
-          maxRunning: 1 + 1,
+          ios: { maxDevices: iosMaxDevices, maxRunning: iosMaxDevices },
+          maxRunning: iosMaxDevices + 1,
         },
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },

@@ -15,13 +15,13 @@ describe("contention & queueing", () => {
 
     const first = await env.cli([...LEASE_ARGS, "--agent-id", "agent-a", "--detach"]);
     expect(first.code).toBe(0);
-    const firstGrant = first.json as { lease: string };
+    const firstGrant = first.json as { lease: { id: string } };
 
     // Same requester leasing again: REQUESTER_ALREADY_LEASED, naming the existing lease.
     const repeat = await env.cli([...LEASE_ARGS, "--agent-id", "agent-a", "--detach"]);
     expect(repeat.code).toBe(13);
     expect(repeat.error).toMatchObject({ code: "REQUESTER_ALREADY_LEASED" });
-    expect(repeat.error?.message).toContain(firstGrant.lease);
+    expect(repeat.error?.message).toContain(firstGrant.lease.id);
 
     // A different requester at capacity with --no-wait fails immediately.
     const noWait = await env.cli([...LEASE_ARGS, "--agent-id", "agent-b", "--no-wait", "--detach"]);
@@ -47,24 +47,24 @@ describe("contention & queueing", () => {
       label: "agent-e queued at position 2",
     });
 
-    const release = await env.cli(["release", firstGrant.lease]);
+    const release = await env.cli(["release", firstGrant.lease.id]);
     expect(release.code).toBe(0);
 
     const grantedD = JSON.parse(await waiterD.firstStdoutLine(15_000)) as {
-      device: string;
-      lease: string;
+      device: { spec: { model: string } };
+      lease: { id: string };
     };
-    expect(grantedD.device).toBe("iPhone 16");
+    expect(grantedD.device.spec.model).toBe("iPhone 16");
 
     waiterD.kill("SIGTERM");
     await waiterD.waitForExit(15_000);
 
     const grantedE = JSON.parse(await waiterE.firstStdoutLine(15_000)) as {
-      device: string;
-      lease: string;
+      device: { spec: { model: string } };
+      lease: { id: string };
     };
-    expect(grantedE.device).toBe("iPhone 16");
-    expect(grantedE.lease).not.toBe(grantedD.lease);
+    expect(grantedE.device.spec.model).toBe("iPhone 16");
+    expect(grantedE.lease.id).not.toBe(grantedD.lease.id);
 
     waiterE.kill("SIGTERM");
     await waiterE.waitForExit(15_000);
@@ -85,41 +85,45 @@ describe("contention & queueing", () => {
 
     const holder = await env.cli([...LEASE_ARGS, "--agent-id", "agent-holder", "--detach"]);
     expect(holder.code).toBe(0);
-    const holderGrant = holder.json as { lease: string };
+    const holderGrant = holder.json as { lease: { id: string } };
 
     // Release hands the caller back before the purge (#58), so the device is `reclaiming` with
     // its full latency still ahead when the next requester arrives -- the case the stage exists
     // for, and the one nothing exercised before this covered the whole path out to the CLI.
-    const release = await env.cli(["release", holderGrant.lease]);
+    const release = await env.cli(["release", holderGrant.lease.id]);
     expect(release.code).toBe(0);
 
     const waiter = env.cliBackground([...LEASE_ARGS, "--agent-id", "agent-waiter"]);
-    await waitFor(() => waiter.progressEvents().some(isReclaimingWithEta(34)), {
+    await waitFor(() => waiter.progressEvents().some(isReclaimingWithEta(34_000)), {
       label: "agent-waiter told the reclaim's ETA",
     });
     expect(waiter.progressEvents().some((event) => isQueuedAt(event, 1))).toBe(true);
 
-    const granted = JSON.parse(await waiter.firstStdoutLine(15_000)) as { device: string };
-    expect(granted.device).toBe("iPhone 16");
+    const granted = JSON.parse(await waiter.firstStdoutLine(15_000)) as {
+      device: { spec: { model: string } };
+    };
+    expect(granted.device.spec.model).toBe("iPhone 16");
 
     waiter.kill("SIGTERM");
     await waiter.waitForExit(15_000);
   });
 });
 
-function isReclaimingWithEta(seconds: number): (event: unknown) => boolean {
+function isReclaimingWithEta(etaMs: number): (event: unknown) => boolean {
   return (event) =>
     typeof event === "object" &&
     event !== null &&
-    (event as Record<string, unknown>).event === "reclaiming" &&
-    (event as Record<string, unknown>).eta_seconds === seconds;
+    (event as Record<string, unknown>).push === "progress" &&
+    (event as Record<string, unknown>).stage === "reclaiming" &&
+    (event as Record<string, unknown>).etaMs === etaMs;
 }
 
 function isQueuedAt(event: unknown, position: number): boolean {
   return (
     typeof event === "object" &&
     event !== null &&
-    (event as Record<string, unknown>).event === "queued" &&
-    (event as Record<string, unknown>).queue_position === position
+    (event as Record<string, unknown>).push === "progress" &&
+    (event as Record<string, unknown>).stage === "queued" &&
+    (event as Record<string, unknown>).queuePosition === position
   );
 }

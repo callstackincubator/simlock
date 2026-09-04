@@ -20,13 +20,18 @@ import {
   type LeaseGrant,
   type LeaseRequestOptions,
   type LeaseTiming,
+  RequestCancelledError,
   RequesterAlreadyLeasedError,
   type Waiter,
   type WaitQueue,
 } from "./wait-queue.js";
 
 export type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
-export { QueueTimeoutError, RequesterAlreadyLeasedError } from "./wait-queue.js";
+export {
+  QueueTimeoutError,
+  RequestCancelledError,
+  RequesterAlreadyLeasedError,
+} from "./wait-queue.js";
 export { NoDriverError } from "./driver-catalog.js";
 
 export class NoCapacityError extends Error {
@@ -61,6 +66,7 @@ export type AcquisitionQueue = Pick<
   | "depth"
   | "detachProgress"
   | "enqueue"
+  | "findPendingWaiter"
   | "hasPendingRequester"
   | "head"
   | "isQueued"
@@ -116,6 +122,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
 
   get queueDepth(): number {
     return this.options.queue.depth;
+  }
+
+  /**
+   * The session principal a pending request was created under (ADR §4: `ownerId` on
+   * `LeaseRequestOptions`, always the session principal, never the caller-suppliable
+   * `requesterId`). `undefined` when no pending request exists for this requester id --
+   * `cancelPending`'s own `not-found` outcome is what surfaces that, not this lookup, so a
+   * caller cancelling a request that already settled (or never existed) is not authorized on
+   * a manufactured owner. A synchronous read like `queueDepth`, not routed through
+   * `decisions.run`: no state is asserted or mutated, and `#leaseCancel`'s contract-level
+   * `authorize` hook (ADR §2 step 3) runs before the handler, so it cannot go through the
+   * handler's own serialized decision anyway.
+   */
+  pendingRequestOwner(requesterId: string): string | undefined {
+    return this.options.queue.findPendingWaiter(requesterId)?.options.ownerId;
   }
 
   get queueHeadSpec(): DeviceSpec | undefined {
@@ -209,9 +230,29 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     try {
-      waiter.spec = await driver.resolveSpec(request, {
+      const resolved = await driver.resolveSpec(request, {
         allowDownload: options.allowDownload ?? false,
+        // The waiter is the one place that knows which requester triggered this resolution;
+        // threaded through so a component install a driver ends up doing on this request's
+        // behalf can attribute its diagnostics (and the resulting `component.install-*` events)
+        // to it.
+        requesterId: options.requesterId,
       });
+      // This is the single place a driver's `resolveSpec` result becomes the spec the core
+      // matches and provisions on -- so `full` is stamped on centrally here, rather than any
+      // driver having to know about the flag (architecture rule 3: drivers stay unaware of
+      // core-only request flags). Never stamped `false`; omitted when the request did not ask
+      // for it, so specs stay byte-identical to every request that predates this flag. Also
+      // omitted when the resolving driver doesn't declare `reducesFeatures` (finding #6, issue
+      // #87 review): a `full` request only means something -- and only earns its own pool key,
+      // never shared with a normal request's (`sameSpec`) -- against a driver that might
+      // otherwise hand back a reduced device. Stamping it regardless would fragment a platform
+      // like Android, which never reduces anything, into two identical pools for no behavioural
+      // difference.
+      waiter.spec =
+        request.full === true && driver.reducesFeatures === true
+          ? { ...resolved, full: true }
+          : resolved;
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -225,6 +266,27 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.options.decisions.run(async () => {
       this.options.queue.detachProgress(requesterId);
+    });
+  }
+
+  /**
+   * Cancels a single pending request. Reuses the queue timeout's safety envelope exactly:
+   * only a waiter still in `queued` state is safe to reject here. `processing` means device
+   * work already claimed it (provision/boot/evict in flight, possibly never having touched
+   * the FIFO list at all on a first-attempt direct dispatch) -- the same state the timeout
+   * timer leaves untouched -- so this reports `not-cancellable` rather than inventing a new
+   * rule for tearing down in-flight driver work; nuke's `cancelAll` already owns that harder
+   * problem, with its own drain of `#activeWorkflows`.
+   */
+  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+    return this.options.decisions.run(async () => {
+      const waiter = this.options.queue.findPendingWaiter(requesterId) as
+        | AcquisitionWaiter
+        | undefined;
+      if (waiter === undefined) return "not-found";
+      if (waiter.state !== "queued") return "not-cancellable";
+      this.#reject(waiter, new RequestCancelledError(waiter.id), "cancelled");
+      return "cancelled";
     });
   }
 
@@ -358,7 +420,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const { device, lease } = await this.options.leases.grant({
       deviceId,
       mode: waiter.options.mode,
+      ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
+      ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
     this.options.queue.resolve(waiter, {
       device,
@@ -533,7 +597,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       | "unresolvable-spec"
       | "already-leased"
       | "boot-timeout"
-      | "killed",
+      | "killed"
+      | "cancelled",
   ): void {
     if (this.options.queue.reject(waiter, error)) {
       this.options.eventBus.emit(

@@ -41,7 +41,13 @@ never enforce them only inside an individual rule or driver.
    over a read-only registry view returning proposed actions. A rule that
    executes side effects directly is a bug regardless of what it does.
 4. **No implicit multi-GB downloads.** Missing runtimes / system images fail
-   the request unless `--allow-download` was explicitly passed.
+   the request unless `--allow-download` (or MCP's `allowDownload`) was
+   explicitly passed, or `downloads.policy: "always"` is set in config --
+   both count as the required explicit consent, and `downloads.policy:
+   "never"` overrides either one back to forbidden. Warm-pool provisioning
+   and startup convergence never trigger a download under any policy: they
+   only ever reuse specs already committed to the registry, never resolve a
+   new one.
 5. **Destructive CLI commands confirm or require `--yes`**
    (`release --all`, `nuke`). `cleanup` must always support `--dry-run`.
 6. **Every destructive action is attributable.** Log/emit which rule or

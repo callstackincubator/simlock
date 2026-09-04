@@ -17,6 +17,18 @@ export interface FileStat {
   readonly kind: "file" | "directory";
   readonly size: number;
   readonly modifiedAtMs: number;
+  /** POSIX permission bits (e.g. `0o600`), masked to the low 9 bits. Not populated by every
+   * caller's needs -- only relevant for callers verifying a file's permissions after creation
+   * (e.g. the daemon's per-start admin secret, ADR 0003 §5). */
+  readonly mode?: number;
+}
+
+export interface WriteFileAtomicOptions {
+  /** POSIX permission bits the file is created with (e.g. `0o600` for owner-only). Set at
+   * creation via the temp file's own open flags -- never a separate `chmod` after the fact,
+   * which would leave a window where the file exists world-readable. Omitted keeps Node's
+   * default (governed by the process umask), unchanged from before this option existed. */
+  readonly mode?: number;
 }
 
 /**
@@ -33,7 +45,7 @@ export interface PathDetails {
 
 export interface Filesystem {
   readFile(path: string): Promise<string>;
-  writeFileAtomic(path: string, contents: string): Promise<void>;
+  writeFileAtomic(path: string, contents: string, options?: WriteFileAtomicOptions): Promise<void>;
   /**
    * Writes a file only when nothing is there, failing `EEXIST` otherwise. The kernel
    * decides who wins, which is the only way two processes racing to write one file both
@@ -69,7 +81,11 @@ export class NodeFilesystem implements Filesystem {
     return readFile(path, "utf8");
   }
 
-  async writeFileAtomic(path: string, contents: string): Promise<void> {
+  async writeFileAtomic(
+    path: string,
+    contents: string,
+    options?: WriteFileAtomicOptions,
+  ): Promise<void> {
     const directory = dirname(path);
     const temporaryPath = join(
       directory,
@@ -77,7 +93,11 @@ export class NodeFilesystem implements Filesystem {
     );
 
     try {
-      await writeFile(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
+      await writeFile(temporaryPath, contents, {
+        encoding: "utf8",
+        flag: "wx",
+        ...(options?.mode === undefined ? {} : { mode: options.mode }),
+      });
       await rename(temporaryPath, path);
     } catch (error: unknown) {
       await rm(temporaryPath, { force: true });
@@ -108,6 +128,7 @@ export class NodeFilesystem implements Filesystem {
       kind: details.isDirectory() ? "directory" : "file",
       size: details.size,
       modifiedAtMs: details.mtimeMs,
+      mode: details.mode & 0o777,
     };
   }
 
@@ -182,6 +203,10 @@ const DEFAULT_MEMORY_MODE = 0o700;
 // A symlink cycle is a legitimate thing to model; resolving it forever is not.
 const MAX_SYMLINK_HOPS = 32;
 
+/** Node's default for a plain file, kept as the default `writeFileAtomic` creates with so a
+ * caller that says nothing about permissions gets what it got before `mode` was an option. */
+const DEFAULT_FILE_MODE = 0o644;
+
 export class MemoryFilesystem implements Filesystem {
   readonly #entries = new Map<string, MemoryEntry>();
   readonly #failures = new Map<string, string>();
@@ -204,10 +229,17 @@ export class MemoryFilesystem implements Filesystem {
     return entry.contents;
   }
 
-  async writeFileAtomic(path: string, contents: string): Promise<void> {
+  async writeFileAtomic(
+    path: string,
+    contents: string,
+    options?: WriteFileAtomicOptions,
+  ): Promise<void> {
     this.#failIfDefined(path);
     this.#requireDirectory(parentPath(path));
-    this.#entries.set(path, this.#newEntry({ kind: "file", contents }));
+    this.#entries.set(path, {
+      ...this.#newEntry({ kind: "file", contents }),
+      mode: options?.mode ?? DEFAULT_FILE_MODE,
+    });
   }
 
   async writeFileExclusive(path: string, contents: string): Promise<void> {
@@ -294,7 +326,6 @@ export class MemoryFilesystem implements Filesystem {
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- Filesystem.stat contract; only tests reach this implementation of it.
   async stat(path: string): Promise<FileStat> {
     this.#failIfDefined(path);
     const entry = this.#entryAt(path);
@@ -303,6 +334,7 @@ export class MemoryFilesystem implements Filesystem {
       kind: entry.kind === "file" ? "file" : "directory",
       size: entry.kind === "file" ? Buffer.byteLength(entry.contents) : 0,
       modifiedAtMs: entry.modifiedAtMs,
+      mode: entry.kind === "file" ? entry.mode : 0o755,
     };
   }
 
@@ -399,7 +431,6 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   /** Test-only: places a symlink at `path`, whether or not `target` exists. */
-  // fallow-ignore-next-line unused-class-member -- test-only state the port itself cannot create.
   defineSymlink(path: string, target: string): void {
     this.#entries.set(path, this.#newEntry({ kind: "symlink", target }));
   }
@@ -441,7 +472,10 @@ export class MemoryFilesystem implements Filesystem {
   #rawEntryAt(path: string): MemoryEntry {
     const entry = this.#entries.get(path);
     if (entry === undefined) {
-      throw errnoError("ENOENT", `No such file or directory: ${path}`);
+      // Carries `code: "ENOENT"` like Node's real fs errors, so callers that branch on
+      // `isMissingPathError` (rather than swallowing every read failure) behave the same
+      // against this fake as they do against `NodeFilesystem`.
+      throw enoent(path);
     }
 
     return entry;
@@ -513,6 +547,14 @@ function errnoError(code: string, message: string): NodeJS.ErrnoException {
   return error;
 }
 
-function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
+export function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function enoent(path: string): NodeJS.ErrnoException {
+  const error = new Error(
+    `ENOENT: no such file or directory, open '${path}'`,
+  ) as NodeJS.ErrnoException;
+  error.code = "ENOENT";
+  return error;
 }

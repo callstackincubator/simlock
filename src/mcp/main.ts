@@ -3,14 +3,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { SimlockClient } from "../client/index.js";
 import {
   NodeDaemonLauncher,
   NodeIpcTransport,
   resolveSimlockHome,
   SystemClock,
 } from "../ports/index.js";
-import { connectDaemon } from "../daemon-client/client.js";
-import type { DaemonConnection } from "../daemon-client/protocol.js";
+import { connectWithAutoLaunch } from "./connect.js";
 import { McpSession } from "./session.js";
 import { createMcpServer } from "./server.js";
 
@@ -32,7 +32,7 @@ export interface McpTransport {
 }
 
 export interface McpStdioEnvironment {
-  readonly connect?: () => Promise<DaemonConnection>;
+  readonly connect?: () => Promise<SimlockClient>;
   readonly createServer?: (session: McpSession) => McpServer;
   readonly createTransport?: () => McpTransport;
   /** Source for `SIMLOCK_AGENT_ID` when `requesterId` is not given explicitly. */
@@ -62,11 +62,11 @@ export async function runMcpStdio(environment: McpStdioEnvironment = {}): Promis
 export async function startMcpStdio(
   environment: McpStdioEnvironment = {},
 ): Promise<McpStdioRunner> {
-  const defaults = defaultEnvironment();
   const env = environment.env ?? process.env;
+  const requesterId = environment.requesterId ?? env.SIMLOCK_AGENT_ID ?? `mcp:${process.pid}`;
+  const defaults = defaultEnvironment(requesterId);
   const session = new McpSession({
     connect: environment.connect ?? defaults.connect,
-    requesterId: environment.requesterId ?? env.SIMLOCK_AGENT_ID ?? `mcp:${process.pid}`,
   });
   const server = (environment.createServer ?? createMcpServer)(session);
   const transport = (environment.createTransport ?? defaults.createTransport)();
@@ -137,7 +137,9 @@ export async function startMcpStdio(
   return { finished, shutdown };
 }
 
-function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "createTransport">> {
+function defaultEnvironment(
+  requesterId: string,
+): Required<Pick<McpStdioEnvironment, "connect" | "createTransport">> {
   const dataDirectory = resolveSimlockHome();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
@@ -145,12 +147,12 @@ function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "c
   const logPath = join(dataDirectory, "daemon.log");
   return {
     connect: () =>
-      connectDaemon({
+      connectWithAutoLaunch({
+        clock,
         // MCP's holder process dies with its agent (stdin EOF -> session.close()), so a
         // sliding TTL is safe here. CLI held mode declares the same capability now that
         // it self-terminates on parent death too — see docs/known-pitfalls.md.
-        capabilities: { heartbeat: true },
-        clock,
+        heartbeat: true,
         ipc,
         launcher: new NodeDaemonLauncher({
           args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
@@ -158,6 +160,7 @@ function defaultEnvironment(): Required<Pick<McpStdioEnvironment, "connect" | "c
           logPath,
           simlockHome: dataDirectory,
         }),
+        principal: requesterId,
         socketPath,
       }),
     createTransport: () => new StdioServerTransport(),

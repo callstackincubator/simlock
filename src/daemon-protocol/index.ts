@@ -1,5 +1,13 @@
-/** The version of the newline-delimited JSON protocol spoken by daemon clients. */
-export const DAEMON_PROTOCOL_VERSION = 2;
+import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
+
+/**
+ * The version of the newline-delimited JSON protocol spoken by daemon clients. Derived from
+ * the contract's `PROTOCOL_VERSION_RANGE` (its `max`) rather than declared separately, so the
+ * two constants cannot drift. See ADR 0003 §6: protocol versions are now negotiated as ranges;
+ * this single-number export is what a legacy exact-match client/daemon (and this file's own
+ * framing helpers, which predate range negotiation) still reads.
+ */
+export const DAEMON_PROTOCOL_VERSION = PROTOCOL_VERSION_RANGE.max;
 
 export type RequestId = string | number;
 

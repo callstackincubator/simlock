@@ -3,6 +3,7 @@ import type { Clock, TimerHandle } from "../ports/index.js";
 import type { DeviceRecord, Platform } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
 import type { SerializedDecision } from "./serialized-decision.js";
+import { stableError } from "./stable-error.js";
 
 export interface QuarantineDriverCatalog {
   get(platform: Platform): Driver;
@@ -236,11 +237,6 @@ function backoffDelay(config: QuarantineRetryConfig, attemptsSoFar: number): num
     config.retryBackoffMs * config.retryBackoffMultiplier ** attemptsSoFar,
     config.maxRetryBackoffMs,
   );
-}
-
-function stableError(error: unknown): string {
-  const value = error instanceof Error ? error : new Error(String(error));
-  return `${value.name}: ${value.message}`;
 }
 
 /**

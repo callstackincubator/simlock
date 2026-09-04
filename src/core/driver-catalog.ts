@@ -53,7 +53,7 @@ export class DriverCatalog {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     return this.get(request.platform).resolveSpec(request, options);
   }

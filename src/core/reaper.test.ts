@@ -56,6 +56,9 @@ function config(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
     lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
     capacity: {
@@ -173,6 +176,7 @@ async function seedLeased(harness: Awaited<ReturnType<typeof createHarness>>) {
     deviceId: device.id,
     mode: "held",
     requesterId: "agent-1",
+    ownerId: "agent-1",
     ttlDeadline: 2_000,
   });
   return device;
@@ -360,7 +364,11 @@ describe("CleanupReaper", () => {
 
   it("shuts down after T1 and destroys after T2 on periodic ticks following a release", async () => {
     const harness = await createHarness(automaticCleanupRules, {}, { tickMs: 10_000 });
-    const grant = await harness.engine.request(spec, { mode: "held", requesterId: "agent-1" });
+    const grant = await harness.engine.request(spec, {
+      mode: "held",
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+    });
 
     await harness.engine.release(grant.lease.id, "explicit");
     await flush();
@@ -395,7 +403,11 @@ describe("CleanupReaper", () => {
 
     const cleanup = harness.reaper.run();
     await flush();
-    const request = harness.engine.request(spec, { mode: "held", requesterId: "agent-2" });
+    const request = harness.engine.request(spec, {
+      mode: "held",
+      ownerId: "agent-2",
+      requesterId: "agent-2",
+    });
     await flush();
     expect(harness.registry.snapshot.leases).toEqual([]);
 

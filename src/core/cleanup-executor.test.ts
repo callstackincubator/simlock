@@ -61,6 +61,7 @@ describe("CleanupExecutor", () => {
       deviceId: device.id,
       mode: "held",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
 

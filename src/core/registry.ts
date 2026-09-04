@@ -40,6 +40,7 @@ export interface ReleasedLease {
 export interface CreateLeaseInput {
   readonly deviceId: string;
   readonly requesterId: string;
+  readonly ownerId: string;
   readonly mode: LeaseRecord["mode"];
   readonly ttlDeadline: number;
 }
@@ -394,6 +395,7 @@ export class Registry {
   async createLease({
     deviceId,
     mode,
+    ownerId,
     requesterId,
     ttlDeadline,
   }: CreateLeaseInput): Promise<LeaseRecord> {
@@ -416,6 +418,7 @@ export class Registry {
       grantedAt: this.options.clock.now(),
       id: `lse_${this.options.idGenerator.generate()}`,
       mode,
+      ownerId,
       requesterId,
       ttlDeadline,
     };
@@ -560,11 +563,13 @@ const deviceRecordKeys = [
   "quarantineAttempts",
   "quarantineNextRetryAt",
   "address",
+  "featureProfile",
 ] as const;
 const leaseRecordKeys = [
   "id",
   "deviceId",
   "requesterId",
+  "ownerId",
   "mode",
   "grantedAt",
   "ttlDeadline",
@@ -639,7 +644,7 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const { address, createdAt, driverData, driverDeviceId, id, spec, state } = value;
+  const { address, createdAt, driverData, driverDeviceId, featureProfile, id, spec, state } = value;
   if (
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
@@ -658,6 +663,7 @@ function parseDevice(value: unknown): DeviceRecord {
   return {
     ...parseOptionalDeviceNumbers(value),
     ...(address === undefined ? {} : { address }),
+    ...(isFeatureProfile(featureProfile) ? { featureProfile } : {}),
     createdAt,
     driverData,
     driverDeviceId,
@@ -667,24 +673,62 @@ function parseDevice(value: unknown): DeviceRecord {
   };
 }
 
+/**
+ * Unlike `address`, a garbage `featureProfile` is dropped rather than failing the whole record --
+ * it is a derived, re-derivable-on-next-boot hint (see `domain.ts`), not load-bearing identity, so
+ * a corrupt value should not stop the registry (and every other device in it) from loading.
+ */
+function isFeatureProfile(value: unknown): value is "full" | "reduced" {
+  return value === "full" || value === "reduced";
+}
+
+/**
+ * ADR 0003 §4: a lease record written before `ownerId` existed loads with `ownerId` equal to
+ * `requesterId`; present-but-wrong-typed is still corrupt, same treatment as every other
+ * load-time migration in this module (see `address` on `parseDevice`). Split out of
+ * `parseLease` purely to keep that function's own branch count down -- this check has no
+ * meaning on its own outside a lease record's already-validated `requesterId`.
+ */
+function isValidOwnerId(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+/** The required-string and timing fields every lease record has always had -- split out of
+ * `parseLease` so that function's own branch count reflects only what changes per schema
+ * version (today: the `ownerId` migration), not the whole record shape at once. */
+function hasValidLeaseCore(value: Record<string, unknown>): value is Record<string, unknown> & {
+  id: string;
+  deviceId: string;
+  requesterId: string;
+  mode: "held" | "detached";
+  grantedAt: number;
+  ttlDeadline: number;
+} {
+  return (
+    typeof value.id === "string" &&
+    typeof value.deviceId === "string" &&
+    typeof value.requesterId === "string" &&
+    (value.mode === "held" || value.mode === "detached") &&
+    typeof value.grantedAt === "number" &&
+    typeof value.ttlDeadline === "number"
+  );
+}
+
 function parseLease(value: unknown): LeaseRecord {
-  if (!isObject(value)) {
+  if (!isObject(value) || !hasValidLeaseCore(value) || !isValidOwnerId(value.ownerId)) {
     throw new RegistryLoadError("Invalid lease record in registry state");
   }
 
-  const { deviceId, grantedAt, id, mode, requesterId, ttlDeadline } = value;
-  if (
-    typeof id !== "string" ||
-    typeof deviceId !== "string" ||
-    typeof requesterId !== "string" ||
-    (mode !== "held" && mode !== "detached") ||
-    typeof grantedAt !== "number" ||
-    typeof ttlDeadline !== "number"
-  ) {
-    throw new RegistryLoadError("Invalid lease record in registry state");
-  }
-
-  return { deviceId, grantedAt, id, mode, requesterId, ttlDeadline };
+  const { deviceId, grantedAt, id, mode, ownerId, requesterId, ttlDeadline } = value;
+  return {
+    deviceId,
+    grantedAt,
+    id,
+    mode,
+    ownerId: ownerId ?? requesterId,
+    requesterId,
+    ttlDeadline,
+  };
 }
 
 function isDeviceSpec(value: unknown): value is DeviceSpec {

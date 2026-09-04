@@ -18,6 +18,9 @@ const config: Config = {
     stableObservations: 2,
   },
   stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+  downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
+  http: { enabled: false, host: "127.0.0.1", port: 4700 },
+  ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
   warmPool: {
     quarantine: {
@@ -115,6 +118,7 @@ describe("idleDestroyRule", () => {
           id: "lse_1",
           mode: "held",
           requesterId: "agent-1",
+          ownerId: "agent-1",
           ttlDeadline: 1,
         },
       ],

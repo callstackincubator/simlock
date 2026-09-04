@@ -5,6 +5,7 @@ import type { DeviceRequest } from "./driver.js";
 import {
   ForeignWaiterError,
   QueueTimeoutError,
+  RequestCancelledError,
   RequesterAlreadyLeasedError,
   WaitQueue,
   type LeaseGrant,
@@ -39,7 +40,12 @@ function grant(): LeaseGrant {
 }
 
 function createWaiter(queue: WaitQueue, requesterId: string, options: { timeoutMs?: number } = {}) {
-  return queue.create(request satisfies DeviceRequest, { mode: "held", requesterId, ...options });
+  return queue.create(request satisfies DeviceRequest, {
+    mode: "held",
+    ownerId: requesterId,
+    requesterId,
+    ...options,
+  });
 }
 
 describe("WaitQueue", () => {
@@ -125,6 +131,7 @@ describe("WaitQueue", () => {
       mode: "held",
       onProgress: (progress) => received.push(progress),
       requesterId: "agent",
+      ownerId: "agent",
     });
 
     queue.enqueue(waiter);
@@ -158,6 +165,22 @@ describe("WaitQueue", () => {
     await expect(rejected.promise).rejects.toThrow("first rejection");
     expect(waiter.state).toBe("granted");
     expect(rejected.state).toBe("rejected");
+  });
+
+  it("finds a pending waiter across queued and not-yet-queued states, for the single-request cancel path", async () => {
+    const { queue } = createQueue();
+    const queued = createWaiter(queue, "queued");
+    const processing = createWaiter(queue, "processing");
+    queue.enqueue(queued);
+    queue.markProcessing(processing);
+
+    expect(queue.findPendingWaiter("queued")).toBe(queued);
+    expect(queue.findPendingWaiter("processing")).toBe(processing);
+    expect(queue.findPendingWaiter("nobody")).toBeUndefined();
+
+    expect(queue.reject(queued, new RequestCancelledError(queued.id))).toBe(true);
+    await expect(queued.promise).rejects.toBeInstanceOf(RequestCancelledError);
+    expect(queue.findPendingWaiter("queued")).toBeUndefined();
   });
 
   it("cancels every pending waiter and clears their pending requester state", async () => {

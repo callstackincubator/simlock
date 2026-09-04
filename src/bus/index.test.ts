@@ -12,13 +12,17 @@ describe("EventBus", () => {
     bus.subscribe("lease.expired", (envelope) => eventEnvelopes.push(envelope));
     bus.subscribeAll((envelope) => allEnvelopes.push(envelope));
 
-    bus.emit("lease.expired", { leaseId: "lease-1", deviceId: "device-1" }, "leases");
+    bus.emit(
+      "lease.expired",
+      { leaseId: "lease-1", deviceId: "device-1", ownerId: "requester-1" },
+      "leases",
+    );
 
     const expectedEnvelope = {
       seq: 1,
       timestamp: 1_234,
       event: "lease.expired",
-      payload: { leaseId: "lease-1", deviceId: "device-1" },
+      payload: { leaseId: "lease-1", deviceId: "device-1", ownerId: "requester-1" },
       module: "leases",
     };
     expect(eventEnvelopes).toEqual([expectedEnvelope]);
@@ -133,6 +137,10 @@ describe("EventBus", () => {
       | "device.quarantine-stranded"
       | "device.shutdown"
       | "device.deleted"
+      | "device.slimmed"
+      | "component.install-started"
+      | "component.installed"
+      | "component.install-failed"
       | "device.foreign-state-detected"
       | "device.foreign-provenance-detected"
       | "device.stalled-transition-detected"

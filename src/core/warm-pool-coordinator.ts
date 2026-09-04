@@ -9,10 +9,11 @@ import {
   type Platform,
   sameSpec,
 } from "./domain.js";
-import type { Driver, DriverDevice } from "./driver.js";
+import { readyTransitionUpdate, type Driver, type DriverDevice } from "./driver.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
+import { stableError } from "./stable-error.js";
 
 export interface WarmPoolDriverCatalog {
   get(platform: Platform): Driver;
@@ -98,10 +99,7 @@ export class WarmPoolCoordinator {
         },
         disposition.readyDevice === undefined
           ? undefined
-          : {
-              address: disposition.readyDevice.address,
-              driverData: disposition.readyDevice.driverData,
-            },
+          : readyTransitionUpdate(disposition.readyDevice),
       );
     });
     this.options.notifyAvailability();
@@ -209,11 +207,6 @@ export class WarmPoolCoordinator {
 
 function capacityDevices(devices: readonly DeviceRecord[]): readonly CapacityDevice[] {
   return devices.map((device) => ({ platform: device.spec.platform, state: device.state }));
-}
-
-function stableError(error: unknown): string {
-  const value = error instanceof Error ? error : new Error(String(error));
-  return `${value.name}: ${value.message}`;
 }
 
 /**

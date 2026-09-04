@@ -18,8 +18,17 @@ export interface EventMap {
     readonly leaseId: string;
     readonly deviceId: string;
     readonly reason: "closed" | "explicit" | "killed" | "orphaned" | "device-lost";
+    /** ADR 0003 §8: the released lease's owner, so a `lease-lost` push can be routed to every
+     * live connection whose principal owns it (in either mode), not just the held-lease
+     * holder -- the registry no longer has the lease to look this up from by the time this
+     * event fires (`beginRelease` already removed it), so it travels on the event instead. */
+    readonly ownerId: string;
   };
-  "lease.expired": { readonly leaseId: string; readonly deviceId: string };
+  "lease.expired": {
+    readonly leaseId: string;
+    readonly deviceId: string;
+    readonly ownerId: string;
+  };
   "lease.rejected": {
     readonly requestSpec: unknown;
     readonly reason:
@@ -28,7 +37,8 @@ export interface EventMap {
       | "unresolvable-spec"
       | "already-leased"
       | "boot-timeout"
-      | "killed";
+      | "killed"
+      | "cancelled";
   };
   "device.provisioned": {
     readonly deviceId: string;
@@ -91,6 +101,35 @@ export interface EventMap {
   };
   "device.shutdown": { readonly deviceId: string; readonly initiator: string };
   "device.deleted": { readonly deviceId: string; readonly initiator: string };
+  "device.slimmed": {
+    readonly deviceId: string;
+    readonly address: string;
+    readonly platform: "ios";
+    readonly categories: readonly string[];
+    readonly labelCount: number;
+    readonly durationMs: number;
+    readonly signature: string;
+    readonly unknownLabels: readonly string[];
+  };
+  "component.install-started": {
+    readonly platform: string;
+    readonly componentId: string;
+    /** The requester on whose behalf this install runs, when the triggering resolution knew one. */
+    readonly requesterId?: string;
+  };
+  "component.installed": {
+    readonly platform: string;
+    readonly componentId: string;
+    readonly durationMs: number;
+    readonly requesterId?: string;
+  };
+  "component.install-failed": {
+    readonly platform: string;
+    readonly componentId: string;
+    readonly durationMs: number;
+    readonly error: string;
+    readonly requesterId?: string;
+  };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };

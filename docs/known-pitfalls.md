@@ -192,3 +192,295 @@ this has to be a TCP port and cannot live as a socket file inside
 `~/.simlock/` the way `daemon.sock` does. That is why
 `drivers.android.adbServerPort` exists and why two Simlock instances on one
 machine need distinct values for it.
+
+## Component downloads: per-request blocking, the bounded-default edge case, and no progress push
+
+The iOS driver's `resolveSpec` (`src/drivers/ios/index.ts`) can now run
+`xcodebuild -downloadPlatform iOS` when a requested runtime is missing and
+downloads are permitted. Two things worth knowing about that path:
+
+**Only the requesting lease waits.** `resolveSpec` runs inside
+`LeaseAcquisitionCoordinator#resolveAndDrive`, per request, outside the
+serialized decision gate and outside the FIFO head — a slow download (tens
+of minutes for a ~7 GB runtime) blocks only the request that triggered it.
+Concurrent requests for the *same* missing runtime are deduped behind an
+in-driver promise (one `xcodebuild` invocation, all callers await it); a
+request for a different model or version proceeds independently and is
+never queued behind someone else's download.
+
+**The bounded-default edge case.** When no `--os` is given and no installed
+runtime pairs with the model, the driver has to guess a version to
+download: unbounded models (no `maxRuntimeVersion` cap) get a plain
+`-downloadPlatform iOS` (latest), but a model with a bounded max (like an
+older device type whose newest compatible runtime is a specific release)
+gets `-buildVersion <major from maxRuntimeVersion>` — just the major
+version number, since the exact patch release isn't known offline (Apple's
+downloadables index isn't parsed in v1; see `docs/IDEAS.md`). If Xcode
+doesn't have a build matching that bare major version, the download fails
+and the caller is told to pass `--os <version>` explicitly rather than
+retrying blind.
+
+**No requester-visible progress during a download (#67 stage 4).** The
+requester's lease-progress stream (`LeaseProgress` in `src/core/wait-queue.ts`
+— `queued` / `provisioning` / `booting` / `reclaiming`, relayed as CLI stderr
+JSON lines and MCP `notifications/progress`) has no `downloading` stage. Both
+drivers' `resolveSpec` — where a runtime or system-image install actually
+happens — runs before `LeaseAcquisitionCoordinator#drive`'s provisioning
+step, and `Driver.resolveSpec`'s signature carries no progress callback the
+way `provision`/`makeReady` do. A held-mode CLI or MCP caller waiting on a
+multi-minute install today sees nothing on the wire between its request and
+either the eventual grant or a timeout; the only visibility is the daemon's
+own `component.install-started` bus event (`simlock events --follow`) and log
+line, neither reaching the waiting connection itself. Threading a
+`downloading` stage through would mean widening the `Driver` interface
+(`resolveSpec` gaining an `onProgress`-shaped option, both drivers
+implementing it), a new `LeaseProgress` variant, and CLI/MCP wire changes —
+real protocol machinery, not a small addition, so it was deliberately not
+built in stage 4. `component.install-started`'s payload already carries
+enough (`platform`, `componentId`) that a future pass wiring this through
+would mostly be plumbing, not new information to invent.
+
+## True cancellation during provisioning is not implemented (ADR 0003 §10)
+
+`simlock/client`'s `requestLease` takes an `AbortSignal`. When device work is
+already in flight (provisioning, booting, reclaiming) and the caller aborts,
+the client sends `lease.cancel`, which answers `not-cancellable` at that
+stage — the daemon keeps doing the work. What the client does instead:
+it waits for the request's real outcome, and if a grant still lands, releases
+it immediately so the caller never ends up holding a device it already
+walked away from, then surfaces `CANCELLED` either way.
+
+**The pitfall:** this is release-on-arrival, not interruption. The
+provisioning/boot/reclaim work the abort was meant to stop keeps running to
+completion (or failure) on its own, consuming the time and driver resources
+it would have anyway, and the released device pays a purge (see "Release
+hands the purge off" in [ARCHITECTURE.md](ARCHITECTURE.md)) before it's
+usable by anyone else. A caller that aborts expecting the operation to
+actually stop gets a device that is unavailable for roughly as long as an
+uncancelled request would have taken, just without ending up holding it.
+
+**Status:** known and accepted for this release, deliberately out of scope
+per the ADR ("True cancellation during provisioning is deliberately out of
+scope here"). Actually interrupting driver work mid-flight would mean
+threading cancellation through `Driver.provision`/`makeReady`/`reclaim`
+themselves — real protocol and driver-interface machinery across both
+platforms, not a client-side change.
+
+**Possible future fix:** none planned yet. A caller that needs to bound the
+cost of an abandoned request should set `timeoutMs`/`--timeout` tightly
+rather than relying on abort to cut a request short once device work has
+started.
+
+## The HTTP tracker and notice buffer are the last frontend-held state (#72)
+
+ADR 0003 moved request handling into one shared, transport-independent
+dispatcher (`src/daemon/dispatcher.ts`) that both the unix socket and HTTP
+call — but two pieces of state still live in the HTTP frontend rather than
+the daemon's core:
+
+- **`LeaseRequestTracker`** (`src/http/tracker.ts`) — the in-memory registry
+  behind `POST /v1/lease-requests` and the resource it returns
+  (`GET`/`DELETE /v1/lease-requests/{id}`, its SSE stream, `Idempotency-Key`
+  replay). This is what lets HTTP offer an async-resource-shaped API
+  (`202`-then-poll) on top of the core's request/grant flow, which itself
+  has no notion of a durable, independently-addressable "request resource."
+- **`LeaseNoticeBuffer`** (`src/http/notices.ts`) — buffers owner-routed
+  device-health facts (`device_unhealthy`, `device_recovered`) per lease so
+  a polling-only HTTP client (no open connection to push to) can drain them
+  on its next `renew` or SSE reconnect instead of missing them entirely.
+
+**The pitfall:** both reset on a daemon restart (in-memory, no persistence),
+and both are HTTP-specific reimplementations of "track something about a
+request/lease across calls" that the socket frontends don't need because
+they hold a live connection instead. A daemon restart loses in-flight
+lease-request tracking state and buffered notices the same way it always
+did pre-ADR 0003 — see [Lifecycle semantics](HTTP-API.md#lifecycle-semantics)
+for the documented recovery loop (`404` → re-request → maybe `409` → `GET`),
+which exists specifically because the tracker does not survive a restart.
+
+**Status:** known, and explicitly called out as the ADR's own unfinished
+seam, not an oversight: "the HTTP tracker and notice buffer remain the known
+stateful leftovers in a frontend." The ADR's dispatcher work "prepares the
+seam... but does not do that work" of removing them.
+
+**Planned fix:** [#72](https://github.com/callstackincubator/simlock/issues/72),
+re-scoped by this ADR to core durability and idempotency — moving durable,
+idempotent lease requests into the core registry itself, so a lease request
+becomes a first-class, restart-surviving core concept instead of a resource
+HTTP alone tracks. Once that lands, `LeaseRequestTracker` and
+`LeaseNoticeBuffer` should be able to shrink to thin views over core state
+rather than independent bookkeeping.
+
+## HTTP single-lease reads answer 404, not 403, for an unowned lease
+
+`GET /v1/leases/:id` and `GET /v1/leases/:id/events` resolve their lease
+through `findOwnedLease` (`src/http/app.ts`), which calls `lease.list` and
+filters to the id in question. `lease.list`'s own scoping (own leases; admin
+sees all) means an id owned by a different agent simply is not in the list —
+indistinguishable, at that point, from an id that does not exist at all. Both
+answer `UNKNOWN_LEASE`/404.
+
+Over the socket there is no equivalent read: `lease.list` is the only
+operation that can answer "what does this session see", and it does not
+distinguish "unknown" from "not yours" either — it just omits the row. So
+these two routes are not actually diverging from a socket answer; there is no
+`lease.get` operation with an `ownsLease` authorize hook to diverge from.
+
+This is deliberately narrower than the fix applied to the two *mutating*
+single-lease routes, `POST /v1/leases/:id/renew` and `DELETE /v1/leases/:id`,
+which used to go through the same `findOwnedLease` helper and therefore used
+to answer 404 for an unowned lease where the socket's `lease.renew`/
+`lease.release` (via their `ownsLease` authorize hook) answer `FORBIDDEN`/403.
+Those two routes now dispatch directly and let the shared error table answer,
+matching the socket exactly. The two read routes above were left on
+`lease.list`-filtered 404 because there is no dispatcher operation for them to
+match — 404-as-anti-enumeration is the *table's* answer here too, just via
+`lease.list`'s own filter rather than a per-op `authorize` hook.
+
+**If a `lease.get` operation with an `ownsLease` hook is ever added to the
+contract**, these two routes should move onto it and start answering 403 for
+an unowned lease, the same way the mutating routes do today.
+
+## HTTP error codes outside the closed contract union
+
+ADR §7: `SimlockError` has a `code` from the contract's closed union, and "a code the client
+does not know... wraps as `UNKNOWN_DAEMON_ERROR`". Four codes the HTTP gateway answers with
+today (`src/http/errors.ts`) have no row in that union
+(`src/contract/errors.ts`'s `ERROR_TABLE`), so a typed client built against the contract can
+only ever see them as `UNKNOWN_DAEMON_ERROR` with the real code buried in `details`:
+
+| Code | Status | Meaning | Where thrown |
+|---|---|---|---|
+| `UNAUTHENTICATED` | 401 | Missing/invalid bearer token | `errors.ts:37` |
+| `UNKNOWN_LEASE_REQUEST` | 404 | No such lease-*request* resource (`POST /v1/lease-requests`'s HTTP-only envelope, ADR §11, kept until #72) | `errors.ts:59` |
+| `REQUEST_NOT_CANCELLABLE` | 409 | `DELETE /v1/lease-requests/:id` on a request already granted or past cancellable state | `errors.ts:70` |
+| `REQUEST_CANCELLED` | 500 | Defensive-only: `RequestCancelledError` reaching `mapError` should never happen in practice (the tracker consumes it internally) | `errors.ts:123` |
+
+`UNKNOWN_LEASE_REQUEST` used to be minted as `UNKNOWN_REQUEST` — the same code the contract
+already declares, but for a different meaning at a different status: the contract's
+`UNKNOWN_REQUEST` is a *protocol* error ("unknown operation name") at 400, thrown by
+`DispatchError` in `src/daemon/dispatcher.ts` for a request naming an operation the dispatcher
+has no handler for. Reusing it for "no such lease-request id" at 404 meant a client branching
+on `error.code` alone could not distinguish the two (S8, adversarial review). Renamed to
+`UNKNOWN_LEASE_REQUEST` so it no longer collides, but that only fixes the collision — it does
+not add a contract row, so it still wraps as `UNKNOWN_DAEMON_ERROR` for a typed client.
+
+**What the contract needs** (out of scope here — `src/contract/` is owned elsewhere): four new
+rows in `ERROR_TABLE` (`src/contract/errors.ts`), each with a `kind` and the `httpStatus`/
+`cliExitCode` columns this table already has for every other code:
+
+```ts
+UNAUTHENTICATED: Record<string, never>;             // kind: "protocol", httpStatus: 401
+UNKNOWN_LEASE_REQUEST: Record<string, never>;        // kind: "domain",   httpStatus: 404
+REQUEST_NOT_CANCELLABLE: { readonly leaseId?: string }; // kind: "domain", httpStatus: 409
+REQUEST_CANCELLED: Record<string, never>;            // kind: "domain",   httpStatus: 500
+```
+
+Once those exist, `src/http/errors.ts` should stop constructing ad hoc `HttpApiError`s for
+these four and instead go through the same `ERROR_TABLE`-driven path `mapError` already uses
+for every contract-declared code, the same way `UNKNOWN_LEASE`/`FORBIDDEN`/`BAD_REQUEST` do
+today.
+
+## iOS slim mode: accepted costs and feature loss (#87)
+
+`ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
+daemons across simulator daemon categories to cut RAM/CPU footprint (see
+[CONFIGURATION.md](CONFIGURATION.md)). It carries four trade-offs worth
+knowing before turning it on.
+
+**Every reclaim pays two boots, indefinitely.** `IosSimctlDriver.reclaim`
+always runs `simctl erase`, which wipes the simulator's data partition —
+including the launchd overrides slimming wrote there. So a reclaimed device
+is never still slim: the next `makeReady` re-applies the full disable pass
+and reboots twice (once to boot the freshly erased device, once more for the
+overrides to take effect) rather than skipping straight to the idempotence
+check. Accepted because both reclaim and warm-pool provisioning run off the
+lease-granting critical path — the requester waiting on a device only pays
+for this when nothing pre-provisioned was available. A non-erasing
+`standard` clean level, if one is added later, would let a reclaimed device
+stay slim and remove this cost; no such level exists today.
+
+**Runtimes older than iOS 18.5 silently get nothing.** `launchctl disable`
+overrides only persist across a reboot on iOS 18.5+; older runtimes accept
+the commands and drop them on the post-slim reboot, so slimming would cost a
+second boot for no effect. `planSlimBoot` (`src/drivers/ios/index.ts`) gates
+on this and skips the apply pass entirely rather than paying that cost —
+silently, from the requester's point of view: the lease still grants, just
+with `slim: false`. `simlock doctor`'s `driver-advisory` /
+`slim-runtime-unsupported` finding is what makes an unsupported runtime
+visible to an operator instead of it only ever showing up as an unexpectedly
+non-slim lease.
+
+**Slim devices lose features that depend on the disabled daemons.** Expect
+push notifications, Spotlight/on-device search, StoreKit/App Store sheets,
+universal links, Siri/Apple Intelligence, iCloud sync, and some system
+pickers to not work on a slim device — the categories that back them are
+exactly the ones slimming disables. Mitigations: `simlock lease --full` (MCP
+`full: true`, HTTP `full: true`) opts a single lease out of slimming, and
+every lease response carries a feature-profile signal so a caller can tell a
+feature-loss failure apart from an actual bug instead of guessing —
+`device.featureProfile === "reduced"` on the CLI/MCP/client contract shape
+(`slim` as a top-level boolean grant field is gone as of 0.3.0, ADR 0003
+§11), or HTTP's own `lease.slim` boolean, which is still derived from the
+same underlying signal.
+
+**Mixing slim and full devices under one spec can make `--full` wait or
+re-provision.** `full` is part of spec identity (`DeviceSpec.full`, compared by `sameSpec`,
+see [ADR 0002](adr/0002-opt-in-slim-ios-simulators.md)), so a `--full`
+request never matches a slim device sitting warm in the pool — even when one is idle and a
+match on model/os alone would otherwise be instant. Depending on capacity,
+that means either queueing for a fresh device to provision or forcing a
+re-provision of a device already running. This is inherent to keeping pool
+matching from fragmenting on driver-level settings, not a bug to fix.
+
+**A cold slim lease outlives a default MCP request timeout.** Measured on
+one machine: a `--full` cold lease took ~28s, a cold slim lease ~160s (two
+real boots plus the disable pass). The MCP SDK's default per-request timeout
+is 60s, so an MCP client that does not reset its timeout on progress
+notifications gets `MCP error -32001: Request timed out` on the slim lease
+even though the daemon completes it. Simlock relays boot progress as MCP
+progress notifications precisely so clients can pass
+`resetTimeoutOnProgress: true` (or a longer timeout) on `lease_simulator`;
+`e2e/slow-ios-slim.test.ts` shows the call shape. The warm pool hides this
+for every lease after the first.
+
+**`launchctl disable` accepts labels that do not exist.** Verified on iOS
+26.4 and 27.0 simulators: disabling `system/com.apple.does.not.exist` exits
+0 and writes the entry to the override database like any other. So the
+per-label `simlock-slim-failed` channel (and the `unknownLabels` field of
+`device.slimmed`) reports labels the shell-safety filter rejected or a
+`launchctl` that crashed, never a daemon Apple has renamed or removed. Drift
+in the label list is invisible at apply time; the only signal is a slim
+device that is not as slim as expected. Re-sync `slim-labels.ts` against
+upstream simslim per iOS major. Newer runtimes also print a deprecation
+warning asking for `user/foreground/<label>` instead of `system/<label>`;
+the `system/` form still takes effect and is what simslim uses.
+
+**Narrowing `ios.slim.categories` does not re-enable anything on existing
+devices.** There is no `launchctl enable` pass anywhere in the driver. When an
+operator removes a category from `ios.slim.categories`, the signature that
+gates re-applying the disable pass changes, so an existing device re-applies
+the now-narrower set on its next boot — but the `launchctl disable` overrides
+already written for the *removed* category are never undone. They live in the
+simulator's own launchd database and only disappear on `simctl erase`. The
+device keeps reporting `slim: true` and keeps missing that category's
+functionality, with no error surfaced anywhere. The real consequence is
+stronger than the flag alone suggests: the device ends up slimmer than *any*
+configuration ever asked for — it carries both the newly-narrower disable set
+it just re-applied *and* the leftover overrides from the wider set it was
+slimmed under before, a combination no `ios.slim.categories` value on its own
+would ever produce. Workaround: after narrowing the category list, reclaim
+(or destroy) every device already running under the old, wider set before
+relying on the change — a plain reboot is not enough.
+
+**Turning `ios.slim.enabled` off leaves orphaned `--full` devices sitting in
+the pool.** `full` only earns its own pool key while the driver might
+otherwise hand back a reduced device (`Driver.reducesFeatures`); once slim
+mode is off, no newly resolved spec ever carries `full: true` again. A device
+that was provisioned for a `--full` request while slim mode was on keeps
+`full: true` on its spec in the registry, so it can no longer match anything
+a resolver produces — it becomes unmatchable by any new request. This is not
+a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
+on the same timers as any other idle device, since neither rule cares what a
+device's spec matches. Until those timers fire, though, it occupies a pool
+slot doing nothing.

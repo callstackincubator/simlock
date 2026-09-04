@@ -79,6 +79,14 @@ export function booleanValue(value: unknown, path: string): boolean {
   return value;
 }
 
+export function stringValue(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw invalidValue(path, "a string");
+  }
+
+  return value;
+}
+
 export function numberAtLeast(minimum: number): Validator {
   return (value: unknown, path: string) => {
     if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
@@ -87,6 +95,32 @@ export function numberAtLeast(minimum: number): Validator {
 
     return value;
   };
+}
+
+export function integerInRange(minimum: number, maximum: number): Validator {
+  return (value: unknown, path: string) => {
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < minimum ||
+      value > maximum
+    ) {
+      throw invalidValue(path, `an integer between ${minimum} and ${maximum}`);
+    }
+
+    return value;
+  };
+}
+
+export function stringArray(value: unknown, path: string): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string" && item.length > 0)
+  ) {
+    throw invalidValue(path, "an array of strings");
+  }
+
+  return value as readonly string[];
 }
 
 export function stringUnion<Value extends string>(

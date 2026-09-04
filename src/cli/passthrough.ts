@@ -1,4 +1,4 @@
-import type { RawPassthroughCommand } from "../daemon-client/contracts.js";
+import type { PassthroughCommand } from "../client/index.js";
 
 /**
  * Runs a daemon-resolved `simlock simctl` / `simlock adb` command in this process's own
@@ -12,7 +12,7 @@ import type { RawPassthroughCommand } from "../daemon-client/contracts.js";
  * daemon's keys win the merge: a caller with a stale `ANDROID_ADB_SERVER_PORT` already
  * exported would otherwise aim the command at whichever server that names.
  */
-export async function spawnPassthrough(command: RawPassthroughCommand): Promise<number> {
+export async function spawnPassthrough(command: PassthroughCommand): Promise<number> {
   const { spawn } = await import("node:child_process");
   const { constants } = await import("node:os");
   const child = spawn(command.command, [...command.args], {

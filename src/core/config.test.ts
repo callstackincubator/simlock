@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
-import { type Config, loadConfig } from "./index.js";
+import { type Config, effectiveAllowDownload, loadConfig } from "./index.js";
 
 /** Narrows the capacity block for assertions on resource-strategy configs. */
 function resourceOptions(config: Config): ResourceStrategyOptions {
@@ -85,6 +85,8 @@ describe("loadConfig", () => {
         },
       },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+      downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
+      http: { enabled: false, host: "127.0.0.1", port: 4700 },
       warmPool: {
         quarantine: {
           maxRetries: 3,
@@ -94,6 +96,7 @@ describe("loadConfig", () => {
         },
       },
       stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+      ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
@@ -369,6 +372,230 @@ describe("loadConfig", () => {
     expect(warn).toHaveBeenCalledWith('Unknown config key: "health.maxBoltCount"');
   });
 
+  it("applies a file-level downloads override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        downloads: { policy: "always", acceptAndroidLicenses: true, timeoutMs: 60_000 },
+      }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.downloads).toEqual({
+      policy: "always",
+      acceptAndroidLicenses: true,
+      timeoutMs: 60_000,
+    });
+  });
+
+  it("applies an override-level downloads policy over the file value", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ downloads: { policy: "never" } }),
+    );
+
+    const config = await loadConfig({
+      configPath,
+      filesystem,
+      overrides: { downloads: { policy: "always" } },
+      systemStats: createStats(),
+    });
+    expect(config.downloads.policy).toBe("always");
+  });
+
+  it("rejects a downloads.policy outside the known set", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ downloads: { policy: "sometimes" } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("downloads.policy");
+  });
+
+  it("rejects a non-boolean downloads.acceptAndroidLicenses", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ downloads: { acceptAndroidLicenses: "yes" } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("downloads.acceptAndroidLicenses");
+  });
+
+  it.each([
+    [{ downloads: { timeoutMs: 0 } }, "downloads.timeoutMs"],
+    [{ downloads: { timeoutMs: -1 } }, "downloads.timeoutMs"],
+    [{ downloads: { timeoutMs: "1200000" } }, "downloads.timeoutMs"],
+  ])("rejects a non-positive or malformed downloads.timeoutMs", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("applies a file-level http override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: true, host: "0.0.0.0", port: 8080 } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.http).toEqual({ enabled: true, host: "0.0.0.0", port: 8080 });
+  });
+
+  it("applies an override-level http port over the file value", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http: { port: 5000 } }));
+
+    const config = await loadConfig({
+      configPath,
+      filesystem,
+      overrides: { http: { port: 6000 } },
+      systemStats: createStats(),
+    });
+    expect(config.http.port).toBe(6000);
+  });
+
+  it("rejects a non-boolean http.enabled", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http: { enabled: "yes" } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.enabled");
+  });
+
+  it("rejects a non-string http.host", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ http: { host: 127 } }));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.host");
+  });
+
+  it.each([
+    [{ http: { port: 0 } }, "http.port"],
+    [{ http: { port: 65536 } }, "http.port"],
+    [{ http: { port: 1.5 } }, "http.port"],
+    [{ http: { port: "4700" } }, "http.port"],
+  ])("rejects an out-of-range or malformed http.port", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("defaults ios.slim to disabled with no categories and a slim boot timeout", async () => {
+    const config = await loadConfig({
+      configPath,
+      filesystem: new MemoryFilesystem(),
+      systemStats: createStats(),
+    });
+
+    expect(config.ios.slim).toEqual({ enabled: false, bootTimeoutMs: 600_000 });
+    expect(config.ios.slim.categories).toBeUndefined();
+    expect("categories" in config.ios.slim).toBe(false);
+  });
+
+  it("applies a file-level ios.slim override, including an explicit category list", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        ios: {
+          slim: { enabled: true, categories: ["logging", "diagnostics"], bootTimeoutMs: 900_000 },
+        },
+      }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.ios.slim).toEqual({
+      enabled: true,
+      categories: ["logging", "diagnostics"],
+      bootTimeoutMs: 900_000,
+    });
+  });
+
+  it("rejects a non-boolean ios.slim.enabled", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ ios: { slim: { enabled: "yes" } } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("ios.slim.enabled");
+  });
+
+  it.each([
+    [{ ios: { slim: { bootTimeoutMs: 0 } } }, "ios.slim.bootTimeoutMs"],
+    [{ ios: { slim: { bootTimeoutMs: -1 } } }, "ios.slim.bootTimeoutMs"],
+    [{ ios: { slim: { bootTimeoutMs: "600000" } } }, "ios.slim.bootTimeoutMs"],
+  ])("rejects a non-positive or malformed ios.slim.bootTimeoutMs", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it.each([
+    [{ ios: { slim: { categories: "logging" } } }],
+    [{ ios: { slim: { categories: [1, 2] } } }],
+    [{ ios: { slim: { categories: [""] } } }],
+  ])("rejects a malformed ios.slim.categories", async (contents) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("ios.slim.categories");
+  });
+
+  it("warns about an unknown key nested under ios.slim without rejecting the file", async () => {
+    const filesystem = new MemoryFilesystem();
+    const warn = vi.fn();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ ios: { slim: { turboMode: true } } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.turboMode"');
+  });
+
   it("applies a file-level stalledTransition override", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
@@ -633,5 +860,22 @@ describe("loadConfig legacy capacity keys", () => {
 
     expect(config.capacity).toEqual({ strategy: "fixed", config: { maxRunning: 3 } });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Ignoring limits"));
+  });
+});
+
+describe("effectiveAllowDownload", () => {
+  it("grants downloads for every request under the always policy", () => {
+    expect(effectiveAllowDownload("always", false)).toBe(true);
+    expect(effectiveAllowDownload("always", true)).toBe(true);
+  });
+
+  it("forbids downloads for every request under the never policy, even an explicit true", () => {
+    expect(effectiveAllowDownload("never", false)).toBe(false);
+    expect(effectiveAllowDownload("never", true)).toBe(false);
+  });
+
+  it("defers to the request's own flag under the on-request policy", () => {
+    expect(effectiveAllowDownload("on-request", false)).toBe(false);
+    expect(effectiveAllowDownload("on-request", true)).toBe(true);
   });
 });

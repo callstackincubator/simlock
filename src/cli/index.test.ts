@@ -8,35 +8,68 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
 import {
+  CryptoTokenSecrets,
   FakeClock,
+  FakeDaemonLauncher,
   FakeParentWatch,
-  FakeSystemStats,
   MemoryFilesystem,
+  MemoryIpcTransport,
   NodeFilesystem,
   NodeIpcTransport,
+  type Filesystem,
+  type IdGenerator,
 } from "../ports/index.js";
+import { FakeSystemStats } from "../ports/index.js";
+import { TokenStore } from "../http/token-store.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
 import { DaemonServer } from "../daemon/server.js";
-import { connectExistingDaemon } from "../daemon-client/client.js";
+import { AdminSecretManager } from "../daemon/admin-secret.js";
+import { createCredentialRoleResolver } from "../daemon/session.js";
+import { SimlockError, type AnySimlockError } from "../contract/index.js";
+import type {
+  CatalogGetOutput,
+  DeviceRecoveredPush,
+  DeviceUnhealthyPush,
+  DoctorReport,
+  LeaseGrant,
+  LeaseListOutput,
+  LeaseRecord,
+  ListGetOutput,
+  SimlockAdminClient,
+  SimlockConfig,
+  StatusGetOutput,
+  TokenListOutput,
+} from "../simlock-client/client.js";
+import { connectSimlockAdmin } from "../admin/index.js";
 import {
-  DaemonClientError,
+  buildCliEnvironment,
   errorExitCode,
   fallbackRequesterId,
   parseDuration,
   readLogFile,
   runCli,
   type CliEnvironment,
-  type DaemonConnection,
+  type CliEnvironmentPorts,
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
 /** A minimal daemon lease response, for the tests that only care what the CLI prints. */
-const detachedGrant = {
+const detachedGrant: LeaseGrant = {
   device: {
+    id: "device-1",
     driverDeviceId: "ABCD",
     spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
   },
-  lease: { id: "lse_env", mode: "detached", ttlDeadline: 61_000 },
+  environment: {},
+  lease: {
+    id: "lse_env",
+    deviceId: "device-1",
+    requesterId: "test-requester",
+    ownerId: "test-requester",
+    mode: "detached",
+    grantedAt: 0,
+    ttlDeadline: 61_000,
+  },
   timing: {
     estimatedBootMs: 0,
     estimatedProvisionMs: 0,
@@ -81,609 +114,89 @@ describe("readLogFile", () => {
   });
 });
 
-describe("CLI boundary", () => {
+/**
+ * ADR 0003 §12: "one smoke test per frontend ... frontends are now serialization". This suite
+ * -- the CLI's own -- keeps: exit-code mapping off `ERROR_TABLE` (not a second map), the
+ * admin-credential resolution order and its agent-fallback notice (ADR §5), `daemon status`'s
+ * absent-vs-refused distinction (ADR §11), `config set`'s validate-before-write, `--json` shape
+ * (no snake_case renderings), the `--yes`/confirm guards on destructive commands (safety rule
+ * 5), and (see "CLI: lease pushes and exit codes" / "CLI: mcp command" / "CLI: daemon logs"
+ * below) the CLI's own process-lifecycle and stderr-rendering behaviour that no other suite
+ * exercises: the lost-lease exit code and its non-re-release, the `{push:...}` stderr lines
+ * including the own-lease-id filter, the `--full`/`--no-wait` flag mapping, the `mcp` command's
+ * lazy module load and startup-failure reporting, and `daemon logs` working without a
+ * connection. Deleted from the pre-ADR suite: every test that only re-walked a daemon
+ * operation's request/response shape through the CLI (lease grant field-by-field, doctor
+ * findings, cleanup/nuke proposals, catalog/list passthrough, events replay/follow wire format,
+ * renew) -- that behaviour is the daemon's contract now, covered once at
+ * `daemon/dispatcher.test.ts`, and `SimlockClientImpl`'s own suite in
+ * `simlock-client/client.test.ts`; re-asserting it a third time through the CLI tested only that
+ * this module still calls `client.foo()`, which the TypeScript compiler already guarantees
+ * against `SimlockAdminClient`'s interface. `--bind-pid`/parent-watch termination races are not
+ * covered by any suite in `pnpm run test` -- they survive only in the real-hardware e2e lanes.
+ */
+describe("CLI: exit codes", () => {
   it.each([
     ["QUEUE_TIMEOUT", 10],
     ["NO_CAPACITY", 11],
     ["RUNTIME_MISSING", 12],
     ["UNKNOWN_MODEL", 12],
+    ["INSUFFICIENT_DISK_SPACE", 12],
+    ["LICENSE_NOT_ACCEPTED", 12],
     ["BAD_REQUEST", 2],
     ["REQUESTER_ALREADY_LEASED", 13],
-  ] as const)("maps %s daemon errors to exit %d", async (code, expected) => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("status.get", new DaemonClientError(code, "failed"));
+    ["UNKNOWN_LEASE", 1],
+  ] as const)("maps %s to exit %d, from ERROR_TABLE not a second map", async (code, expected) => {
+    const error = simlockError(code);
+    expect(errorExitCode(error)).toBe(expected);
 
+    const output = outputCapture();
     await expect(
-      runCli(["status"], output.environmentWith({ connect: async () => connection })),
+      runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.reject(error) }),
+        }),
+      ),
     ).resolves.toBe(expected);
-    expect(errorExitCode(new DaemonClientError(code, "failed"))).toBe(expected);
   });
 
   it("writes a single structured JSON error line to stderr for a daemon error", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("status.get", new DaemonClientError("NO_CAPACITY", "No capacity"));
-
-    await expect(
-      runCli(["status"], output.environmentWith({ connect: async () => connection })),
-    ).resolves.toBe(11);
-    expect(output.stdout).toBe("");
-    expect(output.stderr.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "NO_CAPACITY", message: "No capacity" },
-    });
-  });
-
-  it("gives REQUESTER_ALREADY_LEASED its own exit code and an actionable message", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response(
-      "lease.request",
-      new DaemonClientError(
-        "REQUESTER_ALREADY_LEASED",
-        "Requester test-requester already holds lease lse_1; release it (`simlock release lse_1`) before requesting another device",
-      ),
-    );
-
     await expect(
       runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 16", "--detach"],
-        output.environmentWith({ connect: async () => connection }),
-      ),
-    ).resolves.toBe(13);
-    expect(output.stdout).toBe("");
-    const parsed = JSON.parse(output.stderr) as { error: { code: string; message: string } };
-    expect(parsed.error.code).toBe("REQUESTER_ALREADY_LEASED");
-    expect(parsed.error.message).toContain("lse_1");
-    expect(parsed.error.message).toContain("simlock release lse_1");
-  });
-
-  it("parses human durations and bare milliseconds", () => {
-    expect(parseDuration("90s")).toBe(90_000);
-    expect(parseDuration("10m")).toBe(600_000);
-    expect(parseDuration("250")).toBe(250);
-  });
-
-  it("resolves the fallback requester id from SIMLOCK_AGENT_ID, else the process pid", () => {
-    expect(fallbackRequesterId({ SIMLOCK_AGENT_ID: "agent-from-env" })).toBe("agent-from-env");
-    expect(fallbackRequesterId({})).toBe(String(process.pid));
-  });
-
-  it("reports missing lease arguments as a structured USAGE error", async () => {
-    const output = outputCapture();
-
-    await expect(runCli(["lease"], output.environment)).resolves.toBe(2);
-    expect(output.stdout).toBe("");
-    expect(output.stderr.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "USAGE", message: expect.stringContaining("--platform") },
-    });
-  });
-
-  it("rejects --json on a command whose output is already unconditionally JSON", async () => {
-    const output = outputCapture();
-
-    await expect(runCli(["list", "--json"], output.environment)).resolves.toBe(2);
-    expect(output.stdout).toBe("");
-    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
-  });
-
-  it("lists the MCP server in root help", async () => {
-    const output = outputCapture();
-
-    await expect(runCli([], output.environment)).resolves.toBe(0);
-    expect(output.stdout).toContain("mcp");
-    expect(output.stdout).toContain("Start the stdio MCP server");
-  });
-
-  it("does not load the MCP runner for non-MCP commands", async () => {
-    const output = outputCapture();
-    const loadMcpStdio = vi.fn(async () => vi.fn(async () => undefined));
-    const connection = new StubConnection();
-    connection.response("status.get", {});
-
-    await expect(
-      runCli(
-        ["status", "--json"],
-        output.environmentWith({ connect: async () => connection, loadMcpStdio }),
-      ),
-    ).resolves.toBe(0);
-    expect(loadMcpStdio).not.toHaveBeenCalled();
-  });
-
-  it.each([["--help"], ["-h"]])("prints MCP help without starting it: %s", async (help) => {
-    const output = outputCapture();
-    const runner = vi.fn(async () => undefined);
-
-    await expect(
-      runCli(["mcp", help], output.environmentWith({ runMcpStdio: runner })),
-    ).resolves.toBe(0);
-    expect(output.stdout).toBe("Usage: simlock mcp\n");
-    expect(output.stderr).toBe("");
-    expect(runner).not.toHaveBeenCalled();
-  });
-
-  it("waits for the MCP runner without writing before it completes", async () => {
-    const output = outputCapture();
-    let complete!: () => void;
-    const runner = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          complete = resolve;
-        }),
-    );
-    const run = runCli(["mcp"], output.environmentWith({ runMcpStdio: runner }));
-
-    await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toBe("");
-    complete();
-    await expect(run).resolves.toBe(0);
-    expect(output.stdout).toBe("");
-    expect(output.stderr).toBe("");
-  });
-
-  it.each([["--json"], ["unexpected"], ["--help=true"]])(
-    "rejects unexpected MCP input: %s",
-    async (argument) => {
-      const output = outputCapture();
-      const runner = vi.fn(async () => undefined);
-
-      await expect(
-        runCli(["mcp", argument], output.environmentWith({ runMcpStdio: runner })),
-      ).resolves.toBe(2);
-      expect(output.stdout).toBe("");
-      expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
-      expect(runner).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reports MCP startup failures as a structured INTERNAL error on stderr", async () => {
-    const output = outputCapture();
-    const runner = vi.fn(async () => {
-      throw new Error("MCP startup failed");
-    });
-
-    await expect(runCli(["mcp"], output.environmentWith({ runMcpStdio: runner }))).resolves.toBe(1);
-    expect(output.stdout).toBe("");
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "INTERNAL", message: "MCP startup failed" },
-    });
-    expect(runner).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps held lease stdout pure, renders progress to stderr, and releases on SIGTERM", async () => {
-    const harness = await createHarness();
-    const output = outputCapture();
-    const signals = new EventEmitter();
-    const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      output.environmentWith({
-        connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
-        signals,
-      }),
-    );
-
-    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    signals.emit("SIGTERM");
-
-    await expect(run).resolves.toBe(0);
-    expect(output.stdout.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(output.stdout)).toMatchObject({
-      device: "iPhone 16",
-      os: "26.5",
-      platform: "ios",
-      state: "leased",
-    });
-    expect(
-      output.stderr
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ event: "provisioning" }),
-        expect.objectContaining({ event: "booting" }),
-      ]),
-    );
-    await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
-  });
-
-  it("reports a post-signal release failure as a structured stderr line, not prose", async () => {
-    const output = outputCapture();
-    const signals = new EventEmitter();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_release_fail", mode: "held", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
-    connection.response("lease.release", new Error("release failed"));
-    const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      output.environmentWith({ connect: async () => connection, signals }),
-    );
-
-    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    signals.emit("SIGTERM");
-
-    await expect(run).resolves.toBe(0);
-    expect(output.stderr.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "INTERNAL", message: "release failed" },
-    });
-  });
-
-  it("writes structured stderr lines for device-unhealthy/device-recovered pushes, ignoring malformed ones", async () => {
-    const output = outputCapture();
-    const signals = new EventEmitter();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_health", mode: "held", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
-    connection.response("lease.release", { leaseId: "lse_health" });
-    const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      output.environmentWith({ connect: async () => connection, signals }),
-    );
-
-    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    connection.push("device-unhealthy", {
-      deviceId: "ABCD",
-      leaseId: "lse_health",
-      reason: "crashed",
-    });
-    connection.push("device-recovered", { attempts: 2, deviceId: "ABCD", leaseId: "lse_health" });
-    // Malformed pushes must not crash the CLI or emit a diagnostic line.
-    connection.push("device-unhealthy", { deviceId: 42 });
-    connection.push("device-recovered", null);
-
-    signals.emit("SIGTERM");
-    await expect(run).resolves.toBe(0);
-
-    expect(output.stdout.trim().split("\n")).toHaveLength(1);
-    expect(
-      output.stderr
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
-      { device_id: "ABCD", event: "device_unhealthy", lease: "lse_health" },
-      { attempts: 2, device_id: "ABCD", event: "device_recovered", lease: "lse_health" },
-    ]);
-  });
-
-  it("reports a lost lease, exits 14, and does not re-release it", async () => {
-    const output = outputCapture();
-    const signals = new EventEmitter();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_lost", mode: "held", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
-    connection.response("lease.release", new Error("lease.release must not be called"));
-    const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      output.environmentWith({ connect: async () => connection, signals }),
-    );
-
-    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    // A malformed push must not end the holder's lease: it is ignored outright,
-    // and the process keeps waiting exactly as it did before.
-    connection.push("lease-lost", { deviceId: 42 });
-    // No signal: the daemon ending the lease is what must stop the holder.
-    connection.push("lease-lost", {
-      deviceId: "ABCD",
-      leaseId: "lse_lost",
-      reason: "device-lost",
-    });
-
-    await expect(run).resolves.toBe(14);
-    expect(output.stdout.trim().split("\n")).toHaveLength(1);
-    expect(
-      output.stderr
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
-      { device_id: "ABCD", event: "lease_lost", lease: "lse_lost", reason: "device-lost" },
-    ]);
-  });
-
-  it("flagship e2e: queues a second CLI holder until the first connection drops", async () => {
-    const harness = await createHarness();
-    const first = outputCapture();
-    const second = outputCapture();
-    const firstSignals = new EventEmitter();
-    const secondSignals = new EventEmitter();
-    const firstRun = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      first.environmentWith({
-        connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
-        requesterId: "agent-a",
-        signals: firstSignals,
-      }),
-    );
-    await vi.waitFor(() => expect(first.stdout).not.toBe(""));
-    const secondRun = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      second.environmentWith({
-        connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
-        requesterId: "agent-b",
-        signals: secondSignals,
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(harness.eventBus.replay().some((event) => event.event === "lease.queued")).toBe(true),
-    );
-    expect(second.stdout).toBe("");
-    expect(
-      second.stderr
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([{ event: "queued", queue_position: 1 }]);
-
-    firstSignals.emit("SIGTERM");
-    await expect(firstRun).resolves.toBe(0);
-    await vi.waitFor(() => expect(second.stdout).not.toBe(""));
-    secondSignals.emit("SIGTERM");
-    await expect(secondRun).resolves.toBe(0);
-    expect(
-      second.stderr
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([{ event: "queued", queue_position: 1 }]);
-  });
-
-  it("--agent-id overrides the environment's fallback requester id", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_1", mode: "detached", ttlDeadline: 1_000 },
-      timing: {
-        estimatedBootMs: 1,
-        estimatedProvisionMs: 1,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 2,
-      },
-    });
-
-    await expect(
-      runCli(
-        [
-          "lease",
-          "--platform",
-          "ios",
-          "--device",
-          "iPhone 17 Pro",
-          "--detach",
-          "--agent-id",
-          "agent-x",
-        ],
-        output.environmentWith({ connect: async () => connection, requesterId: "fallback-id" }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(connection.calls).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({ requesterId: "agent-x" }),
-        type: "lease.request",
-      }),
-    ]);
-  });
-
-  it("falls back to the environment's requester id when --agent-id is omitted", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_1", mode: "detached", ttlDeadline: 1_000 },
-      timing: {
-        estimatedBootMs: 1,
-        estimatedProvisionMs: 1,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 2,
-      },
-    });
-
-    await expect(
-      runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
-        output.environmentWith({ connect: async () => connection, requesterId: "fallback-id" }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(connection.calls).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({ requesterId: "fallback-id" }),
-        type: "lease.request",
-      }),
-    ]);
-  });
-
-  it("rejects an empty --agent-id as a usage error", async () => {
-    const output = outputCapture();
-
-    await expect(
-      runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--agent-id", ""],
-        output.environment,
-      ),
-    ).resolves.toBe(2);
-    expect(output.stderr).toContain("--agent-id");
-  });
-
-  it("enforces one lease per --agent-id: same id collides, distinct ids do not", async () => {
-    const harness = await createHarness();
-    const first = outputCapture();
-
-    await expect(
-      runCli(
-        [
-          "lease",
-          "--platform",
-          "ios",
-          "--device",
-          "iPhone 16",
-          "--detach",
-          "--agent-id",
-          "dup-agent",
-        ],
-        first.environmentWith({
-          connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
-        }),
-      ),
-    ).resolves.toBe(0);
-
-    const second = outputCapture();
-    await expect(
-      runCli(
-        [
-          "lease",
-          "--platform",
-          "ios",
-          "--device",
-          "iPhone 16",
-          "--detach",
-          "--agent-id",
-          "dup-agent",
-        ],
-        second.environmentWith({
-          connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
-        }),
-      ),
-    ).resolves.toBe(13);
-    expect(second.stderr).toContain("dup-agent");
-    expect(second.stderr).toContain("already");
-    expect(JSON.parse(second.stderr)).toMatchObject({
-      error: { code: "REQUESTER_ALREADY_LEASED" },
-    });
-
-    const third = outputCapture();
-    await expect(
-      runCli(
-        [
-          "lease",
-          "--platform",
-          "ios",
-          "--device",
-          "iPhone 16",
-          "--detach",
-          "--agent-id",
-          "other-agent",
-          "--no-wait",
-        ],
-        third.environmentWith({
-          connect: () => connectExistingDaemon(harness.socketPath, new NodeIpcTransport()),
+        ["status"],
+        output.environmentWith({
+          readAdminTokenFile: async () => "a-token",
+          connectAdmin: async (resolveCredential) => {
+            await resolveCredential();
+            return fakeClient({ getStatus: () => Promise.reject(simlockError("NO_CAPACITY")) });
+          },
         }),
       ),
     ).resolves.toBe(11);
-    expect(third.stderr).not.toContain("already");
-  });
-
-  it("prints a detached token, exits, and renews it", async () => {
-    const detached = outputCapture();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_9f2c", mode: "detached", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 20,
-        estimatedProvisionMs: 10,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 30,
-      },
-    });
-
-    await expect(
-      runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
-        detached.environmentWith({ connect: async () => connection }),
-      ),
-    ).resolves.toBe(0);
-    expect(detached.stdout).toBe(
-      '{"device":"iPhone 17 Pro","environment":{},"expires_at_ms":61000,"lease":"lse_9f2c","os":"26.5","platform":"ios","state":"leased","timing":{"estimated_boot_ms":20,"estimated_provision_ms":10,"estimated_reclaim_ms":0,"estimated_ready_ms":30},"udid":"ABCD"}\n',
-    );
-    expect(connection.closed).toBe(true);
-
-    const renew = outputCapture();
-    const renewConnection = new StubConnection();
-    renewConnection.response("lease.renew", { id: "lse_9f2c", ttlDeadline: 61_000 });
-    await expect(
-      runCli(
-        ["lease", "renew", "lse_9f2c", "--ttl", "1m"],
-        renew.environmentWith({ connect: async () => renewConnection }),
-      ),
-    ).resolves.toBe(0);
-    expect(renewConnection.calls).toContainEqual({
-      payload: { leaseId: "lse_9f2c", ttlMs: 60_000 },
-      type: "lease.renew",
-    });
+    expect(output.stderr).not.toContain("already");
   });
 
   it("prints shell export lines instead of the JSON grant under --export-env", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
+    const grant: LeaseGrant = {
       ...detachedGrant,
-      // A device root is a user-configurable path, so it can hold a space or an
-      // apostrophe; both have to survive `eval "$(...)"` byte for byte.
+      // A device root is a user-configurable path, so it can hold a space or an apostrophe;
+      // both have to survive `eval "$(...)"` byte for byte.
       environment: {
         SIMLOCK_IOS_DEVICE_SET: "/Users/o'brien/My Sims/devices/ios",
         ANDROID_ADB_SERVER_PORT: "5038",
       },
-    });
+    };
 
     await expect(
       runCli(
         ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
-        output.environmentWith({ connect: async () => connection }),
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ requestLease: (_input, _options) => Promise.resolve(grant) }),
+        }),
       ),
     ).resolves.toBe(0);
     expect(output.stdout).toBe(
@@ -694,13 +207,14 @@ describe("CLI boundary", () => {
 
   it("names the lease on stderr when --export-env has no environment to export", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("lease.request", detachedGrant);
 
     await expect(
       runCli(
         ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
-        output.environmentWith({ connect: async () => connection }),
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ requestLease: (_input, _options) => Promise.resolve(detachedGrant) }),
+        }),
       ),
     ).resolves.toBe(0);
     // stdout stays empty so `eval "$(...)"` is unaffected, but the lease is committed and
@@ -712,48 +226,24 @@ describe("CLI boundary", () => {
 
   it("fails loudly rather than exporting a key that would change what eval runs", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
+    const grant: LeaseGrant = {
       ...detachedGrant,
       // Not reachable through the shipped drivers, whose keys are literals -- but
       // `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
       environment: { "K=1; touch /tmp/probe/PWNED_KEY; X": "1" },
-    });
+    };
 
     await expect(
       runCli(
         ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
-        output.environmentWith({ connect: async () => connection }),
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ requestLease: (_input, _options) => Promise.resolve(grant) }),
+        }),
       ),
     ).resolves.toBe(1);
     expect(output.stdout).toBe("");
     expect(output.stderr).toContain("PWNED_KEY");
-  });
-
-  it("keeps holding the lease after printing export lines in held mode", async () => {
-    const output = outputCapture();
-    const signals = new EventEmitter();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      ...detachedGrant,
-      environment: { SIMLOCK_IOS_DEVICE_SET: "/devices/ios" },
-      lease: { id: "lse_held_env", mode: "held", ttlDeadline: 61_000 },
-    });
-    connection.response("lease.release", { leaseId: "lse_held_env" });
-    const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--export-env"],
-      output.environmentWith({ connect: async () => connection, signals }),
-    );
-
-    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    expect(output.stdout).toBe("export SIMLOCK_IOS_DEVICE_SET='/devices/ios'\n");
-    signals.emit("SIGTERM");
-
-    await expect(run).resolves.toBe(0);
-    expect(connection.calls).toContainEqual({
-      payload: { leaseId: "lse_held_env" },
-      type: "lease.release",
-    });
   });
 
   it.each([
@@ -761,42 +251,49 @@ describe("CLI boundary", () => {
     ["adb", ["shell", "input", "tap", "100", "200"]],
   ])("asks the daemon to scope a %s passthrough and runs it locally", async (tool, args) => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("driver.passthrough", {
+    const resolved = {
       args: ["-P", "5038", ...args],
       command: "/sdk/adb",
       env: { ANDROID_ADB_SERVER_PORT: "5038" },
-    });
-    const runPassthrough = vi.fn(async () => 0);
+    };
+    const seen: unknown[] = [];
+    const ran: unknown[] = [];
 
     await expect(
       runCli(
         [tool, ...args],
-        output.environmentWith({ connect: async () => connection, runPassthrough }),
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: (input) => {
+                seen.push(input);
+                return Promise.resolve(resolved);
+              },
+            }),
+          runPassthrough: async (command) => {
+            ran.push(command);
+            return 0;
+          },
+        }),
       ),
     ).resolves.toBe(0);
-    expect(connection.calls).toContainEqual({
-      payload: { args, tool },
-      type: "driver.passthrough",
-    });
-    expect(runPassthrough).toHaveBeenCalledWith({
-      args: ["-P", "5038", ...args],
-      command: "/sdk/adb",
-      env: { ANDROID_ADB_SERVER_PORT: "5038" },
-    });
+    expect(seen).toEqual([{ args, tool }]);
+    expect(ran).toEqual([resolved]);
     expect(output.stdout).toBe("");
   });
 
   it("propagates the passthrough's own exit code rather than reporting success", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("driver.passthrough", { args: ["devices"], command: "adb", env: {} });
 
     await expect(
       runCli(
         ["adb", "devices"],
         output.environmentWith({
-          connect: async () => connection,
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: () =>
+                Promise.resolve({ args: ["devices"], command: "adb", env: {} }),
+            }),
           runPassthrough: async () => 42,
         }),
       ),
@@ -805,24 +302,33 @@ describe("CLI boundary", () => {
 
   it("renders a driver's refusal as a USAGE error, not as a daemon failure", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response(
-      "driver.passthrough",
-      new DaemonClientError(
-        "PASSTHROUGH_REFUSED",
-        "Refusing `simlock simctl delete`: use `simlock release` or `simlock cleanup` instead.",
-      ),
-    );
-    const runPassthrough = vi.fn(async () => 0);
+    let ranPassthrough = false;
 
     await expect(
       runCli(
         ["simctl", "delete", "ABCD"],
-        output.environmentWith({ connect: async () => connection, runPassthrough }),
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: () =>
+                Promise.reject(
+                  new SimlockError(
+                    "PASSTHROUGH_REFUSED",
+                    "domain",
+                    "Refusing `simlock simctl delete`: use `simlock release` or `simlock cleanup` instead.",
+                    { tool: "simctl" },
+                  ),
+                ),
+            }),
+          runPassthrough: async () => {
+            ranPassthrough = true;
+            return 0;
+          },
+        }),
       ),
     ).resolves.toBe(2);
-    expect(runPassthrough).not.toHaveBeenCalled();
-    expect(JSON.parse(output.stderr)).toEqual({
+    expect(ranPassthrough).toBe(false);
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
       error: {
         code: "USAGE",
         message: expect.stringContaining("simlock release"),
@@ -832,172 +338,57 @@ describe("CLI boundary", () => {
 
   it("passes a passthrough's own --help through to the tool rather than intercepting it", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("driver.passthrough", { args: ["--help"], command: "adb", env: {} });
+    const seen: unknown[] = [];
 
     await expect(
       runCli(
         ["adb", "--help"],
         output.environmentWith({
-          connect: async () => connection,
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: (input) => {
+                seen.push(input);
+                return Promise.resolve({ args: ["--help"], command: "adb", env: {} });
+              },
+            }),
           runPassthrough: async () => 0,
         }),
       ),
     ).resolves.toBe(0);
-    expect(connection.calls).toContainEqual({
-      payload: { args: ["--help"], tool: "adb" },
-      type: "driver.passthrough",
-    });
+    expect(seen).toEqual([{ args: ["--help"], tool: "adb" }]);
   });
 
   it("lists both tool passthroughs in root help", async () => {
     const output = outputCapture();
 
-    await expect(runCli([], output.environment)).resolves.toBe(0);
+    await expect(runCli([], output.environmentWith())).resolves.toBe(0);
     expect(output.stdout).toContain("simctl <args...>");
     expect(output.stdout).toContain("adb <args...>");
   });
 
-  it("keeps status JSON stable", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("status.get", { devices: [], leases: [], revision: 3 });
-
-    await expect(
-      runCli(["status", "--json"], output.environmentWith({ connect: async () => connection })),
-    ).resolves.toBe(0);
-    expect(JSON.parse(output.stdout)).toMatchInlineSnapshot(`
-      {
-        "devices": [],
-        "leases": [],
-        "revision": 3,
-      }
-    `);
-  });
-
-  it("renders managed and running capacity separately", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("status.get", {
-      capacity: {
-        global: { maxRunning: 3, overLimit: false, reserved: 1, running: 1, warm: 1 },
-        ios: {
-          limit: 4,
-          maxRunning: 2,
-          overLimit: false,
-          reserved: 1,
-          running: 1,
-          used: 3,
-          warm: 1,
-        },
-        android: {
-          limit: 2,
-          maxRunning: 2,
-          overLimit: false,
-          reserved: 0,
-          running: 0,
-          used: 1,
-          warm: 0,
-        },
-      },
-      devices: [],
-      leases: [],
-    });
-
-    await expect(
-      runCli(["status"], output.environmentWith({ connect: async () => connection })),
-    ).resolves.toBe(0);
-    expect(output.stdout).toContain("Running global: 1 + 1 reserved/3, warm 1");
-    expect(output.stdout).toContain("Capacity ios: managed 3/4, running 1 + 1 reserved/2, warm 1");
-  });
-
-  it("requests the full device catalog and prints it as JSON", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("catalog.get", {
-      platforms: [
-        { defaultRuntime: "26.5", models: ["iPhone 16"], platform: "ios", runtimes: ["26.5"] },
-      ],
-    });
-
-    await expect(
-      runCli(["catalog", "--json"], output.environmentWith({ connect: async () => connection })),
-    ).resolves.toBe(0);
-    expect(connection.calls).toContainEqual({ payload: {}, type: "catalog.get" });
-    expect(JSON.parse(output.stdout)).toEqual({
-      platforms: [
-        { defaultRuntime: "26.5", models: ["iPhone 16"], platform: "ios", runtimes: ["26.5"] },
-      ],
-    });
-  });
-
-  it("narrows the catalog request to the requested platform", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("catalog.get", { platforms: [] });
-
-    await expect(
-      runCli(
-        ["catalog", "--platform", "android", "--json"],
-        output.environmentWith({ connect: async () => connection }),
-      ),
-    ).resolves.toBe(0);
-    expect(connection.calls).toContainEqual({
-      payload: { platform: "android" },
-      type: "catalog.get",
-    });
-  });
-
-  it("renders the catalog as human-readable text, marking the default runtime", async () => {
-    const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("catalog.get", {
-      platforms: [
-        {
-          defaultRuntime: "26.5",
-          models: ["iPhone 16", "iPhone 17 Pro"],
-          platform: "ios",
-          runtimes: ["18.4", "26.5"],
-        },
-      ],
-    });
-
-    await expect(
-      runCli(["catalog"], output.environmentWith({ connect: async () => connection })),
-    ).resolves.toBe(0);
-    expect(output.stdout).toBe(
-      "Platform: ios\n" +
-        "  Models: iPhone 16, iPhone 17 Pro\n" +
-        "  Runtimes: 18.4, 26.5 (default: 26.5)\n",
-    );
-  });
-
   it("releases and exits when the watched parent process dies, via the same path as a signal", async () => {
     const output = outputCapture();
-    const signals = new EventEmitter();
     const parentWatch = new FakeParentWatch();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_parent_death", mode: "held", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
+    const heldGrant: LeaseGrant = {
+      ...detachedGrant,
+      lease: { ...detachedGrant.lease, id: "lse_parent_death", mode: "held" },
+    };
+    const released: unknown[] = [];
+
     const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
       output.environmentWith({
-        connect: async () => connection,
+        connectAdmin: async () =>
+          fakeClient({
+            requestLease: (_input, _options) => Promise.resolve(heldGrant),
+            releaseLease: (input) => {
+              released.push(input);
+              return Promise.resolve({ leaseId: input.leaseId });
+            },
+          }),
         parentPid: 4321,
         parentWatch,
-        signals,
+        signals: new EventEmitter() as unknown as CliEnvironment["signals"],
       }),
     );
 
@@ -1005,49 +396,43 @@ describe("CLI boundary", () => {
     parentWatch.exit(4321);
 
     await expect(run).resolves.toBe(0);
-    expect(connection.calls.map((call) => call.type)).toEqual(["lease.request", "lease.release"]);
-    expect(connection.closed).toBe(true);
+    expect(released).toEqual([{ leaseId: "lse_parent_death" }]);
   });
 
   it("--bind-pid overrides which pid the CLI watches for parent death", async () => {
     const output = outputCapture();
-    const signals = new EventEmitter();
     const parentWatch = new FakeParentWatch();
-    const connection = new StubConnection();
-    connection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_bind_pid", mode: "held", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
-    let finished = false;
+    const heldGrant: LeaseGrant = {
+      ...detachedGrant,
+      lease: { ...detachedGrant.lease, id: "lse_bind_pid", mode: "held" },
+    };
+    const released: unknown[] = [];
+
     const run = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16", "--bind-pid", "9999"],
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "9876"],
       output.environmentWith({
-        connect: async () => connection,
+        connectAdmin: async () =>
+          fakeClient({
+            requestLease: (_input, _options) => Promise.resolve(heldGrant),
+            releaseLease: (input) => {
+              released.push(input);
+              return Promise.resolve({ leaseId: input.leaseId });
+            },
+          }),
         parentPid: 4321,
         parentWatch,
-        signals,
+        signals: new EventEmitter() as unknown as CliEnvironment["signals"],
       }),
     );
-    void run.then(() => (finished = true));
 
     await vi.waitFor(() => expect(output.stdout).not.toBe(""));
-    // The default parent pid is not the one bound for this invocation -- must not terminate it.
+    // The captured parent is not the one being watched any more, so its death is ignored.
     parentWatch.exit(4321);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(finished).toBe(false);
+    expect(released).toEqual([]);
+    parentWatch.exit(9876);
 
-    parentWatch.exit(9999);
     await expect(run).resolves.toBe(0);
+    expect(released).toEqual([{ leaseId: "lse_bind_pid" }]);
   });
 
   it("rejects a non-numeric --bind-pid as a structured USAGE error", async () => {
@@ -1055,138 +440,415 @@ describe("CLI boundary", () => {
 
     await expect(
       runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 16", "--bind-pid", "not-a-pid"],
-        output.environment,
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "nope"],
+        output.environmentWith(),
       ),
     ).resolves.toBe(2);
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "USAGE", message: "lease --bind-pid must be a positive integer" },
-    });
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
   });
 
-  it("declares the heartbeat capability for held-mode leases, not for detached ones", async () => {
-    const capabilitiesSeen: unknown[] = [];
-    const heldConnection = new StubConnection();
-    heldConnection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_held_cap", mode: "held", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
-    });
-    const heldOutput = outputCapture();
-    const heldSignals = new EventEmitter();
-    const heldRun = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 16"],
-      heldOutput.environmentWith({
-        connect: async (capabilities) => {
-          capabilitiesSeen.push(capabilities);
-          return heldConnection;
+  it("maps a usage error to exit 2 with code USAGE", async () => {
+    const output = outputCapture();
+    await expect(runCli(["nope"], output.environmentWith())).resolves.toBe(2);
+    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+  });
+});
+
+describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
+  it("prefers --token over SIMLOCK_ADMIN_TOKEN and the admin.token file", async () => {
+    const output = outputCapture();
+    let seen: string | undefined;
+    await runCli(
+      ["--token", "from-flag", "status"],
+      output.environmentWith({
+        adminTokenFromEnv: "from-env",
+        readAdminTokenFile: async () => "from-file",
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
+          return fakeClient();
         },
-        signals: heldSignals,
       }),
     );
-    await vi.waitFor(() => expect(heldOutput.stdout).not.toBe(""));
-    heldSignals.emit("SIGTERM");
-    await expect(heldRun).resolves.toBe(0);
+    expect(seen).toBe("from-flag");
+    expect(output.stderr).toBe("");
+  });
 
-    const detachedConnection = new StubConnection();
-    detachedConnection.response("lease.request", {
-      device: {
-        driverDeviceId: "ABCD",
-        spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-        state: "leased",
-      },
-      lease: { id: "lse_detached_cap", mode: "detached", ttlDeadline: 61_000 },
-      timing: {
-        estimatedBootMs: 0,
-        estimatedProvisionMs: 0,
-        estimatedReclaimMs: 0,
-        estimatedReadyMs: 0,
-      },
+  it("prefers SIMLOCK_ADMIN_TOKEN over the admin.token file when --token is absent", async () => {
+    const output = outputCapture();
+    let seen: string | undefined;
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        adminTokenFromEnv: "from-env",
+        readAdminTokenFile: async () => "from-file",
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(seen).toBe("from-env");
+  });
+
+  it("falls back to the admin.token file when neither --token nor the env var is set", async () => {
+    const output = outputCapture();
+    let seen: string | undefined;
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => "from-file",
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(seen).toBe("from-file");
+    expect(output.stderr).toBe("");
+  });
+
+  it("retries a briefly-missing admin.token file before giving up", async () => {
+    const output = outputCapture();
+    let reads = 0;
+    let seen: string | undefined;
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => {
+          reads += 1;
+          return reads < 3 ? undefined : "from-file-after-retry";
+        },
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(reads).toBe(3);
+    expect(seen).toBe("from-file-after-retry");
+    expect(output.stderr).toBe("");
+  });
+
+  it("connects with no credential and writes a stderr notice when every source is empty", async () => {
+    const output = outputCapture();
+    let seen: string | undefined | "unset" = "unset";
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => undefined,
+        connectAdmin: async (resolveCredential) => {
+          seen = await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(seen).toBeUndefined();
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    const notice: unknown = JSON.parse(output.stderr);
+    expect((notice as { notice: string }).notice).toMatch(/agent/i);
+  });
+
+  it("does not read the admin.token file at all when --token is given (B2 ordering)", async () => {
+    // The file source must never be consulted -- let alone before the connection exists -- when
+    // a higher-priority source already answered. Also guards against a regression back to
+    // resolving credentials before `connectAdmin` is even called.
+    const output = outputCapture();
+    let fileReads = 0;
+    await runCli(
+      ["--token", "from-flag", "status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => {
+          fileReads += 1;
+          return "from-file";
+        },
+        connectAdmin: async (resolveCredential) => {
+          await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(fileReads).toBe(0);
+  });
+
+  it("B1: degrades to an agent session with a stderr notice when the daemon rejects the credential", async () => {
+    const output = outputCapture();
+    let attempt = 0;
+    let seenOnRetry: string | undefined | "unset" = "unset";
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => "stale-secret",
+        connectAdmin: async (resolveCredential) => {
+          attempt += 1;
+          if (attempt === 1) {
+            const credential = await resolveCredential();
+            expect(credential).toBe("stale-secret");
+            throw simlockError("ADMIN_AUTHENTICATION_FAILED");
+          }
+          seenOnRetry = await resolveCredential();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(attempt).toBe(2);
+    expect(seenOnRetry).toBeUndefined();
+    expect(output.stderr.trim().split("\n")).toHaveLength(1);
+    const notice = JSON.parse(output.stderr) as { notice: string };
+    expect(notice.notice).toMatch(/admin\.token/i);
+    expect(notice.notice).toMatch(/agent/i);
+  });
+
+  it("B1: does not retry, and propagates the error, when the connection already had no credential", async () => {
+    const output = outputCapture();
+    let attempts = 0;
+    const exitCode = await runCli(
+      ["status"],
+      output.environmentWith({
+        readAdminTokenFile: async () => undefined,
+        connectAdmin: async (resolveCredential) => {
+          attempts += 1;
+          await resolveCredential();
+          throw simlockError("ADMIN_AUTHENTICATION_FAILED");
+        },
+      }),
+    );
+    expect(attempts).toBe(1);
+    expect(exitCode).not.toBe(0);
+    expect(JSON.parse(output.stderr).error.code).toBe("ADMIN_AUTHENTICATION_FAILED");
+  });
+
+  it("B1: an explicit but wrong --token also degrades to agent, with a generic (not file-specific) notice", async () => {
+    const output = outputCapture();
+    let attempt = 0;
+    await runCli(
+      ["--token", "wrong", "status"],
+      output.environmentWith({
+        connectAdmin: async (resolveCredential) => {
+          attempt += 1;
+          const credential = await resolveCredential();
+          if (attempt === 1) {
+            expect(credential).toBe("wrong");
+            throw simlockError("ADMIN_AUTHENTICATION_FAILED");
+          }
+          expect(credential).toBeUndefined();
+          return fakeClient();
+        },
+      }),
+    );
+    expect(attempt).toBe(2);
+    const notice = JSON.parse(output.stderr) as { notice: string };
+    expect(notice.notice).not.toMatch(/admin\.token/i);
+    expect(notice.notice).toMatch(/agent/i);
+  });
+
+  it("B2: reaches admin on a cold start, on the very first invocation, no daemon running yet", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipcTransport = new MemoryIpcTransport();
+    const socketPath = "/simlock/daemon.sock";
+    const adminTokenPath = "/simlock/admin.token";
+    const launcher = new FakeDaemonLauncher(async () => {
+      await startInMemoryDaemon({ adminTokenPath, filesystem, ipcTransport, socketPath });
     });
+    const output = outputCapture({
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+      ipc: ipcTransport,
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith(),
+    );
+    expect(exitCode).toBe(0);
+    expect(launcher.launches).toBe(1);
+    const grant = JSON.parse(output.stdout) as LeaseGrant & { role: string };
+    expect(grant.role).toBe("admin");
+    // Provisioning progress pushes are expected noise on stderr; the agent-fallback notice is
+    // the thing that must be absent.
+    expect(output.stderr).not.toContain("notice");
+  });
+
+  it("B1: a stale admin.token degrades to an agent session instead of bricking the invocation", async () => {
+    const filesystem = new MemoryFilesystem();
+    const ipcTransport = new MemoryIpcTransport();
+    const socketPath = "/simlock/daemon.sock";
+    const adminTokenPath = "/simlock/admin.token";
+    // A daemon actually runs and persists its own secret first, then the file is overwritten
+    // with a value that hashes to nothing the running daemon recognizes -- exactly what a
+    // `kill -9`'d daemon's leftover `admin.token` looks like to the *next* daemon incarnation,
+    // which never touches a file it did not itself just persist.
+    await startInMemoryDaemon({ adminTokenPath, filesystem, ipcTransport, socketPath });
+    await filesystem.writeFileAtomic(adminTokenPath, "stale-secret-from-a-killed-daemon\n");
+    const launcher = new FakeDaemonLauncher();
+    const output = outputCapture({
+      filesystem,
+      clock: new FakeClock(0),
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+      ipc: ipcTransport,
+      launcher,
+      dataDirectory: "/simlock",
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith(),
+    );
+    expect(exitCode).toBe(0);
+    // The daemon was already running -- a bad credential must never trigger an auto-launch.
+    expect(launcher.launches).toBe(0);
+    const grant = JSON.parse(output.stdout) as LeaseGrant & { role: string };
+    expect(grant.role).toBe("agent");
+    expect(output.stderr).toContain("admin.token");
+  });
+});
+
+describe("CLI: daemon status (ADR 0003 §11)", () => {
+  it("reports stopped when the socket cannot be reached at all", async () => {
+    const output = outputCapture();
     await expect(
       runCli(
-        ["lease", "--platform", "ios", "--device", "iPhone 16", "--detach"],
-        outputCapture().environmentWith({
-          connect: async (capabilities) => {
-            capabilitiesSeen.push(capabilities);
-            return detachedConnection;
+        ["daemon", "status", "--json"],
+        output.environmentWith({
+          connectExistingAdmin: async () => {
+            throw new Error("connect ECONNREFUSED");
           },
         }),
       ),
     ).resolves.toBe(0);
-
-    expect(capabilitiesSeen).toEqual([{ heartbeat: true }, undefined]);
+    expect(JSON.parse(output.stdout)).toEqual({ status: "stopped" });
   });
 
-  it("rejects an invalid --platform without contacting the daemon", async () => {
+  it("reports stopped for a transport-kind SimlockError (connection lost)", async () => {
     const output = outputCapture();
+    await expect(
+      runCli(
+        ["daemon", "status", "--json"],
+        output.environmentWith({
+          connectExistingAdmin: async () => {
+            throw simlockError("DAEMON_CONNECTION_LOST");
+          },
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({ status: "stopped" });
+  });
 
-    await expect(runCli(["catalog", "--platform", "windows"], output.environment)).resolves.toBe(2);
-    expect(output.stderr).toContain("--platform must be ios or android");
+  it("distinguishes a refused handshake (socket reachable) from an absent socket", async () => {
+    const output = outputCapture();
+    await expect(
+      runCli(
+        ["daemon", "status", "--json"],
+        output.environmentWith({
+          connectExistingAdmin: async () => {
+            throw simlockError("ADMIN_AUTHENTICATION_FAILED");
+          },
+        }),
+      ),
+    ).resolves.toBe(1);
+    const parsed = JSON.parse(output.stdout) as { status: string; error: { code: string } };
+    expect(parsed.status).toBe("handshake-refused");
+    expect(parsed.error.code).toBe("ADMIN_AUTHENTICATION_FAILED");
+  });
+
+  it("never auto-launches the daemon for daemon status/stop", async () => {
+    const output = outputCapture();
+    let launched = false;
+    await runCli(
+      ["daemon", "status"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          launched = true;
+          return fakeClient();
+        },
+        connectExistingAdmin: async () => fakeClient(),
+      }),
+    );
+    expect(launched).toBe(false);
   });
 
   it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("doctor.run", { findings: [] });
+    const seen: unknown[] = [];
 
     await expect(
       runCli(
         ["doctor", "--purge-orphans"],
-        output.environmentWith({ confirm: async () => true, connect: async () => connection }),
+        output.environmentWith({
+          confirm: async () => true,
+          connectAdmin: async () =>
+            fakeClient({
+              runDoctor: (input) => {
+                seen.push(input);
+                return Promise.resolve({ findings: [] });
+              },
+            }),
+        }),
       ),
     ).resolves.toBe(0);
 
-    expect(connection.calls).toEqual([
-      { payload: { fix: false, purgeOrphans: true }, type: "doctor.run" },
-    ]);
+    expect(seen).toEqual([{ fix: false, purgeOrphans: true }]);
   });
 
   it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("doctor.run", { findings: [] });
+    const seen: unknown[] = [];
 
     await expect(
-      runCli(["doctor", "--fix"], output.environmentWith({ connect: async () => connection })),
+      runCli(
+        ["doctor", "--fix"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              runDoctor: (input) => {
+                seen.push(input);
+                return Promise.resolve({ findings: [] });
+              },
+            }),
+        }),
+      ),
     ).resolves.toBe(0);
 
     // The upgrade contract: `doctor --fix` running unattended in CI never becomes
     // destructive on its own (ADR 0001, decision 6).
-    expect(connection.calls).toEqual([
-      { payload: { fix: true, purgeOrphans: false }, type: "doctor.run" },
-    ]);
+    expect(seen).toEqual([{ fix: true, purgeOrphans: false }]);
   });
 
   it.each([
     ["declined", async () => false],
+    // Explicitly absent: the shared harness defaults `confirm` to an auto-yes, so leaving it
+    // out would test the default rather than the no-terminal case.
     ["unavailable", undefined],
   ] as const)(
     "refuses --purge-orphans and contacts nobody when confirmation is %s",
     async (_case, confirm) => {
       const output = outputCapture();
-      const connection = new StubConnection();
+      let connected = false;
 
       await expect(
         runCli(
           ["doctor", "--purge-orphans"],
           output.environmentWith({
-            ...(confirm === undefined ? {} : { confirm }),
-            connect: async () => connection,
+            // `exactOptionalPropertyTypes`: an explicitly-absent confirm has to be spread in,
+            // not passed as `undefined`.
+            ...(confirm === undefined ? { confirm: undefined } : { confirm }),
+            connectAdmin: async () => {
+              connected = true;
+              return fakeClient();
+            },
           }),
         ),
       ).resolves.toBe(2);
 
-      expect(connection.calls).toEqual([]);
+      expect(connected).toBe(false);
       expect(JSON.parse(output.stderr)).toEqual({
         error: { code: "USAGE", message: expect.stringContaining("--yes") },
       });
@@ -1195,8 +857,7 @@ describe("CLI boundary", () => {
 
   it("takes --yes as the confirmation, so an unattended purge needs no terminal", async () => {
     const output = outputCapture();
-    const connection = new StubConnection();
-    connection.response("doctor.run", { findings: [] });
+    const seen: unknown[] = [];
 
     await expect(
       runCli(
@@ -1205,66 +866,836 @@ describe("CLI boundary", () => {
           confirm: async () => {
             throw new Error("--yes must not ask");
           },
-          connect: async () => connection,
+          connectAdmin: async () =>
+            fakeClient({
+              runDoctor: (input) => {
+                seen.push(input);
+                return Promise.resolve({ findings: [] });
+              },
+            }),
         }),
       ),
     ).resolves.toBe(0);
 
-    expect(connection.calls).toEqual([
-      { payload: { fix: false, purgeOrphans: true }, type: "doctor.run" },
-    ]);
+    expect(seen).toEqual([{ fix: false, purgeOrphans: true }]);
   });
 });
 
-class StubConnection implements DaemonConnection {
-  readonly calls: Array<{ readonly payload: unknown; readonly type: string }> = [];
-  closed = false;
-  readonly #listeners = new Set<(kind: string, payload: unknown) => void>();
-  readonly #responses = new Map<string, unknown>();
+describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
+  it("rejects an invalid merged config without writing the file", async () => {
+    const output = outputCapture();
+    let wrote = false;
+    await expect(
+      runCli(
+        ["config", "set", "lease.heldTtlBackstopMs", "not-a-number"],
+        output.environmentWith({
+          readConfigFile: async () => ({}),
+          writeConfigFile: async () => {
+            wrote = true;
+          },
+          validateConfig: async () => {
+            throw new Error("lease.heldTtlBackstopMs must be a number");
+          },
+        }),
+      ),
+    ).resolves.toBe(2);
+    expect(wrote).toBe(false);
+    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+  });
 
-  response(type: string, value: unknown): void {
-    this.#responses.set(type, value);
-  }
+  it("writes the file once validation passes", async () => {
+    const output = outputCapture();
+    let written: Record<string, unknown> | undefined;
+    await expect(
+      runCli(
+        ["config", "set", "downloads.policy", "never"],
+        output.environmentWith({
+          readConfigFile: async () => ({}),
+          writeConfigFile: async (contents) => {
+            written = contents;
+          },
+          validateConfig: async () => {},
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(written).toEqual({ downloads: { policy: "never" } });
+  });
+});
 
-  async request(type: string, payload: unknown): Promise<unknown> {
-    this.calls.push({ payload, type });
-    const value = this.#responses.get(type);
-    if (value instanceof Error) {
-      throw value;
-    }
-    return value;
-  }
+describe("CLI: config set validates with the real config loader (ADR 0003 §11, B9)", () => {
+  it("rejects an unknown config key instead of silently dropping it", async () => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let wrote = false;
+    const exitCode = await runCli(
+      ["config", "set", "capacty.limits.ios.maxDevices", "2"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async () => {
+          wrote = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(2);
+    expect(wrote).toBe(false);
+    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+  });
 
-  onPush(listener: (kind: string, payload: unknown) => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
-  }
+  it("rejects a mistyped key (missing the Ms suffix) instead of validating clean", async () => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let wrote = false;
+    const exitCode = await runCli(
+      ["config", "set", "lease.heldTtlBackstop", "60000"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async () => {
+          wrote = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(2);
+    expect(wrote).toBe(false);
+  });
 
-  onClose(): () => void {
-    return () => undefined;
-  }
+  it("still writes a genuinely valid key", async () => {
+    const output = outputCapture(realCliEnvironmentPorts());
+    let written: Record<string, unknown> | undefined;
+    const exitCode = await runCli(
+      // Well above the default heartbeat interval (5 min) * 4, so this doesn't also trip
+      // `validateHeartbeatInterval` -- this test is only about the key itself validating clean.
+      ["config", "set", "lease.heldTtlBackstopMs", "2400000"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async (contents) => {
+          written = contents;
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(written).toEqual({ lease: { heldTtlBackstopMs: 2400000 } });
+  });
 
-  push(kind: string, payload: unknown): void {
-    for (const listener of this.#listeners) {
-      listener(kind, payload);
-    }
-  }
+  it("does not let a stray file at the scratch validation path change the outcome", async () => {
+    // Guards against B9's second bug: the validation scratch path must never be able to read a
+    // real file, whether one happens to already exist there or not.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/");
+    await filesystem.writeFileAtomic(
+      "/config-set-validation.json",
+      `${JSON.stringify({ totally: { bogus: true } })}\n`,
+    );
+    const output = outputCapture(realCliEnvironmentPorts(filesystem));
+    let wrote = false;
+    const exitCode = await runCli(
+      ["config", "set", "downloads.policy", "never"],
+      output.environmentWith({
+        readConfigFile: async () => ({}),
+        writeConfigFile: async () => {
+          wrote = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(wrote).toBe(true);
+  });
+});
 
-  async close(): Promise<void> {
-    this.closed = true;
-  }
+describe("CLI: --json shape is the contract, as-is (ADR 0003 §11)", () => {
+  it("status --json has no snake_case renderings", async () => {
+    const output = outputCapture();
+    await runCli(
+      ["status", "--json"],
+      output.environmentWith({ connectAdmin: async () => fakeClient() }),
+    );
+    const text = output.stdout;
+    expect(text).not.toMatch(/expires_at_ms|estimated_boot_ms|queue_position|device_unhealthy/);
+    const parsed = JSON.parse(text) as StatusGetOutput;
+    expect(parsed.queueDepth).toBe(0);
+  });
+
+  it("lease output is the contract's LeaseGrant plus the resolved role", async () => {
+    const output = outputCapture();
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith({ connectAdmin: async () => fakeClient({ role: "admin" }) }),
+    );
+    const parsed = JSON.parse(output.stdout) as LeaseGrant & { role: string };
+    expect(parsed.lease.id).toBe("lse_1");
+    expect(parsed.role).toBe("admin");
+    expect(output.stdout).not.toMatch(/expires_at_ms|estimated_boot_ms/);
+  });
+});
+
+describe("CLI: --yes / confirm guards (safety rule 5)", () => {
+  it("release --all without --yes and a non-interactive confirm refuses", async () => {
+    const output = outputCapture();
+    let released = false;
+    await expect(
+      runCli(
+        ["release", "--all"],
+        output.environmentWith({
+          confirm: async () => false,
+          connectAdmin: async () =>
+            fakeClient({
+              releaseAllLeases: () => {
+                released = true;
+                return Promise.resolve({ leaseIds: [] });
+              },
+            }),
+        }),
+      ),
+    ).resolves.toBe(2);
+    expect(released).toBe(false);
+  });
+
+  it("release --all --yes bypasses the interactive confirm", async () => {
+    const output = outputCapture();
+    let released = false;
+    await expect(
+      runCli(
+        ["release", "--all", "--yes"],
+        output.environmentWith({
+          confirm: async () => false,
+          connectAdmin: async () =>
+            fakeClient({
+              releaseAllLeases: () => {
+                released = true;
+                return Promise.resolve({ leaseIds: ["lse_1"] });
+              },
+            }),
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(released).toBe(true);
+  });
+
+  it("nuke without confirmation or --yes refuses before connecting", async () => {
+    const output = outputCapture();
+    let connected = false;
+    await expect(
+      runCli(
+        ["nuke"],
+        output.environmentWith({
+          confirm: async () => false,
+          connectAdmin: async () => {
+            connected = true;
+            return fakeClient();
+          },
+        }),
+      ),
+    ).resolves.toBe(2);
+    expect(connected).toBe(false);
+  });
+});
+
+describe("CLI: token operations never write tokens.json directly", () => {
+  it("token create/list/revoke all go through the client, not a local TokenStore", async () => {
+    const calls: string[] = [];
+    const client = fakeClient({
+      createToken: (input) => {
+        calls.push("create");
+        return Promise.resolve({
+          secret: "sec_1",
+          token: { id: "tok_1", role: input.role, createdAt: 0 },
+        });
+      },
+      listTokens: () => {
+        calls.push("list");
+        return Promise.resolve({ tokens: [{ id: "tok_1", role: "operator", createdAt: 0 }] });
+      },
+      revokeToken: () => {
+        calls.push("revoke");
+        return Promise.resolve({ revoked: true });
+      },
+    });
+    const environment = outputCapture().environmentWith({ connectAdmin: async () => client });
+    await runCli(["token", "create", "--role", "operator"], environment);
+    await runCli(["token", "list"], environment);
+    await runCli(["token", "revoke", "tok_1"], environment);
+    expect(calls).toEqual(["create", "list", "revoke"]);
+  });
+});
+
+describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", () => {
+  it("exits 14 on a lost lease and does not attempt to re-release it", async () => {
+    const output = outputCapture();
+    let leaseLostListener:
+      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
+      | undefined;
+    let released = false;
+    const client = fakeClient({
+      onLeaseLost: (listener) => {
+        leaseLostListener = listener;
+        return () => {};
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    // Let requestLease resolve and runLease reach the `Promise.race` wait point before firing
+    // the push -- otherwise the listener registered by `client.onLeaseLost` may not exist yet.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    leaseLostListener?.({ leaseId: "lse_1", deviceId: "dev_1", reason: "ttl-backstop" });
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(14);
+    // The daemon already released it -- asking again would only raise UNKNOWN_LEASE.
+    expect(released).toBe(false);
+  });
+
+  it("ignores a lease-lost push for a lease this connection does not hold (own-lease-id filter)", async () => {
+    const output = outputCapture();
+    let leaseLostListener:
+      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
+      | undefined;
+    let released = false;
+    const signals = new EventEmitter();
+    const client = fakeClient({
+      onLeaseLost: (listener) => {
+        leaseLostListener = listener;
+        return () => {};
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // A push for another lease this same principal owns (e.g. an earlier `--detach`'d lease) --
+    // must not be treated as this invocation's own lease being lost.
+    leaseLostListener?.({ leaseId: "some-other-lease", deviceId: "dev_2", reason: "ttl-backstop" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    signals.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(0);
+    expect(released).toBe(true);
+    expect(output.stderr).not.toContain("lease-lost");
+  });
+
+  it("writes {push:...} stderr lines for progress, device-unhealthy, and device-recovered as contract values", async () => {
+    const output = outputCapture();
+    let unhealthyListener: ((push: DeviceUnhealthyPush) => void) | undefined;
+    let recoveredListener: ((push: DeviceRecoveredPush) => void) | undefined;
+    const client = fakeClient({
+      onDeviceUnhealthy: (listener) => {
+        unhealthyListener = listener;
+        return () => {};
+      },
+      onDeviceRecovered: (listener) => {
+        recoveredListener = listener;
+        return () => {};
+      },
+      requestLease: (_input, options) => {
+        options?.onProgress?.({ stage: "provisioning", etaMs: 1_500 });
+        unhealthyListener?.({ leaseId: "lse_1", deviceId: "dev_1" });
+        recoveredListener?.({ leaseId: "lse_1", deviceId: "dev_1", attempts: 2 });
+        return Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          environment: {},
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "detached",
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    const lines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toContainEqual({ push: "progress", stage: "provisioning", etaMs: 1_500 });
+    expect(lines).toContainEqual({
+      push: "device-unhealthy",
+      leaseId: "lse_1",
+      deviceId: "dev_1",
+    });
+    expect(lines).toContainEqual({
+      push: "device-recovered",
+      leaseId: "lse_1",
+      deviceId: "dev_1",
+      attempts: 2,
+    });
+  });
+
+  it("maps --full and --no-wait onto the contract's full/noWait input fields", async () => {
+    const output = outputCapture();
+    let capturedInput: Record<string, unknown> | undefined;
+    const client = fakeClient({
+      requestLease: (input) => {
+        capturedInput = input as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          environment: {},
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "detached",
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    await runCli(
+      [
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 17 Pro",
+        "--detach",
+        "--full",
+        "--no-wait",
+      ],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    expect(capturedInput?.full).toBe(true);
+    expect(capturedInput?.noWait).toBe(true);
+  });
+
+  it("omits full and reports noWait: false when neither flag is given", async () => {
+    const output = outputCapture();
+    let capturedInput: Record<string, unknown> | undefined;
+    const client = fakeClient({
+      requestLease: (input) => {
+        capturedInput = input as unknown as Record<string, unknown>;
+        return Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          environment: {},
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "detached",
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    expect(capturedInput?.full).toBeUndefined();
+    expect(capturedInput?.noWait).toBe(false);
+  });
+});
+
+describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
+  it("does not load the MCP stdio module unless the mcp command runs", async () => {
+    const output = outputCapture();
+    let loaded = false;
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        connectAdmin: async () => fakeClient(),
+        loadMcpStdio: async () => {
+          loaded = true;
+          return async () => {};
+        },
+      }),
+    );
+    expect(loaded).toBe(false);
+  });
+
+  it("loads and runs the stdio runner when the mcp command is dispatched", async () => {
+    const output = outputCapture();
+    let ran = false;
+    const exitCode = await runCli(
+      ["mcp"],
+      output.environmentWith({
+        loadMcpStdio: async () => async () => {
+          ran = true;
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(ran).toBe(true);
+  });
+
+  it("reports a startup failure as a structured error instead of throwing raw", async () => {
+    const output = outputCapture();
+    const exitCode = await runCli(
+      ["mcp"],
+      output.environmentWith({
+        loadMcpStdio: async () => {
+          throw new Error("cannot bind mcp stdio transport");
+        },
+      }),
+    );
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(output.stderr)).toEqual({
+      error: { code: "INTERNAL", message: "cannot bind mcp stdio transport" },
+    });
+  });
+});
+
+describe("CLI: daemon logs (ADR 0003 §11 -- must work when the daemon is dead)", () => {
+  it("reads the log file without connecting to the daemon at all", async () => {
+    const output = outputCapture();
+    let connected = false;
+    const exitCode = await runCli(
+      ["daemon", "logs"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        connectExistingAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        readLogFile: async () => "line one\nline two\n",
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(output.stdout).toBe("line one\nline two\n");
+  });
+
+  it("--json wraps the log tail under a logs key, still with no connection attempted", async () => {
+    const output = outputCapture();
+    let connected = false;
+    const exitCode = await runCli(
+      ["daemon", "logs", "--json"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        connectExistingAdmin: async () => {
+          connected = true;
+          return fakeClient();
+        },
+        readLogFile: async () => "only line\n",
+      }),
+    );
+    expect(exitCode).toBe(0);
+    expect(connected).toBe(false);
+    expect(JSON.parse(output.stdout)).toEqual({ logs: "only line" });
+  });
+});
+
+describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
+  it("lease --detach, status, release, and token create round-trip through a real daemon", async () => {
+    const { socketPath } = await startTestDaemon();
+    const ipc = new NodeIpcTransport();
+    const environment = outputCapture().environmentWith({
+      connectAdmin: async (resolveCredential) => {
+        const credential = await resolveCredential();
+        return connectSimlockAdmin({
+          ipc,
+          endpoint: socketPath,
+          principal: "smoke-test",
+          ...(credential === undefined ? {} : { credential }),
+        });
+      },
+    });
+
+    const leaseOut = outputCapture();
+    const leaseExit = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      leaseOut.environmentWith({ connectAdmin: environment.connectAdmin }),
+    );
+    expect(leaseExit).toBe(0);
+    const grant = JSON.parse(leaseOut.stdout) as LeaseGrant;
+    expect(grant.lease.mode).toBe("detached");
+
+    const statusOut = outputCapture();
+    await runCli(
+      ["status", "--json"],
+      statusOut.environmentWith({ connectAdmin: environment.connectAdmin }),
+    );
+    const status = JSON.parse(statusOut.stdout) as StatusGetOutput;
+    expect(status.leases.map((lease) => lease.id)).toContain(grant.lease.id);
+
+    const releaseOut = outputCapture();
+    const releaseExit = await runCli(
+      ["release", grant.lease.id],
+      releaseOut.environmentWith({ connectAdmin: environment.connectAdmin }),
+    );
+    expect(releaseExit).toBe(0);
+
+    const tokenOut = outputCapture();
+    const tokenExit = await runCli(
+      ["token", "create", "--role", "operator", "--label", "ci"],
+      tokenOut.environmentWith({ connectAdmin: environment.connectAdmin }),
+    );
+    expect(tokenExit).toBe(0);
+    const created = JSON.parse(tokenOut.stdout) as { secret: string; token: { id: string } };
+    expect(typeof created.secret).toBe("string");
+    expect((created as unknown as Record<string, unknown>).token).not.toHaveProperty("hash");
+  });
+});
+
+describe("CLI: pure helpers", () => {
+  it("fallbackRequesterId prefers SIMLOCK_AGENT_ID over a pid-derived default", () => {
+    expect(fallbackRequesterId({ SIMLOCK_AGENT_ID: "agent-7" })).toBe("agent-7");
+    expect(fallbackRequesterId({})).toBe(String(process.pid));
+  });
+
+  it("parseDuration parses units and rejects garbage", () => {
+    expect(parseDuration("500")).toBe(500);
+    expect(parseDuration("500ms")).toBe(500);
+    expect(parseDuration("2s")).toBe(2_000);
+    expect(parseDuration("3m")).toBe(180_000);
+    expect(parseDuration("1h")).toBe(3_600_000);
+    expect(() => parseDuration("banana")).toThrow();
+  });
+});
+
+// ---- test doubles -----------------------------------------------------------------------------
+
+function simlockError(code: AnySimlockError["code"]): AnySimlockError {
+  const messages: Partial<Record<string, string>> = {
+    NO_CAPACITY: "No capacity available",
+  };
+  const kind =
+    code === "DAEMON_CONNECTION_LOST" ||
+    code === "DAEMON_STOPPING" ||
+    code === "DAEMON_STARTUP_FAILED"
+      ? "transport"
+      : (
+            [
+              "BAD_FRAME",
+              "HANDSHAKE_REQUIRED",
+              "BAD_REQUEST",
+              "UNKNOWN_REQUEST",
+              "PROTOCOL_VERSION_UNSUPPORTED",
+              "ADMIN_AUTHENTICATION_FAILED",
+              "FORBIDDEN",
+              "UNKNOWN_DAEMON_ERROR",
+            ] as const
+          ).includes(code as never)
+        ? "protocol"
+        : "domain";
+  return new SimlockError(
+    code,
+    kind,
+    messages[code] ?? `${code} failed`,
+    {} as never,
+  ) as unknown as AnySimlockError;
 }
 
-async function createHarness() {
-  const directory = await mkdtemp(join(tmpdir(), "simlock-cli-"));
+function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
+  const emptyStatus: StatusGetOutput = {
+    devices: [],
+    leases: [],
+    capacity: {
+      ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
+      android: {
+        limit: 1,
+        running: 0,
+        maxRunning: 1,
+        reserved: 0,
+        overLimit: false,
+        warm: 0,
+        used: 0,
+      },
+      global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
+    },
+    health: "running",
+    queueDepth: 0,
+  };
+  const emptyCatalog: CatalogGetOutput = { platforms: [] };
+  const emptyDoctor: DoctorReport = { findings: [] };
+  const emptyLeaseList: LeaseListOutput = { leases: [] };
+  const emptyListGet: ListGetOutput = [];
+  const emptyTokenList: TokenListOutput = { tokens: [] };
+  const grant: LeaseGrant = {
+    environment: {},
+    device: {
+      id: "dev_1",
+      driverDeviceId: "dev_1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+    },
+    lease: {
+      id: "lse_1",
+      deviceId: "dev_1",
+      requesterId: "test-requester",
+      ownerId: "test-requester",
+      mode: "held",
+      grantedAt: 0,
+      ttlDeadline: 60_000,
+    },
+    timing: {
+      estimatedProvisionMs: 0,
+      estimatedBootMs: 0,
+      estimatedReclaimMs: 0,
+      estimatedReadyMs: 0,
+    },
+  };
+  const base: SimlockAdminClient = {
+    principal: "test-requester",
+    role: "admin",
+    daemonVersion: "test",
+    getCatalog: () => Promise.resolve(emptyCatalog),
+    getStatus: () => Promise.resolve(emptyStatus),
+    requestLease: (_input, _options) => Promise.resolve(grant),
+    resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
+    cancelLease: () => Promise.resolve({ result: "not-found" }),
+    renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
+    releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
+    listLeases: () => Promise.resolve(emptyLeaseList),
+    heartbeat: () => Promise.resolve({ leases: [] }),
+    runDoctor: () => Promise.resolve(emptyDoctor),
+    onLeaseLost: () => () => {},
+    onDeviceUnhealthy: () => () => {},
+    onDeviceRecovered: () => () => {},
+    onConnectionLost: () => () => {},
+    close: () => Promise.resolve(),
+    releaseAllLeases: () => Promise.resolve({ leaseIds: [] }),
+    list: () => Promise.resolve(emptyListGet),
+    runCleanup: () => Promise.resolve([]),
+    runNuke: () => Promise.resolve({ deletedDevices: [], releasedLeaseIds: [] }),
+    getConfig: () => Promise.resolve({} as SimlockConfig),
+    stopDaemon: () => Promise.resolve({ stopping: true }),
+    replayEvents: () => Promise.resolve([]),
+    subscribeEvents: () => Promise.resolve(() => Promise.resolve()),
+    createToken: (input) =>
+      Promise.resolve({
+        secret: "sec_1",
+        token: { id: "tok_1", role: input.role, createdAt: 0 },
+      }),
+    listTokens: () => Promise.resolve(emptyTokenList),
+    revokeToken: () => Promise.resolve({ revoked: true }),
+    ...overrides,
+  };
+  return base;
+}
+
+interface OutputCapture {
+  stdout: string;
+  stderr: string;
+  environmentWith(overrides?: Partial<CliEnvironment>): CliEnvironment;
+}
+
+/**
+ * `ports` is `undefined` for the fully-mocked default every other suite uses (a bare object
+ * literal, `connectAdmin` etc. never call their argument unless a test's override does).
+ * Passing `ports` (built with `realCliEnvironmentPorts`, or by hand for the cold-start/B1
+ * suites) routes `environmentWith` through the real `buildCliEnvironment` instead -- the only
+ * way to exercise the production credential-resolution ordering (B2) and the real config
+ * validator (B9) rather than re-testing a test double.
+ */
+function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
+  const capture: OutputCapture = {
+    stdout: "",
+    stderr: "",
+    environmentWith(overrides = {}) {
+      const stderrOut = { write: (value: string) => (capture.stderr += value) };
+      const stdoutOut = { write: (value: string) => (capture.stdout += value) };
+      if (ports === undefined) {
+        return {
+          configPath: "/simlock/config.json",
+          requesterId: "test-requester",
+          now: () => 0,
+          connectAdmin: async () => fakeClient(),
+          connectExistingAdmin: async () => fakeClient(),
+          readAdminTokenFile: async () => undefined,
+          sleep: async () => {},
+          readConfigFile: async () => ({}),
+          writeConfigFile: async () => {},
+          validateConfig: async () => {},
+          readLogFile: async () => "",
+          signals: new EventEmitter() as unknown as CliEnvironment["signals"],
+          parentWatch: new FakeParentWatch(),
+          stderr: stderrOut,
+          stdout: stdoutOut,
+          confirm: async () => true,
+          ...overrides,
+        };
+      }
+      const base = buildCliEnvironment(
+        {
+          ...ports,
+          signals:
+            ports.signals ??
+            (new EventEmitter() as unknown as NonNullable<CliEnvironmentPorts["signals"]>),
+          parentWatch: ports.parentWatch ?? new FakeParentWatch(),
+          confirm: ports.confirm ?? (async () => true),
+          stderr: stderrOut,
+          stdout: stdoutOut,
+        },
+        {},
+      );
+      return { ...base, ...overrides };
+    },
+  };
+  return capture;
+}
+
+// ---- real-daemon harness for the smoke test ----------------------------------------------------
+
+function sequence(): IdGenerator {
+  let next = 0;
+  return { generate: () => `id${next++}` };
+}
+
+async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonServer }> {
+  const directory = await mkdtemp(join(tmpdir(), "simlock-cli-smoke-"));
   temporaryDirectories.push(directory);
   const socketPath = join(directory, "daemon.sock");
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
+  const filesystem = new MemoryFilesystem();
   const registry = await Registry.load({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
+    filesystem,
     idGenerator: sequence(),
     statePath: "/state.json",
   });
@@ -1283,6 +1714,21 @@ async function createHarness() {
       totalRamBytes: 32 * gibibyte,
     }),
   });
+  const reaper = new CleanupReaper({
+    clock,
+    config,
+    eventBus,
+    executor: engine.cleanup,
+    filesystem,
+    registry,
+  });
+  const tokens = new TokenStore({
+    clock,
+    filesystem,
+    idGenerator: sequence(),
+    path: "/tokens.json",
+    secrets: new CryptoTokenSecrets(),
+  });
   const daemon = new DaemonServer({
     capacity: engine,
     catalog: engine,
@@ -1298,25 +1744,124 @@ async function createHarness() {
     }),
     leases: engine,
     queue: engine,
-    reaper: new CleanupReaper({
-      clock,
-      config,
-      eventBus,
-      executor: engine.cleanup,
-      filesystem: new MemoryFilesystem(),
-      registry,
-    }),
+    reaper,
     registry,
+    resolveRole: { resolve: () => "admin" },
+    tokens,
     version: "test",
   });
   runningDaemons.push(daemon);
   await daemon.start();
-  return { eventBus, registry, socketPath };
+  return { socketPath, daemon };
 }
 
-function sequence() {
-  let next = 1;
-  return { generate: () => `${next++}` };
+/** Bare-minimum ports for exercising `buildCliEnvironment`'s real `validateConfig` (B9) without
+ * a daemon connection -- `config set` never calls `connectAdmin`, so `ipc`/`launcher` are inert
+ * placeholders. */
+function realCliEnvironmentPorts(
+  filesystem: Filesystem = new MemoryFilesystem(),
+): CliEnvironmentPorts {
+  return {
+    filesystem,
+    clock: new FakeClock(0),
+    systemStats: new FakeSystemStats({
+      cpuCount: 8,
+      freeRamBytes: 32 * gibibyte,
+      totalRamBytes: 32 * gibibyte,
+    }),
+    ipc: new MemoryIpcTransport(),
+    launcher: new FakeDaemonLauncher(),
+    dataDirectory: "/simlock",
+  };
+}
+
+/**
+ * A real `DaemonServer` wired against in-memory ports (`MemoryFilesystem` + `MemoryIpcTransport`
+ * shared with the CLI environment under test), with the genuine credential handshake
+ * (`AdminSecretManager` + `createCredentialRoleResolver`) instead of `startTestDaemon`'s
+ * `resolveRole: { resolve: () => "admin" }` shortcut -- B1 and B2 both hinge on that handshake
+ * actually running.
+ */
+async function startInMemoryDaemon(options: {
+  readonly filesystem: MemoryFilesystem;
+  readonly ipcTransport: MemoryIpcTransport;
+  readonly socketPath: string;
+  readonly adminTokenPath: string;
+}): Promise<{ daemon: DaemonServer; adminSecret: AdminSecretManager }> {
+  const { adminTokenPath, filesystem, ipcTransport, socketPath } = options;
+  const clock = new FakeClock(1_000);
+  const eventBus = new EventBus(clock);
+  const registry = await Registry.load({
+    clock,
+    eventBus,
+    filesystem,
+    idGenerator: sequence(),
+    statePath: "/state.json",
+  });
+  const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+  const config = testConfig();
+  const engine = new LeaseEngine({
+    clock,
+    config,
+    drivers: [driver],
+    eventBus,
+    idGenerator: sequence(),
+    registry,
+    systemStats: new FakeSystemStats({
+      cpuCount: 8,
+      freeRamBytes: 32 * gibibyte,
+      totalRamBytes: 32 * gibibyte,
+    }),
+  });
+  const reaper = new CleanupReaper({
+    clock,
+    config,
+    eventBus,
+    executor: engine.cleanup,
+    filesystem,
+    registry,
+  });
+  const tokens = new TokenStore({
+    clock,
+    filesystem,
+    idGenerator: sequence(),
+    path: "/tokens.json",
+    secrets: new CryptoTokenSecrets(),
+  });
+  const adminSecret = new AdminSecretManager({
+    filesystem,
+    secrets: new CryptoTokenSecrets(),
+    path: adminTokenPath,
+  });
+  const resolveRole = createCredentialRoleResolver({
+    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
+    verifyAdminSecret: (secret) => adminSecret.verify(secret),
+  });
+  const daemon = new DaemonServer({
+    adminSecret,
+    capacity: engine,
+    catalog: engine,
+    clock,
+    config,
+    defaultRequesterId: "test-process",
+    eventBus,
+    host: new DaemonEndpointHost({
+      connector: ipcTransport,
+      endpoint: socketPath,
+      filesystem,
+      listenerFactory: ipcTransport,
+    }),
+    leases: engine,
+    queue: engine,
+    reaper,
+    registry,
+    resolveRole,
+    tokens,
+    version: "test",
+  });
+  runningDaemons.push(daemon);
+  await daemon.start();
+  return { daemon, adminSecret };
 }
 
 function testConfig(): Config {
@@ -1325,7 +1870,7 @@ function testConfig(): Config {
     drivers: {},
     eventBuffer: { capacity: 100 },
     health: {
-      enabled: true,
+      enabled: false,
       maxConcurrentRecoveries: 1,
       maxRecoveryAttempts: 3,
       probeIntervalMs: 30_000,
@@ -1333,15 +1878,18 @@ function testConfig(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
+    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
+    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 5_000 },
     capacity: {
       strategy: "resource",
       config: {
         limits: {
           android: { maxDevices: 1, maxRunning: 1 },
           ios: { maxDevices: 1, maxRunning: 1 },
-          maxRunning: 1 + 1,
+          maxRunning: 2,
         },
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
@@ -1354,35 +1902,6 @@ function testConfig(): Config {
         retryBackoffMs: 30_000,
         retryBackoffMultiplier: 2,
       },
-    },
-  };
-}
-
-function outputCapture() {
-  let stderr = "";
-  let stdout = "";
-  const environment: CliEnvironment = {
-    connect: async () => {
-      throw new Error("Unexpected daemon connection");
-    },
-    configPath: "/config.json",
-    readConfigFile: async () => ({}),
-    requesterId: "test-requester",
-    signals: new EventEmitter(),
-    stderr: { write: (value: string) => (stderr += value) },
-    stdout: { write: (value: string) => (stdout += value) },
-    writeConfigFile: async () => undefined,
-  };
-  return {
-    environment,
-    environmentWith(overrides: Partial<CliEnvironment>): CliEnvironment {
-      return { ...environment, ...overrides };
-    },
-    get stderr() {
-      return stderr;
-    },
-    get stdout() {
-      return stdout;
     },
   };
 }

@@ -14,6 +14,7 @@ import { resourceOptionValidators } from "./capacity/strategies/resource/index.j
 import {
   booleanValue,
   ConfigError,
+  integerInRange,
   invalidValue,
   nonNegativeNumber,
   numberAtLeast,
@@ -21,12 +22,22 @@ import {
   positiveInteger,
   positiveNumber,
   requireObject,
+  stringArray,
   stringUnion,
+  stringValue,
   type Validator,
   type Warn,
 } from "./validation.js";
 
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
+
+/**
+ * `never` forbids installs even when a request passes `--allow-download` (locked-down
+ * machines/CI). `on-request` (default) preserves today's contract: install only when the
+ * request itself carries the flag. `always` lets the daemon install missing components for
+ * any explicit lease request without the per-request flag.
+ */
+export type DownloadPolicy = "never" | "on-request" | "always";
 
 export interface Config {
   readonly capacity: CapacityConfig;
@@ -37,6 +48,13 @@ export interface Config {
    * would be exactly the leak architecture rule 2 forbids.
    */
   readonly drivers: Readonly<Record<string, Readonly<Record<string, string | number | boolean>>>>;
+  readonly downloads: {
+    readonly policy: DownloadPolicy;
+    /** Explicit legal consent for Android SDK licenses, independent of `policy`. */
+    readonly acceptAndroidLicenses: boolean;
+    /** Per-install timeout; downloads run minutes, not seconds. */
+    readonly timeoutMs: number;
+  };
   readonly idle: {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
@@ -59,6 +77,11 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
+  readonly http: {
+    readonly enabled: boolean;
+    readonly host: string;
+    readonly port: number;
+  };
   readonly health: {
     readonly enabled: boolean;
     readonly probeIntervalMs: number;
@@ -66,6 +89,16 @@ export interface Config {
     readonly maxRecoveryAttempts: number;
     readonly recoveryBackoffMs: number;
     readonly maxConcurrentRecoveries: number;
+  };
+  readonly ios: {
+    readonly slim: {
+      /** Opt-in; default false. */
+      readonly enabled: boolean;
+      /** Which daemon categories to disable. Undefined means "every category the driver knows". */
+      readonly categories?: readonly string[];
+      /** Boot deadline used while slim mode is on (slim adds a second boot; CI runners are slow). */
+      readonly bootTimeoutMs: number;
+    };
   };
   readonly stalledTransition: {
     /**
@@ -136,6 +169,19 @@ export async function loadConfig({
   ) as unknown as Config;
   validateHeartbeatInterval(merged);
   return deepFreeze(merged);
+}
+
+/**
+ * Reduces `downloads.policy` and a request's own `--allow-download` / `allow_download` flag
+ * to the single permission a driver's `resolveSpec` actually sees. `never` overrides an
+ * explicit `true` on the request -- the whole point of the policy is that it cannot be
+ * opted back into per request -- and `always` grants permission the request never had to ask
+ * for. Only `on-request` defers to what the caller asked for, which is today's behavior.
+ */
+export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolean): boolean {
+  if (policy === "always") return true;
+  if (policy === "never") return false;
+  return requested;
 }
 
 /**
@@ -228,6 +274,11 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
       config: defaultCapacityOptions(strategy, systemStats),
     } as CapacityConfig,
     drivers: {},
+    downloads: {
+      policy: "on-request",
+      acceptAndroidLicenses: false,
+      timeoutMs: 1_200_000,
+    },
     idle: {
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
@@ -248,6 +299,7 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
     health: {
       enabled: true,
       probeIntervalMs: 30_000,
@@ -255,6 +307,12 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
       maxRecoveryAttempts: 3,
       recoveryBackoffMs: 5_000,
       maxConcurrentRecoveries: 1,
+    },
+    ios: {
+      slim: {
+        enabled: false,
+        bootTimeoutMs: 600_000,
+      },
     },
     stalledTransition: {
       thresholdMultiplier: 3,
@@ -304,6 +362,7 @@ function validateConfigLayer(
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
+const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 
 /**
  * The `capacity.config` validator is the selected strategy's own, so a strategy
@@ -319,6 +378,11 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     // inside them is still reported rather than silently dropped.
     ...resourceOptionValidators,
     drivers: driversValidator,
+    downloads: objectValidator({
+      policy: stringUnion(DOWNLOAD_POLICIES),
+      acceptAndroidLicenses: booleanValue,
+      timeoutMs: positiveNumber,
+    }),
     idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
     warmPool: objectValidator({
       quarantine: objectValidator({
@@ -336,6 +400,11 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
+    http: objectValidator({
+      enabled: booleanValue,
+      host: stringValue,
+      port: integerInRange(1, 65535),
+    }),
     health: objectValidator({
       enabled: booleanValue,
       probeIntervalMs: positiveNumber,
@@ -343,6 +412,13 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       maxRecoveryAttempts: positiveInteger,
       recoveryBackoffMs: positiveNumber,
       maxConcurrentRecoveries: positiveInteger,
+    }),
+    ios: objectValidator({
+      slim: objectValidator({
+        enabled: booleanValue,
+        categories: stringArray,
+        bootTimeoutMs: positiveNumber,
+      }),
     }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),

@@ -51,6 +51,7 @@ export {
   NoCapacityError,
   NoDriverError,
   QueueTimeoutError,
+  RequestCancelledError,
   RequesterAlreadyLeasedError,
 } from "./lease-acquisition-coordinator.js";
 
@@ -262,9 +263,23 @@ export class LeaseEngine {
     await this.#releaseCoordinator.settleBackgroundReclaims();
   }
 
-  /** Cancels the quarantine coordinator's armed retry timers on daemon shutdown. */
+  /**
+   * Cancels every timer this engine armed, so the process can actually exit.
+   *
+   * The expiry timers matter as much as the quarantine ones and were missed: a lease's
+   * TTL is a `setTimeout` that outlives the decision to shut down, so a daemon with an
+   * outstanding *detached* lease kept running long after `daemon stop` -- up to the
+   * fifteen minutes of its own TTL. Held leases hid it, because releasing them on the way
+   * out cancels their timers; detached leases are deliberately left alone, since their
+   * liveness is the TTL rather than a connection.
+   *
+   * Cancelling expires nothing early and loses nothing: `ttlDeadline` is persisted with
+   * the lease, and `LeaseExpiryScheduler.restore` re-arms it on the next start, which is
+   * also what makes a detached lease survive a restart intact.
+   */
   dispose(): void {
     this.#quarantine.dispose();
+    this.#expiry.dispose();
   }
 
   /** Read-only device catalog; a platform without a registered driver is omitted. */
@@ -279,7 +294,6 @@ export class LeaseEngine {
     return this.#drivers.passthrough(tool, args);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer.
   get queueDepth(): number {
     return this.#acquisition.queueDepth;
   }
@@ -301,9 +315,22 @@ export class LeaseEngine {
   }
 
   /** Stops client feedback for a queued request without affecting its lease outcome. */
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling queueDepth).
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by the dispatcher (same as the sibling queueDepth).
   async detachQueuedProgress(requesterId: string): Promise<void> {
     await this.#acquisition.detachQueuedProgress(requesterId);
+  }
+
+  /** Cancels a single pending request by requester id, for the HTTP lease-request delete route. */
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling detachQueuedProgress).
+  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
+    return this.#acquisition.cancelPending(requesterId);
+  }
+
+  /** The session principal that owns a pending request, for `lease.cancel`'s owner-aware
+   * `authorize` hook (ADR §4). See the coordinator method's own comment. */
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by the dispatcher's authorize context (same as the sibling cancelPending).
+  pendingRequestOwner(requesterId: string): string | undefined {
+    return this.#acquisition.pendingRequestOwner(requesterId);
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer (same as the sibling heartbeat).

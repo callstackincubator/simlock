@@ -39,10 +39,15 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
+| 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
+| 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` held mode only: the daemon ended the lease without the holder asking (TTL backstop, operator `release`, or an unrecoverable device) |
 
-Every row but 14 matches `DAEMON_ERROR_EXIT_CODES` in `src/cli/index.ts` exactly; 14 is not a daemon error code but an outcome of held mode, so it lives beside the table's other `lease` outcome, 0.
+Every row but 14 matches the `cliExitCode` column of the contract's error
+table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
+maintain a second mapping; 14 is not a daemon error code but an outcome of
+held mode, so it lives beside the table's other `lease` outcome, 0.
 A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
 surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code.
@@ -78,6 +83,8 @@ and booting, then — in held mode — keeps running to hold the lease.
 simlock lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
               [--allow-download] [--export-env] [--bind-pid <pid>]
+
+              [--allow-download] [--full] [--bind-pid <pid>]
 ```
 
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
@@ -98,6 +105,36 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
   [Reaching a leased device](#reaching-a-leased-device). If the grant carries no
   environment at all (an older daemon), stdout stays empty and a note naming the
   lease id goes to stderr, so the lease can still be renewed or released.
+
+  For iOS, this runs `xcodebuild -downloadPlatform iOS` under the hood and
+  only reaches back to iOS 16.0 (a floor of Xcode's own downloader); older
+  runtimes and unknown device types (which need a newer Xcode) still require
+  installing/upgrading Xcode by hand. A requested `--os` outside the
+  device's supported runtime range (e.g. iPhone Xs above iOS 18.x) fails
+  immediately — no download is ever attempted for a version that could not
+  work regardless. For Android, this runs `sdkmanager --install`; an
+  unaccepted SDK license fails naming `downloads.acceptAndroidLicenses`
+  (config) unless that flag is set, in which case licenses are accepted
+  automatically and the install retried once. Both drivers check free disk
+  space before starting either install and fail fast, naming required vs.
+  available bytes, instead of risking a full disk mid-download. Every
+  install attempt (including a license-triggered retry) emits
+  `component.install-started` / `component.installed` /
+  `component.install-failed` on the event bus (`simlock events --follow`);
+  see [EVENTS.md](EVENTS.md#components). The requester's own progress stream
+  (below) does not yet reflect an in-flight download — see
+  [known-pitfalls.md](known-pitfalls.md).
+- `--full` — opt this lease out of iOS slim mode (see
+  [CONFIGURATION.md](CONFIGURATION.md) for what slim mode disables). Only
+  meaningful when `ios.slim.enabled` is on; ignored otherwise, and ignored
+  for Android. A `--full` request never matches, and never shares a pool key
+  with, a slim device, so it can wait for a fresh device to provision or
+  force a re-provision of one already running, even while slim devices sit
+  idle in the warm pool.
+- `--detach` — detached mode: print the lease result (the same JSON shape as
+  held mode's grant line, below, including `device.featureProfile`) and
+  exit; the lease is TTL-bound and must be renewed with `simlock lease
+  renew`.
 - `--bind-pid <pid>` — held mode only: watch this pid for death instead of
   the CLI's actual parent. For a holder spawned from a short-lived subshell,
   the immediate parent can die (and get reaped) while the owning agent is
@@ -108,7 +145,10 @@ have a request queued fails with `REQUESTER_ALREADY_LEASED` (exit 13); the
 error message names the existing lease id to release first.
 
 **Held mode (default):** intended to be run in the background by the agent.
-As soon as the device is ready, one JSON line is printed on stdout:
+As soon as the device is ready, one JSON line is printed on stdout — the
+contract's `lease.request` output (`LeaseGrant`: `device`, `lease`, `timing`)
+serialized as-is, plus the one field the CLI adds on top, the connection's
+resolved `role` (ADR 0003 §5):
 
 ```json
 {"lease":"lse_9f2c","platform":"ios","device":"iPhone 17 Pro","os":"26.5","udid":"ABCD-...","state":"leased",
@@ -120,6 +160,25 @@ Simlock keeps its devices in roots the platform tools do not look in by
 default, so a bare `simctl` or `adb` will not find them. See
 [Reaching a leased device](#reaching-a-leased-device).
 
+{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","mode":"held","grantedAt":1735689600000,"ttlDeadline":1735689660000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
+```
+
+`device` is a **projection** of the registry's device record — `id`,
+`driverDeviceId`, `spec`, `address?`, `featureProfile?` — not the full
+record `status.get`/`list.get` return to an admin caller. Internal
+bookkeeping fields (`driverData`, `quarantine*`, `foreign*`, `recovering*`,
+the derived `transitionAgeMs`) never appear on a grant; a caller that wants
+those needs the admin-role `list.get`/`status.get`, not `lease.request`'s
+output. `device.featureProfile` is `"reduced"` when the granted device had
+its feature set reduced (iOS slim mode applied and this request did not pass
+`--full`), and `"full"` or absent otherwise — always absent for Android. It
+lets an agent explain a feature-loss failure (missing push notification,
+Spotlight result, StoreKit sheet, universal link, or system picker) instead
+of misreading it as a bug. See `src/contract/schemas.ts`
+(`deviceRecordSchema`, `leaseRecordSchema`, `leaseGrantSchema`) for the full
+field list — this is the one vocabulary every frontend (CLI, MCP, HTTP, the
+`simlock/client` package) now shares.
+
 then the process stays alive holding the lease. **Kill the process to
 release** — or let it die on its own: held mode watches its parent (the pid
 captured at startup, or `--bind-pid`) and releases and exits on its own the
@@ -129,11 +188,14 @@ action selected for that request. A queued request reports its position
 without speculative work stages; reclaiming work is reported separately:
 
 ```json
-{"event":"queued","queue_position":1}
-{"event":"provisioning","eta_seconds":90}
-{"event":"booting","eta_seconds":60}
-{"event":"reclaiming","eta_seconds":34}
+{"push":"progress","stage":"queued","queuePosition":1}
+{"push":"progress","stage":"provisioning","etaMs":90000}
+{"push":"progress","stage":"booting","etaMs":60000}
+{"push":"progress","stage":"reclaiming","etaMs":34000}
 ```
+
+`push` is the one field the CLI adds to identify the line's kind; everything
+else is the contract's `LeaseProgress` push, serialized as-is (ADR 0003 §11).
 
 `reclaiming` follows `queued` when the device the request is waiting on is
 being purged for its previous holder: the position alone would not say that
@@ -147,12 +209,12 @@ leased device for as long as the connection holds it, on the same stderr
 stream:
 
 ```json
-{"event":"device_unhealthy","lease":"lse_9f2c","device_id":"dev_1a2b"}
-{"event":"device_recovered","lease":"lse_9f2c","device_id":"dev_1a2b","attempts":1}
+{"push":"device-unhealthy","leaseId":"lse_9f2c","deviceId":"dev_1a2b"}
+{"push":"device-recovered","leaseId":"lse_9f2c","deviceId":"dev_1a2b","attempts":1}
 ```
 
-`device_unhealthy` means the device stopped running outside simlock and a
-reboot is in progress under the same lease; `device_recovered` means that
+`device-unhealthy` means the device stopped running outside simlock and a
+reboot is in progress under the same lease; `device-recovered` means that
 reboot passed readiness. The lease itself is untouched by either — it is
 still held and must still be released the normal way. Recovery can instead
 give up (the device vanished, its provenance no longer checks out, or reboot
@@ -160,12 +222,12 @@ attempts ran out); giving up is not itself one of these lines — it ends the
 lease, which surfaces as the same line any other lease loss does:
 
 ```json
-{"event":"lease_lost","lease":"lse_9f2c","device_id":"dev_1a2b","reason":"device-lost"}
+{"push":"lease-lost","leaseId":"lse_9f2c","deviceId":"dev_1a2b","reason":"device-lost"}
 ```
 
-In all three lines `device_id` is the registry device id — the `id` column of
+In all three lines `deviceId` is the registry device id — the `id` column of
 `simlock list --devices`, and the same identifier the event bus uses — not the
-driver-level `udid` the grant returns on stdout. A `lease_lost` line is
+driver-level `udid` the grant returns on stdout. A `lease-lost` line is
 terminal for held mode: there is no longer a lease to
 hold, so the process writes that line and exits `14` rather than waiting for a
 signal, and it does not try to release a lease the daemon has already taken
@@ -324,6 +386,42 @@ The requester identity for leases made through this server is
 server process (one per agent session) so the one-lease-per-agent rule is
 meaningful.
 
+### Breaking in 0.3.0: tool schemas are now the contract's own field names
+
+Tool names are unchanged. Every tool's input/output schema is now derived
+directly from `src/contract`'s zod schemas (`src/mcp/contracts.ts`) instead
+of a hand-maintained snake_case shape — one vocabulary across CLI, MCP,
+HTTP, and `simlock/client`, not a fourth one. Two changes in here are easy
+to miss and will silently produce wrong behavior if you don't update a
+caller:
+
+- **`lease_simulator`'s `timeout_seconds` is now `timeoutMs`.** This is a
+  rename, not a silent unit change: every tool input schema is
+  `.strict()` (`src/contract/operations.ts`), so a caller that keeps
+  sending the old `timeout_seconds` key gets a hard `BAD_REQUEST` — loud,
+  immediate, and impossible to miss. The real, narrower hazard is a caller
+  that migrates the field *name* but not its *value*: sending
+  `{"timeoutMs": 30}` meaning "30 seconds" (the old convention) is valid
+  input, so nothing rejects it — the request just times out in 30
+  milliseconds instead of 30 seconds, roughly 1000× *sooner* than intended,
+  not longer. That surfaces immediately as `QUEUE_TIMEOUT` (CLI exit code
+  10), not as a silent hang, but it can still read as "the daemon is
+  broken" rather than "my timeout value is three orders of magnitude too
+  small" unless you know to check the unit. Update every caller's timeout
+  field name *and* multiply its value by 1000.
+- **The top-level `slim: boolean` on a grant is gone; it's now
+  `device.featureProfile`** (`"full" | "reduced" | undefined`, undefined
+  meaning "not applicable" — always undefined for Android). A caller
+  checking `result.slim === true` now silently never sees a feature-loss
+  signal at all — `result.slim` is simply `undefined` on every response,
+  which is falsy, not an error. Check `result.device.featureProfile ===
+  "reduced"` instead.
+
+Every other field keeps the contract's own camelCase names it already had
+under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
+`allowDownload`, `requesterId`, ...); those did not change shape, only their
+schema's source of truth.
+
 ## `simlock status`
 
 Human and JSON status include derived warm counts globally and per platform.
@@ -434,6 +532,15 @@ enters `quarantined` (see [#21](https://github.com/callstackincubator/simlock/is
 rather than being re-driven, since it may be mid-erase. As with every other
 `--fix` correction, a leased device is never touched.
 
+When `ios.slim.enabled` is on, `doctor` also reports a `driver-advisory`
+finding (code `slim-runtime-unsupported`) for each installed iOS runtime
+older than 18.5 — the version floor `launchctl disable` overrides need to
+survive a reboot (see [CONFIGURATION.md](CONFIGURATION.md)). Slim mode
+silently does nothing on those runtimes otherwise; this finding is what
+makes that visible. It is advisory only — there is no `--fix` for it, since
+the fix is either upgrading the runtime or narrowing `ios.slim` to the
+runtimes that support it.
+
 ## `simlock nuke [--delete-devices] [--yes]`
 
 Emergency reset: force-release all leases, kill emulator/simulator processes
@@ -448,7 +555,14 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 ## `simlock daemon <start|stop|status|logs>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand;
-`daemon` exists for operators and debugging. `logs` tails daemon logs.
+`daemon` exists for operators and debugging. `logs` tails daemon logs and
+works even when the daemon is dead — it reads the log file directly, no
+connection attempted. `status` never auto-starts the daemon and distinguishes
+two failure shapes: `{"status":"stopped"}` when nothing is listening on the
+socket at all, versus `{"status":"handshake-refused","error":{"code":...}}`
+(exit 1) when a daemon answered but refused the connection (a bad admin
+credential, or a protocol version mismatch) — the two used to be reported
+identically as "stopped".
 
 The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields) covering startup (version,
@@ -470,6 +584,54 @@ under `capacity.config` — see
 is running, both a global and a per-platform running limit must have room
 before Simlock provisions or boots a shutdown device.
 
+## Admin credential resolution
+
+Several commands (`list`, `cleanup`, `nuke`, `events`, `config get`,
+`daemon stop`, `token create|list|revoke`, and cross-process `release`) need
+the daemon's `admin` role. The CLI resolves a credential to send at
+handshake, in order:
+
+1. `--token <secret>` — accepted anywhere on the command line.
+2. `SIMLOCK_ADMIN_TOKEN` — the environment variable.
+3. the local `admin.token` file the daemon writes under `SIMLOCK_HOME` at
+   startup (read is retried briefly, to ride out the daemon still writing it
+   after a fresh `daemon start`).
+
+When none of the three resolves (a different OS user, or the file genuinely
+missing), the CLI connects as `agent` instead and writes a one-line stderr
+notice; admin-only operations then fail with `FORBIDDEN` from the daemon,
+same as any other role violation. `simlock lease`'s output JSON includes the
+connection's resolved `role` so a caller can tell which one it got.
+
+This is also why `simlock lease --detach` followed later by
+`simlock release <lease-id>` from a different invocation works even though
+each CLI process has a different pid-derived identity: both commands connect
+as admin (when the local file is readable), and admin bypasses the
+per-connection ownership check that would otherwise apply.
+
+## `simlock token create --role <agent|operator> [--label <text>]` / `list` / `revoke <token-id>`
+
+Mint and manage bearer tokens for the HTTP API. `token.create|list|revoke`
+are daemon operations (admin role) — the daemon is the only process that
+ever reads or writes `tokens.json`; the CLI is a thin client over the same
+`simlock/admin` connection every other admin command uses.
+
+`create` prints the minted secret **once**, alongside the token record:
+
+```json
+{"token":{"id":"tok_9f2c","role":"agent","label":"ci-runner","createdAt":1735689600000},"secret":"slk_Wn9…"}
+```
+
+Only the secret's SHA-256 hash is ever persisted; there is no way to recover
+a lost secret, only to `revoke` the token and `create` a new one. The token
+id doubles as the requester identity over HTTP — one token is one requester,
+same as the CLI's `--agent-id`.
+
+`list` prints `{"tokens":[...]}` — the same record shape as `create`, minus
+the secret and its hash. `revoke <token-id>` prints `{"revoked":true}` or
+`{"revoked":false}` for an id that does not exist — the daemon's
+`token.revoke` operation does not treat an unknown id as an error.
+
 ## Environment variables
 
 ### `SIMLOCK_HOME`
@@ -486,6 +648,13 @@ for tests. Two instances on one machine also need distinct
 `drivers.android.adbServerPort` values, since a TCP port is machine-global and
 `SIMLOCK_HOME` cannot isolate it. When the CLI or MCP server auto-starts the daemon, the daemon
 process inherits the variable like the rest of the environment.
+
+### `SIMLOCK_ADMIN_TOKEN`
+
+The second source in [admin credential resolution](#admin-credential-resolution)
+— an operator token (`simlock token create --role operator`) or the daemon's
+per-start `admin.token` secret, either works. Set it once in a supervisor's
+environment to avoid every admin command reading `admin.token` off disk.
 
 ### `SIMLOCK_DRIVERS_MODULE` (advanced / testing hook)
 

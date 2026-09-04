@@ -1,6 +1,6 @@
 {
   "name": "simlock",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Control plane for iOS simulators and Android emulators.",
   "keywords": [
     "agents",
@@ -27,6 +27,16 @@
     "!dist/**/*.test.d.ts"
   ],
   "type": "module",
+  "exports": {
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./admin": {
+      "types": "./dist/admin/index.d.ts",
+      "default": "./dist/admin/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "build:e2e": "tsc -p e2e/fake-driver/tsconfig.json",
@@ -44,7 +54,10 @@
     "release": "release-it"
   },
   "dependencies": {
+    "@hono/node-server": "2.0.10",
+    "@hono/zod-validator": "^0.9.1",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "hono": "^4.13.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {

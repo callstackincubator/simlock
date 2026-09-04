@@ -17,6 +17,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `lease.heldTtlBackstopMs`         | Backstop TTL for held-mode leases, in case the holding process dies without releasing.                                                                                                                                       | `1 hour`                                                        |
 | `lease.detachedTtlMs`             | TTL for detached-mode leases before they must be renewed with `simlock lease renew`.                                                                                                                                         | `15 minutes`                                                    |
 | `lease.heartbeatIntervalMs`       | How often the daemon pings a held-mode connection that declared the `heartbeat` capability; each pong slides that connection's leases' TTL back out to a full `heldTtlBackstopMs`. Must be `<= lease.heldTtlBackstopMs / 4`. | `5 minutes`                                                     |
+| `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`.                                                                              | `false`                                                          |
+| `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
+| `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of business events kept in the in-memory ring buffer (see `simlock events`).                                                                                                                                          | `1000`                                                           |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery.                                                                                                                                                                | `true`                                                           |
@@ -30,6 +33,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `${SIMLOCK_HOME}/devices/ios`                                    |
 | `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `${SIMLOCK_HOME}/devices/android`                                |
 | `drivers.android.adbServerPort`   | TCP port for Simlock's own adb server. Must not be the shared server's `5037`. Startup fails closed if it is occupied.                                                                                       | `5038`                                                            |
+| `ios.slim.enabled`                | Master switch for slim mode: disables iOS simulator daemon categories to cut RAM and CPU overhead per device.                                                                                                                | `false`                                                          |
+| `ios.slim.categories`             | Which daemon categories to disable when slim mode is on. Omitted means every category the driver knows.                                                                                                                      | every known category                                             |
+| `ios.slim.bootTimeoutMs`          | Boot deadline used while slim mode is on, in place of the normal boot timeout.                                                                                                                                                | `10 minutes`                                                     |
 
 All limit values must be positive integers; all durations and byte sizes
 must be non-negative numbers (milliseconds and bytes, respectively).
@@ -39,6 +45,10 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `health.maxConcurrentRecoveries` must be positive integers.
 `stalledTransition.thresholdMultiplier` must be a number `>= 1`;
 `stalledTransition.minimumThresholdMs` must be a non-negative number.
+`http.enabled` is a boolean, `http.host` a string, and `http.port` an
+integer in `1`-`65535`.
+`ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
+non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
 
@@ -133,6 +143,23 @@ A lease hands you the port to use — see
 Running two Simlock instances on one machine now needs distinct
 `drivers.android.adbServerPort` values as well as distinct `SIMLOCK_HOME`
 values.
+
+Slim mode is opt-in and iOS-only: it disables simulator daemon categories
+that most agent workloads never touch, trading some simulator functionality
+for a leaner runtime footprint. The categories are widgets, Siri/Apple
+Intelligence, Spotlight/search, iCloud, App Store, mail/calendar (PIM),
+Safari/web, Family Sharing, Health, Photos, bundled apps (News/Weather/Maps/
+Tips/games), messaging, connectivity, telemetry, and a miscellaneous group
+(`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`,
+`health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`,
+`other` -- the valid `ios.slim.categories` strings, defined in
+`src/drivers/ios/slim-labels.ts`). Measured on one simulator: ~258 -> ~70
+processes, ~4.0 GB -> ~0.9 GB. It requires iOS 18.5 or newer, since the
+underlying daemon controls are not available on older runtimes. Turning it
+on costs an extra boot per device -- the daemons are disabled between a
+first boot and a second, slower one -- which is why
+`ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
+especially on slower CI runners.
 
 ## Capacity strategies
 

@@ -27,7 +27,10 @@ function config(maxDevices = 1): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},
+    downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
+    http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -153,11 +156,16 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness();
     const granted = await harness.coordinator.request(request, {
       mode: "held",
+      ownerId: "agent",
       requesterId: "agent",
     });
 
     await expect(
-      harness.coordinator.request(request, { mode: "held", requesterId: "agent" }),
+      harness.coordinator.request(request, {
+        mode: "held",
+        ownerId: "agent",
+        requesterId: "agent",
+      }),
     ).rejects.toMatchObject({
       existingLeaseId: granted.lease.id,
       message: expect.stringContaining(granted.lease.id),
@@ -183,6 +191,7 @@ describe("LeaseAcquisitionCoordinator", () => {
 
       const granted = await harness.coordinator.request(request, {
         mode: "held",
+        ownerId: "agent",
         requesterId: "agent",
       });
 
@@ -197,6 +206,7 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     const granted = await harness.coordinator.request(request, {
       mode: "held",
+      ownerId: "agent",
       requesterId: "agent",
     });
 
@@ -206,7 +216,11 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("rejects missing drivers and unresolved specs without leaving pending demand", async () => {
     const empty = await createHarness({ drivers: [] });
     await expect(
-      empty.coordinator.request(request, { mode: "held", requesterId: "missing-driver" }),
+      empty.coordinator.request(request, {
+        mode: "held",
+        ownerId: "missing-driver",
+        requesterId: "missing-driver",
+      }),
     ).rejects.toThrow("No driver registered");
     expect(empty.coordinator.queueDepth).toBe(0);
 
@@ -214,7 +228,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(
       harness.coordinator.request(
         { ...request, osVersion: "99" },
-        { mode: "held", requesterId: "bad-spec" },
+        { mode: "held", ownerId: "bad-spec", requesterId: "bad-spec" },
       ),
     ).rejects.toThrow("Runtime missing");
     expect(harness.coordinator.queueDepth).toBe(0);
@@ -225,16 +239,27 @@ describe("LeaseAcquisitionCoordinator", () => {
     const first = await harness.coordinator.request(request, {
       mode: "held",
       requesterId: "first",
+      ownerId: "first",
     });
     const timedOut = harness.coordinator.request(request, {
       mode: "held",
       requesterId: "timed-out",
+      ownerId: "timed-out",
       timeoutMs: 10,
     });
-    const next = harness.coordinator.request(request, { mode: "held", requesterId: "next" });
+    const next = harness.coordinator.request(request, {
+      mode: "held",
+      ownerId: "next",
+      requesterId: "next",
+    });
     await flush();
     await expect(
-      harness.coordinator.request(request, { mode: "held", noWait: true, requesterId: "no-wait" }),
+      harness.coordinator.request(request, {
+        mode: "held",
+        noWait: true,
+        ownerId: "no-wait",
+        requesterId: "no-wait",
+      }),
     ).rejects.toBeInstanceOf(NoCapacityError);
 
     harness.clock.advance(10);
@@ -247,7 +272,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       payload: { deviceId: device.id, duration: 0, strategy: "wipe" },
     });
     harness.coordinator.kick();
-    await expect(next).resolves.toMatchObject({ lease: { requesterId: "next" } });
+    await expect(next).resolves.toMatchObject({ lease: { ownerId: "next", requesterId: "next" } });
   });
 
   it("grants an existing ready device and preserves request progress semantics", async () => {
@@ -259,6 +284,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       mode: "held",
       onProgress: (update) => progress.push(update.stage),
       requesterId: "agent",
+      ownerId: "agent",
     });
 
     expect(grant.device.id).toBe(ready.id);
@@ -271,6 +297,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const grant = await harness.coordinator.request(request, {
       mode: "held",
       requesterId: "retry",
+      ownerId: "retry",
     });
     expect(grant.device.state).toBe("leased");
     expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
@@ -278,7 +305,11 @@ describe("LeaseAcquisitionCoordinator", () => {
     const failing = await createHarness();
     failing.driver.failOn("makeReady", 1, new DriverCrashError("boot failure"));
     await expect(
-      failing.coordinator.request(request, { mode: "held", requesterId: "boot-failure" }),
+      failing.coordinator.request(request, {
+        mode: "held",
+        ownerId: "boot-failure",
+        requesterId: "boot-failure",
+      }),
     ).rejects.toMatchObject({ name: "BootTimeoutError" });
   });
 
@@ -300,6 +331,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         mode: "held",
         onProgress: (update) => progress.push(update.stage),
         requesterId: "boot",
+        ownerId: "boot",
       }),
     ).resolves.toMatchObject({ device: { id: ready.id } });
     expect(progress).toEqual(["booting"]);
@@ -307,7 +339,11 @@ describe("LeaseAcquisitionCoordinator", () => {
     const eviction = await createHarness();
     const old = await seedReady(eviction, { ...request, model: "iPhone SE" });
     await expect(
-      eviction.coordinator.request(request, { mode: "held", requesterId: "new-spec" }),
+      eviction.coordinator.request(request, {
+        mode: "held",
+        ownerId: "new-spec",
+        requesterId: "new-spec",
+      }),
     ).resolves.toMatchObject({ device: { spec: request } });
     expect(eviction.registry.snapshot.devices.find((device) => device.id === old.id)?.state).toBe(
       "deleted",
@@ -334,6 +370,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const acquisition = harness.coordinator.request(request, {
       mode: "held",
       requesterId: "drained",
+      ownerId: "drained",
     });
     await flush();
     expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
@@ -348,7 +385,11 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(maintenanceReturned).toBe(false);
     expect(harness.registry.snapshot.leases).toEqual([]);
     await expect(
-      harness.coordinator.request(request, { mode: "held", requesterId: "during-maintenance" }),
+      harness.coordinator.request(request, {
+        mode: "held",
+        ownerId: "during-maintenance",
+        requesterId: "during-maintenance",
+      }),
     ).rejects.toMatchObject({ name: "NukeCancelledError" });
 
     harness.driver.releaseMakeReady();
@@ -364,6 +405,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const first = await harness.coordinator.request(request, {
       mode: "held",
       requesterId: "first",
+      ownerId: "first",
     });
     const shutdown = await seedReady(harness);
     await harness.driver.shutdown({
@@ -376,7 +418,11 @@ describe("LeaseAcquisitionCoordinator", () => {
       payload: { deviceId: shutdown.id, initiator: "test" },
     });
 
-    const queued = harness.coordinator.request(request, { mode: "held", requesterId: "queued" });
+    const queued = harness.coordinator.request(request, {
+      mode: "held",
+      ownerId: "queued",
+      requesterId: "queued",
+    });
     await flush();
     harness.driver.hangMakeReady();
     await harness.registry.beginRelease(first.lease.id);
@@ -411,6 +457,73 @@ describe("LeaseAcquisitionCoordinator", () => {
     await harness.coordinator.endMaintenance();
   });
 
+  it("cancels a queued request, emits lease.rejected(cancelled), and frees the requester immediately", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.request(request, {
+      mode: "held",
+      ownerId: "first",
+      requesterId: "first",
+    });
+    const queued = harness.coordinator.request(request, {
+      mode: "held",
+      ownerId: "queued",
+      requesterId: "queued",
+    });
+    await flush();
+    expect(harness.coordinator.queueDepth).toBe(1);
+
+    const rejections: unknown[] = [];
+    harness.bus.subscribe("lease.rejected", (envelope) => rejections.push(envelope.payload));
+
+    await expect(harness.coordinator.cancelPending("queued")).resolves.toBe("cancelled");
+    await expect(queued).rejects.toMatchObject({ name: "RequestCancelledError" });
+    expect(harness.coordinator.queueDepth).toBe(0);
+    expect(rejections).toContainEqual({ requestSpec: request, reason: "cancelled" });
+
+    // No capacity remains (still held by "first"), but crucially this is NoCapacityError,
+    // not RequesterAlreadyLeasedError -- the cancelled requester is no longer pending.
+    await expect(
+      harness.coordinator.request(request, {
+        mode: "held",
+        noWait: true,
+        ownerId: "queued",
+        requesterId: "queued",
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+  });
+
+  it("reports not-found for a requester with no pending waiter", async () => {
+    const harness = await createHarness();
+    await expect(harness.coordinator.cancelPending("nobody")).resolves.toBe("not-found");
+  });
+
+  it("reports not-cancellable while device work is already in flight, matching the queue timeout's envelope", async () => {
+    const harness = await createHarness();
+    const shutdown = await seedReady(harness);
+    await harness.driver.shutdown({
+      address: shutdown.address ?? "",
+      deviceId: shutdown.driverDeviceId,
+      driverData: shutdown.driverData,
+    });
+    await harness.registry.transitionDevice(shutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: shutdown.id, initiator: "test" },
+    });
+    harness.driver.hangMakeReady();
+
+    const acquisition = harness.coordinator.request(request, {
+      mode: "held",
+      requesterId: "booting",
+      ownerId: "booting",
+    });
+    await flush();
+
+    await expect(harness.coordinator.cancelPending("booting")).resolves.toBe("not-cancellable");
+
+    harness.driver.releaseMakeReady();
+    await expect(acquisition).resolves.toMatchObject({ device: { id: shutdown.id } });
+  });
+
   it("keeps admission closed until concurrent maintenance callers have all finished", async () => {
     const harness = await createHarness();
     await harness.coordinator.beginMaintenance();
@@ -418,12 +531,86 @@ describe("LeaseAcquisitionCoordinator", () => {
     await harness.coordinator.endMaintenance();
 
     await expect(
-      harness.coordinator.request(request, { mode: "held", requesterId: "still-maintained" }),
+      harness.coordinator.request(request, {
+        mode: "held",
+        ownerId: "still-maintained",
+        requesterId: "still-maintained",
+      }),
     ).rejects.toMatchObject({ name: "NukeCancelledError" });
 
     await harness.coordinator.endMaintenance();
     await expect(
-      harness.coordinator.request(request, { mode: "held", requesterId: "reopened" }),
-    ).resolves.toMatchObject({ lease: { requesterId: "reopened" } });
+      harness.coordinator.request(request, {
+        mode: "held",
+        ownerId: "reopened",
+        requesterId: "reopened",
+      }),
+    ).resolves.toMatchObject({ lease: { ownerId: "reopened", requesterId: "reopened" } });
+  });
+
+  it("stamps full: true onto the resolved spec centrally for a --full request against a driver that reduces features", async () => {
+    const harness = await createHarness({
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+          reducesFeatures: true,
+        }),
+      ],
+    });
+    const granted = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", ownerId: "agent", requesterId: "agent" },
+    );
+
+    expect(granted.device.spec).toMatchObject({ full: true });
+  });
+
+  it("never stamps full: false onto a spec for a plain request", async () => {
+    const harness = await createHarness();
+    const granted = await harness.coordinator.request(request, {
+      mode: "held",
+      requesterId: "agent",
+      ownerId: "agent",
+    });
+
+    expect(granted.device.spec).not.toHaveProperty("full");
+  });
+
+  it("keeps a --full request from matching a warm slim device of the same spec, against a driver that reduces features", async () => {
+    const harness = await createHarness({
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+          reducesFeatures: true,
+        }),
+      ],
+      maxDevices: 2,
+    });
+    await seedReady(harness, request);
+
+    const granted = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", ownerId: "agent", requesterId: "agent" },
+    );
+
+    // A fresh device was provisioned rather than the warm slim one being handed out.
+    expect(granted.device.spec).toMatchObject({ full: true });
+    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+  });
+
+  it("never stamps full: true onto a spec when the resolving driver does not reduce features, so a --full request produces a spec identical to a normal one", async () => {
+    const harness = await createHarness();
+
+    const fullRequest = await harness.coordinator.request(
+      { ...request, full: true },
+      { mode: "held", ownerId: "agent-full", requesterId: "agent-full" },
+    );
+
+    expect(fullRequest.device.spec).not.toHaveProperty("full");
+    expect(fullRequest.device.spec).toEqual(request);
   });
 });

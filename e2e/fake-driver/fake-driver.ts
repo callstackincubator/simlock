@@ -45,6 +45,34 @@ const DEFAULT_SCRIPT: FakeDriverPlatformScript = {
 };
 
 /** The `simlock <tool>` name each fake platform stands in for, matching the real drivers. */
+/**
+ * Deliberately fake scoping variables every fake-driver grant carries unless a script overrides
+ * them. Nothing reads these -- they exist to be *recognised*: `environment` is built by a driver,
+ * forwarded verbatim by the core, validated at the contract boundary, and rendered by the CLI,
+ * MCP and HTTP. A test that finds these exact values at the far end has proved the map survived
+ * every one of those layers untouched, which no assertion on a plausible-looking real value can
+ * (a real-looking path could just as easily have been reconstructed somewhere downstream).
+ *
+ * The keys mirror the shape the real drivers contribute so nothing downstream is special-cased.
+ * `SIMLOCK_FAKE_TRACER` is the sentinel proper. `SIMLOCK_FAKE_AWKWARD` carries a space and an
+ * apostrophe on purpose: `simlock lease --export-env` emits shell `export` lines for `eval`, so
+ * a value that survives that round trip byte for byte proves the quoting as well as the routing.
+ */
+export const FAKE_LEASE_ENVIRONMENT: Readonly<Record<Platform, Readonly<Record<string, string>>>> =
+  {
+    ios: {
+      SIMLOCK_IOS_DEVICE_SET: "/fake/ios/device-set",
+      SIMLOCK_FAKE_TRACER: "ios-lease-env-tracer-7f3a2c",
+      SIMLOCK_FAKE_AWKWARD: "/fake/o'brien/My Devices/ios",
+    },
+    android: {
+      ANDROID_ADB_SERVER_PORT: "15037",
+      ANDROID_AVD_HOME: "/fake/android/avd-home",
+      SIMLOCK_FAKE_TRACER: "android-lease-env-tracer-7f3a2c",
+      SIMLOCK_FAKE_AWKWARD: "/fake/o'brien/My Devices/android",
+    },
+  };
+
 const PASSTHROUGH_TOOLS: Readonly<Record<Platform, string>> = {
   android: "adb",
   ios: "simctl",
@@ -135,7 +163,7 @@ export class OutOfProcessFakeDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     const script = await this.#beforeCall("resolveSpec", [request, options]);
     this.#assertKnownModel(request.model, script);
@@ -182,9 +210,16 @@ export class OutOfProcessFakeDriver implements Driver {
     return { address: defaultAddress(deviceId), deviceId, driverData: { fakeDeviceId: deviceId } };
   }
 
-  /** Re-reads the script's `address` on every boot -- see `FakeDriverPlatformScript.address`. */
-  async makeReady(device: DriverDevice): Promise<DriverDevice> {
-    const script = await this.#beforeCall("makeReady", [device]);
+  /**
+   * Re-reads the script's `address` on every boot -- see `FakeDriverPlatformScript.address`.
+   * `options.purpose` is logged alongside the call but otherwise ignored -- this fake never
+   * applies any configuration a `"recover"` boot would need to skip.
+   */
+  async makeReady(
+    device: DriverDevice,
+    options?: { readonly purpose: "prepare" | "recover" },
+  ): Promise<DriverDevice> {
+    const script = await this.#beforeCall("makeReady", [device, options]);
     this.#devices.set(device.deviceId, "ready");
     return {
       address: script.address ?? defaultAddress(device.deviceId),
@@ -262,7 +297,10 @@ export class OutOfProcessFakeDriver implements Driver {
 
   /** Synchronous like `estimate`, and cached the same way: the last script read wins. */
   leaseEnvironment(): Readonly<Record<string, string>> {
-    return this.#lastKnownLeaseEnvironment ?? {};
+    // Defaults to the recognisable fakes rather than `{}`: a grant that carried nothing would
+    // make "the environment reached the CLI" and "there was never anything to carry" look
+    // identical at the far end. A script that sets `leaseEnvironment` still wins.
+    return this.#lastKnownLeaseEnvironment ?? FAKE_LEASE_ENVIRONMENT[this.platform];
   }
 
   /**

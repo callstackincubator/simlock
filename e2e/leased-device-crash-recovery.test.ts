@@ -10,15 +10,15 @@ interface DeviceRow {
 }
 
 interface LeaseGrant {
-  readonly lease: string;
-  readonly udid: string;
+  readonly lease: { readonly id: string };
+  readonly device: { readonly driverDeviceId: string };
 }
 
 interface HealthPushLine {
   readonly attempts?: number;
-  readonly device_id: string;
-  readonly event: string;
-  readonly lease: string;
+  readonly deviceId: string;
+  readonly push: string;
+  readonly leaseId: string;
 }
 
 const HEALTH_CONFIG_BASE = {
@@ -74,14 +74,18 @@ describe("leased device crash recovery", () => {
     // an omitted device reads as "missing", which is the unrecoverable branch, not
     // this one.
     await env.driverScript.merge({
-      ios: { managedReality: { devices: [{ deviceId: grant.udid, runState: "stopped" }] } },
+      ios: {
+        managedReality: {
+          devices: [{ deviceId: grant.device.driverDeviceId, runState: "stopped" }],
+        },
+      },
     });
 
-    await waitFor(() => healthLines(held).some((line) => line.event === "device_unhealthy"), {
+    await waitFor(() => healthLines(held).some((line) => line.push === "device-unhealthy"), {
       label: "held CLI reports device_unhealthy",
       timeout: 15_000,
     });
-    await waitFor(() => healthLines(held).some((line) => line.event === "device_recovered"), {
+    await waitFor(() => healthLines(held).some((line) => line.push === "device-recovered"), {
       label: "held CLI reports device_recovered",
       timeout: 15_000,
     });
@@ -93,21 +97,25 @@ describe("leased device crash recovery", () => {
     // we've observed at least one pair, so the recovered state settles; the
     // assertions below deliberately don't depend on an exact recovery count.
     await env.driverScript.merge({
-      ios: { managedReality: { devices: [{ deviceId: grant.udid, runState: "running" }] } },
+      ios: {
+        managedReality: {
+          devices: [{ deviceId: grant.device.driverDeviceId, runState: "running" }],
+        },
+      },
     });
 
     const lines = healthLines(held);
-    const unhealthyIndex = lines.findIndex((line) => line.event === "device_unhealthy");
-    const recoveredIndex = lines.findIndex((line) => line.event === "device_recovered");
+    const unhealthyIndex = lines.findIndex((line) => line.push === "device-unhealthy");
+    const recoveredIndex = lines.findIndex((line) => line.push === "device-recovered");
     expect(unhealthyIndex).toBeGreaterThanOrEqual(0);
     expect(recoveredIndex, "device_recovered must follow device_unhealthy").toBeGreaterThan(
       unhealthyIndex,
     );
     expect(lines[unhealthyIndex]).toMatchObject({
-      device_id: expect.any(String),
-      lease: grant.lease,
+      deviceId: expect.any(String),
+      leaseId: grant.lease.id,
     });
-    expect(lines[recoveredIndex]).toMatchObject({ lease: grant.lease });
+    expect(lines[recoveredIndex]).toMatchObject({ leaseId: grant.lease.id });
 
     await env.expectEvents(["device.crash-detected", "device.recovered"]);
 
@@ -117,19 +125,23 @@ describe("leased device crash recovery", () => {
     const makeReadyCallsForDevice = calls.filter(
       (call) =>
         call.operation === "makeReady" &&
-        (call.arguments[0] as { deviceId: string }).deviceId === grant.udid,
+        (call.arguments[0] as { deviceId: string }).deviceId === grant.device.driverDeviceId,
     );
     expect(
       makeReadyCallsForDevice.length,
-      `expected at least 2 makeReady calls for ${grant.udid}, saw ${String(makeReadyCallsForDevice.length)}`,
+      `expected at least 2 makeReady calls for ${grant.device.driverDeviceId}, saw ${String(makeReadyCallsForDevice.length)}`,
     ).toBeGreaterThan(1);
 
     // The whole point of the feature: the lease survives recovery.
     await waitForLeaseCount(env, 1);
     const leases = (await env.cli(["list", "--leases"])).json;
-    expect(leases).toEqual(expect.arrayContaining([expect.objectContaining({ id: grant.lease })]));
+    expect(leases).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: grant.lease.id })]),
+    );
     const devices = (await env.cli(["list", "--devices"])).json as DeviceRow[];
-    const deviceRow = devices.find((device) => device.driverDeviceId === grant.udid);
+    const deviceRow = devices.find(
+      (device) => device.driverDeviceId === grant.device.driverDeviceId,
+    );
     expect(deviceRow?.state).toBe("leased");
 
     held.kill("SIGKILL");
@@ -158,28 +170,30 @@ describe("leased device crash recovery", () => {
         failures: {
           makeReady: { message: "simulated unrecoverable boot failure", type: "generic" },
         },
-        managedReality: { devices: [{ deviceId: grant.udid, runState: "stopped" }] },
+        managedReality: {
+          devices: [{ deviceId: grant.device.driverDeviceId, runState: "stopped" }],
+        },
       },
     });
 
     const recorded = await env.expectEvents(["device.recovery-failed", "lease.released"]);
     const recoveryFailed = recorded.find((event) => event.event === "device.recovery-failed");
     expect(recoveryFailed?.payload).toMatchObject({
-      leaseId: grant.lease,
+      leaseId: grant.lease.id,
       reason: "attempts-exhausted",
     });
     const released = recorded.find(
       (event) =>
         event.event === "lease.released" &&
-        (event.payload as { leaseId?: string }).leaseId === grant.lease,
+        (event.payload as { leaseId?: string }).leaseId === grant.lease.id,
     );
-    expect(released?.payload).toMatchObject({ leaseId: grant.lease, reason: "device-lost" });
+    expect(released?.payload).toMatchObject({ leaseId: grant.lease.id, reason: "device-lost" });
 
     // The device is back in the pool, not stuck leased to a dead device.
     await waitForLeaseCount(env, 0);
     const leases = (await env.cli(["list", "--leases"])).json;
     expect(leases).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: grant.lease })]),
+      expect.arrayContaining([expect.objectContaining({ id: grant.lease.id })]),
     );
 
     held.kill("SIGKILL");
@@ -213,7 +227,9 @@ describe("leased device crash recovery", () => {
         failures: {
           makeReady: { message: "simulated unrecoverable boot failure", type: "generic" },
         },
-        managedReality: { devices: [{ deviceId: grant.udid, runState: "stopped" }] },
+        managedReality: {
+          devices: [{ deviceId: grant.device.driverDeviceId, runState: "stopped" }],
+        },
       },
     });
 
@@ -223,17 +239,17 @@ describe("leased device crash recovery", () => {
     // Expected: the held process reports the lost lease on stderr (mirroring
     // device_unhealthy/device_recovered) and exits on its own. Actual: it does
     // neither -- this waitFor times out and the process is still alive afterwards.
-    await waitFor(() => healthLines(held).some((line) => line.event === "lease_lost"), {
+    await waitFor(() => healthLines(held).some((line) => line.push === "lease-lost"), {
       label: "held CLI reports the lease ending",
       timeout: 5_000,
     });
-    // `device_id` here is the registry device id (what `simlock list --devices` calls
-    // `id`), not the driver `udid` the grant returns on stdout -- these pushes carry
-    // the same identifier the event bus does.
-    const lost = healthLines(held).find((line) => line.event === "lease_lost");
+    // `deviceId` here is the registry device id (what `simlock list --devices` calls
+    // `id`), not the driver's `driverDeviceId` the grant returns on stdout -- these
+    // pushes carry the same identifier the event bus does.
+    const lost = healthLines(held).find((line) => line.push === "lease-lost");
     expect(lost).toMatchObject({
-      device_id: expect.stringMatching(/^dev_/),
-      lease: grant.lease,
+      deviceId: expect.stringMatching(/^dev_/),
+      leaseId: grant.lease.id,
       reason: "device-lost",
     });
 

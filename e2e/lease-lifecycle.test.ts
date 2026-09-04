@@ -35,14 +35,17 @@ describe("lease lifecycle across both frontends", () => {
       "--detach",
     ]);
     expect(lease.code).toBe(0);
-    const leaseGrant = lease.json as { lease: string; device: string; udid: string };
-    expect(leaseGrant.device).toBe("iPhone 16");
+    const leaseGrant = lease.json as {
+      lease: { id: string };
+      device: { spec: { model: string }; driverDeviceId: string };
+    };
+    expect(leaseGrant.device.spec.model).toBe("iPhone 16");
 
     const statusJson = await env.cli(["status", "--json"]);
     expect(statusJson.code).toBe(0);
     expect(statusJson.json).toMatchObject({
       leases: expect.arrayContaining([
-        expect.objectContaining({ id: leaseGrant.lease, requesterId: agentId }),
+        expect.objectContaining({ id: leaseGrant.lease.id, requesterId: agentId }),
       ]),
     });
 
@@ -50,14 +53,14 @@ describe("lease lifecycle across both frontends", () => {
     expect(listLeases.code).toBe(0);
     expect(listLeases.json).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: leaseGrant.lease, requesterId: agentId }),
+        expect.objectContaining({ id: leaseGrant.lease.id, requesterId: agentId }),
       ]),
     );
 
-    const release = await env.cli(["release", leaseGrant.lease]);
+    const release = await env.cli(["release", leaseGrant.lease.id]);
     expect(release.code).toBe(0);
 
-    await waitForDeviceState(env, leaseGrant.udid, "ready");
+    await waitForDeviceState(env, leaseGrant.device.driverDeviceId, "ready");
 
     await env.expectEvents(["lease.requested", "lease.granted", "lease.released"]);
   });
@@ -73,21 +76,18 @@ describe("lease lifecycle across both frontends", () => {
     try {
       const leaseResult = await mcp.client.callTool({
         name: "lease_simulator",
-        arguments: { platform: "ios", device: "iPhone 16", os: "18.4" },
+        arguments: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
       });
       const leased = leaseResult.structuredContent as {
-        lease_id: string;
-        device_id: string;
-        device: string;
-        platform: string;
+        device: { driverDeviceId: string; spec: { model: string } };
+        lease: { id: string };
       };
-      expect(leased.device).toBe("iPhone 16");
+      expect(leased.device.spec.model).toBe("iPhone 16");
 
       const statusResult = await mcp.client.callTool({ name: "lease_status", arguments: {} });
       expect(statusResult.structuredContent).toMatchObject({
         held: true,
-        lease_id: leased.lease_id,
-        device_id: leased.device_id,
+        id: leased.lease.id,
       });
 
       // The CLI frontend must see the exact same lease, keyed by the same requester id.
@@ -95,7 +95,7 @@ describe("lease lifecycle across both frontends", () => {
       expect(cliLeases.code).toBe(0);
       expect(cliLeases.json).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: leased.lease_id, requesterId: agentId }),
+          expect.objectContaining({ id: leased.lease.id, requesterId: agentId }),
         ]),
       );
 
@@ -106,10 +106,10 @@ describe("lease lifecycle across both frontends", () => {
 
       const releaseResult = await mcp.client.callTool({
         name: "release_simulator",
-        arguments: { lease_id: leased.lease_id },
+        arguments: { leaseId: leased.lease.id },
       });
       expect(releaseResult.structuredContent).toMatchObject({
-        lease_id: leased.lease_id,
+        leaseId: leased.lease.id,
         released: true,
       });
 
@@ -119,10 +119,13 @@ describe("lease lifecycle across both frontends", () => {
       expect(cliLeasesAfter.json).toEqual([]);
       const midPurge = await env.cli(["list", "--devices"]);
       expect(midPurge.json).toEqual([
-        expect.objectContaining({ driverDeviceId: leased.device_id, state: "reclaiming" }),
+        expect.objectContaining({
+          driverDeviceId: leased.device.driverDeviceId,
+          state: "reclaiming",
+        }),
       ]);
 
-      await waitForDeviceState(env, leased.device_id, "ready");
+      await waitForDeviceState(env, leased.device.driverDeviceId, "ready");
     } finally {
       await mcp.close();
     }

@@ -48,6 +48,13 @@ export interface FakeDriverOptions {
    * `estimateMs.reclaim`, so a test that does not care about the split says nothing.
    */
   readonly fullCleanReclaimEstimateMs?: number;
+  /**
+   * The `DriverDevice.featureProfile` `makeReady` reports for every boot -- undefined by
+   * default (this fake, like every real driver except iOS, does not reduce anything), settable
+   * by a test that needs to exercise the core's `featureProfile` persistence without a real
+   * iOS driver.
+   */
+  readonly featureProfile?: "full" | "reduced";
   readonly knownModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
@@ -72,6 +79,13 @@ export interface FakeDriverOptions {
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
+  /**
+   * `Driver.reducesFeatures` passthrough -- undefined by default (this fake, like every real
+   * driver except iOS with slim mode on, does not reduce anything), settable by a test that
+   * needs to exercise `LeaseAcquisitionCoordinator`'s `full`-stamping decision without a real
+   * iOS driver.
+   */
+  readonly reducesFeatures?: boolean;
 }
 
 export class FakeDriverUnknownDeviceError extends Error {
@@ -84,11 +98,13 @@ export class FakeDriverUnknownDeviceError extends Error {
 export class FakeDriver implements Driver {
   readonly platform: Platform;
   readonly deviceRoot: string;
+  readonly reducesFeatures?: boolean;
   readonly #availableOsVersions: Set<string>;
   readonly #callCounts = new Map<FakeDriverOperation, number>();
   readonly #calls: FakeDriverCall[] = [];
   readonly #clock: Clock;
   readonly #estimateMs: FakeDriverOptions["estimateMs"];
+  readonly #featureProfile: "full" | "reduced" | undefined;
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
@@ -111,6 +127,7 @@ export class FakeDriver implements Driver {
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
     this.#clock = options.clock;
     this.#estimateMs = options.estimateMs;
+    this.#featureProfile = options.featureProfile;
     this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
@@ -121,6 +138,10 @@ export class FakeDriver implements Driver {
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
+
+    if (options.reducesFeatures !== undefined) {
+      this.reducesFeatures = options.reducesFeatures;
+    }
     this.#reclaimResult = options.reclaimResult ?? "ready";
     this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
   }
@@ -150,7 +171,7 @@ export class FakeDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     await this.#beforeCall("resolveSpec", request, options);
     this.#assertMatchingPlatform(request.platform);
@@ -184,9 +205,17 @@ export class FakeDriver implements Driver {
     return { address: addressFor(deviceId, 0), deviceId, driverData: { fakeDeviceId: deviceId } };
   }
 
-  /** Each boot re-reads a fresh address, same as the real drivers -- never the caller's. */
-  async makeReady(device: DriverDevice): Promise<DriverDevice> {
-    await this.#beforeCall("makeReady", device);
+  /**
+   * Each boot re-reads a fresh address, same as the real drivers -- never the caller's.
+   * `options.purpose` is recorded on the call log (`calls`) so a test can assert a caller (e.g.
+   * `ManagedDeviceLifecycle.recoverLeased`) requested `"recover"`, but this fake never reduces
+   * anything regardless of purpose -- there is no configuration-changing behaviour to gate.
+   */
+  async makeReady(
+    device: DriverDevice,
+    options?: { readonly purpose: "prepare" | "recover" },
+  ): Promise<DriverDevice> {
+    await this.#beforeCall("makeReady", device, options);
     this.#requireDevice(device);
 
     if (this.#hangMakeReady) {
@@ -202,6 +231,7 @@ export class FakeDriver implements Driver {
       address: addressFor(device.deviceId, bootCount),
       deviceId: device.deviceId,
       driverData: device.driverData,
+      ...(this.#featureProfile === undefined ? {} : { featureProfile: this.#featureProfile }),
     };
   }
 

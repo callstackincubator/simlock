@@ -15,9 +15,9 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator | implemented |
 | `lease.granted` | lease id, device id, requester, mode (held/detached) | a device was assigned and handed out | LeaseLifecycle | implemented |
 | `lease.renewed` | lease id, new deadline | an explicit `simlock lease renew` succeeded (either mode), **or** a held-mode connection that declared the `heartbeat` capability answered a `lease.heartbeat` push (fires once per lease per `lease.heartbeatIntervalMs` while the holder stays alive) | LeaseLifecycle | implemented |
-| `lease.released` | lease id, device id, reason (closed/explicit/killed/orphaned/device-lost) | holder connection closed, explicit release, (orphaned) a `held` lease found still persisted at daemon startup, which cannot have a live holder across a restart, or (device-lost) a leased device could not be recovered after it stopped running outside simlock | LeaseLifecycle | implemented |
-| `lease.expired` | lease id, device id | TTL backstop fired without a heartbeat sliding it first — for a capability-declaring holder this means it stopped ponging (crashed, hung, or lost its socket); for one that never declared the capability it means the grant-time TTL (or the last explicit `simlock lease renew`) simply ran out, exactly as before this change | LeaseLifecycle | implemented |
-| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed) | a request ended without a grant | LeaseAcquisitionCoordinator / WaitQueue | implemented |
+| `lease.released` | lease id, device id, reason (closed/explicit/killed/orphaned/device-lost), owner id | holder connection closed, explicit release, (orphaned) a `held` lease found still persisted at daemon startup, which cannot have a live holder across a restart, or (device-lost) a leased device could not be recovered after it stopped running outside simlock | LeaseLifecycle | implemented |
+| `lease.expired` | lease id, device id, owner id | TTL backstop fired without a heartbeat sliding it first — for a capability-declaring holder this means it stopped ponging (crashed, hung, or lost its socket); for one that never declared the capability it means the grant-time TTL (or the last explicit `simlock lease renew`) simply ran out, exactly as before this change | LeaseLifecycle | implemented |
+| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled) | a request ended without a grant; `cancelled` is an explicit single-request cancel (`LeaseEngine#cancelPending`, backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter -- one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue | implemented |
 
 ## Device lifecycle
 
@@ -40,6 +40,36 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 | `device.recovered` | device id, lease id, attempts, duration | a crashed leased device was rebooted under its existing lease and passed readiness | LeaseHealthMonitor | implemented |
 | `device.recovery-failed` | device id, lease id, attempts, reason, error | recovery could not restore a leased device (absent from driver reality, provenance drift, or attempts exhausted) and its lease was released | LeaseHealthMonitor | implemented |
 | `device.orphan-purged` | driver device id, platform, device root | `simlock doctor --purge-orphans` destroyed a device that sat inside a validly-marked Simlock device root with no registry record — see [ADR 0001](adr/0001-simlock-owned-device-roots.md) | Doctor | implemented |
+| `device.slimmed` | device id, address, platform (ios), categories, label count, duration, signature, unknown labels | *after* the post-slim reboot's `bootstatus` succeeded -- i.e. once the `launchctl disable` overrides applied via `simctl spawn` are actually in force on the simulator | driver-diagnostics | implemented |
+
+`device.slimmed` reports a fact committed to the *simulator's own launchd database*, not to the
+Simlock registry (ADR 0002, `docs/adr/0002-opt-in-slim-ios-simulators.md`) -- so events rule 3 ("emit post-commit
+only") is satisfied by waiting for that commit to become observable, not by waiting on a registry
+write: the driver applies the `launchctl disable` overrides, reboots the device, and only fires
+`onSlimmed` once the second `bootstatus` has passed, proving the overrides survived the reboot and
+are actually in force. The registry's own `device.ready` for that same boot is a separate,
+later event, emitted through the normal readiness path once the driver call returns. A *skipped*
+slim -- the runtime is older than iOS 18.5, its runtime id didn't parse, or the disable pass itself
+failed -- is deliberately not an event: it isn't a fact worth putting in front of every event-bus
+consumer, just operator diagnostics, so it's a `warn` log line (`daemon.driver-discovery`) instead.
+
+## Components
+
+| Event | Payload (key fields) | Emitted when | Emitter | Status |
+|---|---|---|---|---|
+| `component.install-started` | platform, component id (iOS runtime version or "latest"; Android `sdkmanager` package name), requester id (when the triggering resolution knew one) | a driver is about to run `xcodebuild -downloadPlatform` / `sdkmanager --install` for a missing component, disk preflight already passed | driver-diagnostics | implemented |
+| `component.installed` | platform, component id, duration, requester id | the install succeeded **and** a post-install re-scan confirmed the component the request actually needed is present (paired with the requested device type, for iOS) — never fired on a bare exit-0 | driver-diagnostics | implemented |
+| `component.install-failed` | platform, component id, duration, stable error summary, requester id | the install failed, including a license-retry failure (exactly one `install-failed` per attempted install, never one per retry), **or** the installer exited 0 but the post-install re-scan could not confirm the component | driver-diagnostics | implemented |
+
+Drivers never touch the event bus directly (architecture rule 5): both drivers report these
+facts through their own `onDiagnostic` callback (mirroring the Android driver's pre-existing
+diagnostic pattern), and `src/daemon/main.ts` bridges that diagnostic to the bus at driver
+construction time — hence the `driver-diagnostics` emitter rather than `IosSimctlDriver` /
+`AndroidDriver`. A disk-preflight failure (`InsufficientDiskSpaceError`) happens before any
+diagnostic fires: no install was attempted, so nothing is reported as started or failed. See
+"Device requests" and "Fresh-state strategy" in [ARCHITECTURE.md](ARCHITECTURE.md) for how a
+missing component gets to this point, and `docs/known-pitfalls.md` for the requester-visible
+progress gap this leaves.
 
 ## System
 

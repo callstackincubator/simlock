@@ -4,19 +4,20 @@ import type { DeviceSpec } from "../../core/domain.js";
 import {
   BootTimeoutError,
   type DeviceRequest,
+  DiskSpaceGuard,
   type Driver,
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
+  LicenseNotAcceptedError,
   type ObservedDevice,
   type ObservedMark,
   type PassthroughCommand,
   PassthroughRefusedError,
   type ReclaimResult,
   RuntimeMissingError,
-  UnknownModelError,
 } from "../../core/driver.js";
 import {
   ensureOwnedRoot,
@@ -24,19 +25,31 @@ import {
   type LegacyDevice,
   OwnedRootError,
 } from "../../core/index.js";
-import type {
-  Clock,
-  Filesystem,
-  IdGenerator,
-  ProcessHandle,
-  ProcessResult,
-  ProcessRunner,
-  ProcessSupervisor,
-  TcpProbe,
+import { stableError } from "../../core/stable-error.js";
+import type { ComponentInstallDiagnostic } from "../diagnostics.js";
+import {
+  isMissingPathError,
+  type Clock,
+  type Filesystem,
+  type IdGenerator,
+  type ProcessHandle,
+  type ProcessResult,
+  type ProcessRunner,
+  type ProcessSupervisor,
+  type TcpProbe,
 } from "../../ports/index.js";
 import { AdbRegistrar } from "./adb-registrar.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
+import {
+  BuiltinDeviceProfileSource,
+  DeviceProfileRegistry,
+  parseAvdmanagerDeviceProfiles,
+  UserDeviceProfileSource,
+  type DeviceProfileSource,
+  type DeviceProfileSourceDiagnostic,
+  type ResolvedDeviceProfile,
+} from "./device-profile-source.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
 
@@ -60,12 +73,24 @@ const DEFAULT_ADB_SERVER_PORT = 5038;
 // already attached, short enough that a lost announcement costs seconds, not the whole
 // readiness timeout.
 const REGISTRATION_RETRY_AFTER_MS = 5_000;
-const SDK_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
+// Mirrors `downloads.timeoutMs`'s config default (`src/core/config.ts`) -- used only when a
+// caller constructs the driver directly without threading the configured value through (tests,
+// `SIMLOCK_DRIVERS_MODULE`). See the iOS driver's `DEFAULT_DOWNLOAD_TIMEOUT_MS` for the same
+// pattern.
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
+// `sdkmanager --licenses` prompts once per outstanding license with a bare `y/N`. Answering
+// more times than there are real licenses is harmless -- the extra `y`s land after the prompt
+// loop has already exited and sdkmanager simply never reads them -- so this just needs to be
+// comfortably above the largest real Android SDK license count rather than exact.
+const LICENSE_ACCEPT_ANSWERS = 100;
 // A defense-in-depth bound on the wait that follows a SIGKILL: NodeProcessHandle#wait
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+// Conservative estimate for a system-image download+install -- checked before `sdkmanager
+// --install` ever starts, so a full disk fails fast instead of filling up mid-download.
+const ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES = 2 * 1024 ** 3;
 const PROVISION_ESTIMATE_MS = 1_000;
 // Measured on an M3 Pro against Pixel 8 / API 35: 2.4-5.1s over nine steady-state reclaims
 // (median 4.6s), and 3.7-5.7s with three running at once. A `snapshot` reclaim loads the clean
@@ -88,10 +113,32 @@ const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
 export interface AndroidDriverOptions {
+  /**
+   * Explicit legal consent for Android SDK licenses (`downloads.acceptAndroidLicenses`),
+   * independent of the per-request download permission. Defaults to `false`: an install that
+   * fails on an unaccepted license fails outright rather than accepting it silently.
+   */
+  readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
   /** This driver's own `drivers.android` block, handed over unread by the core. */
   readonly driverConfig: Readonly<Record<string, string | number | boolean>>;
   /** The environment every scoped invocation is layered on top of; `process.env` in production. */
+  /**
+   * Ordered device-profile sources, first match wins (see `DeviceProfileRegistry`). Defaults
+   * to `[builtin, user]` -- `avdmanager list device` first, then a read-only parse of
+   * `~/.android/devices.xml`, so a name defined in both resolves to the built-in.
+   */
+  readonly deviceProfileSources?: readonly DeviceProfileSource[];
+  /**
+   * Disk-space preflight, shared with every other driver that installs components -- see the
+   * iOS driver's `IosSimctlDriverOptions.diskSpaceGuard` for why a bare `assertDiskSpace` call
+   * isn't enough on its own. Defaults to a private, driver-local guard when omitted (tests,
+   * `SIMLOCK_DRIVERS_MODULE`); production wiring (`src/daemon/main.ts`) passes one shared
+   * instance to every driver.
+   */
+  readonly diskSpaceGuard?: DiskSpaceGuard;
+  /** Per-install timeout for `sdkmanager`; defaults to `downloads.timeoutMs`'s own default. */
+  readonly downloadTimeoutMs?: number;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
@@ -110,16 +157,26 @@ export interface AndroidDriverOptions {
   readonly uid?: number;
 }
 
-export interface AndroidDriverDiagnostic {
-  readonly avdName: string;
-  readonly kind: "snapshot-cold-boot";
-  readonly readyAfterMs: number;
-}
+export type AndroidDriverDiagnostic =
+  | { readonly avdName: string; readonly kind: "snapshot-cold-boot"; readonly readyAfterMs: number }
+  | DeviceProfileSourceDiagnostic
+  | ComponentInstallDiagnostic;
 
 export class SdkMissingError extends Error {
   constructor(readonly searchedPaths: readonly string[]) {
     super(`Android SDK missing or incomplete; searched: ${searchedPaths.join(", ")}`);
     this.name = "SdkMissingError";
+  }
+}
+
+export class AndroidLicenseNotAcceptedError extends LicenseNotAcceptedError {
+  constructor(readonly packageName: string) {
+    super("android", packageName);
+    this.message =
+      `sdkmanager refused to install ${packageName}: an Android SDK license is not accepted. ` +
+      `Set "downloads.acceptAndroidLicenses": true in config to accept automatically, or run ` +
+      `\`sdkmanager --licenses\` manually.`;
+    this.name = "AndroidLicenseNotAcceptedError";
   }
 }
 
@@ -145,11 +202,6 @@ interface SystemImage {
   readonly path: string;
   readonly tag: string;
   readonly version: string;
-}
-
-interface DeviceProfile {
-  readonly id: string;
-  readonly name: string;
 }
 
 /**
@@ -211,18 +263,23 @@ export class AndroidDriver implements Driver {
   readonly #adbServer: AdbServerSupervisor;
   readonly #adbServerPort: number;
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
+  readonly #acceptAndroidLicenses: boolean;
   readonly #clock: Clock;
+  readonly #deviceProfiles: DeviceProfileRegistry;
   readonly #devices = new Map<string, DeviceState>();
   readonly #deviceRoot: string;
   readonly #filesystem: Filesystem;
   readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
   readonly #legacyAvdHome: string;
+  readonly #diskSpaceGuard: DiskSpaceGuard;
+  readonly #downloadTimeoutMs: number;
+  readonly #installLocks = new Map<string, Promise<void>>();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
   readonly #processRunner: ProcessRunner;
-  readonly #profiles = new Map<string, DeviceProfile>();
+  readonly #resolvedProfiles = new Map<string, ResolvedDeviceProfile>();
   readonly #readinessTimeoutMs: number;
   readonly #registrar: AdbRegistrar;
   readonly #rootOptions: EnsureOwnedRootOptions;
@@ -236,11 +293,14 @@ export class AndroidDriver implements Driver {
     adbServer: AdbServerSupervisor,
     adbServerPort: number,
   ) {
+    this.#acceptAndroidLicenses = options.acceptAndroidLicenses ?? false;
     this.#adbServer = adbServer;
     this.#adbServerPort = adbServerPort;
     this.#baseEnv = options.env;
     this.#clock = options.clock;
     this.#deviceRoot = deviceRoot;
+    this.#diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
+    this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi ?? hostAbiFor(process.arch);
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
@@ -257,6 +317,9 @@ export class AndroidDriver implements Driver {
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
+    this.#deviceProfiles = new DeviceProfileRegistry(
+      options.deviceProfileSources ?? defaultDeviceProfileSources(options, sdk, this.#onDiagnostic),
+    );
   }
 
   /**
@@ -486,13 +549,13 @@ export class AndroidDriver implements Driver {
 
   async resolveSpec(
     request: DeviceRequest,
-    options: { readonly allowDownload: boolean },
+    options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
     if (request.platform !== this.platform) {
       throw new Error(`Android driver cannot resolve ${request.platform} requests`);
     }
 
-    const profile = await this.#resolveProfile(request.model);
+    const profile = await this.#deviceProfiles.resolve(request.model);
     const images = await this.#installedImages();
     const apiLevel = request.osVersion ?? newestApiLevel(images);
     if (apiLevel === undefined) {
@@ -505,12 +568,10 @@ export class AndroidDriver implements Driver {
       }
 
       const packageName = systemImagePackage(apiLevel, "google_apis", this.#hostAbi);
-      await this.#runOrThrow(this.#sdk.sdkmanager, ["--install", packageName], {
-        timeoutMs: SDK_DOWNLOAD_TIMEOUT_MS,
-      });
+      await this.#installSystemImage(packageName, options.requesterId);
     }
 
-    this.#profiles.set(profile.name.toLocaleLowerCase(), profile);
+    this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
     return { model: profile.name, osVersion: apiLevel, platform: this.platform };
   }
 
@@ -524,6 +585,13 @@ export class AndroidDriver implements Driver {
     const avdName = `simlock_${this.#idGenerator.generate()}`;
     const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
 
+    // A `builtin` profile already carries the `avdmanager` device id `-d` wants. A
+    // `properties` profile has none -- it never came from `avdmanager list device` -- so
+    // `avdmanager create avd` is seeded with *some* built-in device (only to skip the
+    // interactive "custom hardware profile?" prompt) and the profile's own properties then
+    // overwrite that seed's config.ini values below, before anything reads them.
+    const seedDeviceId =
+      profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
     await this.#runOrThrow(this.#sdk.avdmanager, [
       "create",
       "avd",
@@ -532,8 +600,15 @@ export class AndroidDriver implements Driver {
       "-k",
       packageName,
       "-d",
-      profile.id,
+      seedDeviceId,
     ]);
+
+    if (profile.kind === "properties") {
+      // Must happen before `#configHash` below captures the driver's snapshot/config-hash
+      // baseline: applying it after would let the baseline settle on the seed device's
+      // hardware and then see a spurious drift on the very next boot.
+      await this.#applyHardwareProperties(avdName, profile.hardwareProperties);
+    }
 
     const configHash = await this.#configHash(avdName, image);
     const port = await this.#portAllocator.allocate(this.#env());
@@ -829,13 +904,13 @@ export class AndroidDriver implements Driver {
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
-    const [profiles, images] = await Promise.all([
-      this.#listDeviceProfiles(),
+    const [models, images] = await Promise.all([
+      this.#deviceProfiles.listModels(),
       this.#installedImages(),
     ]);
     return {
       defaultRuntime: newestApiLevel(images),
-      models: profiles.map((profile) => profile.name),
+      models: [...models],
       runtimes: [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels),
     };
   }
@@ -857,27 +932,175 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async #profileFor(model: string): Promise<DeviceProfile> {
-    return this.#profiles.get(model.toLocaleLowerCase()) ?? this.#resolveProfile(model);
-  }
-
-  async #listDeviceProfiles(): Promise<readonly DeviceProfile[]> {
-    const result = await this.#runOrThrow(this.#sdk.avdmanager, ["list", "device"]);
-    return parseDeviceProfiles(result.stdout);
-  }
-
-  async #resolveProfile(model: string): Promise<DeviceProfile> {
-    const profiles = await this.#listDeviceProfiles();
-    const normalized = model.toLocaleLowerCase();
-    const profile = profiles.find(
-      (candidate) =>
-        candidate.name.toLocaleLowerCase() === normalized ||
-        candidate.id.toLocaleLowerCase() === normalized,
+  async #profileFor(model: string): Promise<ResolvedDeviceProfile> {
+    return (
+      this.#resolvedProfiles.get(model.toLocaleLowerCase()) ?? this.#deviceProfiles.resolve(model)
     );
-    if (profile === undefined) {
-      throw new UnknownModelError(this.platform, model);
+  }
+
+  /** See the seed-device comment at its `provision` call site. */
+  async #defaultAvdmanagerDeviceId(): Promise<string> {
+    const result = await this.#runOrThrow(this.#sdk.avdmanager, ["list", "device"]);
+    const [first] = parseAvdmanagerDeviceProfiles(result.stdout);
+    if (first === undefined) {
+      throw new DriverCrashError(
+        `${this.#sdk.avdmanager} list device reported no built-in device profiles`,
+      );
     }
-    return profile;
+    return first.id;
+  }
+
+  /** Merges `properties` into the AVD's `config.ini` -- see `#mergeConfigIniLines`. */
+  async #applyHardwareProperties(
+    avdName: string,
+    properties: Readonly<Record<string, string>>,
+  ): Promise<void> {
+    await this.#mergeConfigIniLines(avdName, properties);
+  }
+
+  /**
+   * Dedupes concurrent installs of the same system-image package behind one in-flight promise
+   * -- mirrors the iOS driver's `#downloadLocks`, sized to a package instead of a whole
+   * `xcodebuild` invocation. The map entry is removed once the install settles (success or
+   * failure), so a later, non-concurrent call starts a fresh attempt rather than replaying a
+   * stale result.
+   */
+  async #installSystemImage(packageName: string, requesterId: string | undefined): Promise<void> {
+    const inFlight = this.#installLocks.get(packageName);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+
+    const promise = this.#installSystemImageOnce(packageName, requesterId).finally(() => {
+      if (this.#installLocks.get(packageName) === promise) {
+        this.#installLocks.delete(packageName);
+      }
+    });
+    this.#installLocks.set(packageName, promise);
+    return promise;
+  }
+
+  /**
+   * Disk preflight (via the shared `DiskSpaceGuard`, released once the install settles either
+   * way), then the actual `sdkmanager` install, wrapped with `component.install-*` diagnostics
+   * -- split from `#installSystemImageOrThrow` below so the license-retry branching stays its
+   * own single-responsibility function rather than growing this one's complexity. A preflight
+   * failure is reported before any diagnostic fires: no install was actually attempted, so
+   * there is nothing to report as started or failed. The try/catch means a caller sees exactly
+   * one `install-failed` regardless of which branch below throws, never one per attempt.
+   *
+   * `component-installed` is a verified fact, not "`sdkmanager` exited 0 (possibly after a
+   * license-accept retry)": once the install call itself succeeds, this re-scans
+   * `#installedImages` and only reports `component-installed` once the package actually
+   * installed is present there. Absent (a "reported success but nothing showed up" case)
+   * reports `component-install-failed` instead and throws, matching the iOS driver's
+   * post-download verification.
+   */
+  // fallow-ignore-next-line complexity -- reservation, install, and post-install verification are one attempt with one exit per outcome.
+  async #installSystemImageOnce(
+    packageName: string,
+    requesterId: string | undefined,
+  ): Promise<void> {
+    const release = await this.#diskSpaceGuard.reserve(
+      this.#filesystem,
+      this.platform,
+      ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES,
+      this.#sdk.root,
+    );
+    try {
+      this.#onDiagnostic?.({
+        componentId: packageName,
+        kind: "component-install-started",
+        ...(requesterId === undefined ? {} : { requesterId }),
+      });
+      const startedAt = this.#clock.now();
+      try {
+        await this.#installSystemImageOrThrow(packageName);
+      } catch (error: unknown) {
+        this.#onDiagnostic?.({
+          componentId: packageName,
+          durationMs: this.#clock.now() - startedAt,
+          error: stableError(error),
+          kind: "component-install-failed",
+          ...(requesterId === undefined ? {} : { requesterId }),
+        });
+        throw error;
+      }
+
+      const images = await this.#installedImages();
+      if (
+        !images.some(
+          (image) => systemImagePackage(image.apiLevel, image.tag, image.abi) === packageName,
+        )
+      ) {
+        const message = `sdkmanager reported success but ${packageName} is still not installed`;
+        this.#onDiagnostic?.({
+          componentId: packageName,
+          durationMs: this.#clock.now() - startedAt,
+          error: message,
+          kind: "component-install-failed",
+          ...(requesterId === undefined ? {} : { requesterId }),
+        });
+        throw new DriverCrashError(message);
+      }
+
+      this.#onDiagnostic?.({
+        componentId: packageName,
+        durationMs: this.#clock.now() - startedAt,
+        kind: "component-installed",
+        ...(requesterId === undefined ? {} : { requesterId }),
+      });
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Installs a system image, accepting Android SDK licenses first when `sdkmanager` refuses
+   * on an unaccepted one and `acceptAndroidLicenses` allows it -- never otherwise: license
+   * consent is independent of, and never implied by, download permission.
+   */
+  async #installSystemImageOrThrow(packageName: string): Promise<void> {
+    const result = await this.#processRunner.run(this.#sdk.sdkmanager, ["--install", packageName], {
+      timeoutMs: this.#downloadTimeoutMs,
+    });
+    if (result.code === 0 && !hasUnacceptedLicense(result)) {
+      return;
+    }
+    if (!hasUnacceptedLicense(result)) {
+      throw new DriverCrashError(
+        `${this.#sdk.sdkmanager} --install ${packageName} failed: ${result.stderr || result.stdout}`,
+      );
+    }
+    if (!this.#acceptAndroidLicenses) {
+      throw new AndroidLicenseNotAcceptedError(packageName);
+    }
+
+    await this.#acceptLicenses();
+
+    const retry = await this.#processRunner.run(this.#sdk.sdkmanager, ["--install", packageName], {
+      timeoutMs: this.#downloadTimeoutMs,
+    });
+    if (retry.code !== 0 || hasUnacceptedLicense(retry)) {
+      throw new DriverCrashError(
+        `${this.#sdk.sdkmanager} --install ${packageName} still failed after accepting licenses: ` +
+          `${retry.stderr || retry.stdout}`,
+      );
+    }
+  }
+
+  async #acceptLicenses(): Promise<void> {
+    const result = await this.#processRunner.run(this.#sdk.sdkmanager, ["--licenses"], {
+      // `sdkmanager --licenses` prompts once per outstanding license; answering more times
+      // than there are real licenses is harmless (see `LICENSE_ACCEPT_ANSWERS`).
+      input: "y\n".repeat(LICENSE_ACCEPT_ANSWERS),
+      timeoutMs: this.#downloadTimeoutMs,
+    });
+    if (result.code !== 0) {
+      throw new DriverCrashError(
+        `${this.#sdk.sdkmanager} --licenses failed: ${result.stderr || result.stdout}`,
+      );
+    }
   }
 
   async #installedImages(): Promise<SystemImage[]> {
@@ -982,20 +1205,56 @@ export class AndroidDriver implements Driver {
   }
 
   async #writeDurableMark(avdName: string, token: string): Promise<void> {
+    await this.#mergeConfigIniLines(avdName, { [DURABLE_MARK_KEY]: token });
+  }
+
+  /**
+   * Reads `avdName`'s `config.ini`, merges `entries` into it -- overwriting any key already
+   * present, appending the rest -- and writes it back atomically. Shared by
+   * `#applyHardwareProperties` and `#writeDurableMark`, the driver's two config.ini
+   * read-modify-write sites. A missing file (the AVD's config.ini not created yet) starts the
+   * merge from empty content; any other read failure is rethrown rather than treated as an
+   * empty file -- silently starting from "" on, say, an EACCES or EIO would write back only
+   * `entries` and clobber whatever config.ini already held.
+   *
+   * Defense in depth against a config.ini injection: `#applyHardwareProperties` calls this with
+   * values sourced from a device profile (`avdmanager list device`, or a parsed
+   * `~/.android/devices.xml` -- see `device-profile-source.ts`'s own line-break rejection at the
+   * parse boundary). A key or value containing a line break would let one logical property
+   * inject arbitrary extra `config.ini` lines once joined in -- rejected here unconditionally,
+   * independent of and in addition to that parse-time check, so this merge is never the only
+   * thing standing between untrusted input and config.ini.
+   */
+  async #mergeConfigIniLines(
+    avdName: string,
+    entries: Readonly<Record<string, string>>,
+  ): Promise<void> {
+    for (const [key, value] of Object.entries(entries)) {
+      if (containsLineBreak(key) || containsLineBreak(value)) {
+        throw new DriverCrashError(
+          `Refusing to merge config.ini entry with an embedded line break (key ${JSON.stringify(key)})`,
+        );
+      }
+    }
     const path = this.#configIniPath(avdName);
     let contents: string;
     try {
       contents = await this.#filesystem.readFile(path);
-    } catch {
+    } catch (error: unknown) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
       contents = "";
     }
     const lines = contents === "" ? [] : contents.replace(/\r?\n$/, "").split(/\r?\n/);
-    const markLine = `${DURABLE_MARK_KEY}=${token}`;
-    const existingIndex = lines.findIndex((line) => line.startsWith(`${DURABLE_MARK_KEY}=`));
-    if (existingIndex >= 0) {
-      lines[existingIndex] = markLine;
-    } else {
-      lines.push(markLine);
+    for (const [key, value] of Object.entries(entries)) {
+      const line = `${key}=${value}`;
+      const existingIndex = lines.findIndex((entry) => entry.startsWith(`${key}=`));
+      if (existingIndex >= 0) {
+        lines[existingIndex] = line;
+      } else {
+        lines.push(line);
+      }
     }
     await this.#filesystem.writeFileAtomic(path, `${lines.join("\n")}\n`);
   }
@@ -1451,24 +1710,6 @@ function compareCommandLineToolVersions(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
-function parseDeviceProfiles(output: string): DeviceProfile[] {
-  const profiles: DeviceProfile[] = [];
-  let id: string | undefined;
-  for (const line of output.split(/\r?\n/)) {
-    const idMatch = /^id:\s*\d+\s+or\s+"([^"]+)"/.exec(line.trim());
-    if (idMatch?.[1] !== undefined) {
-      id = idMatch[1];
-      continue;
-    }
-    const nameMatch = /^Name:\s*(.+)$/.exec(line.trim());
-    if (id !== undefined && nameMatch?.[1] !== undefined) {
-      profiles.push({ id, name: nameMatch[1] });
-      id = undefined;
-    }
-  }
-  return profiles;
-}
-
 function newestApiLevel(images: readonly SystemImage[]): string | undefined {
   return [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels).at(-1);
 }
@@ -1567,6 +1808,11 @@ function portsFromAdbDevices(output: string): number[] {
     .filter((port) => Number.isInteger(port));
 }
 
+/** See `#mergeConfigIniLines`'s defense-in-depth check. */
+function containsLineBreak(value: string): boolean {
+  return /[\r\n]/.test(value);
+}
+
 function stableHash(parts: readonly string[]): string {
   let hash = 0x811c9dc5;
   for (const character of parts.join("\u0000")) {
@@ -1578,6 +1824,38 @@ function stableHash(parts: readonly string[]): string {
 
 function hostAbiFor(architecture: string): string {
   return architecture === "arm64" ? "arm64-v8a" : "x86_64";
+}
+
+/**
+ * `sdkmanager --install` reports an unaccepted license in its output rather than through a
+ * dedicated exit code, so this is a best-effort text match against sdkmanager's own wording
+ * (e.g. `Warning: License for package ... not accepted.` /
+ * `... licenses have not been accepted.`), checked across both streams since sdkmanager splits
+ * its output between them across versions.
+ */
+function hasUnacceptedLicense(result: ProcessResult): boolean {
+  const combined = `${result.stdout}\n${result.stderr}`;
+  // Covers both documented sdkmanager phrasings: "License for package ... not accepted." and
+  // "licenses have not been accepted." -- the latter has "been" between "not" and "accepted".
+  return /licen[cs]e/i.test(combined) && /not (?:been )?accepted/i.test(combined);
+}
+
+/**
+ * `[builtin, user]`: `avdmanager list device` first, then a read-only parse of Android
+ * Studio's `~/.android/devices.xml`. `ANDROID_SDK_HOME` (not `ANDROID_AVD_HOME`, which only
+ * relocates created AVDs) is the historical env var Android tooling uses to relocate the whole
+ * `~/.android` directory, including `devices.xml`.
+ */
+function defaultDeviceProfileSources(
+  options: AndroidDriverOptions,
+  sdk: AndroidSdkPaths,
+  onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined,
+): readonly DeviceProfileSource[] {
+  const devicesXmlPath = `${options.env.ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
+  return [
+    new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner),
+    new UserDeviceProfileSource(devicesXmlPath, options.filesystem, onDiagnostic),
+  ];
 }
 
 function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAllocator {

@@ -58,8 +58,8 @@ async function releaseAndForget(
   agentId: string,
 ): Promise<void> {
   const held = leaseHeld(env, agentId);
-  const grant = JSON.parse(await held.firstStdoutLine()) as { lease: string };
-  await env.cli(["release", grant.lease]);
+  const grant = JSON.parse(await held.firstStdoutLine()) as { lease: { id: string } };
+  await env.cli(["release", grant.lease.id]);
   held.kill("SIGKILL");
   await held.waitForExit(15_000).catch(() => undefined);
 }
@@ -97,7 +97,10 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     });
 
     const first = leaseHeld(env, "cap-a");
-    const grantA = JSON.parse(await first.firstStdoutLine()) as { lease: string; udid: string };
+    const grantA = JSON.parse(await first.firstStdoutLine()) as {
+      lease: { id: string };
+      device: { driverDeviceId: string };
+    };
 
     // maxRunning (2) has room, but maxDevices (1) does not: a second requester must
     // still queue, because there is no second device to provision.
@@ -111,12 +114,15 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     // finish before responding, so the poll for "reclaiming" must run concurrently
     // with the release call, not after it.
     await env.driverScript.merge({ ios: { latencyMs: { reclaim: 1_500 } } });
-    const releasePromise = env.cli(["release", grantA.lease]);
+    const releasePromise = env.cli(["release", grantA.lease.id]);
 
     await waitFor(
       async () => {
         const rows = await deviceRows(env);
-        return rows.some((row) => row.driverDeviceId === grantA.udid && row.state === "reclaiming");
+        return rows.some(
+          (row) =>
+            row.driverDeviceId === grantA.device.driverDeviceId && row.state === "reclaiming",
+        );
       },
       { label: "device visibly enters reclaiming" },
     );
@@ -131,10 +137,10 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     // The queued second requester is granted the same device once reclaim finishes
     // and it becomes warm (`ready`) again.
     const grantB = JSON.parse(await second.firstStdoutLine(15_000)) as {
-      lease: string;
-      udid: string;
+      lease: { id: string };
+      device: { driverDeviceId: string };
     };
-    expect(grantB.udid).toBe(grantA.udid);
+    expect(grantB.device.driverDeviceId).toBe(grantA.device.driverDeviceId);
 
     first.kill("SIGKILL");
     second.kill("SIGKILL");
@@ -169,7 +175,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       "overlimit-one",
       "--detach",
     ]);
-    const grantOne = leaseOne.json as { lease: string };
+    const grantOne = leaseOne.json as { lease: { id: string } };
     const leaseTwo = await env.cli([
       "lease",
       "--platform",
@@ -182,7 +188,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       "overlimit-two",
       "--detach",
     ]);
-    const grantTwo = leaseTwo.json as { lease: string };
+    const grantTwo = leaseTwo.json as { lease: { id: string } };
 
     await env.withConfig({ limits: { ios: { maxRunning: 1 } } }, async () => {
       const afterLower = await status(env);
@@ -192,7 +198,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       // below what is currently held.
       const leases = (await env.cli(["list", "--leases"])).json as { id: string }[];
       expect(leases.map((lease) => lease.id)).toEqual(
-        expect.arrayContaining([grantOne.lease, grantTwo.lease]),
+        expect.arrayContaining([grantOne.lease.id, grantTwo.lease.id]),
       );
     });
 
@@ -214,13 +220,16 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     });
 
     const heldX = leaseHeld(env, "idle-x");
-    const grantX = JSON.parse(await heldX.firstStdoutLine()) as { lease: string; udid: string };
-    await env.cli(["release", grantX.lease]);
+    const grantX = JSON.parse(await heldX.firstStdoutLine()) as {
+      lease: { id: string };
+      device: { driverDeviceId: string };
+    };
+    await env.cli(["release", grantX.lease.id]);
     heldX.kill("SIGKILL");
     await heldX.waitForExit(15_000).catch(() => undefined);
-    await waitForDeviceState(env, grantX.udid, "ready");
+    await waitForDeviceState(env, grantX.device.driverDeviceId, "ready");
 
-    await waitForCleanupToReach(env, grantX.udid, "shutdown");
+    await waitForCleanupToReach(env, grantX.device.driverDeviceId, "shutdown");
 
     // cleanup --dry-run must report proposals without acting on them.
     await releaseAndForget(env, "dryrun-z");
@@ -308,7 +317,8 @@ function isQueuedAt(event: unknown, position: number): boolean {
   return (
     typeof event === "object" &&
     event !== null &&
-    (event as Record<string, unknown>).event === "queued" &&
-    (event as Record<string, unknown>).queue_position === position
+    (event as Record<string, unknown>).push === "progress" &&
+    (event as Record<string, unknown>).stage === "queued" &&
+    (event as Record<string, unknown>).queuePosition === position
   );
 }
