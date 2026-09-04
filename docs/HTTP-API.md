@@ -8,10 +8,16 @@ another machine is the operator's own tunnel (Tailscale, cloudflared, a
 reverse proxy) — Simlock does no TLS termination in v1, and `Authorization`
 is required on every route regardless of how it's reached, loopback included.
 
-The gateway calls the same role interfaces the CLI and MCP server call
-(`LeaseCommands`, `QueueControl`, `CapacityReader`, `CatalogReader`); the core
-never knows HTTP exists. See [ARCHITECTURE.md](ARCHITECTURE.md) for how it
-fits alongside the other frontends.
+The gateway calls the exact same in-process `Dispatcher` the unix socket
+calls (ADR 0003 §2) — not a second copy of role/ownership logic, and not a
+loopback hop through the socket either. Every route that maps onto a daemon
+operation gets the same input parsing, role check, `authorize`/ownership
+hook, and startup-readiness parking a socket request gets, from that one
+shared instance. This is also why a fix on the socket side (the download
+policy, startup-readiness parking, error mapping) lands on HTTP for free —
+see [ARCHITECTURE.md](ARCHITECTURE.md#contract-dispatcher-and-roles-adr-0003)
+for how it fits together, and the two bug fixes called out below for what
+this actually changed.
 
 ## Leases are detached-only over HTTP
 
@@ -100,6 +106,14 @@ shares a pool key with, a slim device, so it can wait for a fresh device to
 provision or force a re-provision of one already running, even while slim
 devices sit idle in the warm pool. See [CONFIGURATION.md](CONFIGURATION.md)
 for what slim mode disables.
+
+`allowDownload` is now clamped through `config.downloads.policy` the same
+way the socket protocol always was (**bug fix, 0.3.0**): before this
+release, HTTP passed a client-supplied `allowDownload` straight through
+unclamped, so a `"never"` policy could still be bypassed over HTTP even
+though it already blocked the same thing on the socket. Both frontends now
+go through the one shared dispatcher, so there is only one place left to get
+this wrong.
 An `Idempotency-Key` header (at most 200 characters) makes a replay of the
 same key, from the same requester, return the original request resource
 instead of double-queueing — held in memory with a TTL, so a replay after a
@@ -184,7 +198,19 @@ as a bug.
 
 Role: `agent` (own lease; `operator` any). Re-fetches the lease — a client
 that restarts mid-lease recovers its state instead of leaking the lease.
-`404 UNKNOWN_LEASE` once it has expired or been released.
+`404 UNKNOWN_LEASE` once it has expired or been released, **and now also for
+another requester's own, still-live lease** (bug fix, 0.3.0: this used to be
+`403 FORBIDDEN`, which told an unauthorized caller a lease id was valid).
+Every route under `/v1/leases/{id}` (this one, `renew`, `events`, `DELETE`)
+resolves the lease the same way `lease.list`'s dispatcher handler already
+filters leases — to the session's own set, admin sees all — so an id outside
+that set simply isn't in the list; `404` covers "doesn't exist" and "not
+yours" identically, the same way `lease.list` itself does not distinguish
+them. This is different from the lease-*request* routes below
+(`/v1/lease-requests/{id}` and friends), which are still HTTP's own resource
+and still answer `403 FORBIDDEN` for another requester's request — that
+envelope stays HTTP-specific until
+[#72](https://github.com/callstackincubator/simlock/issues/72).
 
 `expiresAt` is always the authoritative deadline. After a **daemon** restart
 the gateway no longer remembers a per-request `ttlMs`, so the payload reports
@@ -244,8 +270,8 @@ Every failure is the same shape the daemon protocol uses:
 |---|---|
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
-| 403 | `FORBIDDEN` (role doesn't permit the route; or the lease/request belongs to another requester) |
-| 404 | `UNKNOWN_REQUEST`, `UNKNOWN_LEASE` |
+| 403 | `FORBIDDEN` (role doesn't permit the route; or a `/v1/lease-requests/*` route whose request belongs to another requester) |
+| 404 | `UNKNOWN_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or a `/v1/leases/*` route naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`) |
@@ -263,12 +289,15 @@ Every failure is the same shape the daemon protocol uses:
   (including across a restart) creates a fresh request rather than erroring
   — the `409` above is the real backstop against a double grant, not the
   idempotency cache.
-- **Startup.** The gateway starts only after the daemon's own startup
-  convergence finishes (unlike the unix socket, which accepts connections
-  immediately and parks non-`hello`/`status.get` requests until convergence
-  completes). A connection refused while the daemon is still starting up is
-  accepted v1 behavior — there is no HTTP-level "starting" response to
-  mirror the socket protocol's parked dispatch.
+- **Startup.** The gateway's listener now starts the moment the daemon
+  claims its socket — the same instant the unix socket itself starts
+  accepting connections, before startup convergence (`doctor.reconcile()`,
+  running-capacity convergence) has run (**bug fix, 0.3.0**: the gateway
+  used to start only once convergence had already finished, so it could not
+  observe or need this). A request that arrives before convergence completes
+  now waits on the shared dispatcher's readiness gate exactly like a socket
+  request, instead of being refused — every route but the routes that don't
+  dispatch at all (`GET /v1/healthz`) can block briefly on a cold start.
 - **Shutdown.** `simlock daemon stop` closes the HTTP listener (and any open
   connection, in-flight SSE streams included) before releasing held leases
   or tearing down the lease engine, so no HTTP request can run against a

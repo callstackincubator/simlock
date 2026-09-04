@@ -1,6 +1,6 @@
 # 0003. One typed daemon contract behind every frontend
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-09-03
 - **Issue:** [#71](https://github.com/callstackincubator/simlock/issues/71)
   (part of [#70](https://github.com/callstackincubator/simlock/issues/70))

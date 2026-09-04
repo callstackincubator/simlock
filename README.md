@@ -50,18 +50,36 @@ simlock lease --platform ios --device "iPhone 16" --detach
 
 ```json
 {
-  "lease": "lse_9f2c",
-  "platform": "ios",
-  "device": "iPhone 16",
-  "os": "18.4",
-  "udid": "ABCD-...",
-  "state": "leased"
+  "device": {
+    "id": "dev_1a2b",
+    "driverDeviceId": "ABCD-...",
+    "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4" },
+    "address": "ABCD-..."
+  },
+  "lease": {
+    "id": "lse_9f2c",
+    "deviceId": "dev_1a2b",
+    "requesterId": "agent-1",
+    "ownerId": "agent-1",
+    "mode": "detached",
+    "grantedAt": 1735689600000,
+    "ttlDeadline": 1735690500000
+  },
+  "timing": {
+    "estimatedProvisionMs": 0,
+    "estimatedBootMs": 0,
+    "estimatedReclaimMs": 0,
+    "estimatedReadyMs": 0
+  },
+  "role": "admin"
 }
 ```
 
 That's the whole interaction: ask for a platform and a device model, get
 back an identified, ready-to-use device. Release it explicitly, or let its
-TTL expire.
+TTL expire. This is the contract's own `LeaseGrant` shape, serialized
+as-is — the CLI's `--json` output is a contract value, not a bespoke
+rendering (see [docs/CLI.md](docs/CLI.md)).
 
 Now say a second agent asks for the same `iPhone 16` a moment later. It's
 already leased to the first agent — no problem, Simlock just provisions
@@ -69,18 +87,34 @@ another one. Progress streams as JSON lines on stderr while it happens, and
 the lease result lands on stdout the moment the new device is ready:
 
 ```json
-{"event":"provisioning","eta_seconds":5}
-{"event":"booting","eta_seconds":30}
+{"push":"progress","requestId":"2","progress":{"stage":"provisioning","etaMs":5000}}
+{"push":"progress","requestId":"2","progress":{"stage":"booting","etaMs":30000}}
 ```
 
 ```json
 {
-  "lease": "lse_a731",
-  "platform": "ios",
-  "device": "iPhone 16",
-  "os": "18.4",
-  "udid": "EFGH-...",
-  "state": "leased"
+  "device": {
+    "id": "dev_3c4d",
+    "driverDeviceId": "EFGH-...",
+    "spec": { "platform": "ios", "model": "iPhone 16", "osVersion": "18.4" },
+    "address": "EFGH-..."
+  },
+  "lease": {
+    "id": "lse_a731",
+    "deviceId": "dev_3c4d",
+    "requesterId": "agent-2",
+    "ownerId": "agent-2",
+    "mode": "detached",
+    "grantedAt": 1735689630000,
+    "ttlDeadline": 1735690530000
+  },
+  "timing": {
+    "estimatedProvisionMs": 5000,
+    "estimatedBootMs": 30000,
+    "estimatedReclaimMs": 0,
+    "estimatedReadyMs": 35000
+  },
+  "role": "admin"
 }
 ```
 
