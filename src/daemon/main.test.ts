@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
@@ -220,6 +220,54 @@ describe("startDaemon HTTP gateway startup readiness", () => {
 
     const parkedResponse = await parkedStatusPromise;
     expect(parkedResponse.status).toBe(200);
+  });
+});
+
+describe("startDaemon HTTP gateway bind failure", () => {
+  // Review finding B6: before this fix, an HTTP bind failure (occupied port) logged and
+  // stopped the daemon from inside `onSocketClaimed`'s handler without `startDaemon()` itself
+  // ever seeing it -- the daemon's own `start()` would go on to resolve successfully once
+  // convergence finished, so the CLI reported success (exit code 0) with no socket, no HTTP,
+  // and no daemon actually running. This proves `startDaemon()` now rejects instead, and that
+  // the daemon never reports having started after it already reported stopping.
+  it("rejects startDaemon() when the configured HTTP port is already in use, without emitting a started record after a stopping one", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-bind-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const filesystem = new MemoryFilesystem();
+    const port = 47_012;
+
+    const occupier = createServer();
+    await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+    try {
+      await expect(
+        startDaemon({
+          clock,
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+          dataDirectory: directory,
+          drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          filesystem,
+          logger,
+          statePath: join(directory, "state.json"),
+          version: "1.2.3",
+        } as StartDaemonOptions),
+      ).rejects.toThrow(/EADDRINUSE|address already in use/i);
+    } finally {
+      await new Promise((resolve) => occupier.close(resolve));
+    }
+
+    const startedIndex = sink.records.findIndex((record) => record.message === "Daemon started");
+    const stoppingIndex = sink.records.findIndex((record) => record.message === "Daemon stopping");
+    expect(stoppingIndex).toBeGreaterThanOrEqual(0);
+    // Either "Daemon started" never appears (the common case: the bind failure is discovered
+    // and the whole thing torn down without convergence ever seeing readiness), or -- if
+    // convergence happened to finish first -- it appears strictly before "Daemon stopping",
+    // never after (ADR events rule 3: a fact must be true when emitted).
+    if (startedIndex >= 0) {
+      expect(startedIndex).toBeLessThan(stoppingIndex);
+    }
   });
 });
 

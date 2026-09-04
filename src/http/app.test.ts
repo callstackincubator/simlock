@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { NoCapacityError, RequesterAlreadyLeasedError } from "../core/index.js";
-import { DispatchError } from "../daemon/dispatcher.js";
+import {
+  InsufficientDiskSpaceError,
+  LicenseNotAcceptedError,
+  NoCapacityError,
+  RequesterAlreadyLeasedError,
+} from "../core/index.js";
+import { DispatchError, DoctorUnavailableError } from "../daemon/dispatcher.js";
+import { StartupFailedError } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
@@ -296,6 +302,60 @@ describe("POST /v1/lease-requests", () => {
 
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBeTruthy();
+  });
+
+  // Review finding B5: HTTP collapsed these four thrown-from-`lease.request` codes to a bare
+  // 500 INTERNAL while the socket transport reported the real code and `ERROR_TABLE`'s own
+  // status -- because `mapError` (this file's target) kept its own hand-written `instanceof`
+  // chain instead of reading the one shared table `errorCode` (in `daemon/server.ts`) already
+  // used. Each of these now goes through `classifyError` + `ERROR_TABLE`, the same as the
+  // socket transport.
+  it("maps a fast InsufficientDiskSpaceError to 422 INSUFFICIENT_DISK_SPACE, not 500 INTERNAL", async () => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, defaultBody);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.reject(new InsufficientDiskSpaceError("ios", 8 * 1024 ** 3, 0));
+    const response = await responsePromise;
+
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("INSUFFICIENT_DISK_SPACE");
+  });
+
+  it("maps a fast LicenseNotAcceptedError to 422 LICENSE_NOT_ACCEPTED, not 500 INTERNAL", async () => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, defaultBody);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.reject(new LicenseNotAcceptedError("android", "system-images;android-35;google_apis"));
+    const response = await responsePromise;
+
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("LICENSE_NOT_ACCEPTED");
+  });
+
+  it("maps a fast StartupFailedError to 503 DAEMON_STARTUP_FAILED, not 500 INTERNAL", async () => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, defaultBody);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.reject(new StartupFailedError());
+    const response = await responsePromise;
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DAEMON_STARTUP_FAILED");
+  });
+
+  it("maps a fast DoctorUnavailableError to 503 DOCTOR_UNAVAILABLE, not 500 INTERNAL", async () => {
+    const { app, dispatcher } = buildHarness();
+    const responsePromise = postLeaseRequest(app, defaultBody);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.reject(new DoctorUnavailableError());
+    const response = await responsePromise;
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DOCTOR_UNAVAILABLE");
   });
 
   it("replays an identical Idempotency-Key without a second dispatch call", async () => {

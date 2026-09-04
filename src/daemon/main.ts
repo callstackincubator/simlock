@@ -182,6 +182,20 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // of leaking a listening HTTP server past a daemon that has already torn everything else down.
   let stopHttpGateway: (() => Promise<void>) | undefined;
   let httpStopRequested = false;
+  // Settles once the HTTP gateway either finishes starting or fails to -- resolved/rejected from
+  // inside `onSocketClaimed`'s handler below. `startDaemon()` awaits this alongside
+  // `daemon.start()` itself (see the bottom of this function) so a bind failure (occupied port,
+  // invalid host) makes `startDaemon()` reject and the entrypoint report a non-zero exit code,
+  // the way it did before the gateway moved to firing concurrently with convergence. When HTTP
+  // is disabled there is nothing to wait for, so this resolves immediately.
+  let resolveGatewayStarted: (() => void) | undefined;
+  let rejectGatewayStarted: ((error: unknown) => void) | undefined;
+  const gatewayStarted: Promise<void> = config.http.enabled
+    ? new Promise<void>((resolve, reject) => {
+        resolveGatewayStarted = resolve;
+        rejectGatewayStarted = reject;
+      })
+    : Promise.resolve();
   const daemon = new DaemonServer({
     capacity: leaseEngine,
     catalog: leaseEngine,
@@ -231,19 +245,22 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
     // being refused". Firing the gateway's own `start()` from here (not after `daemon.start()`
-    // resolves, as before this PR) is what makes that true: the gateway is listening, and every
-    // route calls `daemon.dispatch(...)`, which parks on the same startup-readiness gate a
-    // socket request does. A bind failure (occupied port, invalid host) here can no longer fail
-    // `startDaemon()` itself the way it used to -- by the time it's discovered, `daemon.start()`
-    // may already have resolved to its caller -- so it's logged and the daemon is stopped
-    // best-effort instead; see this PR's report for this as a known behavioural narrowing.
+    // resolves) is what makes that true: the gateway is listening, and every route calls
+    // `daemon.dispatch(...)`, which parks on the same startup-readiness gate a socket request
+    // does. A bind failure (occupied port, invalid host) is reported through `gatewayStarted`
+    // rather than acted on immediately here -- see the bottom of this function for why: calling
+    // `daemon.stop()` right away, while `daemon.start()` may still be awaiting convergence, is
+    // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     ...(config.http.enabled
       ? {
           onSocketClaimed: () => {
-            void startHttpGateway().catch((error: unknown) => {
-              logger.error("HTTP gateway failed to start", { message: errorMessage(error) });
-              void daemon.stop("http-start-failed").catch(() => undefined);
-            });
+            void startHttpGateway().then(
+              () => resolveGatewayStarted?.(),
+              (error: unknown) => {
+                logger.error("HTTP gateway failed to start", { message: errorMessage(error) });
+                rejectGatewayStarted?.(error);
+              },
+            );
           },
         }
       : {}),
@@ -278,7 +295,23 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     if (httpStopRequested) await stopHttpGateway();
   }
 
-  await daemon.start();
+  // Awaited together, not `daemon.start()` alone: `gatewayStarted` is the promise
+  // `onSocketClaimed`'s handler above settles once the concurrently-started HTTP gateway either
+  // finishes starting or fails to. Both are already running concurrently by the time this line
+  // is reached (the gateway since `onSocketClaimed` fired partway through `daemon.start()`), so
+  // this changes nothing about when either finishes -- only what `startDaemon()` itself reports.
+  const [daemonResult, gatewayResult] = await Promise.allSettled([daemon.start(), gatewayStarted]);
+  if (gatewayResult.status === "rejected" && daemonResult.status === "fulfilled") {
+    // The daemon itself came all the way up -- convergence succeeded, `daemon.started` was
+    // already emitted -- but its HTTP gateway never bound. Tear the whole thing down now,
+    // *after* that success is a settled fact, so `daemon.stopping` never precedes (or follows
+    // out of order) `daemon.started`; see this function's own comment above `onSocketClaimed`
+    // and review finding B6. `stop()` is idempotent/dedups concurrent callers, so this is safe
+    // even if `stopAuxiliary`'s own path already ran one.
+    await daemon.stop("http-start-failed").catch(() => undefined);
+  }
+  if (daemonResult.status === "rejected") throw daemonResult.reason;
+  if (gatewayResult.status === "rejected") throw gatewayResult.reason;
   return daemon;
 }
 

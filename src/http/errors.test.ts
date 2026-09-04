@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 
 import {
+  InsufficientDiskSpaceError,
+  LicenseNotAcceptedError,
   NoCapacityError,
   NoDriverError,
   RequesterAlreadyLeasedError,
@@ -9,6 +11,9 @@ import {
   UnknownLeaseError,
   UnknownModelError,
 } from "../core/index.js";
+import { classifyError, StartupFailedError } from "../daemon/error-code.js";
+import { DoctorUnavailableError, NukeUnavailableError } from "../daemon/dispatcher.js";
+import { ERROR_TABLE } from "../contract/index.js";
 import {
   errorResponse,
   HttpApiError,
@@ -61,6 +66,32 @@ describe("mapError", () => {
       code: "UNKNOWN_LEASE",
       status: 404,
     });
+  });
+
+  // Review finding B5: these four previously fell through `mapError`'s own hand-written
+  // `instanceof` chain (which didn't have branches for them) to 500 INTERNAL, while the socket
+  // transport's `errorCode` (now `classifyError`, shared by both) reported the real code. Each
+  // assertion below is checked against `ERROR_TABLE` directly -- the single source both
+  // transports now read -- rather than a hardcoded status, so this test would fail if the table
+  // and `mapError` ever drifted again.
+  it("agrees with the socket transport's classifyError for every core error it recognizes, reading ERROR_TABLE for the HTTP status", () => {
+    const cases: readonly [unknown, string][] = [
+      [new InsufficientDiskSpaceError("ios", 8 * 1024 ** 3, 0), "INSUFFICIENT_DISK_SPACE"],
+      [
+        new LicenseNotAcceptedError("android", "system-images;android-35;google_apis"),
+        "LICENSE_NOT_ACCEPTED",
+      ],
+      [new StartupFailedError(), "DAEMON_STARTUP_FAILED"],
+      [new DoctorUnavailableError(), "DOCTOR_UNAVAILABLE"],
+      [new NukeUnavailableError(), "NUKE_UNAVAILABLE"],
+    ];
+    for (const [error, expectedCode] of cases) {
+      expect(classifyError(error)).toBe(expectedCode);
+      const mapped = mapError(error);
+      expect(mapped.code).toBe(expectedCode);
+      expect(mapped.status).toBe(ERROR_TABLE[expectedCode as keyof typeof ERROR_TABLE].httpStatus);
+      expect(mapped.status).not.toBe(500);
+    }
   });
 
   it("collapses an unrecognized error to 500 INTERNAL without leaking its message", () => {

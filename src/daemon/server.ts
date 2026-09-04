@@ -3,16 +3,8 @@ import { z } from "zod";
 import { type EventBus, type EventEnvelope } from "../bus/index.js";
 import {
   type Config,
-  InsufficientDiskSpaceError,
   type LeaseProgress,
-  LicenseNotAcceptedError,
-  NoCapacityError,
-  NoDriverError,
-  QueueTimeoutError,
   type Registry,
-  RequesterAlreadyLeasedError,
-  RuntimeMissingError,
-  UnknownModelError,
   type CleanupReaper,
   type Doctor,
   type LeaseHealthMonitor,
@@ -44,20 +36,11 @@ import {
 } from "../contract/index.js";
 import type { ConnectionHost } from "./connection-host.js";
 import type { TokenStore } from "../http/token-store.js";
-import {
-  Dispatcher,
-  DispatchError,
-  DoctorUnavailableError,
-  NukeUnavailableError,
-  type DispatchSession,
-} from "./dispatcher.js";
-import {
-  AdminAuthenticationFailedError,
-  resolveAgentRole,
-  type SessionRoleResolver,
-} from "./session.js";
+import { Dispatcher, type DispatchSession } from "./dispatcher.js";
+import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
 import type { AdminSecretManager } from "./admin-secret.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
+import { classifyError, StartupFailedError } from "./error-code.js";
 
 type RequestId = string | number;
 
@@ -1189,14 +1172,6 @@ class ProtocolError extends Error {
   }
 }
 
-/** Thrown to a parked request when startup convergence rejected; see `#awaitReady`. */
-class StartupFailedError extends Error {
-  constructor() {
-    super("Daemon failed to start");
-    this.name = "StartupFailedError";
-  }
-}
-
 /** Parses a request payload through its contract input schema, translating a validation
  * failure into the daemon's own `ProtocolError("BAD_REQUEST", ...)` rather than letting a raw
  * `ZodError` escape (its shape is not part of the wire contract). */
@@ -1209,58 +1184,19 @@ function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
   throw new ProtocolError("BAD_REQUEST", description);
 }
 
-// fallow-ignore-next-line complexity -- preserves stable protocol error mapping.
+/**
+ * Resolves the wire `code` for a socket response. `ProtocolError` is socket-framing-specific
+ * (thrown only while parsing a request frame, before a `Session` exists -- see its own doc) and
+ * stays local to this file; every other error this daemon can throw is classified by the one
+ * shared table both transports read -- see `./error-code.js`'s module doc (ADR 0003 §7, review
+ * finding B5: this used to be its own hand-written `instanceof` chain that silently drifted
+ * from HTTP's).
+ */
 function errorCode(error: unknown): string {
   if (error instanceof ProtocolError) {
     return error.code;
   }
-  // `DispatchError` is `Dispatcher`'s own protocol-shaped rejection (BAD_REQUEST from input
-  // parsing, FORBIDDEN from the role/authorize check, UNKNOWN_REQUEST, INTERNAL) -- same
-  // `{code, message}` shape as `ProtocolError`, deliberately a separate class rather than the
-  // same one so `dispatcher.ts` does not need to import a `DaemonServer`-private type.
-  if (error instanceof DispatchError) {
-    return error.code;
-  }
-  if (error instanceof AdminAuthenticationFailedError) {
-    return "ADMIN_AUTHENTICATION_FAILED";
-  }
-  if (error instanceof NoCapacityError) {
-    return "NO_CAPACITY";
-  }
-  if (error instanceof QueueTimeoutError) {
-    return "QUEUE_TIMEOUT";
-  }
-  if (error instanceof RequesterAlreadyLeasedError) {
-    return "REQUESTER_ALREADY_LEASED";
-  }
-  if (error instanceof NoDriverError) {
-    return "NO_DRIVER";
-  }
-  if (error instanceof RuntimeMissingError) {
-    return "RUNTIME_MISSING";
-  }
-  if (error instanceof UnknownModelError) {
-    return "UNKNOWN_MODEL";
-  }
-  if (error instanceof InsufficientDiskSpaceError) {
-    return "INSUFFICIENT_DISK_SPACE";
-  }
-  if (error instanceof LicenseNotAcceptedError) {
-    return "LICENSE_NOT_ACCEPTED";
-  }
-  if (error instanceof UnknownLeaseError) {
-    return "UNKNOWN_LEASE";
-  }
-  if (error instanceof StartupFailedError) {
-    return "DAEMON_STARTUP_FAILED";
-  }
-  if (error instanceof DoctorUnavailableError) {
-    return "DOCTOR_UNAVAILABLE";
-  }
-  if (error instanceof NukeUnavailableError) {
-    return "NUKE_UNAVAILABLE";
-  }
-  return "INTERNAL";
+  return classifyError(error) ?? "INTERNAL";
 }
 
 function errorMessage(error: unknown): string {
