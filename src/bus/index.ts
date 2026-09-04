@@ -18,8 +18,17 @@ export interface EventMap {
     readonly leaseId: string;
     readonly deviceId: string;
     readonly reason: "closed" | "explicit" | "killed" | "orphaned" | "device-lost";
+    /** ADR 0003 §8: the released lease's owner, so a `lease-lost` push can be routed to every
+     * live connection whose principal owns it (in either mode), not just the held-lease
+     * holder -- the registry no longer has the lease to look this up from by the time this
+     * event fires (`beginRelease` already removed it), so it travels on the event instead. */
+    readonly ownerId: string;
   };
-  "lease.expired": { readonly leaseId: string; readonly deviceId: string };
+  "lease.expired": {
+    readonly leaseId: string;
+    readonly deviceId: string;
+    readonly ownerId: string;
+  };
   "lease.rejected": {
     readonly requestSpec: unknown;
     readonly reason:

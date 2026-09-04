@@ -1,13 +1,7 @@
-import type { Config, DeviceRecord, DeviceRequest, LeaseRecord } from "../core/index.js";
-import type {
-  CapacityReader,
-  CatalogReader,
-  LeaseCommands,
-  QueueControl,
-} from "../core/lease-ports.js";
-import type { PlatformCatalog } from "../core/driver-catalog.js";
-import type { RunningCapacity } from "../core/capacity/index.js";
-import type { LeaseGrant, LeaseRequestOptions } from "../core/wait-queue.js";
+import type { Config, DeviceRecord, LeaseRecord } from "../core/index.js";
+import type { LeaseGrant } from "../core/wait-queue.js";
+import type { OperationName } from "../contract/index.js";
+import type { DispatchSession } from "../daemon/dispatcher.js";
 import type { IdGenerator } from "../ports/index.js";
 import type { TokenIdentity } from "./token-store.js";
 
@@ -88,6 +82,7 @@ export function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
     grantedAt: 1_000,
     id: "lse_1",
     mode: "detached",
+    ownerId: "tok_agent",
     requesterId: "tok_agent",
     ttlDeadline: 1_000 + 900_000,
     ...overrides,
@@ -112,95 +107,77 @@ export function makeGrant(
   };
 }
 
-interface PendingRequest {
-  readonly request: DeviceRequest;
-  readonly options: LeaseRequestOptions;
-  readonly resolve: (grant: LeaseGrant) => void;
+/**
+ * A scripted call this fake's `dispatch()` recorded and did not resolve synchronously via
+ * `handlers` -- `resolve`/`reject` settle the promise `dispatch()` returned, and `session` is
+ * exposed so a test can drive a `lease.request` call's `onProgress` override the same way it
+ * used to reach into `FakeLeaseCommands.calls[i].options.onProgress`.
+ */
+export interface FakeDispatchCall {
+  readonly operation: OperationName;
+  readonly input: unknown;
+  readonly session: DispatchSession;
+  readonly resolve: (value: unknown) => void;
   readonly reject: (error: unknown) => void;
 }
 
-/** Scriptable `LeaseCommands`: every `request()` call parks until the test resolves/rejects it. */
-export class FakeLeaseCommands implements LeaseCommands {
-  readonly calls: PendingRequest[] = [];
-  readonly releaseCalls: Array<{ readonly leaseId: string; readonly reason: string }> = [];
-  readonly renewCalls: Array<{ readonly leaseId: string; readonly ttlMs?: number }> = [];
-  renewImpl: (leaseId: string, ttlMs?: number) => Promise<LeaseRecord> = () => {
-    throw new Error("renew not scripted");
-  };
-  releaseImpl: (leaseId: string, reason: string) => Promise<void> = async () => {};
+/**
+ * Test double for `HttpDispatch` (`src/http/dispatcher-session.ts`). Deliberately does not
+ * reproduce the real `Dispatcher`'s input parsing, role check, `authorize` hook, or startup
+ * parking -- those are covered against the real thing in `daemon/dispatcher.test.ts` and
+ * `daemon/server.test.ts`. This fake exists to let HTTP's own routing/serialization tests
+ * (`app.test.ts`, `tracker.test.ts`) script an operation's answer without standing up a full
+ * `LeaseEngine`/`Registry`/`CleanupReaper`.
+ *
+ * Two ways to script an answer: register a synchronous `handlers[operation]` for the common
+ * "this call always answers the same way" case, or -- for `lease.request`'s progress-then-grant
+ * flow, which needs to drive `session.onProgress` before settling -- leave it unregistered and
+ * resolve/reject the pushed `FakeDispatchCall` from `calls` once the test is ready.
+ */
+export class FakeDispatcher {
+  readonly calls: FakeDispatchCall[] = [];
+  readonly handlers: Partial<
+    Record<OperationName, (input: never, session: DispatchSession) => unknown>
+  > = {};
 
-  request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant> {
+  dispatch(operation: OperationName, input: unknown, session: DispatchSession): Promise<unknown> {
+    const handler = this.handlers[operation];
+    if (handler !== undefined) {
+      const settled = Promise.resolve(handler(input as never, session));
+      this.calls.push({
+        input,
+        operation,
+        reject: () => {},
+        resolve: () => {},
+        session,
+      });
+      return settled;
+    }
     return new Promise((resolve, reject) => {
-      this.calls.push({ options, reject, request, resolve });
+      this.calls.push({ input, operation, reject, resolve, session });
     });
-  }
-
-  async release(leaseId: string, reason: "closed" | "explicit" | "killed"): Promise<void> {
-    this.releaseCalls.push({ leaseId, reason });
-    await this.releaseImpl(leaseId, reason);
-  }
-
-  async releaseAll(): Promise<readonly string[]> {
-    return [];
-  }
-
-  async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
-    this.renewCalls.push({ leaseId, ...(ttlMs === undefined ? {} : { ttlMs }) });
-    return this.renewImpl(leaseId, ttlMs);
-  }
-
-  async heartbeat(): Promise<LeaseRecord> {
-    throw new Error("heartbeat not scripted");
   }
 }
 
 /**
- * `FakeLeaseCommands.request` is called synchronously from within `LeaseRequestTracker.submit`,
+ * `FakeDispatcher.dispatch` is called synchronously from within `LeaseRequestTracker.submit`,
  * but only once the HTTP layer's own async work (body parsing, auth, validation) reaches the
  * handler -- so a caller driving a request through `app.request()` must pump the microtask
- * queue before `leases.calls[index]` exists. Awaiting the whole response first would deadlock:
- * `submit`'s returned promise doesn't settle until a progress/grant/reject callback fires.
+ * queue before `dispatcher.calls[index]` exists. Awaiting the whole response first would
+ * deadlock: `submit`'s returned promise doesn't settle until a progress/grant/reject callback
+ * fires.
  */
-export async function waitForCall(leases: FakeLeaseCommands, index = 0): Promise<void> {
-  for (let attempt = 0; attempt < 100 && leases.calls.length <= index; attempt += 1) {
+export async function waitForDispatch(
+  dispatcher: FakeDispatcher,
+  operation: OperationName,
+  index = 0,
+): Promise<FakeDispatchCall> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const matches = dispatcher.calls.filter((call) => call.operation === operation);
+    if (matches.length > index) return matches[index] as FakeDispatchCall;
     await Promise.resolve();
   }
-  if (leases.calls.length <= index) throw new Error("LeaseCommands.request was never called");
-}
-
-export class FakeQueueControl implements QueueControl {
-  queueDepth = 0;
-  cancelOutcome: "cancelled" | "not-found" | "not-cancellable" = "not-found";
-  readonly cancelCalls: string[] = [];
-
-  async detachQueuedProgress(): Promise<void> {}
-
-  async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
-    this.cancelCalls.push(requesterId);
-    return this.cancelOutcome;
-  }
-}
-
-export class FakeCapacityReader implements CapacityReader {
-  runningCapacity: RunningCapacity = {
-    android: { maxRunning: 4, overLimit: false, reserved: 0, running: 0 },
-    global: { maxRunning: 8, overLimit: false, reserved: 0, running: 0 },
-    ios: { maxRunning: 4, overLimit: false, reserved: 0, running: 0 },
-  };
-
-  deviceLimit(): number {
-    return 4;
-  }
-}
-
-export class FakeCatalogReader implements CatalogReader {
-  platforms: PlatformCatalog[] = [
-    { defaultRuntime: "26.5", models: ["iPhone 17 Pro"], platform: "ios", runtimes: ["26.5"] },
-  ];
-
-  async listCatalog(platform?: "ios" | "android"): Promise<readonly PlatformCatalog[]> {
-    return this.platforms.filter((entry) => platform === undefined || entry.platform === platform);
-  }
+  throw new Error(`${operation} was never dispatched`);
 }
 
 export class FakeRegistry {

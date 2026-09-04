@@ -39,7 +39,12 @@ function grant(): LeaseGrant {
 }
 
 function createWaiter(queue: WaitQueue, requesterId: string, options: { timeoutMs?: number } = {}) {
-  return queue.create(request satisfies DeviceRequest, { mode: "held", requesterId, ...options });
+  return queue.create(request satisfies DeviceRequest, {
+    mode: "held",
+    ownerId: requesterId,
+    requesterId,
+    ...options,
+  });
 }
 
 describe("WaitQueue", () => {
@@ -125,6 +130,7 @@ describe("WaitQueue", () => {
       mode: "held",
       onProgress: (progress) => received.push(progress),
       requesterId: "agent",
+      ownerId: "agent",
     });
 
     queue.enqueue(waiter);

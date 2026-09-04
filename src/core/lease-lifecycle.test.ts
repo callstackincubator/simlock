@@ -51,6 +51,7 @@ describe("LeaseLifecycle", () => {
       deviceId: held.device.id,
       mode: "held",
       requesterId: "held-agent",
+      ownerId: "held-agent",
     });
     expect(heldGrant.lease.ttlDeadline).toBe(1_010);
     expect(held.registry.snapshot.devices).toMatchObject([{ id: held.device.id, state: "leased" }]);
@@ -66,6 +67,7 @@ describe("LeaseLifecycle", () => {
       deviceId: detached.device.id,
       mode: "detached",
       requesterId: "detached-agent",
+      ownerId: "detached-agent",
     });
     expect(detachedGrant.lease.ttlDeadline).toBe(1_020);
   });
@@ -76,6 +78,7 @@ describe("LeaseLifecycle", () => {
       deviceId: harness.device.id,
       mode: "detached",
       requesterId: "agent",
+      ownerId: "agent",
     });
     const renewed = await harness.lifecycle.renew(detached.lease.id, 30);
     expect(renewed.ttlDeadline).toBe(1_030);
@@ -96,6 +99,7 @@ describe("LeaseLifecycle", () => {
       deviceId: held.device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
     });
     expect(grant.lease.ttlDeadline).toBe(1_010);
 
@@ -127,6 +131,7 @@ describe("LeaseLifecycle", () => {
       deviceId: harness.device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
     });
     expect(grant.lease.ttlDeadline).toBe(1_010);
 
@@ -143,6 +148,7 @@ describe("LeaseLifecycle", () => {
       deviceId: released.device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
     });
     let releasedLeaseCountAtEvent = -1;
     released.eventBus.subscribe("lease.released", () => {
@@ -163,6 +169,7 @@ describe("LeaseLifecycle", () => {
       deviceId: expired.device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
     });
     let expiredLeaseCountAtEvent = -1;
     expired.eventBus.subscribe("lease.expired", () => {
@@ -182,6 +189,7 @@ describe("LeaseLifecycle", () => {
       deviceId: harness.device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
     });
     expect(grant.lease.ttlDeadline).toBe(1_010);
 
@@ -215,6 +223,7 @@ describe("LeaseLifecycle", () => {
       deviceId: harness.device.id,
       mode: "detached",
       requesterId: "agent",
+      ownerId: "agent",
     });
 
     await expect(harness.lifecycle.heartbeat(grant.lease.id)).rejects.toBeInstanceOf(
@@ -232,6 +241,7 @@ describe("LeaseLifecycle", () => {
       deviceId: before.device.id,
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
     });
     expect(grant.lease.ttlDeadline).toBe(1_010);
 

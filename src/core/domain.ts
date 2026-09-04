@@ -77,6 +77,14 @@ export interface LeaseRecord {
   readonly id: string;
   readonly deviceId: string;
   readonly requesterId: string;
+  /**
+   * The session principal (ADR 0003 §4) that requested this lease -- the identity `renew`,
+   * `release`, and `list` compare against, not `requesterId` (which is attribution, defaults to
+   * the principal, but a connection may set it to something else per request so one connection
+   * can hold many leases). A record written before this field existed loads with `ownerId` equal
+   * to `requesterId` -- see `parseLease` in `registry.ts`.
+   */
+  readonly ownerId: string;
   readonly mode: "held" | "detached";
   readonly grantedAt: number;
   readonly ttlDeadline: number;

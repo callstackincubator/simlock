@@ -9,7 +9,7 @@
  */
 import { z } from "zod";
 
-import type { AuthorizeContext, Role } from "./roles.js";
+import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
 import {
   cleanupRuleSummarySchema,
   configSchema,
@@ -56,6 +56,7 @@ export function defineOperation<
 
 // ---- catalog.get ------------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const catalogGet = defineOperation({
   name: "catalog.get",
   role: "agent",
@@ -65,6 +66,7 @@ export const catalogGet = defineOperation({
 
 // ---- status.get ---------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const statusGet = defineOperation({
   name: "status.get",
   role: "agent",
@@ -101,9 +103,8 @@ const leaseRequestInputSchema = z
     /** ADR §9: initial TTL for a detached lease. Supplying it for a held lease is
      * `BAD_REQUEST` -- held TTL is the backstop, not the caller's to shorten -- enforced below
      * via `superRefine` rather than left to the handler, so the rule is part of the contract
-     * itself. NOTE: not yet wired to a grant's actual TTL -- see the PR description's "known
-     * gaps"; `LeaseRequestOptions` (src/core/wait-queue.ts) has no `ttlMs` field yet, and
-     * adding one is core-side plumbing beyond this PR's "daemon validates inputs" scope. */
+     * itself. Wired through to `LeaseRequestOptions.ttlMs` (src/core/wait-queue.ts) by the
+     * dispatcher's `lease.request` handler. */
     ttlMs: z.number().finite().positive().optional(),
   })
   .strict()
@@ -127,20 +128,34 @@ export const leaseRequest = defineOperation({
 
 // ---- lease.cancel (new, ADR §9) --------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
   input: z.object({ requesterId: z.string().optional() }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
+  /**
+   * ADR §9: "cancels this principal's pending request by requester id" -- not any pending
+   * request, keyed by a `requesterId` the caller can pass arbitrarily. Deliberately not
+   * `ownsLease` (that hook resolves a *lease's* recorded `ownerId` from the registry; a
+   * pending, not-yet-granted request has no lease yet to look up). `requesterId` defaults to
+   * the principal the same way the handler's own default does (see `dispatcher.ts`'s
+   * `#leaseCancel`), so an omitted `requesterId` always passes -- only an explicit, *different*
+   * `requesterId` is gated, and only admin may supply one.
+   */
+  authorize: (input, context) =>
+    context.role === "admin" || (input.requesterId ?? context.principal) === context.principal,
 });
 
 // ---- lease.renew ----------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRenew = defineOperation({
   name: "lease.renew",
   role: "agent",
   input: z.object({ leaseId: z.string(), ttlMs: z.number().finite().positive().optional() }),
   output: leaseRecordSchema,
+  authorize: ownsLease((input) => input.leaseId),
 });
 
 // ---- lease.release --------------------------------------------------------------------------
@@ -150,10 +165,12 @@ export const leaseRelease = defineOperation({
   role: "agent",
   input: z.object({ leaseId: z.string() }),
   output: z.object({ leaseId: z.string() }),
+  authorize: ownsLease((input) => input.leaseId),
 });
 
 // ---- lease.list (new, ADR §9) -----------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseList = defineOperation({
   name: "lease.list",
   role: "agent",
@@ -163,6 +180,7 @@ export const leaseList = defineOperation({
 
 // ---- lease.heartbeat ------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseHeartbeat = defineOperation({
   name: "lease.heartbeat",
   role: "agent",
@@ -176,6 +194,7 @@ export const leaseHeartbeat = defineOperation({
 
 const doctorRunInputSchema = z.object({ fix: z.boolean().optional() });
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const doctorRun = defineOperation({
   name: "doctor.run",
   /**
@@ -197,6 +216,7 @@ export const doctorRun = defineOperation({
 
 // ---- lease.release-all ------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseReleaseAll = defineOperation({
   name: "lease.release-all",
   role: "admin",
@@ -206,6 +226,7 @@ export const leaseReleaseAll = defineOperation({
 
 // ---- list.get -----------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const listGet = defineOperation({
   name: "list.get",
   role: "admin",
@@ -219,6 +240,7 @@ export const listGet = defineOperation({
 
 // ---- cleanup.run --------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const cleanupRun = defineOperation({
   name: "cleanup.run",
   role: "admin",
@@ -228,6 +250,7 @@ export const cleanupRun = defineOperation({
 
 // ---- nuke.run -----------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const nukeRun = defineOperation({
   name: "nuke.run",
   role: "admin",
@@ -237,6 +260,7 @@ export const nukeRun = defineOperation({
 
 // ---- config.get ---------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
@@ -261,6 +285,7 @@ export const daemonStop = defineOperation({
 
 // ---- events.replay ------------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsReplay = defineOperation({
   name: "events.replay",
   role: "admin",
@@ -270,6 +295,7 @@ export const eventsReplay = defineOperation({
 
 // ---- events.subscribe ---------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsSubscribe = defineOperation({
   name: "events.subscribe",
   role: "admin",
@@ -279,6 +305,7 @@ export const eventsSubscribe = defineOperation({
 
 // ---- events.unsubscribe -------------------------------------------------------------------
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsUnsubscribe = defineOperation({
   name: "events.unsubscribe",
   role: "admin",

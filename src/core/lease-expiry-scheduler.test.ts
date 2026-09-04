@@ -9,6 +9,7 @@ const lease = (id: string, ttlDeadline: number) => ({
   id,
   mode: "detached" as const,
   requesterId: "agent",
+  ownerId: "agent",
   ttlDeadline,
 });
 

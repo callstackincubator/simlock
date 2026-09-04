@@ -181,6 +181,7 @@ function released(device: DeviceRecord): ReleasedLease {
       id: "lease-1",
       mode: "held",
       requesterId: "agent",
+      ownerId: "agent",
       ttlDeadline: 100,
     },
   };

@@ -5,11 +5,23 @@ export interface FileStat {
   readonly kind: "file" | "directory";
   readonly size: number;
   readonly modifiedAtMs: number;
+  /** POSIX permission bits (e.g. `0o600`), masked to the low 9 bits. Not populated by every
+   * caller's needs -- only relevant for callers verifying a file's permissions after creation
+   * (e.g. the daemon's per-start admin secret, ADR 0003 §5). */
+  readonly mode?: number;
+}
+
+export interface WriteFileAtomicOptions {
+  /** POSIX permission bits the file is created with (e.g. `0o600` for owner-only). Set at
+   * creation via the temp file's own open flags -- never a separate `chmod` after the fact,
+   * which would leave a window where the file exists world-readable. Omitted keeps Node's
+   * default (governed by the process umask), unchanged from before this option existed. */
+  readonly mode?: number;
 }
 
 export interface Filesystem {
   readFile(path: string): Promise<string>;
-  writeFileAtomic(path: string, contents: string): Promise<void>;
+  writeFileAtomic(path: string, contents: string, options?: WriteFileAtomicOptions): Promise<void>;
   mkdirp(path: string): Promise<void>;
   rm(path: string): Promise<void>;
   stat(path: string): Promise<FileStat>;
@@ -23,7 +35,11 @@ export class NodeFilesystem implements Filesystem {
     return readFile(path, "utf8");
   }
 
-  async writeFileAtomic(path: string, contents: string): Promise<void> {
+  async writeFileAtomic(
+    path: string,
+    contents: string,
+    options?: WriteFileAtomicOptions,
+  ): Promise<void> {
     const directory = dirname(path);
     const temporaryPath = join(
       directory,
@@ -31,7 +47,11 @@ export class NodeFilesystem implements Filesystem {
     );
 
     try {
-      await writeFile(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
+      await writeFile(temporaryPath, contents, {
+        encoding: "utf8",
+        flag: "wx",
+        ...(options?.mode === undefined ? {} : { mode: options.mode }),
+      });
       await rename(temporaryPath, path);
     } catch (error: unknown) {
       await rm(temporaryPath, { force: true });
@@ -47,6 +67,7 @@ export class NodeFilesystem implements Filesystem {
     await rm(path, { force: true, recursive: true });
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `Filesystem` interface (registry.ts, doctor.ts, ...), never called on a `NodeFilesystem`-typed value directly.
   async stat(path: string): Promise<FileStat> {
     const details = await stat(path);
 
@@ -54,6 +75,7 @@ export class NodeFilesystem implements Filesystem {
       kind: details.isDirectory() ? "directory" : "file",
       size: details.size,
       modifiedAtMs: details.mtimeMs,
+      mode: details.mode & 0o777,
     };
   }
 
@@ -81,8 +103,10 @@ export class NodeFilesystem implements Filesystem {
 }
 
 type MemoryEntry =
-  | { readonly kind: "file"; contents: string; modifiedAtMs: number }
+  | { readonly kind: "file"; contents: string; modifiedAtMs: number; mode: number }
   | { readonly kind: "directory"; modifiedAtMs: number };
+
+const DEFAULT_FILE_MODE = 0o644;
 
 export class MemoryFilesystem implements Filesystem {
   readonly #entries = new Map<string, MemoryEntry>([["/", { kind: "directory", modifiedAtMs: 0 }]]);
@@ -99,9 +123,18 @@ export class MemoryFilesystem implements Filesystem {
     return entry.contents;
   }
 
-  async writeFileAtomic(path: string, contents: string): Promise<void> {
+  async writeFileAtomic(
+    path: string,
+    contents: string,
+    options?: WriteFileAtomicOptions,
+  ): Promise<void> {
     this.#requireDirectory(parentPath(path));
-    this.#entries.set(path, { kind: "file", contents, modifiedAtMs: 0 });
+    this.#entries.set(path, {
+      kind: "file",
+      contents,
+      modifiedAtMs: 0,
+      mode: options?.mode ?? DEFAULT_FILE_MODE,
+    });
   }
 
   async mkdirp(path: string): Promise<void> {
@@ -141,6 +174,7 @@ export class MemoryFilesystem implements Filesystem {
       kind: entry.kind,
       size: entry.kind === "file" ? Buffer.byteLength(entry.contents) : 0,
       modifiedAtMs: entry.modifiedAtMs,
+      mode: entry.kind === "file" ? entry.mode : 0o755,
     };
   }
 

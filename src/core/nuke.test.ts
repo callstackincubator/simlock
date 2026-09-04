@@ -103,7 +103,7 @@ describe("Nuke", () => {
     });
     const grant = await engine.request(
       { model: "Phone", osVersion: "1", platform: "ios" },
-      { mode: "held", requesterId: "agent" },
+      { mode: "held", ownerId: "agent", requesterId: "agent" },
     );
 
     const release = engine.release(grant.lease.id, "explicit");

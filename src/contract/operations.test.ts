@@ -127,6 +127,7 @@ describe("operation input/output round trips", () => {
         id: "lease_1",
         deviceId: "dev_1",
         requesterId: "req_1",
+        ownerId: "req_1",
         mode: "held",
         grantedAt: 1,
         ttlDeadline: 2,

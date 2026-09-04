@@ -400,7 +400,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const { device, lease } = await this.options.leases.grant({
       deviceId,
       mode: waiter.options.mode,
+      ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
+      ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
     this.options.queue.resolve(waiter, { device, lease, timing: waiter.timing });
   }

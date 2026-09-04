@@ -141,6 +141,7 @@ describe("NukeService", () => {
         id: "lse_live",
         mode: "held",
         requesterId: "agent",
+        ownerId: "agent",
         ttlDeadline: 1,
       },
     ];

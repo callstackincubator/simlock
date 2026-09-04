@@ -158,6 +158,7 @@ describe("AcquisitionPlanner", () => {
         id: "lease",
         mode: "held" as const,
         requesterId: "holder",
+        ownerId: "holder",
         ttlDeadline: 100,
       },
     ];

@@ -1,14 +1,9 @@
-import type { EventBus } from "../bus/index.js";
-import {
-  type DeviceRecord,
-  type DeviceRequest,
-  type LeaseRecord,
-  RequestCancelledError,
-} from "../core/index.js";
-import type { LeaseCommands, QueueControl } from "../core/lease-ports.js";
-import type { LeaseGrant, LeaseProgress, LeaseRequestOptions } from "../core/wait-queue.js";
+import { RequestCancelledError } from "../core/index.js";
 import type { Clock, IdGenerator, Logger, TimerHandle } from "../ports/index.js";
+import { buildHttpSession } from "./dispatcher-session.js";
+import type { HttpDispatch } from "./dispatcher-session.js";
 import { mapError } from "./errors.js";
+import type { TokenIdentity } from "./token-store.js";
 
 export interface LeaseRequestInput {
   readonly platform: "ios" | "android";
@@ -40,15 +35,18 @@ export interface LeasePayload {
 
 /**
  * `LeaseRecord` has no `createdAt` -- `grantedAt` is its equivalent. `ttlMs` must be supplied
- * by the caller (the tracker's record of what was applied at grant or last renew, or the
- * lease's mode default when that record is gone, e.g. after a daemon restart). It is never
- * derived as `ttlDeadline - grantedAt`: `grantedAt` never moves on renewal, so that
- * arithmetic reports grant-age plus TTL rather than the interval actually in force --
- * `expiresAt` is the authoritative deadline either way.
+ * by the caller (the tracker's record of what was applied at grant, or the lease's mode
+ * default when that record is gone, e.g. after a daemon restart). It is never derived as
+ * `ttlDeadline - grantedAt`: `grantedAt` never moves on renewal, so that arithmetic reports
+ * grant-age plus TTL rather than the interval actually in force -- `expiresAt` is the
+ * authoritative deadline either way. Parameter types are deliberately narrower than the full
+ * `DeviceRecord`/`LeaseRecord` (only the fields this function reads): both the dispatcher's
+ * `lease.request` output and the core's own `LeaseGrant` satisfy this shape, so this function
+ * works unchanged whether the tracker is fed directly or through `dispatch()`.
  */
 export function buildLeasePayload(
-  device: DeviceRecord,
-  lease: LeaseRecord,
+  device: HttpLeaseDevice,
+  lease: HttpLeaseRecord,
   extra: { readonly requestId?: string; readonly ttlMs: number },
 ): LeasePayload {
   return {
@@ -117,9 +115,15 @@ const IDEMPOTENCY_TTL_MS = 10 * 60_000;
 const IDEMPOTENCY_MAX_ENTRIES = 10_000;
 
 export interface LeaseRequestTrackerOptions {
-  readonly leases: LeaseCommands;
-  readonly queue: QueueControl;
-  readonly eventBus: EventBus;
+  /**
+   * ADR 0003 §2: HTTP calls the exact same shared `Dispatcher` the socket path does -- not a
+   * second copy of "call `LeaseCommands.request`, apply the download policy, set `ownerId`".
+   * Routing `lease.request`/`lease.cancel` through this closes the download-policy divergence
+   * (the clamp lives inside the dispatcher's `lease.request` handler now, so HTTP gets it for
+   * free) and makes an HTTP request during startup park the same way a socket request does
+   * (`dispatch()` awaits startup readiness before running any handler but `status.get`).
+   */
+  readonly dispatch: HttpDispatch;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   /** `lease.detachedTtlMs` -- every HTTP lease is detached, so this is the one mode default that applies. */
@@ -128,18 +132,17 @@ export interface LeaseRequestTrackerOptions {
 }
 
 /**
- * Gateway-layer resource tracking for `POST /v1/lease-requests`. Calls `LeaseCommands.request`
- * with an `onProgress` callback and never awaits its returned promise directly -- `submit`
- * returns as soon as the request resource exists, matching "acquisition is an async resource,
- * no long-blocking POST" from the issue's design principles. `GET`, long-poll, and SSE all
- * read the same in-memory state this class owns; no core changes were needed to observe it.
+ * Gateway-layer resource tracking for `POST /v1/lease-requests`. Calls `dispatch("lease.request",
+ * ...)` with an `onProgress` session override and never awaits its returned promise directly --
+ * `submit` returns as soon as the request resource exists, matching "acquisition is an async
+ * resource, no long-blocking POST" from the issue's design principles. `GET`, long-poll, and SSE
+ * all read the same in-memory state this class owns; no core changes were needed to observe it.
  */
 export class LeaseRequestTracker {
   readonly #requests = new Map<string, TrackedRequest>();
   readonly #idempotency = new Map<string, { requestId: string; timer: TimerHandle }>();
   readonly #leaseRequestId = new Map<string, string>();
   readonly #leaseTtlMs = new Map<string, number>();
-  readonly #unsubscribers: Array<() => void>;
   /**
    * The retention/idempotency-TTL timers `#setState`/`#registerIdempotency` arm below,
    * tracked so `dispose()` can cancel whichever are still outstanding. Without this, a
@@ -151,21 +154,10 @@ export class LeaseRequestTracker {
    */
   readonly #activeTimers = new Set<TimerHandle>();
 
-  constructor(private readonly options: LeaseRequestTrackerOptions) {
-    this.#unsubscribers = [
-      options.eventBus.subscribe("lease.released", (envelope) => {
-        this.#leaseRequestId.delete(envelope.payload.leaseId);
-        this.#leaseTtlMs.delete(envelope.payload.leaseId);
-      }),
-      options.eventBus.subscribe("lease.expired", (envelope) => {
-        this.#leaseRequestId.delete(envelope.payload.leaseId);
-        this.#leaseTtlMs.delete(envelope.payload.leaseId);
-      }),
-    ];
-  }
+  constructor(private readonly options: LeaseRequestTrackerOptions) {}
 
   submit(
-    identity: { readonly requesterId: string },
+    identity: TokenIdentity,
     body: LeaseRequestInput,
     idempotencyKey?: string,
   ): Promise<
@@ -180,30 +172,21 @@ export class LeaseRequestTracker {
       createdAtIso: new Date(this.options.clock.now()).toISOString(),
       id,
       listeners: new Set(),
-      // Best-effort snapshot of current queue depth: on the "admitted, still queued" path
-      // below this is superseded by the first real `onProgress` call before the POST response
-      // is even built, so it only matters for the sliver of time before that.
       requesterId: identity.requesterId,
-      state: { queuePosition: this.options.queue.queueDepth + 1, stage: "queued" },
+      // Best-effort placeholder until the first real `onProgress` call (fired before the POST
+      // response is even built in the common case) supersedes it.
+      state: { queuePosition: 1, stage: "queued" },
     };
     this.#requests.set(id, record);
     this.#registerIdempotency(identity.requesterId, idempotencyKey, id);
 
-    const deviceRequest: DeviceRequest = {
-      model: body.device,
-      platform: body.platform,
-      ...(body.os === undefined ? {} : { osVersion: body.os }),
-      ...(body.full === undefined ? {} : { full: body.full }),
-    };
-
-    // Races the grant/rejection against the request's *first* progress callback. A rejection
-    // that lands before any progress call (already-leased, unresolvable model/runtime/driver,
-    // no-capacity-with-noWait -- see `LeaseAcquisitionCoordinator#request`/`#resolveAndDrive`)
-    // never reached anything the queue considers "in flight", so the POST itself can fail with
-    // the matching HTTP status instead of the caller polling a request resource just to learn
-    // that. Once a progress callback fires (or a grant lands without ever needing one, e.g. an
-    // immediately-ready device), the request is a genuine async resource and always answers
-    // 201 -- from here on, failures surface only as the resource's terminal `failed` state.
+    // Races the grant/rejection against the request's *first* progress callback -- see the
+    // class doc. A rejection that lands before any progress call (already-leased, unresolvable
+    // model/runtime/driver, no-capacity-with-noWait) never reached anything the queue
+    // considers "in flight", so the POST itself can fail with the matching HTTP status instead
+    // of the caller polling a request resource just to learn that. Once a progress callback
+    // fires (or a grant lands without ever needing one), the request is a genuine async
+    // resource and always answers 201.
     return new Promise((resolve) => {
       let settled = false;
       const settleCreated = () => {
@@ -212,22 +195,34 @@ export class LeaseRequestTracker {
         resolve({ kind: "created", view: toView(record) });
       };
 
-      const requestOptions: LeaseRequestOptions = {
-        mode: "detached",
+      const session = buildHttpSession(identity, {
         onProgress: (progress) => {
           this.#applyProgress(record, progress);
           settleCreated();
         },
-        requesterId: identity.requesterId,
-        ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
-        ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
-        ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
-      };
+      });
 
-      this.options.leases
-        .request(deviceRequest, requestOptions)
-        .then(async (grant) => {
-          await this.#applyGrant(record, grant, body.ttlMs);
+      this.options
+        .dispatch(
+          "lease.request",
+          {
+            model: body.device,
+            platform: body.platform,
+            ...(body.os === undefined ? {} : { osVersion: body.os }),
+            ...(body.full === undefined ? {} : { full: body.full }),
+            mode: "detached",
+            ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
+            ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
+            ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
+            // ADR §9: the initial TTL travels on the request itself now -- this deletes the old
+            // grant-then-immediately-renew hack (`#applyGrant` below just records what was
+            // actually granted, it never issues a second call to apply it).
+            ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
+          },
+          session,
+        )
+        .then((grant) => {
+          this.#applyGrant(record, grant, body.ttlMs);
           settleCreated();
         })
         .catch((error: unknown) => {
@@ -301,13 +296,14 @@ export class LeaseRequestTracker {
   }
 
   /**
-   * Cancels a pending request. Reuses `QueueControl.cancelPending`'s safety envelope exactly
-   * (see its own docs): only a request still queued -- no device work claimed for it yet -- is
-   * cancellable. The terminal state is applied here, synchronously with the queue's answer,
-   * rather than waiting for the rejected `LeaseCommands.request` promise's `.catch` to run on a
-   * later microtask -- a caller awaiting `cancel()` must see the settled state immediately.
+   * Cancels a pending request via `dispatch("lease.cancel", ...)` -- the exact operation the
+   * socket path's `lease.cancel` uses, authorize hook included (ADR: "cancels this principal's
+   * pending request by requester id"). The terminal state is applied here, synchronously with
+   * the dispatch's answer, rather than waiting for the rejected `lease.request` promise's
+   * `.catch` to run on a later microtask -- a caller awaiting `cancel()` must see the settled
+   * state immediately.
    */
-  async cancel(id: string): Promise<CancelOutcome> {
+  async cancel(id: string, identity: TokenIdentity): Promise<CancelOutcome> {
     const record = this.#requests.get(id);
     if (record === undefined) return { kind: "not-found" };
     const stateBefore = record.state;
@@ -315,15 +311,18 @@ export class LeaseRequestTracker {
       return { kind: "not-cancellable", leaseId: stateBefore.lease.id };
     if (isTerminalStage(stateBefore)) return { kind: "not-cancellable" };
 
-    const outcome = await this.options.queue.cancelPending(record.requesterId);
-    if (outcome === "cancelled") {
+    const session = buildHttpSession(identity);
+    const { result } = await this.options.dispatch(
+      "lease.cancel",
+      { requesterId: record.requesterId },
+      session,
+    );
+    if (result === "cancelled") {
       this.#setState(record, { stage: "cancelled" });
       return { kind: "cancelled" };
     }
     // Settled between the check above and this call (e.g. granted in the interim) -- report
-    // the now-current state rather than a stale answer. Read fresh rather than reusing
-    // `stateBefore`: the object identity is the same, but its `stage` may have moved on
-    // during the `await` above.
+    // the now-current state rather than a stale answer.
     const stateAfter = record.state;
     if (stateAfter.stage === "granted")
       return { kind: "not-cancellable", leaseId: stateAfter.lease.id };
@@ -344,8 +343,16 @@ export class LeaseRequestTracker {
     return this.#leaseRequestId.get(leaseId);
   }
 
+  /** Drops the tracked ttl/request-id bookkeeping for a lease that just ended -- called from the
+   * HTTP app on the same owner-routed fact stream `LeaseNoticeBuffer` consumes, replacing the
+   * direct `eventBus.subscribe("lease.released"/"lease.expired", ...)` this class used to do
+   * itself. */
+  forgetLease(leaseId: string): void {
+    this.#leaseRequestId.delete(leaseId);
+    this.#leaseTtlMs.delete(leaseId);
+  }
+
   dispose(): void {
-    for (const unsubscribe of this.#unsubscribers) unsubscribe();
     for (const timer of this.#activeTimers) this.options.clock.cancel(timer);
     this.#activeTimers.clear();
   }
@@ -358,10 +365,6 @@ export class LeaseRequestTracker {
     const entry = this.#idempotency.get(idempotencyCacheKey(requesterId, idempotencyKey));
     if (entry === undefined) return undefined;
     const existing = this.#requests.get(entry.requestId);
-    // The mapping outlived the request's own 5-minute retention: treat this as a fresh key
-    // rather than returning nothing -- `submit`'s caller falls through to creating a new
-    // request, and `RequesterAlreadyLeasedError` remains the real backstop against a double
-    // grant if the original request had already succeeded.
     return existing === undefined ? undefined : toView(existing);
   }
 
@@ -394,7 +397,7 @@ export class LeaseRequestTracker {
     this.#idempotency.delete(cacheKey);
   }
 
-  #applyProgress(record: TrackedRequest, progress: LeaseProgress): void {
+  #applyProgress(record: TrackedRequest, progress: HttpLeaseProgress): void {
     switch (progress.stage) {
       case "queued":
         this.#setState(record, { queuePosition: progress.queuePosition, stage: "queued" });
@@ -411,40 +414,12 @@ export class LeaseRequestTracker {
     }
   }
 
-  async #applyGrant(
-    record: TrackedRequest,
-    grant: LeaseGrant,
-    ttlMs: number | undefined,
-  ): Promise<void> {
-    let lease = grant.lease;
-    let effectiveTtlMs = this.options.defaultTtlMs;
-    if (ttlMs !== undefined) {
-      try {
-        // `LeaseRequestOptions` carries no ttl -- a detached grant always lands on
-        // `lease.detachedTtlMs` (see `LeaseLifecycle#ttlFor`). A caller-specified `ttlMs` in
-        // the request body is applied with an explicit renew right after grant; see the class
-        // doc and this session's report for what was investigated here.
-        lease = await this.options.leases.renew(lease.id, ttlMs);
-        effectiveTtlMs = ttlMs;
-      } catch (error: unknown) {
-        this.options.logger?.warn(
-          "Requested ttlMs was not applied; lease keeps the default deadline",
-          {
-            leaseId: lease.id,
-            message: error instanceof Error ? error.message : String(error),
-            requestedTtlMs: ttlMs,
-          },
-        );
-        // Renewing a lease that was just granted failing would be surprising; fall back to the
-        // grant's own (config-default) deadline rather than losing the lease record entirely.
-        // `effectiveTtlMs` deliberately stays at the default: the payload must report the ttl
-        // actually in force, not the one that failed to apply.
-      }
-    }
-    this.#leaseRequestId.set(lease.id, record.id);
-    this.#leaseTtlMs.set(lease.id, effectiveTtlMs);
+  #applyGrant(record: TrackedRequest, grant: HttpLeaseGrant, ttlMs: number | undefined): void {
+    const effectiveTtlMs = ttlMs ?? this.options.defaultTtlMs;
+    this.#leaseRequestId.set(grant.lease.id, record.id);
+    this.#leaseTtlMs.set(grant.lease.id, effectiveTtlMs);
     this.#setState(record, {
-      lease: buildLeasePayload(grant.device, lease, {
+      lease: buildLeasePayload(grant.device, grant.lease, {
         requestId: record.id,
         ttlMs: effectiveTtlMs,
       }),
@@ -478,6 +453,41 @@ export class LeaseRequestTracker {
       this.#activeTimers.add(timer);
     }
   }
+}
+
+/** Structural subset of `LeaseProgress` (`src/core/wait-queue.ts`) -- this module only ever
+ * receives it through a dispatched `lease.request`'s session `onProgress` override, never
+ * imports the core type directly. */
+type HttpLeaseProgress =
+  | { readonly stage: "queued"; readonly queuePosition: number }
+  | { readonly stage: "provisioning"; readonly etaMs: number }
+  | { readonly stage: "booting"; readonly etaMs: number }
+  | { readonly stage: "reclaiming"; readonly etaMs: number };
+
+/**
+ * Structural subsets of the *contract's* `lease.request` output shape (`z.infer<leaseGrantSchema>`
+ * -- see `schemas.ts`), not core's `DeviceRecord`/`LeaseRecord`: `dispatch()` always returns
+ * contract-shaped data (e.g. `spec.full` is optional there, since the schema declares it
+ * `.optional()`, where core's own `DeviceSpec.full` is not), and this module never imports core
+ * domain types at all -- everything it needs from a grant is these few fields.
+ */
+interface HttpLeaseDevice {
+  readonly id: string;
+  readonly driverDeviceId: string;
+  readonly spec: { readonly platform: string; readonly model: string; readonly osVersion: string };
+  readonly featureProfile?: "full" | "reduced" | undefined;
+}
+
+interface HttpLeaseRecord {
+  readonly id: string;
+  readonly grantedAt: number;
+  readonly ttlDeadline: number;
+  readonly mode?: "held" | "detached";
+}
+
+interface HttpLeaseGrant {
+  readonly device: HttpLeaseDevice;
+  readonly lease: HttpLeaseRecord;
 }
 
 function toView(record: TrackedRequest): TrackedRequestView {

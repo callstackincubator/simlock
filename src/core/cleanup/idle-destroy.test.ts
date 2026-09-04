@@ -117,6 +117,7 @@ describe("idleDestroyRule", () => {
           id: "lse_1",
           mode: "held",
           requesterId: "agent-1",
+          ownerId: "agent-1",
           ttlDeadline: 1,
         },
       ],

@@ -4,11 +4,20 @@ import type { DeviceRequest } from "./driver.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
+  /** ADR 0003 §4: the session principal the resulting lease is owned by -- distinct from
+   * `requesterId`, which is attribution and defaults to the principal but may be set to
+   * something else per request. Required: every caller of `LeaseCommands.request` (the daemon
+   * dispatcher) always knows its own session's principal. */
+  readonly ownerId: string;
   readonly mode: "held" | "detached";
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
   readonly onProgress?: (progress: LeaseProgress) => void;
+  /** ADR 0003 §9: initial TTL for a *detached* lease. The contract rejects this for a `held`
+   * lease as `BAD_REQUEST` before it ever reaches here (held TTL is the backstop, not the
+   * caller's to shorten) -- this type does not re-enforce that, it trusts the caller. */
+  readonly ttlMs?: number;
 }
 
 /** Request-scoped progress for the lease action currently being performed. */

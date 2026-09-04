@@ -10,6 +10,8 @@ import {
   UnknownLeaseError,
   UnknownModelError,
 } from "../core/index.js";
+import { DispatchError } from "../daemon/dispatcher.js";
+import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 
 /** Every status this gateway ever answers with; keeps `mapError` exhaustive by construction. */
 export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503;
@@ -81,6 +83,24 @@ export function mapError(error: unknown): MappedError {
       code: error.code,
       message: error.message,
       ...(error.extra === undefined ? {} : { extra: error.extra }),
+    };
+  }
+  // ADR 0003 §7: "CLI exit codes and HTTP status codes are columns of the same error table, not
+  // second mappings". `DispatchError` is the shared dispatcher's own protocol-shaped rejection
+  // (bad input, role/`authorize` failure, unknown operation, a rejected credential) -- every
+  // code it can carry is declared in the contract's closed `ERROR_TABLE`, so its HTTP status
+  // comes from that table's `httpStatus` column rather than a second HTTP-only guess. Falls
+  // back to 500 `INTERNAL` only for a code this table somehow doesn't recognize, which would
+  // itself be a contract bug (every `DispatchError` code is a `SimlockErrorCode` by construction
+  // -- see `dispatcher.ts`).
+  if (error instanceof DispatchError) {
+    const entry = (ERROR_TABLE as Record<string, (typeof ERROR_TABLE)[SimlockErrorCode]>)[
+      error.code
+    ];
+    return {
+      status: (entry?.httpStatus ?? 500) as HttpStatus,
+      code: error.code,
+      message: error.message,
     };
   }
   if (error instanceof RequesterAlreadyLeasedError) {

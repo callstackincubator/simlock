@@ -130,6 +130,7 @@ async function seedLeased(
     deviceId: device.id,
     mode: "held",
     requesterId: options.requesterId ?? "agent-1",
+    ownerId: options.requesterId ?? "agent-1",
     ttlDeadline: 10_000_000,
   });
   return { device, lease };

@@ -193,6 +193,7 @@ describe("StartupConverger", () => {
         id: "lease-1",
         mode: "detached" as const,
         requesterId: "a",
+        ownerId: "a",
         ttlDeadline: 10,
       },
       {
@@ -201,6 +202,7 @@ describe("StartupConverger", () => {
         id: "lease-2",
         mode: "detached" as const,
         requesterId: "b",
+        ownerId: "b",
         ttlDeadline: 10,
       },
     ];
@@ -251,6 +253,7 @@ describe("StartupConverger", () => {
         id: "lease-held",
         mode: "held" as const,
         requesterId: "a",
+        ownerId: "a",
         ttlDeadline: 1000,
       },
     ];
@@ -278,6 +281,7 @@ describe("StartupConverger", () => {
         id: "lease-detached",
         mode: "detached" as const,
         requesterId: "a",
+        ownerId: "a",
         ttlDeadline: 1000,
       },
     ];
@@ -299,6 +303,7 @@ describe("StartupConverger", () => {
         id: "lease-held",
         mode: "held" as const,
         requesterId: "a",
+        ownerId: "a",
         ttlDeadline: 1000,
       },
     ];

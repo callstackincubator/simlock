@@ -246,6 +246,7 @@ describe("Registry", () => {
       deviceId: device.id,
       mode: "held",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
     const reloaded = await Registry.load(options);
@@ -289,6 +290,7 @@ describe("Registry", () => {
       deviceId: device.id,
       mode: "detached",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -356,6 +358,7 @@ describe("Registry", () => {
       deviceId: device.id,
       mode: "detached",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
 
@@ -386,6 +389,7 @@ describe("Registry", () => {
       deviceId: device.id,
       mode: "detached",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -426,6 +430,7 @@ describe("Registry", () => {
       deviceId: device.id,
       mode: "detached",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -473,6 +478,7 @@ describe("Registry", () => {
       deviceId: device.id,
       mode: "detached",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -751,6 +757,7 @@ describe("Registry", () => {
       deviceId: device.id,
       mode: "held",
       requesterId: "agent-1",
+      ownerId: "agent-1",
       ttlDeadline: 2_000,
     });
     await registry.markRecoveryAttempt(device.id, 1_200);
@@ -760,5 +767,105 @@ describe("Registry", () => {
     expect(released.device.recoveringSince).toBeUndefined();
     expect(released.device.recoveryAttempts).toBeUndefined();
     expect(released.device.state).toBe("reclaiming");
+  });
+
+  it("loads a lease record written before ownerId existed with ownerId defaulted to requesterId (ADR 0003 §4)", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            id: "dev_1",
+            driverDeviceId: "driver_device",
+            spec,
+            state: "leased",
+            driverData: {},
+            createdAt: 1_000,
+          },
+        ],
+        leases: [
+          {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "agent-1",
+            mode: "held",
+            grantedAt: 1_000,
+            ttlDeadline: 2_000,
+            // No `ownerId` -- exactly what a pre-ADR-0003 daemon wrote.
+          },
+        ],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.snapshot.leases).toEqual([
+      {
+        id: "lse_1",
+        deviceId: "dev_1",
+        requesterId: "agent-1",
+        ownerId: "agent-1",
+        mode: "held",
+        grantedAt: 1_000,
+        ttlDeadline: 2_000,
+      },
+    ]);
+
+    // The migrated default round-trips through a further save/reload unchanged, and the
+    // written file now carries `ownerId` explicitly (it is no longer an "unknown field"
+    // preserved verbatim -- see `#unknownLeaseFields` -- but the registry's own understanding
+    // of the record).
+    await registry.renewLease("lse_1", 3_000);
+    const reloaded = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+    expect(reloaded.snapshot.leases).toEqual(registry.snapshot.leases);
+    expect(reloaded.snapshot.leases[0]?.ownerId).toBe("agent-1");
+  });
+
+  it("rejects a lease record whose ownerId is present but not a string", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leases: [
+          {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "agent-1",
+            ownerId: 42,
+            mode: "held",
+            grantedAt: 1_000,
+            ttlDeadline: 2_000,
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem,
+        idGenerator: { generate: () => "unexpected" },
+        statePath,
+      }),
+    ).rejects.toThrow(/Invalid lease record/);
   });
 });
