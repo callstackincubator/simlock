@@ -787,7 +787,7 @@ download, since no download could make it work.
 Permission comes from `config.downloads.policy`, resolved once, in the
 daemon, before a request ever reaches the acquisition path: `"never"`
 forbids installs outright, even over an explicit `--allow-download` /
-`allow_download`; `"always"` grants it to every explicit lease request
+`allowDownload`; `"always"` grants it to every explicit lease request
 without the caller having to ask; `"on-request"` (the default) defers to
 the request's own flag, which is today's behavior byte-for-byte. Only an
 explicit lease request (`LeaseEngine#request`) can carry download

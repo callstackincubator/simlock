@@ -100,7 +100,7 @@ export function createMcpServer(session: McpSession): McpServer {
     {
       title: "Lease simulator",
       description:
-        "Lease one simulator or emulator for this MCP session. The lease is held until released or this MCP connection closes; provisioning can block unless no_wait is true. Downloads are disabled by default and require allow_download: true.",
+        "Lease one simulator or emulator for this MCP session. The lease is held until released or this MCP connection closes; provisioning can block unless noWait is true. Downloads are disabled by default and require allowDownload: true.",
       inputSchema: leaseSimulatorInputSchema,
       outputSchema: leaseSimulatorOutputSchema,
     },

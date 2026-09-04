@@ -6,6 +6,7 @@ import {
   LicenseNotAcceptedError,
   NoCapacityError,
   RequesterAlreadyLeasedError,
+  UnknownLeaseError,
 } from "../core/index.js";
 import { DispatchError, DoctorUnavailableError } from "../daemon/dispatcher.js";
 import { StartupFailedError } from "../daemon/error-code.js";
@@ -607,12 +608,33 @@ describe("lease routes", () => {
   });
 
   it("404s a renew for an unknown lease", async () => {
-    const { app } = buildHarness();
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.renew"] = () => {
+      throw new UnknownLeaseError("lse-missing");
+    };
+
     const response = await app.request("/v1/leases/lse-missing/renew", {
       headers: agentAuth,
       method: "POST",
     });
     expect(response.status).toBe(404);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      "UNKNOWN_LEASE",
+    );
+  });
+
+  it("403s a renew for another requester's still-live lease -- dispatched directly through lease.renew's own ownsLease hook, not lease.list's 404-for-everything filter (S6)", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.renew"] = () => {
+      throw new DispatchError("FORBIDDEN", "Not authorized for lease.renew");
+    };
+
+    const response = await app.request("/v1/leases/lse_other/renew", {
+      headers: agentAuth,
+      method: "POST",
+    });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
   });
 
   it("streams live lease notices over SSE, ending on lease_lost -- fed by the owner-routed fact bus, not a direct eventBus subscription", async () => {
@@ -675,6 +697,36 @@ describe("lease routes", () => {
       method: "DELETE",
     });
     expect(response.status).toBe(202);
+  });
+
+  it("404s a release for an unknown lease", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.release"] = () => {
+      throw new UnknownLeaseError("lse-missing");
+    };
+
+    const response = await app.request("/v1/leases/lse-missing", {
+      headers: agentAuth,
+      method: "DELETE",
+    });
+    expect(response.status).toBe(404);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+      "UNKNOWN_LEASE",
+    );
+  });
+
+  it("403s a release of another requester's still-live lease -- dispatched directly through lease.release's own ownsLease hook, not lease.list's 404-for-everything filter (S6)", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.release"] = () => {
+      throw new DispatchError("FORBIDDEN", "Not authorized for lease.release");
+    };
+
+    const response = await app.request("/v1/leases/lse_other", {
+      headers: agentAuth,
+      method: "DELETE",
+    });
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
   });
 });
 
