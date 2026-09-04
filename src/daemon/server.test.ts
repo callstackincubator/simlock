@@ -800,6 +800,30 @@ describe("DaemonServer startup readiness", () => {
     });
   });
 
+  it("does not arm live machinery when a stop completes while convergence is still running", async () => {
+    // `daemon.stop` is accepted during startup (see `#dispatchLine`), and an auxiliary
+    // frontend that fails to bind asks for a stop of its own -- so a stop can run to
+    // completion before convergence resolves. `start()` must then bail rather than
+    // subscribe to a disposed bus, schedule a heartbeat tick on a dead daemon, and emit
+    // `daemon.started` after `daemon.stopping` (a fact untrue when emitted, which
+    // `docs/agent-rules/events.md` rule 3 forbids).
+    const converge = deferred<void>();
+    const harness = await createHarness({ converge: () => converge.promise, start: false });
+    const emitted: string[] = [];
+    harness.eventBus.subscribeAll((event) => {
+      if (event.event === "daemon.started" || event.event === "daemon.stopping") {
+        emitted.push(event.event);
+      }
+    });
+    const startPromise = harness.daemon.start();
+
+    await harness.daemon.stop("requested");
+    converge.resolve();
+    await startPromise;
+
+    expect(emitted).toEqual(["daemon.stopping"]);
+  });
+
   it("has lease-lost subscriptions wired before a lease.request parked on convergence proceeds", async () => {
     // Guards the invariant documented in `start()`: subscriptions are set up only
     // after convergence resolves, and a parked request must never observe a window
