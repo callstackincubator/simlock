@@ -22,9 +22,12 @@ export {
   type DriverRejection,
   type ObservedDevice,
   type ObservedRunState,
+  type PassthroughCommand,
+  PassthroughRefusedError,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
+export { UnknownPassthroughToolError } from "./driver-catalog.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor } from "./doctor.js";

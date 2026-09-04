@@ -23,8 +23,11 @@ import {
   parseRawDeviceUnhealthy,
   parseRawLeaseGrant,
   parseRawLeaseLost,
+  parseRawPassthroughCommand,
+  type RawPassthroughCommand,
 } from "../daemon-client/contracts.js";
 import { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
+import { spawnPassthrough } from "./passthrough.js";
 
 export { DaemonClientError, type DaemonConnection } from "../daemon-client/protocol.js";
 
@@ -33,6 +36,8 @@ const USAGE = `Usage: simlock <command> [options]
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config
+  simctl <args...>            Run xcrun simctl against Simlock's iOS device set
+  adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
 Run 'simlock <command> --help' for command usage.`;
 
@@ -43,6 +48,21 @@ Run 'simlock <command> --help' for command usage.`;
  * its own lease.
  */
 const LEASE_LOST_EXIT_CODE = 14;
+
+/**
+ * The daemon's answer when a driver refuses to proxy a verb. It is a usage mistake, not a
+ * daemon fault, so the CLI re-raises it as one and the caller sees the `USAGE` / exit 2
+ * contract `docs/CLI.md` documents for a refused passthrough.
+ */
+const PASSTHROUGH_REFUSED_CODE = "PASSTHROUGH_REFUSED";
+
+/**
+ * A key that is safe to the left of `=` in a shell `export`. Anything else is a command
+ * waiting for `eval` to run it, and escaping the value alone defends the half an attacker
+ * does not need. Not reachable through the shipped drivers (their keys are literals), but
+ * `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
+ */
+const SHELL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const DAEMON_ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   BAD_FRAME: 2,
@@ -101,6 +121,12 @@ export interface CliEnvironment {
   readonly stderr: Output;
   readonly stdout: Output;
   readonly confirm?: (question: string) => Promise<boolean>;
+  /**
+   * Runs a daemon-resolved passthrough command and resolves with its exit code. A hook
+   * rather than a direct spawn so the `simctl` / `adb` wrappers are testable without a
+   * child process, the same way every other external effect here is injected.
+   */
+  readonly runPassthrough?: (command: RawPassthroughCommand) => Promise<number>;
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
 }
 
@@ -153,6 +179,7 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
     stderr: process.stderr,
     stdout: process.stdout,
     confirm: confirmTerminal,
+    runPassthrough: spawnPassthrough,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -196,6 +223,16 @@ export async function runCli(
         return await runDaemon(argv.slice(1), environment);
       case "config":
         return await runConfig(argv.slice(1), environment);
+      case "simctl":
+      case "adb":
+        // Named here rather than discovered from the drivers on purpose: these are
+        // user-facing command names published in `docs/CLI.md`, and the CLI never builds a
+        // simctl or adb argument -- it forwards the name and spawns whatever the daemon
+        // hands back, so which flags scope the tool and which verbs it refuses still live
+        // entirely in the driver (architecture rule 2 is about knowledge, not about names).
+        // Every argument after the tool name is the tool's, verbatim -- including `--help`,
+        // which belongs to `simctl`/`adb` and not to Simlock. `simlock --help` lists these.
+        return await runPassthrough(argv[0], argv.slice(1), environment);
       case "mcp":
         return await runMcp(argv.slice(1), environment);
       default:
@@ -224,6 +261,31 @@ function cliErrorCode(error: unknown): string {
   if (error instanceof UsageError) return "USAGE";
   if (error instanceof DaemonClientError) return error.code;
   return "INTERNAL";
+}
+
+/**
+ * Asks the daemon which command reaches Simlock's devices for this tool, then runs it here.
+ * The split is architecture rule 8 in one function: the daemon owns the scoping (it is the
+ * process that knows which root and which adb port), and the CLI owns the terminal, so an
+ * interactive `adb shell` gets a tty and its exit code travels back to the caller's shell.
+ */
+async function runPassthrough(
+  tool: string,
+  args: readonly string[],
+  environment: CliEnvironment,
+): Promise<number> {
+  const run = environment.runPassthrough;
+  if (run === undefined) throw new Error("Tool passthrough is unavailable");
+  let response: unknown;
+  try {
+    response = await requestOnce(environment, "driver.passthrough", { args, tool });
+  } catch (error: unknown) {
+    if (error instanceof DaemonClientError && error.code === PASSTHROUGH_REFUSED_CODE) {
+      throw new UsageError(error.message);
+    }
+    throw error;
+  }
+  return run(parseRawPassthroughCommand(response));
 }
 
 async function runMcp(argv: readonly string[], environment: CliEnvironment): Promise<number> {
@@ -274,6 +336,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     "bind-pid": { type: "string" },
     detach: { type: "boolean" },
     device: { type: "string" },
+    "export-env": { type: "boolean" },
     help: { type: "boolean", short: "h" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
@@ -284,7 +347,7 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--allow-download] [--bind-pid <pid>]\n",
+        "                     [--allow-download] [--export-env] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -362,7 +425,10 @@ async function runLease(argv: readonly string[], environment: CliEnvironment): P
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
     const result = leaseResult(response);
-    environment.stdout.write(`${JSON.stringify(result)}\n`);
+    // Held mode still holds after this line, whichever shape it took: `--export-env` only
+    // changes what stdout carries, never how long the lease lives.
+    if (values["export-env"] === true) writeExportEnv(environment, result);
+    else environment.stdout.write(`${JSON.stringify(result)}\n`);
     if (detached || termination === undefined) return 0;
     await Promise.race([termination.settled, leaseLostSignal]);
     if (leaseLost) {
@@ -698,13 +764,59 @@ function commandArgs(
   }
 }
 
-function leaseResult(value: unknown): Record<string, unknown> & { readonly lease: string } {
+/**
+ * Writes the export lines, and -- when there are none -- one line to stderr saying so.
+ * Silence would be worse than it looks: the lease is committed and TTL-bound either way,
+ * and a caller that was told neither its id nor that anything was missing can neither
+ * renew nor release it, and has no scoping to reach the device with. stdout stays clean so
+ * `eval "$(...)"` is unaffected. An older daemon, which sends no `environment` at all, is
+ * the case that actually produces this.
+ */
+function writeExportEnv(environment: CliEnvironment, result: ReturnType<typeof leaseResult>): void {
+  environment.stdout.write(exportEnvLines(result.environment));
+  if (Object.keys(result.environment).length > 0) return;
+  environment.stderr.write(
+    `simlock: lease ${result.lease} carries no environment, so there is nothing to export and the device may be unreachable from a bare simctl or adb. Release it with \`simlock release ${result.lease}\`.\n`,
+  );
+}
+
+/**
+ * Shell `export` lines for `eval "$(simlock lease ... --export-env)"`. Single quotes because
+ * they are the only shell quoting that takes every byte literally, and `'\''` is the one way
+ * to get a literal quote back inside them -- a device-set path is a user-configurable path
+ * and may hold a space or an apostrophe. Sorted so repeated runs produce identical output.
+ *
+ * A key that is not a shell identifier fails the command rather than being skipped: the
+ * driver that produced it is broken, and dropping it silently would leave the holder with
+ * a lease it cannot reach and no idea why.
+ */
+function exportEnvLines(environment: Readonly<Record<string, string>>): string {
+  return Object.entries(environment)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => {
+      if (!SHELL_IDENTIFIER.test(key)) {
+        throw new Error(
+          `Refusing to export ${JSON.stringify(key)}: a lease environment key must be a shell identifier, and this one would change what \`eval\` runs.`,
+        );
+      }
+      return `export ${key}='${value.replaceAll("'", "'\\''")}'\n`;
+    })
+    .join("");
+}
+
+function leaseResult(value: unknown): Record<string, unknown> & {
+  readonly environment: Readonly<Record<string, string>>;
+  readonly lease: string;
+} {
   const grant = parseRawLeaseGrant(value);
   return {
     // Optional: undefined only for a device leased straight out of a pre-address `state.json`
     // without ever rebooting under this daemon -- see `DeviceRecord.address` in domain.ts.
     ...(grant.device.address === undefined ? {} : { address: grant.device.address }),
     device: grant.device.spec.model,
+    // Always present, `{}` at the least: an agent that reads it unconditionally should
+    // never have to distinguish "no scoping needed" from "an older daemon said nothing".
+    environment: grant.environment,
     expires_at_ms: grant.lease.ttlDeadline,
     lease: grant.lease.id,
     os: grant.device.spec.osVersion,
@@ -979,6 +1091,7 @@ function waitForTermination(
   });
   return { dispose: () => detach(), settled };
 }
+
 async function confirmTerminal(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
   const { createInterface } = await import("node:readline/promises");

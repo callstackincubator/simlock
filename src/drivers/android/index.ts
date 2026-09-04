@@ -12,6 +12,8 @@ import {
   type DriverReality,
   type ObservedDevice,
   type ObservedMark,
+  type PassthroughCommand,
+  PassthroughRefusedError,
   type ReclaimResult,
   RuntimeMissingError,
   UnknownModelError,
@@ -145,7 +147,59 @@ interface DeviceProfile {
   readonly name: string;
 }
 
+/**
+ * The `simlock <tool>` wrapper this driver answers to. Published as a constant because a
+ * driver that refused to start has no instance to ask, and `DriverRejection` carries the
+ * name so `simlock adb` can say why it is unavailable rather than reading as a missing SDK.
+ */
+export const ANDROID_PASSTHROUGH_TOOL = "adb";
+
+/** Every refusal ends the same way: the Simlock command that does it safely. */
+const RECLAIM_INSTEAD =
+  "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
+
+/**
+ * `kill-server` would detach every leased emulator at once -- an agent's most reflexive
+ * troubleshooting step. Matched anywhere in the arguments rather than in first position:
+ * `adb -P 1 kill-server` is the same command with a global in front of it, and a
+ * positional scan is the only rule that catches every spelling without this module having
+ * to parse adb's own option grammar.
+ */
+const REFUSED_ADB_VERB = "kill-server";
+
+/**
+ * Console commands `simlock adb` will not proxy, matched as a run of adjacent arguments
+ * anywhere in the list so that `-s <serial> emu kill` is caught along with `emu kill`.
+ * Every one of them reaches through Simlock's own adb server, which is the only server
+ * that can see these emulators at all -- a bare `adb` cannot, so what is refused here is
+ * genuinely a capability, and it is refused because it mutates a device behind the
+ * registry's back (ADR 0001, decision 7).
+ */
+const STOPS_A_RUNNING_DEVICE =
+  "it stops a device Simlock still believes is running, which reports as drift on the next reconcile.";
+
+const REFUSED_ADB_SEQUENCES: readonly {
+  readonly sequence: readonly string[];
+  readonly reason: string;
+}[] = [
+  { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "kill"] },
+  { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "avd", "stop"] },
+  {
+    // Not drift, which is why it needs saying: the emulator keeps running and nothing looks
+    // wrong. What is gone is the clean baseline `reclaimStrategy` restores from, so every
+    // later reclaim of this device silently degrades from a snapshot load to a full wipe.
+    reason:
+      "it destroys the clean-boot snapshot Simlock restores from, turning every later reclaim of this device into a full wipe.",
+    sequence: ["emu", "avd", "snapshot", "delete"],
+  },
+];
+
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
+
+/** True when `sequence` appears as consecutive arguments starting anywhere in `args`. */
+function containsSequence(args: readonly string[], sequence: readonly string[]): boolean {
+  return args.some((_, index) => sequence.every((token, offset) => args[index + offset] === token));
+}
 
 export class AndroidDriver implements Driver {
   readonly platform = "android" as const;
@@ -249,6 +303,41 @@ export class AndroidDriver implements Driver {
     // `adb` reads this variable natively, so a lease holder needs nothing else to reach the
     // device: without it their `adb` talks to the shared server, which cannot see it.
     return { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) };
+  }
+
+  readonly passthroughTool = ANDROID_PASSTHROUGH_TOOL;
+
+  /**
+   * `adb -P <port> <args...>` against Simlock's own server, which is the only one that can
+   * see a Simlock emulator at all. `ANDROID_ADB_SERVER_PORT` rides along as well so any adb
+   * that re-execs itself stays on the same server; it says the same thing `-P` does, and
+   * saying it twice costs nothing.
+   */
+  passthrough(args: readonly string[]): PassthroughCommand {
+    this.#assertProxyable(args);
+    return {
+      args: ["-P", String(this.#adbServerPort), ...args],
+      command: this.#sdk.adb,
+      env: { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) },
+    };
+  }
+
+  #assertProxyable(args: readonly string[]): void {
+    if (args.includes(REFUSED_ADB_VERB)) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock adb ${REFUSED_ADB_VERB}\`: it would detach every leased emulator at once. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
+      );
+    }
+    const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
+      containsSequence(args, candidate.sequence),
+    );
+    if (refused !== undefined) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock adb ${refused.sequence.join(" ")}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
+      );
+    }
   }
 
   /**

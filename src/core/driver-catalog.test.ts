@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeClock } from "../ports/index.js";
+import { PassthroughRefusedError } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
-import { DriverCatalog, NoDriverError } from "./driver-catalog.js";
+import { DriverCatalog, NoDriverError, UnknownPassthroughToolError } from "./driver-catalog.js";
 
 describe("DriverCatalog", () => {
   it("resolves a request through its registered driver", async () => {
@@ -77,5 +78,51 @@ describe("DriverCatalog", () => {
 
     await expect(catalog.listCatalog()).resolves.toEqual([]);
     await expect(catalog.listCatalog("android")).resolves.toEqual([]);
+  });
+
+  it("routes a passthrough to the driver that claims its tool name", () => {
+    const clock = new FakeClock();
+    const ios = new FakeDriver({
+      clock,
+      passthrough: (args) => ({ args: ["--set", "/root", ...args], command: "xcrun", env: {} }),
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const android = new FakeDriver({
+      clock,
+      passthrough: () => ({ args: [], command: "adb", env: {} }),
+      passthroughTool: "adb",
+      platform: "android",
+    });
+    const catalog = new DriverCatalog([ios, android]);
+
+    expect(catalog.passthrough("simctl", ["list", "devices"])).toEqual({
+      args: ["--set", "/root", "list", "devices"],
+      command: "xcrun",
+      env: {},
+    });
+  });
+
+  it("lets a driver's refusal out untouched rather than translating it here", () => {
+    const clock = new FakeClock();
+    const driver = new FakeDriver({
+      clock,
+      passthrough: () => {
+        throw new PassthroughRefusedError("simctl", "Refusing `simlock simctl delete`");
+      },
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+
+    expect(() => new DriverCatalog([driver]).passthrough("simctl", ["delete", "ABCD"])).toThrow(
+      PassthroughRefusedError,
+    );
+  });
+
+  it("refuses a tool no registered driver answers to", () => {
+    const clock = new FakeClock();
+    const catalog = new DriverCatalog([new FakeDriver({ clock, platform: "ios" })]);
+
+    expect(() => catalog.passthrough("adb", ["devices"])).toThrow(UnknownPassthroughToolError);
   });
 });

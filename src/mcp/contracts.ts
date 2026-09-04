@@ -22,6 +22,9 @@ export const leaseSimulatorOutputSchema = z.object({
   address: nonEmptyString.optional(),
   device: nonEmptyString,
   device_id: nonEmptyString,
+  // Always present, `{}` at the least: containment means a bare `simctl`/`adb` cannot
+  // reach the granted device, so an agent needs this to use what it was just handed.
+  environment: z.record(z.string(), z.string()),
   expires_at_ms: finiteNumber,
   lease_id: nonEmptyString,
   mode: z.literal("held"),

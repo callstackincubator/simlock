@@ -11,6 +11,7 @@ import {
   CleanupReaper,
   FakeDriver,
   LeaseEngine,
+  PassthroughRefusedError,
   Registry,
 } from "../core/index.js";
 import {
@@ -342,6 +343,69 @@ describe("DaemonServer", () => {
       payload: { platforms: [] },
     });
     await expect(client.request("catalog.get", { platform: "foo" })).resolves.toMatchObject({
+      error: { code: "BAD_REQUEST" },
+      ok: false,
+    });
+  });
+
+  it("resolves a passthrough to its driver's command without running it here", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: (args) => ({
+        args: ["simctl", "--set", "/root", ...args],
+        command: "xcrun",
+        env: {},
+      }),
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("driver.passthrough", { args: ["list", "devices"], tool: "simctl" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { args: ["simctl", "--set", "/root", "list", "devices"], command: "xcrun" },
+    });
+  });
+
+  it("gives a refused verb its own code, so the CLI can render it as a usage error", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: () => {
+        throw new PassthroughRefusedError("simctl", "Refusing it; use `simlock release` instead.");
+      },
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("driver.passthrough", { args: ["delete", "ABCD"], tool: "simctl" }),
+    ).resolves.toMatchObject({
+      error: { code: "PASSTHROUGH_REFUSED", message: expect.stringContaining("simlock release") },
+      ok: false,
+    });
+  });
+
+  it.each([
+    [{ args: ["devices"], tool: "adb" }],
+    [{ args: "list", tool: "simctl" }],
+    [{ args: ["list"] }],
+  ])("rejects a passthrough no driver can serve as given: %s", async (payload) => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(client.request("driver.passthrough", payload)).resolves.toMatchObject({
       error: { code: "BAD_REQUEST" },
       ok: false,
     });
@@ -837,6 +901,58 @@ describe("DaemonServer driver rejections", () => {
     expect(response.error?.message).toBe("No driver registered for platform: android");
   });
 
+  it("names the refusal when a passthrough asks for the tool whose driver did not start", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.adb-server-rejected",
+          passthroughTool: "adb",
+          payload: { port: 5038, reason: "occupied" },
+          platform: "android",
+          reason: "occupied",
+          summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("driver.passthrough", {
+      args: ["devices"],
+      tool: "adb",
+    });
+
+    // Unexplained, "No driver provides a adb passthrough" reads as "this host has no
+    // Android SDK" and sends the operator off to install one, while the summary naming the
+    // port conflict sits unread in `driverRejections` (safety rule 9).
+    expect(response.error?.code).toBe("BAD_REQUEST");
+    expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
+  });
+
+  it("leaves an unknown passthrough tool unexplained when no driver claimed it", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          passthroughTool: "simctl",
+          payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+          platform: "ios",
+          reason: "symlink",
+          summary: "Refusing the ios device root /Devices: it is a symlink",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("driver.passthrough", {
+      args: ["devices"],
+      tool: "adb",
+    });
+
+    expect(response.error?.message).toBe("No driver provides a adb passthrough");
+  });
+
   it("refuses at compile time to pair an event with another event's payload", () => {
     const rejection: DriverRejection = {
       event: "driver.adb-server-rejected",
@@ -1296,6 +1412,7 @@ async function createHarness(
     }),
     leases: engine,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    passthrough: engine,
     queue: engine,
     reaper,
     registry,

@@ -285,6 +285,9 @@ describe("discoverDrivers", () => {
     // `simlock events --json` publishes, so renaming `root` has to fail here.
     expect(rejections[0]).toEqual({
       event: "driver.root-rejected",
+      // The wrapper this platform would have answered to, so `simlock simctl` can say why
+      // it is missing instead of reading as "this host has no Xcode".
+      passthroughTool: "simctl",
       payload: { platform: "ios", reason: "wrong-instance", root: IOS_ROOT },
       platform: "ios",
       reason: "wrong-instance",

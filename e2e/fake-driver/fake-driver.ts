@@ -14,6 +14,8 @@ import {
   type DriverReality,
   type ObservedMark,
   type ObservedRunState,
+  type PassthroughCommand,
+  PassthroughRefusedError,
 } from "../../dist/core/driver.js";
 import type { DeviceSpec, Platform } from "../../dist/core/domain.js";
 import type {
@@ -42,6 +44,55 @@ const DEFAULT_SCRIPT: FakeDriverPlatformScript = {
   availableOsVersions: ["18.0"],
 };
 
+/** The `simlock <tool>` name each fake platform stands in for, matching the real drivers. */
+const PASSTHROUGH_TOOLS: Readonly<Record<Platform, string>> = {
+  android: "adb",
+  ios: "simctl",
+};
+
+const IOS_REFUSED_VERBS = ["create", "erase", "delete"];
+
+/** iOS refuses a lifecycle verb in first non-flag position, where a subcommand sits. */
+function refusedSimctlVerb(args: readonly string[]): string | undefined {
+  const verb = args.find((argument) => !argument.startsWith("-"));
+  return IOS_REFUSED_VERBS.find((candidate) => candidate === verb);
+}
+
+/** Android refuses either form anywhere in the arguments, `-s <serial> emu kill` included. */
+function refusedAdbVerb(args: readonly string[]): string | undefined {
+  if (args.includes("kill-server")) return "kill-server";
+  const pair = args.some((argument, index) => argument === "emu" && args[index + 1] === "kill");
+  return pair ? "emu kill" : undefined;
+}
+
+/**
+ * The refusal rules, restated rather than imported: this one driver stands in for both
+ * platforms, and the e2e lane is exactly where the published behaviour -- exit 2 with a
+ * USAGE line naming what to run instead -- has to be exercised end to end.
+ *
+ * Because they are restated, these are a *mirror* of the real rules and never evidence
+ * for them: deleting the refusal branch from `src/drivers/ios/index.ts` would leave every
+ * e2e case here green. What the shipped drivers refuse is pinned in
+ * `src/drivers/ios/index.test.ts` and `src/drivers/android/index.test.ts`; this pair only
+ * has to be refusable, not complete.
+ */
+const PASSTHROUGH_REFUSALS: Readonly<
+  Record<Platform, (args: readonly string[]) => string | undefined>
+> = {
+  android: refusedAdbVerb,
+  ios: refusedSimctlVerb,
+};
+
+/**
+ * The command a permitted passthrough resolves to: a node one-liner that prints the argv it
+ * was handed and exits with `SIMLOCK_FAKE_PASSTHROUGH_EXIT`. Deliberately reads that from
+ * its own environment rather than from the script file, so a test controls the exit code
+ * through the CLI invocation it is already making and this stays synchronous.
+ */
+const PASSTHROUGH_PROGRAM =
+  "process.stdout.write(JSON.stringify(process.argv.slice(1)));" +
+  "process.exit(Number(process.env.SIMLOCK_FAKE_PASSTHROUGH_EXIT ?? 0));";
+
 /**
  * Driver implementation for the daemon-spawned process the e2e suite drives out of
  * band. Every behaviour lives in a JSON script file re-read on each operation (env
@@ -55,6 +106,7 @@ export class OutOfProcessFakeDriver implements Driver {
   readonly platform: Platform;
   /** Synthetic: this driver owns no real devices, and nothing validates or creates it. */
   readonly deviceRoot: string;
+  readonly passthroughTool: string;
   readonly #clock: FakeDriverClock;
   readonly #logPath: string | undefined;
   readonly #scriptPath: string | undefined;
@@ -66,6 +118,7 @@ export class OutOfProcessFakeDriver implements Driver {
   constructor(options: OutOfProcessFakeDriverOptions) {
     this.platform = options.platform;
     this.deviceRoot = `/fake/${options.platform}`;
+    this.passthroughTool = PASSTHROUGH_TOOLS[options.platform];
     this.#clock = options.clock;
     this.#logPath = options.logPath;
     this.#scriptPath = options.scriptPath;
@@ -199,9 +252,28 @@ export class OutOfProcessFakeDriver implements Driver {
   }
 
   /** Synchronous like `estimate`, and cached the same way: the last script read wins. */
-  // fallow-ignore-next-line unused-class-member -- Driver.leaseEnvironment contract; read by the lease path when it builds a grant.
   leaseEnvironment(): Readonly<Record<string, string>> {
     return this.#lastKnownLeaseEnvironment ?? {};
+  }
+
+  /**
+   * Synchronous and script-free, unlike everything else here: the refusal rules are the
+   * behaviour under test, and a rule that depended on a prior script read would not be
+   * exercised by the very first command a test runs.
+   */
+  passthrough(args: readonly string[]): PassthroughCommand {
+    const refused = PASSTHROUGH_REFUSALS[this.platform](args);
+    if (refused !== undefined) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock ${this.passthroughTool} ${refused}\`: use \`simlock release\` or \`simlock cleanup\` instead.`,
+      );
+    }
+    return {
+      args: ["-e", PASSTHROUGH_PROGRAM, this.deviceRoot, ...args],
+      command: process.execPath,
+      env: { SIMLOCK_FAKE_PASSTHROUGH_PLATFORM: this.platform },
+    };
   }
 
   async #beforeCall(

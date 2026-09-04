@@ -623,6 +623,7 @@ function leaseSimulatorOutput(grant: RawLeaseGrant): LeaseSimulatorOutput {
     address: grant.device.address,
     device: grant.device.spec.model,
     device_id: grant.device.driverDeviceId,
+    environment: grant.environment,
     expires_at_ms: grant.lease.ttlDeadline,
     lease_id: grant.lease.id,
     mode: "held",

@@ -10,6 +10,7 @@ const rawGrant = {
     driverDeviceId: "ABCD",
     spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" as const },
   },
+  environment: { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
   lease: { id: "lse_9f2c", mode: "held" as const, ttlDeadline: 61_000 },
   timing: {
     estimatedBootMs: 20,
@@ -31,6 +32,9 @@ describe("McpSession", () => {
     await expect(session.lease(input)).resolves.toEqual({
       device: "iPhone 17 Pro",
       device_id: "ABCD",
+      // The grant an agent gets over MCP has to say how to reach the device too: an MCP
+      // holder shells out to the same simctl/adb a CLI holder does.
+      environment: { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
       expires_at_ms: 61_000,
       lease_id: "lse_9f2c",
       mode: "held",

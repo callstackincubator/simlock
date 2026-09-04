@@ -9,6 +9,7 @@ import {
   DriverCrashError,
   OwnedRootError,
   OWNED_ROOT_MARKER_FILE,
+  PassthroughRefusedError,
   RuntimeMissingError,
   UnknownModelError,
 } from "../../core/index.js";
@@ -596,6 +597,93 @@ describe("IosSimctlDriver", () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
 
     expect(driver.leaseEnvironment()).toEqual({ SIMLOCK_IOS_DEVICE_SET: deviceRoot });
+  });
+
+  it("scopes a simctl passthrough to the device set the way its own calls are scoped", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(driver.passthrough(["install", "booted", "./MyApp.app"])).toEqual({
+      args: ["simctl", "--set", deviceRoot, "install", "booted", "./MyApp.app"],
+      command: "xcrun",
+      env: {},
+    });
+  });
+
+  it.each([["create"], ["erase"], ["delete"]])(
+    "refuses to proxy %s, naming the command that reclaims a device properly",
+    async (verb) => {
+      const driver = await createDriver(new ScriptedProcessRunner([]));
+
+      expect(() => driver.passthrough([verb, "ABCD"])).toThrow(PassthroughRefusedError);
+      expect(() => driver.passthrough([verb, "ABCD"])).toThrow(/simlock release/);
+      expect(() => driver.passthrough([verb, "ABCD"])).toThrow(/simlock cleanup/);
+    },
+  );
+
+  it("finds the refused verb past a leading flag rather than only in first position", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["--verbose", "delete", "ABCD"])).toThrow(
+      PassthroughRefusedError,
+    );
+  });
+
+  it("proxies a refused word that is an argument rather than the subcommand", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(driver.passthrough(["spawn", "booted", "log", "erase"]).args).toContain("erase");
+  });
+
+  it.each([
+    [["--profiles", "/tmp", "erase", "all"]],
+    [["--set", "/tmp", "delete", "all"]],
+    [["--set=/tmp", "create", "sim"]],
+  ])(
+    "refuses a caller-supplied scoping flag rather than reading its value as the subcommand: %j",
+    async (args) => {
+      const driver = await createDriver(new ScriptedProcessRunner([]));
+
+      // The bug this pins was not the flag itself: the flag's separated value was found as
+      // the subcommand, so the refused verb behind it was never seen, and the wrapper
+      // answered with `--set <simlockRoot>` prepended -- Simlock handing over the very path
+      // that contains every other agent's devices.
+      expect(() => driver.passthrough(args)).toThrow(PassthroughRefusedError);
+      expect(() => driver.passthrough(args)).toThrow(/supplies the device set itself/);
+    },
+  );
+
+  it("refuses to shut down every device in the set at once", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["shutdown", "all"])).toThrow(PassthroughRefusedError);
+    expect(() => driver.passthrough(["shutdown", "all"])).toThrow(/simlock release/);
+  });
+
+  it("still proxies shutting a single device down by udid", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(driver.passthrough(["shutdown", "ABCD"]).args).toEqual([
+      "simctl",
+      "--set",
+      deviceRoot,
+      "shutdown",
+      "ABCD",
+    ]);
+  });
+
+  it("refuses to delete a runtime it cannot download back", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(
+      PassthroughRefusedError,
+    );
+    expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(/through Xcode/);
+  });
+
+  it("still proxies the runtime operations that only read", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(driver.passthrough(["runtime", "list"]).args).toContain("list");
   });
 
   it.skipIf(process.env.SIMLOCK_LIVE_IOS !== "1")(

@@ -27,6 +27,7 @@ function createQueue(onTimeout?: (waiter: import("./wait-queue.js").Waiter) => v
 function grant(): LeaseGrant {
   return {
     device: {} as LeaseGrant["device"],
+    environment: {},
     lease: {} as LeaseGrant["lease"],
     timing: {
       estimatedBootMs: 0,

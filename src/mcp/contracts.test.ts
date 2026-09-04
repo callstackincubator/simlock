@@ -33,6 +33,7 @@ describe("MCP contracts", () => {
       leaseSimulatorOutputSchema.parse({
         device: "iPhone 17 Pro",
         device_id: "ABCD",
+        environment: { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
         expires_at_ms: 61_000,
         lease_id: "lse_9f2c",
         mode: "held",

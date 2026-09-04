@@ -6,6 +6,7 @@ import {
   parseRawDeviceUnhealthy,
   parseRawLeaseGrant,
   parseRawLeaseHeartbeatAck,
+  parseRawPassthroughCommand,
 } from "./contracts.js";
 
 const leaseGrant = {
@@ -13,6 +14,7 @@ const leaseGrant = {
     driverDeviceId: "ABCD",
     spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
   },
+  environment: { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
   lease: { id: "lse_9f2c", mode: "held", ttlDeadline: 61_000 },
   timing: {
     estimatedBootMs: 20,
@@ -41,6 +43,57 @@ describe("parseRawLeaseGrant", () => {
     [null],
   ])("rejects malformed daemon payloads", (value) => {
     expect(() => parseRawLeaseGrant(value)).toThrow("Daemon returned an invalid lease grant");
+  });
+
+  it("reads a grant from a daemon too old to send an environment as having none", () => {
+    const { environment: _omitted, ...withoutEnvironment } = leaseGrant;
+
+    expect(parseRawLeaseGrant(withoutEnvironment).environment).toEqual({});
+  });
+
+  it.each([["not-an-object"], [42], [null], [["SIMLOCK_IOS_DEVICE_SET"]]])(
+    "reads a malformed environment as having none rather than failing the grant: %s",
+    (environment) => {
+      expect(parseRawLeaseGrant({ ...leaseGrant, environment }).environment).toEqual({});
+    },
+  );
+
+  it("keeps the string entries of an environment carrying non-string values", () => {
+    const environment = { ANDROID_ADB_SERVER_PORT: "5038", broken: 5038 };
+
+    expect(parseRawLeaseGrant({ ...leaseGrant, environment }).environment).toEqual({
+      ANDROID_ADB_SERVER_PORT: "5038",
+    });
+  });
+});
+
+describe("parseRawPassthroughCommand", () => {
+  it("parses the command a driver resolved for a passthrough", () => {
+    const command = {
+      args: ["-P", "5038", "shell", "getprop"],
+      command: "/sdk/platform-tools/adb",
+      env: { ANDROID_ADB_SERVER_PORT: "5038" },
+    };
+
+    expect(parseRawPassthroughCommand(command)).toEqual(command);
+  });
+
+  it("defaults a missing environment to none rather than failing", () => {
+    expect(parseRawPassthroughCommand({ args: ["list", "devices"], command: "xcrun" }).env).toEqual(
+      {},
+    );
+  });
+
+  it.each([
+    [{ args: [], command: "" }],
+    [{ args: ["shell", 42], command: "adb" }],
+    [{ args: "shell", command: "adb" }],
+    [{ command: "adb" }],
+    [null],
+  ])("rejects a command that could not be spawned as given", (value) => {
+    expect(() => parseRawPassthroughCommand(value)).toThrow(
+      "Daemon returned an invalid passthrough command",
+    );
   });
 });
 

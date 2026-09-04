@@ -141,6 +141,46 @@ export interface Driver {
    * path and never lets a failure here abort the rest of one.
    */
   dispose?(): Promise<void>;
+  /**
+   * The `simlock <tool>` name this driver answers to (`simctl`, `adb`), when it wraps a
+   * platform tool at all. Spelled `| undefined` rather than left plain optional so a
+   * driver that decides at construction time whether it has one can still say so.
+   */
+  readonly passthroughTool?: string | undefined;
+  /**
+   * Scoped command for `simlock <tool> <args>`, or `PassthroughRefusedError` for a verb
+   * this driver will not proxy. Both halves are the driver's business: only it knows
+   * which flag points its tool at the root it owns, and only it knows which verbs would
+   * change a device's lifecycle behind the registry's back (ADR 0001, decision 7).
+   */
+  passthrough?(args: readonly string[]): PassthroughCommand;
+}
+
+/**
+ * A ready-to-run invocation of a platform tool, already scoped to the driver's root. The
+ * frontend that runs it merges `env` over its own environment rather than replacing it --
+ * these are only the scoping keys, and a tool spawned without `PATH` would not be found.
+ */
+export interface PassthroughCommand {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+}
+
+/**
+ * A passthrough verb a driver refuses to proxy. The wrappers exist to inject scoping
+ * flags, and injecting them into `simctl delete` would hand back exactly the capability
+ * the containment root exists to remove -- so the refusal, and the message naming what to
+ * run instead, live with the driver that knows which verbs those are.
+ */
+export class PassthroughRefusedError extends Error {
+  constructor(
+    readonly tool: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PassthroughRefusedError";
+  }
 }
 
 /** The events a driver may refuse to start with; each pairs with its own payload below. */
@@ -183,6 +223,13 @@ interface DriverRefusal<Event extends DriverRejectionEvent> {
    * open. `doctor` reports it as the failing reason.
    */
   readonly reason: DriverRejectionReason;
+  /**
+   * The `simlock <tool>` wrapper this driver would have answered to, when it has one.
+   * Carried because a passthrough that finds no driver is otherwise indistinguishable
+   * from a host with no SDK, and safety rule 9 promises Simlock reports *why*. The core
+   * only compares it to the requested tool name; the name itself is the driver's.
+   */
+  readonly passthroughTool?: string;
   /** One line, for `doctor` output and the startup log. */
   readonly summary: string;
 }
