@@ -452,42 +452,45 @@ describe.skipIf(process.platform !== "darwin")(
           const fullResult = await mcp.client.callTool(
             {
               name: "lease_simulator",
-              arguments: { platform: "ios", device: model, os, full: true },
+              arguments: { full: true, model, osVersion: os, platform: "ios" },
             },
             undefined,
             leaseCallOptions,
           );
           const fullLeased = fullResult.structuredContent as {
-            lease_id: string;
-            slim: boolean;
+            device: { featureProfile?: "full" | "reduced" };
+            lease: { id: string };
           };
-          expect(fullLeased.slim, "MCP full:true lease must report slim:false").toBe(false);
+          expect(
+            fullLeased.device.featureProfile,
+            "MCP full:true lease must report a full feature profile",
+          ).toBe("full");
 
           await mcp.client.callTool({
             name: "release_simulator",
-            arguments: { lease_id: fullLeased.lease_id },
+            arguments: { leaseId: fullLeased.lease.id },
           });
 
           const slimResult = await mcp.client.callTool(
             {
               name: "lease_simulator",
-              arguments: { platform: "ios", device: model, os },
+              arguments: { model, osVersion: os, platform: "ios" },
             },
             undefined,
             leaseCallOptions,
           );
           const slimLeased = slimResult.structuredContent as {
-            lease_id: string;
-            slim: boolean;
+            device: { featureProfile?: "full" | "reduced" };
+            lease: { id: string };
           };
           expect(
-            slimLeased.slim,
-            "MCP plain lease under ios.slim.enabled must report slim:true",
-          ).toBe(true);
+            slimLeased.device.featureProfile,
+            "MCP plain lease under ios.slim.enabled must report a reduced feature profile",
+          ).toBe("reduced");
 
           await mcp.client.callTool({
             name: "release_simulator",
-            arguments: { lease_id: slimLeased.lease_id },
+            arguments: { leaseId: slimLeased.lease.id },
           });
         } finally {
           await mcp.close();

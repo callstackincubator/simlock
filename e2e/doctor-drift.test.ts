@@ -44,8 +44,13 @@ function leaseHeld(
   ]);
 }
 
-async function grantOf(held: CliBackgroundHandle): Promise<{ lease: string; udid: string }> {
-  return JSON.parse(await held.firstStdoutLine()) as { lease: string; udid: string };
+interface Grant {
+  readonly lease: { readonly id: string };
+  readonly device: { readonly driverDeviceId: string };
+}
+
+async function grantOf(held: CliBackgroundHandle): Promise<Grant> {
+  return JSON.parse(await held.firstStdoutLine()) as Grant;
 }
 
 describe("doctor and drift", () => {
@@ -73,11 +78,13 @@ describe("doctor and drift", () => {
     const deviceD = await grantOf(heldD);
     const heldE = leaseHeld(env, "doctor-e");
     const deviceE = await grantOf(heldE);
-    const distinctUdids = new Set([deviceA, deviceB, deviceC, deviceD, deviceE].map((d) => d.udid));
+    const distinctUdids = new Set(
+      [deviceA, deviceB, deviceC, deviceD, deviceE].map((d) => d.device.driverDeviceId),
+    );
     expect(distinctUdids.size, "expected 5 distinct devices, one per concurrent lease").toBe(5);
 
     for (const device of [deviceA, deviceC, deviceD, deviceE]) {
-      const release = await env.cli(["release", device.lease]);
+      const release = await env.cli(["release", device.lease.id]);
       expect(release.code).toBe(0);
     }
     for (const held of [heldA, heldC, heldD, heldE]) {
@@ -93,16 +100,16 @@ describe("doctor and drift", () => {
     };
 
     const stagedDevices: ScriptedObservedDevice[] = [
-      { deviceId: deviceA.udid, runState: "stopped" },
-      { deviceId: deviceB.udid, runState: "stopped" },
-      // deviceC.udid deliberately omitted.
+      { deviceId: deviceA.device.driverDeviceId, runState: "stopped" },
+      { deviceId: deviceB.device.driverDeviceId, runState: "stopped" },
+      // deviceC.device.driverDeviceId deliberately omitted.
       {
-        deviceId: deviceD.udid,
+        deviceId: deviceD.device.driverDeviceId,
         runState: "running",
         mark: { durable: "tok-d", erasableReadable: true },
       },
       {
-        deviceId: deviceE.udid,
+        deviceId: deviceE.device.driverDeviceId,
         runState: "running",
         mark: { durable: "tok-e", erasable: "stale", erasableReadable: false },
       },
@@ -124,7 +131,7 @@ describe("doctor and drift", () => {
     expect(findings).toContainEqual(
       expect.objectContaining({
         kind: "foreign-state-change",
-        deviceId: registryIdOf(deviceA.udid),
+        deviceId: registryIdOf(deviceA.device.driverDeviceId),
         expected: "running",
         observed: "stopped",
       }),
@@ -132,7 +139,7 @@ describe("doctor and drift", () => {
     expect(findings).toContainEqual(
       expect.objectContaining({
         kind: "foreign-state-change",
-        deviceId: registryIdOf(deviceB.udid),
+        deviceId: registryIdOf(deviceB.device.driverDeviceId),
         expected: "running",
         observed: "stopped",
       }),
@@ -140,18 +147,18 @@ describe("doctor and drift", () => {
     expect(findings).toContainEqual(
       expect.objectContaining({
         kind: "registry-device-missing",
-        deviceId: registryIdOf(deviceC.udid),
+        deviceId: registryIdOf(deviceC.device.driverDeviceId),
       }),
     );
     expect(findings).toContainEqual(
       expect.objectContaining({
         kind: "foreign-provenance-change",
-        deviceId: registryIdOf(deviceD.udid),
+        deviceId: registryIdOf(deviceD.device.driverDeviceId),
         detail: "erased",
       }),
     );
     expect(
-      findings.some((finding) => finding.deviceId === registryIdOf(deviceE.udid)),
+      findings.some((finding) => finding.deviceId === registryIdOf(deviceE.device.driverDeviceId)),
       "deviceE has an unreadable erasable mark and must produce no finding at all",
     ).toBe(false);
     expect(findings).toContainEqual(
@@ -181,15 +188,15 @@ describe("doctor and drift", () => {
     ).toEqual([]);
 
     const rowsAfterFix = await deviceRows(env);
-    const rowA = rowsAfterFix.find((row) => row.id === registryIdOf(deviceA.udid));
+    const rowA = rowsAfterFix.find((row) => row.id === registryIdOf(deviceA.device.driverDeviceId));
     expect(rowA?.state, "deviceA's foreign-state-change should have been corrected").toBe(
       "shutdown",
     );
-    const rowB = rowsAfterFix.find((row) => row.id === registryIdOf(deviceB.udid));
+    const rowB = rowsAfterFix.find((row) => row.id === registryIdOf(deviceB.device.driverDeviceId));
     expect(rowB?.state, "leased deviceB must be left alone by --fix").toBe("leased");
-    const rowC = rowsAfterFix.find((row) => row.id === registryIdOf(deviceC.udid));
+    const rowC = rowsAfterFix.find((row) => row.id === registryIdOf(deviceC.device.driverDeviceId));
     expect(rowC?.state, "vanished deviceC should be marked deleted, not recreated").toBe("deleted");
-    const rowD = rowsAfterFix.find((row) => row.id === registryIdOf(deviceD.udid));
+    const rowD = rowsAfterFix.find((row) => row.id === registryIdOf(deviceD.device.driverDeviceId));
     expect(
       rowD?.foreignProvenanceDetectedAt,
       "provenance drift is report-only -- re-marking would destroy the evidence",

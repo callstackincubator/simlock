@@ -20,14 +20,17 @@ describe("held-lease liveness & restart", () => {
       "--agent-id",
       "flow5-killed",
     ]);
-    const grant = JSON.parse(await held.firstStdoutLine()) as { lease: string; udid: string };
+    const grant = JSON.parse(await held.firstStdoutLine()) as {
+      lease: { id: string };
+      device: { driverDeviceId: string };
+    };
     await waitForLeaseCount(env, 1);
 
     held.kill("SIGKILL");
     await held.waitForExit(15_000);
 
     await waitForLeaseCount(env, 0);
-    await waitForDeviceState(env, grant.udid, "ready");
+    await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
     await env.expectEvents(["lease.granted", "lease.released"]);
   });
 
@@ -48,7 +51,10 @@ describe("held-lease liveness & restart", () => {
       "--agent-id",
       "flow5-orphaned",
     ]);
-    const grant = JSON.parse(await held.firstStdoutLine()) as { lease: string; udid: string };
+    const grant = JSON.parse(await held.firstStdoutLine()) as {
+      lease: { id: string };
+      device: { driverDeviceId: string };
+    };
     await waitForLeaseCount(env, 1);
 
     // Kill the daemon out from under the holder (not a graceful `daemon stop`) so the
@@ -58,13 +64,13 @@ describe("held-lease liveness & restart", () => {
     await env.startDaemon();
 
     await waitForLeaseCount(env, 0);
-    await waitForDeviceState(env, grant.udid, "ready");
+    await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
 
     const recorded = await env.events();
     expect(recorded).toContainEqual(
       expect.objectContaining({
         event: "lease.released",
-        payload: expect.objectContaining({ leaseId: grant.lease, reason: "orphaned" }),
+        payload: expect.objectContaining({ leaseId: grant.lease.id, reason: "orphaned" }),
       }),
     );
 
@@ -98,7 +104,10 @@ describe("held-lease liveness & restart", () => {
       "--detach",
     ]);
     expect(lease.code).toBe(0);
-    const grant = lease.json as { lease: string; udid: string };
+    const grant = lease.json as {
+      lease: { id: string };
+      device: { driverDeviceId: string };
+    };
 
     // The event ring buffer resets on restart (documented behaviour, ARCHITECTURE.md),
     // so check "granted" happened before the restart wipes it, and only look for
@@ -110,13 +119,13 @@ describe("held-lease liveness & restart", () => {
     // Still there immediately after restart -- the lease was not dropped.
     const leasesAfterRestart = await env.cli(["list", "--leases"]);
     expect(leasesAfterRestart.json).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: grant.lease })]),
+      expect.arrayContaining([expect.objectContaining({ id: grant.lease.id })]),
     );
 
     // If the TTL timer were not restored (rather than merely the lease record
     // persisting), it would never expire and this would time out.
     await waitForLeaseCount(env, 0, { timeout: 30_000 });
-    await waitForDeviceState(env, grant.udid, "ready");
+    await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
 
     await env.expectEvents(["lease.expired"]);
   });
