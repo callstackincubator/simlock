@@ -30,6 +30,13 @@ const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
 export interface Config {
   readonly capacity: CapacityConfig;
+  /**
+   * Per-driver settings, opaque to the core: stored, merged, and handed to the driver
+   * that owns the key without a single key being interpreted here. What
+   * `drivers.ios.deviceRoot` means is the iOS driver's business, and knowing it here
+   * would be exactly the leak architecture rule 2 forbids.
+   */
+  readonly drivers: Readonly<Record<string, Readonly<Record<string, string | number | boolean>>>>;
   readonly idle: {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
@@ -220,6 +227,7 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
     } as CapacityConfig,
+    drivers: {},
     idle: {
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
@@ -310,6 +318,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     // Legacy spelling of the resource options; still type-checked here so a typo
     // inside them is still reported rather than silently dropped.
     ...resourceOptionValidators,
+    drivers: driversValidator,
     idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
     warmPool: objectValidator({
       quarantine: objectValidator({
@@ -340,6 +349,39 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       minimumThresholdMs: nonNegativeNumber,
     }),
   };
+}
+
+/**
+ * Checks the shape of `drivers` and nothing else. Every leaf is type-checked, because a
+ * config file is hand-edited and a nested object or array there is a mistake worth
+ * naming -- but an unrecognised key inside a driver block is deliberately *not* a
+ * warning. The core does not know which keys a driver has, and warning about the ones it
+ * has not heard of would be the same leak as interpreting them.
+ */
+const driversValidator: Validator = (value, path) => {
+  const drivers = requireObject(value, path);
+
+  return Object.fromEntries(
+    Object.entries(drivers).map(([name, block]) => [
+      name,
+      driverSettings(block, `${path}.${name}`),
+    ]),
+  );
+};
+
+function driverSettings(value: unknown, path: string): Record<string, string | number | boolean> {
+  const settings = requireObject(value, path);
+  const result: Record<string, string | number | boolean> = {};
+
+  for (const [key, leaf] of Object.entries(settings)) {
+    if (typeof leaf !== "string" && typeof leaf !== "number" && typeof leaf !== "boolean") {
+      throw invalidValue(`${path}.${key}`, "a string, number, or boolean");
+    }
+
+    result[key] = leaf;
+  }
+
+  return result;
 }
 
 function mergeConfig<Base extends object>(base: Base, overrides: object): Base {

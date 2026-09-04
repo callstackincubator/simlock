@@ -7,6 +7,7 @@ const gibibyte = 1024 ** 3;
 
 const config: Config = {
   diskPressure: { freeBytesThreshold: 0 },
+  drivers: {},
   eventBuffer: { capacity: 1 },
   health: {
     enabled: true,

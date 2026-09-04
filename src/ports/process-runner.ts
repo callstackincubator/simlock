@@ -24,6 +24,12 @@ export interface ProcessRunOptions {
   readonly timeoutMs?: number;
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
+  /**
+   * `"ignore"` detaches the child's output entirely: nothing is captured and nothing is
+   * iterable. A long-lived supervised process (Simlock's own adb server) would otherwise
+   * accumulate every line it ever wrote in this handle's buffers for as long as it runs.
+   */
+  readonly stdio?: "pipe" | "ignore";
 }
 
 export interface ProcessResult {
@@ -81,7 +87,7 @@ export class NodeProcessRunner implements ProcessRunner {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
       detached: process.platform !== "win32",
-      stdio: "pipe",
+      stdio: options.stdio ?? "pipe",
     });
 
     return new NodeProcessHandle(child);
@@ -99,10 +105,6 @@ class NodeProcessHandle implements ProcessHandle {
   constructor(private readonly child: ChildProcess) {
     if (child.pid === undefined) {
       throw new Error("Process did not provide a pid");
-    }
-
-    if (child.stdout === null || child.stderr === null) {
-      throw new Error("Process was not started with stdout and stderr pipes");
     }
 
     this.pid = child.pid;
@@ -312,10 +314,18 @@ class LineBuffer implements AsyncIterable<string> {
 }
 
 function captureLines(
-  stream: NodeJS.ReadableStream,
+  stream: NodeJS.ReadableStream | null,
   destination: LineBuffer,
   chunks: string[],
 ): void {
+  // No pipe means the child was spawned with `stdio: "ignore"`. Closing the buffer
+  // straight away is what keeps `for await (const line of handle.stdout)` a loop that
+  // ends immediately rather than one that never yields and never returns.
+  if (stream === null) {
+    destination.close();
+    return;
+  }
+
   let remainder = "";
   stream.setEncoding("utf8");
   stream.on("data", (chunk: string) => {

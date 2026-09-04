@@ -1263,6 +1263,7 @@ function sequence() {
 function testConfig(leaseOverrides?: Partial<Config["lease"]>): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    drivers: {},
     eventBuffer: { capacity: 100 },
     health: {
       enabled: true,

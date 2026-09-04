@@ -87,6 +87,35 @@ describe("NodeProcessRunner", () => {
     });
   });
 
+  it("captures nothing and ends its line streams when output is ignored", async () => {
+    const runner = new NodeProcessRunner();
+
+    const handle = runner.spawn(
+      process.execPath,
+      ["-e", "process.stdout.write('noise'); process.stderr.write('more noise'); process.exit(0)"],
+      { stdio: "ignore" },
+    );
+    const lines: string[] = [];
+    for await (const line of handle.stdout) {
+      lines.push(line);
+    }
+
+    expect(lines).toEqual([]);
+    expect(handle.pid).toBeGreaterThan(0);
+    await expect(handle.wait()).resolves.toEqual({ code: 0, stderr: "", stdout: "" });
+  });
+
+  it("still kills a process whose output is ignored", async () => {
+    const runner = new NodeProcessRunner();
+
+    const handle = runner.spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+      stdio: "ignore",
+    });
+    handle.kill("SIGKILL");
+
+    await expect(handle.wait()).resolves.toMatchObject({ stderr: "", stdout: "" });
+  });
+
   it("kills a process that exceeds its timeout", async () => {
     const runner = new NodeProcessRunner();
 

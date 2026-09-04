@@ -10,6 +10,19 @@ function resourceOptions(config: Config): ResourceStrategyOptions {
   return config.capacity.config;
 }
 
+/**
+ * The walk `simlock config get <key>` performs over the daemon's config, reproduced here
+ * so a driver block is proven reachable by dotted key and not just present in the object.
+ */
+function dottedValue(config: Config, key: string): unknown {
+  let current: unknown = config;
+  for (const segment of key.split(".")) {
+    if (typeof current !== "object" || current === null) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
 const configPath = "/home/agent/.simlock/config.json";
 const gibibyte = 1024 ** 3;
 
@@ -377,6 +390,92 @@ describe("loadConfig", () => {
     [{ stalledTransition: { thresholdMultiplier: 0.5 } }, "stalledTransition.thresholdMultiplier"],
     [{ stalledTransition: { minimumThresholdMs: -1 } }, "stalledTransition.minimumThresholdMs"],
   ])("rejects invalid stalledTransition values in every field", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("defaults to no driver settings at all", async () => {
+    const config = await loadConfig({
+      configPath,
+      filesystem: new MemoryFilesystem(),
+      systemStats: createStats(),
+    });
+
+    expect(config.drivers).toEqual({});
+  });
+
+  it("keeps driver settings verbatim, including keys it has never heard of", async () => {
+    const filesystem = new MemoryFilesystem();
+    const warn = vi.fn();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        drivers: {
+          ios: { deviceRoot: "/Volumes/scratch/simlock-ios" },
+          android: { adbServerPort: 5038, headless: true, somethingOnlyTheDriverKnows: "yes" },
+        },
+      }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+
+    expect(config.drivers).toEqual({
+      ios: { deviceRoot: "/Volumes/scratch/simlock-ios" },
+      android: { adbServerPort: 5038, headless: true, somethingOnlyTheDriverKnows: "yes" },
+    });
+    // Warning about an unrecognised key here would mean the core knows which keys a
+    // driver has, which is the whole thing this block is not allowed to know.
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reads a driver setting at the dotted path `simlock config get` walks", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ drivers: { ios: { deviceRoot: "/Volumes/scratch/simlock-ios" } } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(dottedValue(config, "drivers.ios.deviceRoot")).toBe("/Volumes/scratch/simlock-ios");
+  });
+
+  it("merges driver settings across layers key by key", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        drivers: { ios: { deviceRoot: "/from-file" }, android: { headless: true } },
+      }),
+    );
+
+    const config = await loadConfig({
+      configPath,
+      filesystem,
+      systemStats: createStats(),
+      overrides: { drivers: { ios: { deviceRoot: "/from-override" } } },
+    });
+
+    expect(config.drivers).toEqual({
+      ios: { deviceRoot: "/from-override" },
+      android: { headless: true },
+    });
+  });
+
+  it.each([
+    [{ drivers: "everything" }, "drivers"],
+    [{ drivers: { ios: "/Volumes/scratch" } }, "drivers.ios"],
+    [{ drivers: { ios: { deviceRoot: { path: "/Volumes/scratch" } } } }, "drivers.ios.deviceRoot"],
+    [{ drivers: { ios: { deviceRoot: ["/Volumes/scratch"] } } }, "drivers.ios.deviceRoot"],
+  ])("rejects driver settings that are not plain scalars", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
