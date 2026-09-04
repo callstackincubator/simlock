@@ -379,8 +379,15 @@ registry. They are not migrated: neither CoreSimulator nor the Android SDK
 supports relocating a device, so those are re-provisioned.
 
 A root that fails ownership validation at startup — missing or foreign marker,
-symlink, wrong owner or permissions — stops that platform's driver and is
-reported here with the failing reason.
+symlink, wrong owner or permissions, or a `deviceRoot` that is not an absolute
+path — stops that platform's driver and is reported here with the failing
+reason. Driver discovery runs once, at daemon startup, so re-running `doctor`
+after repairing the root reports the same finding until the daemon is
+restarted; the finding says so.
+
+Nothing else is reported about a platform whose driver did not start. Its
+devices are unobservable, not missing, and `--fix` must never mark a registry
+device deleted on the strength of a reality nobody could read.
 
 A `provisioning` or `reclaiming` device is normally in-flight work Simlock
 itself is driving and is not reported — but only up to a driver-derived
@@ -453,8 +460,9 @@ process inherits the variable like the rest of the environment.
 Overrides driver discovery (`discoverDrivers` in `src/daemon/main.ts`) with a
 JavaScript module of your own instead of the real iOS/Android drivers. Point
 it at a file path; the daemon dynamically imports that module and calls its
-exported `createDrivers(context)` (the same `{ clock, filesystem,
-idGenerator, logger, processRunner }` context real discovery receives),
+exported `createDrivers(context)` (the same `{ clock, driversConfig,
+filesystem, hostPlatform, idGenerator, instanceId, logger, processRunner,
+simlockHome }` context real discovery receives),
 which must return `Driver[]` (or a promise of it, matching
 `src/core/driver.ts`). This exists so tests — and anyone reproducing a bug
 without real hardware — can run the full daemon against a scripted driver

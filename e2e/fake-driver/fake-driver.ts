@@ -53,15 +53,19 @@ const DEFAULT_SCRIPT: FakeDriverPlatformScript = {
  */
 export class OutOfProcessFakeDriver implements Driver {
   readonly platform: Platform;
+  /** Synthetic: this driver owns no real devices, and nothing validates or creates it. */
+  readonly deviceRoot: string;
   readonly #clock: FakeDriverClock;
   readonly #logPath: string | undefined;
   readonly #scriptPath: string | undefined;
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
   #lastKnownEstimateMs: FakeDriverPlatformScript["estimateMs"];
+  #lastKnownLeaseEnvironment: FakeDriverPlatformScript["leaseEnvironment"];
   #nextDeviceNumber = 1;
 
   constructor(options: OutOfProcessFakeDriverOptions) {
     this.platform = options.platform;
+    this.deviceRoot = `/fake/${options.platform}`;
     this.#clock = options.clock;
     this.#logPath = options.logPath;
     this.#scriptPath = options.scriptPath;
@@ -194,12 +198,19 @@ export class OutOfProcessFakeDriver implements Driver {
     return this.#lastKnownEstimateMs?.[estimate.operation] ?? 0;
   }
 
+  /** Synchronous like `estimate`, and cached the same way: the last script read wins. */
+  // fallow-ignore-next-line unused-class-member -- Driver.leaseEnvironment contract; read by the lease path when it builds a grant.
+  leaseEnvironment(): Readonly<Record<string, string>> {
+    return this.#lastKnownLeaseEnvironment ?? {};
+  }
+
   async #beforeCall(
     operation: FakeDriverOperation,
     arguments_: readonly unknown[],
   ): Promise<FakeDriverPlatformScript> {
     const script = await this.#readScript();
     this.#lastKnownEstimateMs = script.estimateMs;
+    this.#lastKnownLeaseEnvironment = script.leaseEnvironment;
     await this.#appendLog(operation, arguments_);
 
     const latency = script.latencyMs?.[operation] ?? 0;

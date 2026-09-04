@@ -73,6 +73,12 @@ belongs on another volume — device data runs to tens of gigabytes:
 }
 ```
 
+A `deviceRoot` must be an absolute path. A relative one — or a value that is
+not a string at all, such as `true` — refuses that one platform with reason
+`not-absolute` rather than being resolved against whatever directory the daemon
+happened to be started from; the daemon still comes up, and the other platform
+is unaffected.
+
 Roots hold device instances only. Runtimes and system images stay where Xcode
 and the Android SDK put them.
 

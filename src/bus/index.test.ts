@@ -141,6 +141,8 @@ describe("EventBus", () => {
       | "disk.pressure-detected"
       | "cleanup.executed"
       | "doctor.reconciled"
+      | "driver.root-rejected"
+      | "driver.adb-server-rejected"
     >();
     expectTypeOf<EventMap>().toMatchTypeOf<Record<EventName, object>>();
   });

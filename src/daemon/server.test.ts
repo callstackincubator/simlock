@@ -5,7 +5,14 @@ import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
+import {
+  type Config,
+  type DriverRejection,
+  CleanupReaper,
+  FakeDriver,
+  LeaseEngine,
+  Registry,
+} from "../core/index.js";
 import {
   FakeClock,
   FakeSystemStats,
@@ -748,6 +755,112 @@ function deferred<T>(): {
   return { promise, reject, resolve };
 }
 
+describe("DaemonServer driver rejections", () => {
+  it("publishes one event per platform that refused to start, after the daemon is up", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          payload: { platform: "ios", reason: "wrong-instance", root: "/Devices" },
+          platform: "ios",
+          reason: "wrong-instance",
+          summary: "Refusing the ios device root /Devices: it belongs to another instance",
+        },
+      ],
+    });
+
+    const events = harness.eventBus.replay();
+    const rejected = events.filter((event) => event.event === "driver.root-rejected");
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        module: "daemon",
+        payload: { platform: "ios", reason: "wrong-instance", root: "/Devices" },
+      }),
+    ]);
+    // The daemon did come up -- the refusal costs one platform, not the process -- and
+    // the buffer says so in that order.
+    const started = events.find((event) => event.event === "daemon.started");
+    expect(started?.seq).toBeLessThan(rejected[0]?.seq ?? 0);
+  });
+
+  it("names the refusal when a lease asks for a platform whose driver did not start", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.adb-server-rejected",
+          payload: { port: 5038, reason: "occupied" },
+          platform: "android",
+          reason: "occupied",
+          summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "Pixel 8", platform: "android" },
+    });
+
+    // Safety rule 9's other half: the platform's driver does not start *and Simlock
+    // reports why*. A bare `NO_DRIVER` reads exactly like "this host has no Android SDK".
+    expect(response.error?.code).toBe("NO_DRIVER");
+    expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
+  });
+
+  it("leaves an ordinary missing platform unexplained, having nothing to explain", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+          platform: "ios",
+          reason: "symlink",
+          summary: "Refusing the ios device root /Devices: it is a symlink",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      request: { model: "Pixel 8", platform: "android" },
+    });
+
+    // The refusal on file is another platform's; attaching it here would blame iOS for
+    // Android's absence.
+    expect(response.error?.code).toBe("NO_DRIVER");
+    expect(response.error?.message).toBe("No driver registered for platform: android");
+  });
+
+  it("refuses at compile time to pair an event with another event's payload", () => {
+    const rejection: DriverRejection = {
+      event: "driver.adb-server-rejected",
+      // @ts-expect-error -- `port` is a number on the wire (docs/EVENTS.md). The check has
+      // to happen where a refusal is written, because the daemon forwards `payload` to the
+      // ring buffer -- and to `simlock events --json` -- without ever reading it.
+      payload: { port: "5038", reason: "occupied" },
+      platform: "android",
+      reason: "occupied",
+      summary: "Refusing the Android driver: port 5038 is occupied",
+    };
+
+    expect(rejection.event).toBe("driver.adb-server-rejected");
+  });
+
+  it("publishes nothing when every driver started", async () => {
+    const harness = await createHarness();
+
+    expect(harness.eventBus.replay().filter((event) => event.event.startsWith("driver."))).toEqual(
+      [],
+    );
+  });
+});
+
 describe("DaemonServer lease heartbeat", () => {
   it("slides a held lease's deadline past the backstop while its holder keeps ponging, and stops sliding once it stops", async () => {
     const harness = await createHarness({
@@ -1085,6 +1198,7 @@ async function createHarness(
     readonly converge?: () => Promise<void>;
     readonly dispose?: () => void;
     readonly driver?: FakeDriver;
+    readonly driverRejections?: readonly DriverRejection[];
     readonly logger?: Logger;
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
@@ -1143,6 +1257,9 @@ async function createHarness(
     clock,
     config,
     ...(options.converge === undefined ? {} : { converge: options.converge }),
+    ...(options.driverRejections === undefined
+      ? {}
+      : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
     host: new DaemonEndpointHost({

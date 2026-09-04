@@ -4,12 +4,16 @@ import { pathToFileURL } from "node:url";
 
 import { EventBus } from "../bus/index.js";
 import {
+  type Config,
   type ConfigOverrides,
   type Driver,
+  type DriverRejection,
   CleanupReaper,
   Doctor,
   LeaseEngine,
   loadConfig,
+  loadInstanceId,
+  OwnedRootError,
   Registry,
   Nuke,
 } from "../core/index.js";
@@ -86,9 +90,27 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     });
   const eventBus = new EventBus(clock, config.eventBuffer.capacity);
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
-  const drivers =
-    options.drivers ??
-    (await discoverDrivers({ clock, filesystem, idGenerator, logger, processRunner }));
+  // Before discovery, because every root a driver validates is checked against it, and it
+  // is written exactly once per home and never regenerated (ADR 0001, decision 2).
+  const instanceId = await loadInstanceId({
+    filesystem,
+    idGenerator,
+    path: join(dataDirectory, "instance.json"),
+  });
+  const { drivers, rejections } =
+    options.drivers === undefined
+      ? await discoverDrivers({
+          clock,
+          driversConfig: config.drivers,
+          filesystem,
+          hostPlatform: process.platform,
+          idGenerator,
+          instanceId,
+          logger,
+          processRunner,
+          simlockHome: dataDirectory,
+        })
+      : { drivers: options.drivers, rejections: [] };
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -116,6 +138,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     clock,
     config,
     drivers,
+    driverRejections: rejections,
     eventBus,
     leaseExpirer: leaseEngine,
     quarantine: leaseEngine,
@@ -128,6 +151,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     clock,
     config,
     doctor,
+    driverRejections: rejections,
     defaultRequesterId:
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
@@ -169,30 +193,44 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
 
 export interface DriverDiscoveryContext {
   readonly clock: Clock;
+  /** Whole `drivers` config section: each driver is handed its own block, unread. */
+  readonly driversConfig: Config["drivers"];
   readonly filesystem: Filesystem;
+  /**
+   * Which platform's tooling this host has, `process.platform` in production and supplied
+   * by the composition root rather than read here. Discovery's fail-closed branch -- the
+   * one that must cost a platform and never the daemon -- is otherwise reachable only on a
+   * Mac, and so is untestable everywhere Simlock's own CI runs.
+   */
+  readonly hostPlatform: NodeJS.Platform;
   readonly idGenerator: IdGenerator;
+  readonly instanceId: string;
   readonly logger: Logger;
   readonly processRunner: ProcessRunner;
+  readonly simlockHome: string;
 }
 
-export async function discoverDrivers(options: DriverDiscoveryContext): Promise<Driver[]> {
+/** Drivers that started, and the platforms that refused to -- both are startup outcomes. */
+export interface DriverDiscovery {
+  readonly drivers: readonly Driver[];
+  readonly rejections: readonly DriverRejection[];
+}
+
+export async function discoverDrivers(options: DriverDiscoveryContext): Promise<DriverDiscovery> {
   const logger = options.logger.child("driver-discovery");
   const driversModule = process.env.SIMLOCK_DRIVERS_MODULE;
   if (driversModule !== undefined) {
-    return loadDriversModule(driversModule, options, logger);
+    // A substituted driver set owns whatever roots it wants, so there is nothing here to
+    // refuse on its behalf.
+    return { drivers: await loadDriversModule(driversModule, options, logger), rejections: [] };
   }
 
   const drivers: Driver[] = [];
-  if (process.platform === "darwin") {
-    drivers.push(
-      new IosSimctlDriver({
-        clock: options.clock,
-        filesystem: options.filesystem,
-        idGenerator: options.idGenerator,
-        processRunner: options.processRunner,
-      }),
-    );
-    logger.info("Discovered driver", { platform: "ios" });
+  const rejections: DriverRejection[] = [];
+  if (options.hostPlatform === "darwin") {
+    const ios = await discoverIosDriver(options, logger);
+    if (ios.driver !== undefined) drivers.push(ios.driver);
+    if (ios.rejection !== undefined) rejections.push(ios.rejection);
   }
   try {
     drivers.push(
@@ -206,14 +244,63 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
       }),
     );
     logger.info("Discovered driver", { platform: "android" });
-    return drivers;
+    return { drivers, rejections };
   } catch (error: unknown) {
     if (error instanceof SdkMissingError) {
       logger.warn("Skipped Android driver: SDK missing", { reason: error.message });
-      return drivers;
+      return { drivers, rejections };
     }
     throw error;
   }
+}
+
+/**
+ * A refused root costs the daemon one platform, never the whole daemon: the other platform
+ * may be perfectly healthy, and a daemon that will not start is a daemon that cannot tell
+ * anyone why (safety rule 9). Every other failure still fails startup -- an unreadable root
+ * is already an `OwnedRootError`, so what is left is a genuine bug.
+ */
+async function discoverIosDriver(
+  options: DriverDiscoveryContext,
+  logger: Logger,
+): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
+  try {
+    const driver = await IosSimctlDriver.create({
+      clock: options.clock,
+      driverConfig: options.driversConfig["ios"] ?? {},
+      filesystem: options.filesystem,
+      idGenerator: options.idGenerator,
+      instanceId: options.instanceId,
+      processRunner: options.processRunner,
+      simlockHome: options.simlockHome,
+      // Ambient like `homedir()` above, and read here rather than in the driver so the
+      // composition root stays the only place that touches process state.
+      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+    });
+    logger.info("Discovered driver", { platform: "ios" });
+    return { driver };
+  } catch (error: unknown) {
+    if (!(error instanceof OwnedRootError)) {
+      throw error;
+    }
+
+    logger.error("Skipped iOS driver: device root rejected", {
+      reason: error.reason,
+      root: error.path,
+      summary: error.message,
+    });
+    return { rejection: rootRejection(error) };
+  }
+}
+
+function rootRejection(error: OwnedRootError): DriverRejection {
+  return {
+    event: "driver.root-rejected",
+    payload: { platform: error.platform, reason: error.reason, root: error.path },
+    platform: error.platform,
+    reason: error.reason,
+    summary: error.message,
+  };
 }
 
 /**
@@ -229,13 +316,15 @@ async function loadDriversModule(
   modulePath: string,
   context: DriverDiscoveryContext,
   logger: Logger,
-): Promise<Driver[]> {
+): Promise<readonly Driver[]> {
   logger.info("Substituting driver discovery via SIMLOCK_DRIVERS_MODULE", {
     module: modulePath,
   });
   const moduleUrl = pathToFileURL(resolve(modulePath)).href;
   const imported = (await import(moduleUrl)) as {
-    createDrivers?: (context: DriverDiscoveryContext) => Promise<Driver[]> | Driver[];
+    createDrivers?: (
+      context: DriverDiscoveryContext,
+    ) => Promise<readonly Driver[]> | readonly Driver[];
   };
   if (typeof imported.createDrivers !== "function") {
     throw new Error(

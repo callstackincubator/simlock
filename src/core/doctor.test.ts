@@ -6,6 +6,7 @@ import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { Doctor } from "./doctor.js";
+import type { DriverRejection } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseEngine } from "./lease-engine.js";
@@ -1231,7 +1232,139 @@ describe("Doctor", () => {
     expect(firstForeignStateSeq).toBeGreaterThan(lastCommitSeq);
     expect(events.at(-1)?.event).toBe("doctor.reconciled");
   });
+
+  it("reports a platform whose driver refused to start, with the reason it refused", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [],
+      driverRejections: [rootRejection()],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings.map((finding) => finding.kind)).toEqual(["driver-unavailable"]);
+    expect(report.findings[0]).toMatchObject({
+      // Discovery happens once, at startup, so the finding has to say what actually
+      // retries the platform -- otherwise repairing the root and re-running `doctor`
+      // reports the identical line and reads as a repair that did not work.
+      detail: expect.stringContaining(
+        "Refusing the ios device root /Devices: it carries no marker",
+      ),
+      platform: "ios",
+      reason: "missing-marker",
+    });
+    expect(report.findings[0]).toMatchObject({
+      detail: expect.stringContaining("restart the daemon"),
+    });
+  });
+
+  it("leaves a refused driver alone under --fix, since adopting it is the refusal's point", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      statePath: "/state.json",
+    });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [],
+      driverRejections: [rootRejection()],
+      eventBus,
+      registry,
+    }).reconcile({ fix: true });
+
+    expect(report.findings.map((finding) => finding.kind)).toEqual(["driver-unavailable"]);
+    expect(registry.snapshot.devices).toEqual([]);
+  });
 });
+
+describe("Doctor with a platform it cannot observe", () => {
+  it("never reports a registry device missing because no driver could look for it", async () => {
+    const { eventBus, registry } = await readyIosDevice();
+
+    const report = await new Doctor({
+      clock: new FakeClock(10_000),
+      config: config(),
+      drivers: [],
+      driverRejections: [rootRejection()],
+      eventBus,
+      registry,
+    }).reconcile({ fix: true });
+
+    // "I could not look" is not "the device is gone". Marking these `deleted` would strand
+    // every simulator in the root behind a registry with no record of it -- the permanent
+    // multi-gigabyte leak ADR 0001 exists to prevent, reachable with a `chmod`.
+    expect(report.findings.map((finding) => finding.kind)).toEqual(["driver-unavailable"]);
+    expect(registry.snapshot.devices[0]?.state).toBe("ready");
+  });
+
+  it("stays silent about a platform that simply has no driver on this host", async () => {
+    const { eventBus, registry } = await readyIosDevice();
+
+    const report = await new Doctor({
+      clock: new FakeClock(10_000),
+      config: config(),
+      drivers: [],
+      eventBus,
+      registry,
+    }).reconcile({ fix: true });
+
+    // Same reasoning with no rejection to report: a missing Android SDK or a non-Mac host
+    // is just as unobservable as a refused root.
+    expect(report.findings).toEqual([]);
+    expect(registry.snapshot.devices[0]?.state).toBe("ready");
+  });
+});
+
+/** One `ready` iOS device in an otherwise empty registry. */
+async function readyIosDevice() {
+  const clock = new FakeClock(10_000);
+  const eventBus = new EventBus(clock);
+  const registry = await Registry.load({
+    clock,
+    eventBus,
+    filesystem: new MemoryFilesystem(),
+    idGenerator: sequence(),
+    statePath: "/state.json",
+  });
+  const registered = await registry.registerDevice({
+    driverData: { fakeDeviceId: "device-1" },
+    driverDeviceId: "device-1",
+    provisionDuration: 0,
+    spec: { model: "Phone", osVersion: "1", platform: "ios" },
+  });
+  await registry.transitionDevice(registered.id, "ready", {
+    event: "device.ready",
+    payload: { bootDuration: 0, deviceId: registered.id },
+  });
+  return { eventBus, registry };
+}
+
+function rootRejection(): DriverRejection {
+  return {
+    event: "driver.root-rejected",
+    payload: { platform: "ios", reason: "missing-marker", root: "/Devices" },
+    platform: "ios",
+    reason: "missing-marker",
+    summary: "Refusing the ios device root /Devices: it carries no marker",
+  };
+}
 
 async function readyDevice(
   registry: Registry,

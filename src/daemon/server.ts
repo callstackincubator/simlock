@@ -15,6 +15,7 @@ import {
   UnknownModelError,
   type CleanupReaper,
   type Doctor,
+  type DriverRejection,
   type LeaseHealthMonitor,
   type Nuke,
   UnknownLeaseError,
@@ -57,6 +58,12 @@ export interface DaemonServerOptions {
   readonly config: Config;
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
+  /**
+   * Platforms whose driver refused to start. The daemon serves without them rather than
+   * refusing to come up (safety rule 9), so the refusal has to be visible somewhere: one
+   * event each lands in the ring buffer here, and `Doctor` reports the same list.
+   */
+  readonly driverRejections?: readonly DriverRejection[];
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
   readonly leases: LeaseCommands;
@@ -198,6 +205,14 @@ export class DaemonServer {
       { configSnapshot: this.options.config, version: this.options.version },
       "daemon",
     );
+    // After `daemon.started`, because these are facts about the daemon that just started
+    // and a subscriber reading the buffer in order should see it come up first.
+    for (const rejection of this.options.driverRejections ?? []) {
+      // No assertion: `DriverRejection` pairs each event name with that event's own
+      // payload, so the contract is checked where the driver module builds the refusal
+      // rather than being taken on trust here, one step from the ring buffer.
+      this.options.eventBus.emit(rejection.event, rejection.payload, "daemon");
+    }
     this.#logger.info("Daemon started", {
       config: this.options.config,
       protocolVersion: this.#protocolVersion,
@@ -379,8 +394,25 @@ export class DaemonServer {
       } else {
         this.#logger.debug("Handled request error", { code, type: frame.type });
       }
-      await this.#respondError(connection.socket, frame.id, code, errorMessage(error));
+      await this.#respondError(connection.socket, frame.id, code, this.#describeError(error));
     }
+  }
+
+  /**
+   * A `NO_DRIVER` for a platform whose driver refused to start says nothing on its own:
+   * it reads identically to "this host has no Xcode". Safety rule 9 promises Simlock
+   * reports *why* a platform is missing, and the lease path is where a user meets that
+   * failure, so the refusal's own one-liner travels with the error.
+   */
+  #describeError(error: unknown): string {
+    const message = errorMessage(error);
+    if (!(error instanceof NoDriverError)) {
+      return message;
+    }
+    const rejection = (this.options.driverRejections ?? []).find(
+      (candidate) => candidate.platform === error.platform,
+    );
+    return rejection === undefined ? message : `${message} (${rejection.summary})`;
   }
 
   async #handleHello(connection: Connection, frame: RequestFrame): Promise<void> {
