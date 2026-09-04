@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect, createServer } from "node:net";
+import { connect, createServer, Server } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
@@ -220,6 +220,107 @@ describe("startDaemon HTTP gateway startup readiness", () => {
 
     const parkedResponse = await parkedStatusPromise;
     expect(parkedResponse.status).toBe(200);
+  });
+});
+
+describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", () => {
+  // Before this fix, `stopAuxiliary` (this file's `stopAuxiliary` closure passed to
+  // `DaemonServer`) returned immediately whenever the concurrently-started HTTP gateway
+  // (`onSocketClaimed` -> `startHttpGateway()`) hadn't finished its own `listen()` yet --
+  // `stopHttpGateway` isn't assigned until it does. `#stop()` (server.ts) awaits
+  // `stopAuxiliary()` first, so it would go on to release leases, settle, and dispose while the
+  // gateway was still binding, then start accepting HTTP requests -- against a torn-down engine
+  // -- once its own `listen()` finally resolved. The fix makes `stopAuxiliary` await
+  // `gatewayStarted` (settled only once the gateway's own bind attempt finishes, one way or the
+  // other) before doing anything else.
+  //
+  // The window this reproduces (`onSocketClaimed` firing to the gateway's `listen()` actually
+  // resolving) is normally a handful of real milliseconds -- reachable, per the review, via
+  // `simlock daemon stop` during startup, but not something a test can land inside reliably by
+  // just racing real I/O against real I/O. So this test holds the window open deterministically
+  // instead: it patches `net.Server.prototype.listen` (restored in `finally`) to delay only a
+  // TCP bind (the gateway's) by 200ms, leaving the daemon's own Unix-socket `listen()` (a string
+  // first argument, not a port) untouched -- so the socket claims and answers `daemon.stop`
+  // long before the patched gateway bind is even allowed to start.
+  it("never lets the HTTP gateway outlive full teardown when daemon.stop lands while the gateway is still mid-bind", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-race-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const filesystem = new MemoryFilesystem();
+    const port = 47_013;
+    const socketPath = join(directory, "daemon.sock");
+
+    const restoreListen = delayTcpListen(200);
+    try {
+      const startPromise = startDaemon({
+        clock,
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+        dataDirectory: directory,
+        drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+        filesystem,
+        logger,
+        socketPath,
+        statePath: join(directory, "state.json"),
+        version: "1.2.3",
+      } as StartDaemonOptions);
+      // `stop()` is idempotent, so it is safe for `afterEach` to also stop whatever this
+      // resolves to (it will, once the delayed gateway bind above finishes settling).
+      void startPromise.then((daemon) => runningDaemons.push(daemon)).catch(() => undefined);
+
+      // Connects and authenticates as admin, then sends `daemon.stop` -- comfortably inside the
+      // 200ms window the patch above holds the gateway's own bind open for. The admin secret is
+      // written (`AdminSecretManager#persist`) before `onSocketClaimed` fires, so it is already
+      // there by the time the socket itself is reachable.
+      const client = await connectRetrying(socketPath);
+      const secret = (await readFileRetrying(filesystem, join(directory, "admin.token"))).trim();
+      await client.request("hello", {
+        clientVersion: "test",
+        credential: secret,
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      const stopReply = await client.request("daemon.stop", {});
+      expect(stopReply.ok).toBe(true);
+      client.socket.end();
+
+      // Lets the delayed gateway bind actually fire and settle (one way or the other) before
+      // this test reads the log for it.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      const stoppingIndex = sink.records.findIndex(
+        (record) => record.message === "Daemon stopping",
+      );
+      expect(stoppingIndex).toBeGreaterThanOrEqual(0);
+      const gatewayStoppedIndex = sink.records.findIndex(
+        (record) => record.message === "HTTP gateway stopped",
+      );
+      const gatewayListeningIndex = sink.records.findIndex(
+        (record) => record.message === "HTTP gateway listening",
+      );
+      // The gateway actually got to bind (it does here -- the port is free and 200ms is ample
+      // real time for a loopback `listen()`), so this asserts the meaningful case directly
+      // rather than treating it as merely possible: it bound, and it was stopped, and both
+      // happened strictly before "Daemon stopping" (logged only once `stopAuxiliary` resolves --
+      // see `server.ts#stop`). Before the fix, `stoppingIndex` would be *smaller* than both of
+      // these -- `stopAuxiliary` returned immediately, so "Daemon stopping" logged right away,
+      // well before the (patch-delayed) gateway bind even started.
+      expect(gatewayListeningIndex).toBeGreaterThanOrEqual(0);
+      expect(gatewayListeningIndex).toBeLessThan(stoppingIndex);
+      expect(gatewayStoppedIndex).toBeGreaterThanOrEqual(0);
+      expect(gatewayStoppedIndex).toBeLessThan(stoppingIndex);
+
+      // And the port must never be reachable once the daemon has finished stopping -- the
+      // gateway did not outlive teardown just because it bound after `stop()` was requested.
+      await expect(
+        fetch(`http://127.0.0.1:${port}/v1/status`, {
+          headers: { authorization: "Bearer irrelevant" },
+          signal: AbortSignal.timeout(200),
+        }),
+      ).rejects.toThrow();
+    } finally {
+      restoreListen();
+    }
   });
 });
 
@@ -690,6 +791,52 @@ async function connectRetrying(socketPath: string, timeoutMs = 2_000): Promise<M
     } catch (error: unknown) {
       if (Date.now() >= deadline) throw error;
       await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+}
+
+/** Delays every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) by
+ * `delayMs`, real time, via `setTimeout` -- but passes a Unix-socket `listen(path, callback)`
+ * call (a string first argument) straight through unpatched. Used only by the S5 race test
+ * above to hold the HTTP gateway's own bind open deterministically without touching `src/http`
+ * -- `@hono/node-server`'s `serve()` ultimately calls `http.Server#listen`, which is `net.Server`'s
+ * own method (Node's `http` module does not override it), so patching it here reaches the
+ * gateway's real bind call. Returns a restorer; always call it, even on failure. */
+function delayTcpListen(delayMs: number): () => void {
+  const original = Server.prototype.listen;
+  type ListenFn = (...callArgs: unknown[]) => Server;
+  Server.prototype.listen = function patchedListen(this: Server, ...args: unknown[]) {
+    const isTcp =
+      typeof args[0] === "number" ||
+      (typeof args[0] === "object" && args[0] !== null && !("path" in (args[0] as object)));
+    if (!isTcp) {
+      return (original as ListenFn).apply(this, args);
+    }
+    setTimeout(() => {
+      (original as ListenFn).apply(this, args);
+    }, delayMs);
+    return this;
+  } as typeof Server.prototype.listen;
+  return () => {
+    Server.prototype.listen = original;
+  };
+}
+
+/** Polls a `MemoryFilesystem` path with no backoff -- used to read `admin.token` the moment
+ * `AdminSecretManager#persist` lands it, without adding artificial delay to a test that is
+ * deliberately racing that write's timing against something else (see the S5 race test). */
+async function readFileRetrying(
+  filesystem: MemoryFilesystem,
+  path: string,
+  timeoutMs = 2_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return await filesystem.readFile(path);
+    } catch (error: unknown) {
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
 }

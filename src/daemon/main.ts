@@ -175,19 +175,20 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   });
   // Reassigned once the HTTP gateway actually starts, but must exist as a stable closure now:
   // `stopAuxiliary` is fixed at `DaemonServer` construction time, before the gateway itself
-  // exists. `httpStopRequested` closes the narrow race `onSocketClaimed`'s doc calls out: if
-  // `stop()` runs (e.g. convergence failed) *while* the gateway is still mid-`start()` below,
-  // `stopHttpGateway` isn't assigned yet for `stopAuxiliary` to call -- this flag lets the
-  // gateway's own startup continuation notice and stop itself the moment it finishes, instead
-  // of leaking a listening HTTP server past a daemon that has already torn everything else down.
+  // exists.
   let stopHttpGateway: (() => Promise<void>) | undefined;
-  let httpStopRequested = false;
   // Settles once the HTTP gateway either finishes starting or fails to -- resolved/rejected from
   // inside `onSocketClaimed`'s handler below. `startDaemon()` awaits this alongside
   // `daemon.start()` itself (see the bottom of this function) so a bind failure (occupied port,
   // invalid host) makes `startDaemon()` reject and the entrypoint report a non-zero exit code,
-  // the way it did before the gateway moved to firing concurrently with convergence. When HTTP
-  // is disabled there is nothing to wait for, so this resolves immediately.
+  // the way it did before the gateway moved to firing concurrently with convergence. `stopAuxiliary`
+  // below *also* awaits this -- that is what closes review finding S5: without it, `stopAuxiliary`
+  // could return having stopped nothing (because `stopHttpGateway` isn't assigned yet, the
+  // gateway still being mid-`start()`), and `#stop()` would go on to release leases, settle, and
+  // dispose while the gateway finishes binding and starts accepting requests against a daemon
+  // already being torn down -- see `server.ts`'s `stopAuxiliary` doc: it "must be shut off before
+  // held-lease release and lease/queue teardown begin". When HTTP is disabled there is nothing to
+  // wait for, so this resolves immediately.
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
   const gatewayStarted: Promise<void> = config.http.enabled
@@ -239,9 +240,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     settle: async () => leaseEngine.settle(),
     dispose: () => leaseEngine.dispose(),
-    stopAuxiliary: () => {
-      httpStopRequested = true;
-      return stopHttpGateway?.() ?? Promise.resolve();
+    // Review finding S5: waits for the concurrently-started gateway to either finish binding
+    // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
+    // stop) *before* returning -- `#stop()` awaits this call before releasing leases, settling,
+    // and disposing (see `server.ts`), so by the time any of that runs, the gateway is
+    // guaranteed to be either stopped or never listening in the first place. `gatewayStarted`'s
+    // rejection (a bind failure) is not this function's problem to surface -- the
+    // `Promise.allSettled` at the bottom of this function, or the standalone `daemon.stop()`
+    // call after it, already handle that -- so it is swallowed here.
+    stopAuxiliary: async () => {
+      await gatewayStarted.catch(() => undefined);
+      await stopHttpGateway?.();
     },
     // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
     // being refused". Firing the gateway's own `start()` from here (not after `daemon.start()`
@@ -289,10 +298,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       await gateway.stop();
       app.dispose();
     };
-    // Closes the race `stopAuxiliary`'s doc above and `onSocketClaimed`'s own doc on
-    // `DaemonServerOptions` call out: `stop()` may already have run (and found
-    // `stopHttpGateway` still unassigned) by the time this async function finally gets here.
-    if (httpStopRequested) await stopHttpGateway();
+    // No self-stop check here: `stopAuxiliary` above is the single place that decides whether
+    // to stop the gateway, and it does so by awaiting `gatewayStarted` (settled once this
+    // function's caller -- `onSocketClaimed`'s handler below -- resolves or rejects) before
+    // calling `stopHttpGateway`. Stopping here too would double-stop it.
   }
 
   // Awaited together, not `daemon.start()` alone: `gatewayStarted` is the promise

@@ -36,7 +36,7 @@ import {
 } from "../contract/index.js";
 import type { ConnectionHost } from "./connection-host.js";
 import type { TokenStore } from "../http/token-store.js";
-import { Dispatcher, type DispatchSession } from "./dispatcher.js";
+import { Dispatcher, DispatchError, type DispatchSession } from "./dispatcher.js";
 import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
 import type { AdminSecretManager } from "./admin-secret.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
@@ -246,6 +246,18 @@ export class DaemonServer {
     input: unknown,
     session: DispatchSession,
   ): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
+    // Mirrors the socket path's `#stopping` -> `DAEMON_STOPPING` gate in `#dispatchLine` (just
+    // above the `#stopping` check there), so every transport that calls this method -- not only
+    // the socket -- shares it. Without this, a caller that reaches the dispatcher directly (the
+    // HTTP gateway; review finding S5) could have a request accepted *during* `#stop()`'s
+    // window (after `stopAuxiliary()` has been awaited, but the auxiliary frontend's own
+    // in-flight request already parked past this check) run against an engine `#stop()` is
+    // concurrently tearing down or has already disposed. `daemon.stop` itself never reaches
+    // this method (`DaemonServer#dispatchLine` handles it directly, ahead of this gate, per
+    // ADR §6) so the frozen-exception behaviour is unaffected.
+    if (this.#stopping) {
+      return Promise.reject(new DispatchError("DAEMON_STOPPING", "Daemon is stopping"));
+    }
     return this.#dispatcher.dispatch(operation, input, session);
   }
 

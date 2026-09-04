@@ -17,6 +17,7 @@ import {
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
+  CryptoTokenSecrets,
   FakeClock,
   FakeSystemStats,
   JsonLinesLogger,
@@ -30,6 +31,7 @@ import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
+import { AdminSecretManager } from "./admin-secret.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -409,6 +411,64 @@ describe("DaemonServer", () => {
     await hello(client);
     await client.close();
     expect(first.daemon.socketPath).toBe(socketPath);
+  });
+
+  // Review finding S1: `AdminSecretManager`'s own doc (`admin-secret.ts`) asserts "a daemon
+  // that loses the start race never calls `persist()` at all ... so the file an
+  // already-running daemon wrote is never touched by the loser" -- untested anywhere before
+  // this. Mirrors the "recovers a stale socket file" test above (two harnesses racing for the
+  // same socket path), but gives each its own real `AdminSecretManager` over its own
+  // `MemoryFilesystem` so this can assert on the filesystem directly, rather than trusting a
+  // stub. In production both instances would target the *same* real `admin.token` path (see
+  // `main.ts`); separate filesystems here isolate what each instance actually did, without that
+  // shared path letting a wrongly-invoked `remove()` on the loser silently clean up after a
+  // wrongly-invoked `persist()` and mask the very bug this test exists to catch.
+  it("never touches admin.token on the daemon instance that loses the start race", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-stale-admin-"));
+    temporaryDirectories.push(directory);
+    const socketPath = join(directory, "daemon.sock");
+    await new NodeFilesystem().writeFileAtomic(socketPath, "stale");
+
+    const secrets = new CryptoTokenSecrets();
+    const winnerFilesystem = new MemoryFilesystem();
+    // Not bound to a name: `createHarness` already registers its daemon in `runningDaemons`
+    // for `afterEach` to stop, and this test only needs the winner alive on `socketPath` (so
+    // the loser's own `start()` below actually loses) plus its filesystem.
+    await createHarness({
+      adminSecret: new AdminSecretManager({
+        filesystem: winnerFilesystem,
+        path: "/admin.token",
+        secrets,
+      }),
+      socketPath,
+    });
+    // The winner (the only one whose `start()` actually reached `host.start()`'s success path)
+    // did persist its secret.
+    await expect(winnerFilesystem.readFile("/admin.token")).resolves.toContain("\n");
+
+    const loserFilesystem = new MemoryFilesystem();
+    const second = await createHarness({
+      adminSecret: new AdminSecretManager({
+        filesystem: loserFilesystem,
+        path: "/admin.token",
+        secrets,
+      }),
+      socketPath,
+      start: false,
+    });
+    await expect(second.daemon.start()).rejects.toMatchObject({
+      name: "DaemonAlreadyRunningError",
+    });
+    // The claim under test: the loser's own filesystem was never written to, because its
+    // `start()` threw before reaching `adminSecret.persist()`. `startDaemon()` (`main.ts`)
+    // never calls `stop()` on a `daemon.start()` rejection like this one either, so this
+    // asserts the state exactly as production leaves it, before any test-hygiene cleanup below.
+    await expect(loserFilesystem.readFile("/admin.token")).rejects.toThrow();
+
+    await second.daemon.stop("failed-start");
+    const client = await createClient(socketPath);
+    await hello(client);
+    await client.close();
   });
 
   it("gracefully stops by releasing held leases and persisting the final registry", async () => {
@@ -1845,6 +1905,11 @@ async function createHarness(
     readonly settle?: () => Promise<void>;
     readonly stateFilesystem?: MemoryFilesystem;
     readonly stopAuxiliary?: () => Promise<void>;
+    /** ADR 0003 §5's per-start admin secret (`AdminSecretManager`). Undefined by default, same
+     * as `DaemonServer`'s own default -- most of this suite doesn't exercise the credential
+     * handshake at all. A test that needs to observe `persist()`/`remove()` calls (or their
+     * absence -- see the "loses the start race" test) injects a spy here. */
+    readonly adminSecret?: AdminSecretManager;
     /** ADR 0003 §5's seam (see `session.ts`): defaults every session in this harness to
      * "admin" -- this suite predates roles and exercises every operation freely, the same
      * access a pre-ADR-0003 connection always had. Tests that specifically exercise role
@@ -1903,6 +1968,7 @@ async function createHarness(
     registry,
   });
   const daemon = new DaemonServer({
+    ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
     catalog: engine,
     clock,

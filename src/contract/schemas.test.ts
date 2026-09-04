@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { grantedDeviceSchema, leaseGrantSchema } from "./schemas.js";
+import { grantedDeviceSchema, leaseGrantSchema, statusDeviceSchema } from "./schemas.js";
 
 /**
  * Regression coverage for the defect fixed alongside ADR 0003 §1: a lease grant's device must
@@ -102,5 +102,73 @@ describe("leaseGrantSchema's device projection", () => {
       driverDeviceId: "SIM-1",
       spec: { platform: "android", model: "Pixel 8", osVersion: "34" },
     });
+  });
+});
+
+/**
+ * Regression coverage for S4 of the ADR 0003 adversarial review: `status.get` is `role:
+ * "agent"` (ADR §3), with no ownership check -- it reports on every device in the registry, not
+ * just ones the caller leases. It must not hand `driverData` (an opaque, driver-defined blob)
+ * or reclamation/recovery bookkeeping to every agent for every device. `statusDeviceSchema` is
+ * what `src/contract/operations.ts`'s `status.get` output declares in place of
+ * `deviceRecordSchema`, and what `DaemonDispatcher#dispatch`'s `#parseOutput` runs each device
+ * through before it reaches any transport.
+ */
+describe("statusDeviceSchema's device projection", () => {
+  /** A device shaped like a full core `DeviceRecord` mid-quarantine, exactly the kind of
+   * payload `DaemonDispatcher#statusGet`'s decoration would carry into `#parseOutput`. */
+  function fullCoreShapedDevice(): Record<string, unknown> {
+    return {
+      id: "device-1",
+      driverDeviceId: "SIM-1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      state: "quarantined",
+      driverData: { udid: "SIM-1", secretDriverInternals: true },
+      createdAt: 0,
+      lastLeaseEndedAt: 10,
+      foreignStateDetectedAt: 20,
+      foreignProvenanceDetectedAt: 30,
+      recoveringSince: 40,
+      recoveryAttempts: 2,
+      quarantinedAt: 50,
+      quarantineAttempts: 3,
+      quarantineNextRetryAt: 60,
+      address: "127.0.0.1:1234",
+      featureProfile: "reduced",
+      transitionAgeMs: 70,
+    };
+  }
+
+  it("strips driverData, driverDeviceId, and reclamation/recovery bookkeeping, keeping only what a human status line needs", () => {
+    const device = statusDeviceSchema.parse(fullCoreShapedDevice());
+
+    for (const field of [
+      "driverData",
+      "driverDeviceId",
+      "createdAt",
+      "lastLeaseEndedAt",
+      "recoveringSince",
+      "recoveryAttempts",
+      "quarantinedAt",
+      "address",
+      "featureProfile",
+    ] as const) {
+      expect(device).not.toHaveProperty(field);
+    }
+
+    expect(device).toEqual({
+      id: "device-1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      state: "quarantined",
+      foreignStateDetectedAt: 20,
+      foreignProvenanceDetectedAt: 30,
+      quarantineAttempts: 3,
+      quarantineNextRetryAt: 60,
+      transitionAgeMs: 70,
+    });
+  });
+
+  it("rejects a device object that is missing the fields status.get must keep", () => {
+    expect(() => statusDeviceSchema.parse({ id: "device-1" })).toThrow();
   });
 });
