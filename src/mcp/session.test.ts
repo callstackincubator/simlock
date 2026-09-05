@@ -648,7 +648,11 @@ describe("McpSession", () => {
       Promise.reject(
         new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lease-1" }),
       );
-    const session = new McpSession({ clock, connect: async () => client });
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
     const notices: unknown[] = [];
     session.onLeaseLost((notice) => notices.push(notice));
     await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
@@ -662,6 +666,58 @@ describe("McpSession", () => {
     expect(notices).toEqual([
       { deviceId: "device-1", leaseId: "lease-1", reason: "renew-rejected" },
     ]);
+
+    await session.close();
+  });
+
+  it("renews over connectForRenew after a dead connection, and never over connect", async () => {
+    // ADR 0004 §2's named safety property: the renew timer reconnects so an idle session does
+    // not lose its lease waiting for a tool call, but it reaches only a daemon that is already
+    // listening. `connect` is the trigger that may auto-launch one, so an operator's `simlock
+    // daemon stop` staying done depends on the timer never reaching for it.
+    const clock = new FakeClock(0);
+    const first = new FakeSimlockClient();
+    first.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    const second = new FakeSimlockClient();
+    second.renewLeaseImpl = (input) =>
+      Promise.resolve({
+        deviceId: "device-1",
+        grantedAt: 0,
+        id: input.leaseId,
+        lastRenewedAt: clock.now(),
+        ownerId: "agent-1",
+        requesterId: "agent-1",
+        ttlMs: 1_000,
+        ttlDeadline: clock.now() + 1_000,
+      });
+
+    let toolCallConnects = 0;
+    let renewConnects = 0;
+    const session = new McpSession({
+      clock,
+      connect: async () => {
+        toolCallConnects += 1;
+        return first;
+      },
+      connectForRenew: async () => {
+        renewConnects += 1;
+        return second;
+      },
+    });
+
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+    expect(toolCallConnects).toBe(1);
+    expect(renewConnects).toBe(0);
+
+    // The connection under the session dies with no tool call in sight.
+    first.emitConnectionLost();
+
+    // The renew tick fires against it: one reconnect, through the non-launching path only.
+    clock.advance(4_115);
+    await flushMicrotasks();
+    expect(renewConnects).toBe(1);
+    expect(toolCallConnects).toBe(1);
+    expect(second.calls.map((call) => call.method)).toEqual(["renewLease"]);
 
     await session.close();
   });

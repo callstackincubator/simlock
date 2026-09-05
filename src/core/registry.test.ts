@@ -838,6 +838,83 @@ describe("Registry", () => {
     expect(reloaded.snapshot.leases[0]?.ownerId).toBe("agent-1");
   });
 
+  it("migrates a lease record written before ADR 0004's ttlMs/lastRenewedAt, dropping mode", async () => {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(5_000);
+    await filesystem.mkdirp("/home/agent/.simlock");
+    // Exactly what a pre-ADR-0004 daemon persisted: a `mode`, and neither of the two fields a
+    // record carries now. Neither is recoverable from what is on disk -- `ttlDeadline -
+    // grantedAt` is the grant-time width only until the first renewal moved the deadline -- so
+    // each takes its documented default rather than a guess dressed up as arithmetic.
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 0,
+            driverData: {},
+            driverDeviceId: "driver_1",
+            id: "dev_1",
+            spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+            state: "leased",
+          },
+        ],
+        leases: [
+          {
+            deviceId: "dev_1",
+            grantedAt: 1_000,
+            id: "lse_1",
+            mode: "held",
+            ownerId: "agent-1",
+            requesterId: "agent-1",
+            ttlDeadline: 2_000,
+          },
+        ],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      defaultTtlMs: 900_000,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.snapshot.leases).toEqual([
+      {
+        id: "lse_1",
+        deviceId: "dev_1",
+        requesterId: "agent-1",
+        ownerId: "agent-1",
+        grantedAt: 1_000,
+        // `lease.defaultTtlMs`, which the daemon passes in from its own config.
+        ttlMs: 900_000,
+        ttlDeadline: 2_000,
+        // A lease that has never been renewed reports the moment it was granted.
+        lastRenewedAt: 1_000,
+      },
+    ]);
+
+    // `mode` is a retired concept, not a field from a newer schema, so the next write drops it
+    // rather than preserving it through the unknown-field forward-compatibility path.
+    await registry.renewLease("lse_1", 9_000, 7_000);
+    const written = JSON.parse(await filesystem.readFile(statePath)) as {
+      leases: Record<string, unknown>[];
+    };
+    expect(written.leases[0]).toEqual({
+      deviceId: "dev_1",
+      grantedAt: 1_000,
+      id: "lse_1",
+      lastRenewedAt: 5_000,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 9_000,
+      ttlMs: 7_000,
+    });
+  });
+
   it("rejects a lease record whose ownerId is present but not a string", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();

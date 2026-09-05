@@ -36,8 +36,9 @@ export interface McpStdioEnvironment {
   /** The `Clock` the session's renew timer runs on; a real one unless a test injects otherwise. */
   readonly clock?: Clock;
   readonly connect?: () => Promise<SimlockClient>;
-  /** The renew timer's connect (ADR 0004 §2) -- never launches a daemon. Defaults alongside
-   * `connect`; a test that injects one usually injects both. */
+  /** The renew timer's connect (ADR 0004 §2) -- never launches a daemon. Falls back only to
+   * the non-launching default, never to `connect`, so injecting `connect` alone cannot hand
+   * the timer an auto-launching path; a test that wants both usually injects both. */
   readonly connectForRenew?: () => Promise<SimlockClient>;
   readonly createServer?: (session: McpSession) => McpServer;
   readonly createTransport?: () => McpTransport;
@@ -77,7 +78,10 @@ export async function startMcpStdio(
   const session = new McpSession({
     clock,
     connect: environment.connect ?? defaults.connect,
-    connectForRenew: environment.connectForRenew ?? environment.connect ?? defaults.connectForRenew,
+    // Never falls back to `connect`: that one may auto-launch a daemon, and ADR 0004 §2 is
+    // explicit that the renew timer must not -- an embedder supplying only `connect` gets the
+    // non-launching default rather than a timer that could undo an operator's `daemon stop`.
+    connectForRenew: environment.connectForRenew ?? defaults.connectForRenew,
   });
   const server = (environment.createServer ?? createMcpServer)(session);
   const transport = (environment.createTransport ?? defaults.createTransport)();

@@ -865,6 +865,12 @@ async function runLease(
       leaseId: grant.lease.id,
       ttlDeadline: grant.lease.ttlDeadline,
       renew: (leaseId) => client.renewLease({ leaseId }),
+      // Every renewal moves the deadline, and the `DAEMON_CONNECTION_LOST` line above names
+      // it: without this the line would keep quoting the grant-time deadline, which after
+      // about one TTL of uptime is a moment in the past on a lease that is perfectly alive.
+      onRenewed: (renewed) => {
+        ourLeaseDeadline = renewed.ttlDeadline;
+      },
       // A retryable attempt failed (see `startLeaseRenewal`): diagnostic output on the same
       // structured stderr channel as a failed release, and not an exit condition -- the lease
       // is still this process's until something says otherwise.

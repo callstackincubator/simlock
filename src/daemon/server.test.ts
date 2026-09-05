@@ -186,7 +186,14 @@ describe("DaemonServer", () => {
   });
 
   it("grants the queued client when the holder's lease expires, not when it disconnects", async () => {
-    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
+    // A log sink rather than a sleep: "the waiter stays queued" is a negative assertion, and
+    // the only honest way to make one is to wait for the daemon to have actually processed
+    // the close first. `Connection closed` is that receipt.
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      lease: { defaultTtlMs: 40 },
+      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), level: "debug", sink }),
+    });
     const holder = await createClient(harness.socketPath);
     const waiter = await createClient(harness.socketPath);
     await hello(holder);
@@ -210,7 +217,9 @@ describe("DaemonServer", () => {
 
     // The holder's socket dying frees nothing (ADR 0004 §3) -- the waiter stays queued.
     await holder.close();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await expect
+      .poll(() => sink.records.some((record) => record.message === "Connection closed"))
+      .toBe(true);
     expect(harness.registry.snapshot.leases.map((lease) => lease.requesterId)).toEqual(["holder"]);
 
     // Its deadline does free it, and the queue is served from there.

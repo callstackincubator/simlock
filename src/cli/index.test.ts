@@ -1340,12 +1340,12 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
 });
 
 /**
- * ADR 0004 §2: held mode is a client policy -- this process renews on a timer at a third of the
- * remaining TTL and releases explicitly, rather than ponging a daemon push and relying on the
- * socket closing. The wire is untouched in this slice (`mode: "held"` still goes out); what is
- * asserted here is the CLI's own behaviour while it holds.
+ * ADR 0004 §2/§3: holding is a client policy -- this process renews on a timer at a third of
+ * the remaining TTL and releases explicitly, and the daemon does neither on its behalf. There
+ * is no mode on the wire any more, so what is asserted here is entirely the CLI's own
+ * behaviour while it holds, and what it does when the connection under it dies.
  */
-describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
+describe("CLI: holder renew and release (ADR 0004 §2)", () => {
   /** Lets `runLease` get past `requestLease` and arm its timer before the clock is advanced. */
   const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1410,6 +1410,93 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
     expect(clock.pendingTimerCount).toBe(0);
     clock.advance(600_000);
     expect(renewals).toHaveLength(2);
+  });
+
+  it("exits 1 on a dead connection, naming the lease that outlived it, and releases nothing", async () => {
+    // ADR 0004 §3: the daemon released nothing when the socket died, so the lease is still
+    // granted -- the holder says so, says until when, and does not pretend to release it.
+    const output = outputCapture();
+    let connectionLostListener: ((error: AnySimlockError) => void) | undefined;
+    let released = false;
+    const client = fakeClient({
+      onConnectionLost: (listener) => {
+        connectionLostListener = listener;
+        return () => {};
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    // Let `requestLease` resolve and `runLease` reach its wait point, so the listener exists.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    connectionLostListener?.(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
+    );
+
+    expect(await runPromise).toBe(1);
+    const line = JSON.parse(output.stderr.trim().split("\n").at(-1) as string) as {
+      error: { code: string; message: string };
+    };
+    expect(line.error.code).toBe("DAEMON_CONNECTION_LOST");
+    expect(line.error.message).toContain("lse_1");
+    expect(line.error.message).toContain("60000");
+    // Nothing to release over a connection that is already gone -- and nothing that should be.
+    expect(released).toBe(false);
+  });
+
+  it("names the latest deadline in that line, not the one the grant carried", async () => {
+    // The deadline moves on every renewal, and this line is the only place a holder reports
+    // it. Quoting the grant-time one would, after about a TTL of uptime, name a moment in the
+    // past on a lease that is perfectly alive.
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let connectionLostListener: ((error: AnySimlockError) => void) | undefined;
+    const client = fakeClient({
+      onConnectionLost: (listener) => {
+        connectionLostListener = listener;
+        return () => {};
+      },
+      renewLease: (input) =>
+        Promise.resolve({
+          deviceId: "dev_1",
+          grantedAt: 0,
+          id: input.leaseId,
+          ownerId: "test-requester",
+          requesterId: "test-requester",
+          lastRenewedAt: clock.now(),
+          ttlMs: 60_000,
+          ttlDeadline: clock.now() + 60_000,
+        }),
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+
+    // Two renewals: the grant's deadline was 60_000, so they land at 20_000 and 40_000, each
+    // answering with a deadline a full TTL further out.
+    clock.advance(20_000);
+    await settle();
+    clock.advance(20_000);
+    await settle();
+
+    connectionLostListener?.(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
+    );
+    expect(await runPromise).toBe(1);
+
+    const line = JSON.parse(output.stderr.trim().split("\n").at(-1) as string) as {
+      error: { message: string };
+    };
+    expect(line.error.message).toContain("100000");
+    // The grant-time deadline (60_000) is not what it reports any more.
+    expect(line.error.message).not.toContain("60000");
   });
 
   it("sends --ttl as the request's own ttlMs, and nothing when it is not given", async () => {
