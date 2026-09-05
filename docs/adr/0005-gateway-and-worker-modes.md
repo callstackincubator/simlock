@@ -17,10 +17,10 @@ Simlock gains a second run mode. A **worker** is what every simlock daemon is
 today: it owns the devices on one machine. A **gateway** owns no devices at
 all. Workers connect *to* it; it keeps a live picture of each one (health,
 capacity, queue, leases, devices, catalog), holds one fleet-wide queue of
-lease requests, dispatches each to the worker best placed to serve it, and
-is the one address the outside world — agents, the web console,
-agent-device — talks to. To a client, a gateway looks like a single, larger
-simlock.
+lease requests, dispatches each to the worker best placed to serve it,
+proxies device commands to the worker that owns the device, and is the one
+address the outside world — agents, the web console, agent-device — talks
+to. To a client, a gateway looks like a single, larger simlock.
 
 ## Problem
 
@@ -43,9 +43,9 @@ against a single simlock has to change.
 ## Users
 
 - **Agent (remote).** Requests a lease from the gateway over HTTP or MCP,
-  gets a device somewhere in the fleet, renews and releases it through the
-  same URL. Never learns a worker's address unless it needs one to reach the
-  device.
+  gets a device somewhere in the fleet, drives it with `simctl`/`adb`
+  commands, renews and releases it — all through the same URL. Never needs
+  a worker's address.
 - **Operator.** Mints join tokens, drains a worker for maintenance, sees
   every machine's health, capacity, queue, and leases in one `simlock status`
   and one console.
@@ -58,9 +58,13 @@ against a single simlock has to change.
 - **A new API between gateway and worker.** The worker link carries the
   existing daemon contract (ADR 0003); the gateway calls the same operations
   a local admin CLI would.
-- **Proxying the data plane.** The gateway hands out leases; driving the
-  device (adb, simctl, screen) still happens against the worker that owns it.
-  `dataPlane` on the lease object stays reserved.
+- **A byte-heavy data plane.** Device *commands* (`simctl`, `adb`, their
+  output) are proxied through the gateway; live screen streaming, port
+  forwarding, and interactive TTYs are not. `dataPlane` on the lease object
+  stays reserved for that.
+- **File transfer.** A command that names a file (`simctl install
+  <path>`, `adb install <apk>`) runs on the worker's filesystem; getting the
+  file there is out of scope for v1 (see open question 5).
 - **A gateway that also owns devices.** One process, one mode. A machine
   that should do both runs two daemons.
 - **Durable gateway queue.** Pending requests on the gateway are in-memory,
@@ -181,12 +185,46 @@ physical machine.
     the gateway releases the lease on the worker. Over HTTP the flag is
     ignored, as on a worker.
 18. The lease object gains `worker: { id, label }` (additive) so a client and
-    the console can tell where the device lives. The worker's network
-    address is **not** on the lease; see open question 5.
+    the console can tell where the device lives. A worker's network address
+    is never exposed: clients reach devices through the gateway (below).
 19. Progress pushes for a dispatched request, and lease-scoped pushes
     (`lease-lost`, `device-unhealthy`, `device-recovered`) relayed by the
     worker's event stream, are re-pushed by the gateway to whichever of its
     connections owns the request or lease, exactly as a worker does today.
+
+### Reaching a device
+
+Today a lease holder reaches its device with `simlock simctl` / `simlock
+adb`: the daemon resolves a root-scoped command (`driver.passthrough`) and
+the CLI spawns it locally. That only works on the worker's own machine. A
+remote agent — over HTTP today, through a gateway tomorrow — has no way to
+drive the device it leased.
+
+19a. New contract operation **`device.exec`** (role `agent`, ownership: the
+     caller must own the lease): `{ leaseId, tool: "simctl" | "adb", args,
+     stdin? }`. The **worker** resolves the command through the same driver
+     passthrough logic (same root scoping, same refusal list for verbs that
+     would change a device's lifecycle behind the registry's back) and runs
+     it through its `ProcessRunner`. Output streams back as request-scoped
+     pushes (`output`, carrying `stream: "stdout" | "stderr"` and a chunk,
+     keyed by the frame id like `progress`); the operation resolves with
+     `{ exitCode }`. It is a contract operation, so it works on the unix
+     socket, over HTTP (`POST /v1/leases/{id}/exec`, response streamed as
+     Server-Sent Events, the same shape `/events` already uses), and over
+     the uplink.
+19b. The **gateway proxies** `device.exec` to the owning worker over its
+     uplink and relays the output pushes to the calling connection,
+     unchanged. It parses nothing about the command; ownership is checked at
+     the gateway (its own lease index) and again at the worker (the
+     forwarded namespaced requester owns the lease there).
+19c. The CLI's `simlock simctl` / `simlock adb` keep spawning locally with
+     inherited stdio when they talk to a worker over its unix socket (an
+     interactive `adb shell` keeps working there). Against a gateway or over
+     HTTP they use `device.exec` and print the streamed output; `stdin` is
+     forwarded as a stream but there is no pseudo-terminal, so
+     line-oriented commands work and full-screen ones do not.
+19d. `driver.passthrough` answers `UNSUPPORTED_IN_GATEWAY_MODE` on a
+     gateway: a command string the client cannot run is worse than an error.
 
 ### Status, events, catalog
 
@@ -263,10 +301,10 @@ physical machine.
     `src/contract/boundary.test.ts`). The uplink is a port
     (`UplinkListenerFactory` on the gateway, `UplinkConnector` on the
     worker) with a WebSocket adapter, so tests script it in memory.
-34. Operations that only make sense against real devices — `nuke.run`,
-    `cleanup.run`, `doctor.run`, `driver.passthrough` — answer
-    `UNSUPPORTED_IN_GATEWAY_MODE` in v1 (see open question 7).
-    `config.get` returns the gateway's own config.
+34. Operations that act on a machine's devices as a whole — `nuke.run`,
+    `cleanup.run`, `doctor.run` — and `driver.passthrough` answer
+    `UNSUPPORTED_IN_GATEWAY_MODE` in v1; they stay per-worker, direct
+    operations. `config.get` returns the gateway's own config.
 35. Tests: one suite per gateway handler against scripted uplinks and a
     manually-advanced `Clock` (dispatch order and pass-over, stale-view
     `NO_CAPACITY`, drained and disconnected workers, fleet-wide one-lease
@@ -301,14 +339,23 @@ physical machine.
 7. **Routing is a pure function over worker views**, a module with one entry
    point selected by `gateway.routing`, the same shape as `CapacityStrategy`.
    Nothing else in the gateway knows how a worker is chosen.
+8. **Device commands execute on the worker and travel over the contract.**
+   The gateway is a proxy for them, over the same uplink it uses for
+   everything else. No worker address ever reaches a client, no second
+   network path exists, and a remote HTTP agent gets the same ability
+   against a lone worker without a gateway at all — which closes the gap
+   that left `dataPlane` reserved (#66).
+9. **A joined worker keeps serving its local clients.** Local agents and the
+   gateway share the worker's capacity; the worker's own accounting
+   arbitrates, and the gateway's views show local leases too.
 
 ## Consequences
 
 - The contract gains: `mode` in `status.get`'s daemon block, `workerId` on
   devices and leases, `worker` on the lease object, `workers` on status,
-  `worker.*` operations, the `worker` token role, and error codes
-  `WORKER_UNREACHABLE`, `WORKER_CONNECTED`, `UNSUPPORTED_IN_GATEWAY_MODE`.
-  All additive.
+  `worker.*` operations, `device.exec` with its `output` push family, the
+  `worker` token role, and error codes `WORKER_UNREACHABLE`,
+  `WORKER_CONNECTED`, `UNSUPPORTED_IN_GATEWAY_MODE`. All additive.
 - New config: `mode`, `gateway.url`, `gateway.token`, `gateway.label`
   (worker side); `gateway.routing`, `gateway.disconnectedRetentionMs`
   (gateway side).
@@ -318,6 +365,8 @@ physical machine.
   non-goal.
 - Sequencing, one PR each, each leaving the tree working, after ADR 0004
   has landed:
+  0. `device.exec` on the worker, with the CLI and HTTP frontends — useful
+     on its own for remote HTTP agents, and the gateway proxies it later;
   1. `config.mode`, `src/gateway/` skeleton, the uplink ports and WebSocket
      adapters, `worker` token role, worker views, `worker.*` operations,
      aggregated `status.get`/`catalog.get`/`events.*`, `GET /v1/workers` —
@@ -354,6 +403,15 @@ physical machine.
 - **Redirecting clients to the worker after the grant.** Makes every client
   fleet-aware and needs per-worker client credentials. Rejected: the gateway
   is the contact point, so it proxies the whole lease lifecycle.
+- **Advertising a worker address on the lease** so clients drive the device
+  directly. Needs every worker reachable from every client, which is the
+  NAT problem the uplink removes, and reopens per-worker credentials.
+  Rejected in favour of proxying `device.exec`.
+- **Fanning `doctor.run` / `cleanup.run` out to every worker.** Useful for
+  the console later; a fleet-wide destructive command from one endpoint is
+  not something v1 should offer. Deferred; all four stay per-worker.
+- **Naming the modes `host` / `worker`.** Rejected: agent-device already
+  has a Host process (#70) and the docs use "host" for the machine.
 - **A gateway that is also a worker (hybrid).** Every gateway code path
   would need a "local" special case and the gateway would hold device
   state. Rejected; run two daemons with distinct `SIMLOCK_HOME`s.
@@ -362,27 +420,23 @@ physical machine.
 
 Answers to these change the requirements above, not just the wording.
 
-1. **Naming.** `gateway`/`worker` (proposed, avoids agent-device's "Host"),
-   or `host`/`worker` as the original ask phrased it?
-2. **Worker identity.** Instance id from `instance.json` (proposed, stable
+1. **Worker identity.** Instance id from `instance.json` (proposed, stable
    across restarts, opaque) or an operator-chosen id that must be unique?
-3. **Disconnected retention.** How long does a disconnected worker stay in
+2. **Disconnected retention.** How long does a disconnected worker stay in
    views before it is forgotten automatically? Proposal: 24 hours, and
    never while it still holds gateway-issued leases the gateway knows of.
-4. **Routing constraints.** Any placement rule beyond capacity — pin a
+3. **Routing constraints.** Any placement rule beyond capacity — pin a
    requester to a worker, prefer a worker by label (Xcode version, chip),
    or exclude a platform on a worker? Proposal: none in v1; `label` is
    display-only.
-5. **Reaching the device.** Is `worker: { id, label }` on the lease enough,
-   with the operator mapping label to address out of band, or should a
-   worker advertise an `address` over the uplink that the gateway puts on
-   the lease? The second is the first step towards a data plane.
-6. **Hybrid.** Is "a gateway never owns devices" acceptable for the
+4. **Hybrid.** Is "a gateway never owns devices" acceptable for the
    two-Mac case?
-7. **Fan-out operations.** Should `doctor.run` and `cleanup.run` through the
-   gateway fan out to every connected worker, with `workerId` on each
-   finding or action, instead of `UNSUPPORTED_IN_GATEWAY_MODE`?
-8. **Local agents versus the fleet.** Should a worker that has joined a
-   gateway still serve its local socket and HTTP clients directly, or
-   should joining make it fleet-only? Proposal: still serves locally;
-   capacity accounting arbitrates.
+5. **Files for `device.exec`.** An agent behind the gateway that wants to
+   install an app has no way to put the artifact on the worker. Options:
+   out of scope (proposed for v1; the seam is a later `device.upload`
+   operation streaming chunks over the same wire), or ship a bounded upload
+   in v1.
+6. **`device.exec` limits.** Per-command timeout, maximum output size, and
+   concurrency per lease — proposal: a config-driven timeout defaulting to
+   ten minutes, no output cap (chunks stream, nothing is buffered), and no
+   concurrency cap beyond what the tool itself tolerates.
