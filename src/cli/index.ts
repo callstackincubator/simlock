@@ -11,7 +11,9 @@ import {
   NodeIpcTransport,
   NodeParentWatch,
   NodeSystemStats,
+  resolveDaemonSocketPath,
   resolveSimlockHome,
+  SocketPathTooLongError,
   SystemClock,
   type Clock,
   type DaemonLauncher,
@@ -351,7 +353,7 @@ export function buildCliEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): CliEnvironment {
   const { clock, dataDirectory, filesystem, ipc, launcher, systemStats } = ports;
-  const socketPath = join(dataDirectory, "daemon.sock");
+  const socketPath = resolveDaemonSocketPath(dataDirectory);
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
@@ -569,7 +571,7 @@ function writeError(environment: CliEnvironment, error: unknown): void {
 }
 
 function cliErrorCode(error: unknown): string {
-  if (error instanceof UsageError) return "USAGE";
+  if (error instanceof UsageError || error instanceof SocketPathTooLongError) return "USAGE";
   if (isSimlockError(error)) return error.code;
   return "INTERNAL";
 }

@@ -47,6 +47,7 @@ import {
   NodeProcessSupervisor,
   NodeSystemStats,
   NodeTcpProbe,
+  resolveDaemonSocketPath,
   resolveSimlockHome,
   SystemClock,
   type SystemStats,
@@ -93,7 +94,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
-  const socketPath = options.socketPath ?? join(dataDirectory, "daemon.sock");
+  const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
   const config = await loadConfig({
     configPath,
     filesystem,

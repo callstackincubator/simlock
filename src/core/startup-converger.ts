@@ -1,5 +1,5 @@
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import type { DeviceRecord, LeaseRecord, Platform } from "./domain.js";
 import type { CapacityReader } from "./lease-ports.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { compareLeastRecentlyUsed } from "./warm-pool.js";
@@ -41,11 +41,17 @@ export interface DeviceClaimReader {
   isClaimed(deviceId: string): boolean;
 }
 
+/** Which platforms have a driver this daemon can drive devices through. */
+export interface StartupDriverAvailability {
+  has(platform: Platform): boolean;
+}
+
 export interface StartupConvergerOptions {
   readonly capacity: CapacityReader;
   readonly claims: DeviceClaimReader;
   readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
+  readonly drivers: StartupDriverAvailability;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
@@ -56,6 +62,13 @@ export interface StartupConvergerOptions {
 /**
  * Directly coordinates the required startup recovery sequence. It emits no
  * events itself; recovery and cleanup own their post-commit lifecycle facts.
+ *
+ * Devices of a platform whose driver was refused at discovery are left exactly as the
+ * registry found them. Recovering or shutting one down needs a driver call there is no
+ * driver for, and a `NoDriverError` out of convergence stops the whole daemon -- costing
+ * the healthy platform for a root the other one rejected, which is the opposite of the
+ * per-platform fail-closed behaviour discovery promises. `simlock doctor` reports the
+ * rejection; the inventory waits for the driver to come back.
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
@@ -110,6 +123,7 @@ export class StartupConverger {
       return snapshot.devices.filter(
         (device) =>
           device.state === "reclaiming" &&
+          this.options.drivers.has(device.spec.platform) &&
           !leasedDeviceIds.has(device.id) &&
           !this.options.claims.isClaimed(device.id),
       );
@@ -134,6 +148,7 @@ export class StartupConverger {
       .filter(
         (device) =>
           device.state === "ready" &&
+          this.options.drivers.has(device.spec.platform) &&
           !leasedDeviceIds.has(device.id) &&
           !this.options.claims.isClaimed(device.id) &&
           !refused.has(device.id) &&

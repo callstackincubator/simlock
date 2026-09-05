@@ -649,6 +649,11 @@ for tests. Two instances on one machine also need distinct
 `SIMLOCK_HOME` cannot isolate it. When the CLI or MCP server auto-starts the daemon, the daemon
 process inherits the variable like the rest of the environment.
 
+Keep it short: `daemon.sock` lives directly under it, and the kernel caps a Unix
+socket path at 104 bytes on macOS (108 on Linux). A deeper `SIMLOCK_HOME` is
+refused up front by every frontend with a `USAGE` error naming the limit, rather
+than failing on connect with a bare `EINVAL`.
+
 ### `SIMLOCK_ADMIN_TOKEN`
 
 The second source in [admin credential resolution](#admin-credential-resolution)

@@ -7,6 +7,7 @@ import type { SimlockClient } from "../client/index.js";
 import {
   NodeDaemonLauncher,
   NodeIpcTransport,
+  resolveDaemonSocketPath,
   resolveSimlockHome,
   SystemClock,
 } from "../ports/index.js";
@@ -143,7 +144,7 @@ function defaultEnvironment(
   const dataDirectory = resolveSimlockHome();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
-  const socketPath = join(dataDirectory, "daemon.sock");
+  const socketPath = resolveDaemonSocketPath(dataDirectory);
   const logPath = join(dataDirectory, "daemon.log");
   return {
     connect: () =>

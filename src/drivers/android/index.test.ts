@@ -50,6 +50,8 @@ const scopedEnv = {
   ANDROID_HOME: sdk,
 } as const;
 const scopedOptions = { env: scopedEnv } as const;
+// The emulator outlives the daemon and is never read from, so it is spawned detached.
+const emulatorOptions = { env: scopedEnv, stdio: "ignore" } as const;
 const binaries = {
   adb: `${sdk}/platform-tools/adb`,
   avdmanager: `${sdk}/cmdline-tools/latest/bin/avdmanager`,
@@ -234,7 +236,7 @@ describe("AndroidDriver", () => {
     expect(harness.runner.calls).toContainEqual({
       args: ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-no-snapshot-load"],
       command: binaries.emulator,
-      options: scopedOptions,
+      options: emulatorOptions,
     });
   });
 
@@ -257,7 +259,7 @@ describe("AndroidDriver", () => {
         "simlock_clean_baseline",
       ],
       command: binaries.emulator,
-      options: scopedOptions,
+      options: emulatorOptions,
     });
   });
 
@@ -349,7 +351,7 @@ describe("AndroidDriver", () => {
         "-no-snapshot-load",
       ],
       command: binaries.emulator,
-      options: scopedOptions,
+      options: emulatorOptions,
     });
   });
 
@@ -523,7 +525,7 @@ describe("AndroidDriver", () => {
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 
     expect(driver.estimate({ operation: "provision" }, spec)).toBe(1_000);
-    expect(driver.estimate({ operation: "boot" }, spec)).toBe(31_000);
+    expect(driver.estimate({ operation: "boot" }, spec)).toBe(70_000);
   });
 
   it("prices reclaim by the strategy the clean level selects", async () => {
