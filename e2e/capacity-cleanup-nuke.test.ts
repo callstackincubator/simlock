@@ -36,7 +36,8 @@ async function deviceRows(
   return result.json as { id: string; driverDeviceId: string; state: string }[];
 }
 
-function leaseHeld(
+/** Starts a `simlock lease` that stays alive, renewing its own lease (ADR 0004 §2). */
+function leaseHolder(
   env: Awaited<ReturnType<typeof withDaemon>>,
   agentId: string,
 ): CliBackgroundHandle {
@@ -57,11 +58,13 @@ async function releaseAndForget(
   env: Awaited<ReturnType<typeof withDaemon>>,
   agentId: string,
 ): Promise<void> {
-  const held = leaseHeld(env, agentId);
-  const grant = JSON.parse(await held.firstStdoutLine()) as { lease: { id: string } };
+  const holder = leaseHolder(env, agentId);
+  const grant = JSON.parse(await holder.firstStdoutLine()) as { lease: { id: string } };
+  // Released explicitly, before the process is killed: a SIGKILLed holder frees nothing
+  // (ADR 0004 §3), so the release has to be its own step for the device to come back.
   await env.cli(["release", grant.lease.id]);
-  held.kill("SIGKILL");
-  await held.waitForExit(15_000).catch(() => undefined);
+  holder.kill("SIGKILL");
+  await holder.waitForExit(15_000).catch(() => undefined);
 }
 
 /**
@@ -96,7 +99,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
 
-    const first = leaseHeld(env, "cap-a");
+    const first = leaseHolder(env, "cap-a");
     const grantA = JSON.parse(await first.firstStdoutLine()) as {
       lease: { id: string };
       device: { driverDeviceId: string };
@@ -104,7 +107,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
 
     // maxRunning (2) has room, but maxDevices (1) does not: a second requester must
     // still queue, because there is no second device to provision.
-    const second = leaseHeld(env, "cap-b");
+    const second = leaseHolder(env, "cap-b");
     await waitFor(() => second.progressEvents().some((event) => isQueuedAt(event, 1)), {
       label: "second requester queues on the managed-device limit, not the running limit",
     });
@@ -142,12 +145,16 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     };
     expect(grantB.device.driverDeviceId).toBe(grantA.device.driverDeviceId);
 
+    // `second` still holds `grantB`, and a SIGKILL would leave it standing for the whole
+    // TTL (ADR 0004 §3), so it is released explicitly before the processes are torn down.
+    await env.cli(["release", grantB.lease.id]);
     first.kill("SIGKILL");
     second.kill("SIGKILL");
     await Promise.all([
       first.waitForExit(15_000).catch(() => undefined),
       second.waitForExit(15_000).catch(() => undefined),
     ]);
+    await waitForLeaseCount(env, 0);
   });
 
   it("reports overLimit when a lowered running limit can't yet be met, without evicting existing leases", async () => {
@@ -158,11 +165,10 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
 
-    // Detached, not held: a graceful `daemon stop` (which `withConfig` triggers to
-    // pick up the new limit) releases every held-mode lease as part of closing its
-    // owning connection -- exactly like a normal held-mode client disconnecting. A
-    // detached lease has no owning connection, so it survives the restart, which is
-    // what actually exercises "a lowered limit doesn't evict an existing lease".
+    // `--detach`, so no holder process has to stay alive across the `daemon stop` that
+    // `withConfig` triggers to pick up the new limit. The leases themselves survive that
+    // stop either way now (ADR 0004 §3), which is what lets this exercise "a lowered limit
+    // doesn't evict an existing lease" against a genuinely still-leased device.
     const leaseOne = await env.cli([
       "lease",
       "--platform",
@@ -219,14 +225,14 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
 
-    const heldX = leaseHeld(env, "idle-x");
-    const grantX = JSON.parse(await heldX.firstStdoutLine()) as {
+    const holderX = leaseHolder(env, "idle-x");
+    const grantX = JSON.parse(await holderX.firstStdoutLine()) as {
       lease: { id: string };
       device: { driverDeviceId: string };
     };
     await env.cli(["release", grantX.lease.id]);
-    heldX.kill("SIGKILL");
-    await heldX.waitForExit(15_000).catch(() => undefined);
+    holderX.kill("SIGKILL");
+    await holderX.waitForExit(15_000).catch(() => undefined);
     await waitForDeviceState(env, grantX.device.driverDeviceId, "ready");
 
     await waitForCleanupToReach(env, grantX.device.driverDeviceId, "shutdown");
@@ -259,14 +265,14 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       "--dry-run must never call a destructive/state-changing driver verb",
     ).toEqual([]);
 
-    // nuke: force-releases held leases, clears the queue, destroys registry devices,
+    // nuke: force-releases every lease, clears the queue, destroys registry devices,
     // and must never touch a device the driver reports but the registry doesn't know
     // about (safety.md: registry-only destruction).
-    const heldForNuke = leaseHeld(env, "nuke-held");
+    const heldForNuke = leaseHolder(env, "nuke-held");
     await heldForNuke.firstStdoutLine();
     // Managed devices are already at 2/2 and running at 1/1 from the idle/dry-run
     // phase above, so this requester has no device to reuse or provision and queues.
-    const queuedForNuke = leaseHeld(env, "nuke-queued");
+    const queuedForNuke = leaseHolder(env, "nuke-queued");
     await waitFor(() => queuedForNuke.progressEvents().some((event) => isQueuedAt(event, 1)), {
       label: "a waiter is queued before nuke",
     });
