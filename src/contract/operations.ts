@@ -18,7 +18,6 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   leaseGrantSchema,
-  leaseModeSchema,
   leaseRecordSchema,
   nukeReportSchema,
   passthroughCommandSchema,
@@ -89,11 +88,11 @@ export const statusGet = defineOperation({
 // ---- lease.request --------------------------------------------------------------------------
 
 /**
- * No `device`/`os` legacy aliases and no nested `request` wrapper -- both accepted by today's
- * daemon (`server.ts:559-565`), neither carried forward. The wire moves to protocol 3 with no
- * compatibility shim (ADR "Consequences"); this is a deliberate break, called out in the PR
- * description. `.strict()` on top of dropping the fields: an old client sending `device`/`os`/
- * `request` now gets a clear `BAD_REQUEST` instead of those keys silently vanishing.
+ * No `device`/`os` legacy aliases and no nested `request` wrapper -- both accepted by the
+ * pre-ADR-0003 daemon, neither carried forward. `.strict()` on top of dropping the fields: an
+ * old client sending `device`/`os`/`request` gets a clear `BAD_REQUEST` instead of those keys
+ * silently vanishing. `mode` leaves the same way under ADR 0004 -- there is one kind of lease,
+ * so a request that still names a mode is a `BAD_REQUEST` rather than a value silently ignored.
  */
 const leaseRequestInputSchema = z
   .object({
@@ -101,29 +100,20 @@ const leaseRequestInputSchema = z
     platform: platformSchema,
     osVersion: z.string().optional(),
     full: z.boolean().optional(),
-    mode: leaseModeSchema.optional(),
     requesterId: z.string().optional(),
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),
     timeoutMs: z.number().finite().positive().optional(),
-    /** ADR §9: initial TTL for a detached lease. Supplying it for a held lease is
-     * `BAD_REQUEST` -- held TTL is the backstop, not the caller's to shorten -- enforced below
-     * via `superRefine` rather than left to the handler, so the rule is part of the contract
-     * itself. Wired through to `LeaseRequestOptions.ttlMs` (src/core/wait-queue.ts) by the
-     * dispatcher's `lease.request` handler. */
+    /**
+     * ADR 0004 §4: this lease's initial TTL, accepted on **every** request now (it used to be
+     * `BAD_REQUEST` for a held lease). Omitting it means `lease.defaultTtlMs`; a value above
+     * `lease.maxTtlMs` is `BAD_REQUEST`, enforced by the dispatcher's handler rather than here
+     * because the cap is a daemon config value this module deliberately cannot see. Wired
+     * through to `LeaseRequestOptions.ttlMs` (src/core/wait-queue.ts) by that same handler.
+     */
     ttlMs: z.number().finite().positive().optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (value.ttlMs !== undefined && (value.mode ?? "held") === "held") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "ttlMs is BAD_REQUEST for a held lease: held TTL is the backstop, not the caller's to shorten",
-        path: ["ttlMs"],
-      });
-    }
-  });
+  .strict();
 
 export const leaseRequest = defineOperation({
   name: "lease.request",
@@ -178,6 +168,13 @@ export const leaseCancel = defineOperation({
 
 // ---- lease.renew ----------------------------------------------------------------------------
 
+/**
+ * ADR 0004 §1: the only thing that keeps a lease alive, on every transport. An omitted `ttlMs`
+ * re-applies the lease's own stored width -- never `lease.defaultTtlMs` -- so a lease granted
+ * for four hours does not shrink to fifteen minutes the first time something renews it. A
+ * `ttlMs` above `lease.maxTtlMs` is `BAD_REQUEST`, checked in the dispatcher's handler where
+ * that config value is visible.
+ */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRenew = defineOperation({
   name: "lease.renew",
@@ -227,18 +224,6 @@ export const leaseList = defineOperation({
   role: "agent",
   input: z.object({}),
   output: z.object({ leases: z.array(leaseRecordSchema) }),
-});
-
-// ---- lease.heartbeat ------------------------------------------------------------------------
-
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const leaseHeartbeat = defineOperation({
-  name: "lease.heartbeat",
-  role: "agent",
-  input: z.object({}),
-  output: z.object({
-    leases: z.array(z.object({ leaseId: z.string(), ttlDeadline: z.number() })),
-  }),
 });
 
 // ---- doctor.run -------------------------------------------------------------------------------
@@ -417,7 +402,6 @@ export const OPERATIONS = {
   "lease.renew": leaseRenew,
   "lease.release": leaseRelease,
   "lease.list": leaseList,
-  "lease.heartbeat": leaseHeartbeat,
   "driver.passthrough": driverPassthrough,
   "doctor.run": doctorRun,
   "lease.release-all": leaseReleaseAll,

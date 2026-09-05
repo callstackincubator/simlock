@@ -14,12 +14,15 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /**
- * The range this contract's daemon speaks. Both ends are 3 today: the socket wire moves to
- * protocol 3 with no compatibility shim (ADR "Consequences") -- the range widens only once a
- * second version is actually kept alive side by side with the first, which nothing here does
- * yet.
+ * The range this contract's daemon speaks. Both ends are 4: ADR 0004 removes `lease.heartbeat`
+ * and `mode` from the wire with no compatibility shim behind them, so under ADR 0003 §6's
+ * honesty rule the range does not widen -- it only ever would once a second version is
+ * actually kept alive side by side with the first, which nothing here does. A protocol-3
+ * client and this daemon simply do not overlap, and `hello` fails with
+ * `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges; `daemon.stop` stays the frozen exception
+ * so the upgrade path (stop, then start the new daemon) exists at all.
  */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 3, max: 3 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 4, max: 4 };
 
 /**
  * The one protocol version that ever existed before ranges did. Used only to build the
@@ -74,7 +77,6 @@ export const helloRequestSchema = z
      * only ever compares this field) still answers intelligibly. */
     protocolVersion: z.number().int().optional(),
     protocolRange: protocolRangeSchema.optional(),
-    capabilities: z.object({ heartbeat: z.boolean().optional() }).optional(),
     principal: z.string().optional(),
     credential: z.string().optional(),
   })
