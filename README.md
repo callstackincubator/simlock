@@ -61,8 +61,9 @@ simlock lease --platform ios --device "iPhone 16" --detach
     "deviceId": "dev_1a2b",
     "requesterId": "agent-1",
     "ownerId": "agent-1",
-    "mode": "detached",
     "grantedAt": 1735689600000,
+    "ttlMs": 900000,
+    "lastRenewedAt": 1735689600000,
     "ttlDeadline": 1735690500000
   },
   "timing": {
@@ -76,10 +77,12 @@ simlock lease --platform ios --device "iPhone 16" --detach
 ```
 
 That's the whole interaction: ask for a platform and a device model, get
-back an identified, ready-to-use device. Release it explicitly, or let its
-TTL expire. This is the contract's own `LeaseGrant` shape, serialized
-as-is — the CLI's `--json` output is a contract value, not a bespoke
-rendering (see [docs/CLI.md](docs/CLI.md)).
+back an identified, ready-to-use device. Release it explicitly, renew it
+before `ttlDeadline` to keep it, or let its TTL expire. Drop `--detach` and
+`simlock lease` stays running instead, doing the first two for you — renewing
+on a timer and releasing when it exits. This is the contract's own
+`LeaseGrant` shape, serialized as-is — the CLI's `--json` output is a
+contract value, not a bespoke rendering (see [docs/CLI.md](docs/CLI.md)).
 
 Now say a second agent asks for the same `iPhone 16` a moment later. It's
 already leased to the first agent — no problem, Simlock just provisions
@@ -104,8 +107,9 @@ the lease result lands on stdout the moment the new device is ready:
     "deviceId": "dev_3c4d",
     "requesterId": "agent-2",
     "ownerId": "agent-2",
-    "mode": "detached",
     "grantedAt": 1735689630000,
+    "ttlMs": 900000,
+    "lastRenewedAt": 1735689630000,
     "ttlDeadline": 1735690530000
   },
   "timing": {
@@ -155,16 +159,17 @@ The daemon starts on demand — there's no separate setup step. Use
 Simlock-managed devices.
 
 See [docs/CLI.md](docs/CLI.md) for the full command reference and
-[docs/CLI.md#mcp-integration-optional](docs/CLI.md) or the [README section
+[docs/CLI.md#simlock-mcp](docs/CLI.md#simlock-mcp) or the [README section
 below](#mcp-integration-optional) for wiring up an MCP client.
 
 ## MCP integration (optional)
 
-The CLI remains Simlock's primary, full operator interface. MCP is a
-narrower, agent-focused integration: it intentionally exposes neither
-status, configuration, events, lease renewal, nor destructive or other
-operator commands. Start it with `simlock mcp` — it reserves stdout for MCP
-JSON-RPC, so lease results never mix with protocol framing.
+The CLI remains Simlock's primary, full operator interface. MCP is a narrower,
+agent-focused integration: it intentionally exposes neither status,
+configuration, events, manual lease renewal, nor destructive or other operator
+commands — the server renews its own session's lease on a timer, so an agent
+never has to ask it to. Start it with `simlock mcp` — it reserves stdout for
+MCP JSON-RPC, so lease results never mix with protocol framing.
 
 `SIMLOCK_AGENT_ID` sets the server's stable requester identity. Simlock
 allows at most one active lease per identity, so give each agent session a
@@ -172,10 +177,10 @@ distinct, stable id — run one MCP server process per agent session, each
 with its own id.
 
 The server exposes exactly four tools: `list_devices` (read-only catalog of
-what can be leased), `lease_simulator`, `release_simulator`, and
-`lease_status` (cheap, safe to poll after a context compaction to check
-whether a device is still held). Full tool contracts, progress reporting,
-and lease-loss notifications are documented in
+what can be leased), `lease_simulator`, `release_simulator`, and `lease_status`
+(cheap, safe to poll after a context compaction to check whether a device is
+still leased to this session). Full tool contracts, progress reporting, and
+lease-loss notifications are documented in
 [docs/CLI.md](docs/CLI.md#simlock-mcp).
 
 ## Documentation
