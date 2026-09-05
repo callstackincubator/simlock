@@ -134,9 +134,9 @@ describe("ManagedDeviceLifecycle", () => {
     const ready = await readyDevice(harness);
     await harness.registry.createLease({
       deviceId: ready.id,
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     expect(await harness.lifecycle.shutdown(ready, "test", "cleanup")).toBeUndefined();
@@ -210,9 +210,9 @@ describe("ManagedDeviceLifecycle", () => {
       const ready = await readyDevice(harness);
       const lease = await harness.registry.createLease({
         deviceId: ready.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 10_000,
       });
       await harness.driver.shutdown({
@@ -234,9 +234,9 @@ describe("ManagedDeviceLifecycle", () => {
       const ready = await readyDevice(harness);
       await harness.registry.createLease({
         deviceId: ready.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 10_000,
       });
       const makeReadyCallsBefore = harness.driver.calls.filter(
@@ -277,9 +277,9 @@ describe("ManagedDeviceLifecycle", () => {
       const ready = await readyDevice(harness);
       const lease = await harness.registry.createLease({
         deviceId: ready.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 10_000,
       });
       harness.driver.hangMakeReady();
@@ -302,9 +302,9 @@ describe("ManagedDeviceLifecycle", () => {
       const ready = await readyDevice(harness);
       const lease = await harness.registry.createLease({
         deviceId: ready.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 10_000,
       });
       const claim = harness.claims.tryClaim(ready.id, "cleanup");
@@ -328,9 +328,9 @@ describe("ManagedDeviceLifecycle", () => {
       const ready = await readyDevice(harness);
       const lease = await harness.registry.createLease({
         deviceId: ready.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 10_000,
       });
       harness.driver.failOn("makeReady", 2, new DriverCrashError("boot failed"));
@@ -352,9 +352,9 @@ describe("ManagedDeviceLifecycle", () => {
       const ready = await readyDevice(harness);
       const lease = await harness.registry.createLease({
         deviceId: ready.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 10_000,
       });
 

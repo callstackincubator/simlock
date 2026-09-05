@@ -244,9 +244,9 @@ describe("Registry", () => {
 
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     const reloaded = await Registry.load(options);
@@ -288,9 +288,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -356,9 +356,9 @@ describe("Registry", () => {
     });
     await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
 
@@ -387,9 +387,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -428,9 +428,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -476,9 +476,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -755,9 +755,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.markRecoveryAttempt(device.id, 1_200);
@@ -791,8 +791,9 @@ describe("Registry", () => {
             id: "lse_1",
             deviceId: "dev_1",
             requesterId: "agent-1",
-            mode: "held",
             grantedAt: 1_000,
+            lastRenewedAt: 1_000,
+            ttlMs: 60_000,
             ttlDeadline: 2_000,
             // No `ownerId` -- exactly what a pre-ADR-0003 daemon wrote.
           },
@@ -814,8 +815,9 @@ describe("Registry", () => {
         deviceId: "dev_1",
         requesterId: "agent-1",
         ownerId: "agent-1",
-        mode: "held",
         grantedAt: 1_000,
+        lastRenewedAt: 1_000,
+        ttlMs: 60_000,
         ttlDeadline: 2_000,
       },
     ]);
@@ -824,7 +826,7 @@ describe("Registry", () => {
     // written file now carries `ownerId` explicitly (it is no longer an "unknown field"
     // preserved verbatim -- see `#unknownLeaseFields` -- but the registry's own understanding
     // of the record).
-    await registry.renewLease("lse_1", 3_000);
+    await registry.renewLease("lse_1", 3_000, 60_000);
     const reloaded = await Registry.load({
       clock,
       eventBus: new EventBus(clock),
@@ -850,8 +852,9 @@ describe("Registry", () => {
             deviceId: "dev_1",
             requesterId: "agent-1",
             ownerId: 42,
-            mode: "held",
             grantedAt: 1_000,
+            lastRenewedAt: 1_000,
+            ttlMs: 60_000,
             ttlDeadline: 2_000,
           },
         ],

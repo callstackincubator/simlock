@@ -9,14 +9,13 @@ export interface LeaseRequestOptions {
    * something else per request. Required: every caller of `LeaseCommands.request` (the daemon
    * dispatcher) always knows its own session's principal. */
   readonly ownerId: string;
-  readonly mode: "held" | "detached";
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
   readonly onProgress?: (progress: LeaseProgress) => void;
-  /** ADR 0003 §9: initial TTL for a *detached* lease. The contract rejects this for a `held`
-   * lease as `BAD_REQUEST` before it ever reaches here (held TTL is the backstop, not the
-   * caller's to shorten) -- this type does not re-enforce that, it trusts the caller. */
+  /** ADR 0004 §4: this lease's initial TTL, accepted on every request. Omitted means
+   * `lease.defaultTtlMs`; the cap against `lease.maxTtlMs` is applied at the daemon boundary
+   * before a request ever reaches here, so this type trusts what it is given. */
   readonly ttlMs?: number;
 }
 

@@ -7,9 +7,10 @@ const lease = (id: string, ttlDeadline: number) => ({
   deviceId: `dev_${id}`,
   grantedAt: 0,
   id,
-  mode: "detached" as const,
+  lastRenewedAt: 0,
   requesterId: "agent",
   ownerId: "agent",
+  ttlMs: ttlDeadline,
   ttlDeadline,
 });
 

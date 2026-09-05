@@ -30,7 +30,7 @@ const config: Config = {
       retryBackoffMultiplier: 2,
     },
   },
-  lease: { detachedTtlMs: 1, heldTtlBackstopMs: 1, heartbeatIntervalMs: 1 },
+  lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
   capacity: {
     strategy: "resource",
     config: {
@@ -116,9 +116,10 @@ describe("idleDestroyRule", () => {
           deviceId: "dev_1",
           grantedAt: 0,
           id: "lse_1",
-          mode: "held",
           requesterId: "agent-1",
           ownerId: "agent-1",
+          lastRenewedAt: 0,
+          ttlMs: 60_000,
           ttlDeadline: 1,
         },
       ],

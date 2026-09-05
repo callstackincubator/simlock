@@ -41,7 +41,6 @@ function grant(): LeaseGrant {
 
 function createWaiter(queue: WaitQueue, requesterId: string, options: { timeoutMs?: number } = {}) {
   return queue.create(request satisfies DeviceRequest, {
-    mode: "held",
     ownerId: requesterId,
     requesterId,
     ...options,
@@ -128,7 +127,6 @@ describe("WaitQueue", () => {
     const reattached: LeaseProgress[] = [];
     const { queue } = createQueue();
     const waiter = queue.create(request, {
-      mode: "held",
       onProgress: (progress) => received.push(progress),
       requesterId: "agent",
       ownerId: "agent",

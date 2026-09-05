@@ -1,5 +1,6 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { Clock, Filesystem, IdGenerator } from "../ports/index.js";
+import { DEFAULT_LEASE_TTL_MS } from "./config.js";
 import {
   type DeviceRecord,
   type DeviceSpec,
@@ -18,6 +19,13 @@ export interface RegistryOptions {
   readonly idGenerator: IdGenerator;
   readonly eventBus: EventBus;
   readonly statePath?: string;
+  /**
+   * The width a lease record written before ADR 0004 loads with, since it has none of its own
+   * (`lease.defaultTtlMs`; the daemon passes the configured value, and `DEFAULT_LEASE_TTL_MS`
+   * stands in for a caller that has no config to hand). Only ever read during that migration --
+   * a granted lease's width always comes from the grant itself.
+   */
+  readonly defaultTtlMs?: number;
 }
 
 export interface RegistrySnapshot {
@@ -41,7 +49,8 @@ export interface CreateLeaseInput {
   readonly deviceId: string;
   readonly requesterId: string;
   readonly ownerId: string;
-  readonly mode: LeaseRecord["mode"];
+  /** The width this lease is granted with; stored on the record, see `LeaseRecord.ttlMs`. */
+  readonly ttlMs: number;
   readonly ttlDeadline: number;
 }
 
@@ -91,6 +100,7 @@ export class Registry {
   static async load(options: RegistryOptions): Promise<Registry> {
     const registry = new Registry({
       ...options,
+      defaultTtlMs: options.defaultTtlMs ?? DEFAULT_LEASE_TTL_MS,
       statePath: options.statePath ?? DEFAULT_REGISTRY_PATH,
     });
 
@@ -394,9 +404,9 @@ export class Registry {
 
   async createLease({
     deviceId,
-    mode,
     ownerId,
     requesterId,
+    ttlMs,
     ttlDeadline,
   }: CreateLeaseInput): Promise<LeaseRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
@@ -413,13 +423,17 @@ export class Registry {
     }
 
     const leasedDevice = transition(device, "leased");
+    const grantedAt = this.options.clock.now();
     const lease: LeaseRecord = {
       deviceId,
-      grantedAt: this.options.clock.now(),
+      grantedAt,
       id: `lse_${this.options.idGenerator.generate()}`,
-      mode,
+      // ADR 0004: set at grant, then again on every renew -- a lease that has never been
+      // renewed reports the moment it was granted rather than nothing at all.
+      lastRenewedAt: grantedAt,
       ownerId,
       requesterId,
+      ttlMs,
       ttlDeadline,
     };
     const devices = [...this.#devices];
@@ -458,15 +472,20 @@ export class Registry {
     return { device: cloneDevice(reclaiming), lease: cloneLease(lease) };
   }
 
+  /**
+   * Commits a renewal: the new deadline, the width it was applied at (which becomes what the
+   * *next* body-less renew re-applies), and `lastRenewedAt`. All three are persisted together,
+   * so a daemon restart mid-lease restores the renewed deadline rather than the grant-time one.
+   */
   // fallow-ignore-next-line unused-class-member -- called through LeaseLifecycle's registry port.
-  async renewLease(leaseId: string, ttlDeadline: number): Promise<LeaseRecord> {
+  async renewLease(leaseId: string, ttlDeadline: number, ttlMs: number): Promise<LeaseRecord> {
     const index = this.#leases.findIndex((lease) => lease.id === leaseId);
     const lease = this.#leases[index];
     if (index === -1 || lease === undefined) {
       throw new UnknownLeaseError(leaseId);
     }
 
-    const renewed = { ...lease, ttlDeadline };
+    const renewed = { ...lease, lastRenewedAt: this.options.clock.now(), ttlDeadline, ttlMs };
     const leases = [...this.#leases];
     leases[index] = renewed;
     await this.#commit(this.#devices, leases);
@@ -524,8 +543,11 @@ export class Registry {
       return record;
     });
     this.#leases = parsed.leases.map((lease) => {
-      const record = parseLease(lease);
-      this.#unknownLeaseFields.set(record.id, unknownFields(lease, leaseRecordKeys));
+      const record = parseLease(lease, this.options.defaultTtlMs);
+      this.#unknownLeaseFields.set(
+        record.id,
+        unknownFields(lease, [...leaseRecordKeys, ...retiredLeaseRecordKeys]),
+      );
       return record;
     });
   }
@@ -570,10 +592,18 @@ const leaseRecordKeys = [
   "deviceId",
   "requesterId",
   "ownerId",
-  "mode",
   "grantedAt",
+  "ttlMs",
   "ttlDeadline",
+  "lastRenewedAt",
 ] as const;
+/**
+ * Fields a lease record written before ADR 0004 carries that this daemon neither reads nor
+ * keeps. Listed here so they are stripped on load rather than preserved through the
+ * unknown-field forward-compatibility path -- `mode` is not a field from a *newer* schema this
+ * daemon should hand back untouched, it is a concept that no longer exists.
+ */
+const retiredLeaseRecordKeys = ["mode"] as const;
 
 function cloneDevice(device: DeviceRecord): DeviceRecord {
   return { ...device, spec: { ...device.spec } };
@@ -695,12 +725,14 @@ function isValidOwnerId(value: unknown): value is string | undefined {
 
 /** The required-string and timing fields every lease record has always had -- split out of
  * `parseLease` so that function's own branch count reflects only what changes per schema
- * version (today: the `ownerId` migration), not the whole record shape at once. */
+ * version (the `ownerId` migration, and ADR 0004's `ttlMs`/`lastRenewedAt` one), not the whole
+ * record shape at once. `mode` is deliberately not checked any more: a record written before
+ * ADR 0004 still carries one, and it is simply dropped on load rather than being a reason to
+ * refuse the whole registry. */
 function hasValidLeaseCore(value: Record<string, unknown>): value is Record<string, unknown> & {
   id: string;
   deviceId: string;
   requesterId: string;
-  mode: "held" | "detached";
   grantedAt: number;
   ttlDeadline: number;
 } {
@@ -708,26 +740,40 @@ function hasValidLeaseCore(value: Record<string, unknown>): value is Record<stri
     typeof value.id === "string" &&
     typeof value.deviceId === "string" &&
     typeof value.requesterId === "string" &&
-    (value.mode === "held" || value.mode === "detached") &&
     typeof value.grantedAt === "number" &&
     typeof value.ttlDeadline === "number"
   );
 }
 
-function parseLease(value: unknown): LeaseRecord {
+/** ADR 0004's migration: a lease written before it has no stored width and no `lastRenewedAt`.
+ * Neither can be recovered from what is on disk (`ttlDeadline - grantedAt` is the grant-time
+ * width only until the first renewal moves the deadline), so each takes the documented default
+ * -- `lease.defaultTtlMs` and `grantedAt` respectively -- rather than a guess dressed up as
+ * arithmetic. A wrongly-typed value present on the record is treated the same as an absent
+ * one. */
+function isValidTimestamp(value: unknown): value is number | undefined {
+  return value === undefined || typeof value === "number";
+}
+
+function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
   if (!isObject(value) || !hasValidLeaseCore(value) || !isValidOwnerId(value.ownerId)) {
     throw new RegistryLoadError("Invalid lease record in registry state");
   }
+  if (!isValidTimestamp(value.ttlMs) || !isValidTimestamp(value.lastRenewedAt)) {
+    throw new RegistryLoadError("Invalid lease record in registry state");
+  }
 
-  const { deviceId, grantedAt, id, mode, ownerId, requesterId, ttlDeadline } = value;
+  const { deviceId, grantedAt, id, lastRenewedAt, ownerId, requesterId, ttlDeadline, ttlMs } =
+    value;
   return {
     deviceId,
     grantedAt,
     id,
-    mode,
+    lastRenewedAt: lastRenewedAt ?? grantedAt,
     ownerId: ownerId ?? requesterId,
     requesterId,
     ttlDeadline,
+    ttlMs: ttlMs ?? defaultTtlMs,
   };
 }
 

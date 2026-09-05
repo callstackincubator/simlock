@@ -13,10 +13,10 @@ export interface LeaseLifecycleRegistry {
     readonly deviceId: string;
     readonly requesterId: string;
     readonly ownerId: string;
-    readonly mode: LeaseRecord["mode"];
+    readonly ttlMs: number;
     readonly ttlDeadline: number;
   }): Promise<LeaseRecord>;
-  renewLease(leaseId: string, ttlDeadline: number): Promise<LeaseRecord>;
+  renewLease(leaseId: string, ttlDeadline: number, ttlMs: number): Promise<LeaseRecord>;
   beginRelease(leaseId: string): Promise<ReleasedLease>;
 }
 
@@ -25,20 +25,17 @@ export interface LeaseLifecycleOptions {
   readonly eventBus: EventBus;
   readonly expiryScheduler: LeaseExpiryScheduler;
   readonly registry: LeaseLifecycleRegistry;
-  readonly ttl: { readonly detachedMs: number; readonly heldBackstopMs: number };
+  /**
+   * ADR 0004 §4: `defaultMs` is `lease.defaultTtlMs`, and it applies in exactly one place -- a
+   * grant whose request named no `ttlMs`. A renew never falls back to it; it re-applies the
+   * lease's own stored width instead.
+   */
+  readonly ttl: { readonly defaultMs: number };
 }
 
 export interface LeaseLifecycleGrant {
   readonly device: DeviceRecord;
   readonly lease: LeaseRecord;
-}
-
-/** A heartbeat slides to the *held* backstop, so it must never be applied to a detached lease. */
-export class DetachedLeaseHeartbeatError extends Error {
-  constructor(readonly leaseId: string) {
-    super(`Detached lease cannot be heartbeated: ${leaseId}`);
-    this.name = "DetachedLeaseHeartbeatError";
-  }
 }
 
 /** Registry-backed lease state changes, deliberately excluding reclaiming and queue wakeups. */
@@ -48,16 +45,19 @@ export class LeaseLifecycle {
   // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's leases port.
   async grant(input: {
     readonly deviceId: string;
-    readonly mode: LeaseRecord["mode"];
     readonly ownerId: string;
     readonly requesterId: string;
-    /** ADR 0003 §9: overrides the mode-aware default for a detached lease's initial TTL. */
+    /** ADR 0004 §4: this lease's initial width; `lease.defaultTtlMs` when the request named
+     * none. Whatever it resolves to is stored on the record, because that is what a later
+     * body-less renew re-applies. */
     readonly ttlMs?: number;
   }): Promise<LeaseLifecycleGrant> {
     const { ttlMs, ...createInput } = input;
+    const effectiveTtlMs = ttlMs ?? this.options.ttl.defaultMs;
     const lease = await this.options.registry.createLease({
       ...createInput,
-      ttlDeadline: this.options.clock.now() + (ttlMs ?? this.#ttlFor(input.mode)),
+      ttlMs: effectiveTtlMs,
+      ttlDeadline: this.options.clock.now() + effectiveTtlMs,
     });
     const device = this.options.registry.snapshot.devices.find(
       (candidate) => candidate.id === lease.deviceId,
@@ -65,12 +65,14 @@ export class LeaseLifecycle {
     if (device === undefined)
       throw new Error(`Granted device disappeared from registry: ${lease.deviceId}`);
 
+    // ADR 0004's Consequences: `mode` leaves this payload, a deliberate one-off exception to
+    // events rule 6 (additive payloads only) taken while the package is 0.x -- there is no mode
+    // left to report. `EVENTS.md` records the exception.
     this.options.eventBus.emit(
       "lease.granted",
       {
         deviceId: lease.deviceId,
         leaseId: lease.id,
-        mode: lease.mode,
         requester: lease.requesterId,
       },
       "lease-lifecycle",
@@ -79,14 +81,23 @@ export class LeaseLifecycle {
     return { device, lease };
   }
 
+  /**
+   * The one thing that keeps a lease alive (ADR 0004 §1). An omitted `ttlMs` re-applies the
+   * lease's own stored width, never `lease.defaultTtlMs`: a lease granted for four hours keeps
+   * its four hours through renewals that do not ask for anything different. A named `ttlMs`
+   * changes that width from this renewal on, which is why it is written back to the record.
+   * The fallback to `defaultMs` is unreachable for a live lease -- it only covers a lease the
+   * snapshot no longer has, whose `renewLease` below is about to throw `UnknownLeaseError`.
+   */
   // fallow-ignore-next-line unused-class-member -- reached through LeaseReleaseCoordinator's lifecycle port.
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
-    const effectiveTtlMs = ttlMs ?? this.#ttlFor(current?.mode ?? "detached");
+    const effectiveTtlMs = ttlMs ?? current?.ttlMs ?? this.options.ttl.defaultMs;
 
     const renewed = await this.options.registry.renewLease(
       leaseId,
       this.options.clock.now() + effectiveTtlMs,
+      effectiveTtlMs,
     );
     this.options.eventBus.emit(
       "lease.renewed",
@@ -98,38 +109,13 @@ export class LeaseLifecycle {
   }
 
   /**
-   * Slides a held lease's deadline back out to a full backstop from now, driven by an
-   * application-level heartbeat from its holder. Goes through the registry (not a direct
-   * `expiryScheduler.replace`) so the persisted `ttlDeadline` stays truthful for readers within
-   * this daemon's lifetime: `status` / `list --leases` derive `lastHeartbeatAt` from it
-   * (`DaemonServer#decorateLease`), and a stale in-memory-only slide would make that reading
-   * wrong immediately, not just after a restart. It does *not* mean the slid deadline survives
-   * a restart -- a held lease's liveness is its daemon connection, so `StartupConverger`
-   * releases every held lease as orphaned on startup regardless of how recently it was slid;
-   * see `startup-converger.ts`.
+   * ADR 0004's Consequences: `closed` and `orphaned` are gone from the reasons a lease can end
+   * with. Neither concept survives -- a closing connection is not a release (§3), and there is
+   * no startup sweep left to orphan anything.
    */
-  // fallow-ignore-next-line unused-class-member -- called by LeaseReleaseCoordinator through the lifecycle port (same as the sibling renew).
-  async heartbeat(leaseId: string): Promise<LeaseRecord> {
-    const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
-    if (current !== undefined && current.mode !== "held")
-      throw new DetachedLeaseHeartbeatError(leaseId);
-
-    const renewed = await this.options.registry.renewLease(
-      leaseId,
-      this.options.clock.now() + this.options.ttl.heldBackstopMs,
-    );
-    this.options.eventBus.emit(
-      "lease.renewed",
-      { leaseId: renewed.id, newDeadline: renewed.ttlDeadline },
-      "lease-lifecycle",
-    );
-    this.options.expiryScheduler.replace(renewed);
-    return renewed;
-  }
-
   async beginRelease(
     leaseId: string,
-    reason: "closed" | "explicit" | "killed" | "orphaned" | "expired" | "device-lost",
+    reason: "explicit" | "killed" | "expired" | "device-lost",
   ): Promise<ReleasedLease> {
     const released = await this.options.registry.beginRelease(leaseId);
     this.options.expiryScheduler.cancel(leaseId);
@@ -158,11 +144,10 @@ export class LeaseLifecycle {
     return released;
   }
 
+  /** Re-arms every persisted lease's TTL timer from its own deadline (ADR 0004: startup
+   * restores all of them, and sweeps none -- nothing about a restart proves a holder is
+   * dead). */
   restoreExpiryTimers(): Promise<void> {
     return this.options.expiryScheduler.restore(this.options.registry.snapshot.leases);
-  }
-
-  #ttlFor(mode: LeaseRecord["mode"]): number {
-    return mode === "held" ? this.options.ttl.heldBackstopMs : this.options.ttl.detachedMs;
   }
 }
