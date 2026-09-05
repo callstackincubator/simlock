@@ -44,12 +44,16 @@ describe("sliding TTL and heartbeat", () => {
     );
   });
 
-  it("slides every heartbeat-capable held lease (MCP and CLI) past the backstop while a detached lease expires at it", async () => {
+  it("slides every held lease (MCP and CLI) past the backstop while a detached lease expires at it", async () => {
     const env = await withDaemon({
       // detachedTtlMs is pinned to the same value as heldTtlBackstopMs purely so the
       // detached lease's own (unrelated) TTL knob expires it on the timeline this
       // test already waits on -- detached mode never heartbeats regardless of TTL,
       // it just isn't naturally this short by default.
+      //
+      // heartbeatIntervalMs is no longer what keeps the held leases alive (their holders
+      // renew on their own timer, ADR 0004 §2); it stays here because the config validator
+      // still requires it to be at most heldTtlBackstopMs / 4, and 4_000ms is short.
       configOverrides: {
         lease: { detachedTtlMs: 4_000, heldTtlBackstopMs: 4_000, heartbeatIntervalMs: 800 },
       },
@@ -98,9 +102,10 @@ describe("sliding TTL and heartbeat", () => {
       ]);
       const detachedGrant = detachedResult.json as { lease: { id: string } };
 
-      // Both held leases -- MCP and CLI -- declare the heartbeat capability and
-      // slide their deadline on every ping; the detached lease holds no connection
-      // at all, never heartbeats, and expires exactly at its grant-time TTL.
+      // Both held holders -- MCP and CLI -- renew on their own timer at a third of the
+      // TTL (ADR 0004 §2), sliding their deadline well past the backstop; the detached
+      // lease has no holder process at all, renews never, and expires exactly at its
+      // grant-time TTL.
       await waitFor(
         async () => {
           const rows = await leaseRows(env);

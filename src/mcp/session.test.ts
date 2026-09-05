@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { SimlockError } from "../client/index.js";
+import { FakeClock } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { McpSession, toMcpErrorResult } from "./session.js";
+
+/** Lets an awaited renewal settle; the fake clock never moves on its own. */
+async function flushMicrotasks(times = 10): Promise<void> {
+  for (let index = 0; index < times; index += 1) await Promise.resolve();
+}
 
 describe("McpSession", () => {
   it("requests a held lease with the tool input as-is, and returns the grant unchanged", async () => {
@@ -15,7 +21,7 @@ describe("McpSession", () => {
       seenOptions = options;
       return Promise.resolve(grant);
     };
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     const signal = new AbortController().signal;
     const onProgress = () => undefined;
@@ -34,7 +40,7 @@ describe("McpSession", () => {
     const client = new FakeSimlockClient();
     client.releaseLeaseImpl = () =>
       Promise.reject(new SimlockError("FORBIDDEN", "protocol", "not your lease", {}));
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     await expect(session.release({ leaseId: "someone-elses-lease" })).rejects.toMatchObject({
       code: "FORBIDDEN",
@@ -47,7 +53,7 @@ describe("McpSession", () => {
   it("adds released: true to a successful release without otherwise reshaping the result", async () => {
     const client = new FakeSimlockClient();
     client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     await expect(session.release({ leaseId: "lease-1" })).resolves.toEqual({
       leaseId: "lease-1",
@@ -58,7 +64,7 @@ describe("McpSession", () => {
   it("forwards list_devices straight to getCatalog", async () => {
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     await session.listDevices({ platform: "ios" });
     expect(client.calls).toEqual([{ input: { platform: "ios" }, method: "getCatalog" }]);
@@ -88,7 +94,7 @@ describe("McpSession", () => {
             },
       );
     };
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     await expect(session.status()).resolves.toEqual({ held: false });
     await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
@@ -125,7 +131,7 @@ describe("McpSession", () => {
           },
         ],
       });
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     await expect(session.status()).resolves.toEqual({ held: false });
   });
@@ -147,7 +153,7 @@ describe("McpSession", () => {
           },
         ],
       });
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
     await expect(session.status()).resolves.toMatchObject({ held: true, id: "lease-1" });
@@ -166,7 +172,7 @@ describe("McpSession", () => {
       clients.push(client);
       return client;
     };
-    const session = new McpSession({ connect });
+    const session = new McpSession({ clock: new FakeClock(), connect });
 
     await session.listDevices({});
     await session.listDevices({});
@@ -193,7 +199,7 @@ describe("McpSession", () => {
       order.push("release");
       return Promise.resolve({ leaseId: input.leaseId });
     };
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
 
     const leaseCall = session.lease({ model: "iPhone 17 Pro", platform: "ios" });
     const releaseCall = session.release({ leaseId: "lease-1" });
@@ -210,7 +216,7 @@ describe("McpSession", () => {
     const pendingClient = new Promise<FakeSimlockClient>((resolve) => {
       resolveConnect = resolve;
     });
-    const session = new McpSession({ connect: () => pendingClient });
+    const session = new McpSession({ clock: new FakeClock(), connect: () => pendingClient });
 
     const listDevicesCall = session.listDevices({});
     await Promise.resolve(); // let the queued mutation reach #clientForUse() and start connecting
@@ -229,7 +235,7 @@ describe("McpSession", () => {
 
   it("rejects every tool call with SESSION_CLOSED, without contacting the client, once closed", async () => {
     const client = new FakeSimlockClient();
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
     await session.close();
 
     await expect(session.lease({ model: "x", platform: "ios" })).rejects.toMatchObject({
@@ -243,10 +249,174 @@ describe("McpSession", () => {
     expect(client.calls).toEqual([]);
   });
 
+  /**
+   * ADR 0004 §2: the session's lease lives on its own `lease.renew` timer, at a third of the
+   * remaining TTL, and is released explicitly when the session ends -- not left to the socket.
+   */
+  it("renews its lease at a third of the TTL, re-deriving the cadence from each renewal", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    const renewals: Array<{ leaseId: string; at: number }> = [];
+    client.renewLeaseImpl = (input) => {
+      renewals.push({ at: clock.now(), leaseId: input.leaseId });
+      return Promise.resolve({
+        deviceId: "device-1",
+        grantedAt: 0,
+        id: input.leaseId,
+        mode: "held" as const,
+        ownerId: "mcp-test",
+        requesterId: "mcp-test",
+        ttlDeadline: clock.now() + 3_000,
+      });
+    };
+    const session = new McpSession({ clock, connect: async () => client });
+
+    // `sampleGrant`'s deadline is 12_345, so the first renewal is due at 4_115.
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+    clock.advance(4_114);
+    await flushMicrotasks();
+    expect(renewals).toEqual([]);
+    clock.advance(1);
+    await flushMicrotasks();
+    expect(renewals).toEqual([{ at: 4_115, leaseId: "lease-1" }]);
+
+    // 3_000ms came back, so the next one is 1_000ms later -- off the renewal's own deadline.
+    clock.advance(1_000);
+    await flushMicrotasks();
+    expect(renewals).toHaveLength(2);
+    expect(renewals[1]).toEqual({ at: 5_115, leaseId: "lease-1" });
+
+    await session.close();
+  });
+
+  it("releases the session's lease explicitly on close, before closing the connection", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    await session.close();
+
+    expect(client.calls.map((call) => call.method)).toEqual(["requestLease", "releaseLease"]);
+    expect(client.calls.at(-1)?.input).toEqual({ leaseId: "lease-1" });
+    expect(client.closeCalls).toBe(1);
+    expect(clock.pendingTimerCount, "the renew timer must not outlive the session").toBe(0);
+  });
+
+  it("closes cleanly even when the farewell release fails", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.releaseLeaseImpl = () =>
+      Promise.reject(new SimlockError("UNKNOWN_LEASE", "domain", "gone", { leaseId: "lease-1" }));
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(client.closeCalls).toBe(1);
+  });
+
+  it("does not release on close when the lease was already released by a tool call", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    await session.release({ leaseId: "lease-1" });
+    // The timer goes with the lease, so nothing can renew what was just given up.
+    expect(clock.pendingTimerCount).toBe(0);
+
+    await session.close();
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(1);
+  });
+
+  it("does not send a second release for a lease whose release is already in flight", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    let answerRelease!: (result: { leaseId: string }) => void;
+    client.releaseLeaseImpl = () =>
+      new Promise<{ leaseId: string }>((resolve) => {
+        answerRelease = resolve;
+      });
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    // `close()` deliberately does not queue behind the tool-call serializer, so it can land
+    // while a `release_simulator` call is still waiting on the daemon.
+    const releasing = session.release({ leaseId: "lease-1" });
+    await flushMicrotasks();
+    const closing = session.close();
+    answerRelease({ leaseId: "lease-1" });
+    await expect(releasing).resolves.toMatchObject({ leaseId: "lease-1", released: true });
+    await closing;
+
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(1);
+  });
+
+  it("keeps renewing when a release fails, because the session still holds the device", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.releaseLeaseImpl = () =>
+      Promise.reject(new SimlockError("INTERNAL", "domain", "could not release", {}));
+    let renewals = 0;
+    client.renewLeaseImpl = (input) => {
+      renewals += 1;
+      return Promise.resolve({
+        deviceId: "device-1",
+        grantedAt: 0,
+        id: input.leaseId,
+        mode: "held" as const,
+        ownerId: "mcp-test",
+        requesterId: "mcp-test",
+        ttlDeadline: clock.now() + 12_000,
+      });
+    };
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    await expect(session.release({ leaseId: "lease-1" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+
+    // The daemon still has the lease, so the timer that keeps it must still be running --
+    // otherwise the device is reclaimed at the deadline under a session that was told its
+    // release failed.
+    clock.advance(4_115);
+    await flushMicrotasks();
+    expect(renewals).toBe(1);
+    await session.close();
+  });
+
+  it("stops renewing a lease that ended elsewhere", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    client.emitLeaseLost({ deviceId: "device-1", leaseId: "lease-1", reason: "expired" });
+
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    await flushMicrotasks();
+    expect(client.calls.filter((call) => call.method === "renewLease")).toEqual([]);
+
+    await session.close();
+    // Nothing to release either: the daemon already ended it.
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toEqual([]);
+  });
+
   it("relays the client's lease-lost, device-unhealthy, and device-recovered pushes to session listeners", async () => {
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
-    const session = new McpSession({ connect: async () => client });
+    const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
     await session.listDevices({}); // forces the client to connect and wire up push relays
 
     const leaseLost: unknown[] = [];

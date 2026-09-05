@@ -65,7 +65,9 @@ export async function connectWithAutoLaunch(
 function attempt(options: ConnectWithAutoLaunchOptions): Promise<SimlockClient> {
   return connectSimlock({
     endpoint: options.socketPath,
-    heartbeat: options.heartbeat ?? true,
+    // ADR 0004 §2/§4: the session renews its own lease on a timer, so it declares no heartbeat
+    // capability unless a caller explicitly asks for one.
+    heartbeat: options.heartbeat ?? false,
     ipc: options.ipc,
     principal: options.principal,
   });
