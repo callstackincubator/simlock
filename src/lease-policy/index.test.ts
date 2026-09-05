@@ -326,6 +326,48 @@ describe("startLeaseRenewal", () => {
     expect(calls).toBe(2);
   });
 
+  it("ignores an abandoned renewal's answer once a newer one has come back", async () => {
+    const clock = new FakeClock(0);
+    const errors: Error[] = [];
+    let answerFirst!: (renewed: { ttlDeadline: number }) => void;
+    let attempts = 0;
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      onError: (error) => errors.push(error as Error),
+      renew: () => {
+        attempts += 1;
+        if (attempts === 1)
+          return new Promise<{ ttlDeadline: number }>((resolve) => {
+            answerFirst = resolve;
+          });
+        // The second attempt is the daemon's newest word: 3_000ms from now.
+        if (attempts === 2) return Promise.resolve({ ttlDeadline: clock.now() + 3_000 });
+        return Promise.reject(new Error("INTERNAL"));
+      },
+      ttlDeadline: 3_000,
+    });
+
+    clock.advance(1_000); // attempt 1, abandoned at its bound below
+    await flushMicrotasks();
+    clock.advance(666);
+    await flushMicrotasks();
+    clock.advance(444); // attempt 2 at 2_110, answering 5_110
+    await flushMicrotasks();
+    expect(attempts).toBe(2);
+
+    // Attempt 1 finally answers, with a far longer deadline -- but it is older than attempt 2,
+    // whose answer is the daemon's current word. Adopting it would have this holder renewing
+    // towards a deadline the daemon never promised.
+    answerFirst({ ttlDeadline: 999_999 });
+    await flushMicrotasks();
+
+    clock.advance(60_000);
+    await flushMicrotasks();
+    expect(clock.pendingTimerCount, "renewal works towards 5_110, so it gives up past it").toBe(0);
+    expect(errors.at(-1)?.message).toContain("Gave up renewing lease lse_1");
+  });
+
   it("never reports a failure that arrives after stop()", async () => {
     const clock = new FakeClock(0);
     let rejectRenew!: (error: Error) => void;

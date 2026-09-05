@@ -18,6 +18,8 @@ import { IpcError, type Clock, type DaemonLauncher, type IpcConnector } from "..
 
 export interface ConnectWithAutoLaunchOptions {
   readonly clock: Clock;
+  /** Dead as of ADR 0004 §4 -- nothing passes `true` any more, and the capability itself goes
+   * away with the daemon's push in PR B, which removes this option with it. */
   readonly heartbeat?: boolean;
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;

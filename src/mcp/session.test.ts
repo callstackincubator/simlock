@@ -335,28 +335,87 @@ describe("McpSession", () => {
     expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(1);
   });
 
-  it("does not send a second release for a lease whose release is already in flight", async () => {
+  it("still releases on close when a tool call's own release is in flight and dies with the wire", async () => {
     const clock = new FakeClock(0);
     const client = new FakeSimlockClient();
     client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
-    let answerRelease!: (result: { leaseId: string }) => void;
+    const pending: Array<{
+      resolve: (result: { leaseId: string }) => void;
+      reject: (error: Error) => void;
+      settled: boolean;
+    }> = [];
     client.releaseLeaseImpl = () =>
-      new Promise<{ leaseId: string }>((resolve) => {
-        answerRelease = resolve;
+      new Promise<{ leaseId: string }>((resolve, reject) => {
+        const entry = {
+          reject: (error: Error) => {
+            entry.settled = true;
+            reject(error);
+          },
+          resolve: (result: { leaseId: string }) => {
+            entry.settled = true;
+            resolve(result);
+          },
+          settled: false,
+        };
+        pending.push(entry);
       });
+    // What the real wire does when the connection closes: every request still waiting for an
+    // answer rejects (ADR 0003 §10).
+    client.onConnectionLost(() => {
+      for (const entry of pending) {
+        if (!entry.settled)
+          entry.reject(new SimlockError("DAEMON_CONNECTION_LOST", "transport", "gone", {}));
+      }
+    });
     const session = new McpSession({ clock, connect: async () => client });
     await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
 
     // `close()` deliberately does not queue behind the tool-call serializer, so it can land
-    // while a `release_simulator` call is still waiting on the daemon.
+    // while a `release_simulator` call is still waiting on the daemon. Skipping the farewell
+    // release because that one exists would mean *no* release at all: the wire kills it a
+    // moment later.
     const releasing = session.release({ leaseId: "lease-1" });
     await flushMicrotasks();
     const closing = session.close();
-    answerRelease({ leaseId: "lease-1" });
-    await expect(releasing).resolves.toMatchObject({ leaseId: "lease-1", released: true });
+    await flushMicrotasks();
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(2);
+
+    pending[1]?.resolve({ leaseId: "lease-1" }); // the daemon answers the farewell release
+    await closing;
+    await expect(releasing).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
+
+    // Exactly one release actually completed -- and the lease really is released.
+    expect(pending.filter((entry) => entry.settled)).toHaveLength(2);
+    expect(pending[0]?.settled).toBe(true); // rejected with the wire
+    expect(client.closeCalls).toBe(1);
+  });
+
+  it("releases a grant that lands after the session closed, and arms no timer for it", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    let answerGrant!: (grant: ReturnType<typeof sampleGrant>) => void;
+    client.requestLeaseImpl = () =>
+      new Promise((resolve) => {
+        answerGrant = resolve;
+      });
+    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+    const session = new McpSession({ clock, connect: async () => client });
+
+    const leasing = session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+    await flushMicrotasks();
+    const closing = session.close();
     await closing;
 
-    expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(1);
+    // The daemon finished provisioning after the session ended: the device goes straight back
+    // rather than being renewed by a session that no longer exists.
+    answerGrant(sampleGrant({ leaseId: "lease-1" }));
+    await expect(leasing).rejects.toMatchObject({ code: "SESSION_CLOSED" });
+
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toEqual([
+      { input: { leaseId: "lease-1" }, method: "releaseLease" },
+    ]);
+    expect(client.calls.filter((call) => call.method === "renewLease")).toEqual([]);
+    expect(clock.pendingTimerCount, "a closed session must leave no timer behind").toBe(0);
   });
 
   it("keeps renewing when a release fails, because the session still holds the device", async () => {
@@ -419,6 +478,32 @@ describe("McpSession", () => {
     await session.close();
     expect(client.calls.filter((call) => call.method === "releaseLease")).toEqual([]);
     expect(client.calls.filter((call) => call.method === "renewLease")).toHaveLength(1);
+  });
+
+  it("announces one ending once, even when the renewal and the daemon both report it", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.renewLeaseImpl = () =>
+      Promise.reject(
+        new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lease-1" }),
+      );
+    const session = new McpSession({ clock, connect: async () => client });
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    clock.advance(4_115);
+    await flushMicrotasks();
+    // The daemon's own push for the same lease arrives a moment later; an agent must not read
+    // that as a second device lost.
+    client.emitLeaseLost({ deviceId: "device-1", leaseId: "lease-1", reason: "expired" });
+
+    expect(notices).toEqual([
+      { deviceId: "device-1", leaseId: "lease-1", reason: "renew-rejected" },
+    ]);
+
+    await session.close();
   });
 
   it("stops renewing a lease that ended elsewhere", async () => {

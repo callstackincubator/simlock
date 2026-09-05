@@ -16,6 +16,17 @@
  * The cadence is computed only from the deadline the daemon returned with the grant (and with
  * every renewal since), never from a TTL config value: a client does not have the daemon's
  * config, and the daemon is free to hand back a shorter deadline than the one asked for.
+ *
+ * Two things follow from deriving the interval as `ttlDeadline - clock.now()`:
+ *
+ * - it assumes the daemon and this client read the same wall clock. True on the unix socket,
+ *   where they are processes on one machine, and the reason `ttlDeadline` is usable as-is
+ *   today. It is not true across a network hop, where a client's clock may sit minutes from
+ *   the daemon's and this arithmetic would renew far too early or far too late.
+ * - the fix for that is ADR 0004's own: once a lease record carries `ttlMs` (PR B), the
+ *   cadence becomes `ttlMs / 3` -- a duration, which needs no shared epoch -- and the deadline
+ *   is left as what it really is, a bound to stop renewing at rather than a clock to schedule
+ *   from. This module is where that change lands; nothing above it has to move.
  */
 import { isSimlockError } from "../contract/index.js";
 import type { Clock, TimerHandle } from "../ports/index.js";
@@ -152,6 +163,10 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
   /** Whichever timer is armed right now: the wait between renewals, or an attempt's bound. */
   let timer: TimerHandle | undefined;
   let stopped = false;
+  /** Attempts are numbered so a late answer can tell whether anything newer has been answered
+   * since (attempts never overlap: one is in flight at a time, by construction). */
+  let attempts = 0;
+  let newestAnswered = 0;
 
   const cancelTimer = (): void => {
     if (timer === undefined) return;
@@ -183,6 +198,8 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
 
   /** One renewal attempt, bounded by a third of what is left of the TTL when it starts. */
   const attemptRenew = async (): Promise<Attempt> => {
+    attempts += 1;
+    const attemptId = attempts;
     // `Promise.resolve().then` rather than a bare call: a `renew` that throws *synchronously*
     // (a client that rejects a malformed input before it ever reaches the wire) is a failed
     // attempt like any other, not something that should escape into the unawaited `tick()`.
@@ -193,9 +210,11 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     // a late rejection from surfacing as an unhandled rejection.)
     request.then(
       (renewed) => {
-        // `Math.max`, not a plain assignment: this answer belongs to a request older than
-        // whatever has happened since, so it may only ever push the deadline forward.
-        if (!stopped) deadline = Math.max(deadline, renewed.ttlDeadline);
+        // Only while no *newer* attempt has been answered, and then only forward: this answer
+        // is older than anything that has happened since, so it may raise a deadline nobody
+        // has since improved on, and never overwrite a fresher one.
+        if (stopped || attemptId <= newestAnswered) return;
+        deadline = Math.max(deadline, renewed.ttlDeadline);
       },
       () => undefined,
     );
@@ -244,6 +263,9 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       return;
     }
 
+    // This attempt is now the newest answer there is, so no request older than it may move the
+    // deadline again (see `attemptRenew`).
+    newestAnswered = attempts;
     if (attempt.renewed.ttlDeadline <= clock.now()) {
       // A deadline that is not in the future cannot be renewed towards -- scheduling off it
       // would be a hot loop against a lease that is already over.
@@ -251,8 +273,9 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       report(new Error(`Lease ${leaseId} was renewed to a deadline that has already passed`));
       return;
     }
-    // The daemon's answer is authoritative, in both directions: it may hand back a shorter
-    // deadline than the one that was asked for, and the cadence follows it.
+    // The daemon's answer is authoritative, in both directions: it may hand back a *shorter*
+    // deadline than the one that was asked for -- a lowered `lease.heldTtlBackstopMs`, a
+    // `ttlMs` it clamped -- and the cadence follows it rather than an older, longer belief.
     deadline = attempt.renewed.ttlDeadline;
     schedule();
   };

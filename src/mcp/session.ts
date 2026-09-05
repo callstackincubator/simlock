@@ -129,9 +129,9 @@ export class McpSession {
    * holds a lease it obtained itself.
    */
   #renewal: LeaseRenewal | undefined;
-  /** The lease a `release()` call has in flight right now, so `close()` never sends a second
-   * release for the same lease (it does not queue behind `#mutations`). */
-  #releaseInFlight: string | undefined;
+  /** Lease ids already announced as lost, so one ending never reaches a listener twice -- see
+   * `#announceLeaseLost`. */
+  readonly #announcedLost = new Set<string>();
 
   constructor(options: McpSessionOptions) {
     this.#clock = options.clock;
@@ -151,6 +151,15 @@ export class McpSession {
         ...(onProgress === undefined ? {} : { onProgress }),
         ...(signal === undefined ? {} : { signal }),
       });
+      if (this.#closed) {
+        // The session ended while the daemon was provisioning. `close()` does not queue behind
+        // `#mutations`, so it has already stopped renewing and closed the connection: arming a
+        // timer now would leave a closed session renewing on a dead client until the backstop,
+        // and `simlock mcp` (which never calls `process.exit`) alive with it. Hand the device
+        // straight back instead, and fail the call that can no longer be honoured.
+        await this.#releaseQuietly(client, grant.lease.id);
+        this.#throwIfClosed();
+      }
       this.#heldLeaseId = grant.lease.id;
       this.#startRenewal(client, grant.lease);
       return grant;
@@ -160,18 +169,8 @@ export class McpSession {
   release(input: ReleaseSimulatorInput): Promise<ReleaseSimulatorOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
-      // Marked before `#clientForUse()`, not after: that call can reconnect, which takes as
-      // long as a daemon launch, and `close()` does not queue behind `#mutations` (see its doc
-      // comment). This is how it knows the lease already has a release on the way -- from the
-      // moment this call commits to sending one -- and must not get a second one.
-      this.#releaseInFlight = input.leaseId;
-      let result;
-      try {
-        const client = await this.#clientForUse();
-        result = await client.releaseLease(input);
-      } finally {
-        this.#releaseInFlight = undefined;
-      }
+      const client = await this.#clientForUse();
+      const result = await client.releaseLease(input);
       // Stopped only once the daemon has actually let the lease go. A release that fails
       // (anything but a dead connection) leaves the session still holding the device, and a
       // session that has stopped renewing a lease it still holds loses that device at the
@@ -239,11 +238,12 @@ export class McpSession {
    * its own call now rather than a side effect of the socket going away -- the daemon still
    * releases on close today, and will not once PR B lands.
    *
-   * One race is deliberately left: a `lease()` still in flight here can set `#heldLeaseId`
-   * after this method read it, and that lease is not released explicitly. It is not reachable
-   * from the MCP frontend (`close()` runs on shutdown, after the transport is gone) and
-   * blocking shutdown on an in-flight provisioning request -- minutes, potentially -- would be
-   * a worse trade than the daemon's own expiry handling it.
+   * It does not queue behind `#mutations`: blocking shutdown on an in-flight provisioning
+   * request -- minutes, potentially -- would be a worse trade than ending now. A `lease()` that
+   * lands after this point releases its own grant instead (see `lease()`), and a `release()`
+   * still in flight is *not* a reason to skip the farewell one: the wire rejects every pending
+   * request when the connection closes below, so skipping would mean no release at all. A
+   * duplicate costs one `UNKNOWN_LEASE` this method already swallows.
    */
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
@@ -251,8 +251,7 @@ export class McpSession {
     this.#stopRenewal();
     this.#unwireClient();
     const client = this.#client;
-    // A lease whose release is already in flight is not released again.
-    const heldLeaseId = this.#heldLeaseId === this.#releaseInFlight ? undefined : this.#heldLeaseId;
+    const heldLeaseId = this.#heldLeaseId;
     this.#heldLeaseId = undefined;
     this.#client = undefined;
     if (this.#connecting !== undefined) {
@@ -265,21 +264,28 @@ export class McpSession {
 
   /** `close()`'s tail: the farewell release (best-effort, bounded), then the connection. */
   async #endSession(client: SimlockClient, heldLeaseId: string | undefined): Promise<void> {
-    if (heldLeaseId !== undefined) {
-      try {
-        await awaitWithin(
-          this.#clock,
-          RELEASE_TIMEOUT_MS,
-          client.releaseLease({ leaseId: heldLeaseId }),
-          `Timed out releasing lease ${heldLeaseId}`,
-        );
-      } catch {
-        // Best-effort by design: the lease may already be gone (expired, force-released), the
-        // connection may be dead, or the daemon may not answer. Shutdown continues either way,
-        // and an unreleased lease still ends at its deadline.
-      }
-    }
+    if (heldLeaseId !== undefined) await this.#releaseQuietly(client, heldLeaseId);
     await this.#closeClient(client);
+  }
+
+  /**
+   * A release nobody is waiting on an answer to: bounded, and silent whatever happens. The
+   * lease may already be gone (expired, force-released, or released by a tool call whose own
+   * answer never arrived), the connection may be dead, or the daemon may not answer at all --
+   * none of which should hold up an ending session, and all of which end the same way in the
+   * daemon regardless, at the lease's deadline.
+   */
+  async #releaseQuietly(client: SimlockClient, leaseId: string): Promise<void> {
+    try {
+      await awaitWithin(
+        this.#clock,
+        RELEASE_TIMEOUT_MS,
+        client.releaseLease({ leaseId }),
+        `Timed out releasing lease ${leaseId}`,
+      );
+    } catch {
+      // Best-effort by design -- see above.
+    }
   }
 
   /**
@@ -322,6 +328,17 @@ export class McpSession {
     if (notice.leaseId !== this.#heldLeaseId) return;
     this.#stopRenewal();
     this.#heldLeaseId = undefined;
+    this.#announceLeaseLost(notice);
+  }
+
+  /**
+   * Tells the listeners a lease ended, once per lease. A lease that a renewal found gone is
+   * very often also pushed as `lease-lost` a moment later (or the other way round) -- two
+   * accounts of one ending, which would read to an agent as two devices lost.
+   */
+  #announceLeaseLost(notice: LeaseLostNotice): void {
+    if (this.#announcedLost.has(notice.leaseId)) return;
+    this.#announcedLost.add(notice.leaseId);
     for (const listener of this.#leaseLostListeners) listener(notice);
   }
 
@@ -383,7 +400,7 @@ export class McpSession {
           this.#stopRenewal();
           this.#heldLeaseId = undefined;
         }
-        for (const listener of this.#leaseLostListeners) listener(push);
+        this.#announceLeaseLost(push);
       }),
       client.onDeviceUnhealthy((push) => {
         for (const listener of this.#deviceHealthListeners) {
