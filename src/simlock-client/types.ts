@@ -32,7 +32,6 @@ export type LeaseRecord = OpOutput<"lease.renew">;
 export type LeaseReleaseInput = OpInput<"lease.release">;
 export type LeaseReleaseOutput = OpOutput<"lease.release">;
 export type LeaseListOutput = OpOutput<"lease.list">;
-export type LeaseHeartbeatOutput = OpOutput<"lease.heartbeat">;
 export type DoctorRunInput = OpInput<"doctor.run">;
 export type DoctorReport = OpOutput<"doctor.run">;
 export type DriverPassthroughInput = OpInput<"driver.passthrough">;

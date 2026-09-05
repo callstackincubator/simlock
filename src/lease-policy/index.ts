@@ -6,7 +6,7 @@
  * It lives in its own module, outside both frontends and outside `simlock/client`, for two
  * reasons:
  *
- * - the CLI's held mode and the MCP session follow the *same* policy, and a second copy of a
+ * - the CLI's holder and the MCP session follow the *same* policy, and a second copy of a
  *   liveness loop is exactly the duplication ADR 0004 exists to remove;
  * - the typed client deliberately owns no renew loop (ADR 0003 §10, `docs/CLIENT.md`): renew
  *   and reconnect policy is a frontend concern, so this is a helper frontends *choose*, never

@@ -68,8 +68,9 @@ const detachedGrant: LeaseGrant = {
     deviceId: "device-1",
     requesterId: "test-requester",
     ownerId: "test-requester",
-    mode: "detached",
     grantedAt: 0,
+    lastRenewedAt: 0,
+    ttlMs: 60_000,
     ttlDeadline: 61_000,
   },
   timing: {
@@ -373,7 +374,7 @@ describe("CLI: exit codes", () => {
     const parentWatch = new FakeParentWatch();
     const heldGrant: LeaseGrant = {
       ...detachedGrant,
-      lease: { ...detachedGrant.lease, id: "lse_parent_death", mode: "held" },
+      lease: { ...detachedGrant.lease, id: "lse_parent_death" },
     };
     const released: unknown[] = [];
 
@@ -406,7 +407,7 @@ describe("CLI: exit codes", () => {
     const parentWatch = new FakeParentWatch();
     const heldGrant: LeaseGrant = {
       ...detachedGrant,
-      lease: { ...detachedGrant.lease, id: "lse_bind_pid", mode: "held" },
+      lease: { ...detachedGrant.lease, id: "lse_bind_pid" },
     };
     const released: unknown[] = [];
 
@@ -889,14 +890,14 @@ describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
     let wrote = false;
     await expect(
       runCli(
-        ["config", "set", "lease.heldTtlBackstopMs", "not-a-number"],
+        ["config", "set", "lease.defaultTtlMs", "not-a-number"],
         output.environmentWith({
           readConfigFile: async () => ({}),
           writeConfigFile: async () => {
             wrote = true;
           },
           validateConfig: async () => {
-            throw new Error("lease.heldTtlBackstopMs must be a number");
+            throw new Error("lease.defaultTtlMs must be a number");
           },
         }),
       ),
@@ -946,7 +947,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     const output = outputCapture(realCliEnvironmentPorts());
     let wrote = false;
     const exitCode = await runCli(
-      ["config", "set", "lease.heldTtlBackstop", "60000"],
+      ["config", "set", "lease.defaultTtl", "60000"],
       output.environmentWith({
         readConfigFile: async () => ({}),
         writeConfigFile: async () => {
@@ -962,9 +963,9 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     const output = outputCapture(realCliEnvironmentPorts());
     let written: Record<string, unknown> | undefined;
     const exitCode = await runCli(
-      // Well above the default heartbeat interval (5 min) * 4, so this doesn't also trip
-      // `validateHeartbeatInterval` -- this test is only about the key itself validating clean.
-      ["config", "set", "lease.heldTtlBackstopMs", "2400000"],
+      // Comfortably under the default `lease.maxTtlMs` (4h), so this doesn't also trip the
+      // TTL pair rule -- this test is only about the key itself validating clean.
+      ["config", "set", "lease.defaultTtlMs", "2400000"],
       output.environmentWith({
         readConfigFile: async () => ({}),
         writeConfigFile: async (contents) => {
@@ -973,7 +974,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       }),
     );
     expect(exitCode).toBe(0);
-    expect(written).toEqual({ lease: { heldTtlBackstopMs: 2400000 } });
+    expect(written).toEqual({ lease: { defaultTtlMs: 2400000 } });
   });
 
   it("does not let a stray file at the scratch validation path change the outcome", async () => {
@@ -1213,8 +1214,9 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "detached",
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1266,8 +1268,9 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "detached",
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1314,8 +1317,9 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "detached",
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1360,9 +1364,10 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
           deviceId: "dev_1",
           grantedAt: 0,
           id: input.leaseId,
-          mode: "held",
           ownerId: "test-requester",
           requesterId: "test-requester",
+          lastRenewedAt: 0,
+          ttlMs: 60_000,
           ttlDeadline: clock.now() + 30_000,
         });
       },
@@ -1408,34 +1413,33 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
     expect(renewals).toHaveLength(2);
   });
 
-  it("declares no heartbeat capability at hello, in either mode (ADR 0004 §4)", async () => {
+  it("sends --ttl as the request's own ttlMs, and nothing when it is not given", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
-    const declared: Array<boolean | undefined> = [];
+    const requested: Array<number | undefined> = [];
     const environment = output.environmentWith({
       clock: new FakeClock(0),
-      connectAdmin: async (_resolveCredential, options) => {
-        declared.push(options?.heartbeat);
-        return fakeClient();
-      },
+      connectAdmin: async () =>
+        fakeClient({
+          requestLease: (input) => {
+            requested.push(input.ttlMs);
+            return Promise.resolve(detachedGrant);
+          },
+        }),
       signals: signals as unknown as CliEnvironment["signals"],
     });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--ttl", "30m"],
+      environment,
+    );
     await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
       environment,
     );
 
-    // Held mode is the case ADR 0004 §4 is actually about: it is the mode the daemon's push
-    // keys off, and the one that used to declare the capability.
-    const heldRun = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
-      environment,
-    );
-    await settle();
-    signals.emit("SIGINT");
-    expect(await heldRun).toBe(0);
-
-    expect(declared).toEqual([false, false]);
+    // ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
+    // TTL at all, so the daemon's own default applies rather than a number the CLI invented.
+    expect(requested).toEqual([30 * 60_000, undefined]);
   });
 
   it.each(["SIGINT", "SIGTERM"] as const)(
@@ -1673,8 +1677,9 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "held" as const,
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1741,9 +1746,10 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
           deviceId: "dev_1",
           grantedAt: 0,
           id: input.leaseId,
-          mode: "held",
           ownerId: "test-requester",
           requesterId: "test-requester",
+          lastRenewedAt: 0,
+          ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         });
       },
@@ -1885,7 +1891,8 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
     );
     expect(leaseExit).toBe(0);
     const grant = JSON.parse(leaseOut.stdout) as LeaseGrant;
-    expect(grant.lease.mode).toBe("detached");
+    // ADR 0004: one kind of lease -- what `--detach` changes is this process, not the grant.
+    expect(grant.lease).toMatchObject({ ttlMs: expect.any(Number) });
 
     const statusOut = outputCapture();
     await runCli(
@@ -2043,8 +2050,9 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       deviceId: "dev_1",
       requesterId: "test-requester",
       ownerId: "test-requester",
-      mode: "held",
       grantedAt: 0,
+      lastRenewedAt: 0,
+      ttlMs: 60_000,
       ttlDeadline: 60_000,
     },
     timing: {
@@ -2066,7 +2074,6 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
     listLeases: () => Promise.resolve(emptyLeaseList),
-    heartbeat: () => Promise.resolve({ leases: [] }),
     runDoctor: () => Promise.resolve(emptyDoctor),
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
@@ -2359,7 +2366,7 @@ function testConfig(): Config {
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 5_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
     capacity: {
       strategy: "resource",
       config: {

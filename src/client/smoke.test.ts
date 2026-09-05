@@ -35,7 +35,6 @@ describe("simlock/client smoke test", () => {
         deviceId: "device_1",
         grantedAt: 0,
         id: "lease_1",
-        mode: "held",
         ownerId: "agent-smoke",
         requesterId: "agent-smoke",
         ttlDeadline: 1_000,
