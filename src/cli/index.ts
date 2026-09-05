@@ -33,7 +33,12 @@ import {
 } from "../admin/index.js";
 import type { Role } from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
-import { startLeaseRenewal, type LeaseRenewal } from "../lease-policy/index.js";
+import {
+  awaitWithin,
+  RELEASE_TIMEOUT_MS,
+  startLeaseRenewal,
+  type LeaseRenewal,
+} from "../lease-policy/index.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 
@@ -88,9 +93,18 @@ interface Output {
   write(value: string): unknown;
 }
 
+/**
+ * ADR 0004 §2's "a catchable signal", enumerated: the two a holder is asked to stop with, plus
+ * `SIGHUP` -- what a closing terminal sends, and the likeliest way a backgrounded holder dies
+ * short of `SIGKILL`. All three take the same path: stop renewing, release, exit.
+ */
+const TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+
+type TerminationSignal = (typeof TERMINATION_SIGNALS)[number];
+
 interface Signals {
-  on(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
-  off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  on(signal: TerminationSignal, listener: () => void): unknown;
+  off(signal: TerminationSignal, listener: () => void): unknown;
 }
 
 type McpStdioRunner = () => Promise<void>;
@@ -117,7 +131,6 @@ export interface CliEnvironment {
    * "SIMLOCK_AGENT_ID and --agent-id still set the requester id ... they are not the
    * principal": `--agent-id` overrides `lease.request`'s `requesterId` field, never this. */
   readonly requesterId: string;
-  readonly now?: () => number;
   /**
    * Connects (auto-launching the daemon if it is not already running) and completes `hello`
    * with whatever `resolveCredential` resolves to.
@@ -387,7 +400,6 @@ export function buildCliEnvironment(
     clock,
     configPath,
     requesterId,
-    now: () => clock.now(),
     connectAdmin: (resolveCredential, options) =>
       connect(autoLaunchIpc, resolveCredential, options),
     connectExistingAdmin: (resolveCredential, options) => connect(ipc, resolveCredential, options),
@@ -750,7 +762,14 @@ async function runLease(
     const leaseId = heldLeaseId;
     heldLeaseId = undefined;
     try {
-      await client.releaseLease({ leaseId });
+      // Bounded like MCP's farewell release: a daemon that accepts the frame and never answers
+      // must not leave `simlock lease` hanging after a Ctrl-C.
+      await awaitWithin(
+        environment.clock,
+        RELEASE_TIMEOUT_MS,
+        client.releaseLease({ leaseId }),
+        `Timed out releasing lease ${leaseId}`,
+      );
     } catch (error: unknown) {
       // Non-fatal: the process still exits 0 after a signal, but the release
       // failure is still diagnostic output, so it stays a structured stderr
@@ -1090,7 +1109,7 @@ async function runEvents(
   try {
     const sinceTs =
       typeof values.since === "string"
-        ? (environment.now ?? Date.now)() - parseDuration(values.since)
+        ? environment.clock.now() - parseDuration(values.since)
         : undefined;
     for (const event of await client.replayEvents(sinceTs === undefined ? {} : { sinceTs })) {
       writeResult(environment, event);
@@ -1546,12 +1565,10 @@ function waitForTermination(
       resolve();
     };
     detach = () => {
-      signals.off("SIGINT", finish);
-      signals.off("SIGTERM", finish);
+      for (const signal of TERMINATION_SIGNALS) signals.off(signal, finish);
       watchHandle?.stop();
     };
-    signals.on("SIGINT", finish);
-    signals.on("SIGTERM", finish);
+    for (const signal of TERMINATION_SIGNALS) signals.on(signal, finish);
     watchHandle =
       parentWatch !== undefined && parentPid !== undefined && parentPid > 0
         ? parentWatch.watch(parentPid, finish)

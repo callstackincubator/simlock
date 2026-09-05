@@ -24,11 +24,46 @@ const RENEW_DIVISOR = 3;
 
 /**
  * Floor on the scheduled delay. Only reachable when the daemon returns a deadline that is
- * already very close (or in the past) -- a misconfigured `lease.heldTtlBackstopMs`, a clock
+ * already very close (or in the past) -- a daemon configured with a zero-length TTL, a clock
  * that jumped, or a renewal that raced its own expiry. Without it, a non-positive remaining
  * TTL would turn the timer into an unbounded renew-per-tick loop against the daemon.
  */
 const MINIMUM_RENEW_DELAY_MS = 250;
+
+/**
+ * How long a holder waits for its farewell `lease.release` before giving up and closing the
+ * connection anyway. The daemon is a local process answering a local socket, so this is not a
+ * latency budget -- it is the bound that keeps an unresponsive daemon from hanging the exit of
+ * a CLI holder or an MCP server. Exceeding it costs nothing but the wait: the lease then ends
+ * the way every unreleased lease ends, at its deadline.
+ */
+export const RELEASE_TIMEOUT_MS = 5_000;
+
+/**
+ * Resolves with `work`, or rejects once `timeoutMs` has passed on `clock`. The timer is always
+ * cancelled, so it never holds a process open by itself, and a rejection from an abandoned
+ * `work` is swallowed rather than surfacing as an unhandled rejection.
+ */
+export async function awaitWithin<T>(
+  clock: Clock,
+  timeoutMs: number,
+  work: Promise<T>,
+  timeoutMessage: string,
+): Promise<T> {
+  work.catch(() => undefined);
+  let timer: TimerHandle | undefined;
+  const expiry = new Promise<never>((_resolve, reject) => {
+    timer = clock.setTimer(timeoutMs, () => {
+      timer = undefined;
+      reject(new Error(timeoutMessage));
+    });
+  });
+  try {
+    return await Promise.race([work, expiry]);
+  } finally {
+    if (timer !== undefined) clock.cancel(timer);
+  }
+}
 
 /** The subset of a `LeaseRecord` renewal needs back: the daemon's new deadline. */
 export interface RenewedLease {
@@ -100,20 +135,42 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     timer = undefined;
   };
 
+  /** Isolated: a holder that cannot report a failure must still keep holding. */
+  const report = (error: unknown): void => {
+    if (onError === undefined) return;
+    try {
+      onError(error);
+    } catch {
+      // A `stderr` that throws (a closed pipe, say) must not take the release path down with
+      // it -- see the `void tick()` below, which nothing awaits.
+    }
+  };
+
   const schedule = (): void => {
     if (stopped) return;
     timer = clock.setTimer(renewDelayMs(deadline - clock.now()), () => {
       timer = undefined;
-      void tick();
+      // Nothing awaits this: an unhandled rejection here would take the whole process down,
+      // and with it the release the holder still owes.
+      void tick().catch(() => undefined);
     });
   };
 
   /** One renewal attempt, bounded by the interval it was scheduled on. */
   const attemptRenew = async (): Promise<Attempt> => {
     const request = renew(leaseId);
-    // Attached unconditionally: an abandoned request still settles later, and a rejection
-    // nobody awaits would surface as an unhandled rejection.
-    request.catch(() => undefined);
+    // An abandoned request still reaches the daemon: if it succeeds after this attempt has
+    // been given up on, its deadline is real and worth keeping -- discarding it would let the
+    // give-up test below fire against a deadline the daemon has already moved. (It also keeps
+    // a late rejection from surfacing as an unhandled rejection.)
+    request.then(
+      (renewed) => {
+        // `Math.max`, not a plain assignment: this answer belongs to a request older than
+        // whatever has happened since, so it may only ever push the deadline forward.
+        if (!stopped) deadline = Math.max(deadline, renewed.ttlDeadline);
+      },
+      () => undefined,
+    );
     return Promise.race<Attempt>([
       request.then(
         (renewed) => ({ ok: true, renewed }),
@@ -138,11 +195,14 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     if (stopped) return;
 
     if (!attempt.ok) {
-      onError?.(attempt.error);
+      report(attempt.error);
       // Out of runway: the lease is gone (or about to be), and another attempt would only
-      // produce another error.
+      // produce another error. Reported separately from the attempt that failed, because
+      // "this one did not work" and "this lease will not be renewed again" are different
+      // things for a holder to read.
       if (clock.now() >= deadline) {
         stopped = true;
+        report(new Error(`Gave up renewing lease ${leaseId}: its deadline has passed`));
         return;
       }
       schedule();
@@ -153,9 +213,11 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       // A deadline that is not in the future cannot be renewed towards -- scheduling off it
       // would be a hot loop against a lease that is already over.
       stopped = true;
-      onError?.(new Error(`Lease ${leaseId} was renewed to a deadline that has already passed`));
+      report(new Error(`Lease ${leaseId} was renewed to a deadline that has already passed`));
       return;
     }
+    // The daemon's answer is authoritative, in both directions: it may hand back a shorter
+    // deadline than the one that was asked for, and the cadence follows it.
     deadline = attempt.renewed.ttlDeadline;
     schedule();
   };

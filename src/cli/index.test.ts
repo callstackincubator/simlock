@@ -1436,6 +1436,34 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
     expect(declared).toEqual([false, false]);
   });
 
+  it.each(["SIGHUP", "SIGINT", "SIGTERM"] as const)(
+    "releases explicitly on %s (ADR 0004 §2's catchable signals)",
+    async (signal) => {
+      const output = outputCapture();
+      const signals = new EventEmitter();
+      let released: string | undefined;
+      const client = fakeClient({
+        releaseLease: (input) => {
+          released = input.leaseId;
+          return Promise.resolve({ leaseId: input.leaseId });
+        },
+      });
+      const runPromise = runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+        output.environmentWith({
+          clock: new FakeClock(0),
+          connectAdmin: async () => client,
+          signals: signals as unknown as CliEnvironment["signals"],
+        }),
+      );
+      await settle();
+      signals.emit(signal);
+
+      expect(await runPromise).toBe(0);
+      expect(released).toBe("lse_1");
+    },
+  );
+
   it("reports a failed renewal on stderr and keeps holding the lease", async () => {
     const clock = new FakeClock(0);
     const output = outputCapture();
@@ -1900,7 +1928,6 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           clock: new FakeClock(0),
           configPath: "/simlock/config.json",
           requesterId: "test-requester",
-          now: () => 0,
           connectAdmin: async () => fakeClient(),
           connectExistingAdmin: async () => fakeClient(),
           readAdminTokenFile: async () => undefined,
