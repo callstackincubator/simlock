@@ -29,7 +29,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 
 | Exit | Error code | Meaning |
 |---|---|---|
-| 0 | — | success (for `lease` held mode: lease ended normally) |
+| 0 | — | success (for a `lease` that stayed alive: the lease ended normally) |
 | 1 | `INTERNAL` | internal / unexpected error |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
@@ -42,12 +42,13 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
-| 14 | — | `lease` held mode only: the daemon ended the lease without the holder asking (TTL backstop, operator `release`, or an unrecoverable device) |
+| 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 
 Every row but 14 matches the `cliExitCode` column of the contract's error
 table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
-maintain a second mapping; 14 is not a daemon error code but an outcome of
-held mode, so it lives beside the table's other `lease` outcome, 0.
+maintain a second mapping; 14 is not a daemon error code but an outcome of a
+`lease` that stays alive, so it lives beside the table's other `lease`
+outcome, 0.
 A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
 surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code.
@@ -56,8 +57,8 @@ still reports the specific code.
 
 ## Agent identity
 
-Leases are keyed by requester: at most one active lease (held or detached)
-per agent id, enforced by the daemon. Give each agent session a **stable**
+Leases are keyed by requester: at most one active lease per agent id,
+enforced by the daemon. Give each agent session a **stable**
 id so this actually constrains anything — a fresh id on every CLI invocation
 (the default) makes the constraint a no-op, since every invocation looks
 like a different requester.
@@ -77,15 +78,21 @@ agent holds what.
 ## `simlock lease`
 
 Acquire a device. Blocks while waiting for capacity, then while provisioning
-and booting, then — in held mode — keeps running to hold the lease.
+and booting, then — unless `--detach` — keeps running, renewing the lease on
+a timer and releasing it when it exits.
 
 ```
 simlock lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
-              [--allow-download] [--export-env] [--bind-pid <pid>]
-
-              [--allow-download] [--full] [--bind-pid <pid>]
+              [--ttl <duration>] [--allow-download] [--full] [--export-env]
+              [--bind-pid <pid>]
 ```
+
+There is only one kind of lease ([ADR
+0004](adr/0004-ttl-first-leases-on-every-transport.md)): every lease has a
+TTL and lives until it expires, is renewed, or is released. `--detach`
+changes what *this process* does after the grant, not what the daemon
+granted.
 
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
   already installed for that platform.
@@ -98,8 +105,10 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
   iOS runtimes remain Xcode-managed in v1: `--allow-download` cannot install
   them; install the runtime through Xcode first.
-- `--detach` — detached mode: print the lease result and exit; the lease is
-  TTL-bound and must be renewed with `simlock lease renew`.
+- `--ttl <duration>` — the lease's initial TTL, replacing
+  `lease.defaultTtlMs` (15m) for this lease. Asking for more than
+  `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2), not a silent clamp. See
+  [CONFIGURATION.md](CONFIGURATION.md).
 - `--export-env` — print the grant's `environment` as shell `export` lines on
   stdout instead of the JSON line, for `eval "$(...)"`. See
   [Reaching a leased device](#reaching-a-leased-device). If the grant carries no
@@ -131,12 +140,13 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
   with, a slim device, so it can wait for a fresh device to provision or
   force a re-provision of one already running, even while slim devices sit
   idle in the warm pool.
-- `--detach` — detached mode: print the lease result (the same JSON shape as
-  held mode's grant line, below, including `device.featureProfile`) and
-  exit; the lease is TTL-bound and must be renewed with `simlock lease
-  renew`.
-- `--bind-pid <pid>` — held mode only: watch this pid for death instead of
-  the CLI's actual parent. For a holder spawned from a short-lived subshell,
+- `--detach` — print the lease result (the same JSON shape as the grant line
+  below, including `device.featureProfile`) and exit instead of staying
+  alive. Nothing then renews the lease on your behalf: keep it with
+  `simlock lease renew` before `ttlDeadline`, and end it with
+  `simlock release`.
+- `--bind-pid <pid>` — only meaningful without `--detach`: watch this pid for
+  death instead of the CLI's actual parent. For a holder spawned from a short-lived subshell,
   the immediate parent can die (and get reaped) while the owning agent is
   still very much alive; point this at the agent's own pid instead.
 
@@ -144,8 +154,8 @@ One lease per requester in v1: leasing while you already hold a lease or
 have a request queued fails with `REQUESTER_ALREADY_LEASED` (exit 13); the
 error message names the existing lease id to release first.
 
-**Held mode (default):** intended to be run in the background by the agent.
-As soon as the device is ready, one JSON line is printed on stdout — the
+**Staying alive (the default):** intended to be run in the background by the
+agent. As soon as the device is ready, one JSON line is printed on stdout — the
 contract's `lease.request` output (`LeaseGrant`: `device`, `lease`, `timing`)
 serialized as-is, plus the one field the CLI adds on top, the connection's
 resolved `role` (ADR 0003 §5):
@@ -160,8 +170,35 @@ Simlock keeps its devices in roots the platform tools do not look in by
 default, so a bare `simctl` or `adb` will not find them. See
 [Reaching a leased device](#reaching-a-leased-device).
 
-{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","mode":"held","grantedAt":1735689600000,"ttlDeadline":1735689660000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
+The full line, with every field the contract defines:
+
+```json
+{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","grantedAt":1735689600000,"ttlDeadline":1735690500000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
 ```
+
+`lease.ttlDeadline` is the moment the daemon will expire this lease if
+nothing renews it. It is the only thing keeping the lease alive — there is
+no second mechanism behind it.
+
+Then the process stays alive, and while it is alive it does two things for
+you. It **renews** the lease every third of the remaining TTL, so the
+deadline keeps moving out for as long as the process is there. And it
+**releases** on the way out: on a normal exit, on `SIGINT`/`SIGTERM`, and on
+parent death — it watches its parent (the pid captured at startup, or
+`--bind-pid`) and releases and exits on its own the moment that parent is
+gone, so a crashed or killed agent's backgrounded `lease` does not outlive
+it.
+
+Release-on-exit is this process's own policy, not something the daemon
+enforces. A holder that is `SIGKILL`ed, or whose machine disappears, cannot
+run it: that lease is not released, and its device stays leased until
+`ttlDeadline` — at most `lease.defaultTtlMs` (15 minutes by default) after
+the last renew. If that matters, lower `lease.defaultTtlMs` or pass a shorter
+`--ttl`; see
+[known-pitfalls.md](known-pitfalls.md#a-sigkilled-lease-holder-keeps-its-device-until-the-ttl-expires).
+Dropping the connection is not itself a release: a daemon restart, a
+suspended machine, or a socket hiccup costs you nothing but the renewals you
+miss while it lasts.
 
 `device` is a **projection** of the registry's device record — `id`,
 `driverDeviceId`, `spec`, `address?`, `featureProfile?` — not the full
@@ -179,12 +216,8 @@ of misreading it as a bug. See `src/contract/schemas.ts`
 field list — this is the one vocabulary every frontend (CLI, MCP, HTTP, the
 `simlock/client` package) now shares.
 
-then the process stays alive holding the lease. **Kill the process to
-release** — or let it die on its own: held mode watches its parent (the pid
-captured at startup, or `--bind-pid`) and releases and exits on its own the
-moment that parent is gone, so a crashed or killed agent's backgrounded
-`lease` does not outlive it. Progress streams on stderr and reflects only the
-action selected for that request. A queued request reports its position
+Progress streams on stderr and reflects only the action selected for that
+request. A queued request reports its position
 without speculative work stages; reclaiming work is reported separately:
 
 ```json
@@ -204,9 +237,9 @@ the driver's own estimate for the work it selected, which for a reclaim means
 the strategy that clean level uses -- an erase runs tens of seconds, a
 snapshot restore a few.
 
-Once granted, held mode also relays the health monitor's findings about the
-leased device for as long as the connection holds it, on the same stderr
-stream:
+Once granted, a `lease` that stays alive also relays the health monitor's
+findings about the leased device for as long as it is connected, on the same
+stderr stream:
 
 ```json
 {"push":"device-unhealthy","leaseId":"lse_9f2c","deviceId":"dev_1a2b"}
@@ -216,7 +249,7 @@ stream:
 `device-unhealthy` means the device stopped running outside simlock and a
 reboot is in progress under the same lease; `device-recovered` means that
 reboot passed readiness. The lease itself is untouched by either — it is
-still held and must still be released the normal way. Recovery can instead
+still yours, still on its TTL, and must still be released the normal way. Recovery can instead
 give up (the device vanished, its provenance no longer checks out, or reboot
 attempts ran out); giving up is not itself one of these lines — it ends the
 lease, which surfaces as the same line any other lease loss does:
@@ -228,9 +261,9 @@ lease, which surfaces as the same line any other lease loss does:
 In all three lines `deviceId` is the registry device id — the `id` column of
 `simlock list --devices`, and the same identifier the event bus uses — not the
 driver-level `udid` the grant returns on stdout. A `lease-lost` line is
-terminal for held mode: there is no longer a lease to
-hold, so the process writes that line and exits `14` rather than waiting for a
-signal, and it does not try to release a lease the daemon has already taken
+terminal for a `lease` that stayed alive: there is no longer a lease to
+renew, so the process writes that line and exits `14` rather than waiting for
+a signal, and it does not try to release a lease the daemon has already taken
 back. The `reason` is whatever ended it — `device-lost` here, but equally
 `expired` or `killed`. See [known-pitfalls.md](known-pitfalls.md)
 for what a reboot cannot bring back — anything the agent had running inside
@@ -239,21 +272,17 @@ forward) is gone whether or not recovery succeeds.
 
 ### `simlock lease renew <lease-id> [--ttl <duration>]`
 
-Extend a lease's TTL — works for both detached and held-mode leases. Renewal
-always resets the deadline to now plus the TTL, regardless of how much time
-was left.
+Extend a lease's TTL. Renewal always resets the deadline to now plus the TTL,
+regardless of how much time was left.
 
-Without `--ttl`, the new deadline uses the lease's own mode-aware default:
-`lease.detachedTtlMs` (15m) for a detached lease, `lease.heldTtlBackstopMs`
-(1h) for a held one — never the other mode's default. Exit 1 if the lease is
-unknown or already expired (error code `UNKNOWN_LEASE`).
+Without `--ttl`, the new deadline is now + `lease.defaultTtlMs` (15m) — not
+the TTL this lease was granted with, which the daemon does not keep. A
+`--ttl` larger than `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2). Exit 1
+if the lease is unknown or already expired (error code `UNKNOWN_LEASE`).
 
-A holder that declares the `heartbeat` capability — both frontends' held
-mode — slides its own deadline to now + `lease.heldTtlBackstopMs`
-automatically on every heartbeat, so renewing such a lease to a deadline
-further out than that does not stick — the next heartbeat pulls it back in.
-Hand-renewal remains the only keep-alive for detached mode, which by design
-never holds a connection to heartbeat over.
+Renewing is the only thing that keeps any lease alive, on every transport.
+A `simlock lease` left running does it for you on a timer; anything holding a
+`--detach` lease has to do it itself, before `ttlDeadline`.
 
 ## Reaching a leased device
 
@@ -346,7 +375,7 @@ instead.
 
 ## `simlock release <lease-id> | --all`
 
-Explicitly release a lease (primarily for detached mode or operator
+Explicitly release a lease (primarily for a `--detach` lease or for operator
 intervention). `--all` force-releases every lease — confirmation required
 unless `--yes`.
 
@@ -354,7 +383,7 @@ Release returns as soon as the lease is gone, not when the device is clean.
 Giving up the lease is a registry commit; wiping the device behind it is a
 driver operation that can run tens of seconds (an iOS `simctl erase`), and it
 proceeds in the background once the command has already exited. The same holds
-for a held lease released by its holder exiting, and for `release_simulator`
+for a lease released by its holder exiting, and for `release_simulator`
 over MCP — an agent gets its turn back immediately instead of waiting on a
 device it has already given up.
 
@@ -373,9 +402,10 @@ Start Simlock's local stdio MCP server. It accepts no flags. Standard output
 is reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The
 server auto-starts the daemon when needed and exposes the focused
 `list_devices`, `lease_simulator`, `release_simulator`, and `lease_status`
-tool surface for one agent session. If that session's held lease ends
-elsewhere (expiry or a force-release), the server relays it as an MCP logging
-notification. A `lease_simulator` call that carries a `_meta.progressToken`
+tool surface for one agent session. The session renews its lease on a timer
+and releases it when the process ends, the same policy `simlock lease`
+follows. If that session's lease ends elsewhere (expiry or a force-release),
+the server relays it as an MCP logging notification. A `lease_simulator` call that carries a `_meta.progressToken`
 gets queue/provisioning/boot progress relayed as MCP `notifications/progress`
 for that request. See [../README.md](../README.md#mcp-integration-optional)
 for details.
@@ -441,7 +471,8 @@ and `list --devices` well before it crosses the threshold that would make
 Human-oriented overview: daemon health, managed capacity (used/limit per
 platform), running and reserved capacity (globally and per platform), every
 managed device with its state, current leases (who — the agent id, see
-[Agent identity](#agent-identity) — since when), and queue depth. `--json`
+[Agent identity](#agent-identity) — since when, and when each was last
+renewed), and queue depth. `--json`
 for the structured equivalent. `overLimit` is true when a lowered limit
 cannot yet be met, for example because active leases consume all running
 slots.
@@ -481,8 +512,8 @@ each rule *would* take (rule name, target, reason) without executing.
 
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries
-whose device vanished, devices booted outside simlock, expired-but-held
-leases, devices stuck mid-transition, and orphans. `--fix` applies the safe
+whose device vanished, devices booted outside simlock, expired leases whose
+device is still marked `leased`, devices stuck mid-transition, and orphans. `--fix` applies the safe
 corrections.
 
 An **orphan** is a device sitting inside a Simlock device root with no registry

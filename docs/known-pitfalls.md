@@ -1,19 +1,49 @@
 # Known pitfalls
 
+## A SIGKILLed lease holder keeps its device until the TTL expires
+
+A lease ends in exactly one of two ways: somebody releases it, or its TTL
+runs out ([ADR 0004](adr/0004-ttl-first-leases-on-every-transport.md)). A
+running `simlock lease` — or an MCP session — releases on the way out, so a
+normal exit, a `SIGINT`/`SIGTERM`, or the death of the holder's parent all
+free the device at once, exactly as before. That is the holder's own policy,
+though, and it needs the holder to run code.
+
+**The pitfall:** a holder killed with `SIGKILL`, or lost with its machine,
+runs nothing. Nothing else steps in for it — the daemon released leases on
+socket close before ADR 0004 and no longer does, on any transport — so the
+device stays `leased` until `ttlDeadline`, at most `lease.defaultTtlMs`
+(15 minutes by default) after the holder's last renew. `simlock status` shows
+the lease and its "last renewed" time throughout; an operator who does not
+want to wait can end it now with `simlock release <lease-id>`.
+
+**Why it is accepted:** the alternative is a `releaseOnDisconnect` flag
+honoured only by transports that have a connection, which puts
+per-connection lease state back into the daemon and at every gateway hop, and
+gives "when does this lease end" a second answer that HTTP can never provide.
+ADR 0004 considered and rejected it; a short default TTL is the accepted
+trade, and it buys the reverse case too — a machine sleep, a daemon upgrade,
+or a socket hiccup no longer costs a live holder its device.
+
+**The knob:** `lease.defaultTtlMs` bounds the leak globally, and `--ttl` (or
+`ttlMs` on a request) bounds it for one lease. Both are worth lowering in a
+CI-shaped fleet where holders are killed routinely; both cost more renew
+traffic and a tighter deadline for a holder that stalls. See
+[CONFIGURATION.md](CONFIGURATION.md).
+
 ## Orphaned lease holders (resolved)
 
-The primary lease mechanism is process-held: `simlock lease` runs in the
-background, holds an open socket to the daemon (connection-alive acts as the
-heartbeat), and the agent kills the process to release the lease.
+`simlock lease` runs in the background, renews its lease on a timer, and
+releases it when it exits.
 
 **The pitfall:** if the agent crashed or was killed, its backgrounded `lease`
 process did *not* die with it — it got reparented (to launchd on macOS) and
-kept the socket open, holding the lease indefinitely. This silently
-reintroduced the "crashed agent holds a device forever" problem the tool
-exists to solve, and it blocked CLI held mode from declaring the heartbeat
-capability: a reparented holder is alive and would answer heartbeats
-forever, which would have turned the bounded TTL-backstop leak into an
-unbounded one.
+kept renewing, holding the lease indefinitely. This silently reintroduced the
+"crashed agent holds a device forever" problem the tool exists to solve, and
+it is worse under a TTL-only lease model than it was under connection-held
+leases: a live reparented holder renews before every deadline, so the TTL
+that bounds every *other* kind of lost holder (see the section above) never
+bounds this one. A bounded leak became an unbounded one.
 
 **Fix:** the holder watches its parent through the `ParentWatch` port
 (`src/ports/parent-watch.ts`) and self-terminates the moment that parent
@@ -29,11 +59,11 @@ native addon, which this package does not take on, so the shipped adapter
 (`NodeParentWatch`) instead polls `process.kill(pid, 0)` for liveness —
 portable across platforms with no native dependency. It satisfies the same
 `ParentWatch` port a future native adapter would, so replacing it later
-touches only that one file. CLI held mode now declares the `heartbeat`
-capability, same as MCP.
+touches only that one file.
 
-Machine sleep and zombie sockets still fall back to the daemon-side TTL
-backstop; this fix is about a holder outliving its owner, nothing more.
+This fix is about a holder outliving its owner, nothing more. A holder that
+dies without running its release path is the section above, and the TTL is
+what bounds that one.
 
 ## Crash recovery cannot restore in-device session state
 
@@ -46,8 +76,9 @@ the process and a reboot cannot bring it back: a launched app, a `log
 stream`, an Appium/XCUITest session, a port forward. Simlock has no visibility
 into what was running there, so it cannot even enumerate what was lost, let
 alone restore it. This is why recovery notifies the holder
-(`device-unhealthy` / `device-recovered` in held mode) rather than healing
-silently — the agent has to notice and re-establish its own session state.
+(`device-unhealthy` / `device-recovered`, on a running `simlock lease`'s
+stderr and in `lease.renew`'s `notices` for a polling client) rather than
+healing silently — the agent has to notice and re-establish its own session state.
 
 Detection also has residual latency by design: a crash isn't declared until
 `health.stableObservations` consecutive `stopped` observations, spaced
@@ -227,7 +258,7 @@ JSON lines and MCP `notifications/progress`) has no `downloading` stage. Both
 drivers' `resolveSpec` — where a runtime or system-image install actually
 happens — runs before `LeaseAcquisitionCoordinator#drive`'s provisioning
 step, and `Driver.resolveSpec`'s signature carries no progress callback the
-way `provision`/`makeReady` do. A held-mode CLI or MCP caller waiting on a
+way `provision`/`makeReady` do. A CLI or MCP caller waiting on a
 multi-minute install today sees nothing on the wire between its request and
 either the eventual grant or a timeout; the only visibility is the daemon's
 own `component.install-started` bus event (`simlock events --follow`) and log

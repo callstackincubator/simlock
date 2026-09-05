@@ -61,7 +61,6 @@ simlock lease --platform ios --device "iPhone 16" --detach
     "deviceId": "dev_1a2b",
     "requesterId": "agent-1",
     "ownerId": "agent-1",
-    "mode": "detached",
     "grantedAt": 1735689600000,
     "ttlDeadline": 1735690500000
   },
@@ -76,8 +75,10 @@ simlock lease --platform ios --device "iPhone 16" --detach
 ```
 
 That's the whole interaction: ask for a platform and a device model, get
-back an identified, ready-to-use device. Release it explicitly, or let its
-TTL expire. This is the contract's own `LeaseGrant` shape, serialized
+back an identified, ready-to-use device. Release it explicitly, renew it
+before `ttlDeadline` to keep it, or let its TTL expire. Drop `--detach` and
+`simlock lease` stays running instead, doing both of those for you —
+renewing on a timer and releasing when it exits. This is the contract's own `LeaseGrant` shape, serialized
 as-is — the CLI's `--json` output is a contract value, not a bespoke
 rendering (see [docs/CLI.md](docs/CLI.md)).
 
@@ -104,7 +105,6 @@ the lease result lands on stdout the moment the new device is ready:
     "deviceId": "dev_3c4d",
     "requesterId": "agent-2",
     "ownerId": "agent-2",
-    "mode": "detached",
     "grantedAt": 1735689630000,
     "ttlDeadline": 1735690530000
   },

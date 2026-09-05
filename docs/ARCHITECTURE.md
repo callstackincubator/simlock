@@ -38,10 +38,11 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   kind, not just transport: it is the one frontend meant to be reached over a
   real network, so it calls the daemon's dispatcher **in-process** — the exact
   same one the socket path calls — rather than going through the unix socket
-  at all, requires a bearer token on every route but `GET /v1/healthz`, and
-  only ever grants detached-style, TTL-renewed leases — "held lease = live
-  connection" does not survive a real network the way it does a local
-  process. Its listener now starts right after the socket claim, the same
+  at all, and requires a bearer token on every route but `GET /v1/healthz`.
+  It grants exactly the same TTL-renewed lease every other frontend does
+  (ADR 0004) — being reachable over a real network is no longer a reason for
+  a different lease model, because there is only one. Its listener now starts
+  right after the socket claim, the same
   moment the unix socket itself starts accepting connections and before
   startup convergence runs (`DaemonServer`'s `onSocketClaimed` hook, see
   "Startup: claim first, converge after" below) — a bug fix from the pre-ADR
@@ -50,9 +51,13 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   completes now waits on the shared dispatcher's readiness gate exactly like
   a socket request, instead of being refused. See [HTTP-API.md](HTTP-API.md)
   for the full route reference.
-- **CLI**: in the default *held* mode it acquires a lease, prints one JSON
-  result line on stdout, then stays alive holding the daemon connection; the
-  connection is the lease heartbeat. Progress streams as JSON lines on stderr.
+- **CLI**: by default it acquires a lease, prints one JSON result line on
+  stdout, then stays alive — renewing the lease at one third of the remaining
+  TTL and releasing it on exit, parent death, or `SIGINT`/`SIGTERM`. That is
+  the CLI's own policy over an ordinary TTL lease, not a daemon mode: the
+  connection itself holds nothing (ADR 0004). `--detach` skips the staying
+  alive; the lease it prints is the same lease. Progress streams as JSON
+  lines on stderr.
 - **stdio MCP server**: its process owns one agent session and exposes MCP over
   stdin/stdout. `McpSession` (`src/mcp/session.ts`) holds one `simlock/client`
   connection at a time and does nothing today's typed client does not already
@@ -60,8 +65,9 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   relays"): tool calls are serialized onto it, `lease_status` is one
   `lease.list` call rather than a session-local cache, and a release the
   session does not own surfaces the daemon's own `FORBIDDEN` rather than a
-  client-side guard pre-empting it. A lease is held by that connection until
-  the session explicitly releases it or the connection dies. Like the CLI, it
+  client-side guard pre-empting it. Like the CLI, the session runs a renew
+  timer over its lease and releases it when the process ends — its own
+  policy, not something the connection does. Like the CLI, it
   relays the daemon's progress pushes for the in-flight `lease_simulator`
   request — as MCP `notifications/progress` instead of stderr JSON lines, and
   only when the client supplied a progress token. Unlike the CLI, this
@@ -70,14 +76,11 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   on the next tool call, once its current client's `onConnectionLost` fires
   — auto-starting the daemon exactly as the CLI does
   (`connectWithAutoLaunch`, `src/mcp/connect.ts`), and never on a version
-  mismatch or a refused handshake, only on "nothing is listening". A held
-  lease never survives its connection dying (the daemon releases it on
-  graceful close, and `StartupConverger` sweeps any orphaned lease from an
-  ungraceful death at its own startup — see "Lease subsystem boundaries and
-  wiring" above): the client already synthesizes `onLeaseLost` (reason
-  `daemon-connection-lost`) for every lease it held the moment its connection
-  dies, so the session relays that straight through rather than asking the
-  daemon whether its old lease survived.
+  mismatch or a refused handshake, only on "nothing is listening". The
+  session's lease survives that reconnect untouched: the daemon released
+  nothing when the old connection died, so the new client's first act is to
+  renew the lease it already has (`lease.list` tells it which), not to ask
+  whether the old one is still there or to request a second device.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 
@@ -275,29 +278,24 @@ until the registry commits the resulting running or non-running state. Global
 and platform limits are checked atomically; no driver-specific runtime
 details participate in this decision.
 
-At startup, `StartupConverger` first releases every persisted `held` lease
-(reason `orphaned`) through the normal release path — a held lease's liveness
-is its daemon connection, so it cannot have a live holder across a restart,
-and this runs before timers are restored so an orphaned lease's timer is
-never re-armed. Like every release (see "Release hands the purge off" below),
-this step is registry-only: the device commits straight to `reclaiming` and
-the lease record is gone, while the driver-side reclaim is kicked off in the
-background, one per device rather than queued, so N orphaned leases no longer
-cost N serial erases on this path. It
-then restores persisted TTL timers for the remaining (`detached`) leases,
-whose liveness is the TTL rather than a connection, and re-arms retry timers
-for devices still `quarantined` (see below) from their persisted next-retry
-deadline. It then recovers unleased interrupted reclaims through the
-warm-pool recovery port — a backgrounded reclaim marks its device with a
+At startup, `StartupConverger` restores the persisted TTL timer of **every**
+lease it finds, and re-arms retry timers for devices still `quarantined` (see
+below) from their persisted next-retry deadline. A lease survives a daemon
+restart because a lease's liveness was never the daemon connection to begin
+with (ADR 0004): a holder that is still running renews against the new daemon
+and never notices, and one that is gone loses its device at the deadline it
+already had. There is no orphan sweep at startup — nothing about a restart
+proves a holder is dead, so nothing is released on the strength of it. A
+lease whose deadline already passed while no daemon was running expires as
+soon as one is, through the ordinary expiry path. It then recovers unleased
+interrupted reclaims through the warm-pool recovery port — a backgrounded reclaim marks its device with a
 `reclaim` operation claim for exactly this reason, so this step can tell it
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and finally
 deterministically shuts down excess unleased, unclaimed `ready` registry
-devices through `CleanupActionExecutor`. Running this release step before
-timer restoration and capacity convergence means the devices it frees are
-visible to both. Leased devices that survive the orphan sweep are never
-touched, so a lowered limit may remain visibly over-limit until leases
-naturally release.
+devices through `CleanupActionExecutor`. Leased devices are never touched by
+any of this, so a lowered limit may remain visibly over-limit until leases
+expire or are released.
 
 The capacity sweep's view of what's `ready` is only ever a snapshot, and a
 background reclaim in flight makes it more so: `reclaiming` already counts
@@ -391,38 +389,45 @@ Conclusions baked into the drivers:
 
 ## Leases
 
-- **Held mode (default)**: lease lives as long as its holding frontend's daemon
-  connection. For the CLI, that is the CLI process; for MCP, it is the MCP
-  server process for that agent session. Connection close = release. The CLI
-  holder additionally watches its parent through the `ParentWatch` port and
-  self-terminates if it dies, so a crashed agent's backgrounded `simlock
-  lease` cannot outlive it by getting reparented — see
-  [known-pitfalls.md](known-pitfalls.md).
-- **Detached mode (`--detach`)**: returns a token, daemon enforces a TTL, the
-  agent must `simlock renew` periodically.
-- **TTL backstop**: even held leases have a long daemon-side TTL for zombie
-  sockets, machine sleep, etc.
-- **Heartbeat-driven sliding TTL, capability-gated**: a held lease's backstop
-  deadline is set once at grant and never moves unless its holder proves it is
-  still alive. The daemon pushes `lease.heartbeat` every
-  `lease.heartbeatIntervalMs` to a connection only if it (a) holds at least one
-  lease and (b) declared `capabilities: { heartbeat: true }` at `hello`
-  (`src/daemon/server.ts`). `IpcDaemonConnection` answers automatically with a
-  `lease.heartbeat` request (`src/simlock-client/wire.ts`), so any
-  frontend inherits ponging for free just by declaring the capability — no
-  frontend-specific pong code. The daemon slides every lease the connection
-  holds through `LeaseLifecycle.heartbeat()`, which goes through
-  `registry.renewLease()` (not a direct `expiryScheduler.replace()`) so the
-  persisted deadline never goes stale and a daemon restart mid-lease restores
-  the slid deadline, not the grant-time one. It is a pure sliding window: a
-  holder that stops ponging simply reaches its existing backstop deadline and
-  expires exactly as before — no missed-pong counter, no extra expiry reason.
-  Both frontends' held mode declare the capability: MCP because its holder
-  process dies with its agent (stdin EOF), and CLI held mode because its
-  holder now self-terminates on parent death instead of surviving reparenting
-  (see [known-pitfalls.md](known-pitfalls.md)) — without that, a reparented
-  CLI holder would pong forever, turning a bounded leak into an unbounded
-  one.
+There is **one kind of lease**, on every transport ([ADR
+0004](adr/0004-ttl-first-leases-on-every-transport.md)).
+
+- **A lease is a TTL and nothing else.** Every lease carries `ttlMs` and a
+  `ttlDeadline` (`expiresAt` in HTTP bodies), set at grant from the request's
+  `ttlMs` or from `lease.defaultTtlMs`, and capped at `lease.maxTtlMs` —
+  asking for more is `BAD_REQUEST`, not a silent clamp. `LeaseLifecycle`
+  arms one expiry timer per lease and re-arms it on renew through
+  `registry.renewLease()` (not a direct `expiryScheduler.replace()`), so the
+  persisted deadline never goes stale and a restart mid-lease restores the
+  renewed deadline rather than the grant-time one. The lease record also
+  carries `lastRenewedAt`, set at grant and on every renew, which is what
+  `simlock status` renders as "last renewed".
+- **The only thing that keeps a lease alive is `lease.renew`.** It is an
+  ordinary client-initiated operation, so it works identically on the unix
+  socket, over HTTP, over MCP, and through a gateway that forwards it to the
+  owning worker. There is no daemon-initiated heartbeat, no capability to
+  declare, and no second deadline behind the first.
+- **Connection close means nothing to a lease.** The daemon keeps no
+  per-connection lease state and releases nothing when a connection closes,
+  on any transport. Nothing is swept at daemon startup either — a restart
+  does not prove a holder is dead. This is what lets a gateway hop, a
+  suspended laptop, or a daemon upgrade cost a client its stream and not its
+  device.
+- **"Holding" is a frontend policy over that one lease.** `simlock lease`
+  and the MCP session both renew at one third of the remaining TTL and
+  release on exit; the CLI holder additionally watches its parent through
+  the `ParentWatch` port and self-terminates if it dies, so a crashed
+  agent's backgrounded `simlock lease` cannot outlive it by getting
+  reparented — see [known-pitfalls.md](known-pitfalls.md). `--detach` is the
+  absence of that policy, not a different lease. The daemon neither knows
+  nor cares which policy a client follows.
+- **The cost of that simplicity, stated once:** a holder killed with
+  `SIGKILL`, or lost with its machine, runs no release, so its device stays
+  leased until the deadline — at most `lease.defaultTtlMs` after its last
+  renew. A short default TTL is the bound, deliberately chosen over
+  reintroducing per-connection lease state that HTTP and a gateway could
+  never honour anyway (ADR 0004, "Alternatives considered"). See
+  [known-pitfalls.md](known-pitfalls.md#a-sigkilled-lease-holder-keeps-its-device-until-the-ttl-expires).
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).
 
@@ -436,8 +441,8 @@ snapshot restore comparably — and it carries no information the releasing
 caller can act on. So `LeaseReleaseCoordinator` commits the first half, hands
 the second to `WarmPoolCoordinator` without awaiting it, and returns. An agent
 releasing over MCP or the CLI gets its turn back immediately instead of
-blocking on a device it has already given up; startup's orphan sweep gets the
-same treatment (see "Running capacity"), which is where the pattern started.
+blocking on a device it has already given up, and an expiry frees its device
+the same way.
 
 The device is not lost track of while that runs. It is `reclaiming`, so it
 still counts as running capacity and is invisible to every grant path
@@ -491,9 +496,8 @@ capacity coordinator into these direct transactional call chains:
   `CleanupActionExecutor`; the executor revalidates registry ownership,
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
-- `StartupConverger` runs orphaned held-lease release, timer restoration,
-  interrupted-reclaim recovery, and running-capacity convergence in that
-  order. `NukeService` coordinates lease release, pending-request
+- `StartupConverger` runs TTL-timer restoration, interrupted-reclaim
+  recovery, and running-capacity convergence in that order. `NukeService` coordinates lease release, pending-request
   cancellation, and registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
@@ -576,9 +580,11 @@ whatever the agent had running *inside* the device when it died — a launched
 app, a `log stream`, an Appium/XCUITest session, a port forward — simlock has
 no way to know that state existed, let alone restore it. So the monitor emits
 `device.crash-detected` the moment a crash is confirmed and `device.recovered`
-once the reboot passes readiness; the daemon pushes both to whichever
-connection currently holds the lease (`device-unhealthy` / `device-recovered`
-on the wire) so the holder learns its device blinked instead of quietly
+once the reboot passes readiness; the daemon pushes both to every live
+connection whose principal owns the lease (`device-unhealthy` /
+`device-recovered` on the wire, ADR 0003 §8 and ADR 0004 §5), and a
+polling-only client reads the same facts from `lease.renew`'s `notices` —
+so the holder learns its device blinked instead of quietly
 finding its session gone. A give-up is not a separate push: it ends the lease
 through the normal `lease.released` path, so the holder learns about it the
 same way it learns about any other lease loss.
@@ -700,7 +706,7 @@ SystemStats  — cpu count, total/free RAM, disk free
 IpcConnector / IpcListenerFactory — connect to and host daemon IPC endpoints
 DaemonLauncher — detached daemon startup with append-only combined logs
 Logger       — debug/info/warn/error(message, fields) plus child(module) scoping
-ParentWatch  — watch a pid, notify once on exit (CLI held-mode self-termination)
+ParentWatch  — watch a pid, notify once on exit (CLI lease-holder self-termination)
 ```
 
 Real implementations are thin adapters wired up once at daemon startup;
@@ -735,9 +741,9 @@ interleaved with live lease/reclaim activity whenever a client issues
 `doctor.run` mid-session (it shells out per driver/device, then at most flags
 drift for a later `--fix`), so overlapping it with startup's own registry
 work introduces nothing this codebase doesn't already do elsewhere. Neither
-call awaits a device reclaim inline any more (#43) — an orphaned held lease's
-reclaim runs in the background once its release commits — so what's left on
-this path is comparatively fast: per-driver/device reconnaissance plus
+call awaits a device reclaim inline any more (#43) — a release's reclaim runs
+in the background once the release commits — so what's left on this path is
+comparatively fast: per-driver/device reconnaissance plus
 whatever unleased interrupted-reclaim recovery and capacity-sweep shutdowns
 convergence itself still performs inline. Two consequences follow from
 claiming first:

@@ -19,14 +19,23 @@ see [ARCHITECTURE.md](ARCHITECTURE.md#contract-dispatcher-and-roles-adr-0003)
 for how it fits together, and the two bug fixes called out below for what
 this actually changed.
 
-## Leases are detached-only over HTTP
+## Leases are TTL-bound, the same as everywhere else
 
-Every lease granted through this API is **detached**: TTL-bound, kept alive
-by `POST /v1/leases/:id/renew`, never by a held connection. HTTP is
-stateless — "held lease = live connection" does not survive a real network —
-so there is no held mode here and no WebSocket held-mode emulation. A lease
-that stops renewing expires via the same TTL machinery `simlock lease
---detach` uses; the device is reclaimed normally.
+A lease granted through this API is the same kind of lease `simlock lease`
+gets on the unix socket ([ADR
+0004](adr/0004-ttl-first-leases-on-every-transport.md)): it carries a TTL, it
+is kept alive by `POST /v1/leases/:id/renew` arriving before `expiresAt`, and
+nothing else keeps it alive. There is no connection-liveness mode to be the
+odd one out from — HTTP is stateless, and so is the lease model now, on every
+transport. Closing a connection, dropping a tunnel, or losing the client
+releases nothing; a lease that stops renewing expires at `expiresAt` and its
+device is reclaimed normally.
+
+That is the whole liveness story here, and it is worth stating plainly what
+it costs: a client that vanishes without calling `DELETE /v1/leases/:id`
+holds its device until `expiresAt` — at most `lease.defaultTtlMs` after its
+last renew. Ask for a shorter `ttlMs` on the request if you want a tighter
+bound.
 
 Acquisition is an async resource, not a blocking call: `POST
 /v1/lease-requests` returns as soon as the request exists (queued, or already
@@ -97,7 +106,8 @@ Role: `agent`. Enqueues a device request.
 ```
 
 `platform` and `device` are required; `os` defaults to the newest installed
-runtime; `ttlMs` defaults to `lease.detachedTtlMs`; `timeoutMs` (optional) is
+runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
+above `lease.maxTtlMs`; `timeoutMs` (optional) is
 enforced daemon-side so a vanished client can't hold a queue slot forever.
 `full` (optional, default `false`) opts this request out of iOS slim mode —
 platform-neutral in shape, but only the iOS driver acts on it (as "do not
@@ -222,16 +232,19 @@ and still answer `403 FORBIDDEN` for another requester's request — that
 envelope stays HTTP-specific until
 [#72](https://github.com/callstackincubator/simlock/issues/72).
 
-`expiresAt` is always the authoritative deadline. After a **daemon** restart
-the gateway no longer remembers a per-request `ttlMs`, so the payload reports
-the lease's mode default (the interval a body-less renew applies from then
-on) and may omit `requestId`; schedule renewals from `expiresAt`, not from
-`ttlMs`.
+`expiresAt` is always the authoritative deadline. The lease itself survives a
+**daemon** restart — the next daemon restores its TTL timer from the
+persisted deadline — but the gateway no longer remembers a per-request
+`ttlMs`, so the payload reports `lease.defaultTtlMs` (the interval a
+body-less renew applies from then on) and may omit `requestId`; schedule
+renewals from `expiresAt`, not from `ttlMs`.
 
 ### `POST /v1/leases/{id}/renew`
 
 Role: `agent` (own lease). Body `{ "ttlMs": 900000 }` (optional; defaults to
-the lease's own mode default). Resets the deadline to now + ttl.
+`lease.defaultTtlMs`, and is `400 BAD_REQUEST` above `lease.maxTtlMs`).
+Resets the deadline to now + ttl, regardless of how much time was left. This
+is the only thing that keeps a lease alive.
 
 → `200 { "leaseId": "lse_9f2c", "expiresAt": "...", "notices": [] }`
 
@@ -244,7 +257,9 @@ learns its device blinked without holding a stream open.
 
 Role: `agent` (own lease). Server-Sent Events for live health pushes on this
 lease: `device_unhealthy`, `device_recovered`, `lease_lost` (ends the
-stream). The same facts held mode relays on stderr today.
+stream). The same facts a running `simlock lease` relays on stderr. Losing
+this stream tells you nothing about the lease — it is still yours until
+`expiresAt`; reconnect, or read the same facts from `renew`'s `notices`.
 
 ### `DELETE /v1/leases/{id}`
 
@@ -291,7 +306,7 @@ Every failure is the same shape the daemon protocol uses:
 - **Daemon restart.** In-flight lease requests are in-memory and do not
   survive, same as the socket protocol's queue today. A client polling a
   request id from before the restart gets `404 UNKNOWN_LEASE_REQUEST`; if its
-  grant had actually landed before the crash, the persisted detached lease
+  grant had actually landed before the crash, the persisted lease
   answers a retried `POST` with `409 REQUESTER_ALREADY_LEASED` naming the
   lease id, which the client then `GET`s to recover its state. This is the
   documented recovery loop: `404` → re-request → (maybe) `409` → `GET`.
@@ -309,9 +324,11 @@ Every failure is the same shape the daemon protocol uses:
   request, instead of being refused — every route but the routes that don't
   dispatch at all (`GET /v1/healthz`) can block briefly on a cold start.
 - **Shutdown.** `simlock daemon stop` closes the HTTP listener (and any open
-  connection, in-flight SSE streams included) before releasing held leases
-  or tearing down the lease engine, so no HTTP request can run against a
-  stopping daemon.
+  connection, in-flight SSE streams included) before tearing down the lease
+  engine, so no HTTP request can run against a stopping daemon. Stopping the
+  daemon does not release anything: leases persist, and the next daemon
+  restores each one's TTL timer from its deadline. A lease whose deadline
+  passed while no daemon was running expires as soon as one is.
 
 ## Not implemented
 

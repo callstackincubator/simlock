@@ -14,9 +14,8 @@ a warning. Inspect the effective, merged configuration at any time with
 | `warmPool.quarantine.retryBackoffMs` | Delay before the first quarantine purge retry.                                                                                                                                                                            | `30 seconds`                                                     |
 | `warmPool.quarantine.retryBackoffMultiplier` | Growth factor applied to the backoff after each failed retry.                                                                                                                                                     | `2`                                                               |
 | `warmPool.quarantine.maxRetryBackoffMs` | Cap on the quarantine retry backoff.                                                                                                                                                                                   | `5 minutes`                                                      |
-| `lease.heldTtlBackstopMs`         | Backstop TTL for held-mode leases, in case the holding process dies without releasing.                                                                                                                                       | `1 hour`                                                        |
-| `lease.detachedTtlMs`             | TTL for detached-mode leases before they must be renewed with `simlock lease renew`.                                                                                                                                         | `15 minutes`                                                    |
-| `lease.heartbeatIntervalMs`       | How often the daemon pings a held-mode connection that declared the `heartbeat` capability; each pong slides that connection's leases' TTL back out to a full `heldTtlBackstopMs`. Must be `<= lease.heldTtlBackstopMs / 4`. | `5 minutes`                                                     |
+| `lease.defaultTtlMs`              | TTL applied to a lease whose `lease.request` carried no `ttlMs`, and to a `lease renew` given no explicit TTL. A lease not renewed before its deadline expires and its device is reclaimed.                                  | `15 minutes`                                                    |
+| `lease.maxTtlMs`                  | Largest TTL a request or a renew may ask for. A larger `ttlMs` is rejected with `BAD_REQUEST` rather than silently clamped, so a caller is never left believing it has more time than it does.                               | `4 hours`                                                       |
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`.                                                                              | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
@@ -49,8 +48,24 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
+`lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
+
+### Retired `lease.*` keys
+
+[ADR 0004](adr/0004-ttl-first-leases-on-every-transport.md) collapsed the
+held/detached lease split into one TTL-bound lease, which retired three keys:
+
+| Old key | What happens now |
+| --- | --- |
+| `lease.detachedTtlMs` | Renamed. A config file that still carries it is read as `lease.defaultTtlMs` — same meaning, same default — and `simlock config` warns once, naming the new key. |
+| `lease.heldTtlBackstopMs` | Removed. There is no separate backstop any more: a lease's TTL *is* its deadline. Warned about and ignored, like any other unrecognized key. |
+| `lease.heartbeatIntervalMs` | Removed with the daemon-initiated heartbeat itself. Warned about and ignored. |
+
+The mapping exists so an existing config keeps working rather than silently
+falling back to a default; it is not a compatibility path to build on. Set
+`lease.defaultTtlMs` and delete the old key.
 
 ## Device roots
 

@@ -1,6 +1,6 @@
 # 0004. TTL-first leases on every transport
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-09-05
 - **Issue:** [#114](https://github.com/callstackincubator/simlock/issues/114)
 - **Supersedes:** nothing (narrows ADR 0003 §8's `lease.heartbeat` push and
