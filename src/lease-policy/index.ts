@@ -109,6 +109,19 @@ export interface LeaseRenewalOptions {
   /** Calls `lease.renew` for this lease -- `client.renewLease({ leaseId })`, in practice. */
   readonly renew: (leaseId: string) => Promise<RenewedLease>;
   /**
+   * Reports each answer this renewal adopts, so a holder that shows the deadline to somebody
+   * can keep saying something true. The CLI's `DAEMON_CONNECTION_LOST` line names it, to say
+   * how long the lease that outlived the connection has left; without this hook that line
+   * would still quote the grant-time deadline, which after roughly one TTL of uptime is a
+   * moment in the past on a lease that is perfectly alive.
+   *
+   * Called on every adopted answer -- which is every answer from the newest attempt, and whose
+   * deadline may be equal to or *earlier* than the previous one, since the daemon's newest
+   * word wins in both directions (a body-less renew re-applying a narrower stored width, say).
+   * Never called after `stop()`.
+   */
+  readonly onRenewed?: (renewed: RenewedLease) => void;
+  /**
    * Reports every failed attempt that is worth retrying, and the failure that finally ends
    * renewal. Never called after `stop()`, and never for the terminal answers `onLeaseGone`
    * covers.
@@ -178,7 +191,7 @@ function isLeaseGone(error: unknown): boolean {
  * is over, or was never this holder's -- so renewal stops at once and `onLeaseGone` says so.
  */
 export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
-  const { clock, leaseId, onError, onLeaseGone, renew } = options;
+  const { clock, leaseId, onError, onLeaseGone, onRenewed, renew } = options;
   /** The last deadline the daemon actually gave us -- the only input to the cadence. */
   let deadline = options.ttlDeadline;
   /** Whichever timer is armed right now: the wait between renewals, or an attempt's bound. */
@@ -213,6 +226,19 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       onLeaseGone(reason, error);
     } catch {
       // A holder that cannot handle the news still has to stop renewing, which it now has.
+    }
+  };
+
+  /** The one place `deadline` moves, so `onRenewed` can never drift from what the cadence
+   * itself is scheduling against. Callers apply the newest-answer-wins rule before calling it;
+   * this only records the answer and reports it, isolated for the same reason `report` is. */
+  const adoptDeadline = (renewed: RenewedLease): void => {
+    deadline = renewed.ttlDeadline;
+    if (onRenewed === undefined) return;
+    try {
+      onRenewed(renewed);
+    } catch {
+      // A holder that cannot record the new deadline must still keep renewing towards it.
     }
   };
 
@@ -253,7 +279,7 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
         // deadline the daemon has already replaced.
         if (stopped || attemptId <= newestAnswered) return;
         newestAnswered = attemptId;
-        deadline = renewed.ttlDeadline;
+        adoptDeadline(renewed);
       },
       () => undefined,
     );
@@ -305,10 +331,11 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     }
 
     // Applied by this attempt's own number, exactly as a late answer is (`attemptRenew` above
-    // has usually already done it for this very answer; both paths agree).
+    // has usually already done it for this very answer; both paths agree, and both go through
+    // `adoptDeadline`, so `onRenewed` sees each adopted answer exactly once).
     if (attempt.attemptId > newestAnswered) {
       newestAnswered = attempt.attemptId;
-      deadline = attempt.renewed.ttlDeadline;
+      adoptDeadline(attempt.renewed);
     }
     if (attempt.renewed.ttlDeadline <= clock.now()) {
       // A deadline that is not in the future cannot be renewed towards -- scheduling off it
@@ -320,8 +347,8 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       return;
     }
     // The cadence follows the newest answer in both directions: the daemon may hand back a
-    // *shorter* deadline than the one asked for -- a lowered `lease.heldTtlBackstopMs`, a
-    // `ttlMs` it clamped -- and a longer, older belief does not override it.
+    // *shorter* deadline than the one asked for -- a body-less renew re-applying a narrower
+    // stored width, say -- and a longer, older belief does not override it.
     schedule();
   };
 

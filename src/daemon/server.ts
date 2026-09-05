@@ -332,12 +332,21 @@ export class DaemonServer {
       return;
     }
 
-    // Subscribed only now, after convergence, not before `start()` claimed the
-    // socket. Under ADR 0004 convergence releases nothing at all (the orphaned-held-lease
-    // sweep is gone with held mode), so the only lease fact it can still emit is a
-    // `lease.expired` for a lease whose deadline passed while no daemon was running -- and no
-    // live connection can be waiting on a push for that, since none existed a moment ago.
-    // A parked `lease.request` is safe too: `start()`'s own
+    // Subscribed only now, after convergence, not before `start()` claimed the socket. Under
+    // ADR 0004 convergence releases nothing at all (the orphan sweep is gone), so the only
+    // lease fact it can still emit is a `lease.expired` for a lease whose deadline passed
+    // while no daemon was running.
+    //
+    // Such a `lease-lost` push can genuinely be missed, and that is accepted rather than
+    // assumed away: the socket has been accepting connections since the claim, `hello` is
+    // answered throughout the window, and a client's renew timer may well be connected while
+    // `restore()` expires its overdue lease. What that client loses is the push, not the
+    // fact -- its next `lease.renew` answers `UNKNOWN_LEASE`, which every holder already
+    // treats as the end of the lease (`onLeaseGone`, `src/lease-policy/index.ts`). Wiring the
+    // subscription earlier would instead push from a daemon that has not finished converging,
+    // which is the worse trade.
+    //
+    // A parked `lease.request` is safe: `start()`'s own
     // continuation is registered on `#readyPromise` before any later request's (the
     // client can only reach the gate after `host.start()`'s callback is wired, well
     // after `start()` began awaiting), so on the shared microtask queue this

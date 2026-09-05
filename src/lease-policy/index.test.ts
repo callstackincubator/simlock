@@ -513,8 +513,9 @@ describe("startLeaseRenewal", () => {
       onLeaseGone: (reason) => gone.push({ reason }),
       renew: () => {
         renewedAt.push(clock.now());
-        // A daemon answering with a deadline that is not in the future -- reachable with
-        // `lease.heldTtlBackstopMs: 0`, which the config validator allows.
+        // A daemon answering with a deadline that is not in the future. `lease.defaultTtlMs`
+        // must be positive (ADR 0004), so this is a clock jump or a daemon bug rather than a
+        // configuration -- and either way a cadence derived from it would be a hot loop.
         return Promise.resolve({ ttlDeadline: clock.now() });
       },
       // Already expired at the grant: the floor keeps even this from being an instant loop.
