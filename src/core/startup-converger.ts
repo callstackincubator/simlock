@@ -1,5 +1,5 @@
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import type { DeviceRecord, LeaseRecord, Platform } from "./domain.js";
 import type { CapacityReader } from "./lease-ports.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { compareLeastRecentlyUsed } from "./warm-pool.js";
@@ -41,11 +41,17 @@ export interface DeviceClaimReader {
   isClaimed(deviceId: string): boolean;
 }
 
+/** Which platforms have a driver this daemon can drive devices through. */
+export interface StartupDriverAvailability {
+  has(platform: Platform): boolean;
+}
+
 export interface StartupConvergerOptions {
   readonly capacity: CapacityReader;
   readonly claims: DeviceClaimReader;
   readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
+  readonly drivers: StartupDriverAvailability;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
@@ -56,6 +62,22 @@ export interface StartupConvergerOptions {
 /**
  * Directly coordinates the required startup recovery sequence. It emits no
  * events itself; recovery and cleanup own their post-commit lifecycle facts.
+ *
+ * Convergence never calls a driver that was refused at discovery. Recovering or shutting a
+ * device down needs a driver call there is no driver for, and a `NoDriverError` out of
+ * convergence stops the whole daemon -- costing the healthy platform for a root the other one
+ * rejected, which is the opposite of the per-platform fail-closed behaviour discovery
+ * promises. `simlock doctor` reports the rejection; the inventory waits for the driver to
+ * come back.
+ *
+ * Two limits on that, both deliberate and neither silent. `#releaseOrphanedHeldLeases` runs
+ * first and unguarded: a held lease cannot have a live holder across a restart, so it is
+ * released whatever its platform, which moves the device to `reclaiming` and leaves the
+ * background reclaim to fail into its own catch. The device is then stuck in `reclaiming`
+ * until its driver returns -- worse than untouched, better than a phantom lease pinning a
+ * device nobody holds. And a dark platform's devices still count toward capacity (see
+ * `capacity/limits.ts`), so a large refused inventory can make the *healthy* platform look
+ * over budget; excess selection below excludes them from the candidates, not from the count.
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
@@ -110,6 +132,7 @@ export class StartupConverger {
       return snapshot.devices.filter(
         (device) =>
           device.state === "reclaiming" &&
+          this.options.drivers.has(device.spec.platform) &&
           !leasedDeviceIds.has(device.id) &&
           !this.options.claims.isClaimed(device.id),
       );
@@ -134,6 +157,7 @@ export class StartupConverger {
       .filter(
         (device) =>
           device.state === "ready" &&
+          this.options.drivers.has(device.spec.platform) &&
           !leasedDeviceIds.has(device.id) &&
           !this.options.claims.isClaimed(device.id) &&
           !refused.has(device.id) &&

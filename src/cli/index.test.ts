@@ -16,6 +16,7 @@ import {
   MemoryIpcTransport,
   NodeFilesystem,
   NodeIpcTransport,
+  SocketPathTooLongError,
   type Filesystem,
   type IdGenerator,
 } from "../ports/index.js";
@@ -1478,6 +1479,49 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
     const created = JSON.parse(tokenOut.stdout) as { secret: string; token: { id: string } };
     expect(typeof created.secret).toBe("string");
     expect((created as unknown as Record<string, unknown>).token).not.toHaveProperty("hash");
+  });
+});
+
+/**
+ * `docs/CLI.md` promises exactly one structured error line per failure, and binds `USAGE` to
+ * exit 2. A `SIMLOCK_HOME` whose socket path exceeds the platform limit had neither: the path
+ * was resolved while *building* the environment, and `runCli` takes its environment as a
+ * default parameter -- whose initializer runs before the function body, and therefore before
+ * the try/catch. The error escaped as an uncaught rejection with a raw stack trace, and took
+ * `simlock --help` down with it.
+ */
+describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
+  const tooDeep = `/tmp/${"d".repeat(120)}`;
+  const ports = (): CliEnvironmentPorts => ({
+    ...realCliEnvironmentPorts(),
+    dataDirectory: tooDeep,
+  });
+
+  it("still prints help, which needs no socket at all", async () => {
+    const output = outputCapture(ports());
+
+    await expect(runCli(["--help"], output.environmentWith())).resolves.toBe(0);
+
+    expect(output.stdout).toContain("Usage: simlock");
+    expect(output.stderr).toBe("");
+  });
+
+  it("reports a command that does need one as a single USAGE line, exit 2", async () => {
+    const output = outputCapture(ports());
+
+    await expect(runCli(["status"], output.environmentWith())).resolves.toBe(2);
+
+    const lines = output.stderr.trimEnd().split("\n");
+    expect(lines).toHaveLength(1);
+    const reported = JSON.parse(lines[0] ?? "") as {
+      readonly error: { readonly code: string; readonly message: string };
+    };
+    expect(reported.error.code).toBe("USAGE");
+    expect(reported.error.message).toContain("SIMLOCK_HOME");
+  });
+
+  it("maps the error to the documented usage exit code", () => {
+    expect(errorExitCode(new SocketPathTooLongError(`${tooDeep}/daemon.sock`, 103))).toBe(2);
   });
 });
 

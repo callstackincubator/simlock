@@ -11,7 +11,9 @@ import {
   NodeIpcTransport,
   NodeParentWatch,
   NodeSystemStats,
+  resolveDaemonSocketPath,
   resolveSimlockHome,
+  SocketPathTooLongError,
   SystemClock,
   type Clock,
   type DaemonLauncher,
@@ -351,7 +353,6 @@ export function buildCliEnvironment(
   env: NodeJS.ProcessEnv = process.env,
 ): CliEnvironment {
   const { clock, dataDirectory, filesystem, ipc, launcher, systemStats } = ports;
-  const socketPath = join(dataDirectory, "daemon.sock");
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
@@ -367,7 +368,15 @@ export function buildCliEnvironment(
     resolveCredential: () => Promise<string | undefined>,
     options?: { readonly heartbeat?: boolean },
   ): Promise<SimlockAdminClient> => {
-    const connection = await connector.connect(socketPath);
+    // Resolved here rather than once during construction, because it can throw: a
+    // `SIMLOCK_HOME` whose socket path exceeds the platform limit is a `SocketPathTooLongError`.
+    // `runCli` takes its environment as a *default parameter*, and a default initializer runs
+    // before the function body -- so resolving eagerly put that throw outside `runCli`'s own
+    // try/catch, where it escaped as an uncaught rejection with a raw stack trace instead of
+    // the single structured error line `docs/CLI.md` promises, and took `simlock --help` (which
+    // needs no socket at all) down with it. Every consumer of this path is behind a command
+    // that is already inside that try.
+    const connection = await connector.connect(resolveDaemonSocketPath(dataDirectory));
     const credential = await resolveCredential();
     return connectSimlockAdmin({
       connection,
@@ -569,7 +578,7 @@ function writeError(environment: CliEnvironment, error: unknown): void {
 }
 
 function cliErrorCode(error: unknown): string {
-  if (error instanceof UsageError) return "USAGE";
+  if (error instanceof UsageError || error instanceof SocketPathTooLongError) return "USAGE";
   if (isSimlockError(error)) return error.code;
   return "INTERNAL";
 }
@@ -611,7 +620,7 @@ async function runPassthrough(
  * second mappings" -- driven from `ERROR_TABLE`'s `cliExitCode` column rather than a second,
  * CLI-maintained map. */
 export function errorExitCode(error: unknown): number {
-  if (error instanceof UsageError) return 2;
+  if (error instanceof UsageError || error instanceof SocketPathTooLongError) return 2;
   if (isSimlockError(error)) return ERROR_TABLE[error.code].cliExitCode;
   return 1;
 }

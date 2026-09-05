@@ -50,6 +50,8 @@ const scopedEnv = {
   ANDROID_HOME: sdk,
 } as const;
 const scopedOptions = { env: scopedEnv } as const;
+// The emulator outlives the daemon and is never read from, so it is spawned detached.
+const emulatorOptions = { env: scopedEnv, stdio: "ignore" } as const;
 const binaries = {
   adb: `${sdk}/platform-tools/adb`,
   avdmanager: `${sdk}/cmdline-tools/latest/bin/avdmanager`,
@@ -234,8 +236,37 @@ describe("AndroidDriver", () => {
     expect(harness.runner.calls).toContainEqual({
       args: ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-no-snapshot-load"],
       command: binaries.emulator,
-      options: scopedOptions,
+      options: emulatorOptions,
     });
+  });
+
+  /**
+   * The half of the daemon-stop fix that argv cannot show. `stdio: "ignore"` alone does not
+   * release the event loop -- the ChildProcess handle does -- so without the `unref` a
+   * `daemon stop` logged "Daemon stopped" and then sat there for as long as any emulator ran.
+   * An emulator is meant to outlive the daemon (`#reattachRunningEmulators` adopts it after a
+   * restart) and is reaped through adb and by pid, never by awaiting its exit.
+   */
+  it("releases the event loop for the emulator it starts, so a stopped daemon can exit", async () => {
+    const harness = await provisionedHarness();
+
+    await harness.driver.makeReady(harness.device);
+
+    // The launches specifically -- `emulator` is also invoked as a short-lived query
+    // (`-list-avds` and friends) through `run`, which waits on the child and must stay
+    // referenced. Only a boot is detached.
+    const launches = harness.runner.calls
+      .map((call, index) => ({ call, index }))
+      .filter(({ call }) => call.command === binaries.emulator && call.args.includes("-avd"));
+    expect(launches.length, "no emulator was launched").toBeGreaterThan(0);
+
+    for (const { index } of launches) {
+      expect(harness.runner.handles[index]?.unreffed, `launch at call ${String(index)}`).toBe(true);
+    }
+    // ... and nothing else is: every other child is one the driver waits on.
+    expect(harness.runner.handles.filter((handle) => handle.unreffed)).toHaveLength(
+      launches.length,
+    );
   });
 
   it("validates a new clean baseline by restarting from it before becoming ready", async () => {
@@ -257,7 +288,7 @@ describe("AndroidDriver", () => {
         "simlock_clean_baseline",
       ],
       command: binaries.emulator,
-      options: scopedOptions,
+      options: emulatorOptions,
     });
   });
 
@@ -349,7 +380,7 @@ describe("AndroidDriver", () => {
         "-no-snapshot-load",
       ],
       command: binaries.emulator,
-      options: scopedOptions,
+      options: emulatorOptions,
     });
   });
 
@@ -523,7 +554,7 @@ describe("AndroidDriver", () => {
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
 
     expect(driver.estimate({ operation: "provision" }, spec)).toBe(1_000);
-    expect(driver.estimate({ operation: "boot" }, spec)).toBe(31_000);
+    expect(driver.estimate({ operation: "boot" }, spec)).toBe(70_000);
   });
 
   it("prices reclaim by the strategy the clean level selects", async () => {

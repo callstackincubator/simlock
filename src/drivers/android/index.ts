@@ -54,7 +54,11 @@ import {
 export { AdbServerUnavailableError } from "./adb-server.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
-const COLD_BOOT_ESTIMATE_MS = 31_000;
+// Measured at 60-71s for a cold boot to `sys.boot_completed` on an M-series Mac against
+// Pixel 8 / API 35 (ADR-era hardware verification), against the 31s this first quoted.
+// Under-quoting matters more than over-quoting: `Doctor` derives its stalled-transition
+// threshold from this number, so a low estimate flags healthy boots on a slower machine.
+const COLD_BOOT_ESTIMATE_MS = 70_000;
 // Console ports, even ones only, each paired with the odd adb port above it. The range
 // starts above the 5585 ceiling a default adb server scans, so the user's server and
 // Android Studio cannot see, drive, or kill a Simlock emulator (ADR 0001, decision 4).
@@ -1336,11 +1340,18 @@ export class AndroidDriver implements Driver {
     fromSnapshot: boolean,
   ): Promise<void> {
     const startedAt = this.#clock.now();
+    // `stdio: "ignore"` and `unref()` for the same reason the adb server gets them: an
+    // emulator outlives the daemon by design (`#reattachRunningEmulators` adopts it after
+    // a restart) and is reaped through adb and by pid, never by awaiting its exit. Left
+    // referenced, its handle and stdio pipes would hold the event loop open, and a
+    // `daemon stop` that had logged "Daemon stopped" would leave the process alive for as
+    // long as any emulator ran.
     const handle = this.#processRunner.spawn(
       this.#sdk.emulator,
       ["-avd", data.avdName, "-port", String(data.port), "-no-snapshot-save", ...launchArgs],
-      { env: this.#env() },
+      { env: this.#env(), stdio: "ignore" },
     );
+    handle.unref();
     state.handle = handle;
     // No announcement here, deliberately. adb answers `host:emulator:<port>` by connecting
     // *out* to that port, and the emulator has not opened it yet a millisecond after the

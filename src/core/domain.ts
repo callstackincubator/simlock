@@ -136,6 +136,24 @@ export function transition(
     throw new IllegalTransition(record.state, to);
   }
 
+  if (to === "shutdown") {
+    // Nothing is listening at the old address once the device stops, and the next
+    // `makeReady` supplies a fresh one on the way back to `ready` -- so dropping it here
+    // costs nothing and keeps `list --devices` from showing an address no one can reach.
+    //
+    // Deliberately *not* extended to `quarantined`, though a quarantined device is equally
+    // unreachable: `quarantined -> ready` is a `reclaim`, and `ReclaimResult` carries no
+    // address for `Registry.recoverFromQuarantine` to restore. Dropping it there stranded
+    // the device permanently -- `AcquisitionPlanner` would then grant it, `grantedDevice`
+    // makes `address` optional so nothing rejected it, and the holder got a grant with no
+    // adb serial it could not recover (`driverData`, which holds the port, is not part of a
+    // grant). The address is also not what a port collision is made of: the console port
+    // lives in `driverData.port`, and this driver reuses the one already recorded there
+    // rather than taking a new one (see `ManagedDeviceLifecycle.recoverLeased`).
+    const { address: _stale, ...stopped } = record;
+    return { ...stopped, ...update, state: to };
+  }
+
   return { ...record, ...update, state: to };
 }
 

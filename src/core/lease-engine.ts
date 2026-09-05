@@ -195,6 +195,7 @@ export class LeaseEngine {
       claims: this.#claims,
       cleanup: this.cleanup,
       decisions: this.#decisions,
+      drivers: this.#drivers,
       interruptedReclaimRecovery: {
         recoverInterruptedReclaim: async (device) => {
           await this.#warmPool.recoverInterrupted(device.id);

@@ -50,6 +50,7 @@ function createHarness(
   devices: DeviceRecord[],
   leases: LeaseRecord[] = [],
   limits = { android: 3, global: 3, ios: 3 },
+  darkPlatforms: ReadonlySet<Platform> = new Set(),
 ) {
   const order: string[] = [];
   const claimed = new Set<string>();
@@ -100,6 +101,7 @@ function createHarness(
     claims: { isClaimed: (deviceId) => claimed.has(deviceId) },
     cleanup,
     decisions: new SerializedDecision(),
+    drivers: { has: (platform) => !darkPlatforms.has(platform) },
     interruptedReclaimRecovery: recovery,
     quarantineRestore,
     registry: {
@@ -229,6 +231,28 @@ describe("StartupConverger", () => {
     expect(harness.cleanup.execute).toHaveBeenCalledWith(
       expect.objectContaining({ target: refused.id }),
     );
+  });
+
+  it("leaves a platform without a driver untouched instead of failing convergence", async () => {
+    const interrupted = device("ios-reclaiming", "ios", "reclaiming", 1);
+    const excess = device("ios-ready", "ios", "ready", 2);
+    const androidInterrupted = device("android-reclaiming", "android", "reclaiming", 3);
+    const harness = createHarness(
+      [interrupted, excess, androidInterrupted],
+      [],
+      { android: 1, global: 1, ios: 0 },
+      new Set<Platform>(["ios"]),
+    );
+
+    await harness.converger.converge();
+
+    expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledOnce();
+    expect(harness.recovery.recoverInterruptedReclaim).toHaveBeenCalledWith(
+      expect.objectContaining({ id: androidInterrupted.id }),
+    );
+    expect(harness.cleanupCalls).toEqual([]);
+    expect(harness.devices.find((item) => item.id === interrupted.id)?.state).toBe("reclaiming");
+    expect(harness.devices.find((item) => item.id === excess.id)?.state).toBe("ready");
   });
 
   it("is idempotent after recovery and successful convergence", async () => {
