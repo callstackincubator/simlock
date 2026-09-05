@@ -37,7 +37,8 @@ keys, and one user-visible behaviour; see below.
   new one, with a warning naming it). `lease.heldTtlBackstopMs` and
   `lease.heartbeatIntervalMs` are removed — `simlock config` warns about
   them and ignores them, like any other unrecognized key. New:
-  `lease.maxTtlMs`, default 4 hours. See `docs/CONFIGURATION.md#retired-lease-keys`.
+  `lease.maxTtlMs`, default 4 hours. See
+  `docs/CONFIGURATION.md#retired-lease-keys`.
 - **A holder killed with `SIGKILL` keeps its device until the TTL expires.**
   The daemon keeps no per-connection lease state and releases nothing when a
   connection closes, on any transport — so a holder that dies without

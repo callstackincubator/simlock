@@ -146,9 +146,10 @@ granted.
   `simlock lease renew` before `ttlDeadline`, and end it with
   `simlock release`.
 - `--bind-pid <pid>` — only meaningful without `--detach`: watch this pid for
-  death instead of the CLI's actual parent. For a holder spawned from a short-lived subshell,
-  the immediate parent can die (and get reaped) while the owning agent is
-  still very much alive; point this at the agent's own pid instead.
+  death instead of the CLI's actual parent. For a holder spawned from a
+  short-lived subshell, the immediate parent can die (and get reaped) while
+  the owning agent is still very much alive; point this at the agent's own
+  pid instead.
 
 One lease per requester in v1: leasing while you already hold a lease or
 have a request queued fails with `REQUESTER_ALREADY_LEASED` (exit 13); the
@@ -249,7 +250,8 @@ stderr stream:
 `device-unhealthy` means the device stopped running outside simlock and a
 reboot is in progress under the same lease; `device-recovered` means that
 reboot passed readiness. The lease itself is untouched by either — it is
-still yours, still on its TTL, and must still be released the normal way. Recovery can instead
+still yours, still on its TTL, and must still be released the normal way.
+Recovery can instead
 give up (the device vanished, its provenance no longer checks out, or reboot
 attempts ran out); giving up is not itself one of these lines — it ends the
 lease, which surfaces as the same line any other lease loss does:
@@ -405,7 +407,8 @@ server auto-starts the daemon when needed and exposes the focused
 tool surface for one agent session. The session renews its lease on a timer
 and releases it when the process ends, the same policy `simlock lease`
 follows. If that session's lease ends elsewhere (expiry or a force-release),
-the server relays it as an MCP logging notification. A `lease_simulator` call that carries a `_meta.progressToken`
+the server relays it as an MCP logging notification. A `lease_simulator` call
+that carries a `_meta.progressToken`
 gets queue/provisioning/boot progress relayed as MCP `notifications/progress`
 for that request. See [../README.md](../README.md#mcp-integration-optional)
 for details.
@@ -513,7 +516,8 @@ each rule *would* take (rule name, target, reason) without executing.
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries
 whose device vanished, devices booted outside simlock, expired leases whose
-device is still marked `leased`, devices stuck mid-transition, and orphans. `--fix` applies the safe
+device is still marked `leased`, devices stuck mid-transition, and orphans.
+`--fix` applies the safe
 corrections.
 
 An **orphan** is a device sitting inside a Simlock device root with no registry
@@ -586,7 +590,11 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 ## `simlock daemon <start|stop|status|logs>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand;
-`daemon` exists for operators and debugging. `logs` tails daemon logs and
+`daemon` exists for operators and debugging. `stop` does not touch leases:
+they persist, and the next daemon restores each one's TTL timer from its
+deadline, so a holder that is still running renews against the new daemon and
+never notices. A lease whose deadline passed while no daemon was running
+expires as soon as one is. `logs` tails daemon logs and
 works even when the daemon is dead — it reads the log file directly, no
 connection attempted. `status` never auto-starts the daemon and distinguishes
 two failure shapes: `{"status":"stopped"}` when nothing is listening on the

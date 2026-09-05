@@ -78,7 +78,8 @@ That's the whole interaction: ask for a platform and a device model, get
 back an identified, ready-to-use device. Release it explicitly, renew it
 before `ttlDeadline` to keep it, or let its TTL expire. Drop `--detach` and
 `simlock lease` stays running instead, doing both of those for you —
-renewing on a timer and releasing when it exits. This is the contract's own `LeaseGrant` shape, serialized
+renewing on a timer and releasing when it exits. This is the contract's own
+`LeaseGrant` shape, serialized
 as-is — the CLI's `--json` output is a contract value, not a bespoke
 rendering (see [docs/CLI.md](docs/CLI.md)).
 

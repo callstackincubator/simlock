@@ -42,8 +42,8 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   It grants exactly the same TTL-renewed lease every other frontend does
   (ADR 0004) — being reachable over a real network is no longer a reason for
   a different lease model, because there is only one. Its listener now starts
-  right after the socket claim, the same
-  moment the unix socket itself starts accepting connections and before
+  right after the socket claim, the same moment the unix socket itself
+  starts accepting connections and before
   startup convergence runs (`DaemonServer`'s `onSocketClaimed` hook, see
   "Startup: claim first, converge after" below) — a bug fix from the pre-ADR
   gateway, which started only once convergence had already finished and so
@@ -67,8 +67,8 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   session does not own surfaces the daemon's own `FORBIDDEN` rather than a
   client-side guard pre-empting it. Like the CLI, the session runs a renew
   timer over its lease and releases it when the process ends — its own
-  policy, not something the connection does. Like the CLI, it
-  relays the daemon's progress pushes for the in-flight `lease_simulator`
+  policy, not something the connection does. Like the CLI, it relays the
+  daemon's progress pushes for the in-flight `lease_simulator`
   request — as MCP `notifications/progress` instead of stderr JSON lines, and
   only when the client supplied a progress token. Unlike the CLI, this
   process outlives any single daemon connection: the typed client itself
@@ -77,10 +77,11 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   — auto-starting the daemon exactly as the CLI does
   (`connectWithAutoLaunch`, `src/mcp/connect.ts`), and never on a version
   mismatch or a refused handshake, only on "nothing is listening". The
-  session's lease survives that reconnect untouched: the daemon released
-  nothing when the old connection died, so the new client's first act is to
-  renew the lease it already has (`lease.list` tells it which), not to ask
-  whether the old one is still there or to request a second device.
+  session's lease survives that reconnect untouched — the daemon released
+  nothing when the old connection died — so the new client picks the same
+  lease back up (`lease.list` tells it which) and keeps renewing it, rather
+  than treating a dead connection as a lost device and requesting a second
+  one.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 
@@ -288,8 +289,9 @@ already had. There is no orphan sweep at startup — nothing about a restart
 proves a holder is dead, so nothing is released on the strength of it. A
 lease whose deadline already passed while no daemon was running expires as
 soon as one is, through the ordinary expiry path. It then recovers unleased
-interrupted reclaims through the warm-pool recovery port — a backgrounded reclaim marks its device with a
-`reclaim` operation claim for exactly this reason, so this step can tell it
+interrupted reclaims through the warm-pool recovery port — a backgrounded
+reclaim marks its device with a `reclaim` operation claim for exactly this
+reason, so this step can tell it
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and finally
 deterministically shuts down excess unleased, unclaimed `ready` registry
@@ -497,8 +499,9 @@ capacity coordinator into these direct transactional call chains:
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
 - `StartupConverger` runs TTL-timer restoration, interrupted-reclaim
-  recovery, and running-capacity convergence in that order. `NukeService` coordinates lease release, pending-request
-  cancellation, and registry-scoped reset operations.
+  recovery, and running-capacity convergence in that order. `NukeService`
+  coordinates lease release, pending-request cancellation, and
+  registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
 Driver work remains outside it. Component boundaries use direct calls for
@@ -583,9 +586,9 @@ no way to know that state existed, let alone restore it. So the monitor emits
 once the reboot passes readiness; the daemon pushes both to every live
 connection whose principal owns the lease (`device-unhealthy` /
 `device-recovered` on the wire, ADR 0003 §8 and ADR 0004 §5), and a
-polling-only client reads the same facts from `lease.renew`'s `notices` —
-so the holder learns its device blinked instead of quietly
-finding its session gone. A give-up is not a separate push: it ends the lease
+polling-only client reads the same facts from `lease.renew`'s `notices` — so
+the holder learns its device blinked instead of quietly finding its session
+gone. A give-up is not a separate push: it ends the lease
 through the normal `lease.released` path, so the holder learns about it the
 same way it learns about any other lease loss.
 
@@ -706,7 +709,7 @@ SystemStats  — cpu count, total/free RAM, disk free
 IpcConnector / IpcListenerFactory — connect to and host daemon IPC endpoints
 DaemonLauncher — detached daemon startup with append-only combined logs
 Logger       — debug/info/warn/error(message, fields) plus child(module) scoping
-ParentWatch  — watch a pid, notify once on exit (CLI lease-holder self-termination)
+ParentWatch  — watch a pid, notify once on exit (lease holder self-termination)
 ```
 
 Real implementations are thin adapters wired up once at daemon startup;
@@ -743,8 +746,8 @@ drift for a later `--fix`), so overlapping it with startup's own registry
 work introduces nothing this codebase doesn't already do elsewhere. Neither
 call awaits a device reclaim inline any more (#43) — a release's reclaim runs
 in the background once the release commits — so what's left on this path is
-comparatively fast: per-driver/device reconnaissance plus
-whatever unleased interrupted-reclaim recovery and capacity-sweep shutdowns
+comparatively fast: per-driver/device reconnaissance plus whatever unleased
+interrupted-reclaim recovery and capacity-sweep shutdowns
 convergence itself still performs inline. Two consequences follow from
 claiming first:
 

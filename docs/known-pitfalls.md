@@ -78,7 +78,8 @@ into what was running there, so it cannot even enumerate what was lost, let
 alone restore it. This is why recovery notifies the holder
 (`device-unhealthy` / `device-recovered`, on a running `simlock lease`'s
 stderr and in `lease.renew`'s `notices` for a polling client) rather than
-healing silently — the agent has to notice and re-establish its own session state.
+healing silently — the agent has to notice and re-establish its own session
+state.
 
 Detection also has residual latency by design: a crash isn't declared until
 `health.stableObservations` consecutive `stopped` observations, spaced

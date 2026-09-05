@@ -179,14 +179,16 @@ doesn't end up holding the result. This is recorded as a known gap in
   on anything but "nothing is listening" (a version mismatch or a refused
   handshake means something answered, and launching there risks a second
   daemon instance or masking a real incompatibility).
-- It does not restart the daemon on a protocol version mismatch. See
+- It does not restart the daemon on a protocol version mismatch — see
   [ARCHITECTURE.md](ARCHITECTURE.md) and [ADR
   0003](adr/0003-one-typed-daemon-contract-behind-every-frontend.md) §6 for
-  why: stopping a daemon out from under its users kills every queued lease
-  request on the machine, and leaves every lease it was serving to burn TTL
-  with nothing to renew against. `PROTOCOL_VERSION_UNSUPPORTED` names the
-  running daemon's version; the fix is `simlock daemon stop` when it's idle,
-  run by an operator or supervisor, not this client.
+  the decision. ADR 0004 changed what a stop costs without changing the
+  answer: leases now survive a restart, but stopping a daemon out from under
+  its users still kills every queued lease request on the machine and leaves
+  every lease it was serving burning TTL with nothing to renew against.
+  `PROTOCOL_VERSION_UNSUPPORTED` names the running daemon's version; the fix
+  is `simlock daemon stop` when it's idle, run by an operator or supervisor,
+  not this client.
 - It does not expose a role the daemon itself would reject — `simlock/admin`
   showing you `stopDaemon`/`runNuke`/etc. is a TypeScript-editor
   convenience, not the actual gate. The daemon's own role check is what
