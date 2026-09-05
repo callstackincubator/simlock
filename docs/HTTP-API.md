@@ -33,9 +33,10 @@ device is reclaimed normally.
 
 That is the whole liveness story here, and it is worth stating plainly what
 it costs: a client that vanishes without calling `DELETE /v1/leases/:id`
-holds its device until `expiresAt` — at most `lease.defaultTtlMs` after its
-last renew. Ask for a shorter `ttlMs` on the request if you want a tighter
-bound.
+holds its device until `expiresAt` — at most the lease's own TTL after its
+last renew: `lease.defaultTtlMs` unless the request asked for more, never
+more than `lease.maxTtlMs`. Ask for a shorter `ttlMs` on the request if you
+want a tighter bound.
 
 Acquisition is an async resource, not a blocking call: `POST
 /v1/lease-requests` returns as soon as the request exists (queued, or already
@@ -232,24 +233,32 @@ and still answer `403 FORBIDDEN` for another requester's request — that
 envelope stays HTTP-specific until
 [#72](https://github.com/callstackincubator/simlock/issues/72).
 
-`expiresAt` is always the authoritative deadline. The lease itself survives a
-**daemon** restart — the next daemon restores its TTL timer from the
-persisted deadline — but the gateway no longer remembers a per-request
-`ttlMs`, so the payload reports `lease.defaultTtlMs` (the interval a
-body-less renew applies from then on) and may omit `requestId`; schedule
-renewals from `expiresAt`, not from `ttlMs`.
+`expiresAt` is always the authoritative deadline, and `ttlMs` is always the
+lease's own width — the TTL it was granted with, or last renewed with when a
+renew carried one. The daemon stores it on the lease record, so it survives a
+**daemon** restart along with the deadline and the restored TTL timer; a
+payload served after a restart may still omit `requestId`, which was only
+ever gateway-side. Schedule renewals from `expiresAt` rather than from
+`ttlMs` all the same: the deadline is the fact, the width is how far the next
+body-less renew will push it.
 
 ### `POST /v1/leases/{id}/renew`
 
-Role: `agent` (own lease). Body `{ "ttlMs": 900000 }` (optional; defaults to
-`lease.defaultTtlMs`, and is `400 BAD_REQUEST` above `lease.maxTtlMs`).
-Resets the deadline to now + ttl, regardless of how much time was left. This
-is the only thing that keeps a lease alive.
+Role: `agent` (own lease). Body `{ "ttlMs": 900000 }` — optional, and
+omitting it re-applies the lease's own `ttlMs` rather than
+`lease.defaultTtlMs`, so a lease keeps the width it was granted with. A
+`ttlMs` above `lease.maxTtlMs` is `400 BAD_REQUEST`; one below it changes the
+lease's width from this renew on. Either way the deadline resets to now + ttl,
+regardless of how much time was left. This is the only thing that keeps a
+lease alive.
 
 → `200 { "leaseId": "lse_9f2c", "expiresAt": "...", "notices": [] }`
 
-`notices` carries device-health facts observed since the previous renew for
-this lease — `{"event":"device_unhealthy"}`,
+`notices` is an HTTP-side convenience, not part of the socket contract's
+`lease.renew` response: `LeaseNoticeBuffer` (`src/http/notices.ts`) collects
+the owner-routed device-health facts a socket client would have received as
+pushes, and drains them here. It carries the facts observed since the
+previous renew for this lease — `{"event":"device_unhealthy"}`,
 `{"event":"device_recovered","attempts":1}` — so a polling-only client
 learns its device blinked without holding a stream open.
 

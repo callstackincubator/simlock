@@ -43,10 +43,12 @@ await client.close();
 `grant.lease.ttlDeadline` unless a `renewLease` call lands first, and the
 daemon does nothing on its own to keep it. `requestLease` takes an optional
 `ttlMs` (`lease.defaultTtlMs` when omitted, `BAD_REQUEST` above
-`lease.maxTtlMs`), and a frontend that means to hold a device for a while
-runs its own renew timer over it — the CLI and the MCP server both renew at
-one third of the remaining TTL and release on exit, and that is ordinary
-frontend code, not something this client does for you. There is no heartbeat
+`lease.maxTtlMs`), and the lease stores that width: a `renewLease` carrying
+no `ttlMs` re-applies the lease's own, rather than falling back to
+`lease.defaultTtlMs`. A frontend that means to hold a device for a while runs
+its own renew timer over that — the CLI and the MCP server both renew at one
+third of the lease's TTL and release on exit, and that is ordinary frontend
+code, not something this client does for you. There is no heartbeat
 to declare and no connection-liveness mode to opt into: a renew arriving
 before the deadline is the whole mechanism.
 
@@ -105,8 +107,11 @@ this client can make a universal decision about:
 - **MCP** keeps a lazy reconnect, because its process outlives any single
   connection — the next tool call after a dead connection builds a brand new
   client (see `src/mcp/session.ts`, `src/mcp/connect.ts`).
-- **The CLI** needs none — a CLI invocation's whole purpose ends with its
-  connection.
+- **The CLI** needs none, and deliberately still does not have one under
+  ADR 0004. A `simlock lease` holder's lease outlives its connection, but the
+  holder itself does not: it writes a `DAEMON_CONNECTION_LOST` line naming
+  the lease and its deadline, exits `1`, and leaves the lease standing for
+  another invocation to renew or for the TTL to end.
 - **A host process** (agent-device) has its own supervisor and its own
   opinion about what "still needed" means across a daemon restart; this
   client does not guess on its behalf.

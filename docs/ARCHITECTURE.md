@@ -76,12 +76,16 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   on the next tool call, once its current client's `onConnectionLost` fires
   — auto-starting the daemon exactly as the CLI does
   (`connectWithAutoLaunch`, `src/mcp/connect.ts`), and never on a version
-  mismatch or a refused handshake, only on "nothing is listening". The
-  session's lease survives that reconnect untouched — the daemon released
-  nothing when the old connection died — so the new client picks the same
-  lease back up (`lease.list` tells it which) and keeps renewing it, rather
-  than treating a dead connection as a lost device and requesting a second
-  one.
+  mismatch or a refused handshake, only on "nothing is listening". Under ADR
+  0004 that reconnect is **eager, driven by the renew timer** rather than
+  lazy: when the timer fires against a dead client, `McpSession` rebuilds one
+  immediately, renews, and continues, instead of waiting for the next tool
+  call — a session that waited would let its own lease expire between tool
+  calls, which is exactly what the timer exists to prevent. The lease itself
+  survives the reconnect untouched (the daemon released nothing when the old
+  connection died), so the new client picks the same lease back up
+  (`lease.list` tells it which) rather than treating a dead connection as a
+  lost device and requesting a second one.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 
@@ -119,6 +123,16 @@ between the socket and HTTP frontends is a consequence of that sharing, not
 of a shared wire format — and every socket-side fix (the download policy in
 `config.downloads.policy`, startup-readiness parking, error mapping)
 applies to HTTP automatically because there is only one code path to fix.
+
+**Protocol versions are negotiated as `{min, max}` ranges** and honestly:
+a range widens only when a compatibility path is actually kept (ADR 0003 §6).
+ADR 0004 removes `lease.heartbeat` and `mode` from the contract with no shim
+behind them, so the range both sides advertise is `{min: 4, max: 4}` — a
+protocol-3 client and a protocol-4 daemon simply do not overlap, and `hello`
+fails with `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges. `daemon.stop`
+stays the frozen exception, accepted at any version the daemon has ever
+spoken, so the upgrade path (`simlock daemon stop`, then start the new
+daemon) exists at all.
 
 **Two roles**, `agent` and `admin`, declared in `src/contract/roles.ts`.
 Read-only and lease-lifecycle operations are `agent`; anything that reads or
@@ -283,12 +297,15 @@ At startup, `StartupConverger` restores the persisted TTL timer of **every**
 lease it finds, and re-arms retry timers for devices still `quarantined` (see
 below) from their persisted next-retry deadline. A lease survives a daemon
 restart because a lease's liveness was never the daemon connection to begin
-with (ADR 0004): a holder that is still running renews against the new daemon
-and never notices, and one that is gone loses its device at the deadline it
-already had. There is no orphan sweep at startup — nothing about a restart
-proves a holder is dead, so nothing is released on the strength of it. A
-lease whose deadline already passed while no daemon was running expires as
-soon as one is, through the ordinary expiry path. It then recovers unleased
+with (ADR 0004). The *holder* does not survive it in the same way: the typed
+client never reconnects (ADR 0003 §10), so a running `simlock lease` exits
+`1` when the old daemon goes away and something has to renew the lease from a
+new invocation before its deadline. What the restart no longer does is decide
+the question for you by releasing the lease outright. There is no orphan
+sweep at startup — nothing about a restart proves a holder is dead, so
+nothing is released on the strength of it. A lease whose deadline already
+passed while no daemon was running expires as soon as one is, through the
+ordinary expiry path. It then recovers unleased
 interrupted reclaims through the warm-pool recovery port — a backgrounded
 reclaim marks its device with a `reclaim` operation claim for exactly this
 reason, so this step can tell it
@@ -401,9 +418,16 @@ There is **one kind of lease**, on every transport ([ADR
   arms one expiry timer per lease and re-arms it on renew through
   `registry.renewLease()` (not a direct `expiryScheduler.replace()`), so the
   persisted deadline never goes stale and a restart mid-lease restores the
-  renewed deadline rather than the grant-time one. The lease record also
-  carries `lastRenewedAt`, set at grant and on every renew, which is what
-  `simlock status` renders as "last renewed".
+  renewed deadline rather than the grant-time one. The record stores its
+  `ttlMs` too — the width it was granted with, or last renewed with when a
+  renew named one — because a body-less renew re-applies that width rather
+  than falling back to `lease.defaultTtlMs`. It also carries
+  `lastRenewedAt`, a **stored** field written at grant and on every renew,
+  which is what `simlock status` renders as "last renewed". That is a new
+  field rather than a rename of `lastHeartbeatAt`: the old one was never
+  stored at all, it was derived at the dispatcher as
+  `ttlDeadline - heldTtlBackstopMs`, and that arithmetic cannot survive
+  per-lease TTLs.
 - **The only thing that keeps a lease alive is `lease.renew`.** It is an
   ordinary client-initiated operation, so it works identically on the unix
   socket, over HTTP, over MCP, and through a gateway that forwards it to the
@@ -412,12 +436,18 @@ There is **one kind of lease**, on every transport ([ADR
 - **Connection close means nothing to a lease.** The daemon keeps no
   per-connection lease state and releases nothing when a connection closes,
   on any transport. Nothing is swept at daemon startup either — a restart
-  does not prove a holder is dead. This is what lets a gateway hop, a
-  suspended laptop, or a daemon upgrade cost a client its stream and not its
-  device.
+  does not prove a holder is dead. So a gateway hop, a suspended laptop, or a
+  daemon upgrade costs a client its stream and not its device. It can still
+  cost the client: the typed client does not reconnect (ADR 0003 §10), so a
+  `simlock lease` holder exits `1` on a dead connection and something has to
+  renew that still-standing lease from a new connection before its deadline.
+  The lease outliving the connection is the daemon's guarantee; picking it
+  back up is the frontend's job.
 - **"Holding" is a frontend policy over that one lease.** `simlock lease`
-  and the MCP session both renew at one third of the remaining TTL and
-  release on exit; the CLI holder additionally watches its parent through
+  and the MCP session both renew at one third of the lease's TTL — sending no
+  TTL of their own, so every renew re-applies the lease's stored `ttlMs` and
+  the deadline keeps its original width — and release on exit; the CLI holder
+  additionally watches its parent through
   the `ParentWatch` port and self-terminates if it dies, so a crashed
   agent's backgrounded `simlock lease` cannot outlive it by getting
   reparented — see [known-pitfalls.md](known-pitfalls.md). `--detach` is the
@@ -425,10 +455,12 @@ There is **one kind of lease**, on every transport ([ADR
   nor cares which policy a client follows.
 - **The cost of that simplicity, stated once:** a holder killed with
   `SIGKILL`, or lost with its machine, runs no release, so its device stays
-  leased until the deadline — at most `lease.defaultTtlMs` after its last
-  renew. A short default TTL is the bound, deliberately chosen over
-  reintroducing per-connection lease state that HTTP and a gateway could
-  never honour anyway (ADR 0004, "Alternatives considered"). See
+  leased until the deadline — at most the lease's own TTL after its last
+  renew: `lease.defaultTtlMs` unless the request asked for more, never more
+  than `lease.maxTtlMs`. A short default TTL is the bound, deliberately
+  chosen over reintroducing per-connection lease state that HTTP and a
+  gateway could never honour anyway (ADR 0004, "Alternatives considered").
+  See
   [known-pitfalls.md](known-pitfalls.md#a-sigkilled-lease-holder-keeps-its-device-until-the-ttl-expires).
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).
@@ -585,12 +617,16 @@ no way to know that state existed, let alone restore it. So the monitor emits
 `device.crash-detected` the moment a crash is confirmed and `device.recovered`
 once the reboot passes readiness; the daemon pushes both to every live
 connection whose principal owns the lease (`device-unhealthy` /
-`device-recovered` on the wire, ADR 0003 §8 and ADR 0004 §5), and a
-polling-only client reads the same facts from `lease.renew`'s `notices` — so
-the holder learns its device blinked instead of quietly finding its session
-gone. A give-up is not a separate push: it ends the lease
-through the normal `lease.released` path, so the holder learns about it the
-same way it learns about any other lease loss.
+`device-recovered` on the wire, ADR 0003 §8 and ADR 0004 §5) — so the holder
+learns its device blinked instead of quietly finding its session gone. A
+polling-only HTTP client, which has no connection to push to, reads the same
+facts from the `notices` array on `POST /v1/leases/{id}/renew`; that buffer
+(`LeaseNoticeBuffer`, `src/http/notices.ts`) is HTTP-side frontend state, not
+part of the socket `lease.renew` response.
+
+A give-up is not a separate push: it ends the lease through the normal
+`lease.released` path, so the holder learns about it the same way it learns
+about any other lease loss.
 
 The monitor starts only after startup convergence completes
 (`DaemonServer#start`, after `#converge()` returns) — the same claim-first

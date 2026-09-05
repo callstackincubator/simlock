@@ -7,16 +7,28 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 > Status: **planned catalog** — update the Status column as events are
 > implemented, and add new events here in the same change that introduces them.
 
+> **Payload removals in the lease rows are a deliberate one-off exception**
+> to events rule 6 ("treat payload shape as a public contract: additive
+> changes only"). [ADR
+> 0004](adr/0004-ttl-first-leases-on-every-transport.md) deletes the concept
+> `lease.granted`'s `mode` reported, and makes two of `lease.released`'s
+> reasons (`closed`, `orphaned`) unreachable — there is no connection close
+> to release on and no startup sweep to orphan anything. Keeping dead fields
+> and unreachable enum values to honour additive-only would leave the
+> catalogue lying about what a consumer can observe. The exception is taken
+> once, while the project is 0.x and the removal is already breaking for the
+> contract, and it does not loosen the rule for anything else.
+
 ## Lease lifecycle
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
 | `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseAcquisitionCoordinator | implemented |
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator | implemented |
-| `lease.granted` | lease id, device id, requester | a device was assigned and handed out | LeaseLifecycle | implemented |
-| `lease.renewed` | lease id, new deadline | a `lease.renew` succeeded — whether it came from `simlock lease renew`, `POST /v1/leases/{id}/renew`, or the renew timer a running `simlock lease` / MCP session keeps over its own lease. There is one renew path and this is it | LeaseLifecycle | implemented |
-| `lease.released` | lease id, device id, reason (explicit/killed/device-lost), owner id | an explicit `lease.release` (which is what a `simlock lease` holder does on its way out), (killed) an operator `release --all` or `nuke`, or (device-lost) a leased device could not be recovered after it stopped running outside simlock. Closing a connection is not a release and never emits this | LeaseLifecycle | implemented |
-| `lease.expired` | lease id, device id, owner id | the lease's deadline passed with no `lease.renew` behind it — the grant-time TTL, or the TTL of the last renew, simply ran out. This is the one way a lease ends without somebody asking, and the only bound on a holder that was killed outright | LeaseLifecycle | implemented |
+| `lease.granted` | lease id, device id, requester | a device was assigned and handed out | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
+| `lease.renewed` | lease id, new deadline | a `lease.renew` succeeded — whether it came from `simlock lease renew`, `POST /v1/leases/{id}/renew`, or the renew timer a running `simlock lease` / MCP session keeps over its own lease. There is one renew path and this is it | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
+| `lease.released` | lease id, device id, reason (explicit/killed/device-lost), owner id | an explicit `lease.release` (which is what a `simlock lease` holder does on its way out), (killed) an operator `release --all` or `nuke`, or (device-lost) a leased device could not be recovered after it stopped running outside simlock. Closing a connection is not a release and never emits this | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
+| `lease.expired` | lease id, device id, owner id | the lease's deadline passed with no `lease.renew` behind it — the grant-time TTL, or the TTL of the last renew, simply ran out. This is the one way a lease ends without somebody asking, and the only bound on a holder that was killed outright | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
 | `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled) | a request ended without a grant; `cancelled` is an explicit single-request cancel (`LeaseEngine#cancelPending`, backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter -- one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue | implemented |
 
 ## Device lifecycle

@@ -3,8 +3,13 @@
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-09-05
 - **Issue:** [#114](https://github.com/callstackincubator/simlock/issues/114)
-- **Supersedes:** nothing (narrows ADR 0003 §8's `lease.heartbeat` push and
-  the held/detached split in `docs/CLI.md`)
+- **Supersedes:** nothing. Narrows [ADR
+  0003](0003-one-typed-daemon-contract-behind-every-frontend.md): §3's
+  `lease.heartbeat` operation row, §8's `lease.heartbeat` connection-scoped
+  push and the held set kept for release-on-close, §9's rule that a `ttlMs`
+  on a held `lease.request` is `BAD_REQUEST`, and §10's `onLeaseLost` firing
+  for each held lease when a connection dies. Also narrows the held/detached
+  split in `docs/CLI.md`.
 
 ## Context
 

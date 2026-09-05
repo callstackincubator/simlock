@@ -48,24 +48,31 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
-`lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers.
+`lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
+`lease.defaultTtlMs` must be `<=` `lease.maxTtlMs` — a config that violates
+either rule is rejected when it loads, naming the offending key, rather than
+being clamped to something the operator did not write.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
 
 ### Retired `lease.*` keys
 
 [ADR 0004](adr/0004-ttl-first-leases-on-every-transport.md) collapsed the
-held/detached lease split into one TTL-bound lease, which retired three keys:
+held/detached lease split into one TTL-bound lease, which retired three keys.
+**All three are simply unrecognized now** — `simlock config` warns about each
+one and ignores it, exactly as it does for any other unknown key. None of
+them is aliased onto a new key, so a config file that still sets one gets the
+new key's default, not the value it wrote:
 
-| Old key | What happens now |
-| --- | --- |
-| `lease.detachedTtlMs` | Renamed. A config file that still carries it is read as `lease.defaultTtlMs` — same meaning, same default — and `simlock config` warns once, naming the new key. |
-| `lease.heldTtlBackstopMs` | Removed. There is no separate backstop any more: a lease's TTL *is* its deadline. Warned about and ignored, like any other unrecognized key. |
-| `lease.heartbeatIntervalMs` | Removed with the daemon-initiated heartbeat itself. Warned about and ignored. |
+| Old key | What it did | What to write instead |
+| --- | --- | --- |
+| `lease.detachedTtlMs` | TTL for detached-mode leases. | `lease.defaultTtlMs`, which means the same thing for the one lease kind that is left. Copy the value across; it is not carried over for you. |
+| `lease.heldTtlBackstopMs` | Backstop TTL behind a held lease. | Nothing. There is no separate backstop any more: a lease's TTL *is* its deadline. |
+| `lease.heartbeatIntervalMs` | Daemon ping interval for held connections. | Nothing. The daemon-initiated heartbeat is gone; clients renew on their own timer. |
 
-The mapping exists so an existing config keeps working rather than silently
-falling back to a default; it is not a compatibility path to build on. Set
-`lease.defaultTtlMs` and delete the old key.
+A warning rather than a hard failure keeps an old config bootable, and a
+warning rather than an alias keeps the key set honest — there is one name for
+this setting, and it is the one in the table above.
 
 ## Device roots
 

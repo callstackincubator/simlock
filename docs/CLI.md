@@ -161,6 +161,8 @@ contract's `lease.request` output (`LeaseGrant`: `device`, `lease`, `timing`)
 serialized as-is, plus the one field the CLI adds on top, the connection's
 resolved `role` (ADR 0003 §5):
 
+The fields you usually care about, from that same line:
+
 ```json
 {"lease":"lse_9f2c","platform":"ios","device":"iPhone 17 Pro","os":"26.5","udid":"ABCD-...","state":"leased",
  "environment":{"SIMLOCK_IOS_DEVICE_SET":"/Users/you/.simlock/devices/ios"}}
@@ -179,13 +181,15 @@ The full line, with every field the contract defines:
 
 `lease.ttlDeadline` is the moment the daemon will expire this lease if
 nothing renews it. It is the only thing keeping the lease alive — there is
-no second mechanism behind it.
+no second mechanism behind it. The lease also stores the `ttlMs` it was
+granted with, which is what a renew re-applies unless one names a new TTL.
 
 Then the process stays alive, and while it is alive it does two things for
-you. It **renews** the lease every third of the remaining TTL, so the
-deadline keeps moving out for as long as the process is there. And it
-**releases** on the way out: on a normal exit, on `SIGINT`/`SIGTERM`, and on
-parent death — it watches its parent (the pid captured at startup, or
+you. It **renews** the lease every third of the lease's TTL, sending no TTL
+of its own, so each renew re-applies the lease's own `ttlMs` and the deadline
+keeps moving out at its original width for as long as the process is there.
+And it **releases** on the way out: on a normal exit, on `SIGINT`/`SIGTERM`,
+and on parent death — it watches its parent (the pid captured at startup, or
 `--bind-pid`) and releases and exits on its own the moment that parent is
 gone, so a crashed or killed agent's backgrounded `lease` does not outlive
 it.
@@ -193,13 +197,26 @@ it.
 Release-on-exit is this process's own policy, not something the daemon
 enforces. A holder that is `SIGKILL`ed, or whose machine disappears, cannot
 run it: that lease is not released, and its device stays leased until
-`ttlDeadline` — at most `lease.defaultTtlMs` (15 minutes by default) after
-the last renew. If that matters, lower `lease.defaultTtlMs` or pass a shorter
-`--ttl`; see
+`ttlDeadline` — at most the lease's own TTL after its last renew:
+`lease.defaultTtlMs` unless the request asked for more, never more than
+`lease.maxTtlMs`. If that matters, lower `lease.defaultTtlMs` or pass a
+shorter `--ttl`; see
 [known-pitfalls.md](known-pitfalls.md#a-sigkilled-lease-holder-keeps-its-device-until-the-ttl-expires).
-Dropping the connection is not itself a release: a daemon restart, a
-suspended machine, or a socket hiccup costs you nothing but the renewals you
-miss while it lasts.
+
+**If the connection dies, the lease outlives it but this process does not.**
+The CLI never reconnects (ADR 0003 §10), so a daemon that stops, crashes, or
+has its socket killed leaves the holder unable to renew or release. It writes
+one error line naming the lease and its deadline, and exits `1`:
+
+```json
+{"error":{"code":"DAEMON_CONNECTION_LOST","message":"lost the daemon connection; lease lse_9f2c is still yours until its ttlDeadline 1735690500000 — renew it with `simlock lease renew lse_9f2c` or let it expire"}}
+```
+
+Nothing was released. The lease is still granted to you on the daemon, still
+counting down, and a later `simlock lease renew <lease-id>` from any
+invocation picks it straight back up. This is not exit `14`: `14` means the
+daemon ended the lease while the connection was alive, which is a different
+thing to have to handle.
 
 `device` is a **projection** of the registry's device record — `id`,
 `driverDeviceId`, `spec`, `address?`, `featureProfile?` — not the full
@@ -266,8 +283,10 @@ driver-level `udid` the grant returns on stdout. A `lease-lost` line is
 terminal for a `lease` that stayed alive: there is no longer a lease to
 renew, so the process writes that line and exits `14` rather than waiting for
 a signal, and it does not try to release a lease the daemon has already taken
-back. The `reason` is whatever ended it — `device-lost` here, but equally
-`expired` or `killed`. See [known-pitfalls.md](known-pitfalls.md)
+back. `lease-lost` is a push from a live daemon connection — a connection
+that simply died is exit `1` and a `DAEMON_CONNECTION_LOST` line instead, and
+leaves the lease standing. The `reason` is whatever ended it — `device-lost`
+here, but equally `expired` or `killed`. See [known-pitfalls.md](known-pitfalls.md)
 for what a reboot cannot bring back — anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
@@ -277,10 +296,14 @@ forward) is gone whether or not recovery succeeds.
 Extend a lease's TTL. Renewal always resets the deadline to now plus the TTL,
 regardless of how much time was left.
 
-Without `--ttl`, the new deadline is now + `lease.defaultTtlMs` (15m) — not
-the TTL this lease was granted with, which the daemon does not keep. A
-`--ttl` larger than `lease.maxTtlMs` (4h) is a `BAD_REQUEST` (exit 2). Exit 1
-if the lease is unknown or already expired (error code `UNKNOWN_LEASE`).
+Without `--ttl`, a renew keeps the lease's own width: the new deadline is now
++ the lease's stored `ttlMs`, the TTL it was granted with or last renewed
+with. `lease.defaultTtlMs` is what a *request* falls back to when it names no
+`ttlMs`, not what a renew falls back to — a lease granted for four hours does
+not quietly shrink to fifteen minutes the first time something renews it.
+Passing `--ttl` changes the lease's width from that renew on, capped by
+`lease.maxTtlMs` (4h); asking for more is a `BAD_REQUEST` (exit 2). Exit 1 if
+the lease is unknown or already expired (error code `UNKNOWN_LEASE`).
 
 Renewing is the only thing that keeps any lease alive, on every transport.
 A `simlock lease` left running does it for you on a timer; anything holding a
@@ -592,8 +615,10 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 Manage the daemon explicitly. Other commands auto-start it on demand;
 `daemon` exists for operators and debugging. `stop` does not touch leases:
 they persist, and the next daemon restores each one's TTL timer from its
-deadline, so a holder that is still running renews against the new daemon and
-never notices. A lease whose deadline passed while no daemon was running
+deadline. What a stop does end is the connections to it — a running `simlock
+lease` cannot reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line
+naming a lease that is still granted; renew it from a later invocation once
+the daemon is back. A lease whose deadline passed while no daemon was running
 expires as soon as one is. `logs` tails daemon logs and
 works even when the daemon is dead — it reads the log file directly, no
 connection attempted. `status` never auto-starts the daemon and distinguishes

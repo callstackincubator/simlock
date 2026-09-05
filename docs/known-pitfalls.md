@@ -12,8 +12,9 @@ though, and it needs the holder to run code.
 **The pitfall:** a holder killed with `SIGKILL`, or lost with its machine,
 runs nothing. Nothing else steps in for it — the daemon released leases on
 socket close before ADR 0004 and no longer does, on any transport — so the
-device stays `leased` until `ttlDeadline`, at most `lease.defaultTtlMs`
-(15 minutes by default) after the holder's last renew. `simlock status` shows
+device stays `leased` until `ttlDeadline`, at most the lease's own TTL after
+its last renew: `lease.defaultTtlMs` (15 minutes by default) unless the
+request asked for more, never more than `lease.maxTtlMs`. `simlock status` shows
 the lease and its "last renewed" time throughout; an operator who does not
 want to wait can end it now with `simlock release <lease-id>`.
 
@@ -38,12 +39,15 @@ releases it when it exits.
 
 **The pitfall:** if the agent crashed or was killed, its backgrounded `lease`
 process did *not* die with it — it got reparented (to launchd on macOS) and
-kept renewing, holding the lease indefinitely. This silently reintroduced the
-"crashed agent holds a device forever" problem the tool exists to solve, and
-it is worse under a TTL-only lease model than it was under connection-held
-leases: a live reparented holder renews before every deadline, so the TTL
-that bounds every *other* kind of lost holder (see the section above) never
-bounds this one. A bounded leak became an unbounded one.
+kept running, holding the lease indefinitely. This silently reintroduced the
+"crashed agent holds a device forever" problem the tool exists to solve.
+
+Under ADR 0004 it is the one failure the TTL cannot bound. Every other way of
+losing a holder ends at the deadline, because nothing is renewing (see the
+section above). A reparented holder is *alive*: its renew timer keeps firing
+against a lease nobody wants any more, pushing the deadline out ahead of
+itself forever. The TTL is a bound on silence, and this holder is not
+silent.
 
 **Fix:** the holder watches its parent through the `ParentWatch` port
 (`src/ports/parent-watch.ts`) and self-terminates the moment that parent
@@ -76,10 +80,11 @@ the process and a reboot cannot bring it back: a launched app, a `log
 stream`, an Appium/XCUITest session, a port forward. Simlock has no visibility
 into what was running there, so it cannot even enumerate what was lost, let
 alone restore it. This is why recovery notifies the holder
-(`device-unhealthy` / `device-recovered`, on a running `simlock lease`'s
-stderr and in `lease.renew`'s `notices` for a polling client) rather than
-healing silently — the agent has to notice and re-establish its own session
-state.
+(`device-unhealthy` / `device-recovered` — pushed to a running `simlock
+lease`'s stderr, and drained from the `notices` array on `POST
+/v1/leases/{id}/renew` by a polling HTTP client, which has no connection to
+push to) rather than healing silently — the agent has to notice and
+re-establish its own session state.
 
 Detection also has residual latency by design: a crash isn't declared until
 `health.stableObservations` consecutive `stopped` observations, spaced

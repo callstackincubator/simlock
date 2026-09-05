@@ -24,28 +24,48 @@ keys, and one user-visible behaviour; see below.
   `BAD_REQUEST` rather than silently clamped. A caller reading
   `lease.mode` off a grant now reads `undefined`, which is falsy, not an
   error; there is nothing to branch on any more.
-- **`lastHeartbeatAt` on the lease record is now `lastRenewedAt`**, set at
-  grant and on every renew. `simlock status` renders it as "last renewed".
+- **A body-less renew re-applies the lease's own TTL, not
+  `lease.defaultTtlMs`.** The lease record stores the `ttlMs` it was granted
+  with (or last renewed with, when a renew carried one), and `lease.renew`
+  without a `ttlMs` resets the deadline to now + that width.
+  `lease.defaultTtlMs` now applies in exactly one place: a `lease.request`
+  that names no `ttlMs`. A caller that relied on renew snapping every lease
+  back to the 15-minute default will find a four-hour lease staying four
+  hours wide.
+- **`lastRenewedAt` replaces `lastHeartbeatAt` — as a new stored field, not
+  a rename.** `lastHeartbeatAt` was never persisted: the dispatcher derived
+  it as `ttlDeadline - heldTtlBackstopMs`, which only worked because every
+  held lease shared one backstop width. With per-lease TTLs that arithmetic
+  has no answer, so the daemon now writes `lastRenewedAt` onto the lease
+  record at grant and on every renew, and `simlock status` renders it as
+  "last renewed". A consumer reading `lastHeartbeatAt` gets `undefined`.
 - **Socket protocol:** moves to protocol 4 with no compatibility shim; the
   range a daemon and client advertise is `{min: 4, max: 4}`. A
   version-mismatched client fails `hello` with
   `PROTOCOL_VERSION_UNSUPPORTED` and never restarts the daemon — run
   `simlock daemon stop` once it's idle. `daemon.stop` remains a frozen
   exception, accepted at any protocol version the daemon has ever spoken.
-- **Config:** `lease.detachedTtlMs` is renamed `lease.defaultTtlMs` (same
-  15-minute default; a config file still carrying the old key is read as the
-  new one, with a warning naming it). `lease.heldTtlBackstopMs` and
-  `lease.heartbeatIntervalMs` are removed — `simlock config` warns about
-  them and ignores them, like any other unrecognized key. New:
-  `lease.maxTtlMs`, default 4 hours. See
+- **Config:** three `lease.*` keys are retired —
+  `lease.detachedTtlMs`, `lease.heldTtlBackstopMs`, and
+  `lease.heartbeatIntervalMs`. All three are now simply unrecognized:
+  `simlock config` warns about each and ignores it, exactly as it does for
+  any other unknown key. **None of them is aliased onto a new key**, so a
+  config still setting `lease.detachedTtlMs` gets `lease.defaultTtlMs`'s
+  default rather than the value it wrote — copy the value across. New:
+  `lease.defaultTtlMs` (15 minutes, applied to a request that names no
+  `ttlMs`) and `lease.maxTtlMs` (4 hours). Both must be positive numbers with
+  `lease.defaultTtlMs <= lease.maxTtlMs`; a config that breaks either rule is
+  rejected at load rather than clamped. See
   `docs/CONFIGURATION.md#retired-lease-keys`.
 - **A holder killed with `SIGKILL` keeps its device until the TTL expires.**
   The daemon keeps no per-connection lease state and releases nothing when a
   connection closes, on any transport — so a holder that dies without
   running its own release path (`SIGKILL`, a crash, a lost machine) holds its
-  device until `expiresAt`, at most `lease.defaultTtlMs` after its last
-  renew, against today's immediate release on socket close. A holder that
-  exits normally, is `SIGTERM`ed, or whose parent dies still releases at
+  device until `expiresAt`, at most the lease's own TTL after its last renew
+  — `lease.defaultTtlMs` unless the request asked for more, never more than
+  `lease.maxTtlMs` — against today's immediate release on socket close. A
+  holder that exits normally, is `SIGTERM`ed, or whose parent dies still
+  releases at
   once, because that is its own policy. This is the one behaviour change a
   local user notices, and it is the accepted price of a single mechanism;
   the reverse case improves, as a machine sleep or a socket hiccup no longer
@@ -65,14 +85,25 @@ keys, and one user-visible behaviour; see below.
   granted and still yours — reconnect and renew it, or let its TTL run out.
   `onConnectionLost` is what reports the dead connection; `onLeaseLost` now
   only ever reports a lease the daemon actually ended.
+- **A running `simlock lease` exits `1` when its daemon connection dies**,
+  writing one `DAEMON_CONNECTION_LOST` line that names the lease id and its
+  `ttlDeadline`. The CLI still does not reconnect (ADR 0003 §10), so it can
+  neither renew nor release — but it no longer implies the lease went with
+  it. The lease stands until its deadline and any later invocation can
+  `simlock lease renew <lease-id>` it. Exit `14` keeps its narrower meaning:
+  the daemon ended the lease while the connection was alive.
 
 ### Features
 
+These ship with the PRs that implement ADR 0004; this section describes what
+those changes add, alongside the breaking changes above.
+
 - **cli:** `simlock lease` (without `--detach`) renews its own lease at one
-  third of the remaining TTL for as long as it runs, and releases on exit,
-  parent death, or `SIGINT`/`SIGTERM`. `--detach` prints the grant and exits;
-  the lease it leaves behind is the same kind of lease, and renewing it is
-  the caller's job.
+  third of the lease's TTL for as long as it runs — sending no TTL of its
+  own, so the deadline keeps the width the lease was granted with — and
+  releases on exit, parent death, or `SIGINT`/`SIGTERM`. `--detach` prints
+  the grant and exits; the lease it leaves behind is the same kind of lease,
+  and renewing it is the caller's job.
 - **cli:** `simlock lease --ttl <duration>` sets a lease's initial TTL in
   place of `lease.defaultTtlMs`, capped by `lease.maxTtlMs`.
 - **daemon:** one expiry path for every frontend — startup restores every
@@ -86,8 +117,8 @@ keys, and one user-visible behaviour; see below.
 
 - record ADR 0004 as **Accepted — not yet implemented**
   (`docs/adr/0004-ttl-first-leases-on-every-transport.md` and
-  `docs/adr/README.md`): the documentation below describes the decided end
-  state, and the code catches up to it.
+  `docs/adr/README.md`): the documentation describes the decided end state;
+  the code catches up in the changes that implement ADR 0004.
 - rewrite the lease model across `docs/CLI.md`, `docs/CLIENT.md`,
   `docs/HTTP-API.md`, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`
   ("Leases", the frontend topology, and startup convergence),
