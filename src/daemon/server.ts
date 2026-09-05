@@ -11,7 +11,6 @@ import {
   type LeaseHealthMonitor,
   NoDriverError,
   type Nuke,
-  UnknownLeaseError,
   UnknownPassthroughToolError,
 } from "../core/index.js";
 import type {
@@ -21,7 +20,7 @@ import type {
   PassthroughResolver,
   QueueControl,
 } from "../core/lease-ports.js";
-import type { Clock, IpcConnection, Logger, TimerHandle } from "../ports/index.js";
+import type { Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { parseRequestFrame, serializeFrame, type RequestFrame } from "../daemon-protocol/index.js";
 import {
@@ -50,12 +49,10 @@ type RequestId = string | number;
 
 interface Connection {
   readonly socket: IpcConnection;
-  readonly heldLeaseIds: Set<string>;
   readonly progressDisposers: Set<() => void>;
   readonly progressRequesters: Set<string>;
   buffer: string;
   helloReceived: boolean;
-  heartbeatCapability: boolean;
   closed: boolean;
   /** ADR 0003 §4: fixed at `hello` for the connection's lifetime. `principal` defaults to
    * `options.defaultRequesterId` when `hello` omits one (today's CLI/MCP -- PR 4 moves them
@@ -66,14 +63,13 @@ interface Connection {
   /**
    * Lease ids this connection is *currently* explicitly releasing (`lease.release`/
    * `lease.release-all`), added right before the dispatched call and consumed by
-   * `#notifyLeaseLost`. ADR §8 says a client "never fires `onLeaseLost` for a release the same
-   * client asked for" -- stated as the *client's* dedup rule (a future PR), but with pushes now
-   * owner-routed to every connection sharing a principal (not just the single held-lease
-   * holder), the daemon can no longer rely on `heldLeaseIds` membership alone to skip the
-   * asking connection: that would also wrongly skip every *other* live connection with the
-   * same principal, which is exactly the fan-out this PR adds. So the daemon still suppresses
-   * the self-push for the one connection that asked, by connection identity rather than by
-   * principal, and lets every other owning connection's push through undisturbed.
+   * `#notifyLeaseLost`. ADR 0003 §8 says a client "never fires `onLeaseLost` for a release the
+   * same client asked for", and pushes are owner-routed to every connection sharing a
+   * principal, so the suppression has to be by connection identity: skipping by principal
+   * would wrongly skip every *other* live connection owning the lease. This is the only
+   * lease-shaped state a connection still keeps, and it lives for the duration of one
+   * dispatched call rather than for the lease's lifetime -- ADR 0004 §3 deletes the held set
+   * that used to sit beside it.
    */
   readonly selfInitiatedReleases: Set<string>;
   /** Set by `#handleHello` only when this connection's `hello` failed protocol-version
@@ -90,7 +86,6 @@ interface Connection {
    * `DaemonServer` has no `IdGenerator` dependency today, and this only needs to be unique per
    * connection lifetime, not globally unpredictable. */
   subscriptionId: string | undefined;
-  releasing: Promise<void> | undefined;
 }
 
 export interface DaemonServerOptions {
@@ -181,8 +176,6 @@ export class DaemonServer {
   readonly #protocolRange: ProtocolRange;
   readonly #unsubscribeLeaseLost: Array<() => void> = [];
   readonly #logger: Logger;
-  #heartbeatTimer: TimerHandle | undefined;
-  #heartbeatNonce = 0;
   #eventSubscriptionSeq = 0;
   #stopping = false;
   #stopPromise: Promise<void> | undefined;
@@ -327,7 +320,7 @@ export class DaemonServer {
     // flight -- `daemon.stop` is accepted during startup (see `#dispatchLine`), and an
     // auxiliary frontend that fails to start asks for a stop of its own. Everything below
     // this point arms live machinery: it subscribes to the fact bus, emits `daemon.started`,
-    // schedules the heartbeat tick, and starts the health monitor. Running any of that
+    // and starts the health monitor. Running any of that
     // against an already-disposed engine would leave timers armed on a dead daemon and would
     // emit `daemon.started` after `daemon.stopping` -- a fact that is not true when emitted,
     // which `docs/agent-rules/events.md` rule 3 forbids. Bail out instead; the stop that
@@ -340,12 +333,11 @@ export class DaemonServer {
     }
 
     // Subscribed only now, after convergence, not before `start()` claimed the
-    // socket: the only thing that emits `lease.released` during convergence is
-    // `convergeRunningCapacity()`'s own orphaned-held-lease release, and by
-    // definition no live connection holds an orphaned lease on a daemon that has
-    // just started (a held lease's liveness is its daemon connection, which cannot
-    // have survived the restart). So nothing emitted during the window needs a
-    // `lease-lost` push. A parked `lease.request` is safe too: `start()`'s own
+    // socket. Under ADR 0004 convergence releases nothing at all (the orphaned-held-lease
+    // sweep is gone with held mode), so the only lease fact it can still emit is a
+    // `lease.expired` for a lease whose deadline passed while no daemon was running -- and no
+    // live connection can be waiting on a push for that, since none existed a moment ago.
+    // A parked `lease.request` is safe too: `start()`'s own
     // continuation is registered on `#readyPromise` before any later request's (the
     // client can only reach the gate after `host.start()`'s callback is wired, well
     // after `start()` began awaiting), so on the shared microtask queue this
@@ -394,7 +386,6 @@ export class DaemonServer {
       socketPath: this.options.host.endpoint,
       version: this.options.version,
     });
-    this.#scheduleHeartbeatTick();
     // Armed only here, after convergence: a probe tick shells out per platform, and
     // convergence is already doing that per driver and device. Starting it late is
     // also what keeps the subscriptions above safe -- nothing can emit
@@ -439,24 +430,22 @@ export class DaemonServer {
   async #stop(reason: string): Promise<void> {
     // Awaited first, before anything below: an auxiliary frontend calls the role
     // interfaces directly rather than parking on `#awaitReady`/this method's own
-    // teardown order, so it must be shut off before held-lease release and
-    // lease/queue teardown begin -- otherwise a request arriving through it mid-stop
-    // could run against an engine already being torn down.
+    // teardown order, so it must be shut off before lease/queue teardown begins --
+    // otherwise a request arriving through it mid-stop could run against an engine
+    // already being torn down.
     await this.options.stopAuxiliary?.();
     this.#logger.info("Daemon stopping", { reason });
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
-    if (this.#heartbeatTimer !== undefined) {
-      this.options.clock.cancel(this.#heartbeatTimer);
-      this.#heartbeatTimer = undefined;
-    }
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
     this.options.reaper.dispose();
     this.options.healthMonitor?.dispose();
-    await Promise.all([...this.#connections].map((connection) => this.#releaseHeld(connection)));
-    // Those releases only commit the registry half and hand the purge off; draining it
-    // here keeps `daemon stop` finishing on a settled pool, as it did when the reclaim
-    // was inline. Disposal follows rather than precedes it, so a retry timer armed by a
+    // ADR 0004 §3: a stop releases nothing. Every lease persists with its deadline, and the
+    // next daemon restores its timer from that deadline (`StartupConverger`); one whose
+    // deadline passed in between expires as soon as a daemon is there to expire it. What is
+    // drained here is only work already in flight -- a release someone else asked for commits
+    // the registry half and hands its purge off, so draining keeps `daemon stop` finishing on
+    // a settled pool. Disposal follows rather than precedes it, so a retry timer armed by a
     // reclaim that settles into quarantine is still cancelled.
     await this.options.settle?.();
     await this.options.dispose?.();
@@ -481,8 +470,6 @@ export class DaemonServer {
       buffer: "",
       closed: false,
       helloReceived: false,
-      heartbeatCapability: false,
-      heldLeaseIds: new Set(),
       // Overwritten by `#handleHello` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
       // construction (`#dispatchLine` routes to `#handleHello` until then).
@@ -493,7 +480,6 @@ export class DaemonServer {
       protocolMismatch: undefined,
       selfInitiatedReleases: new Set(),
       socket,
-      releasing: undefined,
       subscriptionId: undefined,
       unsubscribeEvents: undefined,
     };
@@ -707,7 +693,6 @@ export class DaemonServer {
       await connection.socket.close();
       return;
     }
-    connection.heartbeatCapability = payload.capabilities?.heartbeat === true;
     // ADR §4: the principal is fixed for the connection's lifetime from here on. Falls back to
     // `defaultRequesterId` when `hello` omits one -- today's CLI/MCP frontends don't send a
     // principal yet (PR 4 moves them onto the typed client, which always will).
@@ -746,7 +731,6 @@ export class DaemonServer {
     connection.helloReceived = true;
     this.#logger.info("Connection opened", {
       clientVersion: payload.clientVersion,
-      heartbeatCapability: connection.heartbeatCapability,
       principal: connection.principal,
       protocolVersion: negotiated,
       role: connection.role,
@@ -770,23 +754,23 @@ export class DaemonServer {
   }
 
   /**
-   * The request switch that used to live here moved to `Dispatcher` (ADR §2): this method now
-   * only does what the ADR says stays with `DaemonServer` around the shared `dispatch()` call --
-   * held-lease tracking (`lease.request`/`lease.release`/`lease.release-all`) and building the
-   * per-call `DispatchSession` (ADR §2/§4) from this connection's fixed principal/role plus
-   * whatever is call-specific (progress delivery, event-subscription management).
+   * The request switch that used to live here moved to `Dispatcher` (ADR 0003 §2): this method
+   * now only does what stays with `DaemonServer` around the shared `dispatch()` call --
+   * building the per-call `DispatchSession` (ADR §2/§4) from this connection's fixed
+   * principal/role plus whatever is call-specific (progress delivery, event-subscription
+   * management), and marking a release this connection asked for so its own `lease-lost` push
+   * is suppressed. ADR 0004 §3 deleted the held-lease tracking that used to live here too: the
+   * daemon keeps no per-connection lease state, so a release is no longer bookkeeping to undo
+   * on failure, only a push to suppress while it is in flight.
    */
-  // fallow-ignore-next-line complexity -- held-lease bookkeeping around each dispatched operation is one transaction per case.
+  // fallow-ignore-next-line complexity -- one case per request type; the switch is the transport's whole surface.
   async #handleRequest(connection: Connection, frame: RequestFrame): Promise<unknown> {
     switch (frame.type) {
       case "lease.request":
         return this.#requestLease(connection, frame.id, frame.payload);
       case "lease.release": {
         const input = parseInput(leaseRelease.input, frame.payload);
-        // Clear before the request commits so held-lease bookkeeping does not try to release
-        // this lease again on a later connection close. Marked in `selfInitiatedReleases` too,
-        // for `#notifyLeaseLost` to suppress the self-push -- see that set's comment.
-        const wasHeld = connection.heldLeaseIds.delete(input.leaseId);
+        // Marked for `#notifyLeaseLost` to suppress the self-push -- see that set's comment.
         connection.selfInitiatedReleases.add(input.leaseId);
         try {
           return await this.#dispatcher.dispatch(
@@ -794,28 +778,26 @@ export class DaemonServer {
             frame.payload,
             this.#session(connection),
           );
-        } catch (error: unknown) {
-          if (wasHeld) connection.heldLeaseIds.add(input.leaseId);
-          throw error;
         } finally {
           connection.selfInitiatedReleases.delete(input.leaseId);
         }
       }
       case "lease.release-all": {
-        const previouslyHeld = [...connection.heldLeaseIds];
-        connection.heldLeaseIds.clear();
-        for (const leaseId of previouslyHeld) connection.selfInitiatedReleases.add(leaseId);
+        // Every lease this principal owns is about to end, and this connection asked for it,
+        // so suppress the self-push for each. Read from the registry rather than from
+        // per-connection state, which no longer exists (ADR 0004 §3).
+        const releasing = this.options.registry.snapshot.leases
+          .filter((lease) => connection.role === "admin" || lease.ownerId === connection.principal)
+          .map((lease) => lease.id);
+        for (const leaseId of releasing) connection.selfInitiatedReleases.add(leaseId);
         try {
           return await this.#dispatcher.dispatch(
             "lease.release-all",
             frame.payload ?? {},
             this.#session(connection),
           );
-        } catch (error: unknown) {
-          for (const leaseId of previouslyHeld) connection.heldLeaseIds.add(leaseId);
-          throw error;
         } finally {
-          for (const leaseId of previouslyHeld) connection.selfInitiatedReleases.delete(leaseId);
+          for (const leaseId of releasing) connection.selfInitiatedReleases.delete(leaseId);
         }
       }
       case "lease.renew":
@@ -829,12 +811,6 @@ export class DaemonServer {
       case "lease.list":
         return this.#dispatcher.dispatch(
           "lease.list",
-          frame.payload ?? {},
-          this.#session(connection),
-        );
-      case "lease.heartbeat":
-        return this.#dispatcher.dispatch(
-          "lease.heartbeat",
           frame.payload ?? {},
           this.#session(connection),
         );
@@ -926,14 +902,13 @@ export class DaemonServer {
     }
   }
 
-  /** Builds the ADR §2/§4 session for one dispatched call from this connection's fixed
-   * principal/role plus its currently-held leases and heartbeat capability. `onProgress` is
-   * unset here -- only `#requestLease` needs one, and builds its own session inline so the
-   * closure can see that specific call's `requestId`. */
+  /** Builds the ADR 0003 §2/§4 session for one dispatched call from this connection's fixed
+   * principal and role -- all that is left of it, since ADR 0004 removed the per-connection
+   * lease state that used to travel alongside. `onProgress` is unset here: only `#requestLease`
+   * needs one, and builds its own session inline so the closure can see that specific call's
+   * `requestId`. */
   #session(connection: Connection): DispatchSession {
     return {
-      heartbeatCapability: connection.heartbeatCapability,
-      heldLeaseIds: connection.heldLeaseIds,
       manageEventSubscription: (subscribe) => this.#manageEventSubscription(connection, subscribe),
       principal: connection.principal,
       role: connection.role,
@@ -960,11 +935,12 @@ export class DaemonServer {
   }
 
   /**
-   * The held-lease tracking and progress-delivery wiring ADR §2 keeps in `DaemonServer`
-   * ("DaemonServer keeps framing, connection lifecycle, held-lease tracking, and pushes; it
-   * loses the request switch"). The actual lease acquisition is `Dispatcher`'s
-   * `lease.request` handler; this method's job is everything around that call that depends on
-   * *this connection* rather than on the operation itself.
+   * The progress-delivery wiring ADR 0003 §2 keeps in `DaemonServer` ("DaemonServer keeps
+   * framing, connection lifecycle, and pushes; it loses the request switch"). The actual lease
+   * acquisition is `Dispatcher`'s `lease.request` handler; this method's job is what is left
+   * around that call that depends on *this connection* rather than on the operation itself,
+   * which since ADR 0004 is progress routing and nothing else -- a granted lease is not
+   * attached to the connection that asked for it in any way.
    */
   async #requestLease(
     connection: Connection,
@@ -1002,11 +978,10 @@ export class DaemonServer {
       connection.progressRequesters.delete(requesterId);
       disposeProgress();
     }
-    if (grant.lease.mode === "held" && (connection.closed || this.#stopping)) {
-      await this.options.leases.release(grant.lease.id, "closed");
-    } else if (grant.lease.mode === "held") {
-      connection.heldLeaseIds.add(grant.lease.id);
-    }
+    // A grant that lands after its requester's connection died (or during a stop) is left
+    // standing on purpose: ADR 0004 §3 -- connection close means nothing to a lease, so the
+    // client that reconnects can renew it, and if none does it expires at its deadline like
+    // any other.
     return grant;
   }
 
@@ -1061,55 +1036,14 @@ export class DaemonServer {
   }
 
   /**
-   * Pushes `lease.heartbeat` every `lease.heartbeatIntervalMs` to every connection that
-   * both declared the capability at `hello` and currently holds at least one lease.
-   * Reschedules itself each tick since `Clock` has no `setInterval`.
-   */
-  #scheduleHeartbeatTick(): void {
-    if (this.#stopping) return;
-    this.#heartbeatTimer = this.options.clock.setTimer(
-      this.options.config.lease.heartbeatIntervalMs,
-      () => {
-        this.#sendHeartbeatPushes();
-        this.#scheduleHeartbeatTick();
-      },
-    );
-  }
-
-  #sendHeartbeatPushes(): void {
-    for (const connection of this.#connections) {
-      if (!connection.heartbeatCapability || connection.heldLeaseIds.size === 0) continue;
-      this.#heartbeatNonce += 1;
-      void this.#pushHeartbeat(connection.socket, this.#heartbeatNonce);
-    }
-  }
-
-  async #pushHeartbeat(socket: IpcConnection, nonce: number): Promise<void> {
-    await writeFrame(socket, {
-      push: "lease.heartbeat",
-      payload: this.#parseOutput(
-        PUSH_SCHEMAS["lease.heartbeat"],
-        { nonce },
-        "push:lease.heartbeat",
-      ),
-    });
-  }
-
-  /**
    * Pushes a lease-ended fact to every live connection whose principal owns `leaseId` (ADR
-   * §8: "every live connection whose principal owns the lease, in either mode" -- not just the
-   * held-lease holder, which is the bug this PR fixes: a detached holder used to learn of a
-   * crash only when a renew failed). Also stops tracking the lease as held on whichever
-   * connection had it in `heldLeaseIds` (there is at most one), so a later connection close
-   * does not try to release it again -- the held set survives this PR for exactly that
-   * bookkeeping, nothing else (ADR §8: "The held set is kept only for release-on-close").
+   * 0003 §8, kept by ADR 0004 §5: these are facts about the device, not a liveness channel).
    * Reacts to the existing post-commit lease.expired / lease.released facts (observer-only; no
    * transaction waits on this). `ownerId` comes from the event payload, not a registry lookup:
    * by the time this fires the lease has already been removed from the registry.
    */
   #notifyLeaseLost(leaseId: string, deviceId: string, reason: string, ownerId: string): void {
     for (const connection of this.#connections) {
-      connection.heldLeaseIds.delete(leaseId);
       // Suppresses the push for exactly the connection that asked for this release itself
       // (see `selfInitiatedReleases`'s comment) -- every other connection sharing the owner
       // still gets pushed, which is the owner-routed fan-out this PR adds.
@@ -1202,7 +1136,10 @@ export class DaemonServer {
     }
     connection.closed = true;
     if (connection.helloReceived) {
-      this.#logger.info("Connection closed", { heldLeaseCount: connection.heldLeaseIds.size });
+      // ADR 0004 §3: closing a connection is not a lease event. Whatever this principal held
+      // is still granted, still counting down its TTL, and still renewable by whatever
+      // connects next -- there is nothing to release here and nothing to count.
+      this.#logger.info("Connection closed", { principal: connection.principal });
     }
     for (const disposeProgress of connection.progressDisposers) {
       disposeProgress();
@@ -1215,38 +1152,6 @@ export class DaemonServer {
     this.#connections.delete(connection);
     connection.unsubscribeEvents?.();
     connection.unsubscribeEvents = undefined;
-    void this.#releaseHeld(connection).catch(() => undefined);
-  }
-
-  #releaseHeld(connection: Connection): Promise<void> {
-    if (connection.releasing !== undefined) {
-      return connection.releasing;
-    }
-    const leaseIds = [...connection.heldLeaseIds];
-    connection.heldLeaseIds.clear();
-    const releasing = Promise.all(
-      leaseIds.map(async (leaseId) => {
-        try {
-          await this.options.leases.release(leaseId, "closed");
-        } catch (error: unknown) {
-          if (!(error instanceof UnknownLeaseError)) {
-            throw error;
-          }
-        }
-      }),
-    ).then(() => undefined);
-    connection.releasing = releasing;
-    void releasing.then(
-      () => this.#clearReleasing(connection, releasing),
-      () => this.#clearReleasing(connection, releasing),
-    );
-    return releasing;
-  }
-
-  #clearReleasing(connection: Connection, releasing: Promise<void>): void {
-    if (connection.releasing === releasing) {
-      connection.releasing = undefined;
-    }
   }
 }
 

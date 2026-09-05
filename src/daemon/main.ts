@@ -115,7 +115,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // that resets on restart (see ARCHITECTURE.md "Event bus"), so a component simlock installed
   // is only attributable later through the daemon's own log file.
   wireComponentInstallLogging(eventBus, logger);
-  const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
+  // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
+  // written before it has no stored width of its own, and takes the configured default rather
+  // than a guess derived from its deadline.
+  const registry = await Registry.load({
+    clock,
+    defaultTtlMs: config.lease.defaultTtlMs,
+    eventBus,
+    filesystem,
+    idGenerator,
+    statePath,
+  });
   // Before discovery, because every root a driver validates is checked against it, and it
   // is written exactly once per home and never regenerated (ADR 0001, decision 2).
   const instanceId = await loadInstanceId({
