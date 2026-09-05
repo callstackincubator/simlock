@@ -124,11 +124,13 @@ export class McpSession {
    * cannot answer `lease_status` correctly. */
   #heldLeaseId: string | undefined;
   /**
-   * ADR 0004 §2: the session's half of "held is a client policy" -- the timer that renews
-   * `#heldLeaseId` at a third of its remaining TTL. Non-`undefined` exactly while this session
-   * holds a lease it obtained itself.
+   * ADR 0004 §2: the session's half of "held is a client policy" -- one renew timer per lease
+   * this session obtained, keyed by lease id. Keyed rather than single because nothing here
+   * limits a session to one lease: the daemon's one-lease-per-requester rule is the authority
+   * (ADR 0003 §11), and if it starts allowing two, both have to be kept alive and both have to
+   * be handed back on close. An entry lives exactly as long as this session holds that lease.
    */
-  #renewal: LeaseRenewal | undefined;
+  readonly #renewals = new Map<string, LeaseRenewal>();
   /** Lease ids already announced as lost, so one ending never reaches a listener twice -- see
    * `#announceLeaseLost`. */
   readonly #announcedLost = new Set<string>();
@@ -153,10 +155,10 @@ export class McpSession {
       });
       if (this.#closed) {
         // The session ended while the daemon was provisioning. `close()` does not queue behind
-        // `#mutations`, so it has already stopped renewing and closed the connection: arming a
-        // timer now would leave a closed session renewing on a dead client until the backstop,
-        // and `simlock mcp` (which never calls `process.exit`) alive with it. Hand the device
-        // straight back instead, and fail the call that can no longer be honoured.
+        // `#mutations`, so it has already stopped renewing: arming a timer now would leave a
+        // closed session renewing on a client nobody owns any more, and `simlock mcp` (which
+        // never calls `process.exit`) alive with it. Hand the device straight back instead --
+        // `close()` waits, bounded, for exactly this -- and fail the call it cannot honour.
         await this.#releaseQuietly(client, grant.lease.id);
         this.#throwIfClosed();
       }
@@ -177,10 +179,7 @@ export class McpSession {
       // deadline. A renew that overtakes a *successful* release cannot resurrect anything:
       // `Registry#beginRelease` drops the record, so `lease.renew` can only answer
       // UNKNOWN_LEASE.
-      if (result.leaseId === this.#heldLeaseId) {
-        this.#stopRenewal();
-        this.#heldLeaseId = undefined;
-      }
+      this.#forgetLease(result.leaseId);
       return { ...result, released: true };
     });
   }
@@ -248,23 +247,47 @@ export class McpSession {
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closed = true;
-    this.#stopRenewal();
+    // Whatever a tool call has in flight right now. `#endSession` waits on it (bounded) before
+    // touching the connection, so a `lease()` that lands in that window still has a live wire
+    // to hand its device back on.
+    const inFlight = this.#mutations;
     this.#unwireClient();
     const client = this.#client;
-    const heldLeaseId = this.#heldLeaseId;
+    const heldLeaseIds = [...this.#renewals.keys()];
+    this.#stopAllRenewals();
     this.#heldLeaseId = undefined;
+    this.#announcedLost.clear();
     this.#client = undefined;
     if (this.#connecting !== undefined) {
       void this.#connecting.then((next) => this.#closeClient(next)).catch(noop);
     }
     this.#closePromise =
-      client === undefined ? Promise.resolve() : this.#endSession(client, heldLeaseId);
+      client === undefined ? Promise.resolve() : this.#endSession(client, heldLeaseIds, inFlight);
     return this.#closePromise;
   }
 
-  /** `close()`'s tail: the farewell release (best-effort, bounded), then the connection. */
-  async #endSession(client: SimlockClient, heldLeaseId: string | undefined): Promise<void> {
-    if (heldLeaseId !== undefined) await this.#releaseQuietly(client, heldLeaseId);
+  /**
+   * `close()`'s tail: let the last tool call finish on a live wire, hand every lease back, then
+   * close. The wait is bounded because an in-flight `lease.request` can take minutes and an
+   * ending session cannot wait that long; past the bound the connection closes, the daemon
+   * rejects what was still pending, and any lease that slipped through ends at its deadline.
+   */
+  async #endSession(
+    client: SimlockClient,
+    heldLeaseIds: readonly string[],
+    inFlight: Promise<void>,
+  ): Promise<void> {
+    try {
+      await awaitWithin(
+        this.#clock,
+        RELEASE_TIMEOUT_MS,
+        inFlight,
+        "Timed out waiting for the last tool call to finish",
+      );
+    } catch {
+      // Bounded by design -- see above.
+    }
+    for (const leaseId of heldLeaseIds) await this.#releaseQuietly(client, leaseId);
     await this.#closeClient(client);
   }
 
@@ -295,12 +318,12 @@ export class McpSession {
    * call makes (`#clientForUse`).
    */
   #startRenewal(client: SimlockClient, lease: LeaseRecord): void {
-    this.#stopRenewal();
+    this.#stopRenewal(lease.id);
     // No `onError`: this frontend owns stdout (it is the protocol) and has no side channel a
     // retryable failure could be written to. What the agent has to know is that the lease is
     // over, and that arrives as the `lease-lost` notice `onLeaseGone` raises below (or as the
     // daemon's own push, whichever comes first) rather than as a stream of attempt failures.
-    this.#renewal = startLeaseRenewal({
+    const renewal = startLeaseRenewal({
       clock: this.#clock,
       leaseId: lease.id,
       onLeaseGone: () => {
@@ -316,6 +339,7 @@ export class McpSession {
       renew: (id) => client.renewLease({ leaseId: id }),
       ttlDeadline: lease.ttlDeadline,
     });
+    this.#renewals.set(lease.id, renewal);
   }
 
   /**
@@ -325,9 +349,9 @@ export class McpSession {
    * including ones for leases this session never held; this only ever fires for its own.)
    */
   #reportLeaseLost(notice: LeaseLostNotice): void {
-    if (notice.leaseId !== this.#heldLeaseId) return;
-    this.#stopRenewal();
-    this.#heldLeaseId = undefined;
+    if (!this.#renewals.has(notice.leaseId)) return;
+    this.#stopRenewal(notice.leaseId);
+    if (this.#heldLeaseId === notice.leaseId) this.#heldLeaseId = undefined;
     this.#announceLeaseLost(notice);
   }
 
@@ -342,9 +366,26 @@ export class McpSession {
     for (const listener of this.#leaseLostListeners) listener(notice);
   }
 
-  #stopRenewal(): void {
-    this.#renewal?.stop();
-    this.#renewal = undefined;
+  /** Stops and forgets one lease's renew timer. */
+  #stopRenewal(leaseId: string): void {
+    this.#renewals.get(leaseId)?.stop();
+    this.#renewals.delete(leaseId);
+  }
+
+  #stopAllRenewals(): void {
+    for (const renewal of this.#renewals.values()) renewal.stop();
+    this.#renewals.clear();
+  }
+
+  /**
+   * This session no longer holds `leaseId`: stop renewing it, drop it from `status()`'s answer
+   * if it was the latest, and let its lost-notice bookkeeping go (nothing can announce a lease
+   * that is no longer ours).
+   */
+  #forgetLease(leaseId: string): void {
+    this.#stopRenewal(leaseId);
+    this.#announcedLost.delete(leaseId);
+    if (this.#heldLeaseId === leaseId) this.#heldLeaseId = undefined;
   }
 
   /**
@@ -394,12 +435,10 @@ export class McpSession {
   #wireClient(client: SimlockClient): void {
     this.#clientUnsubscribers = [
       client.onLeaseLost((push) => {
-        if (push.leaseId === this.#heldLeaseId) {
-          // Nothing left to renew: the lease ended elsewhere (expiry, a force-release, or this
-          // connection dying -- the client synthesizes the push for that last one).
-          this.#stopRenewal();
-          this.#heldLeaseId = undefined;
-        }
+        // Nothing left to renew for that lease: it ended elsewhere (expiry, a force-release,
+        // or this connection dying -- the client synthesizes the push for that last one).
+        this.#stopRenewal(push.leaseId);
+        if (this.#heldLeaseId === push.leaseId) this.#heldLeaseId = undefined;
         this.#announceLeaseLost(push);
       }),
       client.onDeviceUnhealthy((push) => {

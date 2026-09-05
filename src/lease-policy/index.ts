@@ -43,6 +43,13 @@ const RENEW_DIVISOR = 3;
 const MINIMUM_RENEW_DELAY_MS = 250;
 
 /**
+ * Ceiling on the scheduled delay: the largest delay a Node timer can express (~24.9 days).
+ * Anything above it silently truncates to 1ms, which would turn a very distant deadline into
+ * exactly the hot loop the floor above exists to prevent. Renewing early costs one round trip.
+ */
+const MAXIMUM_RENEW_DELAY_MS = 2_147_483_647;
+
+/**
  * How long a holder waits for its farewell `lease.release` before giving up and closing the
  * connection anyway. The daemon is a local process answering a local socket, so this is not a
  * latency budget -- it is the bound that keeps an unresponsive daemon from hanging the exit of
@@ -117,12 +124,13 @@ export interface LeaseRenewal {
 
 /** The delay before the next renewal, given how much of the TTL is left. */
 function renewDelayMs(remainingMs: number): number {
-  return Math.max(MINIMUM_RENEW_DELAY_MS, Math.floor(remainingMs / RENEW_DIVISOR));
+  const delay = Math.max(MINIMUM_RENEW_DELAY_MS, Math.floor(remainingMs / RENEW_DIVISOR));
+  return Math.min(MAXIMUM_RENEW_DELAY_MS, delay);
 }
 
 type Attempt =
-  | { readonly ok: true; readonly renewed: RenewedLease }
-  | { readonly ok: false; readonly error: unknown };
+  | { readonly attemptId: number; readonly ok: true; readonly renewed: RenewedLease }
+  | { readonly attemptId: number; readonly ok: false; readonly error: unknown };
 
 /**
  * A rejection that answers "this lease is not yours to renew" rather than "that attempt did
@@ -163,8 +171,8 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
   /** Whichever timer is armed right now: the wait between renewals, or an attempt's bound. */
   let timer: TimerHandle | undefined;
   let stopped = false;
-  /** Attempts are numbered so a late answer can tell whether anything newer has been answered
-   * since (attempts never overlap: one is in flight at a time, by construction). */
+  /** Every attempt is numbered, and every *answer* is applied by that number: two abandoned
+   * attempts can answer in either order, and only the newer one's deadline is the truth. */
   let attempts = 0;
   let newestAnswered = 0;
 
@@ -210,23 +218,26 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     // a late rejection from surfacing as an unhandled rejection.)
     request.then(
       (renewed) => {
-        // Only while no *newer* attempt has been answered, and then only forward: this answer
-        // is older than anything that has happened since, so it may raise a deadline nobody
-        // has since improved on, and never overwrite a fresher one.
+        // Newest answer wins, by attempt number rather than by arrival order or by which
+        // deadline is larger: an older attempt's answer is not "better" for being further
+        // out, it is out of date, and taking it would leave this holder renewing towards a
+        // deadline the daemon has already replaced.
         if (stopped || attemptId <= newestAnswered) return;
-        deadline = Math.max(deadline, renewed.ttlDeadline);
+        newestAnswered = attemptId;
+        deadline = renewed.ttlDeadline;
       },
       () => undefined,
     );
     return Promise.race<Attempt>([
       request.then(
-        (renewed) => ({ ok: true, renewed }),
-        (error: unknown) => ({ error, ok: false }),
+        (renewed) => ({ attemptId, ok: true, renewed }),
+        (error: unknown) => ({ attemptId, error, ok: false }),
       ),
       new Promise<Attempt>((resolve) => {
         timer = clock.setTimer(renewDelayMs(deadline - clock.now()), () => {
           timer = undefined;
           resolve({
+            attemptId,
             error: new Error(`Timed out renewing lease ${leaseId}`),
             ok: false,
           });
@@ -263,9 +274,12 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       return;
     }
 
-    // This attempt is now the newest answer there is, so no request older than it may move the
-    // deadline again (see `attemptRenew`).
-    newestAnswered = attempts;
+    // Applied by this attempt's own number, exactly as a late answer is (`attemptRenew` above
+    // has usually already done it for this very answer; both paths agree).
+    if (attempt.attemptId > newestAnswered) {
+      newestAnswered = attempt.attemptId;
+      deadline = attempt.renewed.ttlDeadline;
+    }
     if (attempt.renewed.ttlDeadline <= clock.now()) {
       // A deadline that is not in the future cannot be renewed towards -- scheduling off it
       // would be a hot loop against a lease that is already over.
@@ -273,10 +287,9 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       report(new Error(`Lease ${leaseId} was renewed to a deadline that has already passed`));
       return;
     }
-    // The daemon's answer is authoritative, in both directions: it may hand back a *shorter*
-    // deadline than the one that was asked for -- a lowered `lease.heldTtlBackstopMs`, a
-    // `ttlMs` it clamped -- and the cadence follows it rather than an older, longer belief.
-    deadline = attempt.renewed.ttlDeadline;
+    // The cadence follows the newest answer in both directions: the daemon may hand back a
+    // *shorter* deadline than the one asked for -- a lowered `lease.heldTtlBackstopMs`, a
+    // `ttlMs` it clamped -- and a longer, older belief does not override it.
     schedule();
   };
 
