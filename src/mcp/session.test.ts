@@ -335,6 +335,30 @@ describe("McpSession", () => {
     expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(1);
   });
 
+  it("does not send a second release for a lease whose release is already in flight", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    let answerRelease!: (result: { leaseId: string }) => void;
+    client.releaseLeaseImpl = () =>
+      new Promise<{ leaseId: string }>((resolve) => {
+        answerRelease = resolve;
+      });
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    // `close()` deliberately does not queue behind the tool-call serializer, so it can land
+    // while a `release_simulator` call is still waiting on the daemon.
+    const releasing = session.release({ leaseId: "lease-1" });
+    await flushMicrotasks();
+    const closing = session.close();
+    answerRelease({ leaseId: "lease-1" });
+    await expect(releasing).resolves.toMatchObject({ leaseId: "lease-1", released: true });
+    await closing;
+
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(1);
+  });
+
   it("keeps renewing when a release fails, because the session still holds the device", async () => {
     const clock = new FakeClock(0);
     const client = new FakeSimlockClient();

@@ -5,8 +5,13 @@ import {
   type LeaseRequestInput,
   type SimlockClient,
 } from "../client/index.js";
-import { startLeaseRenewal, type LeaseRenewal } from "../lease-policy/index.js";
-import type { Clock, TimerHandle } from "../ports/index.js";
+import {
+  awaitWithin,
+  RELEASE_TIMEOUT_MS,
+  startLeaseRenewal,
+  type LeaseRenewal,
+} from "../lease-policy/index.js";
+import type { Clock } from "../ports/index.js";
 import type {
   LeaseSimulatorInput,
   LeaseSimulatorOutput,
@@ -16,15 +21,6 @@ import type {
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
 } from "./contracts.js";
-
-/**
- * How long `close()` waits for its farewell `lease.release` before closing the connection
- * anyway. The daemon is a local process answering a local socket, so this is not a latency
- * budget -- it is the bound that keeps an unresponsive daemon from holding an MCP server's
- * shutdown open forever. Exceeding it costs nothing but the wait: the lease then ends the way
- * every unreleased lease ends, at its deadline.
- */
-const RELEASE_ON_CLOSE_TIMEOUT_MS = 5_000;
 
 export interface McpSessionOptions {
   /**
@@ -132,6 +128,9 @@ export class McpSession {
    * holds a lease it obtained itself.
    */
   #renewal: LeaseRenewal | undefined;
+  /** The lease a `release()` call has in flight right now, so `close()` never sends a second
+   * release for the same lease (it does not queue behind `#mutations`). */
+  #releaseInFlight: string | undefined;
 
   constructor(options: McpSessionOptions) {
     this.#clock = options.clock;
@@ -161,7 +160,16 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      const result = await client.releaseLease(input);
+      // `close()` does not queue behind `#mutations` (see its doc comment), so it can read
+      // `#heldLeaseId` while this release is still in flight. This is how it knows the lease
+      // already has a release on the way and must not get a second one.
+      this.#releaseInFlight = input.leaseId;
+      let result;
+      try {
+        result = await client.releaseLease(input);
+      } finally {
+        this.#releaseInFlight = undefined;
+      }
       // Stopped only once the daemon has actually let the lease go. A release that fails
       // (anything but a dead connection) leaves the session still holding the device, and a
       // session that has stopped renewing a lease it still holds loses that device at the
@@ -241,7 +249,8 @@ export class McpSession {
     this.#stopRenewal();
     this.#unwireClient();
     const client = this.#client;
-    const heldLeaseId = this.#heldLeaseId;
+    // A lease whose release is already in flight is not released again.
+    const heldLeaseId = this.#heldLeaseId === this.#releaseInFlight ? undefined : this.#heldLeaseId;
     this.#heldLeaseId = undefined;
     this.#client = undefined;
     if (this.#connecting !== undefined) {
@@ -256,7 +265,12 @@ export class McpSession {
   async #endSession(client: SimlockClient, heldLeaseId: string | undefined): Promise<void> {
     if (heldLeaseId !== undefined) {
       try {
-        await this.#withReleaseTimeout(client.releaseLease({ leaseId: heldLeaseId }));
+        await awaitWithin(
+          this.#clock,
+          RELEASE_TIMEOUT_MS,
+          client.releaseLease({ leaseId: heldLeaseId }),
+          `Timed out releasing lease ${heldLeaseId}`,
+        );
       } catch {
         // Best-effort by design: the lease may already be gone (expired, force-released), the
         // connection may be dead, or the daemon may not answer. Shutdown continues either way,
@@ -264,23 +278,6 @@ export class McpSession {
       }
     }
     await this.#closeClient(client);
-  }
-
-  /** Rejects once `RELEASE_ON_CLOSE_TIMEOUT_MS` passes, so a dead-but-open socket cannot pin an
-   * MCP server open. The timer is always cancelled, so it never holds the process open itself. */
-  async #withReleaseTimeout(release: Promise<unknown>): Promise<void> {
-    let timer: TimerHandle | undefined;
-    const expiry = new Promise<never>((_resolve, reject) => {
-      timer = this.#clock.setTimer(RELEASE_ON_CLOSE_TIMEOUT_MS, () => {
-        timer = undefined;
-        reject(new McpSessionError("RELEASE_TIMEOUT", "Timed out releasing the session's lease"));
-      });
-    });
-    try {
-      await Promise.race([release, expiry]);
-    } finally {
-      if (timer !== undefined) this.#clock.cancel(timer);
-    }
   }
 
   /**

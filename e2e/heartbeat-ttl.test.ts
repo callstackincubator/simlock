@@ -50,6 +50,10 @@ describe("sliding TTL and heartbeat", () => {
       // detached lease's own (unrelated) TTL knob expires it on the timeline this
       // test already waits on -- detached mode never heartbeats regardless of TTL,
       // it just isn't naturally this short by default.
+      //
+      // heartbeatIntervalMs is no longer what keeps the held leases alive (their holders
+      // renew on their own timer, ADR 0004 §2); it stays here because the config validator
+      // still requires it to be at most heldTtlBackstopMs / 4, and 4_000ms is short.
       configOverrides: {
         lease: { detachedTtlMs: 4_000, heldTtlBackstopMs: 4_000, heartbeatIntervalMs: 800 },
       },
