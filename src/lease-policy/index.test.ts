@@ -104,9 +104,44 @@ describe("startLeaseRenewal", () => {
     expect(calls).toBe(1);
   });
 
-  it("ends renewal on the first failure, reporting it exactly once", async () => {
+  it("retries a failed renewal while the lease can still be saved, and reports every attempt", async () => {
     const clock = new FakeClock(0);
-    const failure = new Error("UNKNOWN_LEASE");
+    const failure = new Error("INTERNAL");
+    const errors: unknown[] = [];
+    const attemptsAt: number[] = [];
+    let failuresLeft = 1;
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      onError: (error) => errors.push(error),
+      renew: () => {
+        attemptsAt.push(clock.now());
+        if (failuresLeft > 0) {
+          failuresLeft -= 1;
+          return Promise.reject(failure);
+        }
+        return Promise.resolve({ ttlDeadline: clock.now() + 3_000 });
+      },
+      ttlDeadline: 3_000,
+    });
+
+    // A daemon that failed to persist one renewal is still willing to serve the next, and the
+    // one-third cadence exists precisely to leave room for the retry.
+    clock.advance(1_000);
+    await flushMicrotasks();
+    expect(attemptsAt).toEqual([1_000]);
+    expect(errors).toEqual([failure]);
+
+    clock.advance(666);
+    await flushMicrotasks();
+    expect(attemptsAt).toEqual([1_000, 1_666]);
+    expect(errors).toHaveLength(1);
+    // The successful retry put the lease back on a full TTL: renewal continues from there.
+    expect(clock.pendingTimerCount).toBe(1);
+  });
+
+  it("gives up once the lease's own deadline has passed", async () => {
+    const clock = new FakeClock(0);
     const errors: unknown[] = [];
     let calls = 0;
     startLeaseRenewal({
@@ -115,20 +150,55 @@ describe("startLeaseRenewal", () => {
       onError: (error) => errors.push(error),
       renew: () => {
         calls += 1;
-        return Promise.reject(failure);
+        return Promise.reject(new Error("DAEMON_CONNECTION_LOST"));
       },
       ttlDeadline: 3_000,
     });
 
-    clock.advance(1_000);
-    await flushMicrotasks();
-    expect(errors).toEqual([failure]);
-    expect(clock.pendingTimerCount).toBe(0);
-
+    // Retries keep shrinking with what is left of the TTL; once the deadline is behind us
+    // there is nothing left to save, and the timer is gone for good.
     clock.advance(60_000);
     await flushMicrotasks();
-    expect(calls, "a failed renewal is not retried on a timer").toBe(1);
+    expect(clock.pendingTimerCount).toBe(0);
+    const attemptsBefore = calls;
+    expect(errors).toHaveLength(attemptsBefore);
+
+    clock.advance(600_000);
+    await flushMicrotasks();
+    expect(calls).toBe(attemptsBefore);
+  });
+
+  it("abandons a renewal the daemon never answers, and retries it", async () => {
+    const clock = new FakeClock(0);
+    const errors: unknown[] = [];
+    let calls = 0;
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      onError: (error) => errors.push(error),
+      renew: () => {
+        calls += 1;
+        // Accepted and never answered: the wire has no request timeout of its own.
+        return new Promise<{ ttlDeadline: number }>(() => {});
+      },
+      ttlDeadline: 9_000,
+    });
+
+    clock.advance(3_000);
+    await flushMicrotasks();
+    expect(calls).toBe(1);
+    expect(errors).toEqual([]);
+
+    // The attempt is bounded by the interval it was scheduled on (2_000ms of the 6_000ms
+    // left), so it does not swallow the rest of the TTL in silence.
+    clock.advance(2_000);
+    await flushMicrotasks();
     expect(errors).toHaveLength(1);
+    expect(calls).toBe(1);
+
+    clock.advance(1_333);
+    await flushMicrotasks();
+    expect(calls).toBe(2);
   });
 
   it("never reports a failure that arrives after stop()", async () => {
@@ -155,18 +225,21 @@ describe("startLeaseRenewal", () => {
     expect(errors).toEqual([]);
   });
 
-  it("still renews a deadline that is already in the past, without becoming a hot loop", async () => {
+  it("tries a deadline that is already in the past once, then stops instead of hot-looping", async () => {
     const clock = new FakeClock(1_000);
     const renewedAt: number[] = [];
-    const renewal = startLeaseRenewal({
+    const errors: unknown[] = [];
+    startLeaseRenewal({
       clock,
       leaseId: "lse_1",
+      onError: (error) => errors.push(error),
       renew: () => {
         renewedAt.push(clock.now());
-        // A daemon that keeps answering with an expired deadline: without the floor this
-        // would renew once per tick forever.
+        // A daemon answering with a deadline that is not in the future -- reachable with
+        // `lease.heldTtlBackstopMs: 0`, which the config validator allows.
         return Promise.resolve({ ttlDeadline: clock.now() });
       },
+      // Already expired at the grant: the floor keeps even this from being an instant loop.
       ttlDeadline: 500,
     });
 
@@ -177,10 +250,11 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(renewedAt).toEqual([1_250]);
 
-    clock.advance(250);
+    // Nothing to renew towards: renewal ends rather than spinning at the floor forever.
+    expect(clock.pendingTimerCount).toBe(0);
+    expect(errors).toHaveLength(1);
+    clock.advance(600_000);
     await flushMicrotasks();
-    expect(renewedAt).toEqual([1_250, 1_500]);
-
-    renewal.stop();
+    expect(renewedAt).toEqual([1_250]);
   });
 });

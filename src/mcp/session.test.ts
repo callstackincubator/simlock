@@ -335,6 +335,41 @@ describe("McpSession", () => {
     expect(client.calls.filter((call) => call.method === "releaseLease")).toHaveLength(1);
   });
 
+  it("keeps renewing when a release fails, because the session still holds the device", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.releaseLeaseImpl = () =>
+      Promise.reject(new SimlockError("INTERNAL", "domain", "could not release", {}));
+    let renewals = 0;
+    client.renewLeaseImpl = (input) => {
+      renewals += 1;
+      return Promise.resolve({
+        deviceId: "device-1",
+        grantedAt: 0,
+        id: input.leaseId,
+        mode: "held" as const,
+        ownerId: "mcp-test",
+        requesterId: "mcp-test",
+        ttlDeadline: clock.now() + 12_000,
+      });
+    };
+    const session = new McpSession({ clock, connect: async () => client });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    await expect(session.release({ leaseId: "lease-1" })).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+
+    // The daemon still has the lease, so the timer that keeps it must still be running --
+    // otherwise the device is reclaimed at the deadline under a session that was told its
+    // release failed.
+    clock.advance(4_115);
+    await flushMicrotasks();
+    expect(renewals).toBe(1);
+    await session.close();
+  });
+
   it("stops renewing a lease that ended elsewhere", async () => {
     const clock = new FakeClock(0);
     const client = new FakeSimlockClient();
