@@ -191,10 +191,10 @@ physical machine.
     worker's clock, gateway or no gateway.
 16. A gateway lease id names its worker, so renew, release, and reads route
     without consulting any state of its own. Clients treat the id as opaque.
-17. `releaseOnDisconnect` (ADR 0004 §3) is honoured at the gateway for its
-    own socket and WebSocket clients: when such a client's connection closes,
-    the gateway releases the lease on the worker. Over HTTP the flag is
-    ignored, as on a worker.
+17. The gateway keeps no per-connection lease state and releases nothing
+    when a client connection closes, exactly as a worker (ADR 0004 §3). A
+    gateway client that stops renewing loses its lease on the worker's
+    clock.
 18. The lease object gains `worker: { id, label }` (additive) so a client and
     the console can tell where the device lives. A worker's network address
     is never exposed: clients reach devices through the gateway (below).
@@ -303,8 +303,8 @@ drive the device it leased.
 30. **Gateway restart.** In-flight requests are lost, exactly as a worker
     restart loses them today. Leases survive on workers; workers reconnect
     on their backoff and the gateway rebuilds every view and its lease index
-    from them. Gateway clients with `releaseOnDisconnect` leases lose them,
-    as they would on a worker restart.
+    from them. Gateway clients keep their leases and simply resume renewing
+    once the gateway answers again.
 31. **Version skew.** `hello` over the uplink negotiates the protocol range
     exactly as over the socket (ADR 0003 §6). A worker outside the gateway's
     range is marked `incompatible` in its view, with both ranges, and is
@@ -331,7 +331,7 @@ drive the device it leased.
 35. Tests: one suite per gateway handler against scripted uplinks and a
     manually-advanced `Clock` (dispatch order and pass-over, stale-view
     `NO_CAPACITY`, drained and disconnected workers, fleet-wide one-lease
-    rule, lease id routing, `releaseOnDisconnect`, reconnect rebuild). One
+    rule, lease id routing, reconnect rebuild). One
     e2e test starts two fake-driver workers and a gateway in one process
     tree and leases through the gateway.
 
@@ -402,8 +402,8 @@ drive the device it leased.
   2. the fleet queue, routing policy, dispatch, `lease.request`/`renew`/
      `release`/`cancel`/`list` forwarding, fleet-wide one-lease rule, lease
      and progress pushes relayed;
-  3. drain semantics, `releaseOnDisconnect` at the gateway,
-     `WORKER_UNREACHABLE` paths, reconnect rebuild, e2e test;
+  3. drain semantics, `WORKER_UNREACHABLE` paths, reconnect rebuild, e2e
+     test;
   4. docs, changelog, and the #88 endpoints.
 
 ## Alternatives considered
@@ -445,6 +445,4 @@ drive the device it leased.
 
 ## Open questions
 
-None outstanding for this record. Lease parameters (default and maximum
-TTL, the CLI's renew cadence and `releaseOnDisconnect` default, the startup
-orphan sweep) are ADR 0004's to settle.
+None outstanding for this record. Lease parameters are settled in ADR 0004.

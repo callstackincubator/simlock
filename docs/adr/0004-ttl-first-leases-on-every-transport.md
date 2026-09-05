@@ -36,22 +36,21 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
 2. **"Held" is a client policy, not a daemon mode.** The CLI's default
    `simlock lease` still prints one result line and stays alive; what it does
    while alive is renew on a timer (one third of the TTL) and release on
-   exit, parent death, or signal. `--detach` means "do not stay alive"; the
-   lease it returns is not a different kind of lease. MCP does the same for
-   the session's lease. Nothing in the daemon knows or cares which policy a
-   client follows.
-3. **Connection close is an optimization, never the liveness mechanism.**
-   `lease.request` gains `releaseOnDisconnect?: boolean` (default `false`).
-   A transport that has a connection (unix socket, a gateway's WebSocket)
-   releases such leases the moment the connection closes, so a crashed CLI
-   holder still frees its device immediately, as today. A transport without
-   one (HTTP) ignores the flag. Either way the TTL is what guarantees the
-   device comes back.
+   exit, parent death, or a catchable signal. `--detach` means "do not stay
+   alive"; the lease it returns is not a different kind of lease. MCP does
+   the same for the session's lease. Nothing in the daemon knows or cares
+   which policy a client follows.
+3. **Connection close means nothing to a lease.** The daemon keeps no
+   per-connection lease state and releases nothing when a connection
+   closes, on any transport. A holder that dies without releasing
+   (`SIGKILL`, a crash, a lost machine) keeps its device until `expiresAt`,
+   which is why the default TTL is short. One mechanism, no exceptions.
 4. **The daemon-initiated heartbeat goes away.** `lease.heartbeat`, the
    `heartbeat` hello capability, `lease.heldTtlBackstopMs`, and
    `lease.heartbeatIntervalMs` are removed. `lease.detachedTtlMs` becomes
-   `lease.defaultTtlMs` (applied when a request carries no `ttlMs`) and a
-   new `lease.maxTtlMs` caps what a request may ask for. `mode` on
+   `lease.defaultTtlMs` (default 15 minutes, applied when a request carries
+   no `ttlMs`) and a new `lease.maxTtlMs` (default 4 hours) caps what a
+   request or renew may ask for; a larger value is `BAD_REQUEST`. `mode` on
    `lease.request` is removed; `ttlMs` is accepted on every request.
 5. **Lease-scoped pushes stay.** `lease-lost`, `device-unhealthy`, and
    `device-recovered` still go to every live connection whose principal owns
@@ -63,24 +62,25 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
 - One code path for expiry, on every frontend; the HTTP gateway's
   "detached-only" special case disappears because there is nothing else.
 - A gateway forwards `lease.renew` to the owning worker and needs no
-  emulation, no timer, and no per-connection state beyond
-  `releaseOnDisconnect`.
-- A held CLI lease that loses its daemon connection without a crash (machine
-  sleep, socket hiccup) now survives until `expiresAt` instead of being
-  released by the daemon on close — unless it asked for
-  `releaseOnDisconnect`, which the CLI's default policy does. Behaviour for
-  the CLI is therefore unchanged; the mechanism is not.
+  emulation, no timer, and no per-connection state at all.
+- A CLI or MCP holder that exits normally still releases at once, because
+  release-on-exit is its own policy. A holder killed with `SIGKILL` or lost
+  with its machine no longer frees its device on socket close; the device
+  sits until `expiresAt`, at most `lease.defaultTtlMs` after the last renew
+  (15 minutes by default, against today's immediate release). This is the
+  one behaviour change a local user can notice, and the price of a single
+  mechanism. A machine-sleep or socket hiccup, conversely, no longer costs a
+  held lease.
+- The daemon's held-lease bookkeeping (the held set kept for
+  release-on-close, ADR 0003 §8) is deleted.
 - Breaking for 0.x: `lease.heartbeat` and `mode` leave the contract;
   three config keys are renamed or removed (`simlock config` warns on the
   old names). `docs/CLI.md`, `docs/CLIENT.md`, `docs/HTTP-API.md`,
   `docs/CONFIGURATION.md`, and `docs/ARCHITECTURE.md` ("Leases") are
   rewritten in the same change.
-- `StartupConverger`'s orphan sweep no longer has "held" leases to release
-  at start; it restores every lease's TTL timer and lets `releaseOnDisconnect`
-  leases whose connection cannot exist any more expire on their deadline —
-  or, simpler and equivalent in effect, releases them immediately as
-  `orphaned`, since a daemon restart provably closed every connection.
-  The second is the proposal.
+- `StartupConverger`'s orphan sweep goes away: there are no held leases to
+  release at start. Startup restores every lease's TTL timer from its
+  persisted deadline, which the detached path already does today.
 
 ## Alternatives considered
 
@@ -91,3 +91,9 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
 - **TTL-first, but keep the daemon ping where the transport allows it.**
   Two liveness mechanisms to keep consistent, for no behaviour the client
   timer does not already give. Rejected.
+- **A `releaseOnDisconnect` request flag** honoured by transports that have
+  a connection, so a killed CLI holder frees its device instantly as today.
+  Considered and rejected: it reintroduces per-connection lease state in
+  the daemon and at every proxy hop, and a second answer to "when does a
+  lease end" that HTTP can never give. A short default TTL is the accepted
+  trade.
