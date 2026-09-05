@@ -101,8 +101,14 @@ physical machine.
    today. A gateway always listens on HTTP (it is the fleet's contact point)
    and on its unix socket (so the local CLI works against it).
 3. A worker joins a fleet with two keys: `gateway.url` and `gateway.token`
-   (a join token), plus an optional `gateway.label` shown in views. Nothing
-   else on the worker changes; `http.enabled` is not required for a worker.
+   (a join token), plus an optional `gateway.label` shown in views and on
+   the lease. Nothing else on the worker changes; `http.enabled` is not
+   required for a worker.
+3a. A worker's fleet id is its existing instance identity
+   (`${SIMLOCK_HOME}/instance.json`): stable across restarts, unique by
+   construction, opaque to clients. Two daemons on one machine have two
+   `SIMLOCK_HOME`s and therefore two ids. `label` is display-only and need
+   not be unique.
 
 ### The uplink
 
@@ -120,8 +126,9 @@ physical machine.
 6. The uplink is the reachability signal. A worker whose uplink is open is
    `connected`; a worker whose uplink is closed is `disconnected` and stays
    in the gateway's views (with its last-known state, greyed) until the
-   operator removes it or a configurable retention elapses. No polling is
-   needed to detect loss.
+   operator removes it or `gateway.disconnectedRetentionMs` (default 24
+   hours) elapses — never while the gateway still knows of gateway-issued
+   leases on it. No polling is needed to detect loss.
 7. On connect the gateway calls `status.get`, `list.get`, `catalog.get`,
    and `events.subscribe` on the worker. It refreshes status and list on
    every worker event that changes capacity or leases, and on a slow
@@ -165,6 +172,10 @@ physical machine.
        (warm hit: sub-second grant);
     3. otherwise the worker with the most free running capacity for that
        platform.
+    No other placement rule exists in v1: no requester affinity, no label
+    selectors, no per-worker platform exclusions. `label` is display-only.
+    Each of those is a future routing policy option, not a change to the
+    request shape.
 14. **One lease per requester is fleet-wide.** A requester holding a
     gateway-issued lease on any worker gets `REQUESTER_ALREADY_LEASED` from
     the gateway, naming the existing lease. The gateway enforces this from
@@ -217,6 +228,12 @@ drive the device it leased.
      unchanged. It parses nothing about the command; ownership is checked at
      the gateway (its own lease index) and again at the worker (the
      forwarded namespaced requester owns the lease there).
+19b'. `device.exec` runs against the worker's filesystem. Getting an
+     artifact there (an `.app`, an `.apk`) is out of scope for v1; it
+     arrives out of band (a shared volume, a CI checkout on the worker). The
+     seam for a later `device.upload` — chunks streamed as request-scoped
+     pushes over the same wire into a per-lease scratch directory deleted
+     on release — is left open by design, not built.
 19c. The CLI's `simlock simctl` / `simlock adb` keep spawning locally with
      inherited stdio when they talk to a worker over its unix socket (an
      interactive `adb shell` keeps working there). Against a gateway or over
@@ -225,6 +242,12 @@ drive the device it leased.
      line-oriented commands work and full-screen ones do not.
 19d. `driver.passthrough` answers `UNSUPPORTED_IN_GATEWAY_MODE` on a
      gateway: a command string the client cannot run is worse than an error.
+19e. Limits: one per-command timeout, `gateway.execTimeoutMs` on the
+     gateway and `exec.timeoutMs` on the worker (both default ten minutes;
+     the worker's is authoritative), after which the process is killed and
+     the operation fails with `EXEC_TIMEOUT`. Output is streamed, never
+     buffered, so there is no size cap. No concurrency cap per lease beyond
+     what the tool itself tolerates.
 
 ### Status, events, catalog
 
@@ -356,9 +379,13 @@ drive the device it leased.
   `worker.*` operations, `device.exec` with its `output` push family, the
   `worker` token role, and error codes `WORKER_UNREACHABLE`,
   `WORKER_CONNECTED`, `UNSUPPORTED_IN_GATEWAY_MODE`. All additive.
-- New config: `mode`, `gateway.url`, `gateway.token`, `gateway.label`
-  (worker side); `gateway.routing`, `gateway.disconnectedRetentionMs`
-  (gateway side).
+- New config: `mode`, `gateway.url`, `gateway.token`, `gateway.label`,
+  `exec.timeoutMs` (worker side); `gateway.routing`,
+  `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs` (gateway
+  side). New error code `EXEC_TIMEOUT`.
+- The two-Mac case runs two daemons on the machine that should do both: a
+  worker and a gateway with distinct `SIMLOCK_HOME`s, the worker joining the
+  gateway over localhost.
 - `docs/HTTP-API.md` gains the `/v1/workers` routes and the uplink endpoint,
   and drops "multi-host brokering" from "Not implemented"; `docs/IDEAS.md`
   drops "Cross-machine coordination"; #88 drops its "one console per daemon"
@@ -418,25 +445,6 @@ drive the device it leased.
 
 ## Open questions
 
-Answers to these change the requirements above, not just the wording.
-
-1. **Worker identity.** Instance id from `instance.json` (proposed, stable
-   across restarts, opaque) or an operator-chosen id that must be unique?
-2. **Disconnected retention.** How long does a disconnected worker stay in
-   views before it is forgotten automatically? Proposal: 24 hours, and
-   never while it still holds gateway-issued leases the gateway knows of.
-3. **Routing constraints.** Any placement rule beyond capacity — pin a
-   requester to a worker, prefer a worker by label (Xcode version, chip),
-   or exclude a platform on a worker? Proposal: none in v1; `label` is
-   display-only.
-4. **Hybrid.** Is "a gateway never owns devices" acceptable for the
-   two-Mac case?
-5. **Files for `device.exec`.** An agent behind the gateway that wants to
-   install an app has no way to put the artifact on the worker. Options:
-   out of scope (proposed for v1; the seam is a later `device.upload`
-   operation streaming chunks over the same wire), or ship a bounded upload
-   in v1.
-6. **`device.exec` limits.** Per-command timeout, maximum output size, and
-   concurrency per lease — proposal: a config-driven timeout defaulting to
-   ten minutes, no output cap (chunks stream, nothing is buffered), and no
-   concurrency cap beyond what the tool itself tolerates.
+None outstanding for this record. Lease parameters (default and maximum
+TTL, the CLI's renew cadence and `releaseOnDisconnect` default, the startup
+orphan sweep) are ADR 0004's to settle.
