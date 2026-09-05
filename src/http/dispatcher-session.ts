@@ -17,13 +17,6 @@ export type HttpDispatch = <Op extends OperationName>(
   session: DispatchSession,
 ) => Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>>;
 
-/** No HTTP request ever holds a lease across calls (every HTTP lease is detached, ADR 0003
- * §2/§9's "the HTTP tracker and notice buffer remain the known stateful leftovers in a
- * frontend" -- held-lease bookkeeping stays a socket-connection concept), so every
- * `DispatchSession` built for an HTTP request shares this same empty, frozen set rather than
- * allocating one per call. */
-const NO_HELD_LEASES: ReadonlySet<string> = new Set();
-
 /** ADR §5's socket roles map onto HTTP's pre-existing bearer-token roles one for one: an
  * `operator` token is what already grants HTTP's admin-only routes (`/v1/leases`,
  * `/v1/devices`, `/v1/events`...), so it resolves to the contract's `"admin"`; an `agent`
@@ -55,8 +48,6 @@ export function buildHttpSession(
   },
 ): DispatchSession {
   return {
-    heartbeatCapability: false,
-    heldLeaseIds: NO_HELD_LEASES,
     manageEventSubscription: extra?.manageEventSubscription ?? (() => undefined),
     principal: identity.requesterId,
     role: toRole(identity.role),

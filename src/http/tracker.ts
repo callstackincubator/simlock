@@ -34,12 +34,13 @@ export interface LeasePayload {
 }
 
 /**
- * `LeaseRecord` has no `createdAt` -- `grantedAt` is its equivalent. `ttlMs` must be supplied
- * by the caller (the tracker's record of what was applied at grant, or the lease's mode
- * default when that record is gone, e.g. after a daemon restart). It is never derived as
- * `ttlDeadline - grantedAt`: `grantedAt` never moves on renewal, so that arithmetic reports
- * grant-age plus TTL rather than the interval actually in force -- `expiresAt` is the
- * authoritative deadline either way. Parameter types are deliberately narrower than the full
+ * `LeaseRecord` has no `createdAt` -- `grantedAt` is its equivalent. `ttlMs` is read straight
+ * off the lease record (ADR 0004: the daemon stores the width a lease was granted with, or
+ * last renewed with), so it survives a daemon restart along with the deadline and this gateway
+ * remembers nothing per request to produce it. It is never derived as `ttlDeadline -
+ * grantedAt`: `grantedAt` never moves on renewal, so that arithmetic reports grant-age plus
+ * TTL rather than the width actually in force -- `expiresAt` is the authoritative deadline
+ * either way. Parameter types are deliberately narrower than the full
  * `DeviceRecord`/`LeaseRecord` (only the fields this function reads): both the dispatcher's
  * `lease.request` output and the core's own `LeaseGrant` satisfy this shape, so this function
  * works unchanged whether the tracker is fed directly or through `dispatch()`.
@@ -47,7 +48,7 @@ export interface LeasePayload {
 export function buildLeasePayload(
   device: HttpLeaseDevice,
   lease: HttpLeaseRecord,
-  extra: { readonly requestId?: string; readonly ttlMs: number },
+  extra: { readonly requestId?: string } = {},
 ): LeasePayload {
   return {
     id: lease.id,
@@ -59,7 +60,7 @@ export function buildLeasePayload(
     deviceId: device.id,
     createdAt: new Date(lease.grantedAt).toISOString(),
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
-    ttlMs: extra.ttlMs,
+    ttlMs: lease.ttlMs,
     dataPlane: null,
     slim: device.featureProfile === "reduced",
   };
@@ -126,8 +127,6 @@ export interface LeaseRequestTrackerOptions {
   readonly dispatch: HttpDispatch;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
-  /** `lease.detachedTtlMs` -- every HTTP lease is detached, so this is the one mode default that applies. */
-  readonly defaultTtlMs: number;
   readonly logger?: Logger;
 }
 
@@ -142,7 +141,6 @@ export class LeaseRequestTracker {
   readonly #requests = new Map<string, TrackedRequest>();
   readonly #idempotency = new Map<string, { requestId: string; timer: TimerHandle }>();
   readonly #leaseRequestId = new Map<string, string>();
-  readonly #leaseTtlMs = new Map<string, number>();
   /**
    * The retention/idempotency-TTL timers `#setState`/`#registerIdempotency` arm below,
    * tracked so `dispose()` can cancel whichever are still outstanding. Without this, a
@@ -210,19 +208,18 @@ export class LeaseRequestTracker {
             platform: body.platform,
             ...(body.os === undefined ? {} : { osVersion: body.os }),
             ...(body.full === undefined ? {} : { full: body.full }),
-            mode: "detached",
             ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
             ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
             ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
-            // ADR §9: the initial TTL travels on the request itself now -- this deletes the old
-            // grant-then-immediately-renew hack (`#applyGrant` below just records what was
-            // actually granted, it never issues a second call to apply it).
+            // ADR 0003 §9: the initial TTL travels on the request itself -- this deletes the
+            // old grant-then-immediately-renew hack. Under ADR 0004 the daemon then stores
+            // that width on the lease, so nothing here has to remember it either.
             ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
           },
           session,
         )
         .then((grant) => {
-          this.#applyGrant(record, grant, body.ttlMs);
+          this.#applyGrant(record, grant);
           settleCreated();
         })
         .catch((error: unknown) => {
@@ -329,26 +326,17 @@ export class LeaseRequestTracker {
     return { kind: "not-cancellable" };
   }
 
-  /** The tracker's own record of the ttl actually applied to a lease it granted (grant or renew). */
-  effectiveTtlMs(leaseId: string): number | undefined {
-    return this.#leaseTtlMs.get(leaseId);
-  }
-
-  /** Updates the tracked ttl after a direct (non-tracker) renew, e.g. `POST /v1/leases/:id/renew`. */
-  recordLeaseTtl(leaseId: string, ttlMs: number): void {
-    this.#leaseTtlMs.set(leaseId, ttlMs);
-  }
-
   requestIdForLease(leaseId: string): string | undefined {
     return this.#leaseRequestId.get(leaseId);
   }
 
-  /** Drops the tracked ttl/request-id bookkeeping for a lease that just ended -- called from the
-   * HTTP app on the same owner-routed fact stream (`OwnerRoutedFacts`, `lease-lost`)
-   * `LeaseNoticeBuffer` consumes, not from a direct `eventBus.subscribe` on this class. */
+  /** Drops the request-id bookkeeping for a lease that just ended -- called from the HTTP app
+   * on the same owner-routed fact stream (`OwnerRoutedFacts`, `lease-lost`) `LeaseNoticeBuffer`
+   * consumes, not from a direct `eventBus.subscribe` on this class. ADR 0004 left this map
+   * alone but deleted the per-lease TTL one that used to sit beside it: the width is on the
+   * lease record now, so there is nothing gateway-side left to forget about it. */
   forgetLease(leaseId: string): void {
     this.#leaseRequestId.delete(leaseId);
-    this.#leaseTtlMs.delete(leaseId);
   }
 
   dispose(): void {
@@ -413,15 +401,10 @@ export class LeaseRequestTracker {
     }
   }
 
-  #applyGrant(record: TrackedRequest, grant: HttpLeaseGrant, ttlMs: number | undefined): void {
-    const effectiveTtlMs = ttlMs ?? this.options.defaultTtlMs;
+  #applyGrant(record: TrackedRequest, grant: HttpLeaseGrant): void {
     this.#leaseRequestId.set(grant.lease.id, record.id);
-    this.#leaseTtlMs.set(grant.lease.id, effectiveTtlMs);
     this.#setState(record, {
-      lease: buildLeasePayload(grant.device, grant.lease, {
-        requestId: record.id,
-        ttlMs: effectiveTtlMs,
-      }),
+      lease: buildLeasePayload(grant.device, grant.lease, { requestId: record.id }),
       stage: "granted",
     });
   }
@@ -480,8 +463,8 @@ interface HttpLeaseDevice {
 interface HttpLeaseRecord {
   readonly id: string;
   readonly grantedAt: number;
+  readonly ttlMs: number;
   readonly ttlDeadline: number;
-  readonly mode?: "held" | "detached";
 }
 
 interface HttpLeaseGrant {
