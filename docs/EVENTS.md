@@ -7,17 +7,15 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 > Status: **planned catalog** — update the Status column as events are
 > implemented, and add new events here in the same change that introduces them.
 
-> **Payload removals in the lease rows are a deliberate one-off exception**
-> to events rule 6 ("treat payload shape as a public contract: additive
-> changes only"). [ADR
-> 0004](adr/0004-ttl-first-leases-on-every-transport.md) deletes the concept
-> `lease.granted`'s `mode` reported, and makes two of `lease.released`'s
-> reasons (`closed`, `orphaned`) unreachable — there is no connection close
-> to release on and no startup sweep to orphan anything. Keeping dead fields
-> and unreachable enum values to honour additive-only would leave the
-> catalogue lying about what a consumer can observe. The exception is taken
-> once, while the project is 0.x and the removal is already breaking for the
-> contract, and it does not loosen the rule for anything else.
+> **The payload removals in the lease rows are a deliberate exception to
+> events rule 6** ("treat payload shape as a public contract: additive
+> changes only"), granted by [ADR
+> 0004](adr/0004-ttl-first-leases-on-every-transport.md) in its Consequences:
+> `lease.granted` loses `mode` and `lease.released` loses the `closed` and
+> `orphaned` reasons, since neither concept exists any more — there is no
+> connection close to release on, and no startup sweep to orphan anything.
+> The ADR takes that exception once, while the package is 0.x; this note
+> records it here so the catalogue does not read as a silent rule violation.
 
 ## Lease lifecycle
 

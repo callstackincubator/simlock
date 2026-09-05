@@ -7,9 +7,9 @@
   0003](0003-one-typed-daemon-contract-behind-every-frontend.md): §3's
   `lease.heartbeat` operation row, §8's `lease.heartbeat` connection-scoped
   push and the held set kept for release-on-close, §9's rule that a `ttlMs`
-  on a held `lease.request` is `BAD_REQUEST`, and §10's `onLeaseLost` firing
-  for each held lease when a connection dies. Also narrows the held/detached
-  split in `docs/CLI.md`.
+  on a held `lease.request` is `BAD_REQUEST`, §10's `onLeaseLost` firing for
+  each held lease when a connection dies, and §10/§11's lazy-only MCP
+  reconnect. Also narrows the held/detached split in `docs/CLI.md`.
 
 ## Context
 
@@ -43,7 +43,14 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
    while alive is renew on a timer (one third of the TTL) and release on
    exit, parent death, or a catchable signal. `--detach` means "do not stay
    alive"; the lease it returns is not a different kind of lease. MCP does
-   the same for the session's lease. Nothing in the daemon knows or cares
+   the same for the session's lease. Its renew timer is what drives its
+   reconnect: when the timer fires against a dead client, the session
+   reconnects to a daemon that is already listening and renews, instead of
+   waiting for the next tool call and letting its own lease expire while
+   idle. The timer never launches a daemon; auto-launch stays a tool-call
+   concern (an operator's `daemon stop` must not be undone by an idle
+   session), so a lease held across a stopped daemon expires unless the
+   daemon is back before its deadline. Nothing in the daemon knows or cares
    which policy a client follows.
 3. **Connection close means nothing to a lease.** The daemon keeps no
    per-connection lease state and releases nothing when a connection
@@ -78,6 +85,11 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
   held lease.
 - The daemon's held-lease bookkeeping (the held set kept for
   release-on-close, ADR 0003 §8) is deleted.
+- `lease.granted` loses `mode` and `lease.released` loses the `closed` and
+  `orphaned` reasons, since neither concept exists any more. This is a
+  deliberate exception to `docs/agent-rules/events.md` rule 6 (additive
+  payloads only), taken once while the package is 0.x; `EVENTS.md` notes
+  it.
 - Breaking for 0.x: `lease.heartbeat` and `mode` leave the contract;
   three config keys are renamed or removed (`simlock config` warns on the
   old names). `docs/CLI.md`, `docs/CLIENT.md`, `docs/HTTP-API.md`,

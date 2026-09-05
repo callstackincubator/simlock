@@ -37,27 +37,26 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   leasing and releasing for an agent session. The HTTP gateway is different in
   kind, not just transport: it is the one frontend meant to be reached over a
   real network, so it calls the daemon's dispatcher **in-process** — the exact
-  same one the socket path calls — rather than going through the unix socket
-  at all, and requires a bearer token on every route but `GET /v1/healthz`.
-  It grants exactly the same TTL-renewed lease every other frontend does
-  (ADR 0004) — being reachable over a real network is no longer a reason for
-  a different lease model, because there is only one. Its listener now starts
-  right after the socket claim, the same moment the unix socket itself
-  starts accepting connections and before
-  startup convergence runs (`DaemonServer`'s `onSocketClaimed` hook, see
-  "Startup: claim first, converge after" below) — a bug fix from the pre-ADR
-  gateway, which started only once convergence had already finished and so
-  never needed to park anything. A request that arrives before convergence
-  completes now waits on the shared dispatcher's readiness gate exactly like
-  a socket request, instead of being refused. See [HTTP-API.md](HTTP-API.md)
-  for the full route reference.
+  same one the socket path calls — rather than going through the unix socket at
+  all, and requires a bearer token on every route but `GET /v1/healthz`. It
+  grants exactly the same TTL-renewed lease every other frontend does (ADR
+  0004) — being reachable over a real network is no longer a reason for a
+  different lease model, because there is only one. Its listener now starts
+  right after the socket claim, the same moment the unix socket itself starts
+  accepting connections and before startup convergence runs (`DaemonServer`'s
+  `onSocketClaimed` hook, see "Startup: claim first, converge after" below) — a
+  bug fix from the pre-ADR gateway, which started only once convergence had
+  already finished and so never needed to park anything. A request that arrives
+  before convergence completes now waits on the shared dispatcher's readiness
+  gate exactly like a socket request, instead of being refused. See
+  [HTTP-API.md](HTTP-API.md) for the full route reference.
 - **CLI**: by default it acquires a lease, prints one JSON result line on
-  stdout, then stays alive — renewing the lease at one third of the remaining
-  TTL and releasing it on exit, parent death, or `SIGINT`/`SIGTERM`. That is
-  the CLI's own policy over an ordinary TTL lease, not a daemon mode: the
+  stdout, then stays alive — renewing the lease at one third of the lease's TTL
+  and releasing it on exit, parent death, or `SIGINT`/`SIGTERM`. That is the
+  CLI's own policy over an ordinary TTL lease, not a daemon mode: the
   connection itself holds nothing (ADR 0004). `--detach` skips the staying
-  alive; the lease it prints is the same lease. Progress streams as JSON
-  lines on stderr.
+  alive; the lease it prints is the same lease. Progress streams as JSON lines
+  on stderr.
 - **stdio MCP server**: its process owns one agent session and exposes MCP over
   stdin/stdout. `McpSession` (`src/mcp/session.ts`) holds one `simlock/client`
   connection at a time and does nothing today's typed client does not already
@@ -66,26 +65,32 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   `lease.list` call rather than a session-local cache, and a release the
   session does not own surfaces the daemon's own `FORBIDDEN` rather than a
   client-side guard pre-empting it. Like the CLI, the session runs a renew
-  timer over its lease and releases it when the process ends — its own
-  policy, not something the connection does. Like the CLI, it relays the
-  daemon's progress pushes for the in-flight `lease_simulator`
-  request — as MCP `notifications/progress` instead of stderr JSON lines, and
-  only when the client supplied a progress token. Unlike the CLI, this
-  process outlives any single daemon connection: the typed client itself
-  never reconnects (ADR §10), so `McpSession` builds a brand new one lazily,
-  on the next tool call, once its current client's `onConnectionLost` fires
-  — auto-starting the daemon exactly as the CLI does
-  (`connectWithAutoLaunch`, `src/mcp/connect.ts`), and never on a version
-  mismatch or a refused handshake, only on "nothing is listening". Under ADR
-  0004 that reconnect is **eager, driven by the renew timer** rather than
-  lazy: when the timer fires against a dead client, `McpSession` rebuilds one
-  immediately, renews, and continues, instead of waiting for the next tool
-  call — a session that waited would let its own lease expire between tool
-  calls, which is exactly what the timer exists to prevent. The lease itself
-  survives the reconnect untouched (the daemon released nothing when the old
-  connection died), so the new client picks the same lease back up
-  (`lease.list` tells it which) rather than treating a dead connection as a
-  lost device and requesting a second one.
+  timer over its lease and releases it when the process ends — its own policy,
+  not something the connection does. Like the CLI, it relays the daemon's
+  progress pushes for the in-flight `lease_simulator` request — as MCP
+  `notifications/progress` instead of stderr JSON lines, and only when the
+  client supplied a progress token. Unlike the CLI, this process outlives any
+  single daemon connection: the typed client itself never reconnects (ADR §10),
+  so `McpSession` builds a brand new one lazily, once its current client's
+  `onConnectionLost` fires. ADR 0004 narrows ADR 0003 §10/§11's lazy-only
+  reconnect to two triggers with deliberately different powers:
+
+  - **On a tool call**, as before — auto-starting the daemon exactly as the
+    CLI does (`connectWithAutoLaunch`, `src/mcp/connect.ts`), and never on a
+    version mismatch or a refused handshake, only on "nothing is listening".
+  - **On the renew timer**, which is new: when the timer fires against a
+    dead client, the session reconnects to a daemon that is **already
+    listening** and renews, instead of waiting for a tool call that may not
+    come and letting its own lease expire while the session sits idle. This
+    trigger never launches a daemon. Auto-launch stays a tool-call concern
+    so an operator's `simlock daemon stop` cannot be undone by an idle
+    session, which means a lease held across a stopped daemon expires unless
+    the daemon is back before its deadline.
+
+  Either way the lease survives the reconnect untouched — the daemon
+  released nothing when the old connection died — so the new client picks
+  the same lease back up (`lease.list` tells it which) rather than treating a
+  dead connection as a lost device and requesting a second one.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 
@@ -200,9 +205,12 @@ client-declared role. How a caller supplies it, in resolution order: the
 `admin.token` file (CLI, briefly retried to ride out a daemon still writing
 it). **The CLI connects as admin whenever the local `admin.token` file is
 readable** — that's what keeps `simlock lease --detach` followed later by
-`simlock release <id>` working across two separate CLI invocations with
-different pid-derived identities, since both connect as admin and admin
-bypasses the per-connection ownership check that would otherwise apply.
+`simlock lease renew <id>` or `simlock release <id>` working across separate
+CLI invocations with different pid-derived identities, since all of them
+connect as admin and admin bypasses the per-connection ownership check that
+would otherwise apply. Renewing someone else's lease is an ownership
+question, not a read: a plain agent-role invocation can only renew a lease
+its own principal was granted.
 When none of the four sources resolves (a different OS user, or the file
 genuinely missing), the CLI falls back to an agent-role session with a
 one-line stderr notice, and `simlock lease`'s output JSON includes the
@@ -298,17 +306,16 @@ lease it finds, and re-arms retry timers for devices still `quarantined` (see
 below) from their persisted next-retry deadline. A lease survives a daemon
 restart because a lease's liveness was never the daemon connection to begin
 with (ADR 0004). The *holder* does not survive it in the same way: the typed
-client never reconnects (ADR 0003 §10), so a running `simlock lease` exits
-`1` when the old daemon goes away and something has to renew the lease from a
-new invocation before its deadline. What the restart no longer does is decide
-the question for you by releasing the lease outright. There is no orphan
-sweep at startup — nothing about a restart proves a holder is dead, so
-nothing is released on the strength of it. A lease whose deadline already
-passed while no daemon was running expires as soon as one is, through the
-ordinary expiry path. It then recovers unleased
-interrupted reclaims through the warm-pool recovery port — a backgrounded
-reclaim marks its device with a `reclaim` operation claim for exactly this
-reason, so this step can tell it
+client never reconnects (ADR 0003 §10), so a running `simlock lease` exits `1`
+when the old daemon goes away and something has to renew the lease from a new
+invocation before its deadline. What the restart no longer does is decide the
+question for you by releasing the lease outright. There is no orphan sweep at
+startup — nothing about a restart proves a holder is dead, so nothing is
+released on the strength of it. A lease whose deadline already passed while no
+daemon was running expires as soon as one is, through the ordinary expiry path.
+`StartupConverger` then recovers unleased interrupted reclaims through the
+warm-pool recovery port — a backgrounded reclaim marks its device with a
+`reclaim` operation claim for exactly this reason, so this step can tell it
 apart from one truly orphaned by a *previous* crash (unclaimed, since claims
 never survive a restart) rather than cutting it short — and finally
 deterministically shuts down excess unleased, unclaimed `ready` registry
@@ -413,54 +420,55 @@ There is **one kind of lease**, on every transport ([ADR
 
 - **A lease is a TTL and nothing else.** Every lease carries `ttlMs` and a
   `ttlDeadline` (`expiresAt` in HTTP bodies), set at grant from the request's
-  `ttlMs` or from `lease.defaultTtlMs`, and capped at `lease.maxTtlMs` —
-  asking for more is `BAD_REQUEST`, not a silent clamp. `LeaseLifecycle`
-  arms one expiry timer per lease and re-arms it on renew through
+  `ttlMs` or from `lease.defaultTtlMs`, and capped at `lease.maxTtlMs` — asking
+  for more is `BAD_REQUEST`, not a silent clamp. `LeaseLifecycle` arms one
+  expiry timer per lease and re-arms it on renew through
   `registry.renewLease()` (not a direct `expiryScheduler.replace()`), so the
   persisted deadline never goes stale and a restart mid-lease restores the
   renewed deadline rather than the grant-time one. The record stores its
   `ttlMs` too — the width it was granted with, or last renewed with when a
-  renew named one — because a body-less renew re-applies that width rather
-  than falling back to `lease.defaultTtlMs`. It also carries
-  `lastRenewedAt`, a **stored** field written at grant and on every renew,
-  which is what `simlock status` renders as "last renewed". That is a new
-  field rather than a rename of `lastHeartbeatAt`: the old one was never
-  stored at all, it was derived at the dispatcher as
-  `ttlDeadline - heldTtlBackstopMs`, and that arithmetic cannot survive
-  per-lease TTLs.
+  renew named one — because a body-less renew re-applies that width rather than
+  falling back to `lease.defaultTtlMs`. It also carries `lastRenewedAt`, a
+  **stored** field written at grant and on every renew, which is what `simlock
+  status` renders as "last renewed". That is a new field rather than a rename
+  of `lastHeartbeatAt`: the old one was never stored at all, it was derived at
+  the dispatcher as `ttlDeadline - heldTtlBackstopMs`, and that arithmetic
+  cannot survive per-lease TTLs.
 - **The only thing that keeps a lease alive is `lease.renew`.** It is an
   ordinary client-initiated operation, so it works identically on the unix
   socket, over HTTP, over MCP, and through a gateway that forwards it to the
   owning worker. There is no daemon-initiated heartbeat, no capability to
   declare, and no second deadline behind the first.
 - **Connection close means nothing to a lease.** The daemon keeps no
-  per-connection lease state and releases nothing when a connection closes,
-  on any transport. Nothing is swept at daemon startup either — a restart
-  does not prove a holder is dead. So a gateway hop, a suspended laptop, or a
-  daemon upgrade costs a client its stream and not its device. It can still
-  cost the client: the typed client does not reconnect (ADR 0003 §10), so a
-  `simlock lease` holder exits `1` on a dead connection and something has to
-  renew that still-standing lease from a new connection before its deadline.
-  The lease outliving the connection is the daemon's guarantee; picking it
-  back up is the frontend's job.
-- **"Holding" is a frontend policy over that one lease.** `simlock lease`
-  and the MCP session both renew at one third of the lease's TTL — sending no
-  TTL of their own, so every renew re-applies the lease's stored `ttlMs` and
-  the deadline keeps its original width — and release on exit; the CLI holder
-  additionally watches its parent through
-  the `ParentWatch` port and self-terminates if it dies, so a crashed
-  agent's backgrounded `simlock lease` cannot outlive it by getting
-  reparented — see [known-pitfalls.md](known-pitfalls.md). `--detach` is the
-  absence of that policy, not a different lease. The daemon neither knows
-  nor cares which policy a client follows.
-- **The cost of that simplicity, stated once:** a holder killed with
-  `SIGKILL`, or lost with its machine, runs no release, so its device stays
-  leased until the deadline — at most the lease's own TTL after its last
-  renew: `lease.defaultTtlMs` unless the request asked for more, never more
-  than `lease.maxTtlMs`. A short default TTL is the bound, deliberately
-  chosen over reintroducing per-connection lease state that HTTP and a
-  gateway could never honour anyway (ADR 0004, "Alternatives considered").
-  See
+  per-connection lease state and releases nothing when a connection closes, on
+  any transport. Nothing is swept at daemon startup either — a restart does not
+  prove a holder is dead. So a gateway hop, a suspended laptop, or a daemon
+  upgrade costs a client its stream and not its device. It can still cost the
+  client: the typed client does not reconnect (ADR 0003 §10), so a `simlock
+  lease` holder exits `1` on a dead connection and something has to renew that
+  still-standing lease from a new connection before its deadline. The lease
+  outliving the connection is the daemon's guarantee; picking it back up is the
+  frontend's job.
+- **"Holding" is a frontend policy over that one lease.** `simlock lease` and
+  the MCP session both renew at one third of the lease's TTL — sending no TTL
+  of their own, so every renew re-applies the lease's stored `ttlMs` and the
+  deadline keeps its original width — and release on exit. A renew that fails
+  transiently on a live connection is simply retried on the next tick; one
+  answered `UNKNOWN_LEASE` means the daemon has already ended the lease, and
+  the holder stops exactly as a `lease-lost` push would stop it. The CLI holder
+  additionally watches its parent through the `ParentWatch` port and
+  self-terminates if it dies, so a crashed agent's backgrounded `simlock lease`
+  cannot outlive it by getting reparented — see
+  [known-pitfalls.md](known-pitfalls.md). `--detach` is the absence of that
+  policy, not a different lease. The daemon neither knows nor cares which
+  policy a client follows.
+- **The cost of that simplicity, stated once:** a holder killed with `SIGKILL`,
+  or lost with its machine, runs no release, so its device stays leased until
+  the deadline — at most the lease's own TTL after its last renew:
+  `lease.defaultTtlMs` unless the request asked for more, never more than
+  `lease.maxTtlMs`. A short default TTL is the bound, deliberately chosen over
+  reintroducing per-connection lease state that HTTP and a gateway could never
+  honour anyway (ADR 0004, "Alternatives considered"). See
   [known-pitfalls.md](known-pitfalls.md#a-sigkilled-lease-holder-keeps-its-device-until-the-ttl-expires).
 - One lease per agent in v1; no atomic multi-device acquisition (documented
   deadlock risk if two devices are taken sequentially).

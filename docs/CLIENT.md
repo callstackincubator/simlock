@@ -104,9 +104,14 @@ device), and a dropped socket is not one.
 Reconnect policy is deliberately a frontend's own concern, not something
 this client can make a universal decision about:
 
-- **MCP** keeps a lazy reconnect, because its process outlives any single
-  connection — the next tool call after a dead connection builds a brand new
-  client (see `src/mcp/session.ts`, `src/mcp/connect.ts`).
+- **MCP** reconnects, because its process outlives any single connection,
+  on either of two triggers (see `src/mcp/session.ts`, `src/mcp/connect.ts`).
+  A tool call after a dead connection builds a brand new client and may
+  auto-launch a daemon that is not running. Its renew timer builds one too,
+  so an idle session does not lose its lease waiting for a call that never
+  comes — but that trigger only ever connects to a daemon that is already
+  listening, never launches one, so an operator's `daemon stop` is not undone
+  by an idle session.
 - **The CLI** needs none, and deliberately still does not have one under
   ADR 0004. A `simlock lease` holder's lease outlives its connection, but the
   holder itself does not: it writes a `DAEMON_CONNECTION_LOST` line naming

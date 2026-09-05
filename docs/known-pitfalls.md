@@ -328,12 +328,18 @@ the daemon's core:
 
 **The pitfall:** both reset on a daemon restart (in-memory, no persistence),
 and both are HTTP-specific reimplementations of "track something about a
-request/lease across calls" that the socket frontends don't need because
-they hold a live connection instead. A daemon restart loses in-flight
-lease-request tracking state and buffered notices the same way it always
-did pre-ADR 0003 — see [Lifecycle semantics](HTTP-API.md#lifecycle-semantics)
-for the documented recovery loop (`404` → re-request → maybe `409` → `GET`),
-which exists specifically because the tracker does not survive a restart.
+request/lease across calls". The socket frontends need neither, but not because
+a connection holds anything — under ADR 0004 it holds nothing. They need
+neither because a socket client is *there* when the fact happens: the daemon
+pushes a device-health fact to whatever connections own the lease at that
+moment, and a request's progress rides the call that made it. A polling HTTP
+client is absent between calls by construction, so something has to hold the
+fact until it comes back, and today that something lives in the frontend. A
+daemon restart loses in-flight lease-request tracking state and buffered
+notices the same way it always did pre-ADR 0003 — see [Lifecycle
+semantics](HTTP-API.md#lifecycle-semantics) for the documented recovery loop
+(`404` → re-request → maybe `409` → `GET`), which exists specifically because
+the tracker does not survive a restart.
 
 **Status:** known, and explicitly called out as the ADR's own unfinished
 seam, not an oversight: "the HTTP tracker and notice buffer remain the known

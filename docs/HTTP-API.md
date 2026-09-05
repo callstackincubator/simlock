@@ -72,7 +72,14 @@ enforced per-resource rather than as a role gate.
 ## Endpoints
 
 All routes are under `/v1`, JSON bodies both ways, additive evolution only —
-new fields, never removed or repurposed ones.
+new fields, never removed or repurposed ones. [ADR
+0004](adr/0004-ttl-first-leases-on-every-transport.md) makes one break in
+that rule, called out where it applies below: a `ttlMs` above
+`lease.maxTtlMs` is now `400 BAD_REQUEST` where it used to be accepted, and
+the `ttlMs` a lease reports is now always the lease's own width rather than a
+value the gateway remembered per request. No field is added or removed; two
+change meaning, which is why they are stated rather than left to be
+discovered.
 
 ### `GET /v1/healthz`
 
@@ -108,15 +115,14 @@ Role: `agent`. Enqueues a device request.
 
 `platform` and `device` are required; `os` defaults to the newest installed
 runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
-above `lease.maxTtlMs`; `timeoutMs` (optional) is
-enforced daemon-side so a vanished client can't hold a queue slot forever.
-`full` (optional, default `false`) opts this request out of iOS slim mode —
-platform-neutral in shape, but only the iOS driver acts on it (as "do not
-slim"); Android ignores it. A `full: true` request never matches, and never
-shares a pool key with, a slim device, so it can wait for a fresh device to
-provision or force a re-provision of one already running, even while slim
-devices sit idle in the warm pool. See [CONFIGURATION.md](CONFIGURATION.md)
-for what slim mode disables.
+above `lease.maxTtlMs`; `timeoutMs` (optional) is enforced daemon-side so a
+vanished client can't hold a queue slot forever. `full` (optional, default
+`false`) opts this request out of iOS slim mode — platform-neutral in shape,
+but only the iOS driver acts on it (as "do not slim"); Android ignores it. A
+`full: true` request never matches, and never shares a pool key with, a slim
+device, so it can wait for a fresh device to provision or force a re-provision
+of one already running, even while slim devices sit idle in the warm pool. See
+[CONFIGURATION.md](CONFIGURATION.md) for what slim mode disables.
 
 `allowDownload` is now clamped through `config.downloads.policy` the same
 way the socket protocol always was (**bug fix, 0.3.0**): before this
@@ -268,7 +274,12 @@ Role: `agent` (own lease). Server-Sent Events for live health pushes on this
 lease: `device_unhealthy`, `device_recovered`, `lease_lost` (ends the
 stream). The same facts a running `simlock lease` relays on stderr. Losing
 this stream tells you nothing about the lease — it is still yours until
-`expiresAt`; reconnect, or read the same facts from `renew`'s `notices`.
+`expiresAt`; reconnect, or read the health facts from `renew`'s `notices`.
+
+`lease_lost` is the one fact `notices` cannot carry: it ends the lease, so
+there is nothing left to renew and nothing to drain the buffer on. A polling
+client learns it the other way round — the next `POST /v1/leases/{id}/renew`
+against an ended lease answers `404 UNKNOWN_LEASE`.
 
 ### `DELETE /v1/leases/{id}`
 

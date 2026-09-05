@@ -184,15 +184,19 @@ nothing renews it. It is the only thing keeping the lease alive — there is
 no second mechanism behind it. The lease also stores the `ttlMs` it was
 granted with, which is what a renew re-applies unless one names a new TTL.
 
-Then the process stays alive, and while it is alive it does two things for
-you. It **renews** the lease every third of the lease's TTL, sending no TTL
-of its own, so each renew re-applies the lease's own `ttlMs` and the deadline
-keeps moving out at its original width for as long as the process is there.
-And it **releases** on the way out: on a normal exit, on `SIGINT`/`SIGTERM`,
-and on parent death — it watches its parent (the pid captured at startup, or
-`--bind-pid`) and releases and exits on its own the moment that parent is
-gone, so a crashed or killed agent's backgrounded `lease` does not outlive
-it.
+Then the process stays alive, and while it is alive it does two things for you.
+It **renews** the lease every third of the lease's TTL, sending no TTL of its
+own, so each renew re-applies the lease's own `ttlMs` and the deadline keeps
+moving out at its original width for as long as the process is there. A renew
+that fails with a transient error while the connection is still alive is not
+fatal — the next tick retries it, and there is a whole TTL of slack to retry
+inside. A renew answered `UNKNOWN_LEASE` is different: the daemon has already
+ended the lease, so the holder exits `14` exactly as a `lease-lost` push would
+have ended it. And it **releases** on the way out: on a normal exit, on
+`SIGINT`/`SIGTERM`, and on parent death — it watches its parent (the pid
+captured at startup, or `--bind-pid`) and releases and exits on its own the
+moment that parent is gone, so a crashed or killed agent's backgrounded `lease`
+does not outlive it.
 
 Release-on-exit is this process's own policy, not something the daemon
 enforces. A holder that is `SIGKILL`ed, or whose machine disappears, cannot
@@ -213,8 +217,11 @@ one error line naming the lease and its deadline, and exits `1`:
 ```
 
 Nothing was released. The lease is still granted to you on the daemon, still
-counting down, and a later `simlock lease renew <lease-id>` from any
-invocation picks it straight back up. This is not exit `14`: `14` means the
+counting down, and a later `simlock lease renew <lease-id>` picks it straight
+back up — from a different invocation only when that invocation resolves an
+admin credential (see [Admin credential
+resolution](#admin-credential-resolution)), since the lease's owner is the
+session that was granted it. This is not exit `14`: `14` means the
 daemon ended the lease while the connection was alive, which is a different
 thing to have to handle.
 
@@ -235,8 +242,8 @@ field list — this is the one vocabulary every frontend (CLI, MCP, HTTP, the
 `simlock/client` package) now shares.
 
 Progress streams on stderr and reflects only the action selected for that
-request. A queued request reports its position
-without speculative work stages; reclaiming work is reported separately:
+request. A queued request reports its position without speculative work stages;
+reclaiming work is reported separately:
 
 ```json
 {"push":"progress","stage":"queued","queuePosition":1}
@@ -266,12 +273,11 @@ stderr stream:
 
 `device-unhealthy` means the device stopped running outside simlock and a
 reboot is in progress under the same lease; `device-recovered` means that
-reboot passed readiness. The lease itself is untouched by either — it is
-still yours, still on its TTL, and must still be released the normal way.
-Recovery can instead
-give up (the device vanished, its provenance no longer checks out, or reboot
-attempts ran out); giving up is not itself one of these lines — it ends the
-lease, which surfaces as the same line any other lease loss does:
+reboot passed readiness. The lease itself is untouched by either — it is still
+yours, still on its TTL, and must still be released the normal way. Recovery
+can instead give up (the device vanished, its provenance no longer checks out,
+or reboot attempts ran out); giving up is not itself one of these lines — it
+ends the lease, which surfaces as the same line any other lease loss does:
 
 ```json
 {"push":"lease-lost","leaseId":"lse_9f2c","deviceId":"dev_1a2b","reason":"device-lost"}
@@ -423,18 +429,19 @@ startup to recover.
 
 ## `simlock mcp`
 
-Start Simlock's local stdio MCP server. It accepts no flags. Standard output
-is reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The
-server auto-starts the daemon when needed and exposes the focused
-`list_devices`, `lease_simulator`, `release_simulator`, and `lease_status`
-tool surface for one agent session. The session renews its lease on a timer
-and releases it when the process ends, the same policy `simlock lease`
+Start Simlock's local stdio MCP server. It accepts no flags. Standard output is
+reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The server
+auto-starts the daemon when needed and exposes the focused `list_devices`,
+`lease_simulator`, `release_simulator`, and `lease_status` tool surface for one
+agent session. `lease_simulator` accepts the contract's optional `ttlMs` —
+defaulting to `lease.defaultTtlMs` and `BAD_REQUEST` above `lease.maxTtlMs`,
+the same rule every other frontend gets — and the session renews that lease on
+a timer and releases it when the process ends, the same policy `simlock lease`
 follows. If that session's lease ends elsewhere (expiry or a force-release),
 the server relays it as an MCP logging notification. A `lease_simulator` call
-that carries a `_meta.progressToken`
-gets queue/provisioning/boot progress relayed as MCP `notifications/progress`
-for that request. See [../README.md](../README.md#mcp-integration-optional)
-for details.
+that carries a `_meta.progressToken` gets queue/provisioning/boot progress
+relayed as MCP `notifications/progress` for that request. See
+[../README.md](../README.md#mcp-integration-optional) for details.
 
 The requester identity for leases made through this server is
 `SIMLOCK_AGENT_ID`, falling back to a pid-derived value — see
@@ -496,12 +503,11 @@ and `list --devices` well before it crosses the threshold that would make
 
 Human-oriented overview: daemon health, managed capacity (used/limit per
 platform), running and reserved capacity (globally and per platform), every
-managed device with its state, current leases (who — the agent id, see
-[Agent identity](#agent-identity) — since when, and when each was last
-renewed), and queue depth. `--json`
-for the structured equivalent. `overLimit` is true when a lowered limit
-cannot yet be met, for example because active leases consume all running
-slots.
+managed device with its state, current leases (who — the agent id, see [Agent
+identity](#agent-identity) — since when, and when each was last renewed), and
+queue depth. `--json` for the structured equivalent. `overLimit` is true when a
+lowered limit cannot yet be met, for example because active leases consume all
+running slots.
 
 ## `simlock list [--devices|--leases|--rules]`
 
@@ -537,11 +543,10 @@ each rule *would* take (rule name, target, reason) without executing.
 ## `simlock doctor [--fix] [--purge-orphans] [--yes]`
 
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
-running emulator processes): report orphaned processes, registry entries
-whose device vanished, devices booted outside simlock, expired leases whose
-device is still marked `leased`, devices stuck mid-transition, and orphans.
-`--fix` applies the safe
-corrections.
+running emulator processes): report orphaned processes, registry entries whose
+device vanished, devices booted outside simlock, expired leases whose device is
+still marked `leased`, devices stuck mid-transition, and orphans. `--fix`
+applies the safe corrections.
 
 An **orphan** is a device sitting inside a Simlock device root with no registry
 record — almost always a daemon that died between creating a device and writing
@@ -612,21 +617,20 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 
 ## `simlock daemon <start|stop|status|logs>`
 
-Manage the daemon explicitly. Other commands auto-start it on demand;
-`daemon` exists for operators and debugging. `stop` does not touch leases:
-they persist, and the next daemon restores each one's TTL timer from its
-deadline. What a stop does end is the connections to it — a running `simlock
-lease` cannot reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line
-naming a lease that is still granted; renew it from a later invocation once
-the daemon is back. A lease whose deadline passed while no daemon was running
-expires as soon as one is. `logs` tails daemon logs and
-works even when the daemon is dead — it reads the log file directly, no
-connection attempted. `status` never auto-starts the daemon and distinguishes
-two failure shapes: `{"status":"stopped"}` when nothing is listening on the
-socket at all, versus `{"status":"handshake-refused","error":{"code":...}}`
-(exit 1) when a daemon answered but refused the connection (a bad admin
-credential, or a protocol version mismatch) — the two used to be reported
-identically as "stopped".
+Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
+exists for operators and debugging. `stop` does not touch leases: they persist,
+and the next daemon restores each one's TTL timer from its deadline. What a
+stop does end is the connections to it — a running `simlock lease` cannot
+reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
+that is still granted; renew it from a later invocation once the daemon is
+back. A lease whose deadline passed while no daemon was running expires as soon
+as one is. `logs` tails daemon logs and works even when the daemon is dead — it
+reads the log file directly, no connection attempted. `status` never
+auto-starts the daemon and distinguishes two failure shapes:
+`{"status":"stopped"}` when nothing is listening on the socket at all, versus
+`{"status":"handshake-refused","error":{"code":...}}` (exit 1) when a daemon
+answered but refused the connection (a bad admin credential, or a protocol
+version mismatch) — the two used to be reported identically as "stopped".
 
 The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields) covering startup (version,

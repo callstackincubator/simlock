@@ -14,7 +14,7 @@ a warning. Inspect the effective, merged configuration at any time with
 | `warmPool.quarantine.retryBackoffMs` | Delay before the first quarantine purge retry.                                                                                                                                                                            | `30 seconds`                                                     |
 | `warmPool.quarantine.retryBackoffMultiplier` | Growth factor applied to the backoff after each failed retry.                                                                                                                                                     | `2`                                                               |
 | `warmPool.quarantine.maxRetryBackoffMs` | Cap on the quarantine retry backoff.                                                                                                                                                                                   | `5 minutes`                                                      |
-| `lease.defaultTtlMs`              | TTL applied to a lease whose `lease.request` carried no `ttlMs`, and to a `lease renew` given no explicit TTL. A lease not renewed before its deadline expires and its device is reclaimed.                                  | `15 minutes`                                                    |
+| `lease.defaultTtlMs`              | TTL applied to a lease whose `lease.request` carried no `ttlMs` — **that request only**. It is *not* the renew fallback: a renew given no explicit TTL re-applies the lease's own stored width, so a lease granted for longer keeps it. A lease not renewed before its deadline expires and its device is reclaimed. | `15 minutes`                                                    |
 | `lease.maxTtlMs`                  | Largest TTL a request or a renew may ask for. A larger `ttlMs` is rejected with `BAD_REQUEST` rather than silently clamped, so a caller is never left believing it has more time than it does.                               | `4 hours`                                                       |
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`.                                                                              | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
@@ -49,9 +49,12 @@ integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 `lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
-`lease.defaultTtlMs` must be `<=` `lease.maxTtlMs` — a config that violates
-either rule is rejected when it loads, naming the offending key, rather than
-being clamped to something the operator did not write.
+`lease.defaultTtlMs` must be `<=` `lease.maxTtlMs`. A config that violates
+either rule is **rejected at load and the daemon does not start**, naming the
+offending key — it is not clamped to something the operator did not write.
+That is the opposite treatment from the retired keys below, which are only
+warned about and ignored: an unrecognized key is a leftover, while a TTL pair
+that contradicts itself has no safe interpretation to fall back on.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
 
