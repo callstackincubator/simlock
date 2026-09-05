@@ -1334,6 +1334,160 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
   });
 });
 
+/**
+ * ADR 0004 §2: held mode is a client policy -- this process renews on a timer at a third of the
+ * remaining TTL and releases explicitly, rather than ponging a daemon push and relying on the
+ * socket closing. The wire is untouched in this slice (`mode: "held"` still goes out); what is
+ * asserted here is the CLI's own behaviour while it holds.
+ */
+describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
+  /** Lets `runLease` get past `requestLease` and arm its timer before the clock is advanced. */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("renews at a third of the TTL the daemon returned, re-deriving the cadence from each renewal", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const renewals: Array<{ leaseId: string; at: number }> = [];
+    let released: string | undefined;
+    const client = fakeClient({
+      renewLease: (input) => {
+        renewals.push({ at: clock.now(), leaseId: input.leaseId });
+        // Half the grant's TTL comes back, so the next renewal must be half as far out too.
+        return Promise.resolve({
+          deviceId: "dev_1",
+          grantedAt: 0,
+          id: input.leaseId,
+          mode: "held",
+          ownerId: "test-requester",
+          requesterId: "test-requester",
+          ttlDeadline: clock.now() + 30_000,
+        });
+      },
+      releaseLease: (input) => {
+        released = input.leaseId;
+        return Promise.resolve({ leaseId: input.leaseId });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock,
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+
+    // The grant's deadline is 60_000, so the first renewal is due at 20_000 -- and not before.
+    clock.advance(19_999);
+    await settle();
+    expect(renewals).toEqual([]);
+    clock.advance(1);
+    await settle();
+    expect(renewals).toEqual([{ at: 20_000, leaseId: "lse_1" }]);
+
+    // 30_000ms of TTL came back at 20_000, so the next renewal is at 30_000, not at 40_000.
+    clock.advance(10_000);
+    await settle();
+    expect(renewals).toEqual([
+      { at: 20_000, leaseId: "lse_1" },
+      { at: 30_000, leaseId: "lse_1" },
+    ]);
+
+    signals.emit("SIGINT");
+    expect(await runPromise).toBe(0);
+    // The release is the CLI's own call, not a side effect of the socket closing.
+    expect(released).toBe("lse_1");
+    // And the timer is gone with it: no renewal can race the release, and nothing keeps the
+    // process alive after the command returns.
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    expect(renewals).toHaveLength(2);
+  });
+
+  it("declares no heartbeat capability at hello, in either mode (ADR 0004 §4)", async () => {
+    const output = outputCapture();
+    const declared: Array<boolean | undefined> = [];
+    const environment = output.environmentWith({
+      connectAdmin: async (_resolveCredential, options) => {
+        declared.push(options?.heartbeat);
+        return fakeClient();
+      },
+    });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      environment,
+    );
+    expect(declared).toEqual([false]);
+  });
+
+  it("arms no renew timer for --detach: it prints and exits, exactly as before", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let renewed = 0;
+    const client = fakeClient({
+      renewLease: () => {
+        renewed += 1;
+        return Promise.reject(new Error("--detach must not renew"));
+      },
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    expect(renewed).toBe(0);
+  });
+
+  it("stops renewing when the lease is lost, and still does not re-release it", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let leaseLostListener:
+      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
+      | undefined;
+    let renewed = 0;
+    let released = false;
+    const client = fakeClient({
+      onLeaseLost: (listener) => {
+        leaseLostListener = listener;
+        return () => {};
+      },
+      renewLease: (input) => {
+        renewed += 1;
+        return Promise.resolve({
+          deviceId: "dev_1",
+          grantedAt: 0,
+          id: input.leaseId,
+          mode: "held",
+          ownerId: "test-requester",
+          requesterId: "test-requester",
+          ttlDeadline: clock.now() + 60_000,
+        });
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+    leaseLostListener?.({ deviceId: "dev_1", leaseId: "lse_1", reason: "ttl-backstop" });
+
+    expect(await runPromise).toBe(14);
+    expect(released).toBe(false);
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    expect(renewed).toBe(0);
+  });
+});
+
 describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
   it("does not load the MCP stdio module unless the mcp command runs", async () => {
     const output = outputCapture();
@@ -1640,6 +1794,8 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
       const stdoutOut = { write: (value: string) => (capture.stdout += value) };
       if (ports === undefined) {
         return {
+          // Overridable through `environmentWith({ clock })` -- see the renew-cadence suite.
+          clock: new FakeClock(0),
           configPath: "/simlock/config.json",
           requesterId: "test-requester",
           now: () => 0,

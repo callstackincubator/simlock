@@ -33,6 +33,7 @@ import {
 } from "../admin/index.js";
 import type { Role } from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
+import { startLeaseRenewal } from "../lease-policy/index.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 
@@ -106,6 +107,11 @@ type McpStdioRunner = () => Promise<void>;
  * one connection helper instead of two.
  */
 export interface CliEnvironment {
+  /**
+   * The `Clock` port (architecture rule 9). Held mode's renew timer runs on it, so a test can
+   * drive the cadence by hand instead of waiting out a real TTL.
+   */
+  readonly clock: Clock;
   readonly configPath: string;
   /** ADR §4's requester default and this connection's fixed principal -- see §9's
    * "SIMLOCK_AGENT_ID and --agent-id still set the requester id ... they are not the
@@ -378,6 +384,7 @@ export function buildCliEnvironment(
   };
 
   return {
+    clock,
     configPath,
     requesterId,
     now: () => clock.now(),
@@ -697,7 +704,11 @@ async function runLease(
     ? undefined
     : waitForTermination(environment.signals, environment.parentWatch, watchedPid);
 
-  const client = await connectDaemonClient(environment, token, { heartbeat: !detached });
+  // ADR 0004 §2/§4: held mode is a client policy now -- this process renews on its own timer
+  // (below) instead of ponging the daemon's push, so neither mode declares the heartbeat
+  // capability any more. The daemon still has the push, and still slides a lease for any
+  // connection that asks for it; this one no longer asks.
+  const client = await connectDaemonClient(environment, token, { heartbeat: false });
   // Set once the daemon says this connection's lease ended without us asking. ADR 0003 §8:
   // lease-scoped pushes go to every live connection sharing the lease's owner, in either mode
   // -- filtered below against this connection's own granted lease id, the same way the
@@ -750,12 +761,37 @@ async function runLease(
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult(environment, result);
     if (detached || termination === undefined) return 0;
-    await Promise.race([termination.settled, leaseLostSignal]);
+    // ADR 0004 §2: what a held holder does while alive is renew on a timer at a third of the
+    // TTL -- computed from the deadline the daemon just returned, not from a config value this
+    // process does not have. `--detach` returned above: it stays exactly as it was, printing
+    // and exiting with no timer at all.
+    const renewal = startLeaseRenewal({
+      clock: environment.clock,
+      leaseId: grant.lease.id,
+      ttlDeadline: grant.lease.ttlDeadline,
+      renew: (leaseId) => client.renewLease({ leaseId }),
+      // A renewal that fails has ended this holder's claim (see `startLeaseRenewal`); it is
+      // diagnostic output, on the same structured stderr channel as a failed release, and it
+      // does not by itself end the process -- the lease-lost push or the daemon's own expiry
+      // is what decides that.
+      onError: (error) => writeError(environment, error),
+    });
+    try {
+      await Promise.race([termination.settled, leaseLostSignal]);
+    } finally {
+      // Before the release below, and before any early return: a renew must never race the
+      // release of the lease it is renewing.
+      renewal.stop();
+    }
     if (leaseLost) {
       // The daemon already released it; asking again would only raise UNKNOWN_LEASE.
       return LEASE_LOST_EXIT_CODE;
     }
     try {
+      // ADR 0004 §2/§3: the release a held holder owes on exit, parent death, or a catchable
+      // signal is this call -- not the socket closing in the `finally` below. The daemon still
+      // releases on close today (PR B removes that), so this is the path that will still be
+      // here when nothing else is.
       await client.releaseLease({ leaseId: grant.lease.id });
     } catch (error: unknown) {
       // Non-fatal: the process still exits 0 after a signal, but the release
