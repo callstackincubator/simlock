@@ -17,6 +17,7 @@
  * every renewal since), never from a TTL config value: a client does not have the daemon's
  * config, and the daemon is free to hand back a shorter deadline than the one asked for.
  */
+import { isSimlockError } from "../contract/index.js";
 import type { Clock, TimerHandle } from "../ports/index.js";
 
 /** ADR 0004 §2's "one third of the TTL". */
@@ -78,10 +79,19 @@ export interface LeaseRenewalOptions {
   /** Calls `lease.renew` for this lease -- `client.renewLease({ leaseId })`, in practice. */
   readonly renew: (leaseId: string) => Promise<RenewedLease>;
   /**
-   * Reports every failed attempt, and the failure that finally ends renewal. Never called
-   * after `stop()`.
+   * Reports every failed attempt that is worth retrying, and the failure that finally ends
+   * renewal. Never called after `stop()`, and never for the terminal answers `onLeaseGone`
+   * covers.
    */
   readonly onError?: (error: unknown) => void;
+  /**
+   * The lease is over: the daemon answered that it does not exist (`UNKNOWN_LEASE`) or is not
+   * this principal's (`FORBIDDEN`). Renewal has already stopped by the time this runs, and
+   * retrying would only repeat the same answer -- so a holder should treat this exactly like
+   * the `lease-lost` push (ADR 0003 §8) it may or may not also receive: stop holding, and do
+   * not try to release what is no longer there. Called at most once.
+   */
+  readonly onLeaseGone?: (error: unknown) => void;
 }
 
 export interface LeaseRenewal {
@@ -104,6 +114,17 @@ type Attempt =
   | { readonly ok: false; readonly error: unknown };
 
 /**
+ * A rejection that answers "this lease is not yours to renew" rather than "that attempt did
+ * not work". Both codes are the daemon's final word: `UNKNOWN_LEASE` means the record is gone
+ * (expired, released, force-released), `FORBIDDEN` that it belongs to another principal
+ * (`ownsLease` in `src/contract/operations.ts`). Retrying either just prints the same answer
+ * until the deadline.
+ */
+function isLeaseGone(error: unknown): boolean {
+  return isSimlockError(error) && (error.code === "UNKNOWN_LEASE" || error.code === "FORBIDDEN");
+}
+
+/**
  * Starts renewing `leaseId` at a third of the remaining TTL, rescheduling off each renewal's
  * own returned deadline, until `stop()`.
  *
@@ -116,13 +137,16 @@ type Attempt =
  * `lease-lost` handler (ADR 0003 §10), which is the signal that actually means "this lease is
  * over"; the retries in between are cheap and bounded by the deadline.
  *
- * Each attempt is bounded by the same interval it was scheduled on, so a daemon that accepts
- * `lease.renew` and never answers costs one interval rather than the whole lease: the wire has
- * no request timeout of its own, and an abandoned request cannot slide the deadline anywhere
- * but forward.
+ * Each attempt is bounded by a third of what is left of the TTL when it starts, so a daemon
+ * that accepts `lease.renew` and never answers costs one interval rather than the whole lease:
+ * the wire has no request timeout of its own, and an abandoned request cannot slide the
+ * deadline anywhere but forward.
+ *
+ * A daemon answering `UNKNOWN_LEASE` or `FORBIDDEN` is not a failed attempt at all -- the lease
+ * is over, or was never this holder's -- so renewal stops at once and `onLeaseGone` says so.
  */
 export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
-  const { clock, leaseId, onError, renew } = options;
+  const { clock, leaseId, onError, onLeaseGone, renew } = options;
   /** The last deadline the daemon actually gave us -- the only input to the cadence. */
   let deadline = options.ttlDeadline;
   /** Whichever timer is armed right now: the wait between renewals, or an attempt's bound. */
@@ -136,15 +160,16 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
   };
 
   /** Isolated: a holder that cannot report a failure must still keep holding. */
-  const report = (error: unknown): void => {
-    if (onError === undefined) return;
+  const notify = (listener: ((error: unknown) => void) | undefined, error: unknown): void => {
+    if (listener === undefined) return;
     try {
-      onError(error);
+      listener(error);
     } catch {
       // A `stderr` that throws (a closed pipe, say) must not take the release path down with
       // it -- see the `void tick()` below, which nothing awaits.
     }
   };
+  const report = (error: unknown): void => notify(onError, error);
 
   const schedule = (): void => {
     if (stopped) return;
@@ -156,9 +181,12 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     });
   };
 
-  /** One renewal attempt, bounded by the interval it was scheduled on. */
+  /** One renewal attempt, bounded by a third of what is left of the TTL when it starts. */
   const attemptRenew = async (): Promise<Attempt> => {
-    const request = renew(leaseId);
+    // `Promise.resolve().then` rather than a bare call: a `renew` that throws *synchronously*
+    // (a client that rejects a malformed input before it ever reaches the wire) is a failed
+    // attempt like any other, not something that should escape into the unawaited `tick()`.
+    const request = Promise.resolve().then(() => renew(leaseId));
     // An abandoned request still reaches the daemon: if it succeeds after this attempt has
     // been given up on, its deadline is real and worth keeping -- discarding it would let the
     // give-up test below fire against a deadline the daemon has already moved. (It also keeps
@@ -195,6 +223,13 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     if (stopped) return;
 
     if (!attempt.ok) {
+      if (isLeaseGone(attempt.error)) {
+        // Terminal, not transient: this lease is over, and the holder needs to hear that once
+        // rather than read the same rejection on every retry until the deadline.
+        stopped = true;
+        notify(onLeaseGone, attempt.error);
+        return;
+      }
       report(attempt.error);
       // Out of runway: the lease is gone (or about to be), and another attempt would only
       // produce another error. Reported separately from the attempt that failed, because

@@ -93,18 +93,9 @@ interface Output {
   write(value: string): unknown;
 }
 
-/**
- * ADR 0004 §2's "a catchable signal", enumerated: the two a holder is asked to stop with, plus
- * `SIGHUP` -- what a closing terminal sends, and the likeliest way a backgrounded holder dies
- * short of `SIGKILL`. All three take the same path: stop renewing, release, exit.
- */
-const TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
-
-type TerminationSignal = (typeof TERMINATION_SIGNALS)[number];
-
 interface Signals {
-  on(signal: TerminationSignal, listener: () => void): unknown;
-  off(signal: TerminationSignal, listener: () => void): unknown;
+  on(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
 }
 
 type McpStdioRunner = () => Promise<void>;
@@ -733,11 +724,16 @@ async function runLease(
   const leaseLostSignal = new Promise<void>((resolve) => {
     notifyLeaseLost = resolve;
   });
+  /** The lease ended without this process asking: stop waiting, skip the release it can no
+   * longer perform, and exit with the lost-lease code. */
+  const markLeaseLost = (): void => {
+    leaseLost = true;
+    notifyLeaseLost?.();
+  };
   const offLeaseLost = client.onLeaseLost((push) => {
     if (push.leaseId !== ourLeaseId) return;
     environment.stderr.write(`${JSON.stringify({ push: "lease-lost", ...push })}\n`);
-    leaseLost = true;
-    notifyLeaseLost?.();
+    markLeaseLost();
   });
   const offUnhealthy = client.onDeviceUnhealthy((push) => {
     environment.stderr.write(`${JSON.stringify({ push: "device-unhealthy", ...push })}\n`);
@@ -817,11 +813,17 @@ async function runLease(
       leaseId: grant.lease.id,
       ttlDeadline: grant.lease.ttlDeadline,
       renew: (leaseId) => client.renewLease({ leaseId }),
-      // A failed attempt is retried until the lease's deadline (see `startLeaseRenewal`), so
-      // this is diagnostic output on the same structured stderr channel as a failed release,
-      // not an exit condition: the lease-lost push or the daemon's own expiry is what decides
-      // when this process stops holding.
+      // A retryable attempt failed (see `startLeaseRenewal`): diagnostic output on the same
+      // structured stderr channel as a failed release, and not an exit condition -- the lease
+      // is still this process's until something says otherwise.
       onError: (error) => writeError(environment, error),
+      // Something did say otherwise: the daemon answered that this lease is gone or not ours.
+      // Same ending as the `lease-lost` push -- exit 14, and no farewell release for a lease
+      // that would only answer UNKNOWN_LEASE again.
+      onLeaseGone: (error) => {
+        writeError(environment, error);
+        markLeaseLost();
+      },
     });
     await Promise.race([termination.settled, leaseLostSignal]);
     // The daemon already released a lost lease; `releaseHeldLease` skips it for that reason.
@@ -1565,10 +1567,12 @@ function waitForTermination(
       resolve();
     };
     detach = () => {
-      for (const signal of TERMINATION_SIGNALS) signals.off(signal, finish);
+      signals.off("SIGINT", finish);
+      signals.off("SIGTERM", finish);
       watchHandle?.stop();
     };
-    for (const signal of TERMINATION_SIGNALS) signals.on(signal, finish);
+    signals.on("SIGINT", finish);
+    signals.on("SIGTERM", finish);
     watchHandle =
       parentWatch !== undefined && parentPid !== undefined && parentPid > 0
         ? parentWatch.watch(parentPid, finish)

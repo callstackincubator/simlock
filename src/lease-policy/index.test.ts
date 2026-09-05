@@ -5,12 +5,20 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { SimlockError } from "../contract/index.js";
 import { FakeClock } from "../ports/index.js";
-import { startLeaseRenewal } from "./index.js";
+import { awaitWithin, RELEASE_TIMEOUT_MS, startLeaseRenewal } from "./index.js";
 
 /** Lets the awaited `renew` call settle; the fake clock never moves on its own. */
 async function flushMicrotasks(times = 10): Promise<void> {
   for (let index = 0; index < times; index += 1) await Promise.resolve();
+}
+
+/** The daemon's two "this lease is not yours to renew" answers, with their real detail shapes. */
+function leaseGoneError(code: "UNKNOWN_LEASE" | "FORBIDDEN"): SimlockError {
+  return code === "UNKNOWN_LEASE"
+    ? new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lse_1" })
+    : new SimlockError("FORBIDDEN", "protocol", "not your lease", {});
 }
 
 describe("startLeaseRenewal", () => {
@@ -104,6 +112,68 @@ describe("startLeaseRenewal", () => {
     clock.advance(60_000);
     await flushMicrotasks();
     expect(calls).toBe(1);
+  });
+
+  it.each(["UNKNOWN_LEASE", "FORBIDDEN"] as const)(
+    "treats %s as the end of the lease, not a failed attempt",
+    async (code) => {
+      const clock = new FakeClock(0);
+      const gone: unknown[] = [];
+      const errors: unknown[] = [];
+      let calls = 0;
+      startLeaseRenewal({
+        clock,
+        leaseId: "lse_1",
+        onError: (error) => errors.push(error),
+        onLeaseGone: (error) => gone.push(error),
+        renew: () => {
+          calls += 1;
+          return Promise.reject(leaseGoneError(code));
+        },
+        ttlDeadline: 30_000,
+      });
+
+      clock.advance(10_000);
+      await flushMicrotasks();
+
+      expect(gone).toHaveLength(1);
+      expect(gone[0]).toMatchObject({ code });
+      expect(errors, "a lease that is over is not a retryable failure").toEqual([]);
+      expect(clock.pendingTimerCount).toBe(0);
+
+      clock.advance(600_000);
+      await flushMicrotasks();
+      expect(calls, "and it is never retried").toBe(1);
+    },
+  );
+
+  it("reports and retries a renew that throws synchronously", async () => {
+    const clock = new FakeClock(0);
+    const errors: unknown[] = [];
+    const attemptsAt: number[] = [];
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      onError: (error) => errors.push(error),
+      renew: () => {
+        attemptsAt.push(clock.now());
+        // A client that validates its input before it ever reaches the wire throws here
+        // rather than rejecting; that must not escape into the unawaited tick.
+        if (attemptsAt.length === 1) throw new Error("BAD_REQUEST");
+        return Promise.resolve({ ttlDeadline: clock.now() + 3_000 });
+      },
+      ttlDeadline: 3_000,
+    });
+
+    clock.advance(1_000);
+    await flushMicrotasks();
+    expect(attemptsAt).toEqual([1_000]);
+    expect((errors[0] as Error).message).toBe("BAD_REQUEST");
+
+    clock.advance(666);
+    await flushMicrotasks();
+    expect(attemptsAt).toEqual([1_000, 1_666]);
+    expect(clock.pendingTimerCount).toBe(1);
   });
 
   it("retries a failed renewal while the lease can still be saved, and reports every attempt", async () => {
@@ -244,8 +314,8 @@ describe("startLeaseRenewal", () => {
     expect(calls).toBe(1);
     expect(errors).toEqual([]);
 
-    // The attempt is bounded by the interval it was scheduled on (2_000ms of the 6_000ms
-    // left), so it does not swallow the rest of the TTL in silence.
+    // The attempt is bounded by a third of what is left of the TTL when it starts (2_000ms of
+    // the 6_000ms remaining at 3_000), so it does not swallow the rest of the TTL in silence.
     clock.advance(2_000);
     await flushMicrotasks();
     expect(errors).toHaveLength(1);
@@ -311,5 +381,54 @@ describe("startLeaseRenewal", () => {
     clock.advance(600_000);
     await flushMicrotasks();
     expect(renewedAt).toEqual([1_250]);
+  });
+});
+
+/**
+ * The bound both frontends put on their farewell `lease.release`: an unresponsive daemon may
+ * cost a holder the wait, never its exit.
+ */
+describe("awaitWithin", () => {
+  it("resolves with the work and leaves no timer behind", async () => {
+    const clock = new FakeClock(0);
+
+    await expect(
+      awaitWithin(clock, RELEASE_TIMEOUT_MS, Promise.resolve({ leaseId: "lse_1" }), "too slow"),
+    ).resolves.toEqual({ leaseId: "lse_1" });
+    // A live timer here would keep a real process alive for the whole bound after the work
+    // it was guarding had already finished.
+    expect(clock.pendingTimerCount).toBe(0);
+  });
+
+  it("rejects with the given message once the bound passes, and cleans up after itself", async () => {
+    const clock = new FakeClock(0);
+    const bounded = awaitWithin(
+      clock,
+      RELEASE_TIMEOUT_MS,
+      new Promise<void>(() => {}),
+      "Timed out releasing lease lse_1",
+    );
+    await flushMicrotasks();
+    expect(clock.pendingTimerCount).toBe(1);
+
+    clock.advance(RELEASE_TIMEOUT_MS - 1);
+    await flushMicrotasks();
+    expect(clock.pendingTimerCount).toBe(1);
+
+    clock.advance(1);
+    await expect(bounded).rejects.toThrow("Timed out releasing lease lse_1");
+    expect(clock.pendingTimerCount).toBe(0);
+  });
+
+  it("propagates the work's own rejection rather than waiting out the bound", async () => {
+    const clock = new FakeClock(0);
+    const failure = new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", {
+      leaseId: "lse_1",
+    });
+
+    await expect(
+      awaitWithin(clock, RELEASE_TIMEOUT_MS, Promise.reject(failure), "too slow"),
+    ).rejects.toBe(failure);
+    expect(clock.pendingTimerCount).toBe(0);
   });
 });

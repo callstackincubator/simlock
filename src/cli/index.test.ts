@@ -41,6 +41,7 @@ import type {
   TokenListOutput,
 } from "../simlock-client/client.js";
 import { connectSimlockAdmin } from "../admin/index.js";
+import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import {
   buildCliEnvironment,
   errorExitCode,
@@ -1436,7 +1437,7 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
     expect(declared).toEqual([false, false]);
   });
 
-  it.each(["SIGHUP", "SIGINT", "SIGTERM"] as const)(
+  it.each(["SIGINT", "SIGTERM"] as const)(
     "releases explicitly on %s (ADR 0004 §2's catchable signals)",
     async (signal) => {
       const output = outputCapture();
@@ -1502,6 +1503,65 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
     signals.emit("SIGINT");
     expect(await runPromise).toBe(0);
     expect(released).toBe("lse_1");
+  });
+
+  it("exits 14 without a farewell release when a renewal is answered UNKNOWN_LEASE", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let released = false;
+    let renewals = 0;
+    const client = fakeClient({
+      renewLease: () => {
+        renewals += 1;
+        return Promise.reject(
+          new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lse_1" }),
+        );
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+    clock.advance(20_000);
+
+    // The daemon's answer is final: this ends the same way the lease-lost push does, rather
+    // than repeating the rejection until the deadline and then sitting alive.
+    expect(await runPromise).toBe(14);
+    expect(released, "asking again would only raise UNKNOWN_LEASE").toBe(false);
+    expect(renewals).toBe(1);
+    expect(clock.pendingTimerCount).toBe(0);
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "{}")).toEqual({
+      error: { code: "UNKNOWN_LEASE", message: "no such lease" },
+    });
+  });
+
+  it("gives up on a farewell release the daemon never answers, instead of hanging", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const client = fakeClient({ releaseLease: () => new Promise(() => {}) });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock,
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    signals.emit("SIGINT");
+    await settle();
+
+    clock.advance(RELEASE_TIMEOUT_MS);
+
+    expect(await runPromise).toBe(0);
+    expect(output.stderr).toContain("Timed out releasing lease lse_1");
+    expect(clock.pendingTimerCount).toBe(0);
   });
 
   it("still releases the lease when printing the grant throws (--export-env with a bad key)", async () => {
