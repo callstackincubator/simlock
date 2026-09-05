@@ -62,6 +62,8 @@ simlock lease --platform ios --device "iPhone 16" --detach
     "requesterId": "agent-1",
     "ownerId": "agent-1",
     "grantedAt": 1735689600000,
+    "ttlMs": 900000,
+    "lastRenewedAt": 1735689600000,
     "ttlDeadline": 1735690500000
   },
   "timing": {
@@ -106,6 +108,8 @@ the lease result lands on stdout the moment the new device is ready:
     "requesterId": "agent-2",
     "ownerId": "agent-2",
     "grantedAt": 1735689630000,
+    "ttlMs": 900000,
+    "lastRenewedAt": 1735689630000,
     "ttlDeadline": 1735690530000
   },
   "timing": {

@@ -211,8 +211,8 @@ connect as admin and admin bypasses the per-connection ownership check that
 would otherwise apply. Renewing someone else's lease is an ownership
 question, not a read: a plain agent-role invocation can only renew a lease
 its own principal was granted.
-When none of the four sources resolves (a different OS user, or the file
-genuinely missing), the CLI falls back to an agent-role session with a
+When none of the CLI's three sources resolves (a different OS user, or the
+file genuinely missing), the CLI falls back to an agent-role session with a
 one-line stderr notice, and `simlock lease`'s output JSON includes the
 connection's resolved `role` so a caller can tell which one it got.
 

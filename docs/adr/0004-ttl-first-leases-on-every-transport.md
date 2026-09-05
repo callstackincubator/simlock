@@ -41,7 +41,10 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
 2. **"Held" is a client policy, not a daemon mode.** The CLI's default
    `simlock lease` still prints one result line and stays alive; what it does
    while alive is renew on a timer (one third of the TTL) and release on
-   exit, parent death, or a catchable signal. `--detach` means "do not stay
+   exit, parent death, or a catchable signal. A transient renew failure is
+   retried on the next tick; a renew answered `UNKNOWN_LEASE` means the
+   daemon already ended the lease, and a holder exits the way a `lease-lost`
+   push ends it. `--detach` means "do not stay
    alive"; the lease it returns is not a different kind of lease. MCP does
    the same for the session's lease. Its renew timer is what drives its
    reconnect: when the timer fires against a dead client, the session

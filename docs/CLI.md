@@ -179,7 +179,7 @@ default, so a bare `simctl` or `adb` will not find them. See
 The full line, with every field the contract defines:
 
 ```json
-{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","grantedAt":1735689600000,"ttlDeadline":1735690500000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
+{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","grantedAt":1735689600000,"ttlMs":900000,"lastRenewedAt":1735689600000,"ttlDeadline":1735690500000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
 ```
 
 `lease.ttlDeadline` is the moment the daemon will expire this lease if
@@ -441,15 +441,14 @@ startup to recover.
 
 Start Simlock's local stdio MCP server. It accepts no flags. Standard output is
 reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The server
-auto-starts the daemon when needed and exposes the focused `list_devices`,
-`lease_simulator`, `release_simulator`, and `lease_status` tool surface for one
-agent session. The server auto-starts the daemon when needed, on a tool call;
-its renew timer reconnects only to a daemon that is already listening, and
-never launches one. `lease_simulator` accepts the contract's optional `ttlMs` —
-defaulting to `lease.defaultTtlMs` and `BAD_REQUEST` above `lease.maxTtlMs`,
-the same rule every other frontend gets — and the session renews that lease on
-a timer and releases it when the process ends, the same policy `simlock lease`
-follows. If that session's lease ends elsewhere (expiry or a force-release),
+exposes the focused `list_devices`, `lease_simulator`, `release_simulator`, and
+`lease_status` tool surface for one agent session. The server auto-starts the
+daemon when needed, on a tool call; its renew timer reconnects only to a
+daemon that is already listening, and never launches one. `lease_simulator`
+accepts the contract's optional `ttlMs` — defaulting to `lease.defaultTtlMs`
+and `BAD_REQUEST` above `lease.maxTtlMs`, the same rule every other frontend
+gets — and the session renews that lease on a timer and releases it when the
+process ends, the same policy `simlock lease` follows. If that session's lease ends elsewhere (expiry or a force-release),
 the server relays it as an MCP logging notification. A `lease_simulator` call
 that carries a `_meta.progressToken` gets queue/provisioning/boot progress
 relayed as MCP `notifications/progress` for that request. See

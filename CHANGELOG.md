@@ -102,9 +102,9 @@ rename, and protocol bump).
   writing one `DAEMON_CONNECTION_LOST` line that names the lease id and its
   `ttlDeadline`. The CLI still does not reconnect (ADR 0003 §10), so it can
   neither renew nor release — but it no longer implies the lease went with it.
-  The lease stands until its deadline and any later invocation can `simlock
-lease renew <lease-id>` it. Exit `14` keeps its narrower meaning: the daemon
-  ended the lease while the connection was alive.
+  The lease stands until its deadline and any later invocation can
+  `simlock lease renew <lease-id>` it. Exit `14` keeps its narrower meaning:
+  the daemon ended the lease while the connection was alive.
 
 ### Features
 
