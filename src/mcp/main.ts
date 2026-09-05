@@ -67,9 +67,12 @@ export async function startMcpStdio(
 ): Promise<McpStdioRunner> {
   const env = environment.env ?? process.env;
   const requesterId = environment.requesterId ?? env.SIMLOCK_AGENT_ID ?? `mcp:${process.pid}`;
-  const defaults = defaultEnvironment(requesterId);
+  // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
+  // loop must not be able to disagree about what time it is (architecture rule 9).
+  const clock = environment.clock ?? new SystemClock();
+  const defaults = defaultEnvironment(requesterId, clock);
   const session = new McpSession({
-    clock: environment.clock ?? new SystemClock(),
+    clock,
     connect: environment.connect ?? defaults.connect,
   });
   const server = (environment.createServer ?? createMcpServer)(session);
@@ -143,9 +146,9 @@ export async function startMcpStdio(
 
 function defaultEnvironment(
   requesterId: string,
+  clock: Clock,
 ): Required<Pick<McpStdioEnvironment, "connect" | "createTransport">> {
   const dataDirectory = resolveSimlockHome();
-  const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
   const socketPath = join(dataDirectory, "daemon.sock");
   const logPath = join(dataDirectory, "daemon.log");

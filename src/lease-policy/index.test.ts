@@ -368,6 +368,56 @@ describe("startLeaseRenewal", () => {
     expect(errors.at(-1)?.message).toContain("Gave up renewing lease lse_1");
   });
 
+  it("applies two late answers newest-first, not largest-first", async () => {
+    const clock = new FakeClock(0);
+    const attemptsAt: number[] = [];
+    const answers: Array<(renewed: { ttlDeadline: number }) => void> = [];
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      renew: () => {
+        attemptsAt.push(clock.now());
+        // The first two attempts are accepted and left unanswered until the end of the test;
+        // everything after fails, so the schedule is driven purely by `deadline`.
+        if (attemptsAt.length <= 2)
+          return new Promise<{ ttlDeadline: number }>((resolve) => {
+            answers.push(resolve);
+          });
+        return Promise.reject(new Error("INTERNAL"));
+      },
+      ttlDeadline: 9_000,
+    });
+
+    clock.advance(3_000); // attempt 1 starts, bound 2_000
+    await flushMicrotasks();
+    clock.advance(2_000); // abandoned at 5_000; next attempt at 6_333
+    await flushMicrotasks();
+    clock.advance(1_333); // attempt 2 starts, bound 889
+    await flushMicrotasks();
+    clock.advance(889); // abandoned at 7_222; next attempt at 7_814
+    await flushMicrotasks();
+    expect(attemptsAt).toEqual([3_000, 6_333]);
+
+    // Both abandoned requests did reach the daemon, and answer out of order. Attempt 2 is the
+    // newer request, so its 12_000 is the truth; attempt 1's 900_000 is stale, and being the
+    // larger number does not make it newer -- adopting it would leave this holder renewing
+    // long after the lease was gone.
+    answers[1]?.({ ttlDeadline: 12_000 });
+    await flushMicrotasks();
+    answers[0]?.({ ttlDeadline: 900_000 });
+    await flushMicrotasks();
+
+    clock.advance(592); // attempt 3 at 7_814, which fails and reschedules off the deadline
+    await flushMicrotasks();
+    expect(attemptsAt).toEqual([3_000, 6_333, 7_814]);
+
+    // A third of what is left of 12_000 at 7_814 is 1_395ms -- so the next attempt lands at
+    // 9_209. Against the stale 900_000 it would not have come for another five minutes.
+    clock.advance(1_395);
+    await flushMicrotasks();
+    expect(attemptsAt).toEqual([3_000, 6_333, 7_814, 9_209]);
+  });
+
   it("never reports a failure that arrives after stop()", async () => {
     const clock = new FakeClock(0);
     let rejectRenew!: (error: Error) => void;

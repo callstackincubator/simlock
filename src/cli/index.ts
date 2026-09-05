@@ -724,16 +724,29 @@ async function runLease(
   const leaseLostSignal = new Promise<void>((resolve) => {
     notifyLeaseLost = resolve;
   });
-  /** The lease ended without this process asking: stop waiting, skip the release it can no
-   * longer perform, and exit with the lost-lease code. */
-  const markLeaseLost = (): void => {
+  /**
+   * The lease ended without this process asking, from either of the two places that can find
+   * out -- the daemon's push, or a renewal it rejects. Both write the one `lease-lost` line a
+   * script tails for (whichever gets there first; the flag is what makes that structural
+   * rather than a matter of ordering), stop the wait, skip the release this process can no
+   * longer perform, and leave `runLease` returning the lost-lease code.
+   */
+  let wroteLeaseLost = false;
+  const markLeaseLost = (notice: {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly reason: string;
+  }): void => {
+    if (!wroteLeaseLost) {
+      wroteLeaseLost = true;
+      environment.stderr.write(`${JSON.stringify({ push: "lease-lost", ...notice })}\n`);
+    }
     leaseLost = true;
     notifyLeaseLost?.();
   };
   const offLeaseLost = client.onLeaseLost((push) => {
     if (push.leaseId !== ourLeaseId) return;
-    environment.stderr.write(`${JSON.stringify({ push: "lease-lost", ...push })}\n`);
-    markLeaseLost();
+    markLeaseLost(push);
   });
   const offUnhealthy = client.onDeviceUnhealthy((push) => {
     environment.stderr.write(`${JSON.stringify({ push: "device-unhealthy", ...push })}\n`);
@@ -824,16 +837,12 @@ async function runLease(
       // watching for `push: "lease-lost"` sees this way of losing a lease too. The error line
       // follows it as the detail of why.
       onLeaseGone: (error) => {
-        environment.stderr.write(
-          `${JSON.stringify({
-            push: "lease-lost",
-            deviceId: grant.lease.deviceId,
-            leaseId: grant.lease.id,
-            reason: "renew-rejected",
-          })}\n`,
-        );
+        markLeaseLost({
+          deviceId: grant.lease.deviceId,
+          leaseId: grant.lease.id,
+          reason: "renew-rejected",
+        });
         writeError(environment, error);
-        markLeaseLost();
       },
     });
     await Promise.race([termination.settled, leaseLostSignal]);
