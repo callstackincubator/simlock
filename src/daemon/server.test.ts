@@ -71,8 +71,11 @@ afterEach(async () => {
 });
 
 describe("DaemonServer", () => {
-  it("releases a held lease when its client connection closes", async () => {
-    const harness = await createHarness();
+  it("keeps a lease when its client connection closes, and ends it at its own deadline", async () => {
+    // ADR 0004 §3: connection close means nothing to a lease. The daemon keeps no
+    // per-connection lease state and releases nothing on close, on any transport -- the TTL
+    // is the only thing that ends a lease nobody released.
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
     const holder = await createClient(harness.socketPath);
 
     await holder.request("hello", {
@@ -80,21 +83,28 @@ describe("DaemonServer", () => {
       protocolVersion: DAEMON_PROTOCOL_VERSION,
     });
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
     });
     expect(grant.ok).toBe(true);
+    const leaseId = leaseIdOf(grant);
     expect(harness.registry.snapshot.leases).toHaveLength(1);
 
     await holder.close();
 
-    await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
     const observer = await createClient(harness.socketPath);
     await hello(observer);
+    // Still granted, still leasing its device, with nothing renewing it.
+    await expect(observer.request("status.get", {})).resolves.toMatchObject({
+      payload: { devices: [{ state: "leased" }], leases: [{ id: leaseId }] },
+    });
+
+    // The deadline is what ends it.
+    harness.clock.advance(40);
+    await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
+    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("ready");
     await expect(observer.request("status.get", {})).resolves.toMatchObject({
       payload: {
         capacity: { global: { warm: 1 }, ios: { warm: 1 } },
@@ -102,6 +112,26 @@ describe("DaemonServer", () => {
       },
     });
     await observer.close();
+  });
+
+  it("releases on an explicit lease.release, which is what a holder does on its way out", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    await expect(
+      holder.request("lease.release", { leaseId: leaseIdOf(grant) }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
+    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    await holder.close();
   });
 
   it("requires a compatible hello before serving requests", async () => {
@@ -138,12 +168,12 @@ describe("DaemonServer", () => {
     });
   });
 
-  // Protocol 2 added the `heartbeat` capability and the sliding held-lease TTL that
-  // depends on it, and shipped without back-compat shims. Rejecting v1 is therefore a
-  // deliberate product decision, not just arithmetic on the current constant. Protocol 3
-  // (ADR 0003) widened the rejection to a range check, but a v1 client (no overlap with
-  // `PROTOCOL_VERSION_RANGE`) is still rejected outright, now as `PROTOCOL_VERSION_UNSUPPORTED`.
-  it("rejects a protocol v1 client outright rather than serving it without heartbeats", async () => {
+  // Every protocol bump so far shipped without a back-compat shim, so rejecting an older
+  // client outright is a deliberate product decision, not just arithmetic on the current
+  // constant. Protocol 3 (ADR 0003) turned the rejection into a range check; protocol 4
+  // (ADR 0004) removed `lease.heartbeat` and `mode` behind that same no-shim rule, so a v1
+  // client has no overlap with `PROTOCOL_VERSION_RANGE` and is still rejected outright.
+  it("rejects a protocol v1 client outright rather than serving it a wire it cannot speak", async () => {
     const harness = await createHarness();
     const legacy = await createClient(harness.socketPath);
 
@@ -155,14 +185,13 @@ describe("DaemonServer", () => {
     });
   });
 
-  it("releases a holder and grants the queued client when the holder disconnects", async () => {
-    const harness = await createHarness();
+  it("grants the queued client when the holder's lease expires, not when it disconnects", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
     const holder = await createClient(harness.socketPath);
     const waiter = await createClient(harness.socketPath);
     await hello(holder);
     await hello(waiter);
     await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -170,7 +199,6 @@ describe("DaemonServer", () => {
     });
 
     const queuedGrant = waiter.request("lease.request", {
-      mode: "held",
       requesterId: "waiter",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -180,10 +208,17 @@ describe("DaemonServer", () => {
       .poll(() => harness.eventBus.replay().some((event) => event.event === "lease.queued"))
       .toBe(true);
 
+    // The holder's socket dying frees nothing (ADR 0004 §3) -- the waiter stays queued.
     await holder.close();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(harness.registry.snapshot.leases.map((lease) => lease.requesterId)).toEqual(["holder"]);
 
+    // Its deadline does free it, and the queue is served from there.
+    harness.clock.advance(40);
     await expect(queuedGrant).resolves.toMatchObject({ ok: true });
-    expect(harness.registry.snapshot.leases.map((lease) => lease.requesterId)).toEqual(["waiter"]);
+    await expect
+      .poll(() => harness.registry.snapshot.leases.map((lease) => lease.requesterId))
+      .toEqual(["waiter"]);
   });
 
   it("keeps lease progress on its requesting connection", async () => {
@@ -191,8 +226,7 @@ describe("DaemonServer", () => {
     const holder = await createClient(harness.socketPath);
     const waiter = await createClient(harness.socketPath);
     await Promise.all([hello(holder), hello(waiter)]);
-    await holder.request("lease.request", {
-      mode: "held",
+    const holderGrant = await holder.request("lease.request", {
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -200,7 +234,6 @@ describe("DaemonServer", () => {
     });
 
     const queuedGrant = waiter.request("lease.request", {
-      mode: "held",
       requesterId: "waiter",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -223,8 +256,10 @@ describe("DaemonServer", () => {
               ?.progress?.stage === "queued",
         ),
     ).toEqual([]);
-    await holder.close();
+    // Closing the holder frees nothing (ADR 0004 §3); releasing does.
+    await holder.request("lease.release", { leaseId: leaseIdOf(holderGrant) });
     await expect(queuedGrant).resolves.toMatchObject({ ok: true });
+    await holder.close();
     await waiter.close();
   });
 
@@ -255,7 +290,6 @@ describe("DaemonServer", () => {
     let requestSettled = false;
     const grant = client
       .request("lease.request", {
-        mode: "detached",
         requesterId: "agent-1",
         model: "iPhone 16",
         osVersion: "26.5",
@@ -345,7 +379,6 @@ describe("DaemonServer", () => {
     await expect(client.request("events.unsubscribe", {})).resolves.toMatchObject({ ok: true });
 
     const grant = await client.request("lease.request", {
-      mode: "detached",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -551,24 +584,26 @@ describe("DaemonServer", () => {
     await client.close();
   });
 
-  it("gracefully stops by releasing held leases and persisting the final registry", async () => {
+  it("gracefully stops without touching leases, persisting them with their deadlines", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
     await hello(client);
-    await client.request("lease.request", {
-      mode: "held",
+    const grant = await client.request("lease.request", {
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
     });
+    const leaseId = leaseIdOf(grant);
 
     await expect(client.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
-    await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
 
-    expect(harness.registry.snapshot.leases).toEqual([]);
-    await expect(harness.stateFilesystem.readFile("/state.json")).resolves.toContain('"leases":[]');
+    // ADR 0004 §3: a stop ends connections, not leases -- they persist and the next daemon
+    // restores each one's timer from its deadline.
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
+    await expect(harness.stateFilesystem.readFile("/state.json")).resolves.toContain(leaseId);
     expect(harness.eventBus.replay().map((event) => event.event)).toContain("daemon.stopping");
+    expect(harness.eventBus.replay().map((event) => event.event)).not.toContain("lease.released");
   });
 
   it("pushes a lease-lost notification to the holding connection when its lease's TTL backstop expires", async () => {
@@ -576,7 +611,6 @@ describe("DaemonServer", () => {
     const holder = await createClient(harness.socketPath);
     await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -609,7 +643,6 @@ describe("DaemonServer", () => {
     const releaser = await createClient(harness.socketPath);
     await Promise.all([hello(holder), hello(releaser)]);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -641,7 +674,6 @@ describe("DaemonServer", () => {
     const holder = await createClient(harness.socketPath);
     await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -683,7 +715,6 @@ describe("DaemonServer", () => {
     const holder = await createClient(harness.socketPath);
     await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -706,11 +737,12 @@ describe("DaemonServer", () => {
       push: "device-unhealthy",
     });
 
-    // The lease is still held after the notice: closing the connection still
-    // releases it, same as any other held lease, proving `heldLeaseIds` was never
-    // touched by the push (unlike `#notifyLeaseLost`).
-    await holder.close();
+    // The lease is untouched by the notice: it is a fact about the device, not about the
+    // lease, and it is still there to be released the normal way.
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
+    await holder.request("lease.release", { leaseId });
     await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
+    await holder.close();
   });
 
   it("pushes a device-recovered notification on device.recovered without releasing the lease", async () => {
@@ -718,7 +750,6 @@ describe("DaemonServer", () => {
     const holder = await createClient(harness.socketPath);
     await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -741,8 +772,11 @@ describe("DaemonServer", () => {
       push: "device-recovered",
     });
 
-    await holder.close();
+    // The lease survived the crash and the recovery both, and ends the normal way.
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
+    await holder.request("lease.release", { leaseId });
     await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
+    await holder.close();
   });
 
   it("ignores device-unhealthy/device-recovered facts for leases with no currently connected holder", async () => {
@@ -769,7 +803,6 @@ describe("DaemonServer", () => {
     const holder = await createClient(harness.socketPath);
     await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -920,7 +953,6 @@ describe("DaemonServer startup readiness", () => {
     const holder = await createClientRetrying(harness.socketPath);
     await hello(holder);
     const parkedGrant = holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1018,7 +1050,6 @@ describe("DaemonServer driver rejections", () => {
     await hello(client);
 
     const response = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "Pixel 8",
       platform: "android",
@@ -1046,7 +1077,6 @@ describe("DaemonServer driver rejections", () => {
     await hello(client);
 
     const response = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "Pixel 8",
       platform: "android",
@@ -1134,15 +1164,12 @@ describe("DaemonServer driver rejections", () => {
   });
 });
 
-describe("DaemonServer lease heartbeat", () => {
-  it("slides a held lease's deadline past the backstop while its holder keeps ponging, and stops sliding once it stops", async () => {
-    const harness = await createHarness({
-      lease: { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 },
-    });
+describe("DaemonServer lease liveness (ADR 0004)", () => {
+  it("keeps a lease alive only while something renews it, and expires it when nothing does", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
     const holder = await createClient(harness.socketPath);
-    await hello(holder, { heartbeat: true });
+    await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1151,26 +1178,23 @@ describe("DaemonServer lease heartbeat", () => {
     const leaseId = leaseIdOf(grant);
     expect((grant.payload as { lease: { ttlDeadline: number } }).lease.ttlDeadline).toBe(1_040);
 
-    // Pong every tick, well past the original backstop (40ms from grant).
+    // Renew on the client's own cadence, well past the grant-time deadline. Each renew names
+    // no TTL, so each re-applies the lease's own 40ms width from now.
     let expectedDeadline = 1_040;
     for (let cycle = 0; cycle < 6; cycle += 1) {
       harness.clock.advance(10);
-      const push = await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
-      const nonce = (push.payload as { nonce: number }).nonce;
-      expectedDeadline += 10;
-      await expect(holder.request("lease.heartbeat", { nonce })).resolves.toMatchObject({
+      expectedDeadline = harness.clock.now() + 40;
+      await expect(holder.request("lease.renew", { leaseId })).resolves.toMatchObject({
         ok: true,
-        payload: { leases: [{ leaseId, ttlDeadline: expectedDeadline }] },
+        payload: { id: leaseId, ttlDeadline: expectedDeadline, ttlMs: 40 },
       });
     }
-    // 60ms have passed since grant, exceeding the 40ms backstop, yet the lease is alive.
+    // 60ms have passed since the grant, well past the deadline it carried, and the lease is
+    // alive because something kept renewing it.
     expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
 
-    // Now stop ponging: pure sliding window means no fail-fast, just the existing backstop
-    // eventually catching up from the last slid deadline.
-    harness.clock.advance(10); // one more push arrives, but is never answered
-    await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
-    harness.clock.advance(40); // the last slid deadline (expectedDeadline) elapses
+    // Stop renewing and the deadline catches up, with no separate backstop behind it.
+    harness.clock.advance(40);
     await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
     await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
       payload: { leaseId, reason: "expired" },
@@ -1179,14 +1203,11 @@ describe("DaemonServer lease heartbeat", () => {
     await holder.close();
   });
 
-  it("never pings a connection that did not declare the heartbeat capability, and it expires exactly as before", async () => {
-    const harness = await createHarness({
-      lease: { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 },
-    });
+  it("never pushes anything to a connection to prove liveness", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
     const holder = await createClient(harness.socketPath);
-    await hello(holder); // no capabilities declared
+    await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1204,25 +1225,58 @@ describe("DaemonServer lease heartbeat", () => {
     await holder.close();
   });
 
-  it("rejects a lease.heartbeat request from a connection that never declared the capability", async () => {
+  it("no longer answers lease.heartbeat at all", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
     await hello(client);
 
     await expect(client.request("lease.heartbeat", { nonce: 1 })).resolves.toMatchObject({
-      error: { code: "BAD_REQUEST" },
+      error: { code: "UNKNOWN_REQUEST" },
       ok: false,
     });
     await client.close();
   });
 
-  it("releases a held lease as orphaned across a daemon restart, even with a heartbeat-slid deadline", async () => {
-    const leaseOverrides = { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 };
+  it("rejects a ttlMs above lease.maxTtlMs on a request and on a renew, rather than clamping", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40, maxTtlMs: 100 } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("lease.request", {
+        requesterId: "agent-1",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+        ttlMs: 101,
+      }),
+    ).resolves.toMatchObject({ error: { code: "BAD_REQUEST" }, ok: false });
+    expect(harness.registry.snapshot.leases).toEqual([]);
+
+    const grant = await client.request("lease.request", {
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+      ttlMs: 100,
+    });
+    const leaseId = leaseIdOf(grant);
+    expect((grant.payload as { lease: { ttlMs: number } }).lease.ttlMs).toBe(100);
+
+    await expect(client.request("lease.renew", { leaseId, ttlMs: 101 })).resolves.toMatchObject({
+      error: { code: "BAD_REQUEST" },
+      ok: false,
+    });
+    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_100 }]);
+    await client.close();
+  });
+
+  it("keeps a lease across a daemon restart and restores its timer from the persisted deadline", async () => {
+    const leaseOverrides = { defaultTtlMs: 40 };
     const first = await createHarness({ lease: leaseOverrides });
     const holder = await createClient(first.socketPath);
-    await hello(holder, { heartbeat: true });
+    await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1232,24 +1286,20 @@ describe("DaemonServer lease heartbeat", () => {
     const deviceId = (grant.payload as { device: { id: string } }).device.id;
 
     first.clock.advance(10);
-    const push = await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
-    const nonce = (push.payload as { nonce: number }).nonce;
-    await expect(holder.request("lease.heartbeat", { nonce })).resolves.toMatchObject({
+    await expect(holder.request("lease.renew", { leaseId })).resolves.toMatchObject({
       ok: true,
-      payload: { leases: [{ leaseId, ttlDeadline: 1_050 }] },
+      payload: { ttlDeadline: 1_050 },
     });
 
-    // Simulate an abrupt daemon crash (not a graceful `daemon stop`, which would itself
-    // release the held connection's leases): the first daemon's process just disappears,
-    // leaving the last persisted registry state — the post-heartbeat slid deadline —
-    // on disk. It is intentionally left running here; the afterEach hook tears it down.
+    // Simulate an abrupt daemon crash: the first daemon's process just disappears, leaving
+    // the last persisted registry state -- the renewed deadline -- on disk. It is
+    // intentionally left running here; the afterEach hook tears it down.
 
-    // "Restart": a fresh daemon reloads that persisted registry state. A held lease's
-    // liveness is its daemon connection, so it cannot have survived the restart regardless
-    // of how recently its deadline was slid — the real startup path (src/daemon/main.ts)
-    // releases it as orphaned before any timer would otherwise be restored.
-    // The underlying device itself (unlike the daemon process) survives a restart, so the
-    // "restarted" harness is wired to the same fake driver instance as the crashed one.
+    // "Restart": a fresh daemon reloads that persisted state. ADR 0004 removed the orphan
+    // sweep that used to release this lease on the theory that a restart proves its holder
+    // is dead -- it proves nothing of the sort, so the lease stands and its timer is
+    // restored from the renewed deadline. The underlying device (unlike the daemon process)
+    // survives a restart, so the "restarted" harness shares the same fake driver instance.
     const second = await createHarness({
       clock: new FakeClock(1_010),
       driver: first.driver,
@@ -1258,43 +1308,102 @@ describe("DaemonServer lease heartbeat", () => {
     });
     await second.engine.convergeRunningCapacity();
 
-    expect(second.registry.snapshot.leases).toEqual([]);
-    // The freed device is reclaimed and available to the next requester, not left shutdown.
-    expect(second.registry.snapshot.devices).toMatchObject([{ id: deviceId, state: "ready" }]);
+    expect(second.registry.snapshot.leases).toMatchObject([{ id: leaseId, ttlDeadline: 1_050 }]);
+    expect(second.registry.snapshot.devices).toMatchObject([{ id: deviceId, state: "leased" }]);
+
+    // The restored timer is the renewed one, not the grant-time one: nothing expires at
+    // 1_040, and the lease ends at 1_050 with no client left to renew it.
+    second.clock.advance(30);
+    await expect.poll(() => second.registry.snapshot.leases).toHaveLength(1);
+    second.clock.advance(10);
+    await expect.poll(() => second.registry.snapshot.leases).toEqual([]);
+    await expect.poll(() => second.registry.snapshot.devices[0]?.state).toBe("ready");
     await holder.close();
   });
 
-  it("surfaces a derived lastHeartbeatAt for held leases in status and list --leases", async () => {
-    const harness = await createHarness({
-      lease: { heartbeatIntervalMs: 10, heldTtlBackstopMs: 40 },
-    });
-    const holder = await createClient(harness.socketPath);
-    await hello(holder, { heartbeat: true });
+  it("expires a lease whose deadline passed while no daemon was running, as soon as one is", async () => {
+    const leaseOverrides = { defaultTtlMs: 40 };
+    const first = await createHarness({ lease: leaseOverrides });
+    const holder = await createClient(first.socketPath);
+    await hello(holder);
     const grant = await holder.request("lease.request", {
-      mode: "held",
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const deviceId = (grant.payload as { device: { id: string } }).device.id;
+    await holder.close();
+
+    // The next daemon starts well after the persisted deadline (1_040).
+    const second = await createHarness({
+      clock: new FakeClock(2_000),
+      driver: first.driver,
+      lease: leaseOverrides,
+      stateFilesystem: first.stateFilesystem,
+    });
+    await second.engine.convergeRunningCapacity();
+
+    await expect.poll(() => second.registry.snapshot.leases).toEqual([]);
+    await expect
+      .poll(() => second.registry.snapshot.devices)
+      .toMatchObject([{ id: deviceId, state: "ready" }]);
+  });
+
+  it("surfaces the stored lastRenewedAt and ttlMs in status and list --leases", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
     });
     const leaseId = leaseIdOf(grant);
+    // Written at grant, before any renew -- it is a stored field, not a derived one, so
+    // there is always an answer.
+    expect((grant.payload as { lease: { lastRenewedAt: number } }).lease.lastRenewedAt).toBe(1_000);
 
     harness.clock.advance(10);
-    const push = await holder.nextFrame((frame) => frame.push === "lease.heartbeat");
-    const nonce = (push.payload as { nonce: number }).nonce;
-    await holder.request("lease.heartbeat", { nonce });
+    await holder.request("lease.renew", { leaseId });
 
     await expect(holder.request("status.get", {})).resolves.toMatchObject({
       ok: true,
-      payload: { leases: [{ id: leaseId, lastHeartbeatAt: 1_010 }] },
+      payload: { leases: [{ id: leaseId, lastRenewedAt: 1_010, ttlMs: 40 }] },
     });
     await expect(holder.request("list.get", { kind: "leases" })).resolves.toMatchObject({
       ok: true,
-      payload: [{ id: leaseId, lastHeartbeatAt: 1_010 }],
+      payload: [{ id: leaseId, lastRenewedAt: 1_010, ttlMs: 40 }],
     });
     await holder.close();
   });
 
+  it("leaves leases alone on a daemon stop", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
+    const holder = await createClient(harness.socketPath);
+    await hello(holder);
+    const grant = await holder.request("lease.request", {
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const leaseId = leaseIdOf(grant);
+    await holder.close();
+
+    await harness.daemon.stop("test");
+
+    // ADR 0004 §3: a stop ends connections, not leases. The record persists with its
+    // deadline for the next daemon to restore a timer from.
+    expect(harness.registry.snapshot.leases).toMatchObject([{ id: leaseId }]);
+    expect(harness.eventBus.replay().filter((event) => event.event === "lease.released")).toEqual(
+      [],
+    );
+  });
+});
+
+describe("DaemonServer decorations", () => {
   it("surfaces a derived transitionAgeMs for a mid-transition device in status and list --devices", async () => {
     const harness = await createHarness();
     const device = await harness.registry.registerDevice({
@@ -1347,23 +1456,30 @@ describe("DaemonServer lease heartbeat", () => {
       );
     });
 
-    it("logs a connection opening with its declared capabilities and closing afterward", async () => {
+    it("logs a connection opening with its principal and role, and closing afterward", async () => {
       const { logger: log, sink } = logger();
       const harness = await createHarness({ logger: log });
       const client = await createClient(harness.socketPath);
 
-      await hello(client, { heartbeat: true });
+      await helloAs(client, "agent-7");
       expect(sink.records).toContainEqual(
         expect.objectContaining({
           level: "info",
           message: "Connection opened",
-          fields: expect.objectContaining({ heartbeatCapability: true }),
+          fields: expect.objectContaining({ principal: "agent-7", role: "admin" }),
         }),
       );
 
       await client.close();
+      // ADR 0004 §3: there is no held-lease count to log any more, because there is no
+      // per-connection lease state to count.
       await expect
-        .poll(() => sink.records.some((record) => record.message === "Connection closed"))
+        .poll(() =>
+          sink.records.some(
+            (record) =>
+              record.message === "Connection closed" && record.fields?.principal === "agent-7",
+          ),
+        )
         .toBe(true);
     });
 
@@ -1385,21 +1501,21 @@ describe("DaemonServer lease heartbeat", () => {
       });
       const holder = await createClient(harness.socketPath);
       await hello(holder);
-      await holder.request("lease.request", {
-        mode: "held",
+      const grant = await holder.request("lease.request", {
         requesterId: "holder",
         model: "iPhone 16",
         osVersion: "26.5",
         platform: "ios",
       });
 
+      // The stop itself releases nothing (ADR 0004 §3), so the reclaim `stop` has to drain
+      // is one somebody else started: the holder releasing on its way out, which commits
+      // the registry half and hands the purge off.
+      await holder.request("lease.release", { leaseId: leaseIdOf(grant) });
+      expect(harness.registry.snapshot.leases).toHaveLength(0);
+
       const stopping = harness.daemon.stop("test-drain");
       await expect.poll(() => order).toEqual(["settle-start"]);
-
-      // The held lease is already gone -- that half of the release is synchronous --
-      // but the purge it handed off is not, and `stop` waits for it so the pool is
-      // left settled rather than `reclaiming` for the next startup to recover.
-      expect(harness.registry.snapshot.leases).toHaveLength(0);
 
       finishSettle();
       await stopping;
@@ -1448,7 +1564,6 @@ describe("DaemonServer lease heartbeat", () => {
       const holder = await createClient(harness.socketPath);
       await hello(holder);
       await holder.request("lease.request", {
-        mode: "held",
         requesterId: "holder",
         model: "iPhone 16",
         osVersion: "26.5",
@@ -1458,9 +1573,9 @@ describe("DaemonServer lease heartbeat", () => {
       await harness.daemon.stop("test-stop-auxiliary");
 
       expect(order).toEqual(["stopAuxiliary", "settle", "dispose"]);
-      // The held lease was still released as part of the same stop -- stopping the
-      // auxiliary frontend first doesn't skip the socket protocol's own teardown.
-      expect(harness.registry.snapshot.leases).toHaveLength(0);
+      // The lease is untouched: ADR 0004 §3 -- a stop tears down connections and timers,
+      // and leaves every lease standing with its deadline for the next daemon.
+      expect(harness.registry.snapshot.leases).toHaveLength(1);
     });
 
     it("reports health via the public accessor across the startup/stop lifecycle", async () => {
@@ -1554,7 +1669,6 @@ describe("DaemonServer download policy", () => {
     await hello(client);
 
     const grant = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1578,7 +1692,6 @@ describe("DaemonServer download policy", () => {
 
     const response = await client.request("lease.request", {
       allowDownload: true,
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1606,7 +1719,6 @@ describe("DaemonServer download policy", () => {
     // did before the policy existed -- and, unlike the never-policy case above, the message
     // is not attributed to configuration, since nothing in config forced the outcome.
     const response = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1630,7 +1742,6 @@ describe("DaemonServer download policy", () => {
     // `--allow-download`, which under the never policy can never help, so the suffix must
     // still attach as the correction.
     const response = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1659,7 +1770,6 @@ describe("DaemonServer download policy", () => {
 
     const response = await client.request("lease.request", {
       allowDownload: true,
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "12.0",
@@ -1683,7 +1793,6 @@ describe("DaemonServer full request flag", () => {
     await hello(client);
 
     const grant = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       full: true,
       model: "iPhone 16",
@@ -1704,7 +1813,6 @@ describe("DaemonServer full request flag", () => {
     await hello(client);
 
     const grant = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1729,7 +1837,6 @@ describe("DaemonServer error code mapping", () => {
     await hello(client);
 
     const response = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1754,7 +1861,6 @@ describe("DaemonServer error code mapping", () => {
     await hello(client);
 
     const response = await client.request("lease.request", {
-      mode: "held",
       requesterId: "agent-1",
       model: "Pixel 8",
       osVersion: "35",
@@ -1974,7 +2080,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const owner = await createClient(harness.socketPath);
     await helloAs(owner, "alice");
     const grant = await owner.request("lease.request", {
-      mode: "held",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
@@ -2006,7 +2111,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const owner = await createClient(harness.socketPath);
     await helloAs(owner, "alice");
     const grant = await owner.request("lease.request", {
-      mode: "held",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
@@ -2028,7 +2132,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const alice = await createClient(harness.socketPath);
     await helloAs(alice, "alice");
     const aliceGrant = await alice.request("lease.request", {
-      mode: "detached",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
@@ -2036,7 +2139,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const bob = await createClient(harness.socketPath);
     await helloAs(bob, "bob");
     await bob.request("lease.request", {
-      mode: "detached",
       requesterId: "bob-2",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -2059,33 +2161,32 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await admin.close();
   });
 
-  it("forwards ttlMs as the initial TTL for a detached lease, and rejects it for a held one", async () => {
+  it("forwards ttlMs as the initial TTL of any lease, and stores it as the lease's width", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const client = await createClient(harness.socketPath);
     await hello(client);
 
-    const detached = await client.request("lease.request", {
-      mode: "detached",
+    const granted = await client.request("lease.request", {
       ttlMs: 30_000,
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
     });
-    expect(detached.ok).toBe(true);
+    expect(granted.ok).toBe(true);
+    // ADR 0004 §4: `ttlMs` is accepted on every request -- it used to be `BAD_REQUEST` unless
+    // the request also named `mode: "detached"` -- and the width it asks for is stored on the
+    // record, which is what a later body-less renew re-applies.
     expect(
-      (detached.payload as { lease: { grantedAt: number; ttlDeadline: number } }).lease,
-    ).toMatchObject({ grantedAt: 1_000, ttlDeadline: 1_000 + 30_000 });
+      (granted.payload as { lease: { grantedAt: number; ttlMs: number; ttlDeadline: number } })
+        .lease,
+    ).toMatchObject({ grantedAt: 1_000, ttlMs: 30_000, ttlDeadline: 1_000 + 30_000 });
 
-    const held = await client.request("lease.request", {
-      mode: "held",
-      ttlMs: 30_000,
-      requesterId: "held-with-ttl",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
+    const leaseId = leaseIdOf(granted);
+    harness.clock.advance(5_000);
+    await expect(client.request("lease.renew", { leaseId })).resolves.toMatchObject({
+      ok: true,
+      payload: { ttlMs: 30_000, ttlDeadline: 6_000 + 30_000 },
     });
-    expect(held.ok).toBe(false);
-    expect(held.error).toMatchObject({ code: "BAD_REQUEST" });
     await client.close();
   });
 
@@ -2096,7 +2197,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const holder = await createClient(harness.socketPath);
     await hello(holder);
     const held = await holder.request("lease.request", {
-      mode: "held",
       requesterId: "holder",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -2107,7 +2207,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const waiter = await createClient(harness.socketPath);
     await hello(waiter);
     const queuedRequest = waiter.request("lease.request", {
-      mode: "held",
       requesterId: "waiter",
       model: "iPhone 16",
       osVersion: "26.5",
@@ -2132,7 +2231,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     const requester = await createClient(harness.socketPath);
     await helloAs(requester, "alice");
     const grant = await requester.request("lease.request", {
-      mode: "detached",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
@@ -2419,9 +2517,8 @@ function testConfig(
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
-      detachedTtlMs: 60_000,
-      heldTtlBackstopMs: 60_000,
-      heartbeatIntervalMs: 5_000,
+      defaultTtlMs: 60_000,
+      maxTtlMs: 3_600_000,
       ...leaseOverrides,
     },
     capacity: {

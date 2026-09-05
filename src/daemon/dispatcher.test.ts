@@ -49,6 +49,8 @@ async function buildDispatcher(
     /** Gives the fake driver a `simlock <tool>` wrapper so `driver.passthrough` has something
      * to route to; off by default so no other test's catalog output changes shape. */
     readonly passthroughTool?: string;
+    /** Narrows the lease TTL knobs (ADR 0004), for the cap and default-width rules. */
+    readonly lease?: Partial<Config["lease"]>;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -76,7 +78,7 @@ async function buildDispatcher(
           passthroughTool: overrides.passthroughTool,
         }),
   });
-  const config = testConfig(overrides.downloadsPolicy);
+  const config = testConfig(overrides.downloadsPolicy, overrides.lease ?? {});
   const engine = new LeaseEngine({
     clock,
     config,
@@ -137,8 +139,6 @@ async function buildDispatcher(
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
   return {
-    heartbeatCapability: false,
-    heldLeaseIds: new Set(),
     manageEventSubscription: () => undefined,
     principal: "tok_agent",
     role: "agent",
@@ -154,15 +154,36 @@ describe("Dispatcher: parsing", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
-  it("rejects ttlMs on a held lease.request with BAD_REQUEST (contract-level rule)", async () => {
-    const { dispatcher } = await buildDispatcher();
+  it("rejects a ttlMs above lease.maxTtlMs on a request, rather than clamping it", async () => {
+    // ADR 0004 §4: the cap is enforced here rather than in the contract schema, because
+    // `lease.maxTtlMs` is a daemon config value the contract module cannot see -- and every
+    // transport reaches leases through this one dispatcher, so HTTP inherits the same answer.
+    const { dispatcher } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_001 },
+        session(),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("rejects a ttlMs above lease.maxTtlMs on a renew too", async () => {
+    const { dispatcher } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+    await expect(
+      dispatcher.dispatch("lease.renew", { leaseId: "lse_1", ttlMs: 1_001 }, session()),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("accepts a ttlMs at the cap on a request (ADR 0004 §4)", async () => {
+    const { dispatcher } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
     await expect(
       dispatcher.dispatch(
         "lease.request",
         { model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_000 },
         session(),
       ),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    ).resolves.toMatchObject({ lease: { ttlMs: 1_000 } });
   });
 
   it("rejects an operation this dispatcher has no handler for with UNKNOWN_REQUEST", async () => {
@@ -291,7 +312,7 @@ describe("Dispatcher: ownership", () => {
   async function grantLease(dispatcher: Awaited<ReturnType<typeof buildDispatcher>>["dispatcher"]) {
     const grant = await dispatcher.dispatch(
       "lease.request",
-      { model: "iPhone 17 Pro", mode: "detached", osVersion: "26.5", platform: "ios" },
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       session({ principal: "tok_owner" }),
     );
     return (grant as { lease: { id: string } }).lease.id;
@@ -396,7 +417,6 @@ describe("Dispatcher: ownership", () => {
       "lease.request",
       {
         model: "iPhone 17 Pro",
-        mode: "detached",
         requesterId: "tok_owner1",
         osVersion: "26.5",
         platform: "ios",
@@ -407,7 +427,6 @@ describe("Dispatcher: ownership", () => {
       "lease.request",
       {
         model: "iPhone 17 Pro",
-        mode: "detached",
         requesterId: "tok_owner2",
         osVersion: "26.5",
         platform: "ios",
@@ -421,7 +440,6 @@ describe("Dispatcher: ownership", () => {
       "lease.request",
       {
         model: "iPhone 17 Pro",
-        mode: "held",
         requesterId: "agent-7",
         osVersion: "26.5",
         platform: "ios",
@@ -467,7 +485,7 @@ describe("Dispatcher: lease.release-all", () => {
     const { dispatcher, registry } = await buildDispatcher();
     await dispatcher.dispatch(
       "lease.request",
-      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       session({ principal: "tok_owner" }),
     );
 
@@ -483,12 +501,12 @@ describe("Dispatcher: lease.release-all", () => {
     const { dispatcher, registry } = await buildDispatcher();
     const first = await dispatcher.dispatch(
       "lease.request",
-      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       session({ principal: "tok_owner_1" }),
     );
     const second = await dispatcher.dispatch(
       "lease.request",
-      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       session({ principal: "tok_owner_2" }),
     );
     expect(registry.snapshot.leases).toHaveLength(2);
@@ -509,7 +527,7 @@ describe("Dispatcher: nuke.run", () => {
     const { dispatcher, registry } = await buildDispatcher({ includeNuke: true });
     await dispatcher.dispatch(
       "lease.request",
-      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       session({ principal: "tok_owner" }),
     );
 
@@ -523,7 +541,7 @@ describe("Dispatcher: nuke.run", () => {
     const { dispatcher, registry } = await buildDispatcher({ includeNuke: true });
     await dispatcher.dispatch(
       "lease.request",
-      { mode: "detached", model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
       session({ principal: "tok_owner" }),
     );
     expect(registry.snapshot.leases).toHaveLength(1);
@@ -670,7 +688,10 @@ function sequence() {
   return { generate: () => `${next++}` };
 }
 
-function testConfig(downloadsPolicy: Config["downloads"]["policy"] = "on-request"): Config {
+function testConfig(
+  downloadsPolicy: Config["downloads"]["policy"] = "on-request",
+  leaseOverrides: Partial<Config["lease"]> = {},
+): Config {
   return {
     drivers: {},
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
@@ -688,7 +709,7 @@ function testConfig(downloadsPolicy: Config["downloads"]["policy"] = "on-request
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 5_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000, ...leaseOverrides },
     capacity: {
       strategy: "resource",
       config: {
