@@ -51,7 +51,8 @@ maintain a second mapping; 14 is not a daemon error code but an outcome of a
 outcome, 0.
 A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
 surfaced by `lease renew`) falls back to exit 1; the structured stderr line
-still reports the specific code.
+still reports the specific code — a renew by a running `simlock lease` is the
+exception, and exits `14`.
 
 ---
 
@@ -144,7 +145,9 @@ granted.
   below, including `device.featureProfile`) and exit instead of staying
   alive. Nothing then renews the lease on your behalf: keep it with
   `simlock lease renew` before `ttlDeadline`, and end it with
-  `simlock release`.
+  `simlock release`. From an invocation other than the one granted the
+  lease, both of those need an admin credential — see [Admin credential
+  resolution](#admin-credential-resolution).
 - `--bind-pid <pid>` — only meaningful without `--detach`: watch this pid for
   death instead of the CLI's actual parent. For a holder spawned from a
   short-lived subshell, the immediate parent can die (and get reaped) while
@@ -315,6 +318,13 @@ Renewing is the only thing that keeps any lease alive, on every transport.
 A `simlock lease` left running does it for you on a timer; anything holding a
 `--detach` lease has to do it itself, before `ttlDeadline`.
 
+From an invocation other than the one granted the lease, this needs an admin
+credential — see [Admin credential
+resolution](#admin-credential-resolution). A lease belongs to the session it
+was granted to, so a fresh agent-role process renewing someone else's lease
+id gets `FORBIDDEN`; the CLI connects as admin whenever the local
+`admin.token` file is readable, which is why this normally just works.
+
 ## Reaching a leased device
 
 Simlock's simulators live in a device set Xcode does not read, and its
@@ -433,7 +443,9 @@ Start Simlock's local stdio MCP server. It accepts no flags. Standard output is
 reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The server
 auto-starts the daemon when needed and exposes the focused `list_devices`,
 `lease_simulator`, `release_simulator`, and `lease_status` tool surface for one
-agent session. `lease_simulator` accepts the contract's optional `ttlMs` —
+agent session. The server auto-starts the daemon when needed, on a tool call;
+its renew timer reconnects only to a daemon that is already listening, and
+never launches one. `lease_simulator` accepts the contract's optional `ttlMs` —
 defaulting to `lease.defaultTtlMs` and `BAD_REQUEST` above `lease.maxTtlMs`,
 the same rule every other frontend gets — and the session renews that lease on
 a timer and releases it when the process ends, the same policy `simlock lease`
@@ -513,7 +525,9 @@ running slots.
 
 Scriptable listings of managed devices, active leases, or registered cleanup
 rules. Defaults to `--devices`. Each lease record's `requesterId` is the
-agent id (see [Agent identity](#agent-identity)) that holds it.
+agent id (see [Agent identity](#agent-identity)) that holds it, and its
+`lastRenewedAt` is when the lease was last renewed (set at grant, then on
+every renew) — the same field `status` renders as "last renewed".
 
 ## `simlock catalog [--platform <ios|android>] [--json]`
 
@@ -632,6 +646,15 @@ auto-starts the daemon and distinguishes two failure shapes:
 answered but refused the connection (a bad admin credential, or a protocol
 version mismatch) — the two used to be reported identically as "stopped".
 
+A daemon that refuses to boot because of its configuration — a
+`lease.defaultTtlMs` above `lease.maxTtlMs`, or a non-positive value for
+either, see [CONFIGURATION.md](CONFIGURATION.md) — fails the start rather
+than picking a value the operator did not write. A command that auto-starts
+the daemon (`simlock lease`, the MCP server) surfaces that as
+`DAEMON_STARTUP_FAILED` and exit 1; the reason is in `simlock daemon logs`,
+which reads the log file directly and so works even though the daemon never
+came up.
+
 The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields) covering startup (version,
 protocol version, socket path, effective config), socket claim/stale-endpoint
@@ -655,9 +678,9 @@ before Simlock provisions or boots a shutdown device.
 ## Admin credential resolution
 
 Several commands (`list`, `cleanup`, `nuke`, `events`, `config get`,
-`daemon stop`, `token create|list|revoke`, and cross-process `release`) need
-the daemon's `admin` role. The CLI resolves a credential to send at
-handshake, in order:
+`daemon stop`, `token create|list|revoke`, and cross-process `lease renew`
+and `release`) need the daemon's `admin` role. The CLI resolves a credential
+to send at handshake, in order:
 
 1. `--token <secret>` — accepted anywhere on the command line.
 2. `SIMLOCK_ADMIN_TOKEN` — the environment variable.
@@ -672,10 +695,11 @@ same as any other role violation. `simlock lease`'s output JSON includes the
 connection's resolved `role` so a caller can tell which one it got.
 
 This is also why `simlock lease --detach` followed later by
-`simlock release <lease-id>` from a different invocation works even though
-each CLI process has a different pid-derived identity: both commands connect
-as admin (when the local file is readable), and admin bypasses the
-per-connection ownership check that would otherwise apply.
+`simlock lease renew <lease-id>` or `simlock release <lease-id>` from a
+different invocation works even though each CLI process has a different
+pid-derived identity: all of them connect as admin (when the local file is
+readable), and admin bypasses the per-connection ownership check that would
+otherwise apply.
 
 ## `simlock token create --role <agent|operator> [--label <text>]` / `list` / `revoke <token-id>`
 

@@ -60,7 +60,7 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
 - **stdio MCP server**: its process owns one agent session and exposes MCP over
   stdin/stdout. `McpSession` (`src/mcp/session.ts`) holds one `simlock/client`
   connection at a time and does nothing today's typed client does not already
-  do (ADR §11: MCP keeps only "connection lifecycle ... and its MCP-only
+  do (ADR 0003 §11: MCP keeps only "connection lifecycle ... and its MCP-only
   relays"): tool calls are serialized onto it, `lease_status` is one
   `lease.list` call rather than a session-local cache, and a release the
   session does not own surfaces the daemon's own `FORBIDDEN` rather than a
@@ -70,8 +70,8 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   progress pushes for the in-flight `lease_simulator` request — as MCP
   `notifications/progress` instead of stderr JSON lines, and only when the
   client supplied a progress token. Unlike the CLI, this process outlives any
-  single daemon connection: the typed client itself never reconnects (ADR §10),
-  so `McpSession` builds a brand new one lazily, once its current client's
+  single daemon connection: the typed client itself never reconnects (ADR 0003
+  §10), so `McpSession` builds a brand new one lazily, once its current client's
   `onConnectionLost` fires. ADR 0004 narrows ADR 0003 §10/§11's lazy-only
   reconnect to two triggers with deliberately different powers:
 

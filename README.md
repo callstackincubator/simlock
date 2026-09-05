@@ -155,7 +155,7 @@ The daemon starts on demand — there's no separate setup step. Use
 Simlock-managed devices.
 
 See [docs/CLI.md](docs/CLI.md) for the full command reference and
-[docs/CLI.md#mcp-integration-optional](docs/CLI.md) or the [README section
+[docs/CLI.md#simlock-mcp](docs/CLI.md#simlock-mcp) or the [README section
 below](#mcp-integration-optional) for wiring up an MCP client.
 
 ## MCP integration (optional)

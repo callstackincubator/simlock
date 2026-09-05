@@ -73,13 +73,20 @@ enforced per-resource rather than as a role gate.
 
 All routes are under `/v1`, JSON bodies both ways, additive evolution only —
 new fields, never removed or repurposed ones. [ADR
-0004](adr/0004-ttl-first-leases-on-every-transport.md) makes one break in
-that rule, called out where it applies below: a `ttlMs` above
-`lease.maxTtlMs` is now `400 BAD_REQUEST` where it used to be accepted, and
-the `ttlMs` a lease reports is now always the lease's own width rather than a
-value the gateway remembered per request. No field is added or removed; two
-change meaning, which is why they are stated rather than left to be
-discovered.
+0004](adr/0004-ttl-first-leases-on-every-transport.md) breaks that rule once,
+under its "Breaking for 0.x" consequence, and each break is called out where
+it applies below:
+
+- **`mode` is gone** from the lease record the operator routes serialize
+  (`GET /v1/status`, `GET /v1/leases`), and **`lastRenewedAt` and the stored
+  `ttlMs` are new on it** — there is one kind of lease now, and the fields
+  that described the split went with it.
+- **A `ttlMs` above `lease.maxTtlMs` is `400 BAD_REQUEST`** where it used to
+  be accepted.
+- **The `ttlMs` a lease reports is the lease's own width**, not a value the
+  gateway remembered per request.
+
+Routes, status codes, and every other field are unchanged.
 
 ### `GET /v1/healthz`
 
