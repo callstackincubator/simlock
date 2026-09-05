@@ -63,12 +63,21 @@ export interface StartupConvergerOptions {
  * Directly coordinates the required startup recovery sequence. It emits no
  * events itself; recovery and cleanup own their post-commit lifecycle facts.
  *
- * Devices of a platform whose driver was refused at discovery are left exactly as the
- * registry found them. Recovering or shutting one down needs a driver call there is no
- * driver for, and a `NoDriverError` out of convergence stops the whole daemon -- costing
- * the healthy platform for a root the other one rejected, which is the opposite of the
- * per-platform fail-closed behaviour discovery promises. `simlock doctor` reports the
- * rejection; the inventory waits for the driver to come back.
+ * Convergence never calls a driver that was refused at discovery. Recovering or shutting a
+ * device down needs a driver call there is no driver for, and a `NoDriverError` out of
+ * convergence stops the whole daemon -- costing the healthy platform for a root the other one
+ * rejected, which is the opposite of the per-platform fail-closed behaviour discovery
+ * promises. `simlock doctor` reports the rejection; the inventory waits for the driver to
+ * come back.
+ *
+ * Two limits on that, both deliberate and neither silent. `#releaseOrphanedHeldLeases` runs
+ * first and unguarded: a held lease cannot have a live holder across a restart, so it is
+ * released whatever its platform, which moves the device to `reclaiming` and leaves the
+ * background reclaim to fail into its own catch. The device is then stuck in `reclaiming`
+ * until its driver returns -- worse than untouched, better than a phantom lease pinning a
+ * device nobody holds. And a dark platform's devices still count toward capacity (see
+ * `capacity/limits.ts`), so a large refused inventory can make the *healthy* platform look
+ * over budget; excess selection below excludes them from the candidates, not from the count.
  */
 export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}

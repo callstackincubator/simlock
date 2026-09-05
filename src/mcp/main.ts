@@ -144,7 +144,6 @@ function defaultEnvironment(
   const dataDirectory = resolveSimlockHome();
   const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
-  const socketPath = resolveDaemonSocketPath(dataDirectory);
   const logPath = join(dataDirectory, "daemon.log");
   return {
     connect: () =>
@@ -162,7 +161,11 @@ function defaultEnvironment(
           simlockHome: dataDirectory,
         }),
         principal: requesterId,
-        socketPath,
+        // Resolved inside `connect` rather than during construction for the same reason as
+        // the CLI's: it throws for an over-long `SIMLOCK_HOME`, and out here that throw
+        // escaped before the server could report it, leaving a dead server and a raw stack
+        // trace on the stdio channel an MCP client is trying to speak protocol over.
+        socketPath: resolveDaemonSocketPath(dataDirectory),
       }),
     createTransport: () => new StdioServerTransport(),
   };

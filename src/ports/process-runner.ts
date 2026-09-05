@@ -259,6 +259,14 @@ export interface ScriptedProcessExpectation {
 
 export class ScriptedProcessRunner implements ProcessRunner {
   readonly calls: ProcessInvocation[] = [];
+  /**
+   * The handle each `spawn` returned, index-aligned with `calls`, so a test can assert what
+   * the caller did *with* the child rather than only how it was started. `unref` is the case
+   * that needs it: nothing about the argv or the options says whether the event loop was
+   * released, and a spawned child that stays referenced keeps the daemon alive after
+   * `daemon stop`.
+   */
+  readonly handles: (ProcessHandle & { readonly unreffed: boolean })[] = [];
   #nextPid = 1;
   readonly #expectations: ScriptedProcessExpectation[];
 
@@ -283,7 +291,9 @@ export class ScriptedProcessRunner implements ProcessRunner {
       throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
     }
 
-    return new ScriptedProcessHandle(this.#nextPid++, expectation);
+    const handle = new ScriptedProcessHandle(this.#nextPid++, expectation);
+    this.handles.push(handle);
+    return handle;
   }
 }
 
