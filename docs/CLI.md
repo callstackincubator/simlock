@@ -216,7 +216,7 @@ has its socket killed leaves the holder unable to renew or release. It writes
 one error line naming the lease and its deadline, and exits `1`:
 
 ```json
-{"error":{"code":"DAEMON_CONNECTION_LOST","message":"lost the daemon connection; lease lse_9f2c is still yours until its ttlDeadline 1735690500000 — renew it with `simlock lease renew lse_9f2c` or let it expire"}}
+{"error":{"code":"DAEMON_CONNECTION_LOST","message":"lost the daemon connection; lease lse_9f2c is still yours until its ttlDeadline 1735690500000 -- renew it with `simlock lease renew lse_9f2c` or let it expire"}}
 ```
 
 Nothing was released. The lease is still granted to you on the daemon, still
@@ -648,11 +648,13 @@ version mismatch) — the two used to be reported identically as "stopped".
 A daemon that refuses to boot because of its configuration — a
 `lease.defaultTtlMs` above `lease.maxTtlMs`, or a non-positive value for
 either, see [CONFIGURATION.md](CONFIGURATION.md) — fails the start rather
-than picking a value the operator did not write. A command that auto-starts
-the daemon (`simlock lease`, the MCP server) surfaces that as
-`DAEMON_STARTUP_FAILED` and exit 1; the reason is in `simlock daemon logs`,
-which reads the log file directly and so works even though the daemon never
-came up.
+than picking a value the operator did not write. That validation runs before
+the socket is claimed, so a command that auto-starts the daemon (`simlock
+lease`, the MCP server) never gets a daemon to talk to: the launch times out
+and the command fails with exit 1 (`INTERNAL`). The error line says nothing
+about the config, because nothing ever answered — the reason is in `simlock
+daemon logs`, which reads the log file directly and so works even though the
+daemon never came up.
 
 The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
 (timestamp, level, module, message, and any fields) covering startup (version,
