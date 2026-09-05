@@ -434,17 +434,32 @@ describe("DaemonServer", () => {
     });
   });
 
-  it.each([
-    [{ args: ["devices"], tool: "adb" }],
-    [{ args: "list", tool: "simctl" }],
-    [{ args: ["list"] }],
-  ])("rejects a passthrough no driver can serve as given: %s", async (payload) => {
+  it.each([[{ args: "list", tool: "simctl" }], [{ args: ["list"] }]])(
+    "rejects a malformed passthrough payload: %s",
+    async (payload) => {
+      const harness = await createHarness();
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await expect(client.request("driver.passthrough", payload)).resolves.toMatchObject({
+        error: { code: "BAD_REQUEST" },
+        ok: false,
+      });
+    },
+  );
+
+  // A well-formed request for a wrapper no driver claims is not a malformed one: it gets its
+  // own ERROR_TABLE row so the socket and HTTP transports name the condition identically
+  // (ADR 0003 §7), and so the CLI can tell "you typed it wrong" from "no driver serves this".
+  it("distinguishes an unknown passthrough tool from a malformed payload", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
     await hello(client);
 
-    await expect(client.request("driver.passthrough", payload)).resolves.toMatchObject({
-      error: { code: "BAD_REQUEST" },
+    await expect(
+      client.request("driver.passthrough", { args: ["devices"], tool: "adb" }),
+    ).resolves.toMatchObject({
+      error: { code: "UNKNOWN_PASSTHROUGH_TOOL" },
       ok: false,
     });
   });
@@ -1005,7 +1020,8 @@ describe("DaemonServer driver rejections", () => {
     const response = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "Pixel 8", platform: "android" },
+      model: "Pixel 8",
+      platform: "android",
     });
 
     // Safety rule 9's other half: the platform's driver does not start *and Simlock
@@ -1032,7 +1048,8 @@ describe("DaemonServer driver rejections", () => {
     const response = await client.request("lease.request", {
       mode: "held",
       requesterId: "agent-1",
-      request: { model: "Pixel 8", platform: "android" },
+      model: "Pixel 8",
+      platform: "android",
     });
 
     // The refusal on file is another platform's; attaching it here would blame iOS for
@@ -1065,7 +1082,7 @@ describe("DaemonServer driver rejections", () => {
     // Unexplained, "No driver provides a adb passthrough" reads as "this host has no
     // Android SDK" and sends the operator off to install one, while the summary naming the
     // port conflict sits unread in `driverRejections` (safety rule 9).
-    expect(response.error?.code).toBe("BAD_REQUEST");
+    expect(response.error?.code).toBe("UNKNOWN_PASSTHROUGH_TOOL");
     expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
   });
 

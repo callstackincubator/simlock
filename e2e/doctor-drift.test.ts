@@ -250,6 +250,52 @@ describe("doctor and drift", () => {
     await env.expectEvents(["device.orphan-purged"]);
   });
 
+  /**
+   * The separation ADR 0001 decision 6 turns on, asserted from the outside. `purgeOrphans`
+   * is not part of `fix` precisely so that an operator already running `doctor --fix`
+   * unattended in CI does not acquire a device-destroying behaviour by upgrading -- which
+   * only holds if `--fix` genuinely leaves orphans alone.
+   *
+   * Worth its own flow rather than an assertion inside the purge test above: the failure it
+   * guards against is the plausible mis-fix of the bug that flag actually shipped with. The
+   * daemon dropped `purgeOrphans` on the floor and destroyed nothing; folding it into `fix`
+   * would have made the purge test pass while quietly making `--fix` destructive for
+   * everyone.
+   */
+  it("reports orphans under --fix and destroys none of them", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: {
+        knownModels: ["iPhone 16"],
+        availableOsVersions: ["18.4"],
+        managedReality: {
+          devices: [{ deviceId: "fake-ios-orphan", runState: "running" }],
+          processes: [{ deviceId: "fake-ios-orphan" }],
+        },
+      },
+    });
+
+    await env.driverLog.clear();
+    // `--yes` too: the confirmation is not what keeps `--fix` non-destructive, so answering
+    // it in advance must not change the outcome either.
+    const fixed = await env.cli(["doctor", "--fix", "--yes"]);
+
+    expect(fixed.code).toBe(0);
+    expect((fixed.json as { findings: Finding[] }).findings.map((f) => f.kind)).toEqual([
+      "orphan-device",
+      "orphan-process",
+    ]);
+    expect(
+      (await env.driverLog.calls()).map((call) => call.operation),
+      "--fix must never destroy a device, however the run was confirmed",
+    ).not.toContain("destroy");
+    // The purge is the only path that re-proves the root, because it is the only one that
+    // was ever going to destroy anything.
+    expect((await env.driverLog.calls()).map((call) => call.operation)).not.toContain(
+      "revalidateRoot",
+    );
+  });
+
   it("destroys nothing when the root can no longer be proven", async () => {
     const env = await withDaemon();
     await env.driverScript.set({

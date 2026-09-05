@@ -118,7 +118,14 @@ const PASSTHROUGH_REFUSALS: Readonly<
  * through the CLI invocation it is already making and this stays synchronous.
  */
 const PASSTHROUGH_PROGRAM =
-  "process.stdout.write(JSON.stringify(process.argv.slice(1)));" +
+  "process.stdout.write(JSON.stringify({" +
+  "argv: process.argv.slice(1)," +
+  // Echoed back so a flow can prove the driver-built environment reached the tool's own
+  // process, not merely that the daemon returned it in the resolved command. That is the
+  // half of ADR 0001 decision 7 the wrapper exists for: handing back the scoping that
+  // containment removed.
+  "platform: process.env.SIMLOCK_FAKE_PASSTHROUGH_PLATFORM ?? null," +
+  "}));" +
   "process.exit(Number(process.env.SIMLOCK_FAKE_PASSTHROUGH_EXIT ?? 0));";
 
 /**

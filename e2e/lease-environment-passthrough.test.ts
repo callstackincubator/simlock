@@ -131,23 +131,38 @@ describe("reaching a leased device", () => {
     }
   });
 
-  it("scopes a passthrough to the driver's root and returns the tool's own exit code", async () => {
-    const env = await withDaemon();
+  /**
+   * Both wrappers, because they are two different drivers answering the same operation and
+   * the CLI knows the names but nothing else: which flag scopes the tool, and what its
+   * environment has to carry, are the driver's to decide (architecture rule 2).
+   *
+   * `platform` is the load-bearing half. The daemon *returning* an environment in the
+   * resolved command proves nothing on its own -- what the lease holder needs is for it to
+   * reach the tool's own process, which only a real spawn can show. `argv` proves the
+   * scoping, `platform` proves the injection, and the exit code proves the CLI reports the
+   * tool's own result rather than its own.
+   */
+  it.each([
+    ["adb", "android", ["shell", "input", "tap", "100", "200"]],
+    ["simctl", "ios", ["list", "devices"]],
+  ])(
+    "scopes a %s passthrough to its driver's root and injects its environment",
+    async (tool, platform, args) => {
+      const env = await withDaemon();
 
-    const passthrough = await env.cli(["adb", "shell", "input", "tap", "100", "200"], {
-      env: { SIMLOCK_FAKE_PASSTHROUGH_EXIT: "7" },
-    });
+      const passthrough = await env.cli([tool, ...args], {
+        env: { SIMLOCK_FAKE_PASSTHROUGH_EXIT: "7" },
+      });
 
-    expect(passthrough.code).toBe(7);
-    expect(JSON.parse(passthrough.stdout)).toEqual([
-      "/fake/android",
-      "shell",
-      "input",
-      "tap",
-      "100",
-      "200",
-    ]);
-  });
+      // The tool's own exit code, not the CLI's: a wrapper that swallowed it would make
+      // `simlock adb shell ...` useless in a script.
+      expect(passthrough.code).toBe(7);
+      expect(JSON.parse(passthrough.stdout)).toEqual({
+        argv: [`/fake/${platform}`, ...args],
+        platform,
+      });
+    },
+  );
 
   it.each([
     [["simctl", "delete", "ABCD"], "simctl delete"],

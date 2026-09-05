@@ -1096,9 +1096,14 @@ describe("AndroidDriver", () => {
         idGenerator: { generate: () => "one" },
         instanceId,
         processRunner: runner,
-        processSupervisor: new FakeProcessSupervisor(),
-        simlockHome: home,
-        tcpProbe: new FakeTcpProbe(),
+        // Adopt the recorded server `recordRunningAdbServer` just wrote, exactly as the
+        // shared `createDriver` helper does: this test is about hardware properties, and
+        // starting a real supervised server is not part of what it exercises. `simlockHome`
+        // has to be the real one too -- under `home` the AVD root would not be
+        // `avdDirectory`, and the assertion below would pass without proving anything.
+        processSupervisor: new FakeProcessSupervisor([adbServerPid]),
+        simlockHome,
+        tcpProbe: new FakeTcpProbe([adbServerPort]),
       });
 
       const spec = await driver.resolveSpec(

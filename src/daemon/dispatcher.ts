@@ -20,6 +20,7 @@ import type {
   CapacityReader,
   CatalogReader,
   LeaseCommands,
+  PassthroughResolver,
   QueueControl,
 } from "../core/lease-ports.js";
 import type { Clock, Logger } from "../ports/index.js";
@@ -100,6 +101,12 @@ export interface DispatcherOptions {
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
   readonly nuke?: Nuke;
+  /**
+   * Builds the scoped command behind `simlock simctl` / `simlock adb` (ADR 0001, decision 7).
+   * Optional for the same reason as `nuke`/`doctor`: the many tests that never issue a
+   * passthrough should not have to fabricate a resolver.
+   */
+  readonly passthrough?: PassthroughResolver;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly registry: Registry;
@@ -160,7 +167,13 @@ type AnyHandler = (input: never, session: DispatchSession) => Promise<unknown> |
  */
 export class Dispatcher {
   readonly #logger: Logger;
-  readonly #handlers: { readonly [Op in OperationName]?: AnyHandler };
+  /**
+   * Total over every operation but `daemon.stop`. Deliberately *not* a partial map: a
+   * declared operation whose handler was never written is otherwise invisible to the
+   * compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
+   * `driver.passthrough` came to be declared, dispatched, and unimplemented at once.
+   */
+  readonly #handlers: Record<Exclude<OperationName, "daemon.stop">, AnyHandler>;
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
@@ -173,6 +186,7 @@ export class Dispatcher {
       "lease.release": this.#leaseRelease,
       "lease.list": this.#leaseList,
       "lease.heartbeat": this.#leaseHeartbeat,
+      "driver.passthrough": this.#driverPassthrough,
       "doctor.run": this.#doctorRun,
       "lease.release-all": this.#leaseReleaseAll,
       "list.get": this.#listGet,
@@ -203,7 +217,12 @@ export class Dispatcher {
     // shape, not the runtime, so it is not the same kind of escape hatch as `input as never`
     // below (that one truly is unverified until `parseInput` runs).
     const definition = OPERATIONS[operation] as unknown as OperationDefinition;
-    const handler = this.#handlers[operation];
+    // `#handlers` is total over every operation but `daemon.stop`, so the only `Op` this
+    // lookup can miss is that one -- and `DaemonServer` intercepts it before `dispatch()`.
+    // The cast states that; the guard below still covers a caller that ignores the rule,
+    // since an absent handler must not become `undefined is not a function`.
+    const handler: AnyHandler | undefined =
+      this.#handlers[operation as Exclude<OperationName, "daemon.stop">];
     if (handler === undefined) {
       throw new DispatchError("UNKNOWN_REQUEST", `Unknown request type: ${operation}`);
     }
@@ -357,9 +376,32 @@ export class Dispatcher {
     return { leases: acked };
   };
 
+  /**
+   * Resolution only: the daemon builds the command and never runs it. Spawning it here would
+   * attach a user's interactive `adb shell` to the daemon's stdio, and the CLI is the process
+   * that actually has a terminal (ADR 0001, decision 7).
+   *
+   * Both failure modes leave as their own typed errors -- `PassthroughRefusedError` for a verb
+   * the driver will not proxy, `UnknownPassthroughToolError` for a tool no driver claims -- so
+   * `errorCode` maps them to `PASSTHROUGH_REFUSED` / `UNKNOWN_PASSTHROUGH_TOOL` and
+   * `DaemonServer#describeError` still gets the chance to append the driver's refusal summary.
+   */
+  #driverPassthrough: Handler<"driver.passthrough"> = (input) => {
+    if (this.options.passthrough === undefined) {
+      throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");
+    }
+    return this.options.passthrough.passthrough(input.tool, input.args);
+  };
+
   #doctorRun: Handler<"doctor.run"> = async (input) => {
     if (this.options.doctor === undefined) throw new DoctorUnavailableError();
-    return this.options.doctor.reconcile({ fix: input.fix ?? false });
+    // `purgeOrphans` travels as its own flag all the way down, never folded into `fix`:
+    // someone already running `doctor --fix` unattended in CI must not acquire a
+    // destructive behaviour by upgrading (ADR 0001, decision 6).
+    return this.options.doctor.reconcile({
+      fix: input.fix ?? false,
+      purgeOrphans: input.purgeOrphans ?? false,
+    });
   };
 
   #listGet: Handler<"list.get"> = (input) => {

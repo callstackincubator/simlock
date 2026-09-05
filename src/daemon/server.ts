@@ -224,6 +224,7 @@ export class DaemonServer {
       leases: options.leases,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
+      ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
       queue: options.queue,
       reaper: options.reaper,
       registry: options.registry,

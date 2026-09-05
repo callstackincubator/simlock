@@ -82,10 +82,21 @@ export class DeviceProfileRegistry {
 export class BuiltinDeviceProfileSource implements DeviceProfileSource {
   readonly #avdmanager: string;
   readonly #processRunner: ProcessRunner;
+  readonly #env: (() => NodeJS.ProcessEnv) | undefined;
 
-  constructor(avdmanager: string, processRunner: ProcessRunner) {
+  /**
+   * `env` is a thunk, not a value: it is the driver's own scoped environment (ADR 0001,
+   * decision 4), and the driver builds it from state it only settles once the AVD root is
+   * proven. Reading it per call means this source can never be handed a snapshot that was
+   * taken before containment was established.
+   *
+   * Omitting it leaves the child's environment inherited rather than replaced -- an empty
+   * override is not "no override", it is a child spawned with no `PATH` at all.
+   */
+  constructor(avdmanager: string, processRunner: ProcessRunner, env?: () => NodeJS.ProcessEnv) {
     this.#avdmanager = avdmanager;
     this.#processRunner = processRunner;
+    this.#env = env;
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the DeviceProfileSource port by DeviceProfileRegistry.listModels.
@@ -106,7 +117,11 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
   }
 
   async #profiles(): Promise<readonly AvdmanagerDeviceProfile[]> {
-    const result = await this.#processRunner.run(this.#avdmanager, ["list", "device"]);
+    const result = await this.#processRunner.run(
+      this.#avdmanager,
+      ["list", "device"],
+      this.#env === undefined ? {} : { env: this.#env() },
+    );
     if (result.code !== 0) {
       throw new DriverCrashError(
         `${this.#avdmanager} list device failed: ${result.stderr || result.stdout}`,

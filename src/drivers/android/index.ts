@@ -318,7 +318,8 @@ export class AndroidDriver implements Driver {
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
     this.#deviceProfiles = new DeviceProfileRegistry(
-      options.deviceProfileSources ?? defaultDeviceProfileSources(options, sdk, this.#onDiagnostic),
+      options.deviceProfileSources ??
+        defaultDeviceProfileSources(options, sdk, this.#onDiagnostic, () => this.#env()),
     );
   }
 
@@ -1850,10 +1851,15 @@ function defaultDeviceProfileSources(
   options: AndroidDriverOptions,
   sdk: AndroidSdkPaths,
   onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined,
+  env: () => NodeJS.ProcessEnv,
 ): readonly DeviceProfileSource[] {
   const devicesXmlPath = `${options.env.ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
   return [
-    new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner),
+    // Scoped like every other invocation this driver makes: `avdmanager` is the tool that
+    // both lists profiles and creates AVDs, and leaving one of its calls pointed at the
+    // user's own `~/.android` is the exception that makes "every call is scoped" untrue
+    // (ADR 0001, decision 4).
+    new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner, env),
     new UserDeviceProfileSource(devicesXmlPath, options.filesystem, onDiagnostic),
   ];
 }

@@ -47,7 +47,6 @@ export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./devic
 export type { EnsureOwnedRootOptions } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary, carried in the driver.root-rejected payload.
 export type { RootRejectionReason } from "./device-root.js";
-// fallow-ignore-next-line unused-type -- public shape of the on-disk ownership marker.
 export type { OwnedRootMarker } from "./device-root.js";
 export { InstanceIdentityError, loadInstanceId } from "./instance-identity.js";
 // fallow-ignore-next-line unused-type -- public options contract for the daemon composition root.

@@ -24,7 +24,6 @@ export type RootRejectionReason =
   | "non-empty-unowned-root"
   | "unreadable";
 
-// fallow-ignore-next-line unused-type -- public shape of the on-disk ownership marker.
 export interface OwnedRootMarker {
   readonly schemaVersion: 1;
   readonly owner: "simlock";

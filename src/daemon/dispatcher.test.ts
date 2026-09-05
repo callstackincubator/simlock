@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import {
@@ -46,6 +46,9 @@ async function buildDispatcher(
      * pay for wiring one -- since a real `Nuke` needs this function's own `engine`/`registry`,
      * it is built here (rather than passed in) when a test opts in. */
     readonly includeNuke?: boolean;
+    /** Gives the fake driver a `simlock <tool>` wrapper so `driver.passthrough` has something
+     * to route to; off by default so no other test's catalog output changes shape. */
+    readonly passthroughTool?: string;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -58,7 +61,21 @@ async function buildDispatcher(
     idGenerator: sequence(),
     statePath: "/state.json",
   });
-  const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+  const driver = new FakeDriver({
+    availableOsVersions: ["26.5"],
+    clock,
+    platform: "ios",
+    ...(overrides.passthroughTool === undefined
+      ? {}
+      : {
+          passthrough: (args: readonly string[]) => ({
+            args: ["--set", "/root", ...args],
+            command: overrides.passthroughTool as string,
+            env: { SIMLOCK_SCOPED: "1" },
+          }),
+          passthroughTool: overrides.passthroughTool,
+        }),
+  });
   const config = testConfig(overrides.downloadsPolicy);
   const engine = new LeaseEngine({
     clock,
@@ -109,12 +126,13 @@ async function buildDispatcher(
     health: () => "running",
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
+    passthrough: engine,
     queue: engine,
     reaper,
     registry,
     tokens,
   });
-  return { clock, dispatcher, driver, engine, eventBus, registry, tokens };
+  return { clock, dispatcher, doctor, driver, engine, eventBus, registry, tokens };
 }
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
@@ -207,6 +225,52 @@ describe("Dispatcher: role rejection", () => {
     await expect(
       dispatcher.dispatch("list.get", { kind: "devices" }, session({ role: "admin" })),
     ).resolves.toEqual([]);
+  });
+
+  // Both halves of this shipped broken once: the handler forwarded `fix` alone, so
+  // `doctor --purge-orphans` prompted for confirmation and then destroyed nothing. The flag
+  // stays its own all the way down -- an unattended `--fix` must not acquire a destructive
+  // behaviour by upgrading (ADR 0001, decision 6) -- which is only true if it also *arrives*.
+  it("doctor.run forwards purgeOrphans to the Doctor, distinctly from fix", async () => {
+    const { dispatcher, doctor } = await buildDispatcher();
+    const reconcile = vi.spyOn(doctor, "reconcile");
+
+    await dispatcher.dispatch("doctor.run", {}, session({ role: "admin" }));
+    expect(reconcile).toHaveBeenLastCalledWith({ fix: false, purgeOrphans: false });
+
+    await dispatcher.dispatch("doctor.run", { fix: true }, session({ role: "admin" }));
+    expect(reconcile).toHaveBeenLastCalledWith({ fix: true, purgeOrphans: false });
+
+    await dispatcher.dispatch("doctor.run", { purgeOrphans: true }, session({ role: "admin" }));
+    expect(reconcile).toHaveBeenLastCalledWith({ fix: false, purgeOrphans: true });
+  });
+
+  // `driver.passthrough` was declared in the contract and dispatched by the socket switch while
+  // no handler existed for it, which the partial handler map hid from the compiler: every
+  // `simlock simctl` / `simlock adb` answered UNKNOWN_REQUEST. The map is total now, so this
+  // guards the routing rather than the registration.
+  it("driver.passthrough resolves the scoped command through the driver that claims the tool", async () => {
+    const { dispatcher } = await buildDispatcher({ passthroughTool: "simctl" });
+
+    await expect(
+      dispatcher.dispatch(
+        "driver.passthrough",
+        { args: ["list", "devices"], tool: "simctl" },
+        session(),
+      ),
+    ).resolves.toEqual({
+      args: ["--set", "/root", "list", "devices"],
+      command: "simctl",
+      env: { SIMLOCK_SCOPED: "1" },
+    });
+  });
+
+  it("driver.passthrough refuses a tool no driver claims", async () => {
+    const { dispatcher } = await buildDispatcher({ passthroughTool: "simctl" });
+
+    await expect(
+      dispatcher.dispatch("driver.passthrough", { args: ["devices"], tool: "adb" }, session()),
+    ).rejects.toThrow(/No driver provides a adb passthrough/);
   });
 
   it("doctor.run's role depends on its own input: fix:false is agent, fix:true is admin", async () => {
