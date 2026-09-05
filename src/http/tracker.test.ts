@@ -5,12 +5,11 @@ import { FakeClock } from "../ports/index.js";
 import { FakeDispatcher, makeGrant, sequenceIdGenerator, waitForDispatch } from "./test-fakes.js";
 import { isTerminalStage, LeaseRequestTracker, type TrackedRequestView } from "./tracker.js";
 
-function buildTracker(overrides: { readonly defaultTtlMs?: number } = {}) {
+function buildTracker() {
   const clock = new FakeClock(1_000);
   const dispatcher = new FakeDispatcher();
   const tracker = new LeaseRequestTracker({
     clock,
-    defaultTtlMs: overrides.defaultTtlMs ?? 900_000,
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     idGenerator: sequenceIdGenerator("req"),
   });
@@ -114,10 +113,10 @@ describe("LeaseRequestTracker.submit", () => {
   });
 
   it("passes a caller-supplied ttlMs directly on the lease.request input -- no separate renew call", async () => {
-    const { dispatcher, tracker } = buildTracker({ defaultTtlMs: 900_000 });
+    const { dispatcher, tracker } = buildTracker();
     const outcomePromise = tracker.submit(identity, { ...body, ttlMs: 60_000 });
     const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ mode: "detached", ttlMs: 60_000 });
+    expect(call.input).toMatchObject({ ttlMs: 60_000 });
 
     call.resolve(
       makeGrant({ lease: { grantedAt: 1_000, id: "lse_1", ttlDeadline: 1_000 + 60_000 } }),

@@ -103,7 +103,6 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   const logger = deps.logger.child("http");
   const tracker = new LeaseRequestTracker({
     clock: deps.clock,
-    defaultTtlMs: deps.config.lease.detachedTtlMs,
     dispatch: deps.dispatch,
     idGenerator: deps.idGenerator,
     logger,
@@ -266,13 +265,13 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const lease = await findOwnedLease(deps, session, c.req.param("id"));
     const device = findDevice(deps, lease.deviceId);
     if (device === undefined) throw unknownLease(lease.id);
+    // ADR 0004: `ttlMs` comes off the lease record itself, so a payload served after a daemon
+    // restart reports the lease's real width rather than a mode default standing in for a
+    // per-request value this gateway no longer remembers. `requestId` is still gateway-side
+    // bookkeeping, and is still the one field a restart can drop.
     const requestId = tracker.requestIdForLease(lease.id);
-    const ttlMs = tracker.effectiveTtlMs(lease.id) ?? modeDefaultTtlMs(lease, deps.config);
     return c.json({
-      lease: buildLeasePayload(device, lease, {
-        ...(requestId === undefined ? {} : { requestId }),
-        ttlMs,
-      }),
+      lease: buildLeasePayload(device, lease, requestId === undefined ? {} : { requestId }),
     });
   });
 
@@ -289,13 +288,16 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     // Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
     // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
     // socket transport, rather than the `UNKNOWN_LEASE`/404 a `lease.list` filter would produce
-    // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself.
+    // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself, and a
+    // `ttlMs` above `lease.maxTtlMs` as `BAD_REQUEST`/400 -- the cap lives in the shared
+    // dispatcher, so this route inherits it rather than restating it. An omitted `ttlMs`
+    // re-applies the lease's own stored width (ADR 0004 §4), which is why nothing is recorded
+    // here afterwards.
     const renewed = await deps.dispatch(
       "lease.renew",
       { leaseId: id, ...(ttlMs === undefined ? {} : { ttlMs }) },
       session,
     );
-    tracker.recordLeaseTtl(id, ttlMs ?? modeDefaultTtlMs(renewed, deps.config));
 
     return c.json({
       expiresAt: new Date(renewed.ttlDeadline).toISOString(),
@@ -471,11 +473,6 @@ function serializeRequest(
     case "cancelled":
       return base;
   }
-}
-
-/** The interval a default (body-less) renew of this lease applies -- its mode's configured TTL. */
-function modeDefaultTtlMs(lease: { readonly mode: "held" | "detached" }, config: Config): number {
-  return lease.mode === "held" ? config.lease.heldTtlBackstopMs : config.lease.detachedTtlMs;
 }
 
 function findDevice(deps: HttpGatewayDeps, id: string): DeviceRecord | undefined {

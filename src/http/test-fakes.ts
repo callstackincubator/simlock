@@ -37,9 +37,8 @@ export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     lease: {
-      detachedTtlMs: 900_000,
-      heartbeatIntervalMs: 5_000,
-      heldTtlBackstopMs: 3_600_000,
+      defaultTtlMs: 900_000,
+      maxTtlMs: 14_400_000,
       ...overrides,
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
@@ -82,9 +81,10 @@ export function makeLease(overrides: Partial<LeaseRecord> = {}): LeaseRecord {
     deviceId: "dev_1",
     grantedAt: 1_000,
     id: "lse_1",
-    mode: "detached",
     ownerId: "tok_agent",
     requesterId: "tok_agent",
+    lastRenewedAt: 1_000,
+    ttlMs: 60_000,
     ttlDeadline: 1_000 + 900_000,
     ...overrides,
   };

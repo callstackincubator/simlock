@@ -380,7 +380,7 @@ describe("POST /v1/lease-requests", () => {
     const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, { ...defaultBody, ttlMs: 60_000 });
     const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ mode: "detached", ttlMs: 60_000 });
+    expect(call.input).toMatchObject({ ttlMs: 60_000 });
     call.resolve(makeGrant({ lease: { grantedAt: 1_000, id: "lse_1", ttlDeadline: 61_000 } }));
     await responsePromise;
     expect(dispatcher.calls.filter((c) => c.operation === "lease.renew")).toHaveLength(0);
@@ -552,7 +552,6 @@ describe("lease routes", () => {
       deviceId: "dev_1",
       grantedAt: 1_000,
       id: (input as { leaseId: string }).leaseId,
-      mode: "detached",
       ownerId: "tok_agent",
       requesterId: "tok_agent",
       ttlDeadline: 2_000 + ((input as { ttlMs?: number }).ttlMs ?? 900_000),
@@ -593,7 +592,6 @@ describe("lease routes", () => {
         deviceId: "dev_1",
         grantedAt: 1_000,
         id: "lse_1",
-        mode: "detached",
         ownerId: "tok_agent",
         requesterId: "tok_agent",
         ttlDeadline: 2_000,
@@ -829,13 +827,18 @@ describe("hardening from review", () => {
     );
   });
 
-  it("reports the mode-default ttlMs for a lease the tracker has no record of", async () => {
-    const { app, config, registry } = buildHarness();
+  it("reports the lease's own stored ttlMs, with nothing gateway-side to remember", async () => {
+    // ADR 0004: the width lives on the lease record, so a payload served by a gateway that
+    // never saw the request (after a daemon restart, say) still reports the real width
+    // instead of a mode default standing in for one.
+    const { app, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+    registry.leases = [
+      makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent", ttlMs: 123_000 }),
+    ];
 
     const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
     const body = (await response.json()) as { lease: { ttlMs: number } };
-    expect(body.lease.ttlMs).toBe(config.lease.detachedTtlMs);
+    expect(body.lease.ttlMs).toBe(123_000);
   });
 });
