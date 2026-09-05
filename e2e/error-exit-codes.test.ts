@@ -84,13 +84,13 @@ describe("error and exit-code table", () => {
     expectStructuredFailure(result, 1, "UNKNOWN_LEASE");
   });
 
-  it("lease renew on a held-mode lease -> exit 0 with a later deadline", async () => {
+  it("lease renew on a running holder's lease -> exit 0 with a later deadline", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
 
-    const held = env.cliBackground([
+    const holder = env.cliBackground([
       "lease",
       "--platform",
       "ios",
@@ -99,9 +99,11 @@ describe("error and exit-code table", () => {
       "--os",
       "18.4",
       "--agent-id",
-      "flow4-held",
+      "flow4-holder",
     ]);
-    const grant = JSON.parse(await held.firstStdoutLine()) as { lease: { id: string } };
+    const grant = JSON.parse(await holder.firstStdoutLine()) as {
+      lease: { id: string; ttlMs: number };
+    };
 
     try {
       const rows = await waitForLeaseCount(env, 1);
@@ -114,15 +116,15 @@ describe("error and exit-code table", () => {
       const result = await env.cli(["lease", "renew", grant.lease.id]);
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
-      const renewed = result.json as { id: string; mode: string; ttlDeadline: number };
+      const renewed = result.json as { id: string; ttlMs: number; ttlDeadline: number };
       expect(renewed.id).toBe(grant.lease.id);
-      expect(renewed.mode).toBe("held");
-      // A held-mode lease used to have no escape hatch: renewal now resets its
-      // backstop deadline exactly like a detached lease's, instead of rejecting.
+      // ADR 0004: one kind of lease, and a body-less renew re-applies its own stored width
+      // rather than any mode-shaped default.
+      expect(renewed.ttlMs).toBe(grant.lease.ttlMs);
       expect(renewed.ttlDeadline).toBeGreaterThan(beforeDeadline);
     } finally {
-      held.kill("SIGTERM");
-      await held.waitForExit(15_000);
+      holder.kill("SIGTERM");
+      await holder.waitForExit(15_000);
     }
   });
 });
