@@ -394,6 +394,33 @@ describe("McpSession", () => {
     await session.close();
   });
 
+  it("reports a lease the daemon says is gone as lease-lost, and releases nothing on close", async () => {
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.renewLeaseImpl = () =>
+      Promise.reject(
+        new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lease-1" }),
+      );
+    const session = new McpSession({ clock, connect: async () => client });
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    // A lease that expired while this session was idle may never produce a push -- the
+    // renewal's own answer is what tells the agent.
+    clock.advance(4_115);
+    await flushMicrotasks();
+    expect(notices).toEqual([
+      { deviceId: "device-1", leaseId: "lease-1", reason: "renew-rejected" },
+    ]);
+    expect(clock.pendingTimerCount).toBe(0);
+
+    await session.close();
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toEqual([]);
+    expect(client.calls.filter((call) => call.method === "renewLease")).toHaveLength(1);
+  });
+
   it("stops renewing a lease that ended elsewhere", async () => {
     const clock = new FakeClock(0);
     const client = new FakeSimlockClient();

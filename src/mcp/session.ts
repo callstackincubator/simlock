@@ -2,6 +2,7 @@ import {
   isSimlockError,
   SimlockError,
   type LeaseProgress,
+  type LeaseRecord,
   type LeaseRequestInput,
   type SimlockClient,
 } from "../client/index.js";
@@ -151,7 +152,7 @@ export class McpSession {
         ...(signal === undefined ? {} : { signal }),
       });
       this.#heldLeaseId = grant.lease.id;
-      this.#startRenewal(client, grant.lease.id, grant.lease.ttlDeadline);
+      this.#startRenewal(client, grant.lease);
       return grant;
     });
   }
@@ -159,13 +160,14 @@ export class McpSession {
   release(input: ReleaseSimulatorInput): Promise<ReleaseSimulatorOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
-      const client = await this.#clientForUse();
-      // `close()` does not queue behind `#mutations` (see its doc comment), so it can read
-      // `#heldLeaseId` while this release is still in flight. This is how it knows the lease
-      // already has a release on the way and must not get a second one.
+      // Marked before `#clientForUse()`, not after: that call can reconnect, which takes as
+      // long as a daemon launch, and `close()` does not queue behind `#mutations` (see its doc
+      // comment). This is how it knows the lease already has a release on the way -- from the
+      // moment this call commits to sending one -- and must not get a second one.
       this.#releaseInFlight = input.leaseId;
       let result;
       try {
+        const client = await this.#clientForUse();
         result = await client.releaseLease(input);
       } finally {
         this.#releaseInFlight = undefined;
@@ -286,17 +288,41 @@ export class McpSession {
    * quietly reconnecting behind the tool surface -- reconnect stays a decision the next tool
    * call makes (`#clientForUse`).
    */
-  #startRenewal(client: SimlockClient, leaseId: string, ttlDeadline: number): void {
+  #startRenewal(client: SimlockClient, lease: LeaseRecord): void {
     this.#stopRenewal();
     // No `onError`: this frontend owns stdout (it is the protocol) and has no side channel a
-    // failed renewal could be written to. Every failure that matters to the agent surfaces as
-    // the `lease-lost` notice that follows it, or as the next tool call's own error.
+    // retryable failure could be written to. What the agent has to know is that the lease is
+    // over, and that arrives as the `lease-lost` notice `onLeaseGone` raises below (or as the
+    // daemon's own push, whichever comes first) rather than as a stream of attempt failures.
     this.#renewal = startLeaseRenewal({
       clock: this.#clock,
-      leaseId,
+      leaseId: lease.id,
+      onLeaseGone: () => {
+        // The daemon says this lease is gone or not ours: the same ending as the push, which
+        // may never arrive (a lease that expired while this connection was away has nothing
+        // left to push about).
+        this.#reportLeaseLost({
+          deviceId: lease.deviceId,
+          leaseId: lease.id,
+          reason: "renew-rejected",
+        });
+      },
       renew: (id) => client.renewLease({ leaseId: id }),
-      ttlDeadline,
+      ttlDeadline: lease.ttlDeadline,
     });
+  }
+
+  /**
+   * This session's own lease has ended, as told by a renewal rather than by a push: drop the
+   * timer, forget the id, and deliver the same notice a push would have. (The push relay in
+   * `#wireClient` stays separate because it forwards every lease-lost push to listeners,
+   * including ones for leases this session never held; this only ever fires for its own.)
+   */
+  #reportLeaseLost(notice: LeaseLostNotice): void {
+    if (notice.leaseId !== this.#heldLeaseId) return;
+    this.#stopRenewal();
+    this.#heldLeaseId = undefined;
+    for (const listener of this.#leaseLostListeners) listener(notice);
   }
 
   #stopRenewal(): void {
