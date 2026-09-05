@@ -73,11 +73,7 @@ describe("loadConfig", () => {
         maxConcurrentRecoveries: 1,
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
-      lease: {
-        detachedTtlMs: 15 * 60_000,
-        heldTtlBackstopMs: 60 * 60_000,
-        heartbeatIntervalMs: 5 * 60_000,
-      },
+      lease: { defaultTtlMs: 15 * 60_000, maxTtlMs: 4 * 60 * 60_000 },
       capacity: {
         strategy: "resource",
         config: {
@@ -184,7 +180,7 @@ describe("loadConfig", () => {
       configPath,
       JSON.stringify({
         limits: { ios: { maxDevices: 3, maxRunning: 2 }, maxRunning: 4 },
-        lease: { detachedTtlMs: 123 },
+        lease: { defaultTtlMs: 123 },
       }),
     );
 
@@ -192,7 +188,7 @@ describe("loadConfig", () => {
       configPath,
       filesystem,
       overrides: {
-        lease: { detachedTtlMs: 456 },
+        lease: { defaultTtlMs: 456 },
         limits: { android: { maxRunning: 1 } },
       },
       systemStats: createStats(),
@@ -205,7 +201,7 @@ describe("loadConfig", () => {
       ios: { maxRunning: 2 },
       maxRunning: 4,
     });
-    expect(config.lease.detachedTtlMs).toBe(456);
+    expect(config.lease.defaultTtlMs).toBe(456);
   });
 
   it("deeply merges a partial config file", async () => {
@@ -255,43 +251,84 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
-  it("accepts a heartbeat interval at the boundary of a quarter of the backstop", async () => {
+  it("accepts a lease TTL pair at the boundary, where the default equals the cap", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ lease: { heldTtlBackstopMs: 40_000, heartbeatIntervalMs: 10_000 } }),
+      JSON.stringify({ lease: { defaultTtlMs: 40_000, maxTtlMs: 40_000 } }),
     );
 
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(config.lease).toMatchObject({ heartbeatIntervalMs: 10_000, heldTtlBackstopMs: 40_000 });
+    expect(config.lease).toMatchObject({ defaultTtlMs: 40_000, maxTtlMs: 40_000 });
   });
 
-  it("rejects a non-positive-integer heartbeat interval", async () => {
+  it.each([
+    [{ lease: { defaultTtlMs: 0 } }, "lease.defaultTtlMs"],
+    [{ lease: { maxTtlMs: -1 } }, "lease.maxTtlMs"],
+    [{ lease: { defaultTtlMs: "soon" } }, "lease.defaultTtlMs"],
+  ])("rejects a non-positive lease TTL, naming the offending key (%#)", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("rejects a defaultTtlMs above maxTtlMs, naming the offending key (ADR 0004)", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ lease: { heartbeatIntervalMs: 0 } }),
+      JSON.stringify({ lease: { defaultTtlMs: 40_001, maxTtlMs: 40_000 } }),
     );
 
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("lease.heartbeatIntervalMs");
+    ).rejects.toThrow("lease.defaultTtlMs");
   });
 
-  it("rejects a heartbeat interval that exceeds a quarter of the backstop", async () => {
+  it("catches the pair rule across layers, not just within one file", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ lease: { heldTtlBackstopMs: 40_000, heartbeatIntervalMs: 10_001 } }),
+      JSON.stringify({ lease: { defaultTtlMs: 60_000 } }),
     );
 
+    // The file's default is fine against the *default* cap; only the merged config is wrong.
     await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("lease.heartbeatIntervalMs");
+      loadConfig({
+        configPath,
+        filesystem,
+        overrides: { lease: { maxTtlMs: 30_000 } },
+        systemStats: createStats(),
+      }),
+    ).rejects.toThrow("lease.defaultTtlMs");
   });
+
+  it.each([["detachedTtlMs"], ["heldTtlBackstopMs"], ["heartbeatIntervalMs"]])(
+    "warns about the retired lease.%s and ignores it, carrying no value over (ADR 0004)",
+    async (retired) => {
+      const filesystem = new MemoryFilesystem();
+      const warn = vi.fn();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify({ lease: { [retired]: 1 } }));
+
+      const config = await loadConfig({
+        configPath,
+        filesystem,
+        systemStats: createStats(),
+        warn,
+      });
+
+      expect(warn).toHaveBeenCalledWith(`Unknown config key: "lease.${retired}"`);
+      // Not aliased onto anything: the new keys keep their own defaults.
+      expect(config.lease).toEqual({ defaultTtlMs: 15 * 60_000, maxTtlMs: 4 * 60 * 60_000 });
+    },
+  );
 
   it("warns about unknown keys without rejecting the file", async () => {
     const filesystem = new MemoryFilesystem();

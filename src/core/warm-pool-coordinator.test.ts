@@ -39,7 +39,7 @@ const config: Config = {
       retryBackoffMultiplier: 2,
     },
   },
-  lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
+  lease: { defaultTtlMs: 100, maxTtlMs: 100 },
   capacity: {
     strategy: "resource",
     config: {
@@ -180,9 +180,10 @@ function released(device: DeviceRecord): ReleasedLease {
       deviceId: device.id,
       grantedAt: 1,
       id: "lease-1",
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      lastRenewedAt: 1,
+      ttlMs: 60_000,
       ttlDeadline: 100,
     },
   };

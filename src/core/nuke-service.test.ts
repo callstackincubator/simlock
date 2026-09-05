@@ -139,9 +139,10 @@ describe("NukeService", () => {
         deviceId: leased.id,
         grantedAt: 0,
         id: "lse_live",
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        lastRenewedAt: 0,
+        ttlMs: 60_000,
         ttlDeadline: 1,
       },
     ];

@@ -5,13 +5,12 @@ import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import type { WarmPoolCoordinator } from "./warm-pool-coordinator.js";
 
-export type LeaseReleaseReason = "closed" | "explicit" | "killed" | "orphaned" | "device-lost";
+export type LeaseReleaseReason = "explicit" | "killed" | "device-lost";
 
 export interface LeaseReleaseCommands {
   release(leaseId: string, reason: LeaseReleaseReason): Promise<void>;
-  releaseAll(reason: Exclude<LeaseReleaseReason, "closed">): Promise<readonly string[]>;
+  releaseAll(reason: Exclude<LeaseReleaseReason, "device-lost">): Promise<readonly string[]>;
   renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
-  heartbeat(leaseId: string): Promise<LeaseRecord>;
 }
 
 export interface LeaseExpirationAdmin {
@@ -28,7 +27,6 @@ export interface LeaseReleaseMaintenance {
 export interface LeaseReleaseLifecycle {
   beginRelease(leaseId: string, reason: LeaseReleaseReason | "expired"): Promise<ReleasedLease>;
   renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
-  heartbeat(leaseId: string): Promise<LeaseRecord>;
 }
 
 export interface LeaseReleaseRegistry {
@@ -135,12 +133,6 @@ export class LeaseReleaseCoordinator
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     return this.#runNormal(() =>
       this.options.decisions.run(() => this.options.lifecycle.renew(leaseId, ttlMs)),
-    );
-  }
-
-  async heartbeat(leaseId: string): Promise<LeaseRecord> {
-    return this.#runNormal(() =>
-      this.options.decisions.run(() => this.options.lifecycle.heartbeat(leaseId)),
     );
   }
 

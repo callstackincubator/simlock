@@ -419,7 +419,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async #grant(waiter: AcquisitionWaiter, deviceId: string): Promise<void> {
     const { device, lease } = await this.options.leases.grant({
       deviceId,
-      mode: waiter.options.mode,
       ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),

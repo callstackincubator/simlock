@@ -117,10 +117,7 @@ export class LeaseEngine {
       eventBus: options.eventBus,
       expiryScheduler: this.#expiry,
       registry: options.registry,
-      ttl: {
-        detachedMs: options.config.lease.detachedTtlMs,
-        heldBackstopMs: options.config.lease.heldTtlBackstopMs,
-      },
+      ttl: { defaultMs: options.config.lease.defaultTtlMs },
     });
     this.#queue = new WaitQueue({
       clock: options.clock,
@@ -202,11 +199,6 @@ export class LeaseEngine {
       },
       quarantineRestore: { restore: () => this.#quarantine.restore() },
       registry: options.registry,
-      releases: {
-        releaseOrphaned: async (leaseId) => {
-          await this.#releaseCoordinator.release(leaseId, "orphaned");
-        },
-      },
       timers: this.#leases,
     });
     this.healthMonitor = new LeaseHealthMonitor({
@@ -228,7 +220,7 @@ export class LeaseEngine {
     return this.#acquisition.request(request, options);
   }
 
-  async release(leaseId: string, reason: "closed" | "explicit" | "killed"): Promise<void> {
+  async release(leaseId: string, reason: "explicit" | "killed"): Promise<void> {
     await this.#releaseCoordinator.release(leaseId, reason);
   }
 
@@ -264,18 +256,15 @@ export class LeaseEngine {
   }
 
   /**
-   * Cancels every timer this engine armed, so the process can actually exit.
+   * Cancels every timer this engine armed, so the process can actually exit. A lease's TTL is
+   * a `setTimeout` that outlives the decision to shut down, so without this a daemon with an
+   * outstanding lease keeps running long after `daemon stop` -- up to that lease's whole TTL.
    *
-   * The expiry timers matter as much as the quarantine ones and were missed: a lease's
-   * TTL is a `setTimeout` that outlives the decision to shut down, so a daemon with an
-   * outstanding *detached* lease kept running long after `daemon stop` -- up to the
-   * fifteen minutes of its own TTL. Held leases hid it, because releasing them on the way
-   * out cancels their timers; detached leases are deliberately left alone, since their
-   * liveness is the TTL rather than a connection.
-   *
-   * Cancelling expires nothing early and loses nothing: `ttlDeadline` is persisted with
-   * the lease, and `LeaseExpiryScheduler.restore` re-arms it on the next start, which is
-   * also what makes a detached lease survive a restart intact.
+   * Cancelling expires nothing early and loses nothing, and under ADR 0004 releases nothing
+   * either: `ttlDeadline` is persisted with the lease, and `LeaseExpiryScheduler.restore`
+   * re-arms it on the next start. That is exactly what makes a lease survive a daemon restart
+   * intact, and a lease whose deadline passed while no daemon was running expire as soon as
+   * one is there to expire it.
    */
   dispose(): void {
     this.#quarantine.dispose();
@@ -333,15 +322,9 @@ export class LeaseEngine {
     return this.#acquisition.pendingRequestOwner(requesterId);
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer (same as the sibling heartbeat).
+  // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port by DaemonServer, which structural typing hides from the analyzer.
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     return this.#releaseCoordinator.renew(leaseId, ttlMs);
-  }
-
-  /** Slides a held lease's TTL back out to a full backstop from now. */
-  // fallow-ignore-next-line unused-class-member -- reached through the LeaseCommands port, which structural typing hides from the analyzer (same as the sibling renew).
-  async heartbeat(leaseId: string): Promise<LeaseRecord> {
-    return this.#releaseCoordinator.heartbeat(leaseId);
   }
 
   /**

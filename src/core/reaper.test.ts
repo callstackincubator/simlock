@@ -60,7 +60,7 @@ function config(): Config {
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
+    lease: { defaultTtlMs: 100, maxTtlMs: 100 },
     capacity: {
       strategy: "resource",
       config: {
@@ -174,9 +174,9 @@ async function seedLeased(harness: Awaited<ReturnType<typeof createHarness>>) {
   const device = await seedReady(harness);
   await harness.registry.createLease({
     deviceId: device.id,
-    mode: "held",
     requesterId: "agent-1",
     ownerId: "agent-1",
+    ttlMs: 60_000,
     ttlDeadline: 2_000,
   });
   return device;
@@ -365,7 +365,6 @@ describe("CleanupReaper", () => {
   it("shuts down after T1 and destroys after T2 on periodic ticks following a release", async () => {
     const harness = await createHarness(automaticCleanupRules, {}, { tickMs: 10_000 });
     const grant = await harness.engine.request(spec, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
@@ -404,7 +403,6 @@ describe("CleanupReaper", () => {
     const cleanup = harness.reaper.run();
     await flush();
     const request = harness.engine.request(spec, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
