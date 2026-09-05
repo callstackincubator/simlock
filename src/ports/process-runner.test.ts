@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { NodeProcessRunner, ScriptedProcessRunner } from "./index.js";
+import { NodeProcessRunner, ProcessSpawnError, ScriptedProcessRunner } from "./index.js";
 
 describe("ScriptedProcessRunner", () => {
   it("returns the scripted result for a matching invocation", async () => {
@@ -85,6 +85,54 @@ describe("NodeProcessRunner", () => {
       stderr: "standard error",
       stdout: "standard out",
     });
+  });
+
+  it("captures nothing and ends its line streams when output is ignored", async () => {
+    const runner = new NodeProcessRunner();
+
+    const handle = runner.spawn(
+      process.execPath,
+      ["-e", "process.stdout.write('noise'); process.stderr.write('more noise'); process.exit(0)"],
+      { stdio: "ignore" },
+    );
+    const lines: string[] = [];
+    for await (const line of handle.stdout) {
+      lines.push(line);
+    }
+
+    expect(lines).toEqual([]);
+    expect(handle.pid).toBeGreaterThan(0);
+    await expect(handle.wait()).resolves.toEqual({ code: 0, stderr: "", stdout: "" });
+  });
+
+  it("still kills a process whose output is ignored", async () => {
+    const runner = new NodeProcessRunner();
+
+    const handle = runner.spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+      stdio: "ignore",
+    });
+    handle.kill("SIGKILL");
+
+    await expect(handle.wait()).resolves.toMatchObject({ stderr: "", stdout: "" });
+  });
+
+  it("reports a spawn that never produced a process instead of crashing the daemon", async () => {
+    // Node reports a failed spawn by emitting `error` asynchronously, and an `error` with no
+    // listener ends the process outright -- no catch can help. So the listener is attached
+    // before anything throws, and the failure comes back as something a caller can handle:
+    // an `adb` that is not executable, `ETXTBSY` mid-update, or `EAGAIN` under the memory
+    // pressure of several running emulators must cost the Android driver, not the daemon.
+    const runner = new NodeProcessRunner();
+
+    expect(() => runner.spawn("/nonexistent/simlock-adb", ["-P", "5038"])).toThrow(
+      ProcessSpawnError,
+    );
+
+    // Past the tick the `error` event would arrive on: still here, still able to assert.
+    await new Promise((resolve) => setImmediate(resolve));
+    await expect(runner.run("/nonexistent/simlock-adb", [])).rejects.toBeInstanceOf(
+      ProcessSpawnError,
+    );
   });
 
   it("kills a process that exceeds its timeout", async () => {

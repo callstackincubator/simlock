@@ -24,11 +24,13 @@ import {
   LicenseNotAcceptedError,
   NoCapacityError,
   NoDriverError,
+  PassthroughRefusedError,
   QueueTimeoutError,
   RequesterAlreadyLeasedError,
   RuntimeMissingError,
   UnknownLeaseError,
   UnknownModelError,
+  UnknownPassthroughToolError,
 } from "../core/index.js";
 import type { SimlockErrorCode } from "../contract/index.js";
 import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./dispatcher.js";
@@ -83,6 +85,12 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof NoDriverError) {
     return "NO_DRIVER";
+  }
+  if (error instanceof PassthroughRefusedError) {
+    return "PASSTHROUGH_REFUSED";
+  }
+  if (error instanceof UnknownPassthroughToolError) {
+    return "UNKNOWN_PASSTHROUGH_TOOL";
   }
   if (error instanceof RuntimeMissingError) {
     return "RUNTIME_MISSING";

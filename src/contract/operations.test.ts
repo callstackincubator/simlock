@@ -39,6 +39,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "doctor.run", input: { fix: false }, role: "agent" },
   { name: "doctor.run", input: {}, role: "agent" },
   { name: "doctor.run", input: { fix: true }, role: "admin" },
+  { name: "doctor.run", input: { purgeOrphans: true }, role: "admin" },
   { name: "lease.release-all", input: {}, role: "admin" },
   { name: "list.get", input: {}, role: "admin" },
   { name: "cleanup.run", input: {}, role: "admin" },
@@ -49,6 +50,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "events.subscribe", input: {}, role: "admin" },
   { name: "events.unsubscribe", input: {}, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
+  { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
   { name: "token.list", input: {}, role: "admin" },
   { name: "token.revoke", input: { id: "tok_1" }, role: "admin" },
 ];
@@ -123,6 +125,7 @@ describe("operation input/output round trips", () => {
         driverData: { udid: "abc" },
         createdAt: 1,
       },
+      environment: {},
       lease: {
         id: "lease_1",
         deviceId: "dev_1",

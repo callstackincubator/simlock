@@ -82,6 +82,8 @@ and booting, then — in held mode — keeps running to hold the lease.
 ```
 simlock lease --platform <ios|android> --device <model> [--os <version>]
               [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
+              [--allow-download] [--export-env] [--bind-pid <pid>]
+
               [--allow-download] [--full] [--bind-pid <pid>]
 ```
 
@@ -94,6 +96,16 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
   (multi-GB; never implicit). Without it, a missing runtime is exit 12.
+  iOS runtimes remain Xcode-managed in v1: `--allow-download` cannot install
+  them; install the runtime through Xcode first.
+- `--detach` — detached mode: print the lease result and exit; the lease is
+  TTL-bound and must be renewed with `simlock lease renew`.
+- `--export-env` — print the grant's `environment` as shell `export` lines on
+  stdout instead of the JSON line, for `eval "$(...)"`. See
+  [Reaching a leased device](#reaching-a-leased-device). If the grant carries no
+  environment at all (an older daemon), stdout stays empty and a note naming the
+  lease id goes to stderr, so the lease can still be renewed or released.
+
   For iOS, this runs `xcodebuild -downloadPlatform iOS` under the hood and
   only reaches back to iOS 16.0 (a floor of Xcode's own downloader); older
   runtimes and unknown device types (which need a newer Xcode) still require
@@ -139,6 +151,15 @@ serialized as-is, plus the one field the CLI adds on top, the connection's
 resolved `role` (ADR 0003 §5):
 
 ```json
+{"lease":"lse_9f2c","platform":"ios","device":"iPhone 17 Pro","os":"26.5","udid":"ABCD-...","state":"leased",
+ "environment":{"SIMLOCK_IOS_DEVICE_SET":"/Users/you/.simlock/devices/ios"}}
+```
+
+The `environment` object is what you need to actually reach the device —
+Simlock keeps its devices in roots the platform tools do not look in by
+default, so a bare `simctl` or `adb` will not find them. See
+[Reaching a leased device](#reaching-a-leased-device).
+
 {"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","mode":"held","grantedAt":1735689600000,"ttlDeadline":1735689660000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
 ```
 
@@ -233,6 +254,95 @@ automatically on every heartbeat, so renewing such a lease to a deadline
 further out than that does not stick — the next heartbeat pulls it back in.
 Hand-renewal remains the only keep-alive for detached mode, which by design
 never holds a connection to heartbeat over.
+
+## Reaching a leased device
+
+Simlock's simulators live in a device set Xcode does not read, and its
+emulators are registered with Simlock's own adb server rather than the shared
+one. That is deliberate — it is what stops another tool, or another agent,
+from erasing a device out from under you. It also means the usual commands
+need to be pointed at the right place.
+
+Every grant carries an `environment` object with what that platform needs:
+
+| Variable | Platform | What it is |
+|---|---|---|
+| `SIMLOCK_IOS_DEVICE_SET` | ios | Device-set path to pass as `simctl --set` |
+| `ANDROID_ADB_SERVER_PORT` | android | Port of Simlock's adb server; `adb` reads it natively |
+
+Two ways to use it.
+
+**Let Simlock inject it** with the `simctl` / `adb` passthroughs below — the
+usual choice.
+
+**Or export it yourself**, when something else has to shell out to the real
+binary:
+
+```bash
+eval "$(simlock lease --platform android --device 'Pixel 8' --detach --export-env)"
+adb shell getprop   # now talks to Simlock's server
+```
+
+On iOS there is no environment variable `simctl` reads on its own, so exported
+or not, the path has to reach the command line:
+
+```bash
+xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices
+```
+
+## `simlock simctl <args...>`
+
+Run `xcrun simctl` against Simlock's iOS device set. Every argument is passed
+through unchanged with `--set <deviceRoot>` inserted, so the command behaves
+exactly as documented by Apple — it just resolves the UDIDs Simlock manages,
+which a bare `simctl` cannot see.
+
+```bash
+simlock simctl install booted ./MyApp.app
+simlock simctl io booted screenshot shot.png
+```
+
+Refused, all exit 2 with `USAGE` and a message naming what to run instead:
+
+- `create`, `erase`, `delete` — they change a device's lifecycle behind the
+  registry's back, so Simlock would report the device as drifted on the next
+  reconcile. Use `simlock release` (which reclaims the device for you) or
+  `simlock cleanup`.
+- `shutdown all` — it stops every device in the set, for every agent, and each
+  interrupted lease spends its recovery budget rebooting; one that runs out
+  ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
+- `runtime delete` — it deletes a runtime shared with Xcode, and Simlock will
+  not download one back. Delete it through Xcode if that is what you mean.
+- `--set` and `--profiles`, in any spelling — `simlock simctl` supplies the
+  device set itself. A caller-supplied one would point simctl outside what
+  Simlock manages, and (because their value is a separate argument) would let
+  a refused verb read as an ordinary operand. Run `xcrun simctl` directly if
+  you mean to leave Simlock's set.
+
+## `simlock adb <args...>`
+
+Run `adb` against Simlock's adb server. Arguments pass through unchanged with
+`-P <adbServerPort>` inserted.
+
+```bash
+simlock adb shell input tap 100 200
+simlock adb logcat -d
+```
+
+Refused, all exit 2 with `USAGE` and a message naming what to run instead.
+Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
+`-P 1 kill-server` are caught too:
+
+- `kill-server` — it would detach every leased emulator at once. (Simlock's
+  server rejects `kill-server` outright in any case.)
+- `emu kill`, `emu avd stop` — they stop a device Simlock believes is
+  running, which reports as drift on the next reconcile.
+- `emu avd snapshot delete` — it destroys the clean-boot snapshot Simlock
+  restores from, turning every later reclaim of that device from a snapshot
+  load into a full wipe.
+
+Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
+instead.
 
 ## `simlock release <lease-id> | --all`
 
@@ -367,13 +477,47 @@ each rule *would* take (rule name, target, reason) without executing.
 `--rule` restricts to a single named rule (e.g. `--rule idle-destroy`); see
 `simlock list --rules` for the registered rules.
 
-## `simlock doctor [--fix]`
+## `simlock doctor [--fix] [--purge-orphans] [--yes]`
 
 Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries
 whose device vanished, devices booted outside simlock, expired-but-held
-leases, and devices stuck mid-transition. `--fix` applies the safe
+leases, devices stuck mid-transition, and orphans. `--fix` applies the safe
 corrections.
+
+An **orphan** is a device sitting inside a Simlock device root with no registry
+record — almost always a daemon that died between creating a device and writing
+it down. Because it is inside a root Simlock provably owns, it cannot be a
+device of yours, so it is safe to destroy; but `--fix` never touches it.
+Destroying orphans requires `--purge-orphans`, which asks for confirmation
+unless `--yes` is given, and refuses (exit 2, `USAGE`) when confirmation is
+declined or there is no terminal to ask at. Keeping it on its own flag means a
+`doctor --fix` already running unattended in CI does not start deleting things
+after an upgrade.
+
+Before the first device of a purge is destroyed, each root the purge is about
+to reach into is re-validated — ownership is proven at startup and then trusted
+for the life of the daemon, which is fine for reporting and not fine for
+destroying (see [known-pitfalls.md](known-pitfalls.md)). A root that no longer
+proves ownership abandons the whole purge and leaves every finding standing. So
+does a device that could not be destroyed: it stays reported, and the rest of
+the run continues.
+
+Registry devices left behind in the *old* pre-device-root locations are
+reported the same way and are destroyed by `--fix`, since they are in the
+registry. They are not migrated: neither CoreSimulator nor the Android SDK
+supports relocating a device, so those are re-provisioned.
+
+A root that fails ownership validation at startup — missing or foreign marker,
+symlink, wrong owner or permissions, or a `deviceRoot` that is not an absolute
+path — stops that platform's driver and is reported here with the failing
+reason. Driver discovery runs once, at daemon startup, so re-running `doctor`
+after repairing the root reports the same finding until the daemon is
+restarted; the finding says so.
+
+Nothing else is reported about a platform whose driver did not start. Its
+devices are unobservable, not missing, and `--fix` must never mark a registry
+device deleted on the strength of a reality nobody could read.
 
 A `provisioning` or `reclaiming` device is normally in-flight work Simlock
 itself is driving and is not reported — but only up to a driver-derived
@@ -493,12 +637,16 @@ the secret and its hash. `revoke <token-id>` prints `{"revoked":true}` or
 ### `SIMLOCK_HOME`
 
 Overrides the data directory the CLI, MCP server, and daemon all use for
-`config.json`, `state.json`, `daemon.sock`, and `daemon.log`. Defaults to
-`~/.simlock`. All three frontends resolve it through the same function
+`config.json`, `state.json`, `daemon.sock`, `daemon.log`, and — unless
+overridden — the device roots themselves under `devices/`. Defaults to
+`~/.simlock`. Because devices live under it, it needs a local volume with tens
+of gigabytes free. All three frontends resolve it through the same function
 (`resolveSimlockHome` in `src/ports/paths.ts`), so setting it once in an
 agent's environment repoints every command at an isolated data directory —
 useful for running multiple independent simlock instances on one machine, or
-for tests. When the CLI or MCP server auto-starts the daemon, the daemon
+for tests. Two instances on one machine also need distinct
+`drivers.android.adbServerPort` values, since a TCP port is machine-global and
+`SIMLOCK_HOME` cannot isolate it. When the CLI or MCP server auto-starts the daemon, the daemon
 process inherits the variable like the rest of the environment.
 
 ### `SIMLOCK_ADMIN_TOKEN`
@@ -513,8 +661,9 @@ environment to avoid every admin command reading `admin.token` off disk.
 Overrides driver discovery (`discoverDrivers` in `src/daemon/main.ts`) with a
 JavaScript module of your own instead of the real iOS/Android drivers. Point
 it at a file path; the daemon dynamically imports that module and calls its
-exported `createDrivers(context)` (the same `{ clock, filesystem,
-idGenerator, logger, processRunner }` context real discovery receives),
+exported `createDrivers(context)` (the same `{ clock, driversConfig,
+filesystem, hostPlatform, idGenerator, instanceId, logger, processRunner,
+simlockHome }` context real discovery receives),
 which must return `Driver[]` (or a promise of it, matching
 `src/core/driver.ts`). This exists so tests — and anyone reproducing a bug
 without real hardware — can run the full daemon against a scripted driver

@@ -56,6 +56,12 @@ export interface ErrorDetailsMap {
   };
   LICENSE_NOT_ACCEPTED: { readonly platform: Platform; readonly componentName: string };
   UNKNOWN_LEASE: { readonly leaseId: string };
+  /** A `simlock <tool>` verb the owning driver will not proxy (ADR 0001, decision 7). Carries
+   * the tool so a caller can say which wrapper refused without re-parsing the message. */
+  PASSTHROUGH_REFUSED: { readonly tool: string };
+  /** No registered driver answers to that `simlock <tool>` wrapper -- either the name is wrong
+   * or the platform's driver refused to start. */
+  UNKNOWN_PASSTHROUGH_TOOL: { readonly tool: string };
   DOCTOR_UNAVAILABLE: Record<string, never>;
   NUKE_UNAVAILABLE: Record<string, never>;
   INTERNAL: Record<string, never>;
@@ -148,6 +154,20 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 422,
   },
   UNKNOWN_LEASE: { code: "UNKNOWN_LEASE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  // Both are caller errors -- a refused verb and an unknown wrapper are things the request got
+  // wrong, not states of the host -- so they take the usage exit code and a 4xx.
+  PASSTHROUGH_REFUSED: {
+    code: "PASSTHROUGH_REFUSED",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 422,
+  },
+  UNKNOWN_PASSTHROUGH_TOOL: {
+    code: "UNKNOWN_PASSTHROUGH_TOOL",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 422,
+  },
   DOCTOR_UNAVAILABLE: {
     code: "DOCTOR_UNAVAILABLE",
     kind: "domain",

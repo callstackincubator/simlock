@@ -221,11 +221,44 @@ reclaim(device)      -> ready | shutdown      // fresh-state strategy lives here
 shutdown(device)
 destroy(device)
 estimate(op)         -> ETA for progress events
-listManaged()        -> Simlock-prefixed device/process reality for doctor
+listManaged()        -> device/process reality inside this driver's owned root, for doctor
 ```
 
 The litmus test for the boundary: adding a third driver (e.g. physical
 devices) must require **no core changes**. If it does, the interface leaked.
+
+### Device roots
+
+Each driver owns a directory that Simlock created and marked, and scopes every
+platform command to it: iOS through `xcrun simctl --set`, Android through
+`ANDROID_AVD_HOME` plus a private adb server on a port the shared server does
+not scan. Devices inside a root are invisible to Xcode, Android Studio, and a
+plain `simctl` / `adb`; conversely Simlock cannot address anything outside it.
+There is one deliberate exception: a device stranded in the pre-root location
+by the migration, which `doctor` reports and `--fix` destroys through the old
+unscoped path — permitted because a registry record names it, which is what
+registry-only destruction asks for.
+
+Ownership is proven when the driver starts, and re-proven
+(`Driver.revalidateRoot()`) immediately before `doctor --purge-orphans`
+destroys anything in a root: reporting can live with a proof taken days ago,
+destroying cannot (see [known-pitfalls.md](known-pitfalls.md)).
+
+This is what lets `listManaged()` answer from membership rather than from a
+name prefix — the difference between *proving* ownership and *guessing* it.
+The registry is unaffected in role: the root is the authoritative device
+**inventory**, the registry is the authoritative device **state** (which of
+seven states, whose lease, which timers, how many recovery attempts left).
+Reconcile compares the two, and "in the root but not in the registry" now means
+orphan rather than "possibly the user's, don't touch".
+
+The root path is the only new thing the core hands a driver, and it hands it as
+an opaque per-driver config entry (`drivers.<platform>.*`) that the core never
+interprets — so a third driver contributes its own root and its own scoping
+mechanism without a core edit, and the litmus test above still holds.
+
+See [ADR 0001](adr/0001-simlock-owned-device-roots.md) for the decision and the
+platform behaviour it was verified against.
 
 ## Running capacity
 

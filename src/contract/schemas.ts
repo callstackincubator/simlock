@@ -174,10 +174,36 @@ const leaseTimingSchema = z.object({
   estimatedReadyMs: z.number(),
 });
 
+/**
+ * Scoping variables a lease holder needs to reach the device it was just granted -- the
+ * device-set path on iOS, the adb server port on Android (ADR 0001, decision 7). Built by the
+ * driver that owns the device root and forwarded verbatim; no key here means anything to the
+ * core or to this contract, which is what lets a third driver contribute its own scoping
+ * without an edit here (architecture rule 2).
+ */
+const leaseEnvironmentSchema = z.record(z.string(), z.string());
+
 export const leaseGrantSchema = z.object({
   device: grantedDeviceSchema,
+  /**
+   * Always present, `{}` at the least: containment cuts both ways, and a grant that did not
+   * carry it would hand back a `driverDeviceId` no documented workflow can address.
+   */
+  environment: leaseEnvironmentSchema,
   lease: leaseRecordSchema,
   timing: leaseTimingSchema,
+});
+
+/**
+ * The scoped command `simlock simctl` / `simlock adb` runs on the caller's behalf. The command
+ * is spawned as-is, so the shape is validated at the boundary like every other output: an
+ * argument list that is not entirely strings would otherwise stringify into whatever the tool
+ * made of it.
+ */
+export const passthroughCommandSchema = z.object({
+  args: z.array(z.string()),
+  command: z.string().min(1),
+  env: z.record(z.string(), z.string()),
 });
 
 export const leaseProgressSchema = z.discriminatedUnion("stage", [

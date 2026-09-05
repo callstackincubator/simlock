@@ -21,6 +21,7 @@ import {
   leaseModeSchema,
   leaseRecordSchema,
   nukeReportSchema,
+  passthroughCommandSchema,
   platformCatalogSchema,
   platformSchema,
   proposalSchema,
@@ -196,6 +197,28 @@ export const leaseRelease = defineOperation({
   authorize: ownsLease((input) => input.leaseId),
 });
 
+// ---- driver.passthrough (ADR 0001, decision 7) -----------------------------------------------
+
+/**
+ * Builds the scoped command behind `simlock simctl` / `simlock adb`. It lives in the daemon
+ * rather than the CLI because only the driver that proved a device root knows which flag points
+ * its tool at that root, and which verbs would change a device's lifecycle behind the registry's
+ * back -- neither is knowledge a frontend is entitled to (ADR 0003 §11: frontends render the
+ * contract and nothing else).
+ *
+ * `role: "agent"`: the wrappers exist so a lease holder can reach a contained device, which is
+ * an agent's job. It grants no authority of its own -- the refusal list lives in the driver, and
+ * what comes back is a command the caller could have written had it known the root path, which
+ * ADR 0001 is explicit is an accident boundary rather than a security one.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const driverPassthrough = defineOperation({
+  name: "driver.passthrough",
+  role: "agent",
+  input: z.object({ args: z.array(z.string()), tool: z.string().min(1) }),
+  output: passthroughCommandSchema,
+});
+
 // ---- lease.list (new, ADR §9) -----------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -220,7 +243,16 @@ export const leaseHeartbeat = defineOperation({
 
 // ---- doctor.run -------------------------------------------------------------------------------
 
-const doctorRunInputSchema = z.object({ fix: z.boolean().optional() });
+const doctorRunInputSchema = z.object({
+  fix: z.boolean().optional(),
+  /**
+   * Destroys every orphan the run finds (ADR 0001, decision 5) -- the single opt-in exception
+   * to registry-only destruction (safety rule 1). Its own flag rather than part of `fix`, so a
+   * `doctor --fix` already running unattended in CI does not acquire a destructive behaviour on
+   * upgrade.
+   */
+  purgeOrphans: z.boolean().optional(),
+});
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const doctorRun = defineOperation({
@@ -237,7 +269,8 @@ export const doctorRun = defineOperation({
    * required role from the input, compare to the session role" -- for every operation, instead
    * of `doctor.run` needing a second, bespoke gating path.
    */
-  role: (input: z.infer<typeof doctorRunInputSchema>): Role => (input.fix ? "admin" : "agent"),
+  role: (input: z.infer<typeof doctorRunInputSchema>): Role =>
+    input.fix || input.purgeOrphans ? "admin" : "agent",
   input: doctorRunInputSchema,
   output: doctorReportSchema,
 });
@@ -385,6 +418,7 @@ export const OPERATIONS = {
   "lease.release": leaseRelease,
   "lease.list": leaseList,
   "lease.heartbeat": leaseHeartbeat,
+  "driver.passthrough": driverPassthrough,
   "doctor.run": doctorRun,
   "lease.release-all": leaseReleaseAll,
   "list.get": listGet,

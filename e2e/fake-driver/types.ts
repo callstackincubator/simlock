@@ -15,7 +15,9 @@ export type FakeDriverOperation =
   | "shutdown"
   | "destroy"
   | "listManaged"
-  | "listCatalog";
+  | "listCatalog"
+  /** The root re-proof `doctor --purge-orphans` takes before its first destroy. */
+  | "revalidateRoot";
 
 export type FakeDriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -60,6 +62,12 @@ export interface FakeDriverPlatformScript {
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly failures?: Partial<Record<FakeDriverOperation, FakeDriverErrorSpec>>;
   readonly managedReality?: ScriptedManagedReality;
+  /**
+   * Environment the grant for this platform's devices should carry, standing in for the
+   * device-set path / adb port a real driver contributes. Read on every operation like
+   * everything else here, so a test can set it before the lease it wants to assert on.
+   */
+  readonly leaseEnvironment?: Readonly<Record<string, string>>;
   /**
    * Overrides the `address` a `makeReady` boot returns (the script is re-read fresh on every
    * call, so a test can change this between two boots of the same device to simulate the real

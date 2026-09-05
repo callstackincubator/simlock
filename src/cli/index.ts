@@ -27,9 +27,13 @@ import {
   isSimlockError,
   type CatalogGetOutput,
   type DoctorReport,
+  type LeaseGrant,
   type SimlockAdminClient,
   type StatusGetOutput,
 } from "../admin/index.js";
+import type { Role } from "../contract/index.js";
+import type { PassthroughCommand } from "../client/index.js";
+import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 
 const USAGE = `Usage: simlock <command> [options]
@@ -37,6 +41,8 @@ const USAGE = `Usage: simlock <command> [options]
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config, token
+  simctl <args...>            Run xcrun simctl against Simlock's iOS device set
+  adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
 Run 'simlock <command> --help' for command usage.
 
@@ -51,6 +57,14 @@ resolution order.`;
  * its own lease.
  */
 const LEASE_LOST_EXIT_CODE = 14;
+
+/**
+ * A key that is safe to the left of `=` in a shell `export`. Anything else is a command
+ * waiting for `eval` to run it, and escaping the value alone defends the half an attacker
+ * does not need. Not reachable through the shipped drivers (their keys are literals), but
+ * `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
+ */
+const SHELL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 class UsageError extends Error {
   constructor(message: string) {
@@ -139,7 +153,15 @@ export interface CliEnvironment {
   readonly parentWatch?: ParentWatch;
   readonly stderr: Output;
   readonly stdout: Output;
-  readonly confirm?: (question: string) => Promise<boolean>;
+  /** `| undefined` explicitly: under `exactOptionalPropertyTypes` that is what lets a caller
+   * (and a test) say "there is no terminal to ask" rather than merely omitting the field. */
+  readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
+  /**
+   * Runs a daemon-resolved passthrough command and resolves with its exit code. A hook
+   * rather than a direct spawn so the `simctl` / `adb` wrappers are testable without a
+   * child process, the same way every other external effect here is injected.
+   */
+  readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
 }
 
 /**
@@ -310,7 +332,11 @@ export interface CliEnvironmentPorts {
   readonly signals?: Signals;
   readonly stderr?: Output;
   readonly stdout?: Output;
-  readonly confirm?: (question: string) => Promise<boolean>;
+  /** `| undefined` explicitly: under `exactOptionalPropertyTypes` that is what lets a caller
+   * (and a test) say "there is no terminal to ask" rather than merely omitting the field. */
+  readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
+  /** Injected so the `simctl` / `adb` wrappers are testable without spawning a child. */
+  readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
   readonly parentPid?: number;
 }
 
@@ -371,6 +397,7 @@ export function buildCliEnvironment(
       if (!(await filesystem.exists(configPath))) return {};
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
     },
+    runPassthrough: ports.runPassthrough ?? spawnPassthrough,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -420,6 +447,7 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
         args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
         command: process.execPath,
         logPath,
+        simlockHome: dataDirectory,
       }),
       dataDirectory,
     },
@@ -506,6 +534,16 @@ export async function runCli(
         return await runConfig(rest.slice(1), environment, token);
       case "token":
         return await runToken(rest.slice(1), environment, token);
+      case "simctl":
+      case "adb":
+        // Named here rather than discovered from the drivers on purpose: these are
+        // user-facing command names published in `docs/CLI.md`, and the CLI never builds a
+        // simctl or adb argument -- it forwards the name and spawns whatever the daemon
+        // hands back, so which flags scope the tool and which verbs it refuses still live
+        // entirely in the driver (architecture rule 2 is about knowledge, not about names).
+        // Every argument after the tool name is the tool's, verbatim -- including `--help`,
+        // which belongs to `simctl`/`adb` and not to Simlock. `simlock --help` lists these.
+        return await runPassthrough(rest[0] ?? "", rest.slice(1), environment, token);
       case "mcp":
         return await runMcp(rest.slice(1), environment);
       default:
@@ -534,6 +572,39 @@ function cliErrorCode(error: unknown): string {
   if (error instanceof UsageError) return "USAGE";
   if (isSimlockError(error)) return error.code;
   return "INTERNAL";
+}
+
+/**
+ * Asks the daemon which command reaches Simlock's devices for this tool, then runs it here.
+ * The split is architecture rule 8 in one function: the daemon owns the scoping (it is the
+ * process that knows which root and which adb port), and the CLI owns the terminal, so an
+ * interactive `adb shell` gets a tty and its exit code travels back to the caller's shell.
+ */
+async function runPassthrough(
+  tool: string,
+  args: readonly string[],
+  environment: CliEnvironment,
+  token: string | undefined,
+): Promise<number> {
+  const run = environment.runPassthrough;
+  if (run === undefined) throw new Error("Tool passthrough is unavailable");
+  const client = await connectDaemonClient(environment, token);
+  let command;
+  try {
+    command = await client.resolvePassthrough({ args: [...args], tool });
+  } catch (error: unknown) {
+    // A verb the driver refuses is the caller getting it wrong, not a daemon fault, so it
+    // surfaces as usage rather than as an internal error.
+    if (isSimlockError(error) && error.code === "PASSTHROUGH_REFUSED") {
+      throw new UsageError(error.message);
+    }
+    throw error;
+  } finally {
+    // Resolved before the command runs, so an interactive `adb shell` does not hold a daemon
+    // connection open for its whole session.
+    await client.close();
+  }
+  return run(command);
 }
 
 /** ADR §7: "CLI exit codes and HTTP status codes are columns of the same error table, not
@@ -591,6 +662,7 @@ async function runLease(
     "bind-pid": { type: "string" },
     detach: { type: "boolean" },
     device: { type: "string" },
+    "export-env": { type: "boolean" },
     full: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     "no-wait": { type: "boolean" },
@@ -602,7 +674,7 @@ async function runLease(
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--allow-download] [--full] [--bind-pid <pid>]\n",
+        "                     [--allow-download] [--full] [--export-env] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -672,7 +744,11 @@ async function runLease(
     ourLeaseId = grant.lease.id;
     // ADR §5: "simlock lease output includes the resolved role" -- the one field this CLI
     // adds on top of the contract's `LeaseGrant` shape, everything else passed through as-is.
-    writeResult(environment, { ...grant, role: client.role });
+    const result = { ...grant, role: client.role };
+    // Held mode still holds after this line, whichever shape it took: `--export-env` only
+    // changes what stdout carries, never how long the lease lives.
+    if (values["export-env"] === true) writeExportEnv(environment, result);
+    else writeResult(environment, result);
     if (detached || termination === undefined) return 0;
     await Promise.race([termination.settled, leaseLostSignal]);
     if (leaseLost) {
@@ -878,14 +954,25 @@ async function runDoctor(
   const values = commandArgs(argv, {
     fix: { type: "boolean" },
     help: { type: "boolean", short: "h" },
+    "purge-orphans": { type: "boolean" },
+    yes: { type: "boolean" },
   });
   if (values.help) {
-    environment.stdout.write("Usage: simlock doctor [--fix]\n");
+    environment.stdout.write("Usage: simlock doctor [--fix] [--purge-orphans] [--yes]\n");
     return 0;
+  }
+  const purgeOrphans = values["purge-orphans"] === true;
+  if (purgeOrphans) {
+    // Destructive, so it confirms exactly as `release --all` and `nuke` do (safety rule 5),
+    // and a missing confirm hook refuses rather than proceeds: a non-interactive caller
+    // that meant it says `--yes`.
+    const confirmed =
+      values.yes ?? (await environment.confirm?.("Destroy every orphaned device? [y/N] "));
+    if (!confirmed) throw new UsageError("doctor --purge-orphans requires confirmation or --yes");
   }
   const client = await connectDaemonClient(environment, token);
   try {
-    const response = await client.runDoctor({ fix: values.fix === true });
+    const response = await client.runDoctor({ fix: values.fix === true, purgeOrphans });
     writeDriverAdvisoryWarnings(environment, response);
     writeResult(environment, response);
     return 0;
@@ -1213,6 +1300,49 @@ function commandArgs(
   }
 }
 
+/**
+ * Writes the export lines, and -- when there are none -- one line to stderr saying so.
+ * Silence would be worse than it looks: the lease is committed and TTL-bound either way,
+ * and a caller that was told neither its id nor that anything was missing can neither
+ * renew nor release it, and has no scoping to reach the device with. stdout stays clean so
+ * `eval "$(...)"` is unaffected. An older daemon, which sends no `environment` at all, is
+ * the case that actually produces this.
+ */
+function writeExportEnv(
+  environment: CliEnvironment,
+  result: LeaseGrant & { readonly role: Role },
+): void {
+  environment.stdout.write(exportEnvLines(result.environment));
+  if (Object.keys(result.environment).length > 0) return;
+  environment.stderr.write(
+    `simlock: lease ${result.lease.id} carries no environment, so there is nothing to export and the device may be unreachable from a bare simctl or adb. Release it with \`simlock release ${result.lease.id}\`.\n`,
+  );
+}
+
+/**
+ * Shell `export` lines for `eval "$(simlock lease ... --export-env)"`. Single quotes because
+ * they are the only shell quoting that takes every byte literally, and `'\''` is the one way
+ * to get a literal quote back inside them -- a device-set path is a user-configurable path
+ * and may hold a space or an apostrophe. Sorted so repeated runs produce identical output.
+ *
+ * A key that is not a shell identifier fails the command rather than being skipped: the
+ * driver that produced it is broken, and dropping it silently would leave the holder with
+ * a lease it cannot reach and no idea why.
+ */
+function exportEnvLines(environment: Readonly<Record<string, string>>): string {
+  return Object.entries(environment)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => {
+      if (!SHELL_IDENTIFIER.test(key)) {
+        throw new Error(
+          `Refusing to export ${JSON.stringify(key)}: a lease environment key must be a shell identifier, and this one would change what \`eval\` runs.`,
+        );
+      }
+      return `export ${key}='${value.replaceAll("'", "'\\''")}'\n`;
+    })
+    .join("");
+}
+
 function requiredPositional(positionals: readonly string[], label: string): string {
   if (positionals.length !== 1 || positionals[0] === undefined)
     throw new UsageError(withHelpHint(`Expected ${label}`));
@@ -1382,6 +1512,7 @@ function waitForTermination(
   });
   return { dispose: () => detach(), settled };
 }
+
 async function confirmTerminal(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
   const { createInterface } = await import("node:readline/promises");

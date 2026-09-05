@@ -1,4 +1,6 @@
+import type { EventMap } from "../bus/index.js";
 import type { Filesystem } from "../ports/index.js";
+import type { RootRejectionReason } from "./device-root.js";
 import type { DeviceSpec, DeviceTransitionUpdate, Platform } from "./domain.js";
 
 export interface DeviceRequest {
@@ -20,9 +22,8 @@ export interface DriverDevice {
   /**
    * The opaque string platform tooling accepts right now -- a simctl UDID for iOS, an adb
    * serial (`emulator-<port>`) for Android. The core carries it without interpreting it; only
-   * the owning driver module knows what it means. Unlike `deviceId` (Simlock's own, stable
-   * `simlock-`/`simlock_`-prefixed name proving Simlock created the device), this can change
-   * across a boot -- see `Driver.makeReady`.
+   * the owning driver module knows what it means. Unlike `deviceId`, which identifies the
+   * device for as long as it exists, this can change across a boot -- see `Driver.makeReady`.
    */
   readonly address: string;
   /**
@@ -100,9 +101,9 @@ export interface ObservedDevice extends DriverDevice {
 
 /** Reality observable by a driver without trusting the registry. */
 export interface DriverReality {
-  /** Devices whose platform-owned name proves that Simlock created them. */
+  /** Devices whose membership in the driver's root proves that Simlock created them. */
   readonly devices: readonly ObservedDevice[];
-  /** Running, Simlock-attributable device processes not necessarily in the registry. */
+  /** Running device processes from that same root, not necessarily in the registry. */
   readonly processes: readonly DriverDevice[];
 }
 
@@ -153,6 +154,25 @@ export interface DriverAdvisory {
 
 export interface Driver {
   readonly platform: Platform;
+  /**
+   * Absolute path of the root this driver owns and scopes every platform command to.
+   * Membership in it is what proves a device is Simlock's; the core carries the string
+   * around without interpreting it, the same way it carries `address`.
+   */
+  readonly deviceRoot: string;
+  /**
+   * Re-runs this driver's own root validation, resolving only while the root still proves
+   * ownership and rejecting with the driver's own refusal (an `OwnedRootError`) when it
+   * does not.
+   *
+   * Ownership is proven once, at startup, and then trusted for the life of the process --
+   * tolerable for reporting, not for destroying. A daemon that has been up for days is one
+   * `mv` or one symlink away from `deviceRoot` naming the user's own device set, at which
+   * point `listManaged` answers with every simulator on the machine and
+   * `doctor --purge-orphans` would destroy them. Only the driver can re-run the check,
+   * because only it knows how its root was built (architecture rule 2).
+   */
+  revalidateRoot(): Promise<void>;
   /**
    * True when this driver may hand back devices with a reduced feature set (the iOS driver's
    * slim mode, when actually enabled), so a caller's `full` request is meaningful and must not
@@ -209,6 +229,46 @@ export interface Driver {
   listCatalog(): Promise<DriverCatalogEntry>;
   estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
   /**
+   * Opaque environment a lease holder needs to reach a device in this driver's root --
+   * containment cuts both ways, so a grant that did not carry it would hand out a device
+   * nobody could address. The core forwards it verbatim; no key here means anything to it.
+   */
+  leaseEnvironment(): Readonly<Record<string, string>>;
+  /**
+   * Releases whatever this driver holds outside its own process -- Android supervises an
+   * adb server it must reap by pid, since nothing else can (`docs/known-pitfalls.md`).
+   * Optional because most drivers hold nothing; the daemon calls it on every shutdown
+   * path and never lets a failure here abort the rest of one.
+   */
+  dispose?(): Promise<void>;
+  /**
+   * The `simlock <tool>` name this driver answers to (`simctl`, `adb`), when it wraps a
+   * platform tool at all. Spelled `| undefined` rather than left plain optional so a
+   * driver that decides at construction time whether it has one can still say so.
+   */
+  readonly passthroughTool?: string | undefined;
+  /**
+   * Scoped command for `simlock <tool> <args>`, or `PassthroughRefusedError` for a verb
+   * this driver will not proxy. Both halves are the driver's business: only it knows
+   * which flag points its tool at the root it owns, and only it knows which verbs would
+   * change a device's lifecycle behind the registry's back (ADR 0001, decision 7).
+   */
+  passthrough?(args: readonly string[]): PassthroughCommand;
+  /**
+   * Looks for a registry device in the location this platform used before Simlock owned a
+   * root, and reports it without touching it. Optional: a driver with no pre-root history
+   * has nothing to find. The core only ever asks about a device the root itself no longer
+   * holds, so a "yes" here is what separates "stranded by the migration" from "gone".
+   */
+  findLegacy?(driverDeviceId: string): Promise<LegacyDevice | undefined>;
+  /**
+   * Destroys such a device through the old, unscoped path it actually lives on. This is
+   * the only Simlock call that reaches outside an owned root, and it is permitted because
+   * the device is in the registry: registry-only destruction (safety rule 1) is satisfied
+   * by the record, not by the root (ADR 0001, Migration).
+   */
+  destroyLegacy?(device: DriverDevice): Promise<void>;
+  /**
    * Configuration-level problems only this driver can see -- reported by `doctor` alongside its
    * drift findings. Read-only and side-effect free (same contract as `listCatalog`): it must
    * never trigger a download, boot, or mutate anything. Optional: a driver with nothing to
@@ -216,6 +276,106 @@ export interface Driver {
    */
   advisories?(): Promise<readonly DriverAdvisory[]>;
 }
+
+/**
+ * A device this driver created before Simlock owned a root, still sitting where the
+ * platform put it. Neither CoreSimulator nor the Android SDK can relocate a device, so
+ * these are reported and destroyed rather than migrated, and users re-provision.
+ */
+export interface LegacyDevice {
+  /** Addressed through the driver's unscoped path, never through the root's. */
+  readonly device: DriverDevice;
+  /** Where the driver found it, for the report. Absent when the tool does not say. */
+  readonly path?: string;
+}
+
+/**
+ * A ready-to-run invocation of a platform tool, already scoped to the driver's root. The
+ * frontend that runs it merges `env` over its own environment rather than replacing it --
+ * these are only the scoping keys, and a tool spawned without `PATH` would not be found.
+ */
+export interface PassthroughCommand {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+}
+
+/**
+ * A passthrough verb a driver refuses to proxy. The wrappers exist to inject scoping
+ * flags, and injecting them into `simctl delete` would hand back exactly the capability
+ * the containment root exists to remove -- so the refusal, and the message naming what to
+ * run instead, live with the driver that knows which verbs those are.
+ */
+export class PassthroughRefusedError extends Error {
+  constructor(
+    readonly tool: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PassthroughRefusedError";
+  }
+}
+
+/** The events a driver may refuse to start with; each pairs with its own payload below. */
+type DriverRejectionEvent = "driver.root-rejected" | "driver.adb-server-rejected";
+
+/**
+ * Why Simlock's own adb server could not be established. Wire-visible, like the root
+ * reasons: these travel in the `driver.adb-server-rejected` payload and are listed in
+ * `docs/EVENTS.md`, so the vocabulary is fixed and closed.
+ *
+ * It sits beside the event names rather than in `drivers/android` because the two are one
+ * contract: the core publishes neither without the other, and a driver module cannot be
+ * the place a core type is defined. Nothing here interprets a term (architecture rule 2).
+ */
+export type AdbServerRejectionReason = "occupied" | "start-failed" | "invalid-port";
+
+/**
+ * Every term a refusal may report. Typed rather than a bare `string` so a reason that no
+ * documented vocabulary contains cannot reach `doctor` output or the bus: the whole value
+ * of publishing these words is that a user who reads one can look it up.
+ */
+export type DriverRejectionReason = RootRejectionReason | AdbServerRejectionReason;
+
+/**
+ * One refusal, with the payload the event it names is published with.
+ *
+ * The pairing is the point. The core forwards `payload` to the bus without reading it, so
+ * this is the only place the wire contract in `docs/EVENTS.md` can still be checked -- a
+ * wider `Record<string, string | number>` would type-check an adb rejection carrying a
+ * string port, or a root rejection with no root at all, and it would reach
+ * `simlock events --json` unexamined.
+ */
+interface DriverRefusal<Event extends DriverRejectionEvent> {
+  readonly platform: Platform;
+  readonly event: Event;
+  readonly payload: EventMap[Event];
+  /**
+   * The refusal's vocabulary term (`missing-marker`, `occupied`, ...), stated separately
+   * rather than read back out of `payload`, which is a wire contract the core does not
+   * open. `doctor` reports it as the failing reason.
+   */
+  readonly reason: DriverRejectionReason;
+  /**
+   * The `simlock <tool>` wrapper this driver would have answered to, when it has one.
+   * Carried because a passthrough that finds no driver is otherwise indistinguishable
+   * from a host with no SDK, and safety rule 9 promises Simlock reports *why*. The core
+   * only compares it to the requested tool name; the name itself is the driver's.
+   */
+  readonly passthroughTool?: string;
+  /** One line, for `doctor` output and the startup log. */
+  readonly summary: string;
+}
+
+/**
+ * Why a driver could not start. A driver that refuses to start fails closed and takes only
+ * its own platform with it (safety rule 9), so the daemon has to be able to report the
+ * refusal without understanding it: the driver module names the event and builds the
+ * payload, and the core carries both to the bus and to `doctor` unread.
+ */
+export type DriverRejection =
+  | DriverRefusal<"driver.root-rejected">
+  | DriverRefusal<"driver.adb-server-rejected">;
 
 export class RuntimeMissingError extends Error {
   /**

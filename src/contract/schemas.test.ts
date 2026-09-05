@@ -58,6 +58,7 @@ describe("leaseGrantSchema's device projection", () => {
   it("strips every internal DeviceRecord field off a grant's device", () => {
     const grant = leaseGrantSchema.parse({
       device: fullCoreShapedDevice(),
+      environment: {},
       lease: {
         id: "lease-1",
         deviceId: "device-1",

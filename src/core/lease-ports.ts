@@ -1,6 +1,6 @@
 import type { CapacityPlatform, RunningCapacity } from "./capacity/index.js";
 import type { LeaseRecord, Platform } from "./domain.js";
-import type { DeviceRequest } from "./driver.js";
+import type { DeviceRequest, PassthroughCommand } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
 import type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
 
@@ -45,6 +45,15 @@ export interface LeaseExpirer {
 /** Read-only device catalog used by the `simlock catalog` command and MCP tool. */
 export interface CatalogReader {
   listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]>;
+}
+
+/**
+ * Resolves `simlock <tool> <args>` into the scoped command its owning driver builds, for
+ * the daemon request handler. Separate from `CatalogReader` because it answers about
+ * tooling rather than about devices, and nothing on the lease path needs it.
+ */
+export interface PassthroughResolver {
+  passthrough(tool: string, args: readonly string[]): PassthroughCommand;
 }
 
 /** Operator reset capability used by the nuke command facade. */

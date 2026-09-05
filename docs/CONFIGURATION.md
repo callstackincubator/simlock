@@ -30,6 +30,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `health.maxConcurrentRecoveries`  | Cap on simultaneous recovery reboots, so a machine wake (every device reads `stopped` at once) cannot start a boot storm.                                                                                                   | `1`                                                               |
 | `stalledTransition.thresholdMultiplier` | Factor applied to a driver's own `provision + boot` (for `provisioning`) or `reclaim` (for `reclaiming`) estimate to get the stall threshold for `simlock doctor`'s `stalled-transition` finding. | `3`                                                               |
 | `stalledTransition.minimumThresholdMs` | Floor under the multiplied estimate, for a driver whose estimate is near zero.                                                                                                                                | `1 minute`                                                        |
+| `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `${SIMLOCK_HOME}/devices/ios`                                    |
+| `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `${SIMLOCK_HOME}/devices/android`                                |
+| `drivers.android.adbServerPort`   | TCP port for Simlock's own adb server. Must not be the shared server's `5037`. Startup fails closed if it is occupied.                                                                                       | `5038`                                                            |
 | `ios.slim.enabled`                | Master switch for slim mode: disables iOS simulator daemon categories to cut RAM and CPU overhead per device.                                                                                                                | `false`                                                          |
 | `ios.slim.categories`             | Which daemon categories to disable when slim mode is on. Omitted means every category the driver knows.                                                                                                                      | every known category                                             |
 | `ios.slim.bootTimeoutMs`          | Boot deadline used while slim mode is on, in place of the normal boot timeout.                                                                                                                                                | `10 minutes`                                                     |
@@ -48,6 +51,98 @@ integer in `1`-`65535`.
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
+
+## Device roots
+
+Simlock keeps every device it creates inside a root it owns, one per platform,
+and scopes every platform command to that root. A simulator or emulator in a
+Simlock root does not appear in Xcode, in Android Studio, or in a plain
+`simctl list` / `adb devices`, and Simlock in turn cannot reach anything
+outside it. See [ADR 0001](adr/0001-simlock-owned-device-roots.md) for why.
+
+```
+~/.simlock/devices/
+├── ios/                    # drivers.ios.deviceRoot     → xcrun simctl --set
+│   ├── .simlock-owned.json
+│   └── <UDID>/
+└── android/                # drivers.android.deviceRoot → ANDROID_AVD_HOME
+    ├── .simlock-owned.json
+    ├── simlock_<n>.ini
+    └── simlock_<n>.avd/
+```
+
+Both roots default under `SIMLOCK_HOME`, so pointing `SIMLOCK_HOME` somewhere
+else moves the devices with it. Override a single platform when its data
+belongs on another volume — device data runs to tens of gigabytes:
+
+```json
+{
+  "drivers": {
+    "ios": { "deviceRoot": "/Volumes/scratch/simlock-ios" }
+  }
+}
+```
+
+A `deviceRoot` must be an absolute path. A relative one — or a value that is
+not a string at all, such as `true` — refuses that one platform with reason
+`not-absolute` rather than being resolved against whatever directory the daemon
+happened to be started from; the daemon still comes up, and the other platform
+is unaffected.
+
+Roots hold device instances only. Runtimes and system images stay where Xcode
+and the Android SDK put them.
+
+### Ownership markers
+
+Each root carries a `.simlock-owned.json` marker naming the Simlock instance
+that owns it. Simlock creates the marker **only** for a root it creates empty
+itself, and refuses any existing root that is unmarked, marked for another
+instance, symlinked, or wrongly owned or permissioned. It never adopts a
+directory it did not create. The instance identity lives in
+`${SIMLOCK_HOME}/instance.json`, written once on first start.
+
+A root that fails validation stops that platform's driver at startup — Simlock
+fails closed rather than falling back to the default device location. `simlock
+doctor` reports the reason.
+
+### Simlock's adb server
+
+Android containment needs one more thing, because `adb` has no equivalent of
+`simctl --set`: Simlock runs its own adb server on `drivers.android.adbServerPort`
+and gives its emulators console ports (5586–5682) above the range a default adb
+server scans. That server is started with USB and mDNS disabled, so it never
+competes with the shared server for physical devices or network targets, and it
+refuses `adb kill-server`.
+
+Containment runs in both directions, and the second half is easy to get wrong.
+Simlock's server also has its emulator scanner turned off (`ADB_EMU=0`), because
+the scan's lower bound is hard-coded at 5555: a server allowed to scan high
+enough to find Simlock's emulators would also connect to *yours*, leaving two
+adb servers driving one device. Simlock's emulators still attach, because an
+emulator announces itself to the server it was told about — once, at its own
+startup. Simlock re-sends that announcement itself for its own console range
+(5586–5682) whenever it starts or adopts a server, and again for an emulator
+that stays unreachable while booting; that is what keeps emulators that
+outlived a `simlock daemon stop` visible to the daemon that comes next. Your
+emulators are never announced, so they stay yours, and Simlock's stay
+Simlock's.
+
+If `drivers.android.adbServerPort` is occupied by a server Simlock did not
+start, or is not a usable port, the Android driver does not start and `simlock
+doctor` reports why (`occupied`, `start-failed`, `invalid-port`). Simlock never
+attaches to a server it did not start. `occupied` is the one of those with no
+automatic way out — `adb kill-server` is refused by design — so the error names
+the two ways out: stop whatever holds the port (`lsof -nP -iTCP:<port>
+-sTCP:LISTEN` names the pid), or move Simlock's own server with `simlock config
+set drivers.android.adbServerPort <port>`.
+
+Consequence worth knowing: your own `adb` will not see Simlock's emulators.
+A lease hands you the port to use — see
+[CLI.md](CLI.md#reaching-a-leased-device).
+
+Running two Simlock instances on one machine now needs distinct
+`drivers.android.adbServerPort` values as well as distinct `SIMLOCK_HOME`
+values.
 
 Slim mode is opt-in and iOS-only: it disables simulator daemon categories
 that most agent workloads never touch, trading some simulator functionality

@@ -67,6 +67,34 @@ describe("FakeDriver", () => {
     const driver: Driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
 
     expect(driver.platform).toBe("ios");
+    expect(driver.deviceRoot).toBe("/fake/ios");
+    expect(driver.leaseEnvironment()).toEqual({});
+  });
+
+  it("carries the root and lease environment a test gives it", () => {
+    const driver = new FakeDriver({
+      clock: new FakeClock(),
+      deviceRoot: "/tmp/devices/ios",
+      leaseEnvironment: { SIMLOCK_IOS_DEVICE_SET: "/tmp/devices/ios" },
+      platform: "ios",
+    });
+
+    expect(driver.deviceRoot).toBe("/tmp/devices/ios");
+    expect(driver.leaseEnvironment()).toEqual({ SIMLOCK_IOS_DEVICE_SET: "/tmp/devices/ios" });
+  });
+
+  it("reports a staged reality entry whatever it is named, the way a root does", () => {
+    const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
+    driver.setManagedReality({
+      devices: [
+        { address: "addr", deviceId: "not-a-simlock-name", driverData: {}, runState: "running" },
+      ],
+      processes: [],
+    });
+
+    return expect(driver.listManaged()).resolves.toMatchObject({
+      devices: [{ deviceId: "not-a-simlock-name" }],
+    });
   });
 
   it("keeps makeReady pending until released when instructed to hang", async () => {

@@ -35,11 +35,13 @@ import type {
   DeviceUnhealthyPush,
   DoctorReport,
   DoctorRunInput,
+  DriverPassthroughInput,
   EventPush,
   EventsReplayInput,
   EventsReplayOutput,
   LeaseCancelInput,
   LeaseCancelOutput,
+  PassthroughCommand,
   LeaseGrant,
   LeaseHeartbeatOutput,
   LeaseListOutput,
@@ -75,6 +77,7 @@ export type {
   DeviceUnhealthyPush,
   DoctorReport,
   DoctorRunInput,
+  DriverPassthroughInput,
   EventPush,
   EventsReplayInput,
   EventsReplayOutput,
@@ -93,6 +96,7 @@ export type {
   LeaseRenewInput,
   LeaseRecord,
   LeaseRequestInput,
+  PassthroughCommand,
   ListGetInput,
   ListGetOutput,
   NukeReport,
@@ -150,6 +154,9 @@ export interface SimlockClient {
   listLeases(): Promise<LeaseListOutput>;
   heartbeat(): Promise<LeaseHeartbeatOutput>;
   runDoctor(input?: DoctorRunInput): Promise<DoctorReport>;
+  /** Resolves the scoped command behind `simlock simctl` / `simlock adb` (ADR 0001, decision
+   * 7). Resolution only -- the caller is the process with a terminal, so it runs it. */
+  resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand>;
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void;
   onDeviceUnhealthy(listener: (push: DeviceUnhealthyPush) => void): () => void;
@@ -262,6 +269,7 @@ function buildDegradedClient(
     listLeases: () => rejected(),
     heartbeat: () => rejected(),
     runDoctor: () => rejected(),
+    resolvePassthrough: () => rejected(),
 
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
@@ -404,6 +412,10 @@ class SimlockClientImpl {
 
   runDoctor(input: DoctorRunInput = {}): Promise<DoctorReport> {
     return this.#call("doctor.run", input);
+  }
+
+  resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand> {
+    return this.#call("driver.passthrough", input);
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {

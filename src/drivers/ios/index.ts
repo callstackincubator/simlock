@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+
 import {
   BootTimeoutError,
   type DeviceRequest,
@@ -9,8 +11,14 @@ import {
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
+  ensureOwnedRoot,
+  type EnsureOwnedRootOptions,
   InsufficientDiskSpaceError,
+  type LegacyDevice,
   type ObservedDevice,
+  OwnedRootError,
+  type PassthroughCommand,
+  PassthroughRefusedError,
   type ObservedRunState,
   RuntimeMissingError,
   UnknownModelError,
@@ -56,6 +64,46 @@ const COLD_BOOT_ESTIMATE_MS = 60_000;
 // at either clean level, so this is the only reclaim number the driver has.
 const ERASE_ESTIMATE_MS = 34_000;
 const MARK_FILE_NAME = "simlock-mark.json";
+/**
+ * The `simlock <tool>` wrapper this driver answers to. Published as a constant because a
+ * driver that refused to start has no instance to ask, and `DriverRejection` carries the
+ * name so `simlock simctl` can say why it is unavailable rather than reading as a missing
+ * SDK.
+ */
+export const IOS_PASSTHROUGH_TOOL = "simctl";
+
+/**
+ * Verbs `simlock simctl` will not proxy. Every one of them changes a device's lifecycle,
+ * which the registry -- not `simctl` -- is the record of: a device created here has no
+ * registry entry and reads as an orphan, and one erased or deleted under a live lease
+ * reads as tampering on the next reconcile. Injecting `--set` for them would hand back
+ * exactly the capability the device set exists to take away (ADR 0001, decision 7).
+ */
+const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
+
+/**
+ * simctl's usage is `simctl [--set <path>] [--profiles <path>] <subcommand>`, so these are
+ * the only two globals whose value is a separate argv entry -- and a separated value is
+ * indistinguishable from a subcommand once it is in the array, which is how
+ * `--profiles /tmp erase all` used to read as the subcommand `/tmp` and slide past every
+ * refusal below. Refusing them is what makes "the first non-flag argument is the
+ * subcommand" true by construction rather than by pattern-matching. It is also right on
+ * its own terms: this wrapper exists to supply the device set, and a caller-supplied one
+ * would aim Simlock's own containment wherever it pointed.
+ */
+const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
+
+/**
+ * `shutdown all` is the iOS analogue of `adb kill-server`: it stops every device in the
+ * set, for every agent, and each affected lease then spends its recovery budget rebooting
+ * -- one that runs out ends as `lease_lost`. Shutting down a single device stays allowed.
+ */
+const SHUTDOWN_ALL_TARGET = "all";
+
+/** Every lifecycle refusal ends the same way: the Simlock command that does it safely. */
+const RECLAIM_INSTEAD =
+  "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
+
 // Slim mode reboots the device a second time and runs a launchctl-disable pass on top of the
 // usual cold boot -- without a dedicated estimate, `doctor`'s provisioning-stall threshold would
 // be sized for a single boot and flag every slim device as stuck. Budget: one `COLD_BOOT_ESTIMATE_MS`
@@ -123,6 +171,17 @@ export interface SlimSkippedFact {
 
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
+  /** This driver's own `drivers.ios` block, handed over unread by the core. */
+  readonly driverConfig: Readonly<Record<string, string | number | boolean>>;
+  readonly filesystem: Filesystem;
+  readonly idGenerator: IdGenerator;
+  /** Identity every device root's ownership marker is checked against. */
+  readonly instanceId: string;
+  readonly processRunner: ProcessRunner;
+  /** `SIMLOCK_HOME`, from which the default device root is derived here rather than in the core. */
+  readonly simlockHome: string;
+  /** `process.getuid?.()`; `undefined` skips the root's ownership check. */
+  readonly uid?: number;
   /**
    * Volume a runtime download actually lands on, for the disk preflight in
    * `#installComponent` -- simulator runtimes install under `~/Library/Developer/
@@ -143,8 +202,6 @@ export interface IosSimctlDriverOptions {
    * shared.
    */
   readonly diskSpaceGuard?: DiskSpaceGuard;
-  readonly filesystem: Filesystem;
-  readonly idGenerator: IdGenerator;
   /**
    * Reports `component.install-*` facts for the daemon layer to bridge onto the event bus --
    * this driver never depends on the bus directly (architecture rule 5). Mirrors the Android
@@ -158,7 +215,6 @@ export interface IosSimctlDriverOptions {
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   /** Reports why a device slim didn't happen when slim mode is on. Mirrors `onDiagnostic`. */
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
-  readonly processRunner: ProcessRunner;
   /** Slim mode; omitted or `enabled: false` means today's behaviour exactly. */
   readonly slim?: {
     readonly enabled: boolean;
@@ -248,10 +304,15 @@ export class IosSimctlDriver implements Driver {
   readonly #onSlimSkipped: ((fact: SlimSkippedFact) => void) | undefined;
   readonly #processRunner: ProcessRunner;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
+  readonly #deviceRoot: string;
+  readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #slim: SlimOptions | undefined;
-  #devicesRoot: string | undefined;
 
-  constructor(options: IosSimctlDriverOptions) {
+  private constructor(
+    options: IosSimctlDriverOptions,
+    deviceRoot: string,
+    rootOptions: EnsureOwnedRootOptions,
+  ) {
     this.#clock = options.clock;
     this.#coreSimulatorRoot = options.coreSimulatorRoot ?? ".";
     this.#diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
@@ -262,8 +323,47 @@ export class IosSimctlDriver implements Driver {
     this.#onSlimmed = options.onSlimmed;
     this.#onSlimSkipped = options.onSlimSkipped;
     this.#processRunner = options.processRunner;
+    this.#deviceRoot = deviceRoot;
+    this.#rootOptions = rootOptions;
     this.#slim = options.slim;
     this.reducesFeatures = options.slim?.enabled === true;
+  }
+
+  /**
+   * Establishes the device set this driver owns before it can be asked to do anything,
+   * which is why construction is asynchronous: a driver that had not yet proven its root
+   * would be a driver that can address devices it cannot prove are Simlock's, and every
+   * later `--set` would be pointing at an unvalidated path. An `OwnedRootError` here is
+   * the fail-closed path -- the caller skips iOS entirely rather than falling back to the
+   * machine's default device set (safety rule 9).
+   */
+  static async create(options: IosSimctlDriverOptions): Promise<IosSimctlDriver> {
+    const rootOptions: EnsureOwnedRootOptions = {
+      filesystem: options.filesystem,
+      idGenerator: options.idGenerator,
+      instanceId: options.instanceId,
+      path: configuredDeviceRoot(options),
+      platform: "ios",
+      ...(options.uid === undefined ? {} : { uid: options.uid }),
+    };
+    const deviceRoot = await ensureOwnedRoot(rootOptions);
+
+    return new IosSimctlDriver(options, deviceRoot, rootOptions);
+  }
+
+  get deviceRoot(): string {
+    return this.#deviceRoot;
+  }
+
+  /**
+   * The same call `create` made, with the same arguments, because the proof *is* that call:
+   * a cheaper second check here would be a second validator, free to drift from the one
+   * every start is judged by. It is asked for immediately before Simlock destroys anything
+   * inside this set, since between then and startup the path can have become a symlink, or
+   * a `mv` can have left the user's own device set standing where this one was.
+   */
+  async revalidateRoot(): Promise<void> {
+    await ensureOwnedRoot(this.#rootOptions);
   }
 
   async resolveSpec(
@@ -582,6 +682,10 @@ export class IosSimctlDriver implements Driver {
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
     const resolved = await this.#resolvedSpec(spec);
+    // Cosmetic, and deliberately so: what proves this device is Simlock's is that it
+    // lives in the device set every call below is scoped to, never what it is called
+    // (safety rule 8). The name exists because it is what a human reads in `simctl list`
+    // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
     const result = await this.#simctl(
       ["create", name, resolved.deviceType.identifier, resolved.runtime.identifier],
@@ -593,10 +697,7 @@ export class IosSimctlDriver implements Driver {
       throw new DriverCrashError("simctl create returned no device UDID");
     }
 
-    const dataPath = await this.#dataPathFor(udid);
-    if (dataPath !== undefined) {
-      await this.#writeMark(udid, dataPath);
-    }
+    await this.#writeMark(udid);
 
     return {
       address: udid,
@@ -836,9 +937,9 @@ export class IosSimctlDriver implements Driver {
     data: IosDriverData,
     signature: string,
   ): Promise<{ readonly alreadySlimmed: boolean; readonly currentToken: string | undefined }> {
-    const dataPath = await this.#dataPathFor(data.udid);
-    const currentToken =
-      dataPath === undefined ? undefined : await this.#readToken(`${dataPath}/${MARK_FILE_NAME}`);
+    // Derived from the owned device set rather than looked up, so unlike the pre-ADR-0001
+    // `simctl list` path it can never come back undefined -- only the token read can.
+    const currentToken = await this.#readToken(join(this.#dataPathFor(data.udid), MARK_FILE_NAME));
 
     const alreadySlimmed =
       data.slimSignature !== undefined &&
@@ -965,11 +1066,7 @@ export class IosSimctlDriver implements Driver {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
     await this.#simctl(["erase", data.udid], COMMAND_TIMEOUT_MS);
-
-    const dataPath = await this.#dataPathFor(data.udid);
-    if (dataPath !== undefined) {
-      await this.#writeMark(data.udid, dataPath);
-    }
+    await this.#writeMark(data.udid);
 
     return { state: "shutdown", strategy: "erase" };
   }
@@ -988,13 +1085,58 @@ export class IosSimctlDriver implements Driver {
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
   }
 
+  /**
+   * Looks for a UDID in the machine's default device set -- where every simulator Simlock
+   * created before it owned one still lives. Reached only for a registry device the root no
+   * longer holds, and it reads: `simctl list` is the one unscoped call that mutates nothing.
+   */
+  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+    const result = await this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
+    const found = parseManagedDevices(JSON.parse(result.stdout) as unknown).find(
+      (device) => device.udid === driverDeviceId,
+    );
+    if (found === undefined) {
+      return undefined;
+    }
+
+    return {
+      device: {
+        address: found.udid,
+        deviceId: found.udid,
+        driverData: {
+          deviceTypeId: "",
+          name: found.name,
+          runtimeId: "",
+          udid: found.udid,
+        } satisfies IosDriverData,
+      },
+      // CoreSimulator lays every set out as `<set>/<UDID>`, data container included, so the
+      // container's parent is the device directory -- and where the *old* set is is exactly
+      // what this driver no longer knows any other way (ADR 0001, consequences).
+      ...(found.dataPath === undefined ? {} : { path: dirname(found.dataPath) }),
+    };
+  }
+
+  /**
+   * Destroys a pre-root simulator through the unscoped path it actually sits on. Permitted
+   * despite living outside this driver's root because the registry names it: registry-only
+   * destruction (safety rule 1) is satisfied by the record, not by the root. `doctor --fix`
+   * is the only caller, and it checks the lease guard before asking.
+   */
+  async destroyLegacy(device: DriverDevice): Promise<void> {
+    const { udid } = iosDriverData(device);
+    // Best effort, exactly as the scoped `#shutdown` is: a device that is already shut down
+    // reports a failure that says nothing about whether the delete can proceed.
+    await this.#invokeLegacySimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
+    await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
+  }
+
   async listManaged(): Promise<DriverReality> {
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
     const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
-    this.#rememberDevicesRoot(parsed);
     const devices: ObservedDevice[] = await Promise.all(
       parsed.map(async (device) => {
-        const mark = await this.#readMark(device.dataPath);
+        const mark = await this.#readMark(device.udid);
         return {
           address: device.udid,
           deviceId: device.udid,
@@ -1090,52 +1232,125 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
-   * Data-container path for a device. `simctl create` returns only the UDID,
-   * and a `simctl list` costs ~260ms -- enough to matter on `reclaim`, which
-   * runs on every release. So the devices root is learned once from simctl's
-   * own answer and every later lookup is derived from it, keeping the extra
-   * subprocess off the lease path. Falls back to listing until something has
-   * primed the root.
+   * The device-set path a lease holder needs to address its simulator at all: inside a
+   * custom set a UDID resolves to nothing without it. `docs/CLI.md` publishes the variable
+   * name, and `simlock simctl` reads it back.
    */
-  async #dataPathFor(udid: string): Promise<string | undefined> {
-    if (this.#devicesRoot !== undefined) {
-      return `${this.#devicesRoot}/${udid}/data`;
-    }
-    const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
-    const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
-    this.#rememberDevicesRoot(parsed);
-    return parsed.find((device) => device.udid === udid)?.dataPath;
+  leaseEnvironment(): Readonly<Record<string, string>> {
+    return { SIMLOCK_IOS_DEVICE_SET: this.#deviceRoot };
   }
 
-  /** `<devicesRoot>/<UDID>/data` -- two levels up from any device's data container. */
-  #rememberDevicesRoot(devices: readonly ParsedManagedDevice[]): void {
-    if (this.#devicesRoot !== undefined) return;
-    const dataPath = devices.find((device) => device.dataPath !== undefined)?.dataPath;
-    if (dataPath === undefined) return;
-    const root = parentDirectory(parentDirectory(dataPath));
-    if (root !== "/") this.#devicesRoot = root;
+  readonly passthroughTool = IOS_PASSTHROUGH_TOOL;
+
+  /**
+   * `xcrun simctl --set <root> <args...>`: the same insertion `#invokeSimctl` makes, for a
+   * command the caller runs itself. This is still an accident boundary and not a security
+   * one (ADR 0001, "Not a security boundary") -- someone who wants to can run
+   * `xcrun simctl --set` themselves -- but the wrapper must never be the thing that hands
+   * over the set path, so the two globals that could disguise a refused verb are refused
+   * before the verb is resolved at all.
+   */
+  passthrough(args: readonly string[]): PassthroughCommand {
+    this.#assertProxyable(args);
+    // No environment: on iOS the device set only ever reaches simctl on the command line
+    // (ADR 0001 records that every candidate variable was tried and ignored).
+    return { args: ["simctl", "--set", this.#deviceRoot, ...args], command: "xcrun", env: {} };
+  }
+
+  #assertProxyable(args: readonly string[]): void {
+    const [verb, ...operands] = this.#subcommand(args);
+    if (verb === undefined) return;
+    if (REFUSED_SIMCTL_VERBS.has(verb)) {
+      this.#refuse(
+        verb,
+        `it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. ${RECLAIM_INSTEAD}`,
+      );
+    }
+    if (verb === "shutdown" && operands.includes(SHUTDOWN_ALL_TARGET)) {
+      this.#refuse(
+        `shutdown ${SHUTDOWN_ALL_TARGET}`,
+        `it stops every device in Simlock's set at once -- every agent's, not just yours -- and each interrupted lease spends its recovery budget rebooting, so one that runs out ends as \`lease_lost\`. Shutting a single device down by udid is still allowed. ${RECLAIM_INSTEAD}`,
+      );
+    }
+    // A bare `simctl` reaches this too, so refusing it takes no capability away. The
+    // wrapper is advertised as the safe path, and being the convenient route to an
+    // unrecoverable multi-gigabyte deletion is not that.
+    if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
+      this.#refuse(
+        "runtime delete",
+        "it deletes a runtime shared with Xcode, and Simlock will not download one back (`--allow-download` cannot install iOS runtimes). Delete it through Xcode if that is really what you meant.",
+      );
+    }
+  }
+
+  #refuse(command: string, guidance: string): never {
+    throw new PassthroughRefusedError(
+      this.passthroughTool,
+      `Refusing \`simlock simctl ${command}\`: ${guidance}`,
+    );
+  }
+
+  /**
+   * The subcommand and its operands, refusing on the way anything that could be mistaken
+   * for a subcommand. A caller-supplied `--set`/`--profiles` (any spelling, `--set=<path>`
+   * included) is the only way a non-flag argument can precede the subcommand, so once
+   * those are gone the first non-flag argument *is* the subcommand.
+   */
+  #subcommand(args: readonly string[]): readonly string[] {
+    for (const [index, argument] of args.entries()) {
+      if (!argument.startsWith("-")) return args.slice(index);
+      const flag = /^-+([^=]*)/.exec(argument)?.[1];
+      if (flag !== undefined && CALLER_SUPPLIED_SCOPE_FLAGS.has(flag)) {
+        throw new PassthroughRefusedError(
+          this.passthroughTool,
+          `Refusing \`simlock simctl ${argument}\`: \`simlock simctl\` supplies the device set itself, and a caller-supplied \`--${flag}\` would point simctl somewhere Simlock does not manage. Drop the flag -- the command is already scoped -- or run \`xcrun simctl\` directly if you mean to leave Simlock's set.`,
+        );
+      }
+    }
+    return [];
+  }
+
+  /** CoreSimulator lays a set out as `<set>/<UDID>`, so no subprocess can tell us more. */
+  #deviceDirectory(udid: string): string {
+    return join(this.#deviceRoot, udid);
+  }
+
+  /**
+   * Data-container path for a device, derived rather than looked up. The driver used to
+   * learn it from a `simctl list` (~260ms, on `reclaim`, which runs on every release)
+   * because it did not know where its devices lived; owning the set means it does.
+   */
+  #dataPathFor(udid: string): string {
+    return join(this.#deviceDirectory(udid), "data");
   }
 
   /**
    * Writes the same provenance token into both regions of a device: the
    * device root (durable -- survives `simctl erase`) and the data container
-   * (erasable -- destroyed by it). Both halves are written together so a
-   * partial write never reads as drift.
+   * (erasable -- destroyed by it).
+   *
+   * The erasable half goes first, and the two are not written concurrently, because a
+   * half-written pair is read by `Doctor` as tampering: durable-without-erasable is
+   * exactly the signature of a foreign erase. Writing the fragile half first means a
+   * failure (`<root>/<udid>/data` is not there, so `writeFileAtomic` -- which creates no
+   * parents -- cannot land) leaves *neither* mark, which reads as "never marked" and
+   * produces no finding at all. The write still throws, so the caller learns something
+   * was wrong with the device; what it must never do is accuse the user of erasing a
+   * device Simlock itself just erased.
    */
-  async #writeMark(udid: string, dataPath: string): Promise<void> {
+  async #writeMark(udid: string): Promise<void> {
     const token = this.#idGenerator.generate();
     const contents = JSON.stringify({
       token,
       udid,
       writtenAt: new Date(this.#clock.now()).toISOString(),
     });
-    const durablePath = `${parentDirectory(dataPath)}/${MARK_FILE_NAME}`;
-    const erasablePath = `${dataPath}/${MARK_FILE_NAME}`;
 
-    await Promise.all([
-      this.#filesystem.writeFileAtomic(durablePath, contents),
-      this.#filesystem.writeFileAtomic(erasablePath, contents),
-    ]);
+    await this.#filesystem.writeFileAtomic(join(this.#dataPathFor(udid), MARK_FILE_NAME), contents);
+    await this.#filesystem.writeFileAtomic(
+      join(this.#deviceDirectory(udid), MARK_FILE_NAME),
+      contents,
+    );
   }
 
   /**
@@ -1148,13 +1363,9 @@ export class IosSimctlDriver implements Driver {
    * shipped) reports `undefined` rather than a half-empty mark, so it stays
    * quiet instead of classifying as tampered on every tick.
    */
-  async #readMark(dataPath: string | undefined): Promise<ObservedMark | undefined> {
-    if (dataPath === undefined) {
-      return undefined;
-    }
-
-    const durable = await this.#readToken(`${parentDirectory(dataPath)}/${MARK_FILE_NAME}`);
-    const erasable = await this.#readToken(`${dataPath}/${MARK_FILE_NAME}`);
+  async #readMark(udid: string): Promise<ObservedMark | undefined> {
+    const durable = await this.#readToken(join(this.#deviceDirectory(udid), MARK_FILE_NAME));
+    const erasable = await this.#readToken(join(this.#dataPathFor(udid), MARK_FILE_NAME));
 
     if (durable === undefined && erasable === undefined) {
       return undefined;
@@ -1232,8 +1443,14 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #simctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
-    const outcome = await this.#invokeSimctl(args, timeoutMs);
+    return this.#checked(args, timeoutMs, await this.#invokeSimctl(args, timeoutMs));
+  }
 
+  async #legacySimctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
+    return this.#checked(args, timeoutMs, await this.#invokeLegacySimctl(args, timeoutMs));
+  }
+
+  #checked(args: readonly string[], timeoutMs: number, outcome: ProcessOutcome): ProcessResult {
     if (outcome.kind === "timed-out") {
       throw new DriverCrashError(`simctl ${args.join(" ")} timed out after ${timeoutMs}ms`);
     }
@@ -1242,14 +1459,34 @@ export class IosSimctlDriver implements Driver {
     return outcome.result;
   }
 
+  /**
+   * The single insertion point for `--set`, which scopes every subcommand to the root this
+   * driver owns and must therefore precede the subcommand. Every call in this file is
+   * spawned through here or through `#invokeLegacySimctl`, and nothing else: a scoped call
+   * that slipped past both would address the machine's default set, where Simlock can prove
+   * nothing about what it touches.
+   */
   async #invokeSimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
+    return this.#invokeXcrun(["simctl", "--set", this.#deviceRoot, ...args], timeoutMs);
+  }
+
+  /**
+   * Deliberately unscoped, and the only thing in Simlock that is: the pre-root devices
+   * `findLegacy` / `destroyLegacy` deal with are in the machine's default set, which is
+   * where a `--set` would stop reaching them. Only those two may call it, and only for a
+   * UDID a registry record names -- registry-only destruction (safety rule 1) is satisfied
+   * by that record, not by the root.
+   */
+  async #invokeLegacySimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
+    return this.#invokeXcrun(["simctl", ...args], timeoutMs);
+  }
+
+  async #invokeXcrun(argv: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
     let process;
     try {
-      process = this.#processRunner.spawn("xcrun", ["simctl", ...args], { timeoutMs });
+      process = this.#processRunner.spawn("xcrun", [...argv], { timeoutMs });
     } catch (error: unknown) {
-      throw new DriverCrashError(
-        `Could not start simctl ${args.join(" ")}: ${errorMessage(error)}`,
-      );
+      throw new DriverCrashError(`Could not start ${argv.join(" ")}: ${errorMessage(error)}`);
     }
 
     let resolveTimeout: (() => void) | undefined;
@@ -1271,7 +1508,7 @@ export class IosSimctlDriver implements Driver {
         timedOut.then(() => ({ kind: "timed-out" as const })),
       ]);
     } catch (error: unknown) {
-      throw new DriverCrashError(`simctl ${args.join(" ")} failed: ${errorMessage(error)}`);
+      throw new DriverCrashError(`${argv.join(" ")} failed: ${errorMessage(error)}`);
     } finally {
       this.#clock.cancel(timer);
     }
@@ -1376,41 +1613,64 @@ class IosRuntimeUnavailableForDownloadError extends RuntimeMissingError {
   }
 }
 
+/**
+ * The configured root, or the per-home default. The default is computed here and not in
+ * the core because what `drivers.ios.deviceRoot` means is this module's business
+ * (architecture rule 2); the core only hands over the block and `SIMLOCK_HOME`.
+ */
+function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
+  const configured = options.driverConfig["deviceRoot"];
+
+  if (configured !== undefined && typeof configured !== "string") {
+    // A `deviceRoot` that is not a usable path refuses this platform's *configuration*,
+    // which costs iOS and nothing else -- the same as every other refusal here. It is not
+    // a daemon-fatal error: `"deviceRoot": true` and `"deviceRoot": "devices/ios"` are one
+    // keystroke apart, and killing the process over the first would take Android down with
+    // it and leave the reason unreachable, since `doctor` -- where `docs/CLI.md` promises
+    // it appears -- needs a daemon to answer. `not-absolute` is the vocabulary term the
+    // docs already publish for "this names no usable directory"; nothing new is invented.
+    throw new OwnedRootError(
+      `Refusing the ios device root: drivers.ios.deviceRoot must be an absolute path, but it is the ${typeof configured} ${JSON.stringify(configured)}`,
+      "not-absolute",
+      String(configured),
+      "ios",
+    );
+  }
+
+  return configured ?? join(options.simlockHome, "devices", "ios");
+}
+
 interface ParsedManagedDevice {
-  readonly dataPath: string | undefined;
+  /** Only `findLegacy` reads this; a scoped listing already knows where its devices are. */
+  readonly dataPath?: string;
   readonly name: string;
   readonly runState: ObservedRunState;
   readonly udid: string;
 }
 
-// fallow-ignore-next-line complexity -- runtime-keyed device JSON is walked and filtered in one pass by design.
 function parseManagedDevices(value: unknown): ParsedManagedDevice[] {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");
   }
-  const devices: ParsedManagedDevice[] = [];
-  for (const runtimeDevices of Object.values(value.devices)) {
-    if (!Array.isArray(runtimeDevices)) continue;
-    for (const device of runtimeDevices) {
-      if (!isRecord(device) || typeof device.name !== "string" || typeof device.udid !== "string") {
-        continue;
-      }
-      if (!device.name.startsWith("simlock-")) continue;
-      devices.push({
-        dataPath: typeof device.dataPath === "string" ? device.dataPath : undefined,
-        name: device.name,
-        runState: simctlRunState(device.state),
-        udid: device.udid,
-      });
-    }
-  }
-  return devices;
+  return Object.values(value.devices).flatMap((runtimeDevices) =>
+    Array.isArray(runtimeDevices) ? runtimeDevices.flatMap(parseManagedDevice) : [],
+  );
 }
 
-/** Mirrors `parentPath` in the `Filesystem` port: the parent of a `dataPath` is the device root. */
-function parentDirectory(path: string): string {
-  const lastSeparator = path.lastIndexOf("/");
-  return lastSeparator <= 0 ? "/" : path.slice(0, lastSeparator);
+/** An entry simctl reports without a name or a udid is not addressable, so it is skipped. */
+function parseManagedDevice(value: unknown): readonly ParsedManagedDevice[] {
+  if (!isRecord(value) || typeof value.name !== "string" || typeof value.udid !== "string") {
+    return [];
+  }
+
+  return [
+    {
+      name: value.name,
+      runState: simctlRunState(value.state),
+      udid: value.udid,
+      ...(typeof value.dataPath === "string" ? { dataPath: value.dataPath } : {}),
+    },
+  ];
 }
 
 /** `simctl` reports `Booting` / `Shutting Down` mid-transition; both must read as `transitioning`, never as drift. */

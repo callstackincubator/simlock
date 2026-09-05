@@ -158,6 +158,7 @@ function defaultEnvironment(
           args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
           command: process.execPath,
           logPath,
+          simlockHome: dataDirectory,
         }),
         principal: requesterId,
         socketPath,

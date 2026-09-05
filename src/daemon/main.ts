@@ -4,23 +4,29 @@ import { pathToFileURL } from "node:url";
 
 import { EventBus } from "../bus/index.js";
 import {
+  type Config,
   type ConfigOverrides,
   type Driver,
+  type DriverRejection,
   CleanupReaper,
   DiskSpaceGuard,
   Doctor,
   LeaseEngine,
   loadConfig,
+  loadInstanceId,
+  OwnedRootError,
   Registry,
   Nuke,
 } from "../core/index.js";
 import {
+  AdbServerUnavailableError,
   AndroidDriver,
+  ANDROID_PASSTHROUGH_TOOL,
   SdkMissingError,
   type AndroidDriverDiagnostic,
 } from "../drivers/android/index.js";
 import type { ComponentInstallDiagnostic } from "../drivers/diagnostics.js";
-import { IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
+import { IOS_PASSTHROUGH_TOOL, IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
 import { createHttpApp } from "../http/app.js";
 import { HttpGateway } from "../http/server.js";
 import { TokenStore } from "../http/token-store.js";
@@ -38,11 +44,15 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   NodeProcessRunner,
+  NodeProcessSupervisor,
   NodeSystemStats,
+  NodeTcpProbe,
   resolveSimlockHome,
   SystemClock,
   type SystemStats,
   type ProcessRunner,
+  type ProcessSupervisor,
+  type TcpProbe,
 } from "../ports/index.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
@@ -61,9 +71,11 @@ export interface StartDaemonOptions {
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
   readonly processRunner?: ProcessRunner;
+  readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
   readonly statePath?: string;
   readonly systemStats?: SystemStats;
+  readonly tcpProbe?: TcpProbe;
   readonly version?: string;
 }
 
@@ -77,6 +89,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const idGenerator = options.idGenerator ?? new CryptoIdGenerator();
   const ipc = options.ipc ?? new NodeIpcTransport();
   const processRunner = options.processRunner ?? new NodeProcessRunner();
+  const processSupervisor = options.processSupervisor ?? new NodeProcessSupervisor();
+  const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? join(dataDirectory, "daemon.sock");
@@ -102,23 +116,37 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // is only attributable later through the daemon's own log file.
   wireComponentInstallLogging(eventBus, logger);
   const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
+  // Before discovery, because every root a driver validates is checked against it, and it
+  // is written exactly once per home and never regenerated (ADR 0001, decision 2).
+  const instanceId = await loadInstanceId({
+    filesystem,
+    idGenerator,
+    path: join(dataDirectory, "instance.json"),
+  });
   // One instance shared across every driver discovered below, so a disk-space reservation one
   // driver makes is visible to the other's own preflight -- see `DiskSpaceGuard`.
   const diskSpaceGuard = new DiskSpaceGuard();
-  const drivers =
-    options.drivers ??
-    (await discoverDrivers({
-      acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
-      clock,
-      diskSpaceGuard,
-      downloadTimeoutMs: config.downloads.timeoutMs,
-      eventBus,
-      filesystem,
-      idGenerator,
-      logger,
-      processRunner,
-      slim: config.ios.slim,
-    }));
+  const { drivers, rejections } =
+    options.drivers === undefined
+      ? await discoverDrivers({
+          acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
+          clock,
+          diskSpaceGuard,
+          downloadTimeoutMs: config.downloads.timeoutMs,
+          driversConfig: config.drivers,
+          eventBus,
+          filesystem,
+          hostPlatform: process.platform,
+          idGenerator,
+          instanceId,
+          logger,
+          processRunner,
+          processSupervisor,
+          simlockHome: dataDirectory,
+          slim: config.ios.slim,
+          tcpProbe,
+        })
+      : { drivers: options.drivers, rejections: [] };
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -146,8 +174,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     clock,
     config,
     drivers,
+    driverRejections: rejections,
     eventBus,
     leaseExpirer: leaseEngine,
+    logger,
     quarantine: leaseEngine,
     registry,
   });
@@ -206,6 +236,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     clock,
     config,
     doctor,
+    driverRejections: rejections,
     defaultRequesterId:
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
@@ -219,6 +250,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     }),
     leases: leaseEngine,
     logger: logger.child("server"),
+    passthrough: leaseEngine,
     queue: leaseEngine,
     reaper,
     nuke,
@@ -242,7 +274,23 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
     },
     settle: async () => leaseEngine.settle(),
-    dispose: () => leaseEngine.dispose(),
+    // Drivers are disposed after the lease subsystem, and every one of them is tried even
+    // when another throws: Android's disposal is the only thing that can stop the adb
+    // server it started (`ADB_REJECT_KILL_SERVER=1` refuses everything else), and a
+    // shutdown that abandoned it would leave a server nothing can reap holding the port
+    // the next daemon needs.
+    dispose: async () => {
+      leaseEngine.dispose();
+      const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
+      for (const [index, disposal] of disposals.entries()) {
+        if (disposal.status === "rejected") {
+          logger.error("Driver disposal failed", {
+            platform: drivers[index]?.platform,
+            reason: disposal.reason instanceof Error ? disposal.reason.message : "unknown",
+          });
+        }
+      }
+    },
     // Review finding S5: waits for the concurrently-started gateway to either finish binding
     // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
     // stop) *before* returning -- `#stop()` awaits this call before releasing leases, settling,
@@ -346,6 +394,8 @@ export interface DriverDiscoveryContext {
   /** Threaded into the Android driver's `downloads.acceptAndroidLicenses` gate; defaults to `false` when omitted. */
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  /** Whole `drivers` config section: each driver is handed its own block, unread. */
+  readonly driversConfig: Config["drivers"];
   /**
    * Threaded into the iOS driver's `xcodebuild -downloadPlatform` timeout and the Android
    * driver's `sdkmanager --install` / `--licenses` timeout; defaults to each driver's own
@@ -362,9 +412,20 @@ export interface DriverDiscoveryContext {
   /** Bridges each driver's `component.install-*` diagnostic onto the bus -- see `emitComponentInstallDiagnostic`. */
   readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Filesystem;
+  /**
+   * Which platform's tooling this host has, `process.platform` in production and supplied
+   * by the composition root rather than read here. Discovery's fail-closed branch -- the
+   * one that must cost a platform and never the daemon -- is otherwise reachable only on a
+   * Mac, and so is untestable everywhere Simlock's own CI runs.
+   */
+  readonly hostPlatform: NodeJS.Platform;
   readonly idGenerator: IdGenerator;
+  readonly instanceId: string;
   readonly logger: Logger;
   readonly processRunner: ProcessRunner;
+  readonly processSupervisor: ProcessSupervisor;
+  readonly simlockHome: string;
+  readonly tcpProbe: TcpProbe;
   /**
    * The iOS driver's opt-in slim mode (`ios.slim` in config). Never threaded into the Android
    * driver -- slim is iOS-only (ADR 0002, out of scope: Android equivalent). Omitted or
@@ -377,67 +438,179 @@ export interface DriverDiscoveryContext {
   };
 }
 
-export async function discoverDrivers(options: DriverDiscoveryContext): Promise<Driver[]> {
+/** Drivers that started, and the platforms that refused to -- both are startup outcomes. */
+export interface DriverDiscovery {
+  readonly drivers: readonly Driver[];
+  readonly rejections: readonly DriverRejection[];
+}
+
+export async function discoverDrivers(options: DriverDiscoveryContext): Promise<DriverDiscovery> {
   const logger = options.logger.child("driver-discovery");
   const driversModule = process.env.SIMLOCK_DRIVERS_MODULE;
   if (driversModule !== undefined) {
-    return loadDriversModule(driversModule, options, logger);
+    // A substituted driver set owns whatever roots it wants, so there is nothing here to
+    // refuse on its behalf.
+    return { drivers: await loadDriversModule(driversModule, options, logger), rejections: [] };
   }
 
+  // One instance shared across both drivers, so a disk-space reservation one makes is visible
+  // to the other's own preflight -- see `DiskSpaceGuard`.
   const diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
   const drivers: Driver[] = [];
-  if (process.platform === "darwin") {
-    drivers.push(
-      new IosSimctlDriver({
-        clock: options.clock,
-        coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
-        diskSpaceGuard,
-        ...(options.downloadTimeoutMs === undefined
-          ? {}
-          : { downloadTimeoutMs: options.downloadTimeoutMs }),
-        filesystem: options.filesystem,
-        idGenerator: options.idGenerator,
-        onDiagnostic: emitComponentInstallDiagnostic(options.eventBus, "ios"),
-        onSlimmed: emitSlimDiagnostic(options.eventBus),
-        onSlimSkipped: (fact) => {
-          logger.warn("Skipped iOS device slim", {
-            deviceId: fact.deviceId,
-            detail: fact.detail,
-            reason: fact.reason,
-          });
-        },
-        processRunner: options.processRunner,
-        ...(options.slim === undefined ? {} : { slim: options.slim }),
-      }),
-    );
-    logger.info("Discovered driver", { platform: "ios" });
+  const rejections: DriverRejection[] = [];
+  if (options.hostPlatform === "darwin") {
+    const ios = await discoverIosDriver(options, diskSpaceGuard, logger);
+    if (ios.driver !== undefined) drivers.push(ios.driver);
+    if (ios.rejection !== undefined) rejections.push(ios.rejection);
   }
+  const android = await discoverAndroidDriver(options, diskSpaceGuard, logger);
+  if (android.driver !== undefined) drivers.push(android.driver);
+  if (android.rejection !== undefined) rejections.push(android.rejection);
+  return { drivers, rejections };
+}
+
+/**
+ * A refused root costs the daemon one platform, never the whole daemon: the other platform
+ * may be perfectly healthy, and a daemon that will not start is a daemon that cannot tell
+ * anyone why (safety rule 9). Every other failure still fails startup -- an unreadable root
+ * is already an `OwnedRootError`, so what is left is a genuine bug.
+ */
+async function discoverIosDriver(
+  options: DriverDiscoveryContext,
+  diskSpaceGuard: DiskSpaceGuard,
+  logger: Logger,
+): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
   try {
-    drivers.push(
-      await AndroidDriver.create({
-        acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
-        clock: options.clock,
-        diskSpaceGuard,
-        ...(options.downloadTimeoutMs === undefined
-          ? {}
-          : { downloadTimeoutMs: options.downloadTimeoutMs }),
-        env: process.env,
-        filesystem: options.filesystem,
-        homeDirectory: homedir(),
-        idGenerator: options.idGenerator,
-        onDiagnostic: bridgeAndroidDriverDiagnostic(options.eventBus),
-        processRunner: options.processRunner,
-      }),
-    );
+    const driver = await IosSimctlDriver.create({
+      clock: options.clock,
+      coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
+      diskSpaceGuard,
+      ...(options.downloadTimeoutMs === undefined
+        ? {}
+        : { downloadTimeoutMs: options.downloadTimeoutMs }),
+      driverConfig: options.driversConfig["ios"] ?? {},
+      filesystem: options.filesystem,
+      idGenerator: options.idGenerator,
+      instanceId: options.instanceId,
+      onDiagnostic: emitComponentInstallDiagnostic(options.eventBus, "ios"),
+      onSlimmed: emitSlimDiagnostic(options.eventBus),
+      onSlimSkipped: (fact) => {
+        logger.warn("Skipped iOS device slim", {
+          deviceId: fact.deviceId,
+          detail: fact.detail,
+          reason: fact.reason,
+        });
+      },
+      processRunner: options.processRunner,
+      simlockHome: options.simlockHome,
+      ...(options.slim === undefined ? {} : { slim: options.slim }),
+      // Ambient like `homedir()` above, and read here rather than in the driver so the
+      // composition root stays the only place that touches process state.
+      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+    });
+    logger.info("Discovered driver", { platform: "ios" });
+    return { driver };
+  } catch (error: unknown) {
+    if (!(error instanceof OwnedRootError)) {
+      throw error;
+    }
+
+    logger.error("Skipped iOS driver: device root rejected", {
+      reason: error.reason,
+      root: error.path,
+      summary: error.message,
+    });
+    return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOL) };
+  }
+}
+
+/**
+ * Android refuses for one more reason than iOS does -- it needs a private adb server as
+ * well as an owned root -- and both refusals cost the platform rather than the daemon.
+ * A missing SDK is not a refusal at all: this host simply has no Android tooling, which is
+ * ordinary and reported by the absence of the platform.
+ */
+async function discoverAndroidDriver(
+  options: DriverDiscoveryContext,
+  diskSpaceGuard: DiskSpaceGuard,
+  logger: Logger,
+): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
+  try {
+    const driver = await AndroidDriver.create({
+      acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
+      clock: options.clock,
+      diskSpaceGuard,
+      ...(options.downloadTimeoutMs === undefined
+        ? {}
+        : { downloadTimeoutMs: options.downloadTimeoutMs }),
+      driverConfig: options.driversConfig["android"] ?? {},
+      env: process.env,
+      filesystem: options.filesystem,
+      homeDirectory: homedir(),
+      idGenerator: options.idGenerator,
+      instanceId: options.instanceId,
+      onDiagnostic: bridgeAndroidDriverDiagnostic(options.eventBus),
+      processRunner: options.processRunner,
+      processSupervisor: options.processSupervisor,
+      simlockHome: options.simlockHome,
+      tcpProbe: options.tcpProbe,
+      // Ambient like `homedir()` above, and read here rather than in the driver so the
+      // composition root stays the only place that touches process state.
+      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+    });
     logger.info("Discovered driver", { platform: "android" });
-    return drivers;
+    return { driver };
   } catch (error: unknown) {
     if (error instanceof SdkMissingError) {
       logger.warn("Skipped Android driver: SDK missing", { reason: error.message });
-      return drivers;
+      return {};
     }
+    if (error instanceof OwnedRootError) {
+      logger.error("Skipped Android driver: device root rejected", {
+        reason: error.reason,
+        root: error.path,
+        summary: error.message,
+      });
+      return { rejection: rootRejection(error, ANDROID_PASSTHROUGH_TOOL) };
+    }
+    if (error instanceof AdbServerUnavailableError) {
+      logger.error("Skipped Android driver: adb server unavailable", {
+        port: error.port,
+        reason: error.reason,
+        summary: error.message,
+      });
+      return { rejection: adbServerRejection(error) };
+    }
+
     throw error;
   }
+}
+
+function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {
+  return {
+    event: "driver.adb-server-rejected",
+    passthroughTool: ANDROID_PASSTHROUGH_TOOL,
+    payload: { port: error.port, reason: error.reason },
+    platform: "android",
+    reason: error.reason,
+    summary: error.message,
+  };
+}
+
+/**
+ * The tool name is passed in rather than derived from `error.platform`: which wrapper a
+ * platform answers to is the driver module's business, and this file is the composition
+ * root that already knows both driver classes (architecture rule 2).
+ */
+function rootRejection(error: OwnedRootError, passthroughTool: string): DriverRejection {
+  return {
+    event: "driver.root-rejected",
+    passthroughTool,
+    payload: { platform: error.platform, reason: error.reason, root: error.path },
+    platform: error.platform,
+    reason: error.reason,
+    summary: error.message,
+  };
 }
 
 /**
@@ -453,13 +626,15 @@ async function loadDriversModule(
   modulePath: string,
   context: DriverDiscoveryContext,
   logger: Logger,
-): Promise<Driver[]> {
+): Promise<readonly Driver[]> {
   logger.info("Substituting driver discovery via SIMLOCK_DRIVERS_MODULE", {
     module: modulePath,
   });
   const moduleUrl = pathToFileURL(resolve(modulePath)).href;
   const imported = (await import(moduleUrl)) as {
-    createDrivers?: (context: DriverDiscoveryContext) => Promise<Driver[]> | Driver[];
+    createDrivers?: (
+      context: DriverDiscoveryContext,
+    ) => Promise<readonly Driver[]> | readonly Driver[];
   };
   if (typeof imported.createDrivers !== "function") {
     throw new Error(

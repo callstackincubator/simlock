@@ -7,14 +7,18 @@ import {
   type Registry,
   type CleanupReaper,
   type Doctor,
+  type DriverRejection,
   type LeaseHealthMonitor,
+  NoDriverError,
   type Nuke,
   UnknownLeaseError,
+  UnknownPassthroughToolError,
 } from "../core/index.js";
 import type {
   CapacityReader,
   CatalogReader,
   LeaseCommands,
+  PassthroughResolver,
   QueueControl,
 } from "../core/lease-ports.js";
 import type { Clock, IpcConnection, Logger, TimerHandle } from "../ports/index.js";
@@ -96,6 +100,12 @@ export interface DaemonServerOptions {
   readonly config: Config;
   readonly doctor?: Doctor;
   readonly defaultRequesterId: string;
+  /**
+   * Platforms whose driver refused to start. The daemon serves without them rather than
+   * refusing to come up (safety rule 9), so the refusal has to be visible somewhere: one
+   * event each lands in the ring buffer here, and `Doctor` reports the same list.
+   */
+  readonly driverRejections?: readonly DriverRejection[];
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
   readonly leases: LeaseCommands;
@@ -107,6 +117,8 @@ export interface DaemonServerOptions {
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor;
   readonly nuke?: Nuke;
+  /** Builds the scoped command behind `simlock simctl` / `simlock adb`; absent in tests that never use them. */
+  readonly passthrough?: PassthroughResolver;
   readonly registry: Registry;
   /** ADR 0003 §11: threaded straight into the `Dispatcher` for `token.create|list|revoke`. */
   readonly tokens?: TokenStore;
@@ -135,8 +147,13 @@ export interface DaemonServerOptions {
    * it for startup recovery. Runs after held leases are released and before `dispose`.
    */
   readonly settle?: () => Promise<void>;
-  /** Cancels any timers the lease subsystem armed (e.g. quarantine retries) on shutdown. */
-  readonly dispose?: () => void;
+  /**
+   * Releases what the daemon holds beyond its own state on shutdown: timers the lease
+   * subsystem armed (quarantine retries), and every driver's own external resources.
+   * Awaited, because a driver's release is asynchronous and a stop that returned before it
+   * finished would report a shutdown that had not happened.
+   */
+  readonly dispose?: () => void | Promise<void>;
   /**
    * Stops an auxiliary frontend (today: the HTTP gateway's listener, started only after
    * `start()` resolves -- see `main.ts`) before anything else in `stop()` runs, so no
@@ -207,6 +224,7 @@ export class DaemonServer {
       leases: options.leases,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
+      ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
       queue: options.queue,
       reaper: options.reaper,
       registry: options.registry,
@@ -361,6 +379,14 @@ export class DaemonServer {
       { configSnapshot: this.options.config, version: this.options.version },
       "daemon",
     );
+    // After `daemon.started`, because these are facts about the daemon that just started
+    // and a subscriber reading the buffer in order should see it come up first.
+    for (const rejection of this.options.driverRejections ?? []) {
+      // No assertion: `DriverRejection` pairs each event name with that event's own
+      // payload, so the contract is checked where the driver module builds the refusal
+      // rather than being taken on trust here, one step from the ring buffer.
+      this.options.eventBus.emit(rejection.event, rejection.payload, "daemon");
+    }
     this.#logger.info("Daemon started", {
       config: this.options.config,
       protocolVersion: this.#protocolRange.max,
@@ -433,7 +459,7 @@ export class DaemonServer {
     // was inline. Disposal follows rather than precedes it, so a retry timer armed by a
     // reclaim that settles into quarantine is still cancelled.
     await this.options.settle?.();
-    this.options.dispose?.();
+    await this.options.dispose?.();
     for (const connection of this.#connections) {
       await connection.socket.close();
     }
@@ -602,8 +628,33 @@ export class DaemonServer {
       } else {
         this.#logger.debug("Handled request error", { code, type: frame.type });
       }
-      await this.#respondError(connection.socket, frame.id, code, errorMessage(error));
+      await this.#respondError(connection.socket, frame.id, code, this.#describeError(error));
     }
+  }
+
+  /**
+   * A `NO_DRIVER` for a platform whose driver refused to start says nothing on its own:
+   * it reads identically to "this host has no Xcode". Safety rule 9 promises Simlock
+   * reports *why* a platform is missing, so the refusal's own one-liner travels with the
+   * error on both paths a user meets it: leasing, and the `simlock simctl` / `simlock adb`
+   * wrapper, whose bare "No driver provides a adb passthrough" reads as a missing SDK and
+   * sends the operator off to install one instead of at the port conflict that caused it.
+   */
+  #describeError(error: unknown): string {
+    const message = errorMessage(error);
+    const rejection = this.#rejectionFor(error);
+    return rejection === undefined ? message : `${message} (${rejection.summary})`;
+  }
+
+  #rejectionFor(error: unknown): DriverRejection | undefined {
+    const rejections = this.options.driverRejections ?? [];
+    if (error instanceof NoDriverError) {
+      return rejections.find((candidate) => candidate.platform === error.platform);
+    }
+    if (error instanceof UnknownPassthroughToolError) {
+      return rejections.find((candidate) => candidate.passthroughTool === error.tool);
+    }
+    return undefined;
   }
 
   // fallow-ignore-next-line complexity -- handshake validation, version negotiation, and role resolution are one sequential gate; splitting it would scatter the early-return contract.
@@ -838,6 +889,15 @@ export class DaemonServer {
       case "events.unsubscribe":
         return this.#dispatcher.dispatch(
           "events.unsubscribe",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "driver.passthrough":
+        // Resolution only: the daemon never runs the command. Spawning it here would attach
+        // a user's interactive `adb shell` to the daemon's stdio, and the CLI is the process
+        // that actually has a terminal.
+        return this.#dispatcher.dispatch(
+          "driver.passthrough",
           frame.payload ?? {},
           this.#session(connection),
         );

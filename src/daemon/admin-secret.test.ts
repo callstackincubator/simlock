@@ -52,6 +52,12 @@ describe("AdminSecretManager", () => {
       readdir: () => Promise.reject(new Error("unused by this test")),
       exists: () => Promise.reject(new Error("unused by this test")),
       diskFree: () => Promise.reject(new Error("unused by this test")),
+      writeFileExclusive: () => Promise.reject(new Error("unused by this test")),
+      rename: () => Promise.reject(new Error("unused by this test")),
+      lstat: () => Promise.reject(new Error("unused by this test")),
+      mkdir: () => Promise.reject(new Error("unused by this test")),
+      chmod: () => Promise.reject(new Error("unused by this test")),
+      realpath: () => Promise.reject(new Error("unused by this test")),
     };
     const manager = new AdminSecretManager({
       filesystem,
@@ -125,6 +131,24 @@ describe("AdminSecretManager", () => {
       diskFree: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      writeFileExclusive: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      rename: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      lstat: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      mkdir: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      chmod: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      realpath: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
     };
     const realSecrets = secrets();
     // Constructing `AdminSecretManager` calls `secrets.generateSecret()`/`secrets.hash(...)`
@@ -175,6 +199,24 @@ describe("AdminSecretManager", () => {
         throw new Error("must not touch the filesystem");
       },
       diskFree: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      writeFileExclusive: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      rename: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      lstat: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      mkdir: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      chmod: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      realpath: () => {
         throw new Error("must not touch the filesystem");
       },
     };

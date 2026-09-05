@@ -32,6 +32,12 @@ export interface ProcessRunOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
   /**
+   * `"ignore"` detaches the child's output entirely: nothing is captured and nothing is
+   * iterable. A long-lived supervised process (Simlock's own adb server) would otherwise
+   * accumulate every line it ever wrote in this handle's buffers for as long as it runs.
+   */
+  readonly stdio?: "pipe" | "ignore";
+  /**
    * Written to the child's stdin and then closed. For a CLI that reads an interactive prompt
    * from stdin (e.g. `sdkmanager --licenses`'s per-license `y/N`) rather than accepting a flag.
    * Omitted means stdin is left open and unwritten, exactly as before this option existed.
@@ -50,7 +56,29 @@ export interface ProcessHandle {
   readonly stdout: AsyncIterable<string>;
   readonly stderr: AsyncIterable<string>;
   kill(signal?: NodeJS.Signals): void;
+  /**
+   * Stops this child from keeping the parent's event loop alive. Only for a process that
+   * is meant to outlive the daemon and is reaped by pid instead of by exit (Simlock's adb
+   * server): everything else is awaited through `wait()` and must keep the loop open.
+   */
+  unref(): void;
   wait(): Promise<ProcessResult>;
+}
+
+/**
+ * A child that could not be started at all -- a binary that exists but is not executable,
+ * `ETXTBSY` while it is being rewritten, `EAGAIN` under memory pressure. Node reports this
+ * asynchronously, so it is raised here as a synchronous throw (and therefore a rejected
+ * promise out of `run`) rather than left to surface as an unhandled `error` event.
+ */
+export class ProcessSpawnError extends Error {
+  constructor(
+    readonly command: string,
+    readonly args: readonly string[],
+  ) {
+    super(`Failed to spawn ${command} ${args.join(" ")}`);
+    this.name = "ProcessSpawnError";
+  }
 }
 
 export interface ProcessRunner {
@@ -110,14 +138,24 @@ export class NodeProcessRunner implements ProcessRunner {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
       detached: process.platform !== "win32",
-      stdio: "pipe",
+      stdio: options.stdio ?? "pipe",
     });
+
+    if (child.pid === undefined) {
+      // The spawn failed, and Node will say why by emitting `error` on the next tick. An
+      // `error` with no listener is a hard, uncatchable process exit, so the listener is
+      // attached *before* this function leaves -- throwing first would take the daemon
+      // down over an unreadable `adb`. The reason is lost with it (it does not exist yet),
+      // which is the price of turning an asynchronous crash into a catchable failure.
+      child.once("error", () => undefined);
+      throw new ProcessSpawnError(command, args);
+    }
 
     if (options.input !== undefined) {
       child.stdin?.end(options.input);
     }
 
-    return new NodeProcessHandle(child);
+    return new NodeProcessHandle(child, child.pid);
   }
 }
 
@@ -129,16 +167,11 @@ class NodeProcessHandle implements ProcessHandle {
   readonly #stderrChunks: string[] = [];
   readonly #result: Promise<ProcessResult>;
 
-  constructor(private readonly child: ChildProcess) {
-    if (child.pid === undefined) {
-      throw new Error("Process did not provide a pid");
-    }
-
-    if (child.stdout === null || child.stderr === null) {
-      throw new Error("Process was not started with stdout and stderr pipes");
-    }
-
-    this.pid = child.pid;
+  constructor(
+    private readonly child: ChildProcess,
+    pid: number,
+  ) {
+    this.pid = pid;
     captureLines(child.stdout, this.stdout, this.#stdoutChunks);
     captureLines(child.stderr, this.stderr, this.#stderrChunks);
     this.#result = new Promise<ProcessResult>((resolve, reject) => {
@@ -173,6 +206,10 @@ class NodeProcessHandle implements ProcessHandle {
         armGrace(capturedSoFar());
       });
     });
+    // A child nobody waits on (the supervised adb server) would otherwise turn a late
+    // `error` into an unhandled rejection, which ends the daemon. Marking the promise
+    // handled here changes nothing for a caller that does await `wait()`.
+    this.#result.catch(() => undefined);
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
@@ -190,6 +227,10 @@ class NodeProcessHandle implements ProcessHandle {
 
       throw error;
     }
+  }
+
+  unref(): void {
+    this.child.unref();
   }
 
   wait(): Promise<ProcessResult> {
@@ -247,6 +288,8 @@ export class ScriptedProcessRunner implements ProcessRunner {
 }
 
 class ScriptedProcessHandle implements ProcessHandle {
+  /** Whether the caller released the event loop, which only a supervised child should do. */
+  unreffed = false;
   readonly stdout = new LineBuffer();
   readonly stderr = new LineBuffer();
   readonly #result: Promise<ProcessResult>;
@@ -270,6 +313,10 @@ class ScriptedProcessHandle implements ProcessHandle {
 
   kill(_signal: NodeJS.Signals = "SIGTERM"): void {
     this.#finish({ code: null, stderr: "", stdout: "" });
+  }
+
+  unref(): void {
+    this.unreffed = true;
   }
 
   wait(): Promise<ProcessResult> {
@@ -345,10 +392,18 @@ class LineBuffer implements AsyncIterable<string> {
 }
 
 function captureLines(
-  stream: NodeJS.ReadableStream,
+  stream: NodeJS.ReadableStream | null,
   destination: LineBuffer,
   chunks: string[],
 ): void {
+  // No pipe means the child was spawned with `stdio: "ignore"`. Closing the buffer
+  // straight away is what keeps `for await (const line of handle.stdout)` a loop that
+  // ends immediately rather than one that never yields and never returns.
+  if (stream === null) {
+    destination.close();
+    return;
+  }
+
   let remainder = "";
   stream.setEncoding("utf8");
   stream.on("data", (chunk: string) => {

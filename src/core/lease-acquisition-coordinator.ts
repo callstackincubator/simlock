@@ -411,6 +411,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     });
   }
 
+  /**
+   * The one place a `LeaseGrant` is built, which is why the lease environment is read
+   * here: every acquisition path -- ready device, fresh provision, boot, eviction -- funnels
+   * through it, so there is no second construction site to keep in step.
+   */
   async #grant(waiter: AcquisitionWaiter, deviceId: string): Promise<void> {
     const { device, lease } = await this.options.leases.grant({
       deviceId,
@@ -419,7 +424,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       requesterId: waiter.options.requesterId,
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
     });
-    this.options.queue.resolve(waiter, { device, lease, timing: waiter.timing });
+    this.options.queue.resolve(waiter, {
+      device,
+      environment: this.options.drivers.get(device.spec.platform).leaseEnvironment(),
+      lease,
+      timing: waiter.timing,
+    });
   }
 
   async #evictRunning(

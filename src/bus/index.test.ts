@@ -144,11 +144,14 @@ describe("EventBus", () => {
       | "device.foreign-state-detected"
       | "device.foreign-provenance-detected"
       | "device.stalled-transition-detected"
+      | "device.orphan-purged"
       | "daemon.started"
       | "daemon.stopping"
       | "disk.pressure-detected"
       | "cleanup.executed"
       | "doctor.reconciled"
+      | "driver.root-rejected"
+      | "driver.adb-server-rejected"
     >();
     expectTypeOf<EventMap>().toMatchTypeOf<Record<EventName, object>>();
   });

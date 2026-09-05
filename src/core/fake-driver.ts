@@ -7,7 +7,10 @@ import {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type LegacyDevice,
   type ObservedRunState,
+  type PassthroughCommand,
+  PassthroughRefusedError,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
@@ -20,7 +23,11 @@ export type FakeDriverOperation =
   | "shutdown"
   | "destroy"
   | "listManaged"
-  | "listCatalog";
+  | "listCatalog"
+  /** Recorded like every other call, so a test can pin that it precedes the first destroy. */
+  | "revalidateRoot"
+  | "findLegacy"
+  | "destroyLegacy";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -32,6 +39,8 @@ export interface FakeDriverCall {
 export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
   readonly clock: Clock;
+  /** Stands in for a real driver's owned root; nothing here validates or creates it. */
+  readonly deviceRoot?: string;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
   /**
    * Reclaim estimate for a `full` clean, when a test needs the two clean levels priced apart
@@ -48,7 +57,26 @@ export interface FakeDriverOptions {
   readonly featureProfile?: "full" | "reduced";
   readonly knownModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
+  /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
+  readonly leaseEnvironment?: Readonly<Record<string, string>>;
+  /**
+   * The `simlock <tool>` name this fake claims, when a test needs one. Absent by default so
+   * two fakes in one catalog do not both answer to the same tool.
+   */
+  readonly passthroughTool?: string;
+  /**
+   * Builds the scoped command for that tool. Throw `PassthroughRefusedError` from here to
+   * model a driver's own refusal rules; omit it and every argument list is refused, which
+   * is what a driver claiming a tool it cannot build a command for would mean.
+   */
+  readonly passthrough?: (args: readonly string[]) => PassthroughCommand;
   readonly platform: Platform;
+  /**
+   * What this driver claims to find outside its root for a given device id, keyed by
+   * `driverDeviceId`. Empty by default: a driver that has never had a pre-root life finds
+   * nothing, which is what keeps every other test's missing device simply missing.
+   */
+  readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   /**
@@ -69,6 +97,7 @@ export class FakeDriverUnknownDeviceError extends Error {
 
 export class FakeDriver implements Driver {
   readonly platform: Platform;
+  readonly deviceRoot: string;
   readonly reducesFeatures?: boolean;
   readonly #availableOsVersions: Set<string>;
   readonly #callCounts = new Map<FakeDriverOperation, number>();
@@ -81,11 +110,15 @@ export class FakeDriver implements Driver {
   #hangMakeReady = false;
   readonly #knownModels: Set<string> | undefined;
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
+  readonly #leaseEnvironment: Readonly<Record<string, string>>;
+  readonly passthroughTool: string | undefined;
+  readonly #passthrough: ((args: readonly string[]) => PassthroughCommand) | undefined;
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
   readonly #reclaimResult: "ready" | "shutdown";
   readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
+  readonly #legacyDevices: Map<string, LegacyDevice>;
   /** Bumped on every `makeReady` boot -- mirrors a real driver reassigning a port per boot. */
   readonly #bootCounts = new Map<string, number>();
   #managedReality: DriverReality | undefined;
@@ -99,7 +132,13 @@ export class FakeDriver implements Driver {
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#latencyMs = options.latencyMs;
+    this.#leaseEnvironment = options.leaseEnvironment ?? {};
+    this.#legacyDevices = new Map(Object.entries(options.legacyDevices ?? {}));
+    this.passthroughTool = options.passthroughTool;
+    this.#passthrough = options.passthrough;
     this.platform = options.platform;
+    this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
+
     if (options.reducesFeatures !== undefined) {
       this.reducesFeatures = options.reducesFeatures;
     }
@@ -109,6 +148,25 @@ export class FakeDriver implements Driver {
 
   get calls(): readonly FakeDriverCall[] {
     return this.#calls.map((call) => ({ ...call, arguments: [...call.arguments] }));
+  }
+
+  /**
+   * Succeeds unless a test fails it through `failOn`. A real driver re-runs the filesystem
+   * checks here; the fake only has to be refusable, since what `Doctor` does with a refusal
+   * is the behaviour under test.
+   */
+  async revalidateRoot(): Promise<void> {
+    await this.#beforeCall("revalidateRoot");
+  }
+
+  async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+    await this.#beforeCall("findLegacy", driverDeviceId);
+    return this.#legacyDevices.get(driverDeviceId);
+  }
+
+  async destroyLegacy(device: DriverDevice): Promise<void> {
+    await this.#beforeCall("destroyLegacy", device);
+    this.#legacyDevices.delete(device.deviceId);
   }
 
   async resolveSpec(
@@ -243,6 +301,20 @@ export class FakeDriver implements Driver {
     return this.#estimateMs?.[estimate.operation] ?? 0;
   }
 
+  leaseEnvironment(): Readonly<Record<string, string>> {
+    return this.#leaseEnvironment;
+  }
+
+  passthrough(args: readonly string[]): PassthroughCommand {
+    if (this.#passthrough === undefined) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool ?? "",
+        "Fake driver builds no passthrough command",
+      );
+    }
+    return this.#passthrough(args);
+  }
+
   failOn(operation: FakeDriverOperation, callNumber: number, error: Error): void {
     this.#failures.set(failureKey(operation, callNumber), error);
   }
@@ -258,12 +330,14 @@ export class FakeDriver implements Driver {
     }
   }
 
+  /**
+   * Stages what `listManaged` reports. Everything passed in is reported back, name and
+   * all: a real driver answers from what sits inside the root it owns, so a double that
+   * screened entries by prefix would be modelling ownership Simlock stopped inferring
+   * (safety rule 8).
+   */
   setManagedReality(reality: DriverReality): void {
-    const managed = {
-      devices: reality.devices.filter(isSimlockManaged),
-      processes: reality.processes.filter(isSimlockManaged),
-    };
-    this.#managedReality = cloneReality(managed);
+    this.#managedReality = cloneReality(reality);
     for (const device of reality.devices) {
       this.#devices.set(device.deviceId, statusFor(device.runState));
     }
@@ -311,10 +385,6 @@ export class FakeDriver implements Driver {
 
 function addressFor(deviceId: string, bootCount: number): string {
   return `${deviceId}-addr-${bootCount}`;
-}
-
-function isSimlockManaged(device: DriverDevice): boolean {
-  return device.deviceId.startsWith("simlock-") || device.deviceId.startsWith("simlock_");
 }
 
 function runStateFor(status: "provisioned" | "ready" | "shutdown"): ObservedRunState {

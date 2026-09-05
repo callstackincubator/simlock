@@ -44,6 +44,7 @@ describe("MCP contracts", () => {
         spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
         state: "leased",
       },
+      environment: {},
       lease: {
         deviceId: "device-1",
         grantedAt: 0,

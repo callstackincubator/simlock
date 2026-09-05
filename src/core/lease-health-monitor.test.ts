@@ -18,6 +18,7 @@ const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const
 function config(overrides: Partial<Config["health"]> = {}): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    drivers: {},
     eventBuffer: { capacity: 100 },
     warmPool: {
       quarantine: {

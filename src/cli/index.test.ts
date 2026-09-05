@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
@@ -53,6 +53,30 @@ import {
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
+/** A minimal daemon lease response, for the tests that only care what the CLI prints. */
+const detachedGrant: LeaseGrant = {
+  device: {
+    id: "device-1",
+    driverDeviceId: "ABCD",
+    spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+  },
+  environment: {},
+  lease: {
+    id: "lse_env",
+    deviceId: "device-1",
+    requesterId: "test-requester",
+    ownerId: "test-requester",
+    mode: "detached",
+    grantedAt: 0,
+    ttlDeadline: 61_000,
+  },
+  timing: {
+    estimatedBootMs: 0,
+    estimatedProvisionMs: 0,
+    estimatedReclaimMs: 0,
+    estimatedReadyMs: 0,
+  },
+};
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
 
@@ -151,11 +175,276 @@ describe("CLI: exit codes", () => {
         }),
       ),
     ).resolves.toBe(11);
+    expect(output.stderr).not.toContain("already");
+  });
+
+  it("prints shell export lines instead of the JSON grant under --export-env", async () => {
+    const output = outputCapture();
+    const grant: LeaseGrant = {
+      ...detachedGrant,
+      // A device root is a user-configurable path, so it can hold a space or an apostrophe;
+      // both have to survive `eval "$(...)"` byte for byte.
+      environment: {
+        SIMLOCK_IOS_DEVICE_SET: "/Users/o'brien/My Sims/devices/ios",
+        ANDROID_ADB_SERVER_PORT: "5038",
+      },
+    };
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ requestLease: (_input, _options) => Promise.resolve(grant) }),
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(output.stdout).toBe(
+      "export ANDROID_ADB_SERVER_PORT='5038'\n" +
+        "export SIMLOCK_IOS_DEVICE_SET='/Users/o'\\''brien/My Sims/devices/ios'\n",
+    );
+  });
+
+  it("names the lease on stderr when --export-env has no environment to export", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ requestLease: (_input, _options) => Promise.resolve(detachedGrant) }),
+        }),
+      ),
+    ).resolves.toBe(0);
+    // stdout stays empty so `eval "$(...)"` is unaffected, but the lease is committed and
+    // TTL-bound: a caller told nothing at all could neither renew nor release it.
     expect(output.stdout).toBe("");
-    expect(output.stderr.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(output.stderr)).toEqual({
-      error: { code: "NO_CAPACITY", message: "No capacity available" },
+    expect(output.stderr).toContain(detachedGrant.lease.id);
+    expect(output.stderr).toContain("no environment");
+  });
+
+  it("fails loudly rather than exporting a key that would change what eval runs", async () => {
+    const output = outputCapture();
+    const grant: LeaseGrant = {
+      ...detachedGrant,
+      // Not reachable through the shipped drivers, whose keys are literals -- but
+      // `SIMLOCK_DRIVERS_MODULE` and the wire both accept whatever a driver returns.
+      environment: { "K=1; touch /tmp/probe/PWNED_KEY; X": "1" },
+    };
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--export-env"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ requestLease: (_input, _options) => Promise.resolve(grant) }),
+        }),
+      ),
+    ).resolves.toBe(1);
+    expect(output.stdout).toBe("");
+    expect(output.stderr).toContain("PWNED_KEY");
+  });
+
+  it.each([
+    ["simctl", ["install", "booted", "./MyApp.app"]],
+    ["adb", ["shell", "input", "tap", "100", "200"]],
+  ])("asks the daemon to scope a %s passthrough and runs it locally", async (tool, args) => {
+    const output = outputCapture();
+    const resolved = {
+      args: ["-P", "5038", ...args],
+      command: "/sdk/adb",
+      env: { ANDROID_ADB_SERVER_PORT: "5038" },
+    };
+    const seen: unknown[] = [];
+    const ran: unknown[] = [];
+
+    await expect(
+      runCli(
+        [tool, ...args],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: (input) => {
+                seen.push(input);
+                return Promise.resolve(resolved);
+              },
+            }),
+          runPassthrough: async (command) => {
+            ran.push(command);
+            return 0;
+          },
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(seen).toEqual([{ args, tool }]);
+    expect(ran).toEqual([resolved]);
+    expect(output.stdout).toBe("");
+  });
+
+  it("propagates the passthrough's own exit code rather than reporting success", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["adb", "devices"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: () =>
+                Promise.resolve({ args: ["devices"], command: "adb", env: {} }),
+            }),
+          runPassthrough: async () => 42,
+        }),
+      ),
+    ).resolves.toBe(42);
+  });
+
+  it("renders a driver's refusal as a USAGE error, not as a daemon failure", async () => {
+    const output = outputCapture();
+    let ranPassthrough = false;
+
+    await expect(
+      runCli(
+        ["simctl", "delete", "ABCD"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: () =>
+                Promise.reject(
+                  new SimlockError(
+                    "PASSTHROUGH_REFUSED",
+                    "domain",
+                    "Refusing `simlock simctl delete`: use `simlock release` or `simlock cleanup` instead.",
+                    { tool: "simctl" },
+                  ),
+                ),
+            }),
+          runPassthrough: async () => {
+            ranPassthrough = true;
+            return 0;
+          },
+        }),
+      ),
+    ).resolves.toBe(2);
+    expect(ranPassthrough).toBe(false);
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+      error: {
+        code: "USAGE",
+        message: expect.stringContaining("simlock release"),
+      },
     });
+  });
+
+  it("passes a passthrough's own --help through to the tool rather than intercepting it", async () => {
+    const output = outputCapture();
+    const seen: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["adb", "--help"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              resolvePassthrough: (input) => {
+                seen.push(input);
+                return Promise.resolve({ args: ["--help"], command: "adb", env: {} });
+              },
+            }),
+          runPassthrough: async () => 0,
+        }),
+      ),
+    ).resolves.toBe(0);
+    expect(seen).toEqual([{ args: ["--help"], tool: "adb" }]);
+  });
+
+  it("lists both tool passthroughs in root help", async () => {
+    const output = outputCapture();
+
+    await expect(runCli([], output.environmentWith())).resolves.toBe(0);
+    expect(output.stdout).toContain("simctl <args...>");
+    expect(output.stdout).toContain("adb <args...>");
+  });
+
+  it("releases and exits when the watched parent process dies, via the same path as a signal", async () => {
+    const output = outputCapture();
+    const parentWatch = new FakeParentWatch();
+    const heldGrant: LeaseGrant = {
+      ...detachedGrant,
+      lease: { ...detachedGrant.lease, id: "lse_parent_death", mode: "held" },
+    };
+    const released: unknown[] = [];
+
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            requestLease: (_input, _options) => Promise.resolve(heldGrant),
+            releaseLease: (input) => {
+              released.push(input);
+              return Promise.resolve({ leaseId: input.leaseId });
+            },
+          }),
+        parentPid: 4321,
+        parentWatch,
+        signals: new EventEmitter() as unknown as CliEnvironment["signals"],
+      }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    parentWatch.exit(4321);
+
+    await expect(run).resolves.toBe(0);
+    expect(released).toEqual([{ leaseId: "lse_parent_death" }]);
+  });
+
+  it("--bind-pid overrides which pid the CLI watches for parent death", async () => {
+    const output = outputCapture();
+    const parentWatch = new FakeParentWatch();
+    const heldGrant: LeaseGrant = {
+      ...detachedGrant,
+      lease: { ...detachedGrant.lease, id: "lse_bind_pid", mode: "held" },
+    };
+    const released: unknown[] = [];
+
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "9876"],
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            requestLease: (_input, _options) => Promise.resolve(heldGrant),
+            releaseLease: (input) => {
+              released.push(input);
+              return Promise.resolve({ leaseId: input.leaseId });
+            },
+          }),
+        parentPid: 4321,
+        parentWatch,
+        signals: new EventEmitter() as unknown as CliEnvironment["signals"],
+      }),
+    );
+
+    await vi.waitFor(() => expect(output.stdout).not.toBe(""));
+    // The captured parent is not the one being watched any more, so its death is ignored.
+    parentWatch.exit(4321);
+    expect(released).toEqual([]);
+    parentWatch.exit(9876);
+
+    await expect(run).resolves.toBe(0);
+    expect(released).toEqual([{ leaseId: "lse_bind_pid" }]);
+  });
+
+  it("rejects a non-numeric --bind-pid as a structured USAGE error", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "nope"],
+        output.environmentWith(),
+      ),
+    ).resolves.toBe(2);
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
   });
 
   it("maps a usage error to exit 2 with code USAGE", async () => {
@@ -485,6 +774,111 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     );
     expect(launched).toBe(false);
   });
+
+  it("asks the daemon to purge orphans only once the operator has confirmed", async () => {
+    const output = outputCapture();
+    const seen: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["doctor", "--purge-orphans"],
+        output.environmentWith({
+          confirm: async () => true,
+          connectAdmin: async () =>
+            fakeClient({
+              runDoctor: (input) => {
+                seen.push(input);
+                return Promise.resolve({ findings: [] });
+              },
+            }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(seen).toEqual([{ fix: false, purgeOrphans: true }]);
+  });
+
+  it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
+    const output = outputCapture();
+    const seen: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["doctor", "--fix"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              runDoctor: (input) => {
+                seen.push(input);
+                return Promise.resolve({ findings: [] });
+              },
+            }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    // The upgrade contract: `doctor --fix` running unattended in CI never becomes
+    // destructive on its own (ADR 0001, decision 6).
+    expect(seen).toEqual([{ fix: true, purgeOrphans: false }]);
+  });
+
+  it.each([
+    ["declined", async () => false],
+    // Explicitly absent: the shared harness defaults `confirm` to an auto-yes, so leaving it
+    // out would test the default rather than the no-terminal case.
+    ["unavailable", undefined],
+  ] as const)(
+    "refuses --purge-orphans and contacts nobody when confirmation is %s",
+    async (_case, confirm) => {
+      const output = outputCapture();
+      let connected = false;
+
+      await expect(
+        runCli(
+          ["doctor", "--purge-orphans"],
+          output.environmentWith({
+            // `exactOptionalPropertyTypes`: an explicitly-absent confirm has to be spread in,
+            // not passed as `undefined`.
+            ...(confirm === undefined ? { confirm: undefined } : { confirm }),
+            connectAdmin: async () => {
+              connected = true;
+              return fakeClient();
+            },
+          }),
+        ),
+      ).resolves.toBe(2);
+
+      expect(connected).toBe(false);
+      expect(JSON.parse(output.stderr)).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("--yes") },
+      });
+    },
+  );
+
+  it("takes --yes as the confirmation, so an unattended purge needs no terminal", async () => {
+    const output = outputCapture();
+    const seen: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["doctor", "--purge-orphans", "--yes"],
+        output.environmentWith({
+          confirm: async () => {
+            throw new Error("--yes must not ask");
+          },
+          connectAdmin: async () =>
+            fakeClient({
+              runDoctor: (input) => {
+                seen.push(input);
+                return Promise.resolve({ findings: [] });
+              },
+            }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(seen).toEqual([{ fix: false, purgeOrphans: true }]);
+  });
 });
 
 describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
@@ -811,6 +1205,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             driverDeviceId: "dev_1",
             spec: { platform: "ios", model: "x", osVersion: "26.5" },
           },
+          environment: {},
           lease: {
             id: "lse_1",
             deviceId: "dev_1",
@@ -863,6 +1258,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             driverDeviceId: "dev_1",
             spec: { platform: "ios", model: "x", osVersion: "26.5" },
           },
+          environment: {},
           lease: {
             id: "lse_1",
             deviceId: "dev_1",
@@ -910,6 +1306,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             driverDeviceId: "dev_1",
             spec: { platform: "ios", model: "x", osVersion: "26.5" },
           },
+          environment: {},
           lease: {
             id: "lse_1",
             deviceId: "dev_1",
@@ -1159,6 +1556,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
   const emptyListGet: ListGetOutput = [];
   const emptyTokenList: TokenListOutput = { tokens: [] };
   const grant: LeaseGrant = {
+    environment: {},
     device: {
       id: "dev_1",
       driverDeviceId: "dev_1",
@@ -1186,7 +1584,8 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     daemonVersion: "test",
     getCatalog: () => Promise.resolve(emptyCatalog),
     getStatus: () => Promise.resolve(emptyStatus),
-    requestLease: () => Promise.resolve(grant),
+    requestLease: (_input, _options) => Promise.resolve(grant),
+    resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
     cancelLease: () => Promise.resolve({ result: "not-found" }),
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
@@ -1468,6 +1867,7 @@ async function startInMemoryDaemon(options: {
 function testConfig(): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    drivers: {},
     eventBuffer: { capacity: 100 },
     health: {
       enabled: false,

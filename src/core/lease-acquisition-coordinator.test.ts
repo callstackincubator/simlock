@@ -26,6 +26,7 @@ const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as co
 function config(maxDevices = 1): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    drivers: {},
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
@@ -155,8 +156,8 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness();
     const granted = await harness.coordinator.request(request, {
       mode: "held",
-      requesterId: "agent",
       ownerId: "agent",
+      requesterId: "agent",
     });
 
     await expect(
@@ -171,6 +172,45 @@ describe("LeaseAcquisitionCoordinator", () => {
       name: "RequesterAlreadyLeasedError",
     });
     expect(granted.lease.requesterId).toBe("agent");
+  });
+
+  it.each([["provisioned"], ["ready"]] as const)(
+    "hands the owning driver's lease environment to a %s device's grant",
+    async (path) => {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock,
+        leaseEnvironment: { SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios" },
+        platform: "ios",
+      });
+      const harness = await createHarness({ drivers: [driver] });
+      // Both acquisition paths funnel through the same construction site; asserting only
+      // the fresh-provision one would leave a warm-pool grant free to carry nothing.
+      if (path === "ready") await seedReady(harness);
+
+      const granted = await harness.coordinator.request(request, {
+        mode: "held",
+        ownerId: "agent",
+        requesterId: "agent",
+      });
+
+      expect(granted.environment).toEqual({
+        SIMLOCK_IOS_DEVICE_SET: "/home/agent/.simlock/devices/ios",
+      });
+    },
+  );
+
+  it("grants a device from a driver contributing nothing an empty environment", async () => {
+    const harness = await createHarness();
+
+    const granted = await harness.coordinator.request(request, {
+      mode: "held",
+      ownerId: "agent",
+      requesterId: "agent",
+    });
+
+    expect(granted.environment).toEqual({});
   });
 
   it("rejects missing drivers and unresolved specs without leaving pending demand", async () => {

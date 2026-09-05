@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock } from "../ports/index.js";
+import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
   type DeviceRecord,
@@ -9,7 +9,14 @@ import {
   transitionEnteredAt,
 } from "./domain.js";
 import type { DeviceOperationClaims } from "./device-operation-claims.js";
-import type { Driver, DriverDevice, ObservedDevice, ObservedMark } from "./driver.js";
+import type {
+  Driver,
+  DriverDevice,
+  DriverRejection,
+  DriverRejectionReason,
+  ObservedDevice,
+  ObservedMark,
+} from "./driver.js";
 import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
 
@@ -34,6 +41,24 @@ export type DoctorFinding =
       readonly deviceId: string;
       readonly platform: Platform;
       readonly detail: ProvenanceDrift;
+    }
+  | {
+      /** A platform Simlock is running without, because its driver refused to start. */
+      readonly kind: "driver-unavailable";
+      readonly platform: Platform;
+      readonly reason: DriverRejectionReason;
+      readonly detail: string;
+    }
+  | {
+      /**
+       * A registry device that outlived the move to owned roots: absent from this
+       * driver's root, still present in the location the platform used before it.
+       */
+      readonly kind: "legacy-device";
+      readonly deviceId: string;
+      readonly platform: Platform;
+      readonly device: DriverDevice;
+      readonly path?: string;
     }
   | {
       readonly kind: "stalled-transition";
@@ -71,6 +96,8 @@ export type DoctorFinding =
  */
 export type ProvenanceDrift = "erased" | "mark-mismatch" | "durable-mark-missing";
 
+type OrphanDeviceFinding = Extract<DoctorFinding, { readonly kind: "orphan-device" }>;
+
 export interface DoctorReport {
   readonly findings: readonly DoctorFinding[];
 }
@@ -93,21 +120,51 @@ export interface DoctorOptions {
    * backgrounded reclaim from being read as a stall -- see `stalledTransitionFinding`.
    */
   readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
+  /**
+   * Drivers that refused to start, as reported once at daemon startup. They are findings
+   * on every run, not just the first: the daemon has been serving without that platform
+   * ever since, and `doctor` is where `docs/CLI.md` promises the reason turns up.
+   */
+  readonly driverRejections?: readonly DriverRejection[];
+  readonly logger?: Logger;
   readonly registry: Registry;
 }
 
 export interface DoctorReconcileOptions {
   readonly fix?: boolean;
+  /**
+   * Destroys the orphans this run finds. Safety rule 1's single opt-in exception, and
+   * deliberately not part of `fix`: someone already running `doctor --fix` unattended in
+   * CI must not acquire a destructive behaviour by upgrading (ADR 0001, decision 6).
+   */
+  readonly purgeOrphans?: boolean;
 }
 
 export class Doctor {
-  constructor(private readonly options: DoctorOptions) {}
+  readonly #logger: Logger;
 
-  async reconcile({ fix = false }: DoctorReconcileOptions = {}): Promise<DoctorReport> {
+  constructor(private readonly options: DoctorOptions) {
+    this.#logger = options.logger?.child("doctor") ?? new NoopLogger();
+  }
+
+  async reconcile({
+    fix = false,
+    purgeOrphans = false,
+  }: DoctorReconcileOptions = {}): Promise<DoctorReport> {
     const snapshot = this.options.registry.snapshot;
     const realities = await Promise.all(
       this.options.drivers.map(async (driver) => ({ driver, reality: await driver.listManaged() })),
     );
+    // A platform with no driver has no observable reality: its driver refused to start,
+    // its SDK is missing, or this host has none. "I could not look" is not "the device is
+    // gone", and reading it as such is destructive -- every registry device of that
+    // platform would drift-report as missing and `--fix` would mark the lot `deleted`,
+    // stranding tens of gigabytes of simulators in a root with no record left to reach
+    // them. That is the permanent leak ADR 0001 exists to prevent, so existence, run
+    // state, provenance and orphans are all reported only for platforms a driver
+    // actually observed. What remains reportable is what needs no driver: expired
+    // leases, and the `driver-unavailable` finding that says why the platform is dark.
+    const observedPlatforms = new Set(this.options.drivers.map((driver) => driver.platform));
     const realDeviceKeys = new Set(
       realities.flatMap(({ driver, reality }) =>
         reality.devices.map((device) => key(driver.platform, device.deviceId)),
@@ -127,21 +184,22 @@ export class Doctor {
     const findings: DoctorFinding[] = [];
 
     for (const device of snapshot.devices) {
-      const deviceFindings = registryDriftFindings(
-        device,
-        realDeviceKeys,
-        observedDevices,
-        this.options.claims,
-      );
-      findings.push(...deviceFindings);
-      if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
-        await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
-      }
-      if (deviceFindings.some((finding) => finding.kind === "foreign-provenance-change")) {
-        await this.options.registry.markForeignProvenanceDetected(
-          device.id,
-          this.options.clock.now(),
+      if (observedPlatforms.has(device.spec.platform)) {
+        const deviceFindings = await this.#withLegacyDevice(
+          device,
+          registryDriftFindings(device, realDeviceKeys, observedDevices, this.options.claims),
+          driversByPlatform.get(device.spec.platform),
         );
+        findings.push(...deviceFindings);
+        if (deviceFindings.some((finding) => finding.kind === "foreign-state-change")) {
+          await this.options.registry.markForeignStateDetected(device.id, this.options.clock.now());
+        }
+        if (deviceFindings.some((finding) => finding.kind === "foreign-provenance-change")) {
+          await this.options.registry.markForeignProvenanceDetected(
+            device.id,
+            this.options.clock.now(),
+          );
+        }
       }
       const stalled = stalledTransitionFinding(
         device,
@@ -154,30 +212,185 @@ export class Doctor {
         findings.push(stalled);
       }
     }
+    findings.push(...driverUnavailableFindings(this.options.driverRejections ?? []));
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
     findings.push(...(await this.#collectAdvisories()));
 
-    const report = { findings };
     if (fix) {
-      await this.#applySafeFixes(findings);
+      await this.#applySafeFixes(findings, driversByPlatform);
     }
-    this.#emitFindingEvents(findings);
+    const remaining = purgeOrphans
+      ? await this.#purgeOrphans(findings, driversByPlatform)
+      : findings;
+
+    const report = { findings: remaining };
+    this.#emitFindingEvents(remaining);
     this.options.eventBus.emit(
       "doctor.reconciled",
       {
         // `driftFindings` is a stable payload contract (events rule 6: additive changes only)
         // that has always meant "things `--fix` might correct" -- every finding kind so far.
         // A `driver-advisory` is neither drift nor ever actionable by `--fix` (see
-        // `#applySafeFixes`), so folding it into this field would silently redefine what an
+        // `#applySafeFix`), so folding it into this field would silently redefine what an
         // existing consumer is entitled to assume about every entry in it. It stays available
         // through `DoctorReport.findings` (what `doctor.run` returns to a caller) but is
         // filtered out of the event payload.
-        driftFindings: findings.filter((finding) => finding.kind !== "driver-advisory"),
+        driftFindings: remaining.filter((finding) => finding.kind !== "driver-advisory"),
       },
       "doctor",
     );
     return report;
+  }
+
+  /**
+   * Destroys every orphan this run found, and reports back the findings that outlived the
+   * attempt.
+   *
+   * This is the one place Simlock destroys something the registry has never heard of, and
+   * the residual risk is accepted rather than mitigated: an orphan has no registry record,
+   * so no central safety filter and no `DeviceOperationClaims` entry can protect it --
+   * including a device this very daemon is between `driver.provision` and
+   * `registry.registerDevice` on, which is precisely the window that creates orphans in the
+   * first place. Nothing here can tell that device apart from the leak it looks like. That
+   * is why the command is opt-in, confirmed, and unreachable from the reaper, a cleanup
+   * rule, an idle tier or `--fix` (safety rule 1) -- not an oversight to be "fixed" later
+   * by wiring it into something automatic.
+   *
+   * A destroy that fails is logged and leaves its finding standing: the orphan is still
+   * there to report, and one unlucky device must not cost the rest of the run.
+   */
+  async #purgeOrphans(
+    findings: readonly DoctorFinding[],
+    driversByPlatform: ReadonlyMap<Platform, Driver>,
+  ): Promise<readonly DoctorFinding[]> {
+    const orphans = findings.filter(
+      (finding): finding is OrphanDeviceFinding => finding.kind === "orphan-device",
+    );
+    if (orphans.length === 0 || !(await this.#rootsStillProven(orphans, driversByPlatform))) {
+      return findings;
+    }
+
+    const purged = new Set<string>();
+    for (const orphan of orphans) {
+      const driver = driversByPlatform.get(orphan.platform);
+      if (driver === undefined) continue;
+      try {
+        await driver.destroy(orphan.device);
+      } catch (error: unknown) {
+        this.#logger.error("Could not purge orphan device", {
+          deviceId: orphan.device.deviceId,
+          platform: orphan.platform,
+          reason: errorMessage(error),
+        });
+        continue;
+      }
+      purged.add(key(orphan.platform, orphan.device.deviceId));
+      this.options.eventBus.emit(
+        "device.orphan-purged",
+        {
+          deviceRoot: driver.deviceRoot,
+          driverDeviceId: orphan.device.deviceId,
+          platform: orphan.platform,
+        },
+        "doctor",
+      );
+    }
+
+    // An `orphan-process` for a device that is now gone is gone with it: destroying the
+    // device covers the process it was running, so reporting both would ask the operator
+    // to deal with something that no longer exists.
+    return findings.filter(
+      (finding) =>
+        !(
+          (finding.kind === "orphan-device" || finding.kind === "orphan-process") &&
+          purged.has(key(finding.platform, finding.device.deviceId))
+        ),
+    );
+  }
+
+  /**
+   * Re-proves each root the purge is about to reach into, before its first destroy.
+   *
+   * The proof a purge acts on is the one taken at startup, and the thing it authorises is
+   * recomputed on every reconcile: a root replaced by a symlink, or a `mv` that leaves the
+   * user's own device set at the configured path, turns `listManaged` into a claim over
+   * their simulators and this command into the thing that deletes them. Reporting can live
+   * with a stale proof; destroying cannot.
+   *
+   * A refusal aborts the whole purge rather than the one platform: the roots are validated
+   * before anything is destroyed, so an abort costs a re-run and never a half-purge, and a
+   * daemon that cannot prove one of its roots is not a daemon to keep destroying on.
+   */
+  async #rootsStillProven(
+    orphans: readonly OrphanDeviceFinding[],
+    driversByPlatform: ReadonlyMap<Platform, Driver>,
+  ): Promise<boolean> {
+    const platforms = new Set(orphans.map((orphan) => orphan.platform));
+    for (const platform of platforms) {
+      const driver = driversByPlatform.get(platform);
+      if (driver === undefined) continue;
+      try {
+        await driver.revalidateRoot();
+      } catch (error: unknown) {
+        this.#logger.error(
+          "Refusing to purge orphans: the device root no longer proves ownership",
+          {
+            deviceRoot: driver.deviceRoot,
+            platform,
+            reason: errorMessage(error),
+          },
+        );
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Rewrites a `registry-device-missing` finding as `legacy-device` when the driver still
+   * finds the device where the platform kept it before roots existed. Absent from the root
+   * is what both findings have in common; where the device actually is decides which one it
+   * is, and only the driver can look there.
+   *
+   * A driver that cannot answer -- no legacy location, or a lookup that failed -- leaves
+   * the original finding alone. `registry-device-missing` is the conservative of the two:
+   * its fix only writes to the registry, while the legacy fix destroys.
+   */
+  async #withLegacyDevice(
+    device: DeviceRecord,
+    findings: readonly DoctorFinding[],
+    driver: Driver | undefined,
+  ): Promise<readonly DoctorFinding[]> {
+    const findLegacy = driver?.findLegacy?.bind(driver);
+    if (findLegacy === undefined || !findings.some((f) => f.kind === "registry-device-missing")) {
+      return findings;
+    }
+
+    let legacy;
+    try {
+      legacy = await findLegacy(device.driverDeviceId);
+    } catch (error: unknown) {
+      this.#logger.warn("Could not look for a pre-root copy of a missing device", {
+        deviceId: device.id,
+        platform: device.spec.platform,
+        reason: errorMessage(error),
+      });
+      return findings;
+    }
+    if (legacy === undefined) return findings;
+
+    return findings.map((finding) =>
+      finding.kind === "registry-device-missing"
+        ? {
+            device: legacy.device,
+            deviceId: device.id,
+            kind: "legacy-device" as const,
+            platform: device.spec.platform,
+            ...(legacy.path === undefined ? {} : { path: legacy.path }),
+          }
+        : finding,
+    );
   }
 
   /**
@@ -246,16 +459,22 @@ export class Doctor {
     }
   }
 
-  async #applySafeFixes(findings: readonly DoctorFinding[]): Promise<void> {
+  async #applySafeFixes(
+    findings: readonly DoctorFinding[],
+    driversByPlatform: ReadonlyMap<Platform, Driver>,
+  ): Promise<void> {
     for (const finding of findings) {
-      await this.#applySafeFix(finding);
+      await this.#applySafeFix(finding, driversByPlatform);
     }
   }
 
   /** One finding's `--fix` action, split out of `#applySafeFixes` so the per-kind dispatch
-   * (already at the edge of this file's complexity budget with `driver-advisory` added) doesn't
-   * also have to carry the loop. */
-  async #applySafeFix(finding: DoctorFinding): Promise<void> {
+   * (already at the edge of this file's complexity budget) doesn't also have to carry the loop. */
+  // fallow-ignore-next-line complexity -- one exhaustive arm per finding kind, each a single call or a documented no-op.
+  async #applySafeFix(
+    finding: DoctorFinding,
+    driversByPlatform: ReadonlyMap<Platform, Driver>,
+  ): Promise<void> {
     switch (finding.kind) {
       case "registry-device-missing":
         await this.#fixMissingDevice(finding.deviceId);
@@ -275,6 +494,13 @@ export class Doctor {
       case "foreign-provenance-change":
         // Report-only: re-marking destroys the evidence, and the device may be leased.
         break;
+      case "driver-unavailable":
+        // Nothing here can repair a refused root or an occupied port without doing the
+        // one thing failing closed exists to prevent: adopting what it refused.
+        break;
+      case "legacy-device":
+        await this.#fixLegacyDevice(finding, driversByPlatform.get(finding.platform));
+        break;
       case "stalled-transition":
         await this.#fixStalledTransition(finding);
         break;
@@ -293,6 +519,43 @@ export class Doctor {
     if (device !== undefined && device.state !== "deleted") {
       await this.options.registry.markDeviceMissing(deviceId, "doctor");
     }
+  }
+
+  /**
+   * Destroys a stranded pre-root device and then records what that leaves behind.
+   *
+   * The destroy reaches outside the driver's root, which every other path in Simlock is
+   * forbidden to do -- and is permitted here for one reason: the device is in the registry.
+   * Registry-only destruction (safety rule 1) is a rule about *what may be destroyed*, and
+   * a registry record satisfies it exactly as a root membership would; the record is also
+   * the only thing that names this device at all. The lease guard every other fix applies
+   * still applies, first and hardest, because the device is real and someone may be on it.
+   *
+   * The registry record is only marked missing once the device is actually gone. Marking it
+   * first would strand the device: the record naming it would be `deleted` and nothing would
+   * ever mention its old path again.
+   */
+  async #fixLegacyDevice(
+    finding: Extract<DoctorFinding, { readonly kind: "legacy-device" }>,
+    driver: Driver | undefined,
+  ): Promise<void> {
+    const destroyLegacy = driver?.destroyLegacy?.bind(driver);
+    if (destroyLegacy === undefined) return;
+    const snapshot = this.options.registry.snapshot;
+    if (snapshot.leases.some((lease) => lease.deviceId === finding.deviceId)) {
+      return;
+    }
+    try {
+      await destroyLegacy(finding.device);
+    } catch (error: unknown) {
+      this.#logger.error("Could not destroy a pre-root device", {
+        deviceId: finding.deviceId,
+        platform: finding.platform,
+        reason: errorMessage(error),
+      });
+      return;
+    }
+    await this.#fixMissingDevice(finding.deviceId);
   }
 
   async #fixForeignStateChange(
@@ -540,6 +803,24 @@ function provenanceDrift(mark: ObservedMark): ProvenanceDrift | undefined {
   return mark.erasable === mark.durable ? undefined : "mark-mismatch";
 }
 
+/**
+ * Discovery runs once, at daemon start, so a refusal is a frozen snapshot: repairing the
+ * root and running `doctor` again reports the identical finding, because nothing has
+ * looked at the root since. The finding therefore has to name the step that actually
+ * retries the platform, or it reads as a repair that did not work.
+ */
+const DRIVER_RETRY_REMEDY =
+  "Driver discovery runs once, at daemon startup: restart the daemon (`simlock daemon stop`, then any command relaunches it) once this is fixed, or the platform stays unavailable.";
+
+function driverUnavailableFindings(rejections: readonly DriverRejection[]): DoctorFinding[] {
+  return rejections.map((rejection) => ({
+    detail: `${rejection.summary}. ${DRIVER_RETRY_REMEDY}`,
+    kind: "driver-unavailable" as const,
+    platform: rejection.platform,
+    reason: rejection.reason,
+  }));
+}
+
 function orphanFindings(
   realities: readonly {
     readonly driver: Driver;
@@ -600,4 +881,8 @@ function expectedRunState(state: DeviceState): "running" | "stopped" | undefined
 
 function key(platform: string, deviceId: string): string {
   return `${platform}:${deviceId}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

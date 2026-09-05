@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventBus } from "../bus/index.js";
 import {
   type Config,
+  type DriverRejection,
   CleanupReaper,
   FakeDriver,
   InsufficientDiskSpaceError,
   LeaseEngine,
+  PassthroughRefusedError,
   Registry,
   RuntimeMissingError,
 } from "../core/index.js";
@@ -380,6 +382,84 @@ describe("DaemonServer", () => {
     });
     await expect(client.request("catalog.get", { platform: "foo" })).resolves.toMatchObject({
       error: { code: "BAD_REQUEST" },
+      ok: false,
+    });
+  });
+
+  it("resolves a passthrough to its driver's command without running it here", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: (args) => ({
+        args: ["simctl", "--set", "/root", ...args],
+        command: "xcrun",
+        env: {},
+      }),
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("driver.passthrough", { args: ["list", "devices"], tool: "simctl" }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: { args: ["simctl", "--set", "/root", "list", "devices"], command: "xcrun" },
+    });
+  });
+
+  it("gives a refused verb its own code, so the CLI can render it as a usage error", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: () => {
+        throw new PassthroughRefusedError("simctl", "Refusing it; use `simlock release` instead.");
+      },
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("driver.passthrough", { args: ["delete", "ABCD"], tool: "simctl" }),
+    ).resolves.toMatchObject({
+      error: { code: "PASSTHROUGH_REFUSED", message: expect.stringContaining("simlock release") },
+      ok: false,
+    });
+  });
+
+  it.each([[{ args: "list", tool: "simctl" }], [{ args: ["list"] }]])(
+    "rejects a malformed passthrough payload: %s",
+    async (payload) => {
+      const harness = await createHarness();
+      const client = await createClient(harness.socketPath);
+      await hello(client);
+
+      await expect(client.request("driver.passthrough", payload)).resolves.toMatchObject({
+        error: { code: "BAD_REQUEST" },
+        ok: false,
+      });
+    },
+  );
+
+  // A well-formed request for a wrapper no driver claims is not a malformed one: it gets its
+  // own ERROR_TABLE row so the socket and HTTP transports name the condition identically
+  // (ADR 0003 §7), and so the CLI can tell "you typed it wrong" from "no driver serves this".
+  it("distinguishes an unknown passthrough tool from a malformed payload", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("driver.passthrough", { args: ["devices"], tool: "adb" }),
+    ).resolves.toMatchObject({
+      error: { code: "UNKNOWN_PASSTHROUGH_TOOL" },
       ok: false,
     });
   });
@@ -894,6 +974,166 @@ function deferred<T>(): {
   return { promise, reject, resolve };
 }
 
+describe("DaemonServer driver rejections", () => {
+  it("publishes one event per platform that refused to start, after the daemon is up", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          payload: { platform: "ios", reason: "wrong-instance", root: "/Devices" },
+          platform: "ios",
+          reason: "wrong-instance",
+          summary: "Refusing the ios device root /Devices: it belongs to another instance",
+        },
+      ],
+    });
+
+    const events = harness.eventBus.replay();
+    const rejected = events.filter((event) => event.event === "driver.root-rejected");
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        module: "daemon",
+        payload: { platform: "ios", reason: "wrong-instance", root: "/Devices" },
+      }),
+    ]);
+    // The daemon did come up -- the refusal costs one platform, not the process -- and
+    // the buffer says so in that order.
+    const started = events.find((event) => event.event === "daemon.started");
+    expect(started?.seq).toBeLessThan(rejected[0]?.seq ?? 0);
+  });
+
+  it("names the refusal when a lease asks for a platform whose driver did not start", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.adb-server-rejected",
+          payload: { port: 5038, reason: "occupied" },
+          platform: "android",
+          reason: "occupied",
+          summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "Pixel 8",
+      platform: "android",
+    });
+
+    // Safety rule 9's other half: the platform's driver does not start *and Simlock
+    // reports why*. A bare `NO_DRIVER` reads exactly like "this host has no Android SDK".
+    expect(response.error?.code).toBe("NO_DRIVER");
+    expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
+  });
+
+  it("leaves an ordinary missing platform unexplained, having nothing to explain", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+          platform: "ios",
+          reason: "symlink",
+          summary: "Refusing the ios device root /Devices: it is a symlink",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("lease.request", {
+      mode: "held",
+      requesterId: "agent-1",
+      model: "Pixel 8",
+      platform: "android",
+    });
+
+    // The refusal on file is another platform's; attaching it here would blame iOS for
+    // Android's absence.
+    expect(response.error?.code).toBe("NO_DRIVER");
+    expect(response.error?.message).toBe("No driver registered for platform: android");
+  });
+
+  it("names the refusal when a passthrough asks for the tool whose driver did not start", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.adb-server-rejected",
+          passthroughTool: "adb",
+          payload: { port: 5038, reason: "occupied" },
+          platform: "android",
+          reason: "occupied",
+          summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("driver.passthrough", {
+      args: ["devices"],
+      tool: "adb",
+    });
+
+    // Unexplained, "No driver provides a adb passthrough" reads as "this host has no
+    // Android SDK" and sends the operator off to install one, while the summary naming the
+    // port conflict sits unread in `driverRejections` (safety rule 9).
+    expect(response.error?.code).toBe("UNKNOWN_PASSTHROUGH_TOOL");
+    expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
+  });
+
+  it("leaves an unknown passthrough tool unexplained when no driver claimed it", async () => {
+    const harness = await createHarness({
+      driverRejections: [
+        {
+          event: "driver.root-rejected",
+          passthroughTool: "simctl",
+          payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+          platform: "ios",
+          reason: "symlink",
+          summary: "Refusing the ios device root /Devices: it is a symlink",
+        },
+      ],
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const response = await client.request("driver.passthrough", {
+      args: ["devices"],
+      tool: "adb",
+    });
+
+    expect(response.error?.message).toBe("No driver provides a adb passthrough");
+  });
+
+  it("refuses at compile time to pair an event with another event's payload", () => {
+    const rejection: DriverRejection = {
+      event: "driver.adb-server-rejected",
+      // @ts-expect-error -- `port` is a number on the wire (docs/EVENTS.md). The check has
+      // to happen where a refusal is written, because the daemon forwards `payload` to the
+      // ring buffer -- and to `simlock events --json` -- without ever reading it.
+      payload: { port: "5038", reason: "occupied" },
+      platform: "android",
+      reason: "occupied",
+      summary: "Refusing the Android driver: port 5038 is occupied",
+    };
+
+    expect(rejection.event).toBe("driver.adb-server-rejected");
+  });
+
+  it("publishes nothing when every driver started", async () => {
+    const harness = await createHarness();
+
+    expect(harness.eventBus.replay().filter((event) => event.event.startsWith("driver."))).toEqual(
+      [],
+    );
+  });
+});
+
 describe("DaemonServer lease heartbeat", () => {
   it("slides a held lease's deadline past the backstop while its holder keeps ponging, and stops sliding once it stops", async () => {
     const harness = await createHarness({
@@ -1134,7 +1374,9 @@ describe("DaemonServer lease heartbeat", () => {
         finishSettle = resolve;
       });
       const harness = await createHarness({
-        dispose: () => order.push("dispose"),
+        dispose: () => {
+          order.push("dispose");
+        },
         settle: async () => {
           order.push("settle-start");
           await settling;
@@ -1166,10 +1408,36 @@ describe("DaemonServer lease heartbeat", () => {
       expect(order).toEqual(["settle-start", "settle-end", "dispose"]);
     });
 
+    it("waits for an asynchronous disposal before reporting the daemon stopped", async () => {
+      let disposed = false;
+      let finishDispose!: () => void;
+      const disposing = new Promise<void>((resolve) => {
+        finishDispose = resolve;
+      });
+      const harness = await createHarness({
+        dispose: async () => {
+          await disposing;
+          disposed = true;
+        },
+      });
+
+      const stopping = harness.daemon.stop("test-async-dispose");
+      await expect.poll(() => disposed).toBe(false);
+
+      // A driver's release is asynchronous -- Android's reaps the adb server it started --
+      // and a stop that returned before it finished would report a shutdown that had not
+      // happened, leaving the next daemon to find the port still held.
+      finishDispose();
+      await stopping;
+      expect(disposed).toBe(true);
+    });
+
     it("stops an auxiliary frontend before releasing held leases and draining settle", async () => {
       const order: string[] = [];
       const harness = await createHarness({
-        dispose: () => order.push("dispose"),
+        dispose: () => {
+          order.push("dispose");
+        },
         settle: async () => {
           order.push("settle");
         },
@@ -1917,9 +2185,9 @@ async function createHarness(
     readonly start?: boolean;
     readonly clock?: FakeClock;
     readonly converge?: () => Promise<void>;
-    readonly dispose?: () => void;
-    readonly downloads?: Partial<Config["downloads"]>;
+    readonly dispose?: () => void | Promise<void>;
     readonly driver?: FakeDriver;
+    readonly driverRejections?: readonly DriverRejection[];
     readonly logger?: Logger;
     /** Passed to the default `FakeDriver`; makes a `--full` request meaningful (see `Driver.reducesFeatures`). */
     readonly reducesFeatures?: boolean;
@@ -1939,6 +2207,8 @@ async function createHarness(
      * access a pre-ADR-0003 connection always had. Tests that specifically exercise role
      * enforcement (ADR §3) override this to get an "agent" (or mixed) session instead. */
     readonly resolveRole?: SessionRoleResolver;
+    /** Overrides the `downloads` config block for tests that exercise the download policy. */
+    readonly downloads?: Partial<Config["downloads"]>;
   } = {},
 ) {
   const directory =
@@ -1998,6 +2268,9 @@ async function createHarness(
     clock,
     config,
     ...(options.converge === undefined ? {} : { converge: options.converge }),
+    ...(options.driverRejections === undefined
+      ? {}
+      : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
     host: new DaemonEndpointHost({
@@ -2008,6 +2281,7 @@ async function createHarness(
     }),
     leases: engine,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    passthrough: engine,
     queue: engine,
     reaper,
     registry,
@@ -2124,6 +2398,7 @@ function testConfig(
 ): Config {
   return {
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    drivers: {},
     eventBuffer: { capacity: 100 },
     health: {
       enabled: true,

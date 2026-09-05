@@ -12,6 +12,7 @@ import {
   type DeviceUnhealthyPush,
   type DoctorReport,
   type DoctorRunInput,
+  type DriverPassthroughInput,
   type LeaseCancelInput,
   type LeaseCancelOutput,
   type LeaseGrant,
@@ -23,6 +24,7 @@ import {
   type LeaseRenewInput,
   type LeaseRecord,
   type LeaseRequestInput,
+  type PassthroughCommand,
   type RequestLeaseOptions,
   type SimlockClient,
   type StatusGetOutput,
@@ -63,6 +65,8 @@ export class FakeSimlockClient implements SimlockClient {
   listLeasesImpl: () => Promise<LeaseListOutput> = notStubbed("listLeases");
   heartbeatImpl: () => Promise<LeaseHeartbeatOutput> = notStubbed("heartbeat");
   runDoctorImpl: (input: DoctorRunInput) => Promise<DoctorReport> = notStubbed("runDoctor");
+  resolvePassthroughImpl: (input: DriverPassthroughInput) => Promise<PassthroughCommand> =
+    notStubbed("resolvePassthrough");
 
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();
   readonly #deviceUnhealthyListeners = new Set<(push: DeviceUnhealthyPush) => void>();
@@ -125,6 +129,12 @@ export class FakeSimlockClient implements SimlockClient {
     return this.runDoctorImpl(input);
   }
 
+  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never resolves a passthrough.
+  resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand> {
+    this.calls.push({ input, method: "resolvePassthrough" });
+    return this.resolvePassthroughImpl(input);
+  }
+
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {
     this.#leaseLostListeners.add(listener);
     return () => this.#leaseLostListeners.delete(listener);
@@ -185,6 +195,7 @@ export function sampleGrant(overrides: { readonly leaseId?: string } = {}): Leas
       id: "device-1",
       spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
     },
+    environment: {},
     lease: {
       deviceId: "device-1",
       grantedAt: 0,

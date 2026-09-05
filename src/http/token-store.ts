@@ -90,7 +90,6 @@ export class TokenStore {
    * immediately for a long-running process (the daemon) verifying bearer
    * tokens -- there is no in-process invalidation path otherwise.
    */
-  // fallow-ignore-next-line unused-class-member -- reached structurally through HttpGatewayDeps.tokens (see daemon/main.ts).
   async verify(secret: string): Promise<TokenIdentity | undefined> {
     const hash = this.#secrets.hash(secret);
     const record = (await this.#readAll()).find((candidate) => candidate.hash === hash);

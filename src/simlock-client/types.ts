@@ -35,6 +35,9 @@ export type LeaseListOutput = OpOutput<"lease.list">;
 export type LeaseHeartbeatOutput = OpOutput<"lease.heartbeat">;
 export type DoctorRunInput = OpInput<"doctor.run">;
 export type DoctorReport = OpOutput<"doctor.run">;
+export type DriverPassthroughInput = OpInput<"driver.passthrough">;
+/** The scoped command `simlock simctl` / `simlock adb` runs; see `passthroughCommandSchema`. */
+export type PassthroughCommand = OpOutput<"driver.passthrough">;
 
 // ---- admin-only operations ------------------------------------------------------------------
 

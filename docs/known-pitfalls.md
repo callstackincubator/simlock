@@ -100,6 +100,99 @@ destroys it (registry-only, as always). The device stays visible as
 `device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
 follow-up facts (see `docs/EVENTS.md`).
 
+## Device roots are an accident boundary, not a security boundary
+
+Simlock keeps its devices in roots it owns and scopes every platform command
+to them, so Xcode, Android Studio, and a plain `simctl` / `adb` do not see
+them. This is what makes ownership provable: nothing outside Simlock can put a
+device in a Simlock root, so a device found there is Simlock's without needing
+to guess from its name.
+
+**The pitfall:** it is tempting to read that as isolation. It is not. A user
+who passes `xcrun simctl --set <path>` or raises
+`ADB_LOCAL_TRANSPORT_MAX_PORT` on their own adb server reaches straight into
+the root. Nothing about the mechanism resists a *deliberate* actor — it only
+makes accidental interference very unlikely, which is the actual goal, since
+the thing being prevented is a developer or another tool wiping a device an
+agent is mid-lease on.
+
+This is exactly why the durable/erasable provenance marks survive the change:
+they detect a device erased or deleted out from under a live lease, which
+containment makes rare but cannot make impossible. Do not remove them on the
+grounds that the root already proves ownership — the root proves *whose device
+it is*, the marks prove *what happened to it*.
+
+**Status:** accepted by design. Anything that needs a real trust boundary
+(multi-tenant machines, untrusted agents) needs OS-level isolation, which is
+out of scope for a device control plane.
+
+## A root's ownership is proven at startup and trusted for the daemon's life
+
+`ensureOwnedRoot` runs once per driver, at daemon start. Every later answer to
+"is this device Simlock's?" — `listManaged`, every `simctl --set`, every
+`ANDROID_AVD_HOME` — is computed against that path again and again, but the
+*proof* behind it is the one taken at boot and never retaken.
+
+**The pitfall:** a daemon can be up for days. In that time the path can become
+a symlink, or an `mv` can leave the user's own device set standing exactly
+where Simlock's root was. Nothing re-checks, so `listManaged` starts answering
+with the user's simulators, every one of them has no registry record, and
+`doctor` reports the lot as orphans. This is a different case from the accident
+boundary above, which is about someone deliberately reaching *into* the root;
+this one is the root being swapped *under* Simlock, and it turns a report into
+a claim over devices that were never Simlock's.
+
+**Fix, and the deliberate half-measure in it:** destroying re-proves the root
+and reporting does not. `doctor --purge-orphans` calls `Driver.revalidateRoot()`
+— the same validation `create` was judged by, with the same arguments —
+immediately before its first destroy, and abandons the whole purge if any root
+refuses. Nothing else does, and that asymmetry is the point: a stale proof
+behind a *report* costs a confusing `doctor` run, while a stale proof behind a
+`destroy` costs the user their devices. Re-validating on every reconcile tick,
+or before every `listManaged`, would buy nothing for the case that matters and
+would put a filesystem check on the reaper's path.
+
+**Status:** accepted, and bounded by design — the purge is the only destructive
+path root membership alone can authorise (safety rule 1), so it is the only one
+that needs the re-proof. Restarting the daemon re-proves everything; a driver
+whose root has gone bad then simply does not start.
+
+## Simlock's adb server has to be supervised by pid
+
+Android containment needs Simlock to run its own adb server, because `adb` has
+no equivalent of `simctl --set`. That server is started with
+`ADB_REJECT_KILL_SERVER=1` so an agent's reflexive `adb kill-server` cannot
+detach every leased emulator at once.
+
+**The pitfall:** that protection applies to Simlock too. `adb kill-server`
+against its own server returns `error: kill-server rejected by remote server`,
+for the life of the process. The only way to stop it is to kill the pid.
+
+So the pid is recorded in `~/.simlock/adb-server.json` as soon as the server
+has one — before it is known to be listening, since the gap between the two is
+a window a daemon can die in and a listening server with no record is
+unrecoverable. The daemon reaps it by pid on shutdown, and a daemon that
+crashed must find that file on restart and adopt-or-kill the server it names. A
+stale entry — the pid is gone, or belongs to something else now — must be
+treated as no server, not as a server to kill blindly. "Belongs to something
+else" is decided from the process's full command line (an `adb` binary, this
+server's `-P <port>`, and `nodaemon`), never from the command name alone: a
+recycled pid most often belongs to *some* adb, and the shared server every
+other tool on the machine is talking to is precisely the wrong thing to
+SIGKILL. Where the process table cannot be read at all, the record is kept —
+deleting it would strand a live server behind an `occupied` refusal forever.
+
+The file is deliberately *not* part of `state.json`: process supervision must
+not depend on registry integrity, since a corrupt registry is exactly when you
+would need to clean up a leftover server.
+
+**Related:** unix-domain sockets are not available for the adb server on
+macOS (`unix:`, `localfilesystem:`, and `localabstract:` are all rejected), so
+this has to be a TCP port and cannot live as a socket file inside
+`~/.simlock/` the way `daemon.sock` does. That is why
+`drivers.android.adbServerPort` exists and why two Simlock instances on one
+machine need distinct values for it.
+
 ## Component downloads: per-request blocking, the bounded-default edge case, and no progress push
 
 The iOS driver's `resolveSpec` (`src/drivers/ios/index.ts`) can now run

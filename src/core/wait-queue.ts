@@ -36,6 +36,12 @@ export interface LeaseTiming {
 
 export interface LeaseGrant {
   readonly device: DeviceRecord;
+  /**
+   * What the holder needs in its environment to reach this device at all -- the owning
+   * driver's own answer, forwarded verbatim. Empty is a legitimate answer; the core never
+   * reads a key here (architecture rule 2).
+   */
+  readonly environment: Readonly<Record<string, string>>;
   readonly lease: LeaseRecord;
   readonly timing: LeaseTiming;
 }
