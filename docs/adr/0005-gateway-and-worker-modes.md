@@ -2,7 +2,8 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-05
-- **Issue:** none yet
+- **Issue:** [#115](https://github.com/callstackincubator/simlock/issues/115)
+  (sub-issues #116–#120, one per sequenced PR)
 - **Supersedes:** nothing
 - **Depends on:** [ADR 0004](0004-ttl-first-leases-on-every-transport.md)
 
