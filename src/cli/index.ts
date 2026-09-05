@@ -795,7 +795,7 @@ async function runLease(
     );
     ourLeaseId = grant.lease.id;
     // Owed from here on, whatever happens next -- see `releaseHeldLease`.
-    if (!detached && termination !== undefined) heldLeaseId = grant.lease.id;
+    if (!detached) heldLeaseId = grant.lease.id;
     // ADR §5: "simlock lease output includes the resolved role" -- the one field this CLI
     // adds on top of the contract's `LeaseGrant` shape, everything else passed through as-is.
     const result = { ...grant, role: client.role };
@@ -803,11 +803,12 @@ async function runLease(
     // changes what stdout carries, never how long the lease lives.
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult(environment, result);
-    if (detached || termination === undefined) return 0;
+    // `--detach` is the only invocation without a termination watch: it prints and exits,
+    // with no timer and no release, exactly as it did before ADR 0004.
+    if (termination === undefined) return 0;
     // ADR 0004 §2: what a held holder does while alive is renew on a timer at a third of the
     // TTL -- computed from the deadline the daemon just returned, not from a config value this
-    // process does not have. `--detach` returned above: it stays exactly as it was, printing
-    // and exiting with no timer at all.
+    // process does not have.
     renewal = startLeaseRenewal({
       clock: environment.clock,
       leaseId: grant.lease.id,
@@ -819,8 +820,18 @@ async function runLease(
       onError: (error) => writeError(environment, error),
       // Something did say otherwise: the daemon answered that this lease is gone or not ours.
       // Same ending as the `lease-lost` push -- exit 14, and no farewell release for a lease
-      // that would only answer UNKNOWN_LEASE again.
+      // that would only answer UNKNOWN_LEASE again -- and the same stderr line, so a script
+      // watching for `push: "lease-lost"` sees this way of losing a lease too. The error line
+      // follows it as the detail of why.
       onLeaseGone: (error) => {
+        environment.stderr.write(
+          `${JSON.stringify({
+            push: "lease-lost",
+            deviceId: grant.lease.deviceId,
+            leaseId: grant.lease.id,
+            reason: "renew-rejected",
+          })}\n`,
+        );
         writeError(environment, error);
         markLeaseLost();
       },

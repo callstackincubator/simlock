@@ -1535,7 +1535,20 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
     expect(released, "asking again would only raise UNKNOWN_LEASE").toBe(false);
     expect(renewals).toBe(1);
     expect(clock.pendingTimerCount).toBe(0);
-    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "{}")).toEqual({
+
+    // The same stderr line the push path writes, so a script tailing for `push: "lease-lost"`
+    // sees this way of losing a lease too, with the error line after it as the detail.
+    const lines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toContainEqual({
+      push: "lease-lost",
+      deviceId: "dev_1",
+      leaseId: "lse_1",
+      reason: "renew-rejected",
+    });
+    expect(lines.at(-1)).toEqual({
       error: { code: "UNKNOWN_LEASE", message: "no such lease" },
     });
   });
