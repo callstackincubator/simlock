@@ -26,8 +26,7 @@ const RENEW_DIVISOR = 3;
  * Floor on the scheduled delay. Only reachable when the daemon returns a deadline that is
  * already very close (or in the past) -- a misconfigured `lease.heldTtlBackstopMs`, a clock
  * that jumped, or a renewal that raced its own expiry. Without it, a non-positive remaining
- * TTL would turn the timer into an unbounded renew-per-tick loop against the daemon. The
- * renewal still happens; it is only kept from becoming a hot loop.
+ * TTL would turn the timer into an unbounded renew-per-tick loop against the daemon.
  */
 const MINIMUM_RENEW_DELAY_MS = 250;
 
@@ -44,17 +43,18 @@ export interface LeaseRenewalOptions {
   /** Calls `lease.renew` for this lease -- `client.renewLease({ leaseId })`, in practice. */
   readonly renew: (leaseId: string) => Promise<RenewedLease>;
   /**
-   * Reports the failure that stopped renewal (see `LeaseRenewal#stop` for why renewal ends
-   * there). Never called after `stop()`.
+   * Reports every failed attempt, and the failure that finally ends renewal. Never called
+   * after `stop()`.
    */
   readonly onError?: (error: unknown) => void;
 }
 
 export interface LeaseRenewal {
   /**
-   * Cancels the pending timer and guarantees no further `renew` call, `onError` call, or
-   * reschedule -- including from a renewal that is already in flight. Idempotent, and the one
-   * thing a holder must do before releasing, so a renew cannot race its own release.
+   * Cancels whatever timer is armed -- the wait between renewals, or the bound on an attempt
+   * already in flight -- and guarantees no further `renew` call, `onError` call, or reschedule.
+   * Idempotent, and the one thing a holder must do before releasing, so a renew cannot race its
+   * own release.
    */
   stop(): void;
 }
@@ -64,50 +64,108 @@ function renewDelayMs(remainingMs: number): number {
   return Math.max(MINIMUM_RENEW_DELAY_MS, Math.floor(remainingMs / RENEW_DIVISOR));
 }
 
+type Attempt =
+  | { readonly ok: true; readonly renewed: RenewedLease }
+  | { readonly ok: false; readonly error: unknown };
+
 /**
  * Starts renewing `leaseId` at a third of the remaining TTL, rescheduling off each renewal's
  * own returned deadline, until `stop()`.
  *
- * A failed renewal ends renewal rather than retrying: the typed client never reconnects (ADR
- * 0003 §10), so a rejection is either a dead connection -- on which no later call would
- * succeed either -- or the daemon saying this lease is no longer renewable (it expired, or
- * was force-released). Both end this holder's claim; retrying would only turn one honest
- * error into a stream of them. The caller learns through `onError` and through the
- * `lease-lost` push that accompanies the second case.
+ * Renewing at a third of the TTL exists to leave room for two more tries before the deadline,
+ * so a failed attempt is retried on the same cadence rather than ending the lease: the daemon
+ * may have failed to persist one renewal (`INTERNAL`) and still be perfectly willing to serve
+ * the next. Renewal ends only when the lease can no longer be saved -- its last known deadline
+ * has passed, or the daemon answered with one that is not in the future. A holder whose
+ * connection died, or whose lease was force-released, stops sooner than that through its
+ * `lease-lost` handler (ADR 0003 §10), which is the signal that actually means "this lease is
+ * over"; the retries in between are cheap and bounded by the deadline.
+ *
+ * Each attempt is bounded by the same interval it was scheduled on, so a daemon that accepts
+ * `lease.renew` and never answers costs one interval rather than the whole lease: the wire has
+ * no request timeout of its own, and an abandoned request cannot slide the deadline anywhere
+ * but forward.
  */
 export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
   const { clock, leaseId, onError, renew } = options;
+  /** The last deadline the daemon actually gave us -- the only input to the cadence. */
+  let deadline = options.ttlDeadline;
+  /** Whichever timer is armed right now: the wait between renewals, or an attempt's bound. */
   let timer: TimerHandle | undefined;
   let stopped = false;
 
-  const schedule = (ttlDeadline: number): void => {
+  const cancelTimer = (): void => {
+    if (timer === undefined) return;
+    clock.cancel(timer);
+    timer = undefined;
+  };
+
+  const schedule = (): void => {
     if (stopped) return;
-    timer = clock.setTimer(renewDelayMs(ttlDeadline - clock.now()), () => {
+    timer = clock.setTimer(renewDelayMs(deadline - clock.now()), () => {
       timer = undefined;
       void tick();
     });
   };
 
-  const tick = async (): Promise<void> => {
-    if (stopped) return;
-    try {
-      const renewed = await renew(leaseId);
-      schedule(renewed.ttlDeadline);
-    } catch (error: unknown) {
-      if (stopped) return;
-      stopped = true;
-      onError?.(error);
-    }
+  /** One renewal attempt, bounded by the interval it was scheduled on. */
+  const attemptRenew = async (): Promise<Attempt> => {
+    const request = renew(leaseId);
+    // Attached unconditionally: an abandoned request still settles later, and a rejection
+    // nobody awaits would surface as an unhandled rejection.
+    request.catch(() => undefined);
+    return Promise.race<Attempt>([
+      request.then(
+        (renewed) => ({ ok: true, renewed }),
+        (error: unknown) => ({ error, ok: false }),
+      ),
+      new Promise<Attempt>((resolve) => {
+        timer = clock.setTimer(renewDelayMs(deadline - clock.now()), () => {
+          timer = undefined;
+          resolve({
+            error: new Error(`Timed out renewing lease ${leaseId}`),
+            ok: false,
+          });
+        });
+      }),
+    ]);
   };
 
-  schedule(options.ttlDeadline);
+  const tick = async (): Promise<void> => {
+    if (stopped) return;
+    const attempt = await attemptRenew();
+    cancelTimer();
+    if (stopped) return;
+
+    if (!attempt.ok) {
+      onError?.(attempt.error);
+      // Out of runway: the lease is gone (or about to be), and another attempt would only
+      // produce another error.
+      if (clock.now() >= deadline) {
+        stopped = true;
+        return;
+      }
+      schedule();
+      return;
+    }
+
+    if (attempt.renewed.ttlDeadline <= clock.now()) {
+      // A deadline that is not in the future cannot be renewed towards -- scheduling off it
+      // would be a hot loop against a lease that is already over.
+      stopped = true;
+      onError?.(new Error(`Lease ${leaseId} was renewed to a deadline that has already passed`));
+      return;
+    }
+    deadline = attempt.renewed.ttlDeadline;
+    schedule();
+  };
+
+  schedule();
 
   return {
     stop: (): void => {
       stopped = true;
-      if (timer === undefined) return;
-      clock.cancel(timer);
-      timer = undefined;
+      cancelTimer();
     },
   };
 }

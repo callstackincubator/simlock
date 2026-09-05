@@ -1408,18 +1408,120 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
 
   it("declares no heartbeat capability at hello, in either mode (ADR 0004 §4)", async () => {
     const output = outputCapture();
+    const signals = new EventEmitter();
     const declared: Array<boolean | undefined> = [];
     const environment = output.environmentWith({
+      clock: new FakeClock(0),
       connectAdmin: async (_resolveCredential, options) => {
         declared.push(options?.heartbeat);
         return fakeClient();
       },
+      signals: signals as unknown as CliEnvironment["signals"],
     });
     await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
       environment,
     );
-    expect(declared).toEqual([false]);
+
+    // Held mode is the case ADR 0004 §4 is actually about: it is the mode the daemon's push
+    // keys off, and the one that used to declare the capability.
+    const heldRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      environment,
+    );
+    await settle();
+    signals.emit("SIGINT");
+    expect(await heldRun).toBe(0);
+
+    expect(declared).toEqual([false, false]);
+  });
+
+  it("reports a failed renewal on stderr and keeps holding the lease", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    let released: string | undefined;
+    const client = fakeClient({
+      renewLease: () =>
+        Promise.reject(new SimlockError("INTERNAL", "domain", "could not persist the lease", {})),
+      releaseLease: (input) => {
+        released = input.leaseId;
+        return Promise.resolve({ leaseId: input.leaseId });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock,
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    clock.advance(20_000);
+    await settle();
+
+    const errorLines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.error !== undefined);
+    expect(errorLines).toContainEqual({
+      error: { code: "INTERNAL", message: "could not persist the lease" },
+    });
+
+    // A failed renewal is not an exit condition: the holder still holds, and still releases.
+    signals.emit("SIGINT");
+    expect(await runPromise).toBe(0);
+    expect(released).toBe("lse_1");
+  });
+
+  it("still releases the lease when printing the grant throws (--export-env with a bad key)", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let released: string | undefined;
+    const client = fakeClient({
+      requestLease: () =>
+        Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          // A driver-supplied key that is not a shell identifier fails the command rather than
+          // being silently dropped -- and that throw must not cost the device.
+          environment: { "NOT A KEY": "value" },
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "held" as const,
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        }),
+      releaseLease: (input) => {
+        released = input.leaseId;
+        return Promise.resolve({ leaseId: input.leaseId });
+      },
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--export-env"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(released, "an exit through a throw is still an exit, and still owes a release").toBe(
+      "lse_1",
+    );
+    expect(clock.pendingTimerCount).toBe(0);
   });
 
   it("arms no renew timer for --detach: it prints and exits, exactly as before", async () => {

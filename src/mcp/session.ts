@@ -161,11 +161,17 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      // Stopped before the call, not after it: a renew that overtook its own release would
-      // resurrect the lease the caller just gave up.
-      if (input.leaseId === this.#heldLeaseId) this.#stopRenewal();
       const result = await client.releaseLease(input);
-      if (result.leaseId === this.#heldLeaseId) this.#heldLeaseId = undefined;
+      // Stopped only once the daemon has actually let the lease go. A release that fails
+      // (anything but a dead connection) leaves the session still holding the device, and a
+      // session that has stopped renewing a lease it still holds loses that device at the
+      // deadline. A renew that overtakes a *successful* release cannot resurrect anything:
+      // `Registry#beginRelease` drops the record, so `lease.renew` can only answer
+      // UNKNOWN_LEASE.
+      if (result.leaseId === this.#heldLeaseId) {
+        this.#stopRenewal();
+        this.#heldLeaseId = undefined;
+      }
       return { ...result, released: true };
     });
   }
