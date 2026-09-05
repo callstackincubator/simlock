@@ -10,11 +10,7 @@ async function flushMicrotasks(times = 10): Promise<void> {
 }
 
 function sampleGrant(
-  overrides: {
-    readonly leaseId?: string;
-    readonly deviceId?: string;
-    readonly mode?: "held" | "detached";
-  } = {},
+  overrides: { readonly leaseId?: string; readonly deviceId?: string } = {},
 ): LeaseGrant {
   const leaseId = overrides.leaseId ?? "lease_1";
   const deviceId = overrides.deviceId ?? "device_1";
@@ -29,9 +25,10 @@ function sampleGrant(
       deviceId,
       grantedAt: 0,
       id: leaseId,
-      mode: overrides.mode ?? "held",
+      lastRenewedAt: 0,
       ownerId: "agent-1",
       requesterId: "agent-1",
+      ttlMs: 1_000,
       ttlDeadline: 1_000,
     },
     timing: {
@@ -105,16 +102,14 @@ describe("connectSimlock: handshake", () => {
     expect(connection.sent).toHaveLength(1);
   });
 
-  it("declares no heartbeat capability by default, and starts no renew timer of its own (ADR 0004 §2/§4)", async () => {
+  it("declares no capabilities at all, and starts no renew timer of its own (ADR 0004 §2/§4)", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
     const hello = connection.lastSentOf("hello")!;
-    // The daemon-initiated heartbeat is what ADR 0004 §4 removes; a client that does not
-    // declare it is never pushed one, and keeps its leases alive with `lease.renew` instead.
-    expect((hello.payload as { capabilities?: { heartbeat?: boolean } }).capabilities).toEqual({
-      heartbeat: false,
-    });
+    // ADR 0004 §4 removed the daemon-initiated heartbeat and the capability that gated it;
+    // a lease stays alive because a client calls `lease.renew`, and nothing else.
+    expect((hello.payload as { capabilities?: unknown }).capabilities).toBeUndefined();
     completeHello(connection);
     const client = await connectPromise;
 
@@ -123,18 +118,6 @@ describe("connectSimlock: handshake", () => {
     await flushMicrotasks();
     expect(connection.sent).toHaveLength(sentAfterHello);
     await client.close();
-  });
-
-  it("still declares the heartbeat capability when a caller explicitly asks for one", async () => {
-    const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection, heartbeat: true });
-    await flushMicrotasks();
-    const hello = connection.lastSentOf("hello")!;
-    expect((hello.payload as { capabilities?: { heartbeat?: boolean } }).capabilities).toEqual({
-      heartbeat: true,
-    });
-    completeHello(connection);
-    await (await connectPromise).close();
   });
 
   it("a bad admin credential causes zero requests after hello, and closes the connection", async () => {
@@ -217,7 +200,7 @@ describe("connectSimlock: handshake", () => {
 });
 
 describe("connection death", () => {
-  it("rejects in-flight calls and fires onLeaseLost for held leases", async () => {
+  it("rejects in-flight calls, fires onConnectionLost, and reports no lost lease", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
@@ -241,11 +224,11 @@ describe("connection death", () => {
     connection.simulateDeath();
 
     await expect(statusPromise).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
-    expect(leaseLost).toHaveBeenCalledWith({
-      deviceId: "device_1",
-      leaseId: "lease_held",
-      reason: "daemon-connection-lost",
-    });
+    // ADR 0004 §3 narrows ADR 0003 §10: a dead connection is not a dead lease. The daemon
+    // released nothing, so `lease_held` is still granted and still counting down -- there is
+    // nothing to report through `onLeaseLost`, which now only ever carries a lease the daemon
+    // actually ended.
+    expect(leaseLost).not.toHaveBeenCalled();
     expect(connectionLost).toHaveBeenCalledTimes(1);
 
     await expect(client.getStatus()).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
@@ -450,19 +433,20 @@ describe("pushes", () => {
     });
   });
 
-  it("answers a lease.heartbeat push with a fire-and-forget request frame carrying the same payload", async () => {
+  it("ignores an unknown push kind such as a protocol-3 daemon's lease.heartbeat", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });
     await flushMicrotasks();
     completeHello(connection);
-    await connectPromise;
+    const client = await connectPromise;
 
+    // Not reachable against a protocol-4 daemon (the ranges do not overlap, so `hello` fails
+    // first), but the wire must not answer a push it no longer understands.
     connection.push("lease.heartbeat", { nonce: 12345 });
     await flushMicrotasks();
 
-    const pong = connection.lastSentOf("lease.heartbeat")!;
-    expect(pong).toBeDefined();
-    expect(pong.payload).toEqual({ nonce: 12345 });
+    expect(connection.lastSentOf("lease.heartbeat")).toBeUndefined();
+    await client.close();
   });
 
   it("silently drops malformed lease-scoped and event pushes instead of throwing", async () => {

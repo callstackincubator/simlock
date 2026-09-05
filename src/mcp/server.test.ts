@@ -43,9 +43,10 @@ describe("MCP server (smoke)", () => {
                 deviceId: grant.device.id,
                 grantedAt: grant.lease.grantedAt,
                 id: grant.lease.id,
-                mode: grant.lease.mode,
                 ownerId: grant.lease.ownerId,
                 requesterId: grant.lease.requesterId,
+                lastRenewedAt: grant.lease.grantedAt,
+                ttlMs: 60_000,
                 ttlDeadline: grant.lease.ttlDeadline,
               },
             ],
@@ -70,7 +71,7 @@ describe("MCP server (smoke)", () => {
         platform: "ios",
       });
       expect(lease.isError).not.toBe(true);
-      expect(lease.structuredContent).toMatchObject({ lease: { id: "lease-1", mode: "held" } });
+      expect(lease.structuredContent).toMatchObject({ lease: { id: "lease-1" } });
 
       const devices = await call(mcpClient, "list_devices", {});
       expect(devices.isError).not.toBe(true);
@@ -293,7 +294,11 @@ describe("MCP server (smoke)", () => {
 });
 
 async function connectedServer(client: FakeSimlockClient) {
-  const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
+  const session = new McpSession({
+    clock: new FakeClock(),
+    connect: async () => client,
+    connectForRenew: async () => client,
+  });
   const server = createMcpServer(session);
   const mcpClient = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

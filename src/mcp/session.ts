@@ -38,11 +38,20 @@ export interface McpSessionOptions {
   readonly clock: Clock;
   /**
    * Opens one connection and completes the `hello` handshake, fixing this session's principal
-   * for the connection's lifetime (ADR §4). Called again -- building a brand new client, never
-   * reusing or repairing the dead one -- on lazy reconnect: the typed client "does not
-   * reconnect and does not retry" (ADR §10), so that policy has to live here.
+   * for the connection's lifetime (ADR 0003 §4). Called again -- building a brand new client,
+   * never reusing or repairing the dead one -- on reconnect: the typed client "does not
+   * reconnect and does not retry" (ADR §10), so that policy has to live here. This is the
+   * tool-call trigger, and it may auto-launch a daemon that is not running.
    */
   readonly connect: () => Promise<SimlockClient>;
+  /**
+   * The renew timer's own connect (ADR 0004 §2): same handshake, but it only ever reaches a
+   * daemon that is **already listening** and never launches one. An idle session should not
+   * lose its lease waiting for a tool call that may never come; an operator's `simlock daemon
+   * stop` must not be undone by that same idle session. Both are true only because the two
+   * triggers have deliberately different powers -- see `#renewHeldLease`.
+   */
+  readonly connectForRenew: () => Promise<SimlockClient>;
 }
 
 export interface McpErrorResult {
@@ -115,6 +124,7 @@ export function toMcpErrorResult(error: unknown): McpErrorResult {
 export class McpSession {
   readonly #clock: Clock;
   readonly #connect: () => Promise<SimlockClient>;
+  readonly #connectForRenew: () => Promise<SimlockClient>;
   #client: SimlockClient | undefined;
   #connecting: Promise<SimlockClient> | undefined;
   #closed = false;
@@ -145,6 +155,7 @@ export class McpSession {
   constructor(options: McpSessionOptions) {
     this.#clock = options.clock;
     this.#connect = options.connect;
+    this.#connectForRenew = options.connectForRenew;
   }
 
   lease(
@@ -155,7 +166,9 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      const request: LeaseRequestInput = { ...input, mode: "held" };
+      // ADR 0004: no `mode` to ask for, and `ttlMs` (if the caller named one) travels through
+      // from the tool's contract-derived schema untouched.
+      const request: LeaseRequestInput = { ...input };
       const grant = await client.requestLease(request, {
         ...(onProgress === undefined ? {} : { onProgress }),
         ...(signal === undefined ? {} : { signal }),
@@ -170,7 +183,7 @@ export class McpSession {
         this.#throwIfClosed();
       }
       this.#heldLeaseId = grant.lease.id;
-      this.#startRenewal(client, grant.lease);
+      this.#startRenewal(grant.lease);
       return grant;
     });
   }
@@ -201,24 +214,22 @@ export class McpSession {
 
   /**
    * This session's current lease, or an explicit "no lease held" result -- one `lease.list`
-   * call (ADR §9), never a cache of lease state. `lease.list` filters by **owner principal
-   * only** (no mode filter, no connection filter -- see `src/daemon/dispatcher.ts`'s
-   * `lease.list` handler), so it can return leases this connection never requested: a
-   * `detached` lease the CLI holds under the same `SIMLOCK_AGENT_ID` principal, or a stale
-   * `held` lease left over from an earlier session under that principal. Taking `leases[0]`
-   * unconditionally would report a lease this session neither holds nor will release on close.
-   * Filtering to `mode === "held"` **and** `id === #heldLeaseId` scopes the answer to the one
-   * lease this session's own `lease()` call actually obtained; `leases` itself is always
-   * re-fetched, never cached.
+   * call (ADR 0003 §9), never a cache of lease state. `lease.list` filters by **owner principal
+   * only** (see `src/daemon/dispatcher.ts`'s `lease.list` handler), so it can return leases
+   * this connection never requested: one a `simlock lease --detach` left behind under the same
+   * `SIMLOCK_AGENT_ID` principal, or one left over from an earlier session under that
+   * principal. Taking `leases[0]` unconditionally would report a lease this session neither
+   * renews nor will release on close. Matching on `id === #heldLeaseId` scopes the answer to
+   * the one lease this session's own `lease()` call actually obtained -- the only filter left,
+   * since ADR 0004 removed the `mode` the old one also checked, and the only one that was ever
+   * load-bearing anyway. `leases` itself is always re-fetched, never cached.
    */
   status(): Promise<LeaseStatusOutput> {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
       const { leases } = await client.listLeases();
-      const lease = leases.find((candidate) => {
-        return candidate.mode === "held" && candidate.id === this.#heldLeaseId;
-      });
+      const lease = leases.find((candidate) => candidate.id === this.#heldLeaseId);
       return lease === undefined ? { held: false } : { ...lease, held: true };
     });
   }
@@ -241,8 +252,8 @@ export class McpSession {
   /**
    * Ends the session: stops renewing, releases this session's lease explicitly, then closes the
    * connection. ADR 0004 §3 ("connection close means nothing to a lease") is why the release is
-   * its own call now rather than a side effect of the socket going away -- the daemon still
-   * releases on close today, and will not once PR B lands.
+   * its own call rather than a side effect of the socket going away: nothing else will free the
+   * device before its deadline.
    *
    * It does not queue behind `#mutations`: blocking shutdown on an in-flight provisioning
    * request -- minutes, potentially -- would be a worse trade than ending now. A `lease()` that
@@ -334,12 +345,11 @@ export class McpSession {
   }
 
   /**
-   * Starts (or restarts) the renew timer for the lease this session just obtained. The client
-   * is captured deliberately: if that connection dies, the renewal fails and stops rather than
-   * quietly reconnecting behind the tool surface -- reconnect stays a decision the next tool
-   * call makes (`#clientForUse`).
+   * Starts (or restarts) the renew timer for one lease this session obtained. No client is
+   * captured: each tick resolves one through `#renewHeldLease`, so a connection that died
+   * between ticks costs the lease nothing (ADR 0004 §2) instead of ending its renewal.
    */
-  #startRenewal(client: SimlockClient, lease: LeaseRecord): void {
+  #startRenewal(lease: LeaseRecord): void {
     this.#stopRenewal(lease.id);
     // No `onError`: this frontend owns stdout (it is the protocol) and has no side channel a
     // retryable failure could be written to. What the agent has to know is that the lease is
@@ -355,10 +365,24 @@ export class McpSession {
         // left to push about), and the session must stop counting the lease as its own.
         this.#reportLeaseLost({ deviceId: lease.deviceId, leaseId: lease.id, reason });
       },
-      renew: (id) => client.renewLease({ leaseId: id }),
+      renew: (id) => this.#renewHeldLease(id),
       ttlDeadline: lease.ttlDeadline,
     });
     this.#renewals.set(lease.id, renewal);
+  }
+
+  /**
+   * One renewal, against whatever connection this session has -- reconnecting first if the
+   * current one died (ADR 0004 §2's second reconnect trigger). It connects only to a daemon
+   * that is already listening: an idle session keeps its lease across a daemon it can still
+   * reach, and an operator's `simlock daemon stop` is not undone by one that it cannot. A
+   * failure here is not fatal to the lease; `startLeaseRenewal` retries on the next tick, with
+   * the whole remaining TTL as its runway -- except for the one failure that is fatal, which
+   * `onLeaseGone` handles above.
+   */
+  async #renewHeldLease(leaseId: string): Promise<{ readonly ttlDeadline: number }> {
+    const client = await this.#clientForUse(this.#connectForRenew);
+    return client.renewLease({ leaseId });
   }
 
   /**
@@ -416,13 +440,22 @@ export class McpSession {
 
   /**
    * Reconnects lazily: a dead `#client` (cleared by the client's own `onConnectionLost`, below)
-   * makes the next call re-run `#connect()`, building a brand new `SimlockClient` -- the typed
-   * client itself never reconnects (ADR §10), so constructing a fresh one here on every dead
-   * connection is what keeps MCP's process-outlives-a-connection lifecycle working.
+   * makes the next caller build a brand new `SimlockClient` -- the typed client itself never
+   * reconnects (ADR 0003 §10), so constructing a fresh one here on every dead connection is
+   * what keeps MCP's process-outlives-a-connection lifecycle working.
+   *
+   * Which `connect` runs is the caller's decision, and ADR 0004 §2 makes it a meaningful one: a
+   * tool call passes the auto-launching one (the default), the renew timer passes the one that
+   * only reaches an already-listening daemon. Both share `#connecting`, so two triggers racing
+   * produce one connection rather than two -- whichever asked first decides whether a daemon
+   * gets launched, which is safe in both directions: a tool call is happening either way, and
+   * the timer never launches on its own.
    */
-  async #clientForUse(): Promise<SimlockClient> {
+  async #clientForUse(
+    connect: () => Promise<SimlockClient> = this.#connect,
+  ): Promise<SimlockClient> {
     if (this.#client !== undefined) return this.#client;
-    this.#connecting ??= this.#connect();
+    this.#connecting ??= connect();
     const connecting = this.#connecting;
     try {
       const client = await connecting;
@@ -454,15 +487,16 @@ export class McpSession {
   /**
    * Relays a freshly-connected client's pushes to this session's own listeners (which survive
    * across a reconnect, unlike the client itself), and drops `#client` the moment this
-   * connection dies so the next call reconnects. The client already synthesizes `onLeaseLost`
-   * for every lease it held when its connection dies (ADR §10), so nothing extra is needed
-   * here for that case.
+   * connection dies so the next caller reconnects. A dead connection is deliberately *not*
+   * treated as a lost lease (ADR 0004 §3, which is why the client no longer synthesizes one):
+   * the lease is still granted, and the renew timer picks it back up over the next connection.
    */
   #wireClient(client: SimlockClient): void {
     this.#clientUnsubscribers = [
       client.onLeaseLost((push) => {
-        // Nothing left to renew for that lease: it ended elsewhere (expiry, a force-release,
-        // or this connection dying -- the client synthesizes the push for that last one).
+        // Nothing left to renew for that lease: the daemon ended it (expiry, or a
+        // force-release). A dead connection is not one of those any more -- ADR 0004 §3, which
+        // is why the client no longer synthesizes a push for it.
         this.#stopRenewal(push.leaseId);
         if (this.#heldLeaseId === push.leaseId) this.#heldLeaseId = undefined;
         this.#announceLeaseLost(push);

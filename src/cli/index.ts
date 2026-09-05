@@ -57,10 +57,11 @@ explicitly; see docs/CLI.md#admin-credential-resolution for the default
 resolution order.`;
 
 /**
- * Held mode ends with the lease already gone: the daemon released it without
- * the holder asking (a TTL backstop, an operator `release`, or a leased device
- * that could not be recovered). Distinct from 0, which means the holder ended
- * its own lease.
+ * A `lease` that stayed alive ends with the lease already gone: the daemon ended it without
+ * the holder asking (TTL expiry, an operator `release`, or a leased device that could not be
+ * recovered). Distinct from 0, which means the holder ended its own lease, and from 1 on a
+ * dead connection, which means nothing ended the lease at all -- it is still granted and still
+ * counting down (ADR 0004 §3).
  */
 const LEASE_LOST_EXIT_CODE = 14;
 
@@ -113,7 +114,7 @@ type McpStdioRunner = () => Promise<void>;
  */
 export interface CliEnvironment {
   /**
-   * The `Clock` port (architecture rule 9). Held mode's renew timer runs on it, so a test can
+   * The `Clock` port (architecture rule 9). A holder's renew timer runs on it, so a test can
    * drive the cadence by hand instead of waiting out a real TTL.
    */
   readonly clock: Clock;
@@ -134,13 +135,11 @@ export interface CliEnvironment {
    */
   readonly connectAdmin: (
     resolveCredential: () => Promise<string | undefined>,
-    options?: { readonly heartbeat?: boolean },
   ) => Promise<SimlockAdminClient>;
   /** Same as `connectAdmin` but never auto-launches -- `daemon stop`/`daemon status` must not
    * start a daemon just to ask whether one is running. */
   readonly connectExistingAdmin: (
     resolveCredential: () => Promise<string | undefined>,
-    options?: { readonly heartbeat?: boolean },
   ) => Promise<SimlockAdminClient>;
   /** `SIMLOCK_ADMIN_TOKEN`, ADR §5's second resolution source. */
   readonly adminTokenFromEnv?: string;
@@ -158,7 +157,7 @@ export interface CliEnvironment {
   readonly loadMcpStdio?: () => Promise<McpStdioRunner>;
   readonly runMcpStdio?: () => Promise<void>;
   readonly signals: Signals;
-  /** The pid `lease` held mode watches by default -- the parent captured at CLI startup. */
+  /** The pid a running `lease` watches by default -- the parent captured at CLI startup. */
   readonly parentPid?: number;
   readonly parentWatch?: ParentWatch;
   readonly stderr: Output;
@@ -252,11 +251,10 @@ function writeAgentFallbackNotice(environment: CliEnvironment, source: Credentia
 async function connectDaemonClient(
   environment: CliEnvironment,
   tokenFlag: string | undefined,
-  options: { readonly launch?: boolean; readonly heartbeat?: boolean } = {},
+  options: { readonly launch?: boolean } = {},
 ): Promise<SimlockAdminClient> {
   const connect =
     options.launch === false ? environment.connectExistingAdmin : environment.connectAdmin;
-  const connectOptions = options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat };
 
   let source: CredentialSource = "none";
   const resolveCredential = async (): Promise<string | undefined> => {
@@ -274,13 +272,13 @@ async function connectDaemonClient(
   };
 
   try {
-    const client = await connect(resolveCredential, connectOptions);
+    const client = await connect(resolveCredential);
     if (source === "none") writeAgentFallbackNotice(environment, "none");
     return client;
   } catch (error: unknown) {
     if (!isAdminAuthFailure(error) || source === "none") throw error;
     writeAgentFallbackNotice(environment, source);
-    return connect(async () => undefined, connectOptions);
+    return connect(async () => undefined);
   }
 }
 
@@ -375,7 +373,6 @@ export function buildCliEnvironment(
   const connect = async (
     connector: IpcConnector,
     resolveCredential: () => Promise<string | undefined>,
-    options?: { readonly heartbeat?: boolean },
   ): Promise<SimlockAdminClient> => {
     const connection = await connector.connect(socketPath);
     const credential = await resolveCredential();
@@ -383,7 +380,6 @@ export function buildCliEnvironment(
       connection,
       principal: requesterId,
       ...(credential === undefined ? {} : { credential }),
-      ...(options?.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
     });
   };
 
@@ -391,9 +387,8 @@ export function buildCliEnvironment(
     clock,
     configPath,
     requesterId,
-    connectAdmin: (resolveCredential, options) =>
-      connect(autoLaunchIpc, resolveCredential, options),
-    connectExistingAdmin: (resolveCredential, options) => connect(ipc, resolveCredential, options),
+    connectAdmin: (resolveCredential) => connect(autoLaunchIpc, resolveCredential),
+    connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}
       : { adminTokenFromEnv: env.SIMLOCK_ADMIN_TOKEN }),
@@ -679,12 +674,14 @@ async function runLease(
     os: { type: "string" },
     platform: { type: "string" },
     timeout: { type: "string" },
+    ttl: { type: "string" },
   });
   if (values.help) {
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
         "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--allow-download] [--full] [--export-env] [--bind-pid <pid>]\n",
+        "                     [--ttl <duration>] [--allow-download] [--full] [--export-env]\n" +
+        "                     [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -697,29 +694,34 @@ async function runLease(
   const requesterId = (values["agent-id"] as string | undefined) ?? environment.requesterId;
   const detached = values.detach ?? false;
   const timeoutMs = typeof values.timeout === "string" ? parseDuration(values.timeout) : undefined;
-  // Held mode watches its parent so a crashed agent's backgrounded holder
-  // self-terminates instead of surviving reparenting (docs/known-pitfalls.md).
-  // `--bind-pid` overrides which pid that is, for a holder spawned from a
-  // short-lived subshell whose immediate parent dies before the agent does.
+  // ADR 0004 §4: this lease's initial TTL, in place of `lease.defaultTtlMs`. Sent as-is -- the
+  // cap against `lease.maxTtlMs` is the daemon's to apply, and asking for more comes back as
+  // `BAD_REQUEST` rather than being clamped here to a value the caller did not write.
+  const ttlMs = typeof values.ttl === "string" ? parseDuration(values.ttl) : undefined;
+  // A holder watches its parent so a crashed agent's backgrounded `simlock lease`
+  // self-terminates instead of surviving reparenting (docs/known-pitfalls.md) -- the one
+  // failure a TTL cannot bound, because a reparented holder keeps renewing. `--bind-pid`
+  // overrides which pid that is, for a holder spawned from a short-lived subshell whose
+  // immediate parent dies before the agent does.
   const bindPid = parseBindPid(values["bind-pid"]);
   const watchedPid = bindPid ?? environment.parentPid;
   const termination = detached
     ? undefined
     : waitForTermination(environment.signals, environment.parentWatch, watchedPid);
 
-  // ADR 0004 §2/§4: held mode is a client policy now -- this process renews on its own timer
-  // (below) instead of ponging the daemon's push, so neither mode declares the heartbeat
-  // capability any more. The daemon still has the push, and still slides a lease for any
-  // connection that asks for it; this one no longer asks.
-  const client = await connectDaemonClient(environment, token, { heartbeat: false });
+  // ADR 0004 §2: holding is this process's own policy -- it renews on its own timer (below).
+  // There is no capability to declare and no daemon-initiated push to answer.
+  const client = await connectDaemonClient(environment, token);
   // Set once the daemon says this connection's lease ended without us asking. ADR 0003 §8:
-  // lease-scoped pushes go to every live connection sharing the lease's owner, in either mode
-  // -- filtered below against this connection's own granted lease id, the same way the
-  // pre-typed-client CLI did, since a second CLI invocation sharing this principal (e.g. a
-  // detached lease from an earlier `--detach`) can otherwise deliver a push for a lease this
-  // process never held.
+  // lease-scoped pushes go to every live connection sharing the lease's owner -- filtered below
+  // against this connection's own granted lease id, the same way the pre-typed-client CLI did,
+  // since a second CLI invocation sharing this principal (a lease from an earlier `--detach`,
+  // say) can otherwise deliver a push for a lease this process never held.
   let leaseLost = false;
   let ourLeaseId: string | undefined;
+  /** Reported in the `DAEMON_CONNECTION_LOST` line below, so a reader knows how long the
+   * still-standing lease has left to be renewed in. */
+  let ourLeaseDeadline: number | undefined;
   let notifyLeaseLost: (() => void) | undefined;
   const leaseLostSignal = new Promise<void>((resolve) => {
     notifyLeaseLost = resolve;
@@ -748,6 +750,33 @@ async function runLease(
     if (push.leaseId !== ourLeaseId) return;
     markLeaseLost(push);
   });
+  /**
+   * ADR 0004 §3: a dead connection is not a dead lease. The daemon released nothing, so the
+   * lease is still granted, still counting down, and a later `simlock lease renew <id>` picks
+   * it straight back up -- but this process can neither renew nor release it, and the CLI
+   * deliberately does not reconnect (ADR 0003 §10). So it says exactly that, naming the lease
+   * and the deadline the next invocation has to beat, and exits 1. Distinct from exit 14, which
+   * means the daemon *ended* the lease while the connection was alive.
+   */
+  let connectionLost = false;
+  let notifyConnectionLost: (() => void) | undefined;
+  const connectionLostSignal = new Promise<void>((resolve) => {
+    notifyConnectionLost = resolve;
+  });
+  const offConnectionLost = client.onConnectionLost(() => {
+    connectionLost = true;
+    if (ourLeaseId !== undefined) {
+      environment.stderr.write(
+        `${JSON.stringify({
+          error: {
+            code: "DAEMON_CONNECTION_LOST",
+            message: `lost the daemon connection; lease ${ourLeaseId} is still yours until its ttlDeadline ${String(ourLeaseDeadline)} -- renew it with \`simlock lease renew ${ourLeaseId}\` or let it expire`,
+          },
+        })}\n`,
+      );
+    }
+    notifyConnectionLost?.();
+  });
   const offUnhealthy = client.onDeviceUnhealthy((push) => {
     environment.stderr.write(`${JSON.stringify({ push: "device-unhealthy", ...push })}\n`);
   });
@@ -755,19 +784,23 @@ async function runLease(
     environment.stderr.write(`${JSON.stringify({ push: "device-recovered", ...push })}\n`);
   });
   /**
-   * ADR 0004 §2/§3: the release a held holder owes when it stops holding -- an exit, parent
-   * death, a catchable signal, or a throw on the way to any of them. It runs from the `finally`
-   * below so no exit path can skip it (a broken `--export-env` key or an EPIPE on a closed pipe
-   * both throw between the grant and the wait), and it is the call that will still be here when
-   * the daemon stops releasing on connection close in PR B.
+   * ADR 0004 §2/§3: the release a holder owes when it stops holding -- an exit, parent death, a
+   * catchable signal, or a throw on the way to any of them. It runs from the `finally` below so
+   * no exit path can skip it (a broken `--export-env` key or an EPIPE on a closed pipe both
+   * throw between the grant and the wait), and it is now the *only* thing that frees the device
+   * before the deadline: the daemon releases nothing when this connection closes.
    *
-   * Set only for held mode, and cleared as it runs, so it happens exactly once and never for
-   * `--detach` (whose lease deliberately outlives this process) or for a lease the daemon has
-   * already ended (`leaseLost` -- asking again would only raise UNKNOWN_LEASE).
+   * Set only for a holder, and cleared as it runs, so it happens exactly once and never for
+   * `--detach` (whose lease deliberately outlives this process), for a lease the daemon has
+   * already ended (`leaseLost` -- asking again would only raise UNKNOWN_LEASE), or over a
+   * connection that is already gone (`connectionLost`).
    */
   let heldLeaseId: string | undefined;
   const releaseHeldLease = async (): Promise<void> => {
-    if (heldLeaseId === undefined || leaseLost) return;
+    // A dead connection can neither carry the release nor needs to: the lease outlives this
+    // process either way, and `client.releaseLease` would only reject `DAEMON_CONNECTION_LOST`
+    // a second time.
+    if (heldLeaseId === undefined || leaseLost || connectionLost) return;
     const leaseId = heldLeaseId;
     heldLeaseId = undefined;
     try {
@@ -791,7 +824,6 @@ async function runLease(
     const grant = await client.requestLease(
       {
         allowDownload: values["allow-download"] === true,
-        mode: detached ? "detached" : "held",
         noWait: values["no-wait"] === true,
         requesterId,
         model: values.device,
@@ -799,6 +831,7 @@ async function runLease(
         platform,
         ...(values.full === true ? { full: true } : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(ttlMs === undefined ? {} : { ttlMs }),
       },
       {
         onProgress: (progress) => {
@@ -807,21 +840,26 @@ async function runLease(
       },
     );
     ourLeaseId = grant.lease.id;
+    ourLeaseDeadline = grant.lease.ttlDeadline;
     // Owed from here on, whatever happens next -- see `releaseHeldLease`.
     if (!detached) heldLeaseId = grant.lease.id;
     // ADR §5: "simlock lease output includes the resolved role" -- the one field this CLI
     // adds on top of the contract's `LeaseGrant` shape, everything else passed through as-is.
     const result = { ...grant, role: client.role };
-    // Held mode still holds after this line, whichever shape it took: `--export-env` only
-    // changes what stdout carries, never how long the lease lives.
+    // A holder keeps holding after this line, whichever shape its output took: `--export-env`
+    // only changes what stdout carries, never how long the lease lives.
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult(environment, result);
     // `--detach` is the only invocation without a termination watch: it prints and exits,
     // with no timer and no release, exactly as it did before ADR 0004.
     if (termination === undefined) return 0;
-    // ADR 0004 §2: what a held holder does while alive is renew on a timer at a third of the
-    // TTL -- computed from the deadline the daemon just returned, not from a config value this
-    // process does not have.
+    // The connection can die between the grant and the wait below; the listener above has
+    // already written its line, so this only has to reach the same exit.
+    if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
+    // ADR 0004 §2: what a holder does while alive is renew on a timer at a third of the TTL --
+    // computed from the deadline the daemon just returned, not from a config value this process
+    // does not have. Each renew names no TTL of its own, so the daemon re-applies the lease's
+    // stored width and the deadline keeps moving out at its original width.
     renewal = startLeaseRenewal({
       clock: environment.clock,
       leaseId: grant.lease.id,
@@ -842,9 +880,14 @@ async function runLease(
         writeError(environment, error);
       },
     });
-    await Promise.race([termination.settled, leaseLostSignal]);
-    // The daemon already released a lost lease; `releaseHeldLease` skips it for that reason.
-    return leaseLost ? LEASE_LOST_EXIT_CODE : 0;
+    await Promise.race([termination.settled, leaseLostSignal, connectionLostSignal]);
+    // Three ways to get here, three answers: the daemon ended the lease (14, and
+    // `releaseHeldLease` skips a lease that is already gone), the connection died while the
+    // lease stood (1, nothing released), or this process was asked to stop (0, and it releases
+    // on the way out).
+    if (leaseLost) return LEASE_LOST_EXIT_CODE;
+    if (connectionLost) return ERROR_TABLE.DAEMON_CONNECTION_LOST.cliExitCode;
+    return 0;
   } finally {
     // Stopped before the release, always: a renew must never race the release of the lease it
     // is renewing, and no timer may outlive this command.
@@ -854,6 +897,7 @@ async function runLease(
     offLeaseLost();
     offUnhealthy();
     offRecovered();
+    offConnectionLost();
     await client.close();
   }
 }
@@ -1509,11 +1553,12 @@ function formatStatus(status: StatusGetOutput): string {
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
     return `Device ${device.id}: ${device.state}${suffix}`;
   });
-  const leaseLines = leases.map((lease) => {
-    const heartbeatSuffix =
-      lease.lastHeartbeatAt === undefined ? "" : `, last heartbeat ${lease.lastHeartbeatAt}`;
-    return `Lease ${lease.id}: ${lease.requesterId} since ${lease.grantedAt}${heartbeatSuffix}`;
-  });
+  // ADR 0004: `lastRenewedAt` is a stored field written at grant and on every renew, so unlike
+  // the derived `lastHeartbeatAt` it replaces, every lease has one to render.
+  const leaseLines = leases.map(
+    (lease) =>
+      `Lease ${lease.id}: ${lease.requesterId} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
+  );
   return [
     `Daemon: ${health}`,
     globalLine,
