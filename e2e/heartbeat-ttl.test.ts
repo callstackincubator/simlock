@@ -44,7 +44,7 @@ describe("sliding TTL and heartbeat", () => {
     );
   });
 
-  it("slides every heartbeat-capable held lease (MCP and CLI) past the backstop while a detached lease expires at it", async () => {
+  it("slides every held lease (MCP and CLI) past the backstop while a detached lease expires at it", async () => {
     const env = await withDaemon({
       // detachedTtlMs is pinned to the same value as heldTtlBackstopMs purely so the
       // detached lease's own (unrelated) TTL knob expires it on the timeline this
@@ -98,9 +98,10 @@ describe("sliding TTL and heartbeat", () => {
       ]);
       const detachedGrant = detachedResult.json as { lease: { id: string } };
 
-      // Both held leases -- MCP and CLI -- declare the heartbeat capability and
-      // slide their deadline on every ping; the detached lease holds no connection
-      // at all, never heartbeats, and expires exactly at its grant-time TTL.
+      // Both held holders -- MCP and CLI -- renew on their own timer at a third of the
+      // TTL (ADR 0004 §2), sliding their deadline well past the backstop; the detached
+      // lease has no holder process at all, renews never, and expires exactly at its
+      // grant-time TTL.
       await waitFor(
         async () => {
           const rows = await leaseRows(env);

@@ -101,7 +101,6 @@ export class FakeSimlockClient implements SimlockClient {
     return this.cancelLeaseImpl(input);
   }
 
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls lease.renew.
   renewLease(input: LeaseRenewInput): Promise<LeaseRecord> {
     this.calls.push({ input, method: "renewLease" });
     return this.renewLeaseImpl(input);

@@ -105,6 +105,38 @@ describe("connectSimlock: handshake", () => {
     expect(connection.sent).toHaveLength(1);
   });
 
+  it("declares no heartbeat capability by default, and starts no renew timer of its own (ADR 0004 §2/§4)", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    const hello = connection.lastSentOf("hello")!;
+    // The daemon-initiated heartbeat is what ADR 0004 §4 removes; a client that does not
+    // declare it is never pushed one, and keeps its leases alive with `lease.renew` instead.
+    expect((hello.payload as { capabilities?: { heartbeat?: boolean } }).capabilities).toEqual({
+      heartbeat: false,
+    });
+    completeHello(connection);
+    const client = await connectPromise;
+
+    // Renew policy stays a frontend's (ADR 0003 §10): connecting alone sends nothing further.
+    const sentAfterHello = connection.sent.length;
+    await flushMicrotasks();
+    expect(connection.sent).toHaveLength(sentAfterHello);
+    await client.close();
+  });
+
+  it("still declares the heartbeat capability when a caller explicitly asks for one", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection, heartbeat: true });
+    await flushMicrotasks();
+    const hello = connection.lastSentOf("hello")!;
+    expect((hello.payload as { capabilities?: { heartbeat?: boolean } }).capabilities).toEqual({
+      heartbeat: true,
+    });
+    completeHello(connection);
+    await (await connectPromise).close();
+  });
+
   it("a bad admin credential causes zero requests after hello, and closes the connection", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlockAdmin({ connection, credential: "wrong" });
