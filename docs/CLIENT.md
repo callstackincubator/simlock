@@ -78,6 +78,57 @@ and MCP's tool schemas now share. Nothing core-private
 (`DeviceRecord`/`LeaseRecord`-the-core-type) ever appears on this surface;
 see `src/simlock-client/no-core-leak.test.ts`.
 
+## Driving the leased device
+
+Two methods reach the device a lease names, and which one you want depends on
+one thing: whether this process is on the machine that owns it.
+
+```ts
+// Same machine: resolve the scoped command and run it yourself.
+const command = await client.resolvePassthrough({ tool: "adb", args: ["shell", "getprop"] });
+// -> { command: "/sdk/adb", args: ["-P", "5038", "shell", "getprop"], env: { ... } }
+
+// Somewhere else: run it on the daemon's machine and stream the output back.
+const { exitCode } = await client.execDevice(
+  { leaseId: grant.lease.id, tool: "adb", args: ["shell", "getprop"] },
+  { onOutput: ({ stream, chunk }) => process[stream].write(chunk) },
+);
+```
+
+`resolvePassthrough` only resolves: it hands back the command line the
+driver builds (the scoping flags for its own device root, `simctl --set` or
+`adb -P`), and running it is yours to do — which only works if the paths and
+the adb port it names exist where you are.
+
+`execDevice` runs it. The daemon resolves the same command through the same
+driver — the same scoping, and the same refusal list, so a verb the driver
+will not proxy comes back as `PASSTHROUGH_REFUSED` from either method — spawns
+it on its own machine, and streams the output to `onOutput` as it arrives.
+Each call gets `{ stream: "stdout" | "stderr", chunk }`; `chunk` is whatever
+the command wrote, decoded as UTF-8 and forwarded unsplit, so a caller that
+wants lines assembles them itself. Nothing is buffered daemon-side and there is
+no size cap. The promise resolves with the command's own `exitCode`.
+
+`leaseId` is an ownership proof and nothing more: the *device* is named by the
+command's own arguments, which the daemon does not parse. A lease this
+client's principal does not own is `FORBIDDEN`; an id that names no lease is
+`UNKNOWN_LEASE`.
+
+Three limits worth knowing:
+
+- **No pseudo-terminal.** Line-oriented commands work; full-screen and
+  interactive ones (a bare `adb shell`) do not.
+- **`stdin` is one shot.** The optional `stdin` string is written to the
+  command once and the pipe is then closed — not a channel you can write to
+  over time.
+- **`exec.timeoutMs`** (ten minutes by default) kills a command that outruns
+  it, and the call rejects with `EXEC_TIMEOUT` rather than reporting the exit
+  code the kill produced. Losing the connection does not kill the command;
+  it only ends the output you were receiving.
+
+Paths in `args` resolve on the daemon's filesystem, not yours. Getting an
+`.app` or an `.apk` there is out of scope for now.
+
 ## One connection, no reconnect, no retry
 
 This is the one thing to internalize before building anything on top of this

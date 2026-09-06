@@ -27,6 +27,7 @@ a warning. Inspect the effective, merged configuration at any time with
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
+| `exec.timeoutMs`                  | How long a single `device.exec` command (the remote half of `simlock simctl` / `simlock adb` — see [CLI.md](CLI.md#reaching-a-leased-device)) may run before Simlock kills it and fails the call with `EXEC_TIMEOUT`. Output is streamed, never buffered, so there is no size limit to go with it.                                | `10 minutes`                                                     |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of business events kept in the in-memory ring buffer (see `simlock events`).                                                                                                                                          | `1000`                                                           |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery.                                                                                                                                                                | `true`                                                           |
@@ -57,10 +58,10 @@ integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 `mode` must be exactly `"worker"` or `"gateway"`. `gateway.url` must be an
-absolute `ws`/`wss` URL — `http`/`https` are rejected — and `gateway.token` a
-non-empty
-string; **in `mode: "worker"`**, setting either without the other is rejected
-at load and the daemon does not start, because a half-configured uplink would
+absolute `ws`/`wss` URL — `http`/`https` are rejected — and `gateway.token`
+a non-empty string; **in `mode: "worker"`**, setting either without the other
+is rejected at load and the daemon does not start, because a half-configured
+uplink would
 otherwise come up looking like an ordinary standalone worker. That rule does
 not apply in `mode: "gateway"`, where both keys are worker-side and are
 warned about and ignored like every other worker key — a gateway is not
