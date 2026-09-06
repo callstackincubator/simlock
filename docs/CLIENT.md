@@ -78,7 +78,7 @@ and MCP's tool schemas now share. Nothing core-private
 (`DeviceRecord`/`LeaseRecord`-the-core-type) ever appears on this surface;
 see `src/simlock-client/no-core-leak.test.ts`.
 
-## Driving the leased device
+## Running a command on the leased device: `exec`
 
 Two methods reach the device a lease names, and which one you want depends on
 one thing: whether this process is on the machine that owns it.
@@ -89,7 +89,7 @@ const command = await client.resolvePassthrough({ tool: "adb", args: ["shell", "
 // -> { command: "/sdk/adb", args: ["-P", "5038", "shell", "getprop"], env: { ... } }
 
 // Somewhere else: run it on the daemon's machine and stream the output back.
-const { exitCode } = await client.execDevice(
+const { exitCode } = await client.exec(
   { leaseId: grant.lease.id, tool: "adb", args: ["shell", "getprop"] },
   { onOutput: ({ stream, chunk }) => process[stream].write(chunk) },
 );
@@ -100,9 +100,10 @@ driver builds (the scoping flags for its own device root, `simctl --set` or
 `adb -P`), and running it is yours to do — which only works if the paths and
 the adb port it names exist where you are.
 
-`execDevice` runs it. The daemon resolves the same command through the same
+`exec` runs it. The daemon resolves the same command through the same
 driver — the same scoping, and the same refusal list, so a verb the driver
-will not proxy comes back as `PASSTHROUGH_REFUSED` from either method — spawns
+will not proxy comes back as `PASSTHROUGH_REFUSED` from either method, and a
+`tool` no driver on that machine wraps as `UNKNOWN_PASSTHROUGH_TOOL` — spawns
 it on its own machine, and streams the output to `onOutput` as it arrives.
 Each call gets `{ stream: "stdout" | "stderr", chunk }`; `chunk` is whatever
 the command wrote, decoded as UTF-8 and forwarded unsplit, so a caller that

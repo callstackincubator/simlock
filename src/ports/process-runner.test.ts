@@ -7,6 +7,24 @@ import {
   ScriptedProcessRunner,
 } from "./index.js";
 
+/** Signal-0 liveness probe: asks the kernel whether the pid exists without signalling it. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function waitUntil(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for a process condition");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("ScriptedProcessRunner", () => {
   it("returns the scripted result for a matching invocation", async () => {
     const runner = new ScriptedProcessRunner([
@@ -99,6 +117,22 @@ describe("ScriptedProcessRunner: spawnStreaming", () => {
     await expect(handle.wait()).resolves.toEqual({ code: 4, signal: null });
   });
 
+  it("models a child that ignores SIGTERM, so only SIGKILL settles it", async () => {
+    const runner = new ScriptedProcessRunner([
+      { hangs: true, ignoresSigterm: true, match: { args: ["logcat"], command: "adb" } },
+    ]);
+    const handle = runner.spawnStreaming("adb", ["logcat"], { onChunk: () => {} });
+    let settled = false;
+    void handle.wait().then(() => (settled = true));
+
+    handle.kill("SIGTERM");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    handle.kill("SIGKILL");
+    await expect(handle.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  });
+
   it("records the invocation and settles a hanging command only when it is killed", async () => {
     const runner = new ScriptedProcessRunner([
       { hangs: true, match: { args: ["logcat"], command: "adb" } },
@@ -167,6 +201,40 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     const result = await handle.wait();
     expect(result.code).toBeNull();
     expect(exitCodeOf(result)).toBeGreaterThan(128);
+  });
+
+  it("kills the grandchildren too, because the signal goes to the process group", async () => {
+    // The reason `kill` signals `-pid` rather than the child: a tool that forks (an
+    // `adb`/`emulator` wrapper script, `simctl spawn`) leaves the work in a *grandchild*, and a
+    // timeout that reaped only the direct child would leave that running with nothing left to
+    // reap it. Verified against a real grandchild rather than asserted from the code: with the
+    // group kill removed, the grandchild below survives and this fails.
+    const runner = new NodeProcessRunner();
+    let stdout = "";
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      [
+        "-e",
+        // The parent prints the grandchild's pid, then both sit still. `detached` on the
+        // grandchild puts it in this group but out of the parent's own reach, which is the
+        // case that matters.
+        "const { spawn } = require('node:child_process');" +
+          "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });" +
+          "process.stdout.write(String(child.pid));" +
+          "setInterval(() => {}, 1000);",
+      ],
+      { onChunk: (_stream, chunk) => (stdout += chunk) },
+    );
+
+    await waitUntil(() => stdout !== "");
+    const grandchildPid = Number(stdout.trim());
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+
+    handle.kill("SIGKILL");
+    await handle.wait();
+    await waitUntil(() => !isAlive(grandchildPid));
+    expect(isAlive(grandchildPid)).toBe(false);
   });
 
   it("reports a spawn that never produced a process, like `spawn` does", async () => {

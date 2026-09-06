@@ -1,7 +1,7 @@
 import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 
-import { waitFor, withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
 
 /**
  * ADR 0005 §19a-§19e, end to end: a remote agent leases a device over HTTP and then drives it
@@ -10,10 +10,11 @@ import { waitFor, withDaemon } from "./helpers/index.js";
  * This is the flow the operation exists for. Every layer it crosses is exercised for real --
  * the token, the lease, the route, the dispatcher, the driver's own passthrough resolution,
  * and a genuine child process on the daemon side -- so what it proves that the unit suites
- * cannot is that the scoping, the streamed chunks and the exit code all survive the whole
- * trip. The fake driver's passthrough resolves to a node one-liner that prints its argv and
- * honours `--fake-exec-stderr=` / `--fake-exec-exit=`, which is how a command's second stream
- * and a non-zero exit are observable from the far end of an HTTP request.
+ * cannot is that the scoping, the streamed chunks, the exit code and the authorization all
+ * survive the whole trip. The fake driver's passthrough resolves to a node one-liner that
+ * prints its argv and honours `--fake-exec-stderr=`, `--fake-exec-exit=` and
+ * `--fake-exec-echo-stdin`, which is how a command's second stream, a non-zero exit and its
+ * stdin are observable from the far end of an HTTP request.
  */
 
 /** Same reservation dance as `http-api.test.ts`: config validation rejects `http.port: 0`. */
@@ -62,185 +63,228 @@ async function readSse(response: Response): Promise<SseFrame[]> {
   return frames;
 }
 
+interface Fleet {
+  readonly env: TestEnv;
+  readonly baseUrl: string;
+  token(role: "agent" | "operator"): Promise<Record<string, string>>;
+  lease(body: Record<string, unknown>, auth: Record<string, string>): Promise<string>;
+  exec(
+    leaseId: string,
+    body: Record<string, unknown>,
+    auth: Record<string, string>,
+  ): Promise<Response>;
+}
+
+/** One daemon with HTTP on, both fake platforms scripted, and the three calls every flow here
+ * makes. Factored out so each test reads as the thing it is proving rather than as setup. */
+async function fleet(): Promise<Fleet> {
+  const port = await reservePort();
+  const env = await withDaemon({
+    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+  });
+  await env.driverScript.set({
+    android: { knownModels: ["Pixel 8"], availableOsVersions: ["35"] },
+    ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+  });
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  await waitFor(
+    async () => {
+      try {
+        return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+      } catch {
+        return false;
+      }
+    },
+    { label: "HTTP gateway accepting connections" },
+  );
+
+  return {
+    baseUrl,
+    env,
+    async token(role) {
+      const created = await env.cli(["token", "create", "--role", role]);
+      expect(created.code).toBe(0);
+      return {
+        authorization: `Bearer ${(created.json as { secret: string }).secret}`,
+        "content-type": "application/json",
+      };
+    },
+    async lease(body, auth) {
+      const created = await fetch(`${baseUrl}/v1/lease-requests`, {
+        body: JSON.stringify(body),
+        headers: auth,
+        method: "POST",
+      });
+      expect(created.status).toBe(201);
+      const requestId = ((await created.json()) as { request: { id: string } }).request.id;
+      let leaseId = "";
+      await waitFor(
+        async () => {
+          const polled = await fetch(`${baseUrl}/v1/lease-requests/${requestId}?wait=10`, {
+            headers: auth,
+          });
+          const view = (await polled.json()) as {
+            request: { state: string; lease?: { id: string } };
+          };
+          leaseId = view.request.lease?.id ?? "";
+          return view.request.state === "granted";
+        },
+        { label: "the lease request is granted", timeout: 30_000 },
+      );
+      expect(leaseId).not.toBe("");
+      return leaseId;
+    },
+    async exec(leaseId, body, auth) {
+      return fetch(`${baseUrl}/v1/leases/${leaseId}/exec`, {
+        body: JSON.stringify(body),
+        headers: auth,
+        method: "POST",
+      });
+    },
+  };
+}
+
+function chunksOf(frames: readonly SseFrame[], stream: "stdout" | "stderr"): string {
+  return frames
+    .filter((frame) => frame.event === "output")
+    .map((frame) => frame.data as { stream: string; chunk: string })
+    .filter((chunk) => chunk.stream === stream)
+    .map((chunk) => chunk.chunk)
+    .join("");
+}
+
+async function errorCodeOf(response: Response): Promise<string> {
+  return ((await response.json()) as { error: { code: string } }).error.code;
+}
+
 describe("device.exec over HTTP", () => {
-  it("leases a device, runs a scoped command on the daemon, and streams its output and exit code", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-    });
-    await env.driverScript.set({
-      android: { knownModels: ["Pixel 8"], availableOsVersions: ["35"] },
-      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
-    });
-    const baseUrl = `http://127.0.0.1:${port}`;
+  it("runs the driver-scoped command on the daemon and streams both its output and its exit code", async () => {
+    const { env, exec, lease, token } = await fleet();
+    const auth = await token("agent");
+    const leaseId = await lease({ device: "iPhone 16", os: "18.4", platform: "ios" }, auth);
 
-    const tokenResult = await env.cli(["token", "create", "--role", "agent"]);
-    expect(tokenResult.code).toBe(0);
-    const agentAuth = {
-      authorization: `Bearer ${(tokenResult.json as { secret: string }).secret}`,
-    };
-    const jsonAuth = { ...agentAuth, "content-type": "application/json" };
-
-    await waitFor(
-      async () => {
-        try {
-          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
-        } catch {
-          return false;
-        }
-      },
-      { label: "HTTP gateway accepting connections" },
-    );
-
-    const created = await fetch(`${baseUrl}/v1/lease-requests`, {
-      body: JSON.stringify({ device: "iPhone 16", os: "18.4", platform: "ios" }),
-      headers: jsonAuth,
-      method: "POST",
-    });
-    expect(created.status).toBe(201);
-    const requestId = ((await created.json()) as { request: { id: string } }).request.id;
-
-    let lease: { id: string } | undefined;
-    await waitFor(
-      async () => {
-        const polled = await fetch(`${baseUrl}/v1/lease-requests/${requestId}?wait=10`, {
-          headers: agentAuth,
-        });
-        const body = (await polled.json()) as {
-          request: { state: string; lease?: { id: string } };
-        };
-        lease = body.request.lease;
-        return body.request.state === "granted";
-      },
-      { label: "the lease request is granted", timeout: 30_000 },
-    );
-    const leaseId = lease?.id ?? "";
-
-    // The command itself: `simctl list devices`, plus the two flags that make the fake tool
-    // write to stderr and exit non-zero.
-    const exec = await fetch(`${baseUrl}/v1/leases/${leaseId}/exec`, {
-      body: JSON.stringify({
+    const response = await exec(
+      leaseId,
+      {
         args: ["list", "devices", "--fake-exec-stderr=a warning", "--fake-exec-exit=3"],
         tool: "simctl",
-      }),
-      headers: jsonAuth,
-      method: "POST",
-    });
-    expect(exec.status).toBe(200);
-    expect(exec.headers.get("content-type")).toContain("text/event-stream");
+      },
+      auth,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
 
-    const frames = await readSse(exec);
+    const frames = await readSse(response);
     expect(frames.at(-1)).toEqual({ data: { exitCode: 3 }, event: "exit" });
-
-    const output = frames.filter((frame) => frame.event === "output");
-    const stdout = output
-      .filter((frame) => (frame.data as { stream: string }).stream === "stdout")
-      .map((frame) => (frame.data as { chunk: string }).chunk)
-      .join("");
-    const stderr = output
-      .filter((frame) => (frame.data as { stream: string }).stream === "stderr")
-      .map((frame) => (frame.data as { chunk: string }).chunk)
-      .join("");
-
     // The daemon ran the command the *driver* resolved, not the one the client sent: the
     // device root is prepended and the driver's environment reached the child's own process.
-    expect(JSON.parse(stdout)).toEqual({
+    expect(JSON.parse(chunksOf(frames, "stdout"))).toEqual({
       argv: ["/fake/ios", "list", "devices", "--fake-exec-stderr=a warning", "--fake-exec-exit=3"],
       platform: "ios",
     });
-    expect(stderr).toBe("a warning");
+    expect(chunksOf(frames, "stderr")).toBe("a warning");
 
-    // A verb the driver refuses is refused here too, and nothing is spawned for it: the exec
-    // route is not a way around the passthrough refusal list.
-    const refused = await fetch(`${baseUrl}/v1/leases/${leaseId}/exec`, {
-      body: JSON.stringify({ args: ["delete", "ABCD"], tool: "simctl" }),
-      headers: jsonAuth,
-      method: "POST",
-    });
-    expect(refused.status).toBe(422);
-    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
-      "PASSTHROUGH_REFUSED",
+    // `stdin` travels with the request, is written once, and the pipe is then closed -- so a
+    // command that reads it sees exactly this and then EOF.
+    const echoed = await exec(
+      leaseId,
+      { args: ["list", "--fake-exec-echo-stdin"], stdin: "piped payload", tool: "simctl" },
+      auth,
     );
+    expect(echoed.status).toBe(200);
+    const echoedFrames = await readSse(echoed);
+    expect(echoedFrames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+    expect(JSON.parse(chunksOf(echoedFrames, "stdout"))).toMatchObject({ stdin: "piped payload" });
 
-    // The daemon tells the driver there is no terminal on this path, and the driver refuses
-    // what needs one -- an interactive shell that would otherwise sit on a pipe until
-    // `exec.timeoutMs`. Android's rule; the fake driver mirrors it for the same platform.
-    const androidToken = await env.cli(["token", "create", "--role", "agent"]);
-    expect(androidToken.code).toBe(0);
-    const androidAuth = {
-      authorization: `Bearer ${(androidToken.json as { secret: string }).secret}`,
-      "content-type": "application/json",
-    };
-    const androidCreated = await fetch(`${baseUrl}/v1/lease-requests`, {
-      body: JSON.stringify({ device: "Pixel 8", platform: "android" }),
-      headers: androidAuth,
-      method: "POST",
-    });
-    expect(androidCreated.status).toBe(201);
-    const androidRequestId = ((await androidCreated.json()) as { request: { id: string } }).request
-      .id;
-    let androidLease: { id: string } | undefined;
-    await waitFor(
-      async () => {
-        const polled = await fetch(`${baseUrl}/v1/lease-requests/${androidRequestId}?wait=10`, {
-          headers: androidAuth,
-        });
-        const body = (await polled.json()) as {
-          request: { state: string; lease?: { id: string } };
-        };
-        androidLease = body.request.lease;
-        return body.request.state === "granted";
-      },
-      { label: "the android lease request is granted", timeout: 30_000 },
-    );
+    await env.cli(["release", leaseId]);
+  });
 
-    const bareShell = await fetch(`${baseUrl}/v1/leases/${androidLease?.id ?? ""}/exec`, {
-      body: JSON.stringify({ args: ["shell"], tool: "adb" }),
-      headers: androidAuth,
-      method: "POST",
-    });
+  it("refuses through the driver's own list, and never runs what it refuses", async () => {
+    const { env, exec, lease, token } = await fleet();
+    const auth = await token("agent");
+    const leaseId = await lease({ device: "Pixel 8", platform: "android" }, auth);
+
+    // A verb the driver will not proxy is `PASSTHROUGH_REFUSED` here exactly as it is for the
+    // local wrapper: the exec route is not a way around the refusal list.
+    const refusedVerb = await exec(leaseId, { args: ["kill-server"], tool: "adb" }, auth);
+    expect(refusedVerb.status).toBe(422);
+    expect(await errorCodeOf(refusedVerb)).toBe("PASSTHROUGH_REFUSED");
+
+    // The one refusal particular to this path: an interactive shell with no terminal to attach
+    // it to, refused rather than left to stall until `exec.timeoutMs`.
+    const bareShell = await exec(leaseId, { args: ["shell"], tool: "adb" }, auth);
     expect(bareShell.status).toBe(422);
-    expect(((await bareShell.json()) as { error: { code: string } }).error.code).toBe(
-      "PASSTHROUGH_REFUSED",
-    );
+    expect(await errorCodeOf(bareShell)).toBe("PASSTHROUGH_REFUSED");
 
     // The same command with something to run is not the interactive shell, and goes through.
-    const shellWithCommand = await fetch(`${baseUrl}/v1/leases/${androidLease?.id ?? ""}/exec`, {
-      body: JSON.stringify({ args: ["shell", "getprop"], tool: "adb" }),
-      headers: androidAuth,
-      method: "POST",
-    });
+    const shellWithCommand = await exec(leaseId, { args: ["shell", "getprop"], tool: "adb" }, auth);
     expect(shellWithCommand.status).toBe(200);
     expect((await readSse(shellWithCommand)).at(-1)).toEqual({
       data: { exitCode: 0 },
       event: "exit",
     });
-    await env.cli(["release", androidLease?.id ?? ""]);
 
-    // A lease this token does not own is refused before anything runs -- ownership is the
-    // dispatcher's own hook, not something this route re-implements.
-    const otherToken = await env.cli(["token", "create", "--role", "agent"]);
-    const otherExec = await fetch(`${baseUrl}/v1/leases/${leaseId}/exec`, {
-      body: JSON.stringify({ args: ["list"], tool: "simctl" }),
-      headers: {
-        authorization: `Bearer ${(otherToken.json as { secret: string }).secret}`,
-        "content-type": "application/json",
-      },
-      method: "POST",
-    });
-    expect(otherExec.status).toBe(403);
-    expect(((await otherExec.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    // A tool no driver on this machine wraps is a request this host cannot serve, not a
+    // malformed one.
+    const unwrapped = await exec(leaseId, { args: [], tool: "bash" }, auth);
+    expect(unwrapped.status).toBe(422);
+    expect(await errorCodeOf(unwrapped)).toBe("UNKNOWN_PASSTHROUGH_TOOL");
 
-    // An id that names no lease answers 404 rather than running anything.
-    const unknown = await fetch(`${baseUrl}/v1/leases/lse_nope/exec`, {
-      body: JSON.stringify({ args: ["list"], tool: "simctl" }),
-      headers: jsonAuth,
-      method: "POST",
-    });
-    expect(unknown.status).toBe(404);
-    expect(((await unknown.json()) as { error: { code: string } }).error.code).toBe(
-      "UNKNOWN_LEASE",
+    await env.cli(["release", leaseId]);
+  });
+
+  it("checks ownership per role: an agent's own lease, and an operator that must name its holder", async () => {
+    // ADR 0005 §19a': an agent is gated the ordinary way and may not name a requester at all;
+    // an operator does *not* get the usual bypass on this operation and must name the one the
+    // lease was granted to.
+    const { env, exec, lease, token } = await fleet();
+    const auth = await token("agent");
+    const otherAuth = await token("agent");
+    const operatorAuth = await token("operator");
+    const leaseId = await lease({ device: "iPhone 16", os: "18.4", platform: "ios" }, auth);
+
+    const unknownLease = await exec("lse_nope", { args: ["list"], tool: "simctl" }, auth);
+    expect(unknownLease.status).toBe(404);
+    expect(await errorCodeOf(unknownLease)).toBe("UNKNOWN_LEASE");
+
+    const someoneElses = await exec(leaseId, { args: ["list"], tool: "simctl" }, otherAuth);
+    expect(someoneElses.status).toBe(403);
+    expect(await errorCodeOf(someoneElses)).toBe("FORBIDDEN");
+
+    // An agent that names *any* requester is refused outright: identity here is the token's,
+    // and answering as if the field had not been sent would read like it was honoured.
+    const agentNaming = await exec(
+      leaseId,
+      { args: ["list"], requesterId: "someone", tool: "simctl" },
+      auth,
     );
+    expect(agentNaming.status).toBe(403);
+
+    const leases = (await env.cli(["list", "--leases"])).json as readonly {
+      id: string;
+      requesterId: string;
+    }[];
+    const holder = leases.find((lease) => lease.id === leaseId)?.requesterId ?? "";
+    expect(holder).not.toBe("");
+
+    const operatorWithout = await exec(leaseId, { args: ["list"], tool: "simctl" }, operatorAuth);
+    expect(operatorWithout.status).toBe(403);
+
+    const operatorWrong = await exec(
+      leaseId,
+      { args: ["list"], requesterId: "not-the-holder", tool: "simctl" },
+      operatorAuth,
+    );
+    expect(operatorWrong.status).toBe(403);
+
+    const operatorRight = await exec(
+      leaseId,
+      { args: ["list"], requesterId: holder, tool: "simctl" },
+      operatorAuth,
+    );
+    expect(operatorRight.status).toBe(200);
+    expect((await readSse(operatorRight)).at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
 
     await env.cli(["release", leaseId]);
   });

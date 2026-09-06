@@ -475,6 +475,11 @@ Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
 - `emu avd snapshot delete` — it destroys the clean-boot snapshot Simlock
   restores from, turning every later reclaim of that device from a snapshot
   load into a full wipe.
+- `-P`, `--server-port`, `-L`, and `-H`, in any spelling — `simlock adb`
+  supplies the server itself, and `adb` takes the *last* one on the line, so a
+  caller-supplied one would silently win and point the command at a server
+  that cannot see Simlock's devices (or at one Simlock must not touch). Run
+  `adb` directly if you mean to leave Simlock's server.
 
 Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
 instead. As with `simlock simctl`, against a gateway the command runs on the

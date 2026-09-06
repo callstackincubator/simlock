@@ -133,14 +133,25 @@ const PASSTHROUGH_PROGRAM =
   "};" +
   "const stderrText = flag('--fake-exec-stderr');" +
   "if (stderrText !== undefined) process.stderr.write(stderrText);" +
-  "process.stdout.write(JSON.stringify({" +
+  // `device.exec`'s `stdin` is a one-shot string written to the process and then closed, which
+  // is only observable from the far end if the tool reads it back out. Opt-in, so every other
+  // flow's command still exits without waiting on a stdin nobody wrote to.
+  "const echoStdin = argv.includes('--fake-exec-echo-stdin');" +
+  "const report = (stdin) => process.stdout.write(JSON.stringify({" +
   "argv," +
-  // Echoed back so a flow can prove the driver-built environment reached the tool's own
-  // process, not merely that the daemon returned it in the resolved command. That is the
-  // half of ADR 0001 decision 7 the wrapper exists for: handing back the scoping that
-  // containment removed.
   "platform: process.env.SIMLOCK_FAKE_PASSTHROUGH_PLATFORM ?? null," +
+  "...(stdin === undefined ? {} : { stdin })," +
   "}));" +
+  "if (echoStdin) {" +
+  "let buffered = '';" +
+  "process.stdin.setEncoding('utf8');" +
+  "process.stdin.on('data', (chunk) => { buffered += chunk; });" +
+  "process.stdin.on('end', () => report(buffered));" +
+  // `report` echoes `platform` back so a flow can prove the driver-built environment reached
+  // the tool's own process, not merely that the daemon returned it in the resolved command --
+  // the half of ADR 0001 decision 7 the wrapper exists for: handing back the scoping that
+  // containment removed.
+  "} else report(undefined);" +
   // `exitCode` rather than `exit()`: over a pipe (which is how `device.exec` reads it, unlike
   // the CLI's inherited stdio) an immediate `exit()` can truncate a write that has not
   // flushed. Setting the code lets the process end once its streams have drained.

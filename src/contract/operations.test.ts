@@ -228,10 +228,14 @@ describe("operation input/output round trips", () => {
       OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "simctl" }),
     ).toEqual({ args: [], leaseId: "lse_1", tool: "simctl" });
 
-    // The tool is a closed set, unlike `driver.passthrough`'s open string: this operation
-    // spawns what it resolves.
-    expect(() =>
+    // `tool` is an open string, exactly as `driver.passthrough`'s is: which wrappers exist is
+    // the drivers' answer, so a name none of them wraps parses fine here and comes back as
+    // `UNKNOWN_PASSTHROUGH_TOOL` from the driver catalog rather than as a malformed body.
+    expect(
       OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "bash" }),
+    ).toEqual({ args: [], leaseId: "lse_1", tool: "bash" });
+    expect(() =>
+      OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "" }),
     ).toThrow();
     expect(() =>
       OPERATIONS["device.exec"].input.parse({

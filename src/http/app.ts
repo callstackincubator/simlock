@@ -19,6 +19,7 @@ import {
   unknownRequest,
 } from "./errors.js";
 import { LeaseNoticeBuffer } from "./notices.js";
+import { OutputRelay } from "./output-relay.js";
 import { pipeSse } from "./sse.js";
 import type { TokenIdentity } from "./token-store.js";
 import {
@@ -77,20 +78,28 @@ const leaseRequestBodySchema = z.object({
  * how every other route in this file states its body -- and because omitting `leaseId` from a
  * `.strict()` operation schema is not something `z.omit` can express without also dropping the
  * strictness that makes a typo an error.
+ *
+ * `tool` is a plain string, matching the operation: a name no driver on this machine wraps is
+ * `UNKNOWN_PASSTHROUGH_TOOL` (422) from the driver catalog, not a malformed body -- `400` here
+ * means the body's *shape* is wrong, nothing more.
+ *
+ * `stdin` and `requesterId` accept `null` as well as an omitted key, and normalize it to
+ * omitted: the documented example sends `"stdin": null, "requesterId": null` to show the
+ * fields exist, and a serializer that writes every optional field as `null` should not be a
+ * `400`.
  */
-const execBodySchema = z.object({
-  tool: z.enum(["simctl", "adb"]),
-  args: z.array(z.string()),
-  stdin: z.string().optional(),
-  /**
-   * Honoured only for an `operator` token (which resolves to the `admin` session role, where
-   * the operation reads it); an `agent` token's is dropped before dispatch rather than sent
-   * on to be ignored, so the one identity an agent request can ever act under is its own
-   * token's -- the same rule that already makes requester identity non-client-declared over
-   * HTTP (see "Authentication" in docs/HTTP-API.md).
-   */
-  requesterId: z.string().optional(),
-});
+const execBodySchema = z
+  .object({
+    tool: z.string().min(1),
+    args: z.array(z.string()),
+    stdin: z.string().nullish().transform(nullToUndefined),
+    requesterId: z.string().nullish().transform(nullToUndefined),
+  })
+  .strict();
+
+function nullToUndefined<Value>(value: Value | null | undefined): Value | undefined {
+  return value ?? undefined;
+}
 
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
   return {
@@ -125,13 +134,6 @@ function requireTtlWithinCap(ttlMs: number | undefined, config: Config): void {
       `ttlMs ${String(ttlMs)} exceeds lease.maxTtlMs (${String(config.lease.maxTtlMs)})`,
     );
   }
-}
-
-/** One SSE `output` event's payload -- `device.exec`'s push shape minus the frame id, which
- * an HTTP response does not need (the response *is* the correlation). */
-interface OutputChunk {
-  readonly stream: "stdout" | "stderr";
-  readonly chunk: string;
 }
 
 /** The gateway-owned subscriptions `createHttpApp` starts, attached to the returned app so a caller can dispose them on shutdown without this module exposing the tracker/notices instances themselves. */
@@ -373,39 +375,35 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       const identity = c.get("identity");
       const leaseId = c.req.param("id");
       const { requesterId, ...body } = c.req.valid("json");
-      const proxiedRequester = identity.role === "operator" ? requesterId : undefined;
+      // Requester identity is the token's over HTTP, never the body's -- except for an
+      // `operator` token, which is the proxying case `device.exec` reads it for. An agent
+      // token that supplies one at all is refused rather than quietly ignored: a request that
+      // names an identity and is answered as if it had not is the kind of silence that reads
+      // like authorization.
+      if (requesterId !== undefined && identity.role !== "operator") {
+        throw forbidden("requesterId may only be supplied by an operator token");
+      }
 
       // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
-      // route mutates a device, so it answers `device.exec`'s own `ownsLease` hook -- 403 for
+      // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for
       // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
       // a `lease.list` filter would produce (see `findOwnedLease`'s comment).
-      let deliver: ((chunk: OutputChunk) => void) | undefined;
-      // Holds only what the command wrote between its first byte and this route deciding it has
-      // a stream to write to -- one turn of the event loop, not the command's output. Once
-      // `deliver` is set every later chunk goes straight to the wire (ADR 0005 §19e).
-      const buffered: OutputChunk[] = [];
-      let onFirstChunk!: () => void;
-      const firstChunk = new Promise<void>((resolve) => {
-        onFirstChunk = resolve;
+      // Where a chunk goes at each stage of this request's life, including after the client
+      // disconnects -- see `OutputRelay`, which is where the "retain nothing then" rule lives
+      // and is tested.
+      const relay = new OutputRelay();
+      let onStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        onStarted = resolve;
       });
 
       const settled = deps
         .dispatch(
           "device.exec",
-          {
-            leaseId,
-            ...body,
-            ...(proxiedRequester === undefined ? {} : { requesterId: proxiedRequester }),
-          },
+          { leaseId, ...body, ...(requesterId === undefined ? {} : { requesterId }) },
           buildHttpSession(identity, {
-            onOutput: (stream, chunk) => {
-              if (deliver !== undefined) {
-                deliver({ chunk, stream });
-                return;
-              }
-              buffered.push({ chunk, stream });
-              onFirstChunk();
-            },
+            onStarted: () => onStarted(),
+            onOutput: (stream, chunk) => relay.push({ chunk, stream }),
           }),
         )
         .then(
@@ -413,19 +411,19 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
           (error: unknown) => ({ error, kind: "failed" }) as const,
         );
 
-      // The one thing an SSE response cannot do is take back its status code, so the failures
-      // that land *before* any output -- an unowned lease, an unknown one, a refused verb, a
-      // daemon still starting -- are raced here and answered as ordinary JSON errors with their
-      // own status. Once a byte has been written the stream is committed, and a later failure
-      // (an `EXEC_TIMEOUT`, say) travels as a terminal `error` event instead.
-      const outcome = await Promise.race([settled, firstChunk.then(() => undefined)]);
+      // An SSE response cannot take back its status code, so the decision point is the moment
+      // the process exists: every failure that can precede one -- an unowned lease, an unknown
+      // one, a refused verb, an unknown tool, a daemon still starting -- lands before
+      // `onStarted` and is answered as an ordinary JSON error with its own status. After it,
+      // the stream is committed, which is what gets a silent long-running command its `200`
+      // and its keepalives immediately, and what makes `EXEC_TIMEOUT` always arrive as the
+      // stream's terminal `error` event (ADR 0005 §19e).
+      const outcome = await Promise.race([settled, started.then(() => undefined)]);
       if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
 
       return pipeSse(c, deps.clock, {
         subscribe(send, end) {
-          for (const chunk of buffered) send({ data: chunk, event: "output" });
-          buffered.length = 0;
-          deliver = (chunk) => send({ data: chunk, event: "output" });
+          relay.attach((chunk) => send({ data: chunk, event: "output" }));
           void settled.then((result) => {
             if (result.kind === "exited") {
               send({ data: { exitCode: result.exitCode }, event: "exit" });
@@ -438,13 +436,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
             }
             end();
           });
-          return () => {
-            // The command keeps running after a client disconnects (ADR 0004 §3's reasoning,
-            // applied to a process instead of a lease: a half-applied `simctl install` killed
-            // by a dropped tunnel is worse than one nobody watched finish). This only stops
-            // writing its output; `exec.timeoutMs` still bounds it.
-            deliver = undefined;
-          };
+          // The command keeps running after a client disconnects; what ends here is this
+          // route's interest in its output, terminally.
+          return () => relay.drop();
         },
       });
     },

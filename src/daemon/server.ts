@@ -1081,8 +1081,20 @@ export class DaemonServer {
     }
   }
 
-  /** ADR 0005 §19a: `output` carries the originating request's frame id, exactly as `progress`
-   * does, so a connection running more than one command routes each chunk to its own call. */
+  /**
+   * ADR 0005 §19a: `output` carries the originating request's frame id, exactly as `progress`
+   * does, so a connection running more than one command routes each chunk to its own call.
+   *
+   * Known gap, inherited rather than introduced here: `writeFrame` does not observe socket
+   * backpressure -- it hands the frame to the socket and the returned promise is not awaited by
+   * the caller (see `#execDevice`'s `void this.#pushOutput(...)`, and `#pushProgress` and
+   * `#pushEvent` before it). A client that reads slower than a command writes therefore grows
+   * the *kernel's* send buffer and Node's own write queue rather than being slowed down. It
+   * matters more here than for `progress` -- a `logcat` can outrun a reader indefinitely where
+   * a progress push cannot -- but it is one property of one push helper for every family, so
+   * fixing it belongs with the framing rather than with this operation, and `exec.timeoutMs`
+   * bounds the exposure in the meantime.
+   */
   async #pushOutput(
     socket: IpcConnection,
     requestId: RequestId,

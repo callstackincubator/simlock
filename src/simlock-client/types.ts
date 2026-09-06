@@ -37,10 +37,10 @@ export type DoctorReport = OpOutput<"doctor.run">;
 export type DriverPassthroughInput = OpInput<"driver.passthrough">;
 /** The scoped command `simlock simctl` / `simlock adb` runs; see `passthroughCommandSchema`. */
 export type PassthroughCommand = OpOutput<"driver.passthrough">;
-export type DeviceExecInput = OpInput<"device.exec">;
+export type ExecInput = OpInput<"device.exec">;
 /** `{ exitCode }` -- the output itself arrived as `onOutput` chunks while the command ran
  * (ADR 0005 §19a). */
-export type DeviceExecOutput = OpOutput<"device.exec">;
+export type ExecOutput = OpOutput<"device.exec">;
 
 // ---- admin-only operations ------------------------------------------------------------------
 
@@ -104,10 +104,10 @@ export interface DeviceRecoveredPush {
 
 // ---- connect options --------------------------------------------------------------------------
 
-/** ADR 0005 §19a: `onOutput` is to `execDevice` what `onProgress` is to `requestLease` -- the
- * live half of one call, delivered while it is still in flight. A caller that omits it still
- * gets the exit code; the output is simply not observed. */
-export interface ExecDeviceOptions {
+/** ADR 0005 §19a: `onOutput` is to `exec` what `onProgress` is to `requestLease` -- the live
+ * half of one call, delivered while it is still in flight. A caller that omits it still gets
+ * the exit code; the output is simply not observed. */
+export interface ExecOptions {
   readonly onOutput?: (chunk: DeviceOutputChunk) => void;
 }
 
