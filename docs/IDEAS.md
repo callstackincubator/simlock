@@ -81,10 +81,55 @@ small addition, and the daemon-side `component.install-started` bus event
 already gives an operator visibility via `simlock events --follow` even
 though the waiting requester itself does not see it yet.
 
-## Cross-machine coordination
+## Gateway-side file upload for `device.exec`
 
-A fleet-level broker over multiple hosts. Explicitly out of scope for v1
-(single host only).
+`device.exec` runs a `simctl`/`adb` command on the machine that owns the
+device, so a path in its arguments (`simctl install <path>`, `adb install
+<apk>`) resolves on *that* filesystem. Getting an artifact there is out of
+band in v1 — a shared volume, a CI checkout on the worker. The designed shape
+for closing this is `device.upload`: chunks streamed as request-scoped pushes
+over the same wire `device.exec` already uses, into a per-lease scratch
+directory deleted on release. [ADR
+0005](adr/0005-gateway-and-worker-modes.md) leaves that seam open on purpose
+and does not build it; a remote agent that has to install a build it just
+produced is the case that will decide when it is worth it.
+
+## Capacity slices reserved for the gateway
+
+A worker's capacity is shared between its local agents and the fleet, with
+the worker's own accounting as the single arbiter (ADR 0005 §12). A worker
+could instead reserve a slice for gateway traffic, so a busy local developer
+cannot starve the fleet. Deferred: it adds a worker-side concept for a
+problem the worker views already make *visible*, and an operator who sees one
+machine's local load can drain it instead.
+
+## Fan-out `doctor` / `cleanup` across a fleet
+
+`nuke.run`, `cleanup.run`, and `doctor.run` stay per-worker in v1 and answer
+`UNSUPPORTED_IN_GATEWAY_MODE` on a gateway. A gateway could fan the read-only
+half out to every worker and merge the findings, which is exactly what a
+multi-worker console wants to render. Deferred, and the destructive half
+(`--fix`, `cleanup`, `nuke`) deliberately more so: a fleet-wide destructive
+command from one endpoint is not something v1 should offer.
+
+## Richer routing: label selectors and requester affinity
+
+The v1 routing policy is warm hit, then most free capacity, and nothing else
+— no requester affinity, no label selectors, no per-worker platform
+exclusions (`label` is display-only). Each is a future policy behind
+`gateway.routing`, which is a pure function over worker views with one entry
+point, so adding one is a new module rather than a change to the request
+shape. Affinity ("give this agent the machine its build cache is on") is the
+one with the clearest payoff; selectors ("only the M4 Macs") the one most
+likely to be asked for first.
+
+## A byte-heavy data plane
+
+Device *commands* travel through the gateway (`device.exec`); live screen
+streaming, port forwarding, and interactive TTYs do not, and `dataPlane` on
+the lease object stays reserved for them. They need sustained throughput and
+a session, not a request/response with output pushes, which is a different
+transport decision from the one ADR 0005 makes.
 
 ## Priorities / preemption
 
