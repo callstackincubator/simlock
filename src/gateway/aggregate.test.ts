@@ -48,7 +48,7 @@ describe("aggregateStatus", () => {
     // The contract is the arbiter: a gateway's answer parses as `status.get`'s output or it is
     // not the same shape.
     expect(() => OPERATIONS["status.get"].output.parse(status)).not.toThrow();
-    expect(status.mode).toBe("gateway");
+    expect(status.daemon.mode).toBe("gateway");
     expect(status.workers).toEqual([]);
   });
 
@@ -138,7 +138,7 @@ describe("aggregateStatus", () => {
       queueDepth: 0,
     });
 
-    expect(status).toMatchObject({ health: "starting", queueDepth: 0 });
+    expect(status).toMatchObject({ daemon: { health: "starting" }, queueDepth: 0 });
     expect(status.workers?.[0]).toMatchObject({ health: "failed", queueDepth: 7 });
   });
 });
