@@ -280,7 +280,7 @@ describe("pushes", () => {
     const client = await connectPromise;
 
     const onOutput = vi.fn();
-    const execPromise = client.execDevice(
+    const execPromise = client.exec(
       { args: ["list", "devices"], leaseId: "lease_1", tool: "simctl" },
       { onOutput },
     );

@@ -973,10 +973,11 @@ describe("Dispatcher: device.exec", () => {
     expect(runner.calls).toEqual([]);
   });
 
-  it("rejects a tool outside the contract's closed set before touching a driver", async () => {
-    const { dispatcher, leaseId } = await withLease({
-      processRunner: new ScriptedProcessRunner([]),
-    });
+  it("answers a tool no driver wraps with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST", async () => {
+    // Which wrappers exist is the drivers' answer, so `bash` is a well-formed request this
+    // host cannot serve -- the same distinction, and the same code, `driver.passthrough` draws.
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
 
     await expect(
       dispatcher.dispatch(
@@ -984,7 +985,62 @@ describe("Dispatcher: device.exec", () => {
         { args: [], leaseId, tool: "bash" },
         session({ principal: "tok_agent" }),
       ),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    ).rejects.toThrow(/No driver provides a bash passthrough/);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("escalates to SIGKILL when a timed-out command ignores SIGTERM", async () => {
+    // SIGTERM is a request. A tool that ignores it (or is itself stuck) must not be able to
+    // hold the operation -- and the caller's connection -- open past the grace window.
+    const runner = new ScriptedProcessRunner([
+      { hangs: true, ignoresSigterm: true, match: command },
+    ]);
+    const { clock, dispatcher, leaseId } = await withLease({
+      exec: { timeoutMs: 1_000 },
+      processRunner: runner,
+    });
+
+    const pending = dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    await flush();
+    let settled = false;
+    void pending.catch(() => (settled = true));
+
+    // The timeout fires and SIGTERM lands; the command ignores it and the operation is still
+    // in flight, which is the state the escalation exists for.
+    clock.advance(1_000);
+    await flush();
+    expect(settled).toBe(false);
+
+    clock.advance(10_000);
+    await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+  });
+
+  it("does not call a command that finished a timeout, even when the timer fires in the same turn", async () => {
+    // The timer and the exit can land in the same turn of the loop. A flag set by whichever
+    // callback ran last would blame the limit for a command that met it, so the two are raced:
+    // whichever actually settled first is the answer.
+    const runner = new ScriptedProcessRunner([
+      { match: command, result: { code: 0, stderr: "", stdout: "" } },
+    ]);
+    const { clock, dispatcher, leaseId } = await withLease({
+      exec: { timeoutMs: 1_000 },
+      processRunner: runner,
+    });
+
+    const pending = dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    // No `flush()`: the command has already exited (the scripted handle settles on spawn) but
+    // nothing has observed it yet when the clock jumps past the timeout.
+    clock.advance(60_000);
+
+    await expect(pending).resolves.toEqual({ exitCode: 0 });
   });
 });
 

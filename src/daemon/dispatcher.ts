@@ -70,6 +70,16 @@ export interface DispatchSession {
    * the same reason: both are request-scoped pushes, and the dispatcher stays out of framing.
    */
   readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
+  /**
+   * Called once, for a `device.exec` call, the moment its process is running -- after every
+   * failure that can happen *before* one exists (a refused verb, an unknown tool, an unowned
+   * lease, a daemon still starting) and before any output. A transport that has to commit to
+   * a response shape uses it as the decision point: HTTP opens its event stream here, so a
+   * command that prints nothing for nine minutes still gets its `200` and its keepalives, and
+   * an `EXEC_TIMEOUT` always arrives as that stream's terminal event rather than as a status
+   * code the client cannot receive any more (ADR 0005 §19e).
+   */
+  readonly onStarted?: () => void;
   /** `events.subscribe`/`events.unsubscribe` stay push-shaped (ADR §2: "pushes" stay with the
    * transport), so the dispatcher's handler for them does nothing but call this: `true` to
    * (re)subscribe, returning the new subscription id; `false` to tear an existing one down. */
@@ -83,6 +93,10 @@ export interface DispatchSession {
  * `NodeProcessRunner`'s `SIGTERM_TO_SIGKILL_GRACE_MS`.
  */
 const EXEC_SIGKILL_GRACE_MS = 10_000;
+
+/** The `Promise.race` marker for "the timeout won". A unique object rather than a string, so
+ * it can never collide with something a `StreamingProcessHandle` could resolve with. */
+const EXEC_EXPIRED = Symbol("exec-expired");
 
 /** Thrown for a role/ownership rejection or a malformed request; `DaemonServer` maps this the
  * same way it already maps its own protocol errors (see `errorCode` in `server.ts`). */
@@ -490,6 +504,9 @@ export class Dispatcher {
       onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
       ...(input.stdin === undefined ? {} : { input: input.stdin }),
     });
+    // Announced before the first chunk can arrive, because "it started" is what a transport
+    // needs to decide its response shape on -- see `DispatchSession.onStarted`.
+    session.onStarted?.();
     return { exitCode: await this.#awaitExec(handle, input.tool, input.args) };
   };
 
@@ -507,29 +524,36 @@ export class Dispatcher {
     args: readonly string[],
   ): Promise<number> {
     const timeoutMs = this.options.config.exec.timeoutMs;
-    let timedOut = false;
-    const escalate = () => {
-      timedOut = true;
+    const waited = handle.wait();
+    let timer: TimerHandle | undefined;
+    const expired = new Promise<typeof EXEC_EXPIRED>((resolve) => {
+      timer = this.options.clock.setTimer(timeoutMs, () => resolve(EXEC_EXPIRED));
+    });
+    let killTimer: TimerHandle | undefined;
+    try {
+      // Raced rather than decided by a flag the timer sets: a command that exits in the same
+      // turn the timer fires has *finished*, and reporting that as a timeout would blame the
+      // limit for a command that met it. `Promise.race` settles on whichever actually
+      // happened first, which is exactly the question.
+      const outcome = await Promise.race([waited, expired]);
+      if (outcome !== EXEC_EXPIRED) return exitCodeOf(outcome);
+
+      // SIGTERM first, SIGKILL after a grace window: a tool that ignores the first must not be
+      // able to hold this operation -- and the caller's connection -- open forever. The same
+      // escalation `NodeProcessRunner#run` makes for its own timeout.
       killQuietly(handle, "SIGTERM");
-      return this.options.clock.setTimer(EXEC_SIGKILL_GRACE_MS, () => {
+      killTimer = this.options.clock.setTimer(EXEC_SIGKILL_GRACE_MS, () => {
         killQuietly(handle, "SIGKILL");
       });
-    };
-    let killTimer: TimerHandle | undefined;
-    const timer = this.options.clock.setTimer(timeoutMs, () => {
-      killTimer = escalate();
-    });
-    try {
-      const result = await handle.wait();
-      if (timedOut) {
-        throw new DispatchError(
-          "EXEC_TIMEOUT",
-          `\`${tool} ${args.join(" ")}\` exceeded exec.timeoutMs (${String(timeoutMs)}ms) and was killed`,
-        );
-      }
-      return exitCodeOf(result);
+      await waited;
+      // `EXEC_TIMEOUT` rather than the exit code the kill produced: "we stopped it" and "it
+      // failed" are different facts, and only the first tells a caller to raise the limit.
+      throw new DispatchError(
+        "EXEC_TIMEOUT",
+        `\`${tool} ${args.join(" ")}\` exceeded exec.timeoutMs (${String(timeoutMs)}ms) and was killed`,
+      );
     } finally {
-      this.options.clock.cancel(timer);
+      if (timer !== undefined) this.options.clock.cancel(timer);
       if (killTimer !== undefined) this.options.clock.cancel(killTimer);
     }
   }

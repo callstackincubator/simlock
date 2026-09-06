@@ -722,8 +722,10 @@ describe("lease routes", () => {
       // The path names the lease; the body is the rest of the operation's input.
       expect(call.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
 
-      // Written before the response even exists, which is the case the route's pre-stream
-      // handoff buffer exists for: it must still arrive, and still arrive first.
+      // The stream opens when the process starts, not when it first speaks (ADR 0005 §19e).
+      // This chunk lands in the window between the two, which is the only thing the route's
+      // handoff buffer is for: it must still arrive, and still arrive first.
+      call.session.onStarted?.();
       call.session.onOutput?.("stdout", "one");
       const response = await responsePromise;
       expect(response.status).toBe(200);
@@ -761,6 +763,7 @@ describe("lease routes", () => {
 
       const responsePromise = postExec(app);
       const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
       call.session.onOutput?.("stdout", "working");
       const response = await responsePromise;
 
@@ -773,11 +776,12 @@ describe("lease routes", () => {
       expect(frames.at(-1)?.data).toMatchObject({ error: { code: "EXEC_TIMEOUT" } });
     });
 
-    it("forwards requesterId for an operator token and drops it for an agent one", async () => {
+    it("forwards requesterId for an operator token and 403s an agent that supplies one", async () => {
       // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
       // "Authentication"): the token is the identity. The one exception is an operator token
-      // proxying for someone -- which is the case ADR 0005 §19b/§27 needs -- so an agent's
-      // `requesterId` is dropped before dispatch rather than sent on to be ignored.
+      // proxying for someone -- the case ADR 0005 §19b/§27 needs. An agent that names an
+      // identity is refused rather than answered as if it had not: silence there would read
+      // like the field had been honoured.
       const { app, dispatcher } = buildHarness();
 
       const asOperator = app.request("/v1/leases/lse_1/exec", {
@@ -792,30 +796,109 @@ describe("lease routes", () => {
         requesterId: "agent-7",
         tool: "simctl",
       });
+      operatorCall.session.onStarted?.();
       operatorCall.resolve({ exitCode: 0 });
       await asOperator;
 
-      const asAgent = app.request("/v1/leases/lse_1/exec", {
+      const asAgent = await app.request("/v1/leases/lse_1/exec", {
         body: JSON.stringify({ args: ["list"], requesterId: "agent-7", tool: "simctl" }),
         headers: { ...agentAuth, "content-type": "application/json" },
         method: "POST",
       });
-      const agentCall = await waitForDispatch(dispatcher, "device.exec", 1);
-      expect(agentCall.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
-      agentCall.resolve({ exitCode: 0 });
-      await asAgent;
+      expect(asAgent.status).toBe(403);
+      expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+      expect(dispatcher.calls.filter((call) => call.operation === "device.exec")).toHaveLength(1);
+
+      // A `null` for either optional is the documented example's own spelling, and normalizes
+      // to an omitted field rather than a 400 -- including for an agent, which is not
+      // "supplying a requesterId".
+      const withNulls = app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify({ args: ["list"], requesterId: null, stdin: null, tool: "simctl" }),
+        headers: { ...agentAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+      const nullCall = await waitForDispatch(dispatcher, "device.exec", 1);
+      expect(nullCall.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
+      nullCall.session.onStarted?.();
+      nullCall.resolve({ exitCode: 0 });
+      await withNulls;
     });
 
-    it("400s a body naming a tool outside the contract's closed set", async () => {
+    it("dispatches an unwrapped tool rather than rejecting it, and 400s a malformed body", async () => {
+      // Which wrappers exist is the drivers' answer: `bash` is a tool this host does not wrap
+      // (`UNKNOWN_PASSTHROUGH_TOOL`, 422, from the driver catalog -- see the dispatcher suite),
+      // not a malformed request. `400` here is about the body's shape only.
       const { app, dispatcher } = buildHarness();
 
-      const response = await postExec(app, { args: [], tool: "bash" });
-
-      expect(response.status).toBe(400);
-      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
-        "BAD_REQUEST",
+      const unwrapped = postExec(app, { args: [], tool: "bash" });
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      expect(call.input).toEqual({ args: [], leaseId: "lse_1", tool: "bash" });
+      call.reject(
+        new DispatchError("UNKNOWN_PASSTHROUGH_TOOL", "No driver provides a bash passthrough"),
       );
-      expect(dispatcher.calls.filter((call) => call.operation === "device.exec")).toEqual([]);
+      const refused = await unwrapped;
+      expect(refused.status).toBe(422);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+        "UNKNOWN_PASSTHROUGH_TOOL",
+      );
+
+      for (const body of [
+        { args: [] },
+        { args: "list", tool: "simctl" },
+        { args: [], tool: "simctl", unexpected: true },
+      ]) {
+        const response = await postExec(app, body);
+        expect(response.status).toBe(400);
+        expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+          "BAD_REQUEST",
+        );
+      }
+      expect(dispatcher.calls.filter((call) => call.operation === "device.exec")).toHaveLength(1);
+    });
+
+    it("opens the stream when the process starts, before it has written anything", async () => {
+      // ADR 0005 §19e: a command that prints nothing for nine minutes still gets its `200` and
+      // its keepalives, and an `EXEC_TIMEOUT` therefore always arrives as the stream's terminal
+      // event rather than as a status the client can no longer be given.
+      const { app, clock, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+
+      const framesPromise = readSseFrames(response, 1);
+      await Promise.resolve();
+      // Nothing written yet, and the connection is already alive enough to keep alive.
+      clock.advance(15_000);
+      call.reject(new DispatchError("EXEC_TIMEOUT", "exceeded exec.timeoutMs (600000ms)"));
+      const frames = await framesPromise;
+      expect(frames).toEqual([
+        { data: { error: { code: "EXEC_TIMEOUT", message: expect.any(String) } }, event: "error" },
+      ]);
+    });
+
+    it("survives a client that disconnects while the command keeps writing", async () => {
+      // The command runs on deliberately, so chunks keep arriving at a route with nowhere to
+      // put them. They go nowhere and the request still settles normally -- what "nowhere"
+      // means precisely, and that nothing accumulates, is `output-relay.test.ts`.
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      const reader = response.body?.getReader();
+      await Promise.resolve();
+      await reader?.cancel();
+      await Promise.resolve();
+
+      const chunk = "x".repeat(1_024);
+      for (let index = 0; index < 1_000; index += 1) call.session.onOutput?.("stdout", chunk);
+
+      call.resolve({ exitCode: 0 });
+      await expect(responsePromise).resolves.toBeDefined();
     });
   });
 

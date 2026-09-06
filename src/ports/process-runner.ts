@@ -446,6 +446,13 @@ export interface ScriptedProcessExpectation {
    * `spawnStreaming` falls back to the line lists (stdout then stderr, newline-terminated).
    */
   readonly chunks?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
+  /**
+   * Models a child that ignores `SIGTERM` -- only `SIGKILL` ends it. Without this a scripted
+   * `hangs` process dies on the first signal, so the escalation every timeout path depends on
+   * (`SIGTERM`, then `SIGKILL` after a grace window) is never actually exercised: the code that
+   * sends the second signal would be dead and nothing would notice.
+   */
+  readonly ignoresSigterm?: boolean;
 }
 
 export class ScriptedProcessRunner implements ProcessRunner {
@@ -516,11 +523,14 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
   #resolve!: (result: StreamingProcessResult) => void;
   #finished = false;
 
+  readonly #ignoresSigterm: boolean;
+
   constructor(
     readonly pid: number,
     expectation: ScriptedProcessExpectation,
     onChunk: (stream: "stdout" | "stderr", chunk: string) => void,
   ) {
+    this.#ignoresSigterm = expectation.ignoresSigterm ?? false;
     this.#result = new Promise<StreamingProcessResult>((resolve) => {
       this.#resolve = resolve;
     });
@@ -531,6 +541,7 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    if (this.#ignoresSigterm && signal !== "SIGKILL") return;
     this.#finish({ code: null, signal });
   }
 

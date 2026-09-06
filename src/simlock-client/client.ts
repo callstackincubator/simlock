@@ -34,14 +34,14 @@ import type {
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
-  DeviceExecInput,
-  DeviceExecOutput,
+  ExecInput,
+  ExecOutput,
   DeviceOutputChunk,
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
   EventPush,
-  ExecDeviceOptions,
+  ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
   LeaseCancelInput,
@@ -79,14 +79,14 @@ export type {
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
-  DeviceExecInput,
-  DeviceExecOutput,
+  ExecInput,
+  ExecOutput,
   DeviceOutputChunk,
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
   EventPush,
-  ExecDeviceOptions,
+  ExecOptions,
   EventsReplayInput,
   EventsReplayOutput,
   EventsSubscribeOutput,
@@ -168,7 +168,7 @@ export interface SimlockClient {
    * does not. `stdin` is written once and closed -- there is no pseudo-terminal, so
    * line-oriented commands work and full-screen ones do not (§19c).
    */
-  execDevice(input: DeviceExecInput, options?: ExecDeviceOptions): Promise<DeviceExecOutput>;
+  exec(input: ExecInput, options?: ExecOptions): Promise<ExecOutput>;
 
   /**
    * Reports a lease the *daemon* ended -- an expiry, an operator release, an unrecoverable
@@ -287,7 +287,7 @@ function buildDegradedClient(
     listLeases: () => rejected(),
     runDoctor: () => rejected(),
     resolvePassthrough: () => rejected(),
-    execDevice: () => rejected(),
+    exec: () => rejected(),
 
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
@@ -429,10 +429,7 @@ class SimlockClientImpl {
     return this.#call("driver.passthrough", input);
   }
 
-  async execDevice(
-    input: DeviceExecInput,
-    options: ExecDeviceOptions = {},
-  ): Promise<DeviceExecOutput> {
+  async exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
     const payload = await this.#callRaw(
       "device.exec",
       this.#parseInput("device.exec", input),

@@ -18,6 +18,14 @@ rename, and protocol bump).
 
 ### ⚠ BREAKING CHANGES
 
+- **The daemon protocol is now 5**, `{min: 5, max: 5}`, with no compatibility
+  shim — the same no-shim rule that took it to 4. ADR 0005 adds `device.exec`
+  and its `output` push family, and makes `status.get` always carry `mode`, so
+  advertising 4 would claim a compatibility path that does not exist. A client
+  built against 4 does not overlap this daemon and its `hello` fails with
+  `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges; `daemon.stop` stays the
+  frozen exception, so `simlock daemon stop` then starting the new daemon is
+  the upgrade path.
 - **Contract:** `lease.heartbeat` is removed as an operation, and `heartbeat`
   is removed as a `hello` capability. The daemon never pushes to a client to
   prove liveness any more; nothing replaces it, because `lease.renew` already
@@ -148,14 +156,25 @@ those changes add, alongside the breaking changes above.
   still spawn with inherited stdio, so an interactive `adb shell` keeps its
   terminal — and take this path against a `gateway`, which owns no devices;
   the CLI reads which it is talking to from `status.get`'s new `mode` field
-  rather than guessing from its transport, and takes `--lease <id>` on that
-  path only. `stdin` is a one-shot string, read from a pipe to EOF before the
+  rather than guessing from its transport, and both commands now accept
+  `--lease <id>` (ignored against a worker, so one command line works against
+  either). `stdin` is a one-shot string, read from a pipe to EOF before the
   command starts: there is no pseudo-terminal, so line-oriented commands work,
   full-screen ones do not, and a bare `adb shell` is refused
-  (`PASSTHROUGH_REFUSED`) rather than left to hang.
+  (`PASSTHROUGH_REFUSED`) rather than left to hang. On this one operation
+  **`admin` does not bypass ownership**: an admin session names the
+  `requesterId` it is running the command for and the daemon compares it to
+  the lease's own, which is what keeps a proxy holding one admin credential
+  from reaching every lease on the machine.
 - **contract:** `status.get` reports `mode` (`worker`/`gateway`), always
   `worker` in this release — the field a client reads to tell whether the
   device it leased is on the daemon's own machine.
+- **android:** `simlock adb` now refuses a caller-supplied `-P`,
+  `--server-port`, `-L`, or `-H` in any spelling, the way `simlock simctl`
+  already refuses `--set`/`--profiles`. `adb` takes the _last_ `-P` on the
+  line, so one supplied by a caller silently won over the one Simlock inserts
+  and pointed the command at another server — including the machine's default
+  one, outside Simlock's containment entirely.
 - **config:** `exec.timeoutMs` (default ten minutes) bounds one `device.exec`
   command; past it the process is killed and the call fails with the new
   `EXEC_TIMEOUT` error code (CLI exit `10`, the code the other "ran out of

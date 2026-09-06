@@ -34,6 +34,8 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
+| 2 | `PASSTHROUGH_REFUSED` | a `simlock simctl`/`simlock adb` verb the driver will not proxy (rendered as the `USAGE` line above) |
+| 2 | `UNKNOWN_PASSTHROUGH_TOOL` | no driver on the daemon's machine wraps that tool |
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
 | 10 | `EXEC_TIMEOUT` | a command run on the daemon's machine (`simlock simctl`/`simlock adb` against a gateway) outran `exec.timeoutMs` and was killed |
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
@@ -379,23 +381,36 @@ exactly as on the local path, and a refusal is still exit `2` with a `USAGE`
 line naming what to run instead: the worker refuses, and the CLI relabels,
 rather than the CLI keeping a copy of the list.
 
-**The CLI decides by asking, not by guessing.** It reads `mode` from
-`status.get`: a `worker` owns the devices it serves, so the command it resolves
-is spawned right here with a real terminal; a `gateway` owns none, so the
-command has to run on whichever worker does. That is the whole switch — no
-flag, and nothing about which transport the CLI happens to be using. Today
-every daemon reports `worker`, so `simlock simctl` / `simlock adb` always take
-the local path; the gateway work (#115) is what makes the other one reachable
-from this CLI, and the same operation is already reachable over the [HTTP
-API](HTTP-API.md) (`POST /v1/leases/{id}/exec`) and from `simlock/client`'s
-`execDevice` (see [CLIENT.md](CLIENT.md)).
+**The CLI decides by asking, not by guessing.** Every `simlock simctl` /
+`simlock adb` invocation now begins with a `status.get` and reads `mode` off
+it: a `worker` owns the devices it serves, so the command it resolves is
+spawned right here with a real terminal; a `gateway` owns none, so the command
+has to run on whichever worker does. That is the whole switch — no flag, and
+nothing about which transport the CLI happens to be using. The cost is one
+extra round trip, and one consequence worth knowing: a daemon that cannot be
+reached fails the command with that call's own error rather than with a
+passthrough error. Today every daemon reports `worker`, so these commands
+always take the local path; the gateway work (#115) is what makes the other one
+reachable from this CLI, and the same operation is already reachable over the
+[HTTP API](HTTP-API.md) (`POST /v1/leases/{id}/exec`) and from
+`simlock/client`'s `exec` (see [CLIENT.md](CLIENT.md)).
 
-Against a gateway, `simlock simctl` / `simlock adb` take one flag of Simlock's
-own, `--lease <id>`, naming the lease to run against. Without it the lease is
-the one your agent identity holds (`--agent-id`, or `SIMLOCK_AGENT_ID`; see
-[Agent identity](#agent-identity)) — an id that holds no lease, or more than
-one, is a usage error naming it. The flag exists only on this path: locally
-every argument after the tool name belongs to the tool, `--lease` included.
+The lease the remote command runs against is the one your agent identity holds
+(`--agent-id`, or `SIMLOCK_AGENT_ID`; see [Agent
+identity](#agent-identity)) — an id that holds no lease, or more than one, is a
+usage error naming it — or `--lease <id>`, which names one explicitly. The flag
+is accepted against a worker too, where it is simply ignored, so one command
+line works against either kind of daemon; it is read only ahead of the tool's
+own arguments, so `simlock adb --lease lse_1 shell input text --lease` names a
+lease once and types the word once.
+
+An **admin-role** invocation — the usual case, since the CLI connects as admin
+whenever `admin.token` is readable — sends its resolved agent id as
+`requesterId`, because on this one operation admin does *not* bypass the
+ownership check: the daemon compares that id to the lease's own. So naming
+somebody else's lease fails even from an admin-credentialed CLI; run under the
+identity that holds it. An agent-role invocation sends none and is gated the
+ordinary way, its principal against the lease's owner.
 
 Two differences worth knowing before you rely on it:
 
@@ -406,7 +421,10 @@ Two differences worth knowing before you rely on it:
   exit `2`) rather than left to hang on a pipe until the timeout — pass the
   command to run, or get a shell on that machine. On the local path, where the
   CLI hands the tool its own terminal, `adb shell` stays fully interactive and
-  allowed.
+  allowed. The refusals are the daemon's in both directions, never a copy the
+  CLI keeps: it sends the command, and relabels whatever comes back
+  (`PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`) as the same `USAGE` exit
+  2 the local path produces.
 - **`stdin` is one shot.** Piped stdin is read to EOF *before* the command
   starts, sent with it, and the pipe is then closed — enough for a command that
   reads a prompt or a payload (`… | simlock adb shell cat > /sdcard/f`), not a
@@ -424,12 +442,20 @@ Files are the other thing distance costs: a command naming a path
 daemon's filesystem, not yours. Getting the artifact there is out of scope for
 now — a shared volume, or a CI checkout on that machine.
 
-## `simlock simctl <args...>`
+## `simlock simctl [--lease <lease-id>] <args...>`
 
 Run `xcrun simctl` against Simlock's iOS device set. Every argument is passed
 through unchanged with `--set <deviceRoot>` inserted, so the command behaves
 exactly as documented by Apple — it just resolves the UDIDs Simlock manages,
 which a bare `simctl` cannot see.
+
+`--lease` is only meaningful when the device is on another machine, where the
+command runs through `device.exec`, which is scoped to a lease; see [When the
+device is on another machine](#when-the-device-is-on-another-machine). Against
+a daemon that owns the device it is unnecessary, and accepted so that one
+command line works against either. It is read only in front of the tool's own
+arguments: once `simctl`'s or `adb`'s subcommand has appeared, a later
+`--lease` is that subcommand's.
 
 ```bash
 simlock simctl install booted ./MyApp.app
@@ -453,10 +479,11 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
   a refused verb read as an ordinary operand. Run `xcrun simctl` directly if
   you mean to leave Simlock's set.
 
-## `simlock adb <args...>`
+## `simlock adb [--lease <lease-id>] <args...>`
 
 Run `adb` against Simlock's adb server. Arguments pass through unchanged with
-`-P <adbServerPort>` inserted.
+`-P <adbServerPort>` inserted. `--lease` behaves exactly as it does for
+`simlock simctl` above.
 
 ```bash
 simlock adb shell input tap 100 200
@@ -474,6 +501,11 @@ Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
 - `emu avd snapshot delete` — it destroys the clean-boot snapshot Simlock
   restores from, turning every later reclaim of that device from a snapshot
   load into a full wipe.
+- `-P`, `--server-port`, `-L`, and `-H`, in any spelling — `simlock adb`
+  supplies the server itself, and `adb` takes the *last* one on the line, so a
+  caller-supplied one would silently win and point the command at a server
+  that cannot see Simlock's devices (or at one Simlock must not touch). Run
+  `adb` directly if you mean to leave Simlock's server.
 
 Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
 instead.

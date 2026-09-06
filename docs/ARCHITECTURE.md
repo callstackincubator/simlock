@@ -131,13 +131,15 @@ applies to HTTP automatically because there is only one code path to fix.
 
 **Protocol versions are negotiated as `{min, max}` ranges** and honestly:
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
-ADR 0004 removes `lease.heartbeat` and `mode` from the contract with no shim
-behind them, so the range both sides advertise is `{min: 4, max: 4}` — a
-protocol-3 client and a protocol-4 daemon simply do not overlap, and `hello`
-fails with `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges. `daemon.stop`
-stays the frozen exception, accepted at any version the daemon has ever
-spoken, so the upgrade path (`simlock daemon stop`, then start the new
-daemon) exists at all.
+Two changes have moved it since. ADR 0004 removed `lease.heartbeat` and
+`mode` from the contract with no shim behind them, taking the wire to
+protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
+`mode` field `status.get` now always carries, again with no compatibility path
+kept, taking it to 5. So the range both sides advertise is `{min: 5, max: 5}`,
+an older client and a current daemon simply do not overlap, and `hello` fails
+with `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges. `daemon.stop` stays the
+frozen exception, accepted at any version the daemon has ever spoken, so the
+upgrade path (`simlock daemon stop`, then start the new daemon) exists at all.
 
 **Two roles**, `agent` and `admin`, declared in `src/contract/roles.ts`.
 Read-only and lease-lifecycle operations are `agent`; anything that reads or

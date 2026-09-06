@@ -1800,6 +1800,36 @@ describe("AndroidDriver.create", () => {
     );
   });
 
+  it("refuses a caller-supplied server flag in every spelling adb accepts", async () => {
+    // `adb` takes the *last* `-P` on the line, so a caller-supplied one silently wins over the
+    // one this driver inserts and the command lands on whatever server that names -- the
+    // machine's default one included, which is outside Simlock's containment entirely (safety
+    // rule 9). Same hole `--set`/`--profiles` closes on the iOS side, same answer.
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    for (const args of [
+      ["-P", "5037", "devices"],
+      ["-P=5037", "devices"],
+      ["--server-port", "5037", "devices"],
+      ["--server-port=5037", "devices"],
+      ["-L", "tcp:127.0.0.1:5037", "devices"],
+      ["-L=tcp:127.0.0.1:5037", "devices"],
+      ["-H", "other-host", "devices"],
+      ["-H=other-host", "devices"],
+      ["shell", "getprop"].concat(["-P", "5037"]),
+    ]) {
+      expect(() => driver.passthrough(args), args.join(" ")).toThrow(PassthroughRefusedError);
+      expect(() => driver.passthrough(args, { hasTerminal: false }), args.join(" ")).toThrow(
+        /supplies the adb server itself/,
+      );
+    }
+
+    // An argument that merely starts with one of those letters is not one of those flags.
+    expect(driver.passthrough(["-s", "emulator-5554", "devices"]).args).toContain("devices");
+    expect(driver.passthrough(["shell", "echo", "-Please"]).args).toContain("-Please");
+  });
+
   it("refuses a bare `adb shell` only where the caller has no terminal", async () => {
     // ADR 0005 §19c: `device.exec` runs the command on this machine with pipes and no pty, so
     // an interactive shell there is a process reading a pipe nothing will ever write to --

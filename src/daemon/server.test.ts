@@ -30,6 +30,9 @@ import {
   ScriptedProcessRunner,
   type Logger,
   type ProcessRunner,
+  type ProcessStreamOptions,
+  type StreamingProcessHandle,
+  type StreamingProcessResult,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
@@ -173,9 +176,10 @@ describe("DaemonServer", () => {
 
   // Every protocol bump so far shipped without a back-compat shim, so rejecting an older
   // client outright is a deliberate product decision, not just arithmetic on the current
-  // constant. Protocol 3 (ADR 0003) turned the rejection into a range check; protocol 4
-  // (ADR 0004) removed `lease.heartbeat` and `mode` behind that same no-shim rule, so a v1
-  // client has no overlap with `PROTOCOL_VERSION_RANGE` and is still rejected outright.
+  // constant. Protocol 3 (ADR 0003) turned the rejection into a range check; 4 (ADR 0004)
+  // removed `lease.heartbeat` and `mode` behind that same no-shim rule; 5 (ADR 0005) adds
+  // `device.exec` and a `mode` field on `status.get` the same way. A v1 client has no overlap
+  // with `PROTOCOL_VERSION_RANGE` and is still rejected outright.
   it("rejects a protocol v1 client outright rather than serving it a wire it cannot speak", async () => {
     const harness = await createHarness();
     const legacy = await createClient(harness.socketPath);
@@ -563,6 +567,109 @@ describe("DaemonServer", () => {
         push: "output",
       },
     ]);
+  });
+
+  it("routes two commands on one connection by frame id, and pushes to no other connection", async () => {
+    // ADR 0005 §19a keys `output` on the request's frame id for the same reason `progress` is
+    // keyed on it: one connection may have several calls in flight. And a push is a *reply* to
+    // one call, not a broadcast -- a second connection, even one owned by the same principal,
+    // has no business seeing another's command output.
+    const clock = new FakeClock(1_000);
+    const driver = passthroughDriver(clock);
+    const harness = await createHarness({
+      clock,
+      driver,
+      processRunner: new ScriptedProcessRunner([
+        {
+          chunks: [{ chunk: "first-command", stream: "stdout" }],
+          match: { args: ["--set", "/root", "list", "devices"], command: "simctl" },
+        },
+        {
+          chunks: [{ chunk: "second-command", stream: "stdout" }],
+          match: { args: ["--set", "/root", "list", "runtimes"], command: "simctl" },
+        },
+      ]),
+    });
+    const client = await createClient(harness.socketPath);
+    const observer = await createClient(harness.socketPath);
+    await hello(client);
+    await hello(observer);
+    const grant = await client.request("lease.request", {
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    const leaseId = leaseIdOf(grant);
+
+    const first = client.request(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      "exec-a",
+    );
+    const second = client.request(
+      "device.exec",
+      { args: ["list", "runtimes"], leaseId, tool: "simctl" },
+      "exec-b",
+    );
+    await Promise.all([first, second]);
+
+    expect(
+      client
+        .frames()
+        .filter((frame) => frame.push === "output")
+        .map((frame) => frame.payload),
+    ).toEqual([
+      { chunk: "first-command", requestId: "exec-a", stream: "stdout" },
+      { chunk: "second-command", requestId: "exec-b", stream: "stdout" },
+    ]);
+    expect(observer.frames().filter((frame) => frame.push === "output")).toEqual([]);
+  });
+
+  it("stops pushing when the connection dies, and lets the command finish anyway", async () => {
+    // ADR 0004 §3's reasoning applied to a process: a dropped connection is not a reason to
+    // kill a half-applied `simctl install`. What stops is the pushing -- writing to a dead
+    // socket is the transport's problem to not have, and the operation itself carries on to
+    // its own end (or to `exec.timeoutMs`).
+    const clock = new FakeClock(1_000);
+    const driver = passthroughDriver(clock);
+    const runner = new ControllableStreamingRunner();
+    const harness = await createHarness({ clock, driver, processRunner: runner });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    const grant = await client.request("lease.request", {
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    void client.request(
+      "device.exec",
+      { args: ["list", "devices"], leaseId: leaseIdOf(grant), tool: "simctl" },
+      "exec-dropped",
+    );
+    await waitFor(() => runner.handle !== undefined);
+    const firstPush = client.nextFrame((frame) => frame.push === "output");
+    runner.handle?.emit("stdout", "before-the-drop");
+    expect(await firstPush).toMatchObject({
+      payload: { chunk: "before-the-drop", requestId: "exec-dropped" },
+      push: "output",
+    });
+
+    await client.close();
+    await flush();
+    // Chunks written after the socket is gone reach no one and throw nothing, and the command
+    // still runs to its own end: the daemon is not left with a half-run command, and nothing
+    // about a dead socket reaches the operation.
+    runner.handle?.emit("stdout", "after-the-drop");
+    runner.handle?.finish(0);
+    await flush();
+    expect(runner.handle?.settled).toBe(true);
+
+    // Still serving: writing to a socket that went away mid-command took nothing down with it.
+    const survivor = await createClient(harness.socketPath);
+    await hello(survivor);
+    await expect(survivor.request("status.get", {})).resolves.toMatchObject({ ok: true });
+    await survivor.close();
   });
 
   it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
@@ -2466,6 +2573,85 @@ async function createHarness(
   }
 
   return { clock, config, daemon, driver, engine, eventBus, registry, socketPath, stateFilesystem };
+}
+
+/** A `FakeDriver` that claims the `simctl` wrapper, for the `device.exec` flows. */
+function passthroughDriver(clock: FakeClock): FakeDriver {
+  return new FakeDriver({
+    availableOsVersions: ["26.5"],
+    clock,
+    passthrough: (args: readonly string[]) => ({
+      args: ["--set", "/root", ...args],
+      command: "simctl",
+      env: {},
+    }),
+    passthroughTool: "simctl",
+    platform: "ios",
+  });
+}
+
+/**
+ * A `ProcessRunner` whose streamed child is driven by the test rather than scripted up front --
+ * `ScriptedProcessRunner` emits every chunk at spawn, which cannot express "a chunk arrives
+ * *after* the client disconnected", the case that matters here.
+ */
+class ControllableStreamingRunner implements ProcessRunner {
+  handle: ControllableStreamingHandle | undefined;
+
+  run(): Promise<never> {
+    throw new Error("not used");
+  }
+
+  spawn(): never {
+    throw new Error("not used");
+  }
+
+  spawnStreaming(
+    _command: string,
+    _args: readonly string[],
+    options: ProcessStreamOptions,
+  ): StreamingProcessHandle {
+    this.handle = new ControllableStreamingHandle(options.onChunk);
+    return this.handle;
+  }
+}
+
+class ControllableStreamingHandle implements StreamingProcessHandle {
+  readonly pid = 4_242;
+  settled = false;
+  readonly #result: Promise<StreamingProcessResult>;
+  #resolve!: (result: StreamingProcessResult) => void;
+
+  constructor(private readonly onChunk: (stream: "stdout" | "stderr", chunk: string) => void) {
+    this.#result = new Promise((resolve) => {
+      this.#resolve = resolve;
+    });
+  }
+
+  emit(stream: "stdout" | "stderr", chunk: string): void {
+    this.onChunk(stream, chunk);
+  }
+
+  finish(code: number): void {
+    this.settled = true;
+    this.#resolve({ code, signal: null });
+  }
+
+  kill(): void {
+    this.finish(0);
+  }
+
+  wait(): Promise<StreamingProcessResult> {
+    return this.#result;
+  }
+}
+
+async function waitFor(condition: () => boolean, attempts = 200): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timed out waiting for a condition");
 }
 
 async function createClient(socketPath: string): Promise<Client> {

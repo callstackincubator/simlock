@@ -236,6 +236,20 @@ const REFUSED_ADB_VERB = "kill-server";
 const STOPS_A_RUNNING_DEVICE =
   "it stops a device Simlock still believes is running, which reports as drift on the next reconcile.";
 
+/**
+ * Global flags that would point `adb` at a different server than the one Simlock owns. adb
+ * takes the **last** `-P` on the line, so a caller-supplied one silently wins over the one
+ * this driver inserts and the command lands on the machine's default server, outside
+ * containment entirely (safety rule 9) -- the same hole the iOS driver closes by refusing a
+ * caller-supplied `--set`/`--profiles`.
+ *
+ * `-P` and `--server-port` name the port; `-L` names the whole listen address
+ * (`tcp:host:port`); `-H` names the host. Each is refused in every spelling adb accepts,
+ * including the `--flag=value` form, because refusing only the space-separated one would leave
+ * the equals form as a way around it.
+ */
+const CALLER_SUPPLIED_SCOPE_FLAGS: readonly string[] = ["-P", "-L", "-H", "--server-port"];
+
 const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
   readonly reason: string;
@@ -500,6 +514,18 @@ export class AndroidDriver implements Driver {
       throw new PassthroughRefusedError(
         this.passthroughTool,
         `Refusing \`simlock adb ${refused.sequence.join(" ")}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
+      );
+    }
+
+    const scopeFlag = args.find((argument) =>
+      CALLER_SUPPLIED_SCOPE_FLAGS.some(
+        (flag) => argument === flag || argument.startsWith(`${flag}=`),
+      ),
+    );
+    if (scopeFlag !== undefined) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock adb ${scopeFlag}\`: \`simlock adb\` supplies the adb server itself, and adb takes the last one on the line -- a caller-supplied one would point the command at a server that cannot see Simlock's devices, or at one it must not touch. Run \`adb\` directly if you mean to leave Simlock's server.`,
       );
     }
   }

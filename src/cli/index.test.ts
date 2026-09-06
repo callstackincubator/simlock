@@ -402,7 +402,7 @@ describe("CLI: exit codes", () => {
               fakeClient({
                 getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                execDevice: (input, options) => {
+                exec: (input, options) => {
                   seen.push(input);
                   options?.onOutput?.({ chunk: "ro.build", stream: "stdout" });
                   options?.onOutput?.({ chunk: "a warning\n", stream: "stderr" });
@@ -475,7 +475,7 @@ describe("CLI: exit codes", () => {
               fakeClient({
                 getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                execDevice: () =>
+                exec: () =>
                   Promise.reject(
                     new SimlockError(
                       "PASSTHROUGH_REFUSED",
@@ -507,7 +507,7 @@ describe("CLI: exit codes", () => {
               fakeClient({
                 getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                execDevice: () =>
+                exec: () =>
                   Promise.reject(
                     new SimlockError(
                       "EXEC_TIMEOUT",
@@ -539,7 +539,7 @@ describe("CLI: exit codes", () => {
               fakeClient({
                 getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.reject(new Error("must not need the lease list")),
-                execDevice: (input) => {
+                exec: (input) => {
                   seen.push(input);
                   return Promise.resolve({ exitCode: 0 });
                 },
@@ -569,7 +569,7 @@ describe("CLI: exit codes", () => {
               fakeClient({
                 getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                execDevice: (input) => {
+                exec: (input) => {
                   seen.push(input);
                   return Promise.resolve({ exitCode: 0 });
                 },
@@ -604,7 +604,7 @@ describe("CLI: exit codes", () => {
                 role: "agent",
                 getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                execDevice: (input) => {
+                exec: (input) => {
                   seen.push(input);
                   return Promise.resolve({ exitCode: 0 });
                 },
@@ -615,21 +615,21 @@ describe("CLI: exit codes", () => {
       expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", tool: "adb" }]);
     });
 
-    it("spawns locally, with the arguments untouched, when the daemon is a worker", async () => {
-      // The other half of the same switch: a worker owns its devices, so the command it
-      // resolves runs here with a real terminal -- and `--lease` is not a flag on that path,
-      // it is an argument for the tool like any other.
+    it("spawns locally against a worker, accepting and ignoring --lease", async () => {
+      // The other half of the same switch, and the reason `--lease` is accepted on both: one
+      // command line has to work against either kind of daemon (docs/CLI.md). A worker takes
+      // the flag, drops it, and passes the rest to the tool untouched.
       const output = outputCapture();
       const ran: unknown[] = [];
       const seen: unknown[] = [];
 
       await expect(
         runCli(
-          ["adb", "--lease", "shell"],
+          ["adb", "--lease", "lse_ignored", "shell", "getprop"],
           output.environmentWith({
             connectAdmin: async () =>
               fakeClient({
-                execDevice: () => Promise.reject(new Error("must not exec remotely")),
+                exec: () => Promise.reject(new Error("must not exec remotely")),
                 resolvePassthrough: (input) => {
                   seen.push(input);
                   return Promise.resolve({ args: ["-P", "5038"], command: "adb", env: {} });
@@ -642,8 +642,40 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([{ args: ["--lease", "shell"], tool: "adb" }]);
+      expect(seen).toEqual([{ args: ["shell", "getprop"], tool: "adb" }]);
       expect(ran).toHaveLength(1);
+    });
+
+    it("stops scanning for --lease at the tool's own first argument", async () => {
+      // Everything from the tool's subcommand onwards is the tool's, so a `--lease` there is
+      // an argument to *it* -- typed text, a filter, an operand -- and travels through.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "lse_mine", "shell", "input", "text", "--lease"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.reject(new Error("must not need the lease list")),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        {
+          args: ["shell", "input", "text", "--lease"],
+          leaseId: "lse_mine",
+          requesterId: "test-requester",
+          tool: "adb",
+        },
+      ]);
     });
   });
 
@@ -2457,7 +2489,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     getStatus: () => Promise.resolve(EMPTY_STATUS),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
-    execDevice: () => Promise.resolve({ exitCode: 0 }),
+    exec: () => Promise.resolve({ exitCode: 0 }),
     cancelLease: () => Promise.resolve({ result: "not-found" }),
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),

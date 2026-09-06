@@ -253,9 +253,12 @@ export const driverPassthrough = defineOperation({
  * discover. Locally, `simlock adb shell` still spawns with inherited stdio and stays fully
  * interactive (ADR §19c).
  *
- * `tool` is the closed `simctl | adb` set rather than `driver.passthrough`'s open string:
- * this operation spawns what it resolves, so a typo reaching a driver that answers to some
- * third name should fail at the contract boundary rather than deeper in.
+ * `tool` is an open string, exactly as `driver.passthrough`'s is, and for the same reason:
+ * which wrappers exist is the drivers' answer, not the contract's. A name no driver on that
+ * machine wraps comes back as `UNKNOWN_PASSTHROUGH_TOOL` -- the code that already means
+ * precisely that, at the 422/exit-2 it already carries -- rather than as a `BAD_REQUEST`,
+ * which would say the request was malformed when it was merely aimed at a tool this host does
+ * not have. `BAD_REQUEST` on this operation means the body's shape is wrong, nothing more.
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const deviceExec = defineOperation({
@@ -264,7 +267,7 @@ export const deviceExec = defineOperation({
   input: z
     .object({
       leaseId: z.string(),
-      tool: z.enum(["simctl", "adb"]),
+      tool: z.string().min(1),
       args: z.array(z.string()),
       stdin: z.string().optional(),
       /**

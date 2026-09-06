@@ -623,6 +623,12 @@ async function runPassthrough(
   environment: CliEnvironment,
   token: string | undefined,
 ): Promise<number> {
+  // `--lease` is accepted on both paths so one command line works against either kind of
+  // daemon (docs/CLI.md), and it is stripped here, before the branch, for the same reason:
+  // whether it is *meaningful* depends on the daemon's mode, but whether it is the tool's
+  // argument must not. Scanning stops at the first non-flag argument -- everything from the
+  // tool's own subcommand onwards belongs to the tool, `adb shell ... --lease x` included.
+  const { leaseFlag, rest } = extractLeaseFlag(args);
   const client = await connectDaemonClient(environment, token);
   // ADR 0005 §19c: which path this invocation takes is a fact about the daemon, not a flag --
   // a `worker` owns the devices it serves, so the command it resolves can be spawned right
@@ -637,7 +643,7 @@ async function runPassthrough(
   }
   if (mode === "gateway") {
     try {
-      return await runRemotePassthrough(tool, args, environment, client);
+      return await runRemotePassthrough(tool, rest, environment, client, leaseFlag);
     } finally {
       await client.close();
     }
@@ -651,7 +657,10 @@ async function runPassthrough(
   }
   let command;
   try {
-    command = await client.resolvePassthrough({ args: [...args], tool });
+    // `rest`, not `args`: a `--lease` in front of the tool's own arguments is Simlock's, and
+    // ignoring it here (rather than forwarding it to `simctl`/`adb`, which would fail) is what
+    // "accepted so one command line works against either" means.
+    command = await client.resolvePassthrough({ args: [...rest], tool });
   } catch (error: unknown) {
     // A verb the driver refuses is the caller getting it wrong, not a daemon fault, so it
     // surfaces as usage rather than as an internal error.
@@ -681,8 +690,8 @@ async function runRemotePassthrough(
   args: readonly string[],
   environment: CliEnvironment,
   client: SimlockAdminClient,
+  leaseFlag: string | undefined,
 ): Promise<number> {
-  const { leaseFlag, rest } = extractLeaseFlag(args);
   try {
     const leaseId = leaseFlag ?? (await resolveRemoteLeaseId(client, environment));
     // Read to EOF before the command starts, because `stdin` is one shot (ADR 0005 §19c):
@@ -694,9 +703,9 @@ async function runRemotePassthrough(
     // and on one it is required to match the lease. An agent-role connection is gated on the
     // lease it owns instead, so it sends none rather than a value that would be ignored.
     const requesterId = client.role === "admin" ? environment.requesterId : undefined;
-    const { exitCode } = await client.execDevice(
+    const { exitCode } = await client.exec(
       {
-        args: [...rest],
+        args: [...args],
         leaseId,
         tool,
         ...(requesterId === undefined ? {} : { requesterId }),
@@ -724,35 +733,47 @@ async function runRemotePassthrough(
 }
 
 /**
- * Pulls `--lease <id>` (or `--lease=<id>`) out of the argument list. Only ever called on the
- * remote path: locally every argument after the tool name is the tool's, verbatim, and this
- * flag does not exist -- which is why it is extracted here rather than parsed at the command
- * boundary with the rest of the CLI's flags. A remote command needs a lease named somehow,
- * and this is the explicit way; `resolveRemoteLeaseId` is the implicit one.
+ * Pulls a leading `--lease <id>` (or `--lease=<id>`) off the argument list, leaving the rest
+ * for the tool.
+ *
+ * Scanning **stops at the first non-flag argument**, which is the whole reason this can exist
+ * at all next to "every argument after the tool name is the tool's": once `simctl`'s or
+ * `adb`'s own subcommand has appeared, everything after it -- including something spelled
+ * `--lease` -- is an argument to that subcommand, not to Simlock. So
+ * `simlock adb --lease lse_1 shell input text --lease` names a lease once and types the word
+ * once.
+ *
+ * It is accepted on both paths, not just the remote one: only a gateway *needs* it (the
+ * command runs against a lease there), but a caller should be able to write one command line
+ * and have it work against either kind of daemon, so a worker takes the flag and ignores it.
  */
 function extractLeaseFlag(args: readonly string[]): {
   readonly leaseFlag: string | undefined;
   readonly rest: readonly string[];
 } {
-  const rest: string[] = [];
   let leaseFlag: string | undefined;
-  for (let index = 0; index < args.length; index += 1) {
+  let index = 0;
+  while (index < args.length) {
     const argument = args[index] as string;
     if (argument === "--lease") {
       const value = args[index + 1];
       if (value === undefined) throw new UsageError("--lease requires a lease id");
       leaseFlag = value;
-      index += 1;
+      index += 2;
       continue;
     }
     if (argument.startsWith("--lease=")) {
       leaseFlag = argument.slice("--lease=".length);
       if (leaseFlag === "") throw new UsageError("--lease requires a lease id");
+      index += 1;
       continue;
     }
-    rest.push(argument);
+    // Any other flag is the tool's, and so is everything from here on: a flag Simlock does not
+    // know cannot be told apart from one whose *value* looks like a flag, so the scan stops
+    // rather than guessing.
+    break;
   }
-  return { leaseFlag, rest };
+  return { leaseFlag, rest: args.slice(index) };
 }
 
 /**
