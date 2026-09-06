@@ -8,8 +8,8 @@ another machine is the operator's own tunnel (Tailscale, cloudflared, a
 reverse proxy) — Simlock does no TLS termination in v1, and `Authorization`
 is required on every route regardless of how it's reached, loopback included.
 
-The gateway calls the exact same in-process `Dispatcher` the unix socket
-calls (ADR 0003 §2) — not a second copy of role/ownership logic, and not a
+The HTTP frontend calls the exact same in-process `Dispatcher` the unix
+socket calls (ADR 0003 §2) — not a second copy of role/ownership logic, and not a
 loopback hop through the socket either. Every route that maps onto a daemon
 operation gets the same input parsing, role check, `authorize`/ownership
 hook, and startup-readiness parking a socket request gets, from that one
@@ -57,17 +57,23 @@ the CLI's `--agent-id`/`SIMLOCK_AGENT_ID`, identity is never client-declared
 here, so the one-lease-per-requester rule keys off which token authenticated
 the request, not anything the request body says.
 
-Two roles:
+Three roles:
 
 | Role | Can |
 |---|---|
 | `agent` | catalog, status, its own lease requests and leases |
-| `operator` | everything `agent` can, plus every other requester's leases/devices, event replay/stream, and releasing any lease |
+| `operator` | everything `agent` can, plus every other requester's leases/devices, event replay/stream, releasing any lease, and the worker routes on a gateway |
+| `worker` | open an uplink at `GET /v1/uplink`, and nothing else |
 
 A valid token with the wrong role for a route is `403 FORBIDDEN`, not `401` —
 distinct from an unrecognized token. Reaching another requester's own
 resource (a lease/request an `agent` token didn't create) is the same `403`,
 enforced per-resource rather than as a role gate.
+
+`worker` is a **join token** (ADR 0005), minted on a gateway and put in a
+worker's `gateway.token`. The exclusivity runs both ways and is checked before
+any session exists: a `worker` token is `403` on every `/v1` route but
+`/v1/uplink`, and an `agent` or `operator` token is `403` *at* `/v1/uplink`.
 
 ## Endpoints
 
@@ -84,7 +90,7 @@ it applies below:
 - **A `ttlMs` above `lease.maxTtlMs` is `400 BAD_REQUEST`** where it used to
   be accepted.
 - **The `ttlMs` a lease reports is the lease's own width**, not a value the
-  gateway remembered per request.
+  HTTP frontend remembered per request.
 
 Routes, status codes, and every other field are unchanged.
 
@@ -411,6 +417,60 @@ Role: `operator` for all four.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`).
 
+On a **gateway** all four answer for the whole fleet: leases and devices carry
+a `workerId`, and the event stream carries every worker's republished events
+(also with a `workerId` in the payload) alongside the gateway's own
+`worker.*` facts.
+
+## Gateway mode (ADR 0005)
+
+A daemon started with `config.mode: "gateway"` serves this same API for a
+fleet rather than one machine. Everything above still applies — same routes,
+same auth, same error shapes — with three differences.
+
+**`GET /v1/status` and `GET /v1/catalog` aggregate.** Status returns the shape
+a worker returns, with capacity summed over the connected workers, `workerId`
+on every device and lease, `daemon.mode: "gateway"`, and an additive `workers`
+array of worker views. Catalog is the union of the connected workers'
+catalogs, each model and runtime annotated with `modelWorkers` /
+`runtimeWorkers` — which workers have it.
+
+**Worker routes** (role `operator`), registered only in gateway mode — on a
+worker these paths are `404`, because a worker has no worker registry:
+
+| Route | Answers |
+|---|---|
+| `GET /v1/workers` | `{"workers":[...]}` — every worker view |
+| `POST /v1/workers/{id}/drain` | `{"workerId":"…","drained":true}` |
+| `DELETE /v1/workers/{id}/drain` | `{"workerId":"…","drained":false}` |
+| `DELETE /v1/workers/{id}` | `{"workerId":"…","removed":true\|false}` |
+
+A worker view is `{ id, label?, connection, drained, lastSeenAt, health?,
+version?, protocol?, capacity?, downloads?, queueDepth?, leases, devices,
+catalog }`. `connection` is `connected`, `disconnected` (the uplink closed;
+the view keeps its last-known state until every lease on it has expired and
+`gateway.disconnectedRetentionMs` has passed), or `incompatible` (the uplink
+is open but `hello` found no overlapping protocol range — `protocol` then
+carries both). Drain and undrain answer `404 UNKNOWN_WORKER` for an id with no
+view; removing a *connected* worker is `409 WORKER_CONNECTED`, while removing
+one the gateway has already forgotten answers `{"removed":false}`.
+
+**`GET /v1/uplink`** — the WebSocket upgrade a worker dials (`Authorization:
+Bearer <join token>`, plus `x-simlock-worker-id` and an optional
+`x-simlock-worker-label` header). It is not a JSON route: it upgrades to a
+WebSocket carrying the daemon protocol, over which the *gateway* is the
+protocol client. Authentication happens at the upgrade, before any WebSocket
+exists — `401` for a missing or unrecognized token, `403` for a real token of
+another role, `404` for any other path — so an unauthorized peer never reaches
+the protocol at all. A worker's `gateway.url` is the gateway's **base** URL;
+the worker derives this path itself.
+
+**What a gateway refuses.** `POST /v1/lease-requests` and the lease lifecycle
+routes answer `501 UNSUPPORTED_IN_GATEWAY_MODE` until fleet routing lands;
+`driver.passthrough`-backed routes and the per-machine maintenance operations
+(`nuke`, `cleanup`, `doctor`) answer it permanently — they act on one
+machine's devices and stay per-worker.
+
 ## Errors
 
 Every failure is the same shape the daemon protocol uses:
@@ -425,10 +485,15 @@ Every failure is the same shape the daemon protocol uses:
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
 | 403 | `FORBIDDEN` (role doesn't permit the route; a `/v1/lease-requests/*` route whose request belongs to another requester; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}` naming another requester's still-live lease) |
 | 404 | `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
-| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted) |
+| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (body names the `workerId`) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a `device.exec` verb the driver will not proxy, a bare `adb shell` included), `UNKNOWN_PASSTHROUGH_TOOL` (no driver claims that tool here) |
-| 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`) |
+| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (body names the `operation`) |
+| 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (body names the `workerId`) |
 | 504 | `EXEC_TIMEOUT` (a `POST /v1/leases/{id}/exec` command outran `exec.timeoutMs` and was killed; arrives as a terminal `error` event instead if output had already started) |
+
+`404` also covers `UNKNOWN_WORKER` (body names the `workerId`) on the worker
+routes. Where an error carries typed details, they are inlined beside `code`
+and `message` — details are contract, message text is not.
 
 ## Lifecycle semantics
 
@@ -443,12 +508,12 @@ Every failure is the same shape the daemon protocol uses:
   (including across a restart) creates a fresh request rather than erroring
   — the `409` above is the real backstop against a double grant, not the
   idempotency cache.
-- **Startup.** The gateway's listener now starts the moment the daemon
-  claims its socket — the same instant the unix socket itself starts
-  accepting connections, before startup convergence (`doctor.reconcile()`,
-  running-capacity convergence) has run (**bug fix, 0.3.0**: the gateway
-  used to start only once convergence had already finished, so it could not
-  observe or need this). A request that arrives before convergence completes
+- **Startup.** The HTTP listener now starts the moment the daemon claims its
+  socket — the same instant the unix socket itself starts accepting
+  connections, before startup convergence (`doctor.reconcile()`,
+  running-capacity convergence) has run (**bug fix, 0.3.0**: it used to start
+  only once convergence had already finished, so it could not observe or need
+  this). A request that arrives before convergence completes
   now waits on the shared dispatcher's readiness gate exactly like a socket
   request, instead of being refused — every route but the routes that don't
   dispatch at all (`GET /v1/healthz`) can block briefly on a cold start.
@@ -475,6 +540,6 @@ Every failure is the same shape the daemon protocol uses:
   filesystem, and there is no route that puts a file there. An `.app` or an
   `.apk` arrives out of band (a shared volume, a CI checkout on that machine)
   in this version.
-- MCP-over-HTTP, in-process TLS, and multi-host brokering are all out of
-  scope for this version too (a per-lease `dataPlane.baseUrl` already leaves
-  room for the last one, once it exists).
+- MCP-over-HTTP and in-process TLS are out of scope for this version too.
+  Multi-host brokering is no longer on this list: it is [ADR
+  0005](adr/0005-gateway-and-worker-modes.md)'s gateway mode, above.

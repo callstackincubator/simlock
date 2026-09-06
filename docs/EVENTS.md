@@ -102,6 +102,34 @@ produced a bus event would push everything else out of the ring buffer within
 minutes. An audit trail of what agents ran on their devices is a different
 feature with different retention needs, not a line in this catalogue.
 
+## Fleet (gateway mode)
+
+Emitted only by a daemon in gateway mode ([ADR
+0005](adr/0005-gateway-and-worker-modes.md) §22), about the workers connected
+to it.
+
+| Event | Payload (key fields) | Emitted when | Emitter | Status |
+|---|---|---|---|---|
+| `worker.connected` | worker id, label, worker's daemon version | a worker's uplink opened and its `hello` completed, so the gateway can drive it | WorkerRegistry | implemented |
+| `worker.rejected` | reason (incompatible/unauthenticated), worker id, label, protocol ranges | an uplink reached the gateway and was turned away before any session existed: `unauthenticated` for a credential the gateway does not hold with role `worker` (a revoked or mistyped join token, or a real token of another role), `incompatible` for a `hello` that found no overlapping protocol range — `protocol` then carries both ranges. An unauthenticated peer is not a known worker, so `workerId` is only what the connection claimed, and may be absent | GatewayService / WorkerRegistry | implemented |
+| `worker.disconnected` | worker id, label, lease count | a worker's uplink closed. `leaseCount` is what its view still shows it holding — how much is stranded, and why the view is kept rather than dropped | WorkerRegistry | implemented |
+| `worker.removed` | worker id, label, reason (operator/retention) | a disconnected worker's view was forgotten: by `simlock worker remove`, or because every lease on it had expired and `gateway.disconnectedRetentionMs` elapsed | WorkerRegistry | implemented |
+| `worker.drain-started` | worker id, label | `simlock worker drain` flagged a worker: it keeps its leases and receives no new dispatches | WorkerRegistry | implemented |
+| `worker.drain-ended` | worker id, label | `simlock worker undrain` cleared that flag | WorkerRegistry | implemented |
+
+Drain and undrain are idempotent, and an event is a fact about a *change*:
+draining an already-drained worker succeeds and emits nothing.
+
+**A worker's own events are republished on the gateway's bus** with `workerId`
+added to the payload, under their original names and with their original
+emitting module — the fact happened in that worker's lease engine or reaper,
+and rewriting either would make the audit trail lie about where. That is what
+makes `simlock events` and `simlock events --follow` against a gateway a
+fleet-wide view, and it is the one place a payload documented above arrives
+with an extra field: additive, and only ever on a gateway. The six events in
+this section are the gateway's own, and carry no `workerId` beyond the worker
+they are about.
+
 ## Conventions recap
 
 - Every event carries: `timestamp`, `event`, `payload`, emitting module.
