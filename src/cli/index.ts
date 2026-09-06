@@ -831,17 +831,14 @@ async function runLease(
       // structured stderr channel as a failed release, and not an exit condition -- the lease
       // is still this process's until something says otherwise.
       onError: (error) => writeError(environment, error),
-      // Something did say otherwise: the daemon answered that this lease is gone or not ours.
-      // Same ending as the `lease-lost` push -- exit 14, and no farewell release for a lease
-      // that would only answer UNKNOWN_LEASE again -- and the same stderr line, so a script
-      // watching for `push: "lease-lost"` sees this way of losing a lease too. The error line
-      // follows it as the detail of why.
-      onLeaseGone: (error) => {
-        markLeaseLost({
-          deviceId: grant.lease.deviceId,
-          leaseId: grant.lease.id,
-          reason: "renew-rejected",
-        });
+      // Something did say otherwise: renewal ended, either because the daemon answered that
+      // this lease is gone or not ours (`renew-rejected`) or because it could not be kept
+      // alive to its deadline (`renew-failed`). Both are the same ending as the `lease-lost`
+      // push -- the same stderr line, so a script watching for `push: "lease-lost"` sees every
+      // way of losing a lease; exit 14; and no farewell release for a lease this process can
+      // no longer speak for. The error line follows as the detail of why.
+      onLeaseGone: (reason, error) => {
+        markLeaseLost({ deviceId: grant.lease.deviceId, leaseId: grant.lease.id, reason });
         writeError(environment, error);
       },
     });

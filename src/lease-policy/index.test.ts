@@ -118,14 +118,14 @@ describe("startLeaseRenewal", () => {
     "treats %s as the end of the lease, not a failed attempt",
     async (code) => {
       const clock = new FakeClock(0);
-      const gone: unknown[] = [];
+      const gone: Array<{ reason: string; error: unknown }> = [];
       const errors: unknown[] = [];
       let calls = 0;
       startLeaseRenewal({
         clock,
         leaseId: "lse_1",
         onError: (error) => errors.push(error),
-        onLeaseGone: (error) => gone.push(error),
+        onLeaseGone: (reason, error) => gone.push({ error, reason }),
         renew: () => {
           calls += 1;
           return Promise.reject(leaseGoneError(code));
@@ -137,7 +137,10 @@ describe("startLeaseRenewal", () => {
       await flushMicrotasks();
 
       expect(gone).toHaveLength(1);
-      expect(gone[0]).toMatchObject({ code });
+      expect(gone[0]?.reason, "the daemon's answer, not a failure to reach it").toBe(
+        "renew-rejected",
+      );
+      expect(gone[0]?.error).toMatchObject({ code });
       expect(errors, "a lease that is over is not a retryable failure").toEqual([]);
       expect(clock.pendingTimerCount).toBe(0);
 
@@ -215,11 +218,13 @@ describe("startLeaseRenewal", () => {
   it("retries on a shrinking ladder, then gives up once the lease's own deadline has passed", async () => {
     const clock = new FakeClock(0);
     const errors: Error[] = [];
+    const gone: Array<{ reason: string; error: Error }> = [];
     const attemptsAt: number[] = [];
     startLeaseRenewal({
       clock,
       leaseId: "lse_1",
       onError: (error) => errors.push(error as Error),
+      onLeaseGone: (reason, error) => gone.push({ error: error as Error, reason }),
       renew: () => {
         attemptsAt.push(clock.now());
         return Promise.reject(new Error("INTERNAL"));
@@ -240,12 +245,15 @@ describe("startLeaseRenewal", () => {
     expect(attemptsAt).toEqual([1_000, 1_666, 2_110]);
     expect(errors.map((error) => error.message)).toEqual(["INTERNAL", "INTERNAL", "INTERNAL"]);
 
-    // Once the deadline is behind us there is nothing left to save: renewal ends, with its own
-    // final report, distinct from the attempt failure that preceded it.
+    // Once the deadline is behind us there is nothing left to save. That is the end of the
+    // lease, not one more failed attempt, so it is reported as such -- a holder that only
+    // watched `onError` would sit alive holding nothing.
     clock.advance(60_000);
     await flushMicrotasks();
     expect(clock.pendingTimerCount).toBe(0);
-    expect(errors.at(-1)?.message).toContain("Gave up renewing lease lse_1");
+    expect(gone).toHaveLength(1);
+    expect(gone[0]?.reason).toBe("renew-failed");
+    expect(gone[0]?.error.message).toContain("Gave up renewing lease lse_1");
 
     const attempts = attemptsAt.length;
     clock.advance(600_000);
@@ -329,12 +337,14 @@ describe("startLeaseRenewal", () => {
   it("ignores an abandoned renewal's answer once a newer one has come back", async () => {
     const clock = new FakeClock(0);
     const errors: Error[] = [];
+    const gone: Array<{ reason: string }> = [];
     let answerFirst!: (renewed: { ttlDeadline: number }) => void;
     let attempts = 0;
     startLeaseRenewal({
       clock,
       leaseId: "lse_1",
       onError: (error) => errors.push(error as Error),
+      onLeaseGone: (reason) => gone.push({ reason }),
       renew: () => {
         attempts += 1;
         if (attempts === 1)
@@ -365,7 +375,7 @@ describe("startLeaseRenewal", () => {
     clock.advance(60_000);
     await flushMicrotasks();
     expect(clock.pendingTimerCount, "renewal works towards 5_110, so it gives up past it").toBe(0);
-    expect(errors.at(-1)?.message).toContain("Gave up renewing lease lse_1");
+    expect(gone.at(-1)?.reason).toBe("renew-failed");
   });
 
   it("applies two late answers newest-first, not largest-first", async () => {
@@ -418,6 +428,57 @@ describe("startLeaseRenewal", () => {
     expect(attemptsAt).toEqual([3_000, 6_333, 7_814, 9_209]);
   });
 
+  it("does not send a renewal that stop() beat to the wire", async () => {
+    const clock = new FakeClock(0);
+    let calls = 0;
+    const renewal = startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      renew: () => {
+        calls += 1;
+        return Promise.resolve({ ttlDeadline: clock.now() + 3_000 });
+      },
+      ttlDeadline: 3_000,
+    });
+
+    // The timer has fired -- the tick is running -- but `stop()` lands before the request
+    // leaves. "No further `renew` call" has to mean this too, or a released lease gets one
+    // last renewal after its release.
+    clock.advance(1_000);
+    renewal.stop();
+    await flushMicrotasks();
+
+    expect(calls).toBe(0);
+    expect(clock.pendingTimerCount).toBe(0);
+  });
+
+  it("clamps the delay to what a timer can express, for a deadline months away", async () => {
+    const clock = new FakeClock(0);
+    const renewedAt: number[] = [];
+    const ninetyDays = 90 * 24 * 60 * 60 * 1_000;
+    const renewal = startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      renew: () => {
+        renewedAt.push(clock.now());
+        return Promise.resolve({ ttlDeadline: clock.now() + ninetyDays });
+      },
+      ttlDeadline: ninetyDays,
+    });
+
+    // A third of 90 days is past what `setTimeout` can hold, and a truncated delay would fire
+    // in a millisecond -- the hot loop the floor exists to prevent, from the other end.
+    clock.advance(2_147_483_646);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([]);
+
+    clock.advance(1);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([2_147_483_647]);
+
+    renewal.stop();
+  });
+
   it("never reports a failure that arrives after stop()", async () => {
     const clock = new FakeClock(0);
     let rejectRenew!: (error: Error) => void;
@@ -445,11 +506,11 @@ describe("startLeaseRenewal", () => {
   it("tries a deadline that is already in the past once, then stops instead of hot-looping", async () => {
     const clock = new FakeClock(1_000);
     const renewedAt: number[] = [];
-    const errors: unknown[] = [];
+    const gone: Array<{ reason: string }> = [];
     startLeaseRenewal({
       clock,
       leaseId: "lse_1",
-      onError: (error) => errors.push(error),
+      onLeaseGone: (reason) => gone.push({ reason }),
       renew: () => {
         renewedAt.push(clock.now());
         // A daemon answering with a deadline that is not in the future -- reachable with
@@ -467,9 +528,10 @@ describe("startLeaseRenewal", () => {
     await flushMicrotasks();
     expect(renewedAt).toEqual([1_250]);
 
-    // Nothing to renew towards: renewal ends rather than spinning at the floor forever.
+    // Nothing to renew towards: renewal ends -- and says so, rather than spinning at the floor
+    // forever or leaving the holder to infer it.
     expect(clock.pendingTimerCount).toBe(0);
-    expect(errors).toHaveLength(1);
+    expect(gone).toEqual([{ reason: "renew-failed" }]);
     clock.advance(600_000);
     await flushMicrotasks();
     expect(renewedAt).toEqual([1_250]);

@@ -89,6 +89,18 @@ export interface RenewedLease {
   readonly ttlDeadline: number;
 }
 
+/**
+ * Why renewal ended for good. Both mean "this holder no longer has a lease", and both are told
+ * to `onLeaseGone`; they differ in what a reader should conclude:
+ *
+ * - `renew-rejected`: the daemon answered `UNKNOWN_LEASE`/`FORBIDDEN` -- the lease is gone, or
+ *   was never this principal's. Nothing was lost by this client.
+ * - `renew-failed`: renewal never got an answer it could use before the lease's own deadline
+ *   passed (or the daemon answered with a deadline already behind us). The lease may still be
+ *   alive on the daemon for a moment, but nothing here can keep it, and it will expire.
+ */
+export type LeaseGoneReason = "renew-rejected" | "renew-failed";
+
 export interface LeaseRenewalOptions {
   readonly clock: Clock;
   readonly leaseId: string;
@@ -103,13 +115,14 @@ export interface LeaseRenewalOptions {
    */
   readonly onError?: (error: unknown) => void;
   /**
-   * The lease is over: the daemon answered that it does not exist (`UNKNOWN_LEASE`) or is not
-   * this principal's (`FORBIDDEN`). Renewal has already stopped by the time this runs, and
-   * retrying would only repeat the same answer -- so a holder should treat this exactly like
-   * the `lease-lost` push (ADR 0003 §8) it may or may not also receive: stop holding, and do
-   * not try to release what is no longer there. Called at most once.
+   * The lease is over, for either of the reasons `LeaseGoneReason` names. Renewal has already
+   * stopped by the time this runs, and nothing it could do would bring the lease back -- so a
+   * holder should treat this exactly like the `lease-lost` push (ADR 0003 §8) it may or may
+   * not also receive: stop holding, and do not try to release what is no longer there. Called
+   * at most once, and it is the *only* end-of-lease signal this module raises: `onError`
+   * reports attempts that failed while the lease was still savable.
    */
-  readonly onLeaseGone?: (error: unknown) => void;
+  readonly onLeaseGone?: (reason: LeaseGoneReason, error: unknown) => void;
 }
 
 export interface LeaseRenewal {
@@ -183,16 +196,25 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
   };
 
   /** Isolated: a holder that cannot report a failure must still keep holding. */
-  const notify = (listener: ((error: unknown) => void) | undefined, error: unknown): void => {
-    if (listener === undefined) return;
+  const report = (error: unknown): void => {
+    if (onError === undefined) return;
     try {
-      listener(error);
+      onError(error);
     } catch {
       // A `stderr` that throws (a closed pipe, say) must not take the release path down with
       // it -- see the `void tick()` below, which nothing awaits.
     }
   };
-  const report = (error: unknown): void => notify(onError, error);
+  /** Ends renewal and says why, once. Isolated for the same reason `report` is. */
+  const giveUp = (reason: LeaseGoneReason, error: unknown): void => {
+    stopped = true;
+    if (onLeaseGone === undefined) return;
+    try {
+      onLeaseGone(reason, error);
+    } catch {
+      // A holder that cannot handle the news still has to stop renewing, which it now has.
+    }
+  };
 
   const schedule = (): void => {
     if (stopped) return;
@@ -211,7 +233,14 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     // `Promise.resolve().then` rather than a bare call: a `renew` that throws *synchronously*
     // (a client that rejects a malformed input before it ever reaches the wire) is a failed
     // attempt like any other, not something that should escape into the unawaited `tick()`.
-    const request = Promise.resolve().then(() => renew(leaseId));
+    // The `stopped` check inside it is what makes `stop()`'s "no further `renew` call"
+    // guarantee true even for a stop that lands in the microtask between the timer firing and
+    // the request going out.
+    const request = Promise.resolve().then(() =>
+      stopped
+        ? Promise.reject(new Error(`Renewal of lease ${leaseId} was stopped before it was sent`))
+        : renew(leaseId),
+    );
     // An abandoned request still reaches the daemon: if it succeeds after this attempt has
     // been given up on, its deadline is real and worth keeping -- discarding it would let the
     // give-up test below fire against a deadline the daemon has already moved. (It also keeps
@@ -256,18 +285,19 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       if (isLeaseGone(attempt.error)) {
         // Terminal, not transient: this lease is over, and the holder needs to hear that once
         // rather than read the same rejection on every retry until the deadline.
-        stopped = true;
-        notify(onLeaseGone, attempt.error);
+        giveUp("renew-rejected", attempt.error);
         return;
       }
       report(attempt.error);
-      // Out of runway: the lease is gone (or about to be), and another attempt would only
-      // produce another error. Reported separately from the attempt that failed, because
-      // "this one did not work" and "this lease will not be renewed again" are different
-      // things for a holder to read.
+      // Out of runway: the deadline has passed, so another attempt would only produce another
+      // error against a lease that is expiring. That is the end of this lease as far as any
+      // holder is concerned -- reported as such, not as one more failed attempt, so a frontend
+      // stops holding instead of sitting alive with no timer.
       if (clock.now() >= deadline) {
-        stopped = true;
-        report(new Error(`Gave up renewing lease ${leaseId}: its deadline has passed`));
+        giveUp(
+          "renew-failed",
+          new Error(`Gave up renewing lease ${leaseId}: its deadline has passed`),
+        );
         return;
       }
       schedule();
@@ -282,9 +312,11 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     }
     if (attempt.renewed.ttlDeadline <= clock.now()) {
       // A deadline that is not in the future cannot be renewed towards -- scheduling off it
-      // would be a hot loop against a lease that is already over.
-      stopped = true;
-      report(new Error(`Lease ${leaseId} was renewed to a deadline that has already passed`));
+      // would be a hot loop against a lease that is already over, so this is an ending too.
+      giveUp(
+        "renew-failed",
+        new Error(`Lease ${leaseId} was renewed to a deadline that has already passed`),
+      );
       return;
     }
     // The cadence follows the newest answer in both directions: the daemon may hand back a
