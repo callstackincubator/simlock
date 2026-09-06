@@ -190,6 +190,9 @@ export function createConnectionPair(): [IpcConnection, IpcConnection] {
 class PairedConnection implements IpcConnection {
   readonly #closeListeners = new Set<() => void>();
   readonly #dataListeners = new Set<(chunk: string) => void>();
+  /** Buffered until the first `onData`, exactly as the WebSocket adapter does and as a real
+   * socket does: the peer may write before this end has been handed to whoever reads it. */
+  readonly #pending: string[] = [];
   #peer: PairedConnection | undefined;
   #closed = false;
 
@@ -203,6 +206,10 @@ class PairedConnection implements IpcConnection {
 
   onData(listener: (chunk: string) => void): () => void {
     this.#dataListeners.add(listener);
+    if (this.#pending.length > 0) {
+      const buffered = this.#pending.splice(0);
+      for (const chunk of buffered) listener(chunk);
+    }
     return () => this.#dataListeners.delete(listener);
   }
 
@@ -226,6 +233,10 @@ class PairedConnection implements IpcConnection {
   async write(contents: string): Promise<void> {
     const peer = this.#peer;
     if (this.#closed || peer === undefined || peer.#closed) return;
+    if (peer.#dataListeners.size === 0) {
+      peer.#pending.push(contents);
+      return;
+    }
     for (const listener of peer.#dataListeners) listener(contents);
   }
 

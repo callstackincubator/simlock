@@ -1057,6 +1057,27 @@ export class DaemonServer {
         );
       case "token.revoke":
         return this.#dispatcher.dispatch("token.revoke", frame.payload, this.#session(connection));
+      // ADR 0005 §23. Listed here like any other operation: this switch is the socket's whole
+      // surface, and whether a *given* daemon implements one is the dispatcher's answer, not
+      // the transport's -- a worker's dispatcher has no handler for these and says
+      // `UNKNOWN_REQUEST` itself, which is the same code this switch's default produces but
+      // for the honest reason.
+      case "worker.list":
+        return this.#dispatcher.dispatch(
+          "worker.list",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "worker.drain":
+        return this.#dispatcher.dispatch("worker.drain", frame.payload, this.#session(connection));
+      case "worker.undrain":
+        return this.#dispatcher.dispatch(
+          "worker.undrain",
+          frame.payload,
+          this.#session(connection),
+        );
+      case "worker.remove":
+        return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
       // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`
