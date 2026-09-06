@@ -237,39 +237,58 @@ const STOPS_A_RUNNING_DEVICE =
   "it stops a device Simlock still believes is running, which reports as drift on the next reconcile.";
 
 /**
- * Global flags that would point `adb` at a different server than the one Simlock owns. adb
- * takes the **last** `-P` on the line, so a caller-supplied one silently wins over the one
- * this driver inserts and the command lands on the machine's default server, outside
- * containment entirely (safety rule 9) -- the same hole the iOS driver closes by refusing a
- * caller-supplied `--set`/`--profiles`.
+ * adb globals `simlock adb` passes a caller's command through unchanged. This is an
+ * **allow list**, not a blocklist of the flags known to point `adb` at a different server
+ * than the one Simlock owns (`-P`/`-H`/`-L`/`--server-port`, which adb takes the **last** of
+ * on the line, so a caller-supplied one would silently win over the one this driver inserts
+ * and land the command on the machine's default server, outside containment entirely --
+ * safety rule 9, the same hole the iOS driver closes by refusing a caller-supplied
+ * `--set`/`--profiles`).
  *
- * `-P` and `--server-port` name the port, `-H` the host, `-L` the whole listen address
- * (`tcp:host:port`). The single-letter pair is matched **attached as well as separated**
- * (`-P5037`, `-Hother-host`) because adb's own parser is `strncmp(argv[0], "-P", 2)`: it takes
- * the rest of the argument as the value, so a check that only knew `-P` as a whole word would
- * refuse the spelling adb accepts and pass the one it also accepts. `-P=5037` needs no entry
- * of its own -- adb would read the value as `=5037` and fail -- but the attached rule catches
- * it anyway, which is the right way round.
+ * A blocklist only refuses what someone already thought to name, and adb has globals this
+ * list never needed to: `--reply-fd` takes a value, is absent from `adb --help`, and is real
+ * -- confirmed against the adb binary on this machine (1.0.41 / 37.0.1), which errors
+ * `--reply-fd requires an argument` rather than `unknown command`. A scanner that assumes an
+ * unrecognized flag takes no value treats `--reply-fd 9` as ending the globals region at `9`,
+ * and never sees the `-H`/`-P` that follow it -- exactly the bypass this allow list closes.
+ * Root validation fails closed (safety rule 9): an argument here whose arity this driver does
+ * not know is refused, not assumed harmless.
  *
- * Deliberately **not** here: `-s`, `-t`, `-d`, `-e`. Those select which device on Simlock's own
- * server a command talks to, which is what the arguments are *for*; refusing them would break
- * every multi-device invocation to prevent nothing, since every device they can name is one
- * Simlock already manages. What that does mean -- any lease holder can name any Simlock device
- * on this machine -- is the accident boundary ADR 0001 draws, not a hole in this list; see
- * `docs/known-pitfalls.md`.
+ * Only `-s`, `-t`, `-d`, `-e` are allowed through: they select which device on Simlock's own
+ * server a command talks to, which is what arguments before the subcommand are *for*, and
+ * refusing them would break every multi-device invocation to prevent nothing, since every
+ * device they can name is one Simlock already manages. What that does mean -- any lease
+ * holder can name any Simlock device on this machine -- is the accident boundary ADR 0001
+ * draws, not a hole in this list; see `docs/known-pitfalls.md`. Everything else -- the known
+ * scope flags, `-a`, `--exit-on-write-error`, `--one-device`, `--reply-fd`, and any global a
+ * future adb adds -- is refused in this position, whether or not it turns out to be benign.
+ *
+ * Arity, verified against real adb on this machine: `-d` and `-e` take no value. `-s` is
+ * **separate-only** -- adb rejects the fused `-sSERIAL` outright (`-s requires an argument`).
+ * `-t` accepts both `-t 123` and the fused `-t123` (`strncmp(argv[0], "-t", 2)`).
+ *
+ * `--version` and `--help` are also allowed through, but not as globals with an arity: adb
+ * answers them on their own, before it ever looks for a subcommand (`-h` gets no such
+ * treatment and is `unknown command` on real adb), so for this scan they *are* the
+ * subcommand rather than something that precedes one.
  */
-const ATTACHED_SCOPE_FLAGS: readonly string[] = ["-P", "-H"];
-const EXACT_SCOPE_FLAGS: readonly string[] = ["-L", "--server-port"];
+const SELF_CONTAINED_ACTIONS: readonly string[] = ["--version", "--help"];
 
-/** adb globals whose value is the next argument, so it is not the subcommand however much it
- * looks like one (`-s emulator-5554 shell ...`). `-d`, `-e` and `-a` take none. */
-const VALUE_TAKING_GLOBALS: readonly string[] = ["-s", "-t", "-L", "-H", "-P", "--server-port"];
+function allowedGlobalArity(argument: string): "none" | "value" | undefined {
+  if (argument === "-d" || argument === "-e") return "none";
+  if (argument === "-s") return "value";
+  if (argument === "-t") return "value";
+  if (argument.startsWith("-t") && argument.length > 2) return "none"; // fused, e.g. `-t123`
+  return undefined;
+}
 
 /**
- * The caller-supplied scope flag in the *globals* region, if any: adb's globals come before
- * the subcommand, and everything from the subcommand onwards is that subcommand's operand --
- * `adb shell echo -Please` is a word to echo, not an attempt to move the server. Same scan the
- * iOS driver runs for `--set`/`--profiles`, for the same reason.
+ * The caller-supplied argument that ends this driver's tolerance of the *globals* region, if
+ * any: adb's globals come before the subcommand, and everything from the subcommand onwards
+ * is that subcommand's operand -- `adb shell echo -Please` is a word to echo, not an attempt
+ * to move the server. Same scan the iOS driver runs for `--set`/`--profiles`, for the same
+ * reason, except this one refuses by *not* recognizing a flag rather than by recognizing it:
+ * see `allowedGlobalArity`.
  */
 function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
@@ -278,9 +297,12 @@ function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
     // its own -- unless it is the *value* of a global that takes one (`-s <serial>`), which is
     // why this walks adb's small global grammar rather than stopping at the first bare word.
     if (!argument.startsWith("-")) return undefined;
-    if (EXACT_SCOPE_FLAGS.includes(argument)) return argument;
-    if (ATTACHED_SCOPE_FLAGS.some((flag) => argument.startsWith(flag))) return argument;
-    if (VALUE_TAKING_GLOBALS.includes(argument)) index += 1;
+    if (SELF_CONTAINED_ACTIONS.includes(argument)) return undefined;
+    const arity = allowedGlobalArity(argument);
+    // Not one of the four we allow through: refuse rather than guess whether it takes a value
+    // (and so whether the *next* argument is really the subcommand or this flag's operand).
+    if (arity === undefined) return argument;
+    if (arity === "value") index += 1;
   }
   return undefined;
 }
@@ -556,7 +578,7 @@ export class AndroidDriver implements Driver {
     if (scopeFlag !== undefined) {
       throw new PassthroughRefusedError(
         this.passthroughTool,
-        `Refusing \`simlock adb ${scopeFlag}\`: \`simlock adb\` supplies the adb server itself, and adb takes the last one on the line -- a caller-supplied one would point the command at a server that cannot see Simlock's devices, or at one it must not touch. Drop the flag -- the command is already scoped -- or run \`adb\` directly if you mean to leave Simlock's server.`,
+        `Refusing \`simlock adb ${scopeFlag}\`: \`simlock adb\` supplies the adb server itself, and only allows \`-s\`/\`-t\`/\`-d\`/\`-e\` ahead of the subcommand -- anything else there, whether it is a known way to move the server or one this driver does not recognize, might point the command at a server that cannot see Simlock's devices, or at one it must not touch. Drop the flag -- the command is already scoped -- or run \`adb\` directly if you mean to leave Simlock's server.`,
       );
     }
   }

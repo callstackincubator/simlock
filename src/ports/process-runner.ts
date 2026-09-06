@@ -264,6 +264,27 @@ export class NodeProcessRunner implements ProcessRunner {
 }
 
 /**
+ * Thrown by `NodeStreamingProcessHandle#wait()` when the child exited but a chunk's delivery
+ * -- the promise `onChunk` returned, which this handle was waiting on before resuming the
+ * pipe for backpressure (ADR 0005 §19e) -- was still outstanding `EXIT_TO_CLOSE_MAX_DEFERRAL_MS`
+ * later. A paused readable never reaches `close` and stops emitting `data`, so nothing here can
+ * *prove* the remaining output was delivered; resolving `{ exitCode }` as if it had been would
+ * be exactly the silent truncation streaming without buffering exists to avoid. The caller sees
+ * this as `device.exec`'s terminal error, the same shape a `PASSTHROUGH_REFUSED` or
+ * `EXEC_TIMEOUT` already is on both transports -- not a clean exit that quietly drops a tail.
+ */
+export class ExecOutputDeliveryStalledError extends Error {
+  constructor() {
+    super(
+      "The command exited, but delivering one of its output chunks was still unresolved " +
+        `${String(EXIT_TO_CLOSE_MAX_DEFERRAL_MS)}ms later; treating this as a clean exit could ` +
+        "have reported an exit code while silently dropping the tail of the command's output.",
+    );
+    this.name = "ExecOutputDeliveryStalledError";
+  }
+}
+
+/**
  * `spawnStreaming`'s handle. Holds no output: every chunk is handed to `onChunk` the moment
  * the stream emits it and is then forgotten, which is what lets `device.exec` stream
  * arbitrarily large output through a daemon that never grows for it.
@@ -272,11 +293,37 @@ export class NodeProcessRunner implements ProcessRunner {
  * (see `EXIT_TO_CLOSE_GRACE_MS`): a grandchild holding the inherited pipe open (`adb
  * start-server` is exactly this) means `close` may never fire even though the process the
  * caller asked about is gone.
+ *
+ * The quiet window that dance relies on only means anything when the pipe is idle because the
+ * child has nothing left to write. `#forward` below pauses the readable while a chunk's
+ * delivery to the consumer is outstanding (the backpressure ADR 0005 §19e asks for): a paused
+ * readable emits no `data`, so `#chunkCount` stops moving for a reason that has nothing to do
+ * with the child being gone. Settling under that -- as this class once did -- resolves `wait()`
+ * while a chunk still sits undelivered in the paused pipe, and the caller returns `{ exitCode }`
+ * having silently dropped it.
+ *
+ * `close` itself is not the all-clear it looks like, either: verified against real Node (a
+ * child that writes two small chunks in quick succession and calls `process.exit()`), the
+ * stdio pipe's `close` can fire in the very same tick as a `data` event delivering a chunk
+ * this handle just paused on -- Node drains whatever the OS pipe was already holding as part
+ * of noticing EOF, pause or no pause. So both `close` and the exit grace window fail closed
+ * through the same `#settleWhenDrained`: `#pendingDeliveries` is this handle's own state (it is
+ * the one that called `pause()`), checked directly rather than inferred from the chunk counter
+ * the grandchild case already overloads, and only `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` with a
+ * delivery still outstanding at that deadline ends the wait -- as a rejection
+ * (`ExecOutputDeliveryStalledError`), not a settle, because at that point something really may
+ * have been dropped and pretending otherwise is the one thing this class must not do. A chatty
+ * grandchild with **no** pending delivery hitting the same deadline still settles as before:
+ * nothing of the command's own output is waiting on anyone in that case, only unrelated noise
+ * this handle was never going to forward to a live consumer anyway (see `#execDevice` in
+ * `daemon/server.ts`, torn down by then).
  */
 class NodeStreamingProcessHandle implements StreamingProcessHandle {
   readonly pid: number;
   readonly #result: Promise<StreamingProcessResult>;
   #chunkCount = 0;
+  #pendingDeliveries = 0;
+  #deliveryWaiters: Array<() => void> = [];
 
   constructor(
     private readonly child: ChildProcess,
@@ -295,19 +342,60 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         settled = true;
         resolve({ code, signal });
       };
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+      // Neither `close` nor the exit grace window may resolve this promise while a chunk's
+      // delivery is still outstanding -- both funnel through here instead of settling
+      // directly, each with its own budget for how long it will wait on a delivery that
+      // never finishes before giving up and failing loudly instead. Re-checked against a
+      // timer at the deadline, not only woken by a delivery settling: a delivery that never
+      // settles at all -- the case this exists for -- would otherwise leave nothing to wake
+      // this back up and notice the deadline has passed.
+      const settleWhenDrained = (deadline: number, onDrained: () => void): void => {
+        if (settled) return;
+        if (this.#pendingDeliveries === 0) {
+          onDrained();
+          return;
+        }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          fail(new ExecOutputDeliveryStalledError());
+          return;
+        }
+        let deadlineTimer: NodeJS.Timeout | undefined;
+        const timedOut = new Promise<void>((resolve) => {
+          deadlineTimer = setTimeout(resolve, remainingMs);
+          deadlineTimer.unref();
+        });
+        void Promise.race([this.#nextDeliverySettled(), timedOut]).then(() => {
+          if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+          settleWhenDrained(deadline, onDrained);
+        });
+      };
 
       child.once("close", (code, signal) => {
-        settle(code, signal);
+        settleWhenDrained(Date.now() + EXIT_TO_CLOSE_MAX_DEFERRAL_MS, () => settle(code, signal));
       });
       child.once("exit", (code, signal) => {
         const deadline = Date.now() + EXIT_TO_CLOSE_MAX_DEFERRAL_MS;
         const armGrace = (chunksAtArm: number): void => {
           const timer = setTimeout(() => {
-            if (this.#chunkCount !== chunksAtArm && Date.now() < deadline) {
+            if (settled) return;
+            // A pending delivery always wins over "chunk count still changing": it is this
+            // handle's own state, not an inference, and it is checked first so a chattering
+            // stream with one stuck delivery does not keep re-arming past it forever.
+            if (
+              this.#pendingDeliveries === 0 &&
+              this.#chunkCount !== chunksAtArm &&
+              Date.now() < deadline
+            ) {
               armGrace(this.#chunkCount);
               return;
             }
-            settle(code, signal);
+            settleWhenDrained(deadline, () => settle(code, signal));
           }, EXIT_TO_CLOSE_GRACE_MS);
           timer.unref();
         };
@@ -328,6 +416,14 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
     return this.#result;
   }
 
+  /** Resolves the next time any outstanding delivery finishes, successfully or not -- just a
+   * wake-up to re-check state, not a promise about which one it was. */
+  #nextDeliverySettled(): Promise<void> {
+    return new Promise((resolve) => {
+      this.#deliveryWaiters.push(resolve);
+    });
+  }
+
   #forward(
     stream: NodeJS.ReadableStream | null,
     name: "stdout" | "stderr",
@@ -343,12 +439,18 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
       // pipe -- it fills the OS buffer and then blocks in its own `write` -- which is the only
       // place backpressure can be applied without holding the bytes somewhere. Resumed on
       // either outcome: a failed delivery (a dead socket) must not wedge the process, and the
-      // exec timeout still bounds a child nobody drains.
+      // exec timeout still bounds a child nobody drains. Tracked in `#pendingDeliveries` so the
+      // exit settle path can tell "paused waiting on the consumer" apart from "child is gone".
+      this.#pendingDeliveries += 1;
       stream.pause();
-      void Promise.resolve(delivered).then(
-        () => stream.resume(),
-        () => stream.resume(),
-      );
+      const settleDelivery = (): void => {
+        this.#pendingDeliveries -= 1;
+        stream.resume();
+        const waiters = this.#deliveryWaiters;
+        this.#deliveryWaiters = [];
+        for (const waiter of waiters) waiter();
+      };
+      void Promise.resolve(delivered).then(settleDelivery, settleDelivery);
     });
   }
 }

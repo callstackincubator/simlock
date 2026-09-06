@@ -7,7 +7,7 @@ a warning. Inspect the effective, merged configuration at any time with
 
 | Property                          | Description                                                                                                                                                                                                                  | Default                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `mode`                            | Which shape this daemon runs as: `worker` (owns the devices on this machine) or `gateway` (owns none, fronts the workers that join it -- see [ADR 0005](adr/0005-gateway-and-worker-modes.md)). One daemon runs exactly one mode. Only `worker` does anything in this release; the value is reported on `simlock status`'s daemon block, which is how a client tells the two apart. | `worker`                                                        |
+| `mode`                            | Which shape this daemon runs as: `worker` (owns the devices on this machine) or `gateway` (owns none, fronts the workers that join it -- see [ADR 0005](adr/0005-gateway-and-worker-modes.md)). One daemon runs exactly one mode. See below for exactly what setting it does and does not do before the gateway skeleton (#117) lands. | `worker`                                                        |
 | `capacity.strategy`               | Which policy decides how many devices may exist and run at once: `resource` or `fixed`. The options under `capacity.config` are that strategy's own -- see [Capacity strategies](#capacity-strategies).                     | `resource`                                                      |
 | `idle.shutdownAfterMs`            | How long an unused device sits idle before Simlock shuts it down (tier 1, reclaims RAM).                                                                                                                                     | `10 minutes`                                                    |
 | `idle.deleteAfterMs`              | How long a shut-down device sits idle before Simlock deletes it (tier 2, reclaims disk).                                                                                                                                     | `1 hour`                                                        |
@@ -51,10 +51,32 @@ integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 `mode` must be exactly `"worker"` or `"gateway"`. `"gateway"` is *reachable*
-in this release and inert: the config loads, the daemon starts, and
-`simlock status` reports the mode, but nothing joins a gateway and no request
-is dispatched anywhere until the gateway work lands (#117). Setting it today
-buys a daemon that serves no devices.
+in this release, but is not the finished thing ADR 0005 describes -- the
+gateway skeleton that starts no drivers, validates no device roots, and
+accepts worker uplinks lands with #117. Precisely what setting it today does
+and does not do:
+
+- The config loads, the daemon starts exactly as a `worker` would --
+  drivers, device roots, the reaper, health monitoring, and capacity all run
+  the same regardless of `mode` -- and `simlock status` reports the mode,
+  which is how a client tells the two apart.
+- It is **not** inert, though: the CLI reads it. `simlock simctl` and
+  `simlock adb` ask the daemon its mode and switch on the answer (ADR 0005
+  §19c) -- `"gateway"` sends the command over `device.exec` instead of
+  resolving and spawning it locally, and `device.exec` requires a lease the
+  local path does not. Nothing proxies that request anywhere yet, so it
+  still runs against this same daemon, which still owns the device directly
+  -- but the CLI's own behavior genuinely changes today, before there is a
+  fleet on the other end of it to justify it.
+- `mode: "gateway"` with `http.enabled: false` is rejected at load (ADR 0005
+  §2): a gateway is the fleet's contact point over HTTP, so one nothing can
+  reach has no safe reading. This holds regardless of whether the rest of
+  gateway mode has landed, since it is a config-shape rule, not a networking
+  one.
+
+Setting `mode: "gateway"` today buys a daemon that still serves its own
+devices exactly as a worker does, plus a CLI that now insists on a lease and
+an extra hop to reach them -- not a daemon that joins or fronts a fleet.
 `exec.timeoutMs` must be a positive number.
 `lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
 `lease.defaultTtlMs` must be `<=` `lease.maxTtlMs`. A config that violates

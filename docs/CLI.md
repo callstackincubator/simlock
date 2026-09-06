@@ -509,23 +509,32 @@ The refused *verbs* are matched anywhere in the arguments, so
 For those three, use `simlock release` (which reclaims the device for you) or
 `simlock cleanup` instead.
 
-The server-scope flags are refused by *position* rather than anywhere on the
-line, because past the subcommand they are no longer adb's:
+Globals — the arguments before the subcommand — are refused by *position*
+and by an **allow list**, rather than anywhere on the line or by naming the
+ones known to be dangerous:
 
-- `-P`, `-H`, `-L`, and `--server-port`, anywhere in adb's globals — the
-  arguments before the subcommand — including the attached forms `-P5037` and
-  `-Hhost`, and including one that follows another global's value
-  (`-s emulator-5554 -P 5037 shell …`). `simlock adb` supplies the server
-  itself, and `adb` takes the *last* one on the line, so a caller-supplied one
-  would silently win and point the command at a server that cannot see
-  Simlock's devices (or at one Simlock must not touch). Run `adb` directly if
-  you mean to leave Simlock's server.
+- Only `-s`, `-t`, `-d`, and `-e` (in every spelling adb accepts, including
+  the attached forms `-t123`, and including one that follows another
+  global's value, e.g. `-s emulator-5554 -t 1 shell …`) are let through —
+  they select a device inside the containment Simlock already established
+  rather than escaping it (see [known-pitfalls.md](known-pitfalls.md)).
+  `--version` and `--help` are also let through, since adb answers those on
+  its own before it ever looks for a subcommand.
+- Everything else positioned there is refused, whether or not it is a flag
+  this driver has a name for: `-P`, `-H`, `-L`, `--server-port` (including
+  the attached forms `-P5037` and `-Hhost`) are refused because `simlock adb`
+  supplies the server itself and `adb` takes the *last* one on the line, so a
+  caller-supplied one would silently win and point the command at a server
+  that cannot see Simlock's devices (or at one Simlock must not touch); any
+  other global — known adb globals this driver has no reason to allow
+  (`-a`, `--exit-on-write-error`, `--one-device`, the undocumented
+  `--reply-fd`) as well as any global a future adb release adds — is refused
+  the same way, on the principle that an argument whose effect on the command
+  this driver cannot vouch for is refused rather than assumed harmless.
 
 From the subcommand onwards those spellings are operands and pass through:
-`simlock adb shell echo -Please` echoes a word. `-s`, `-t`, `-d` and `-e`
-are *not* refused — they select a device inside the containment Simlock
-already established rather than escaping it (see
-[known-pitfalls.md](known-pitfalls.md)).
+`simlock adb shell echo -Please` echoes a word. Run `adb` directly if you
+mean to leave Simlock's server.
 
 ## `simlock release <lease-id> | --all`
 

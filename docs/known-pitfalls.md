@@ -176,13 +176,19 @@ means parsing each tool's argument grammar well enough to decide which token
 is a device id, on a surface that changes with the platform tools rather than
 with simlock. A parser that is wrong in the permissive direction refuses
 nothing extra; one that is wrong in the strict direction refuses commands
-that were always fine. The flags simlock *does* refuse
+that were always fine. The verbs simlock *does* refuse
 ([CLI.md](CLI.md)) are the ones that move a device's lifecycle behind the
-registry's back or escape containment altogether — `adb kill-server`, `-P` /
-`-L` / `-H` / `--server-port`, `simctl delete` — which is a list of verbs and
-scope switches, not a judgement about identity. `-s` / `-t` / `-d` / `-e`
-select a device *within* the containment simlock already established, so they
-stay.
+registry's back or escape containment altogether — `adb kill-server`,
+`simctl delete` — which is a judgement about what an action does, not about
+identity. adb's server-scope globals are handled differently, and more
+strictly, because a caller-supplied one there does not merely name a device —
+it can silently repoint the whole command at a server Simlock does not own
+(safety rule 9): `simlock adb` allow-lists `-s` / `-t` / `-d` / `-e`, the
+globals that select a device *within* the containment simlock already
+established, and refuses everything else positioned before the subcommand —
+`-P` / `-L` / `-H` / `--server-port` by name, and any other global (including
+one this driver has never heard of) on the general principle that an argument
+it cannot vouch for is refused rather than assumed harmless.
 
 The consequence follows the same rule as the rest of this section: mutually
 untrusted agents on one machine need OS-level isolation. Agents that trust
@@ -663,3 +669,42 @@ a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
 on the same timers as any other idle device, since neither rule cares what a
 device's spec matches. Until those timers fire, though, it occupies a pool
 slot doing nothing.
+
+## `simlock simctl` / `simlock adb` can hang forever reading a piped stdin
+
+ADR 0005 §19c: a piped stdin is read to EOF first, then sent as `device.exec`'s
+one-shot string (§19a) — there is no incremental stdin channel, so the whole
+thing has to exist before the request can be sent at all. `readPipedStdin` in
+`src/cli/index.ts` does exactly that: `process.stdin.isTTY === true` means
+nothing was piped and it returns `undefined` immediately, and otherwise it
+reads the stream to completion with no bound.
+
+**The pitfall:** "not a TTY" and "has a well-behaved sender" are different
+facts. `simlock adb shell getprop` run from a CI job whose stdin is an
+inherited pipe that nothing ever closes (a common shape for a step that
+redirects a long-lived process's output, or simply forgets to redirect stdin
+from `/dev/null`) blocks on this read before the command is even sent — not
+inside the command, not bounded by `exec.timeoutMs`, which only starts once
+`device.exec`'s request goes out. There is no timeout here at all, and no way
+to tell from the caller's side, short of the process just never finishing,
+that this is what happened.
+
+**Why this is not being fixed by adding a bound:** §19c is explicit that the
+whole piped input is read before the request is sent, because `device.exec`'s
+`stdin` is a single string handed over once, not a channel — there is nowhere
+to send a partial read to. A read that gave up after some fixed time would
+either send a truncated `stdin` (silently changing the command's input, which
+is worse than hanging) or refuse the command outright on a caller whose input
+was simply slow rather than infinite, and simlock has no way to distinguish
+the two from here. Every other tool with the same read-to-EOF contract for a
+piped stdin (`cat`, `jq`, `xargs` without `-n`) has the identical hazard for
+the identical reason; it is not a defect specific to this CLI, and a caller
+that pipes in CI is already expected to close or redirect stdin the way any
+other pipe-reading command line requires.
+
+**Status:** accepted, deliberately not worked around. If this bites in
+practice the fix belongs at the call site — redirect stdin from `/dev/null`
+in the job that does not mean to pipe anything (`simlock adb shell getprop
+</dev/null`), or pass `stdin` some other way once a future need justifies
+one — not in `readPipedStdin` guessing at a timeout ADR 0005 does not ask
+for.

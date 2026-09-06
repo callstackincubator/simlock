@@ -46,8 +46,16 @@ export function buildHttpSession(
     readonly onProgress?: (progress: LeaseProgress) => void;
     /** ADR 0005 §19a: the `POST /v1/leases/{id}/exec` route's own override -- each chunk
      * becomes one SSE `output` event on that request's response. Same per-call shape as
-     * `onProgress`, and inert for every other route for the same reason. */
-    readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
+     * `onProgress`, and inert for every other route for the same reason.
+     *
+     * **May return a promise**, matching `DispatchSession.onOutput` exactly (not just
+     * assignable to it): the route's own implementation genuinely returns the SSE write's
+     * promise, which is what pauses the command at its pipe until the chunk has actually gone
+     * out (ADR 0005 §19e's backpressure, end to end). A narrower `=> void` here still lets
+     * that implementation through structurally, since `void` accepts an ignored return value --
+     * so this type is where the property is defined that a future implementation still returns
+     * a promise, not just a hope that it will. */
+    readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>;
     /** ADR 0005 §19e: the exec route opens its event stream here rather than on the first
      * chunk, so a command that prints nothing still gets a `200` and its keepalives. */
     readonly onStarted?: () => void;

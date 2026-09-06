@@ -454,6 +454,12 @@ export function buildCliEnvironment(
  * Reads piped stdin to EOF, or `undefined` when stdin is a terminal (nothing was piped, and
  * reading would block on a human). The only caller is the remote passthrough path, whose
  * `stdin` is one shot -- see `CliEnvironment.readStdin`.
+ *
+ * No bound on the read itself: ADR 0005 §19c sends the whole piped input as a single string,
+ * so there is nowhere to send a partial one, and a caller whose stdin is a pipe nothing ever
+ * closes (an inherited, never-redirected pipe in CI) hangs here with no timeout -- see
+ * "`simlock simctl` / `simlock adb` can hang forever reading a piped stdin" in
+ * `docs/known-pitfalls.md`. Accepted deliberately, not an oversight.
  */
 async function readPipedStdin(): Promise<string | undefined> {
   if (process.stdin.isTTY === true) return undefined;

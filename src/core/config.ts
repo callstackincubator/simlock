@@ -212,6 +212,7 @@ export async function loadConfig({
     overrideConfig,
   ) as unknown as Config;
   validateLeaseTtls(merged);
+  validateGatewayNeedsHttp(merged);
   return deepFreeze(merged);
 }
 
@@ -239,6 +240,23 @@ export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolea
 function validateLeaseTtls(config: Config): void {
   if (config.lease.defaultTtlMs > config.lease.maxTtlMs) {
     throw invalidValue("lease.defaultTtlMs", "at most lease.maxTtlMs");
+  }
+}
+
+/**
+ * Cross-field check (ADR 0005 §2): a gateway is the fleet's contact point, over both HTTP and
+ * its unix socket, so `http.enabled: false` on a `gateway` daemon describes one nothing could
+ * ever reach -- no worker could open an uplink to it and no agent could lease through it. That
+ * has no safe reading to fall back on (unlike a `worker`, for which HTTP is genuinely
+ * optional), so it fails the daemon start naming the key rather than starting a gateway that
+ * can never do the one thing a gateway is for. `mode` itself decides which driver-starting,
+ * device-root-validating half of `gateway` mode actually runs (the rest of ADR 0005 §2,
+ * #117's scope) -- this check is purely a config-shape rule with no dependency on that,
+ * which is why it belongs here rather than waiting on it.
+ */
+function validateGatewayNeedsHttp(config: Config): void {
+  if (config.mode === "gateway" && !config.http.enabled) {
+    throw invalidValue("http.enabled", 'true when mode is "gateway"');
   }
 }
 
