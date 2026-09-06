@@ -304,12 +304,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     // Review finding S5: waits for the concurrently-started gateway to either finish binding
     // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
-    // stop) *before* returning -- `#stop()` awaits this call before releasing leases, settling,
-    // and disposing (see `server.ts`), so by the time any of that runs, the gateway is
-    // guaranteed to be either stopped or never listening in the first place. `gatewayStarted`'s
-    // rejection (a bind failure) is not this function's problem to surface -- the
-    // `Promise.allSettled` at the bottom of this function, or the standalone `daemon.stop()`
-    // call after it, already handle that -- so it is swallowed here.
+    // stop) *before* returning -- `#stop()` awaits this call before settling and disposing
+    // (see `server.ts`; the leases themselves are left alone, ADR 0004 §3), so by the time
+    // either of those runs, the gateway is guaranteed to be either stopped or never listening
+    // in the first place. `gatewayStarted`'s rejection (a bind failure) is not this function's
+    // problem to surface -- the `Promise.allSettled` at the bottom of this function, or the
+    // standalone `daemon.stop()` call after it, already handle that -- so it is swallowed
+    // here.
     stopAuxiliary: async () => {
       await gatewayStarted.catch(() => undefined);
       await stopHttpGateway?.();
