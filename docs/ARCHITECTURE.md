@@ -327,12 +327,9 @@ WebSocket to `<gateway.url>/v1/uplink` on start, and again after any
 disconnect on exponential backoff, presenting its join token (role `worker`)
 and its instance id. The gateway verifies the token against its own token
 store. A missing or unrecognized token is `401`; a **valid token of the wrong
-role is `403`**, not `401` — ADR 0005 §4 says "rejects anything else with
-`401`", but the two failures are different facts and the rest of the API
-already separates them (a good credential that does not permit this is
-`FORBIDDEN`), so the docs settle on the split rather than collapse it. Either
-way nothing enters the worker registry and the gateway emits
-`worker.rejected` (see [EVENTS.md](EVENTS.md)).
+role is `403`** (ADR 0005 §4) — two different facts, answered the way the
+rest of the API already answers them. Either way nothing enters the worker
+registry and the gateway emits `worker.rejected` (see [EVENTS.md](EVENTS.md)).
 
 Over that one socket **the gateway is the protocol client**. It sends `hello`
 and issues ordinary contract operations to the worker's own dispatcher,
@@ -554,19 +551,11 @@ on the worker (ten minutes) is the authoritative one, because that is the
 side owning the process and able to kill it; `gateway.execTimeoutMs` (eleven
 minutes) is a backstop for the case where the worker never answers at all —
 deliberately the longer of the two, so an ordinary timeout surfaces as the
-worker's own `EXEC_TIMEOUT` instead of racing the gateway's. (ADR 0005 §19e
-gives both defaults as ten minutes while also making the worker's
-authoritative; equal values make that authority a coin toss on every timeout,
-so the docs settle on eleven minutes for the gateway. The ADR's intent is
-kept, its number is not.)
+worker's own `EXEC_TIMEOUT` instead of racing the gateway's (ADR 0005 §19e).
 
 Two deliberate limits: `stdin` is a single string sent with the request, not
 an incremental channel, and there is no pseudo-terminal — line-oriented
-commands work, full-screen ones do not. (ADR 0005 is not of one mind here:
-§19a declares `stdin` as a field on the input and §19c calls it "forwarded as
-a stream". The field is what these docs specify, because a stream is only
-useful with a terminal to attach it to, and §19c's own next clause is that
-there is no pseudo-terminal.) And `device.exec` runs against the
+commands work, full-screen ones do not. And `device.exec` runs against the
 **worker's** filesystem, so an artifact a command names (`simctl install
 <path>`, `adb install <apk>`) has to get there out of band. The seam for a
 later `device.upload` — chunks streamed as request-scoped pushes into a
@@ -592,9 +581,6 @@ events --follow` against a gateway shows the whole fleet. The gateway also
 emits its own facts — `worker.connected`, `worker.disconnected`,
 `worker.rejected`, `worker.removed`, `worker.drain-started`,
 `worker.drain-ended`, and `request.dispatched`; see [EVENTS.md](EVENTS.md).
-(`worker.rejected` is the one not in ADR 0005 §22's list: an uplink refused at
-the door leaves no other trace, and "the machine that never appeared" is
-exactly what an operator comes looking for.)
 
 ### Failure behaviour
 

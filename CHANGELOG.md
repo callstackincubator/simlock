@@ -250,10 +250,9 @@ is the daemon that exists today.
   `request.dispatched` are emitted by a gateway, and every worker's own
   business events are republished on the gateway's bus with `workerId` added
   to the payload — an additive change, so no exception to events rule 6 is
-  needed this time. `worker.rejected` is not in ADR 0005 §22's list: it is
-  added here because an uplink refused at the door otherwise leaves no trace
-  at all, and an operator looking for a machine that never appeared needs one.
-  See `docs/EVENTS.md`.
+  needed this time. `worker.rejected` reports an uplink refused at the door,
+  which nothing else records — it is what answers "why did that machine never
+  appear". See `docs/EVENTS.md`.
 - **contract:** five new error codes. `WORKER_UNREACHABLE` (`kind:
 "transport"`, CLI exit 1, HTTP 503 — where every other `transport`-kind
   code already sits) when a worker's uplink is down; `WORKER_CONNECTED`
