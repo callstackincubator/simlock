@@ -1,6 +1,6 @@
 # 0005. Gateway and worker modes
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-09-05
 - **Issue:** [#115](https://github.com/callstackincubator/simlock/issues/115)
   (sub-issues #116–#120, one per sequenced PR)
@@ -9,8 +9,9 @@
 
 > This record is a PRD and an ADR in one file: the first half says what the
 > feature is and who it is for, the second half records the shape it takes
-> and why. Everything under [Open questions](#open-questions) is still being
-> decided; everything else is the current proposal.
+> and why. Nothing is left open: the documentation now describes the decided
+> end state, and the code catches up in the PRs sequenced under
+> [Consequences](#consequences).
 
 ## Summary
 
@@ -65,7 +66,7 @@ against a single simlock has to change.
   stays reserved for that.
 - **File transfer.** A command that names a file (`simctl install
   <path>`, `adb install <apk>`) runs on the worker's filesystem; getting the
-  file there is out of scope for v1 (see open question 5).
+  file there is out of scope for v1 (see requirement 19b').
 - **A gateway that also owns devices.** One process, one mode. A machine
   that should do both runs two daemons.
 - **Durable gateway queue.** Pending requests on the gateway are in-memory,
