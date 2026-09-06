@@ -63,9 +63,12 @@ async function buildDispatcher(
     /** Collects the `PassthroughContext` each resolution was given, so a test can assert what
      * the driver was told about its caller (ADR 0005 §19c's "no terminal"). */
     readonly passthroughContextSink?: unknown[];
+    /** Shares one clock with the test, for a flow that has to schedule against the dispatcher's
+     * own timers. */
+    readonly clock?: FakeClock;
   } = {},
 ) {
-  const clock = new FakeClock(1_000);
+  const clock = overrides.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const filesystem = new MemoryFilesystem();
   const registry = await Registry.load({
@@ -786,7 +789,9 @@ describe("Dispatcher: device.exec", () => {
       "device.exec",
       { args: ["list", "devices"], leaseId, tool: "simctl" },
       session({
-        onOutput: (stream, chunk) => seen.push(`${stream}:${chunk}`),
+        onOutput: (stream, chunk) => {
+          seen.push(`${stream}:${chunk}`);
+        },
         principal: "tok_agent",
       }),
     );
@@ -1019,16 +1024,18 @@ describe("Dispatcher: device.exec", () => {
     await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
   });
 
-  it("does not call a command that finished a timeout, even when the timer fires in the same turn", async () => {
-    // The timer and the exit can land in the same turn of the loop. A flag set by whichever
-    // callback ran last would blame the limit for a command that met it, so the two are raced:
-    // whichever actually settled first is the answer.
-    const runner = new ScriptedProcessRunner([
-      { match: command, result: { code: 0, stderr: "", stdout: "" } },
-    ]);
-    const { clock, dispatcher, leaseId } = await withLease({
+  it("does not call a command that finished a timeout, even when it exits in the timer's own turn", async () => {
+    // The sharp case: the child exits at the very instant the timeout fires. A flag set by
+    // whichever callback ran last would blame the limit for a command that met it, so the two
+    // are raced -- whichever actually settled first is the answer. Driven by a handle whose
+    // `wait()` is resolved from a timer scheduled for the same instant and registered first,
+    // so the exit genuinely lands inside the timeout's own turn of the loop.
+    const clock = new FakeClock(1_000);
+    const handle = new SettleOnCueHandle();
+    const { dispatcher, leaseId } = await withLease({
+      clock,
       exec: { timeoutMs: 1_000 },
-      processRunner: runner,
+      processRunner: { spawnStreaming: () => handle } as unknown as ProcessRunner,
     });
 
     const pending = dispatcher.dispatch(
@@ -1036,13 +1043,43 @@ describe("Dispatcher: device.exec", () => {
       { args: ["list", "devices"], leaseId, tool: "simctl" },
       session({ principal: "tok_agent" }),
     );
-    // No `flush()`: the command has already exited (the scripted handle settles on spawn) but
-    // nothing has observed it yet when the clock jumps past the timeout.
-    clock.advance(60_000);
+    await flush();
 
-    await expect(pending).resolves.toEqual({ exitCode: 0 });
+    // The child exits and the timeout fires in the same synchronous turn, with nothing having
+    // observed the exit yet -- the ordering a flag would get wrong and a race gets right.
+    handle.finish(7);
+    clock.advance(1_000);
+
+    await expect(pending).resolves.toEqual({ exitCode: 7 });
+    // And nothing was signalled: a command that finished is not one to kill.
+    expect(handle.signals).toEqual([]);
   });
 });
+
+/** A streamed child that settles only when a test says so, and records what it was signalled
+ * with -- enough to tell "we killed it" from "it finished" without a real process. */
+class SettleOnCueHandle {
+  readonly pid = 99;
+  readonly signals: string[] = [];
+  #resolve!: (result: { code: number | null; signal: NodeJS.Signals | null }) => void;
+  readonly #result = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => {
+      this.#resolve = resolve;
+    },
+  );
+
+  finish(code: number): void {
+    this.#resolve({ code, signal: null });
+  }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    this.signals.push(signal);
+  }
+
+  wait(): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+    return this.#result;
+  }
+}
 
 function sequence() {
   let next = 1;
