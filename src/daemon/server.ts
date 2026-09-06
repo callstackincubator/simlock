@@ -40,7 +40,12 @@ import {
 } from "../contract/index.js";
 import type { ConnectionHost } from "./connection-host.js";
 import type { TokenStore } from "../http/token-store.js";
-import { Dispatcher, DispatchError, type DispatchSession } from "./dispatcher.js";
+import {
+  Dispatcher,
+  DispatchError,
+  type ContractDispatcher,
+  type DispatchSession,
+} from "./dispatcher.js";
 import { resolveAgentRole, type SessionRoleResolver } from "./session.js";
 import type { AdminSecretManager } from "./admin-secret.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
@@ -69,6 +74,14 @@ interface Connection {
   principal: string;
   role: Role;
   /**
+   * Set only for a connection accepted through `acceptUplink` (ADR 0005 §5): the role that
+   * connection gets, decided by *how it was accepted* rather than by anything in its `hello`.
+   * `#handleHello` uses it in place of `#resolveRole`, so no credential is consulted and none
+   * is required. See `acceptUplink`'s own comment for why that is the correct trust model
+   * here and nowhere else.
+   */
+  readonly forcedRole: Role | undefined;
+  /**
    * Lease ids this connection is *currently* explicitly releasing (`lease.release`/
    * `lease.release-all`), added right before the dispatched call and consumed by
    * `#notifyLeaseLost`. ADR 0003 §8 says a client "never fires `onLeaseLost` for a release the
@@ -96,26 +109,24 @@ interface Connection {
   subscriptionId: string | undefined;
 }
 
-export interface DaemonServerOptions {
+/**
+ * The worker engine `DaemonServer` builds its `Dispatcher` from, and the few things it touches
+ * around that dispatcher (the registry snapshot a `lease.release-all` reads to suppress its own
+ * pushes, the queue a closing connection detaches progress from, the reaper and health monitor
+ * a stop disposes).
+ *
+ * Separate from the common options because ADR 0005 §32 gives the contract a second
+ * implementation: a **gateway** passes `dispatcher` instead of all of this, and has none of it
+ * to pass -- no registry, no capacity, no lifecycle (§33). Keeping the split in the *type*
+ * rather than making every field optional is what preserves the compile-time guarantee for
+ * worker mode: omitting `queue` from a worker's options is still an error, not a runtime
+ * surprise.
+ */
+export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
-  readonly clock: Clock;
-  readonly config: Config;
   readonly doctor?: Doctor;
-  readonly defaultRequesterId: string;
-  /**
-   * Platforms whose driver refused to start. The daemon serves without them rather than
-   * refusing to come up (safety rule 9), so the refusal has to be visible somewhere: one
-   * event each lands in the ring buffer here, and `Doctor` reports the same list.
-   */
-  readonly driverRejections?: readonly DriverRejection[];
-  readonly eventBus: EventBus;
-  readonly host: ConnectionHost;
   readonly leases: LeaseCommands;
-  readonly logger?: Logger;
-  /** Overrides the daemon's advertised protocol range (ADR 0003 §6); defaults to
-   * `PROTOCOL_VERSION_RANGE`. A bare number is normalized to `{n, n}`, same as a client's. */
-  readonly protocolVersion?: number | ProtocolRange;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor;
@@ -130,6 +141,24 @@ export interface DaemonServerOptions {
   readonly registry: Registry;
   /** ADR 0003 §11: threaded straight into the `Dispatcher` for `token.create|list|revoke`. */
   readonly tokens?: TokenStore;
+}
+
+export interface DaemonServerCommonOptions {
+  readonly clock: Clock;
+  readonly config: Config;
+  readonly defaultRequesterId: string;
+  /**
+   * Platforms whose driver refused to start. The daemon serves without them rather than
+   * refusing to come up (safety rule 9), so the refusal has to be visible somewhere: one
+   * event each lands in the ring buffer here, and `Doctor` reports the same list.
+   */
+  readonly driverRejections?: readonly DriverRejection[];
+  readonly eventBus: EventBus;
+  readonly host: ConnectionHost;
+  readonly logger?: Logger;
+  /** Overrides the daemon's advertised protocol range (ADR 0003 §6); defaults to
+   * `PROTOCOL_VERSION_RANGE`. A bare number is normalized to `{n, n}`, same as a client's. */
+  readonly protocolVersion?: number | ProtocolRange;
   readonly version: string;
   /** ADR §5's seam (see `session.ts`): resolves a session's role from `hello`'s payload.
    * Defaults to `resolveAgentRole` (every session is "agent") -- PR 2's credential handshake
@@ -184,6 +213,19 @@ export interface DaemonServerOptions {
   readonly onSocketClaimed?: () => void;
 }
 
+/**
+ * ADR 0005 §32: one transport, two dispatchers. A worker passes its engine and gets the
+ * `Dispatcher` built for it; a gateway passes a ready-made `dispatcher` (its own handlers, over
+ * worker views and uplinks) and no engine at all. The union -- rather than one interface with
+ * everything optional -- is what keeps each mode's requirements checked at compile time.
+ */
+export type DaemonServerOptions =
+  | (DaemonServerCommonOptions & DaemonServerEngineOptions & { readonly dispatcher?: undefined })
+  | (DaemonServerCommonOptions & {
+      /** The contract implementation this daemon serves. See `src/gateway/dispatcher.ts`. */
+      readonly dispatcher: ContractDispatcher;
+    });
+
 type DaemonHealth = "starting" | "running" | "failed";
 
 /**
@@ -195,7 +237,7 @@ type DaemonHealth = "starting" | "running" | "failed";
  * the server's own live state are passed in rather than reached for.
  */
 function buildDispatcher(
-  options: DaemonServerOptions,
+  options: DaemonServerCommonOptions & DaemonServerEngineOptions,
   hooks: {
     readonly awaitReady: () => Promise<void>;
     readonly health: () => DaemonHealth;
@@ -241,9 +283,16 @@ export class DaemonServer {
    * `start()`.
    */
   readonly #parkedDispatches = new Set<Promise<void>>();
-  readonly #dispatcher: Dispatcher;
+  readonly #dispatcher: ContractDispatcher;
   readonly #resolveRole: SessionRoleResolver;
-  readonly #ownerRoutedFacts: OwnerRoutedFactBus;
+  /**
+   * The worker engine, or `undefined` in gateway mode (ADR 0005 §33: a gateway has no
+   * registry, capacity or lifecycle to hold). Every engine touchpoint below is written
+   * against this rather than `this.options`, so "what a gateway does not have" is one
+   * `?.` at each site instead of a mode flag threaded through the class.
+   */
+  readonly #engine: DaemonServerEngineOptions | undefined;
+  readonly #ownerRoutedFacts: OwnerRoutedFacts & { dispose(): void };
 
   constructor(private readonly options: DaemonServerOptions) {
     this.#protocolRange =
@@ -256,11 +305,29 @@ export class DaemonServer {
     // `#notifyDeviceRecovered` below route from is what the HTTP gateway's `LeaseNoticeBuffer`
     // consumes too (see `ownerRoutedFacts` getter and `main.ts`) -- one bus subscription
     // per raw event, not one per consumer.
-    this.#ownerRoutedFacts = new OwnerRoutedFactBus(options.eventBus, options.registry);
-    this.#dispatcher = buildDispatcher(options, {
-      awaitReady: () => this.#awaitReady(),
-      health: () => this.#health,
-    });
+    if (options.dispatcher === undefined) {
+      // Worker mode: build the engine-backed `Dispatcher` exactly as before. `options` narrows
+      // to the engine arm of the union here, so every field it needs is still required at
+      // compile time.
+      const engine: DaemonServerEngineOptions = options;
+      this.#engine = engine;
+      this.#ownerRoutedFacts = new OwnerRoutedFactBus(options.eventBus, engine.registry);
+      this.#dispatcher = buildDispatcher(options, {
+        awaitReady: () => this.#awaitReady(),
+        health: () => this.#health,
+      });
+    } else {
+      // Gateway mode (ADR 0005 §32): the handlers come ready-made, and there is no engine to
+      // hold. Owner-routed facts are inert here, deliberately: the gateway issues no leases of
+      // its own in this PR, and a worker's republished `lease.expired` names *that worker's*
+      // owner, not a gateway client's principal -- routing one to a gateway connection would
+      // push another machine's fact at the wrong holder. #118/#119 relay lease-scoped pushes,
+      // with the gateway's own lease index to route them by; until then this is inert rather
+      // than wrong.
+      this.#engine = undefined;
+      this.#dispatcher = options.dispatcher;
+      this.#ownerRoutedFacts = inertOwnerRoutedFacts();
+    }
   }
 
   // fallow-ignore-next-line unused-class-member -- retained as a daemon compatibility facade.
@@ -438,7 +505,7 @@ export class DaemonServer {
     // also what keeps the subscriptions above safe -- nothing can emit
     // device.crash-detected during the startup window, because the only emitter is
     // this monitor.
-    this.options.healthMonitor?.start();
+    this.#engine?.healthMonitor?.start();
   }
 
   async #converge(): Promise<void> {
@@ -484,8 +551,8 @@ export class DaemonServer {
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
-    this.options.reaper.dispose();
-    this.options.healthMonitor?.dispose();
+    this.#engine?.reaper.dispose();
+    this.#engine?.healthMonitor?.dispose();
     // ADR 0004 §3: a stop releases nothing. Every lease persists with its deadline, and the
     // next daemon restores its timer from that deadline (`StartupConverger`); one whose
     // deadline passed in between expires as soon as a daemon is there to expire it. What is
@@ -507,7 +574,30 @@ export class DaemonServer {
     this.#logger.info("Daemon stopped", { reason });
   }
 
-  #accept(socket: IpcConnection): void {
+  /**
+   * ADR 0005 §5: accepts a worker's *outbound* uplink as one more connection on this daemon's
+   * own protocol, and grants that session the `admin` role.
+   *
+   * The grant is not a hole in ADR 0003 §5 ("admin authority comes from a credential in the
+   * handshake, never from the socket") -- it is the same rule applied one layer out. §5's
+   * prohibition is on inferring authority from a *transport this daemon merely accepted*: a
+   * local unix socket proves nothing about who connected. Here the daemon is not accepting
+   * anything; it *dialled out*, to the `gateway.url` in its own configuration, presenting the
+   * `gateway.token` from that same file, and the gateway verified that token before this
+   * connection existed (ADR 0005 §4). The credential in this handshake is that join token,
+   * checked by the peer; the trust runs from this worker's own config, which is exactly the
+   * kind of statement §5 says admin authority may come from. An operator who does not want a
+   * gateway administering this machine removes two config keys.
+   *
+   * Everything else about the session is unchanged: `hello` still negotiates the protocol
+   * range (§31, ADR 0003 §6), the dispatcher still runs every role and ownership check, and a
+   * mismatched range still refuses every operation but `daemon.stop`.
+   */
+  acceptUplink(connection: IpcConnection): void {
+    this.#accept(connection, "admin");
+  }
+
+  #accept(socket: IpcConnection, forcedRole?: Role): void {
     if (this.#stopping) {
       void socket.close();
       return;
@@ -515,6 +605,7 @@ export class DaemonServer {
     const connection: Connection = {
       buffer: "",
       closed: false,
+      forcedRole,
       helloReceived: false,
       // Overwritten by `#handleHello` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
@@ -730,10 +821,16 @@ export class DaemonServer {
     // whether the versions would otherwise have matched.
     let role: Role;
     try {
-      role = await this.#resolveRole.resolve({
-        ...(payload.principal === undefined ? {} : { principal: payload.principal }),
-        ...(payload.credential === undefined ? {} : { credential: payload.credential }),
-      });
+      // ADR 0005 §5: an uplink connection's role comes from how it was accepted (this daemon
+      // dialled the gateway named in its own config), so no credential is consulted -- see
+      // `acceptUplink`. Every other connection resolves its role from `hello` exactly as
+      // before.
+      role =
+        connection.forcedRole ??
+        (await this.#resolveRole.resolve({
+          ...(payload.principal === undefined ? {} : { principal: payload.principal }),
+          ...(payload.credential === undefined ? {} : { credential: payload.credential }),
+        }));
     } catch (error: unknown) {
       await this.#respondError(connection.socket, frame.id, errorCode(error), errorMessage(error));
       await connection.socket.close();
@@ -840,7 +937,7 @@ export class DaemonServer {
         // and one granted inside the window is not suppressed, so its holder gets the push it
         // would have got for any other force-release. Neither can suppress a push for a lease
         // this principal does not own, which is the property that matters.
-        const releasing = this.options.registry.snapshot.leases
+        const releasing = (this.#engine?.registry.snapshot.leases ?? [])
           .filter((lease) => connection.role === "admin" || lease.ownerId === connection.principal)
           .map((lease) => lease.id);
         for (const leaseId of releasing) connection.selfInitiatedReleases.add(leaseId);
@@ -1271,13 +1368,25 @@ export class DaemonServer {
     }
     connection.progressDisposers.clear();
     for (const requesterId of connection.progressRequesters) {
-      void this.options.queue.detachQueuedProgress(requesterId);
+      void this.#engine?.queue.detachQueuedProgress(requesterId);
     }
     connection.progressRequesters.clear();
     this.#connections.delete(connection);
     connection.unsubscribeEvents?.();
     connection.unsubscribeEvents = undefined;
   }
+}
+
+/**
+ * An `OwnerRoutedFacts` that never emits -- what a gateway gets, since it has no local leases
+ * to report facts about (see the constructor's comment). A named function rather than an inline
+ * object literal so the intent reads at the one place that would otherwise be a bare `{}`.
+ */
+function inertOwnerRoutedFacts(): OwnerRoutedFacts & { dispose(): void } {
+  return {
+    subscribe: () => () => {},
+    dispose: () => {},
+  };
 }
 
 class ProtocolError extends Error {
