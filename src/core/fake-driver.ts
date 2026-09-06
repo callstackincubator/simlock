@@ -11,6 +11,7 @@ import {
   type ObservedRunState,
   type PassthroughCommand,
   PassthroughRefusedError,
+  type PassthroughContext,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
@@ -69,7 +70,10 @@ export interface FakeDriverOptions {
    * model a driver's own refusal rules; omit it and every argument list is refused, which
    * is what a driver claiming a tool it cannot build a command for would mean.
    */
-  readonly passthrough?: (args: readonly string[]) => PassthroughCommand;
+  readonly passthrough?: (
+    args: readonly string[],
+    context?: PassthroughContext,
+  ) => PassthroughCommand;
   readonly platform: Platform;
   /**
    * What this driver claims to find outside its root for a given device id, keyed by
@@ -112,7 +116,9 @@ export class FakeDriver implements Driver {
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
   readonly passthroughTool: string | undefined;
-  readonly #passthrough: ((args: readonly string[]) => PassthroughCommand) | undefined;
+  readonly #passthrough:
+    | ((args: readonly string[], context?: PassthroughContext) => PassthroughCommand)
+    | undefined;
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
   readonly #reclaimResult: "ready" | "shutdown";
@@ -305,14 +311,14 @@ export class FakeDriver implements Driver {
     return this.#leaseEnvironment;
   }
 
-  passthrough(args: readonly string[]): PassthroughCommand {
+  passthrough(args: readonly string[], context?: PassthroughContext): PassthroughCommand {
     if (this.#passthrough === undefined) {
       throw new PassthroughRefusedError(
         this.passthroughTool ?? "",
         "Fake driver builds no passthrough command",
       );
     }
-    return this.#passthrough(args);
+    return this.#passthrough(args, context);
   }
 
   failOn(operation: FakeDriverOperation, callNumber: number, error: Error): void {

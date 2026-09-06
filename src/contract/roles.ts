@@ -20,6 +20,16 @@ export interface AuthorizeContext {
   readonly principal: string;
   readonly role: Role;
   readonly ownerId: (id: string) => string | undefined;
+  /**
+   * The *requester* a lease is attributed to (`LeaseRecord.requesterId`), as opposed to the
+   * session principal that owns it. Both exist because one connection may hold many leases,
+   * one per requester (ADR 0003 §4) -- and `device.exec` authorizes on this one, since the
+   * caller a gateway proxies for is a requester, not a principal (ADR 0005 §19b/§27). Same
+   * "lookup, not a value" shape as `ownerId`, and `undefined` for a lease id nothing knows,
+   * which the hooks treat as authorized so a handler's own `UNKNOWN_LEASE` surfaces instead of
+   * a misleading `FORBIDDEN`.
+   */
+  readonly leaseRequesterId: (id: string) => string | undefined;
   /** ADR §4/§9: the session principal that created the pending request identified by
    * `requesterId` -- looked up against the live wait queue, the same "lookup, not a value"
    * shape as `ownerId` above and for the same reason (the only identifier available at

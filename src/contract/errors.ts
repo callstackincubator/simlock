@@ -176,10 +176,10 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 422,
   },
   // The command ran, and ran too long: a 504 for the same reason a proxy uses one (the thing
-  // this daemon was waiting on never finished), and its own CLI exit code rather than the
-  // generic 1, so a script can tell a killed command from one that merely failed. 15 is the
-  // next free code after `lease`'s own 14 (see the CLI's LEASE_LOST_EXIT_CODE).
-  EXEC_TIMEOUT: { code: "EXEC_TIMEOUT", kind: "domain", cliExitCode: 15, httpStatus: 504 },
+  // this daemon was waiting on never finished), and 10 -- the exit code the other "you ran
+  // out of time" outcome (`QUEUE_TIMEOUT`) already uses -- so a script branching on "timed
+  // out" does not need a second number for the second kind of wait.
+  EXEC_TIMEOUT: { code: "EXEC_TIMEOUT", kind: "domain", cliExitCode: 10, httpStatus: 504 },
   DOCTOR_UNAVAILABLE: {
     code: "DOCTOR_UNAVAILABLE",
     kind: "domain",

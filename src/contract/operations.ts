@@ -81,6 +81,14 @@ export const statusGet = defineOperation({
     leases: z.array(leaseRecordSchema),
     capacity: statusCapacitySchema,
     health: daemonHealthSchema,
+    /**
+     * Which run mode this daemon is in (ADR 0005 §1). Always `"worker"` today -- the mode that
+     * owns devices, which is every daemon that exists -- and declared now because it is what a
+     * client uses to tell whether the device it leased is on this machine: a `simlock simctl`
+     * against a `worker` spawns locally, against a `gateway` it goes through `device.exec`
+     * (§19c). #117 makes the value configurable; this is the field it fills in.
+     */
+    mode: z.enum(["worker", "gateway"]),
     queueDepth: z.number(),
   }),
 });
@@ -226,11 +234,16 @@ export const driverPassthrough = defineOperation({
  * run if it happened to be on that machine. That is what makes a leased device reachable from
  * a remote HTTP agent today, and through a gateway later, without a second network path.
  *
- * `role: "agent"` with `ownsLease`: driving a device is an agent's job, but -- unlike
- * `driver.passthrough`, which only builds a string -- this one actually runs a command against
- * a machine, so it is gated on the caller owning the lease it names. `leaseId` is that proof
- * and nothing more: the command's own arguments still name the device (a udid, a serial), and
- * the daemon parses none of them.
+ * `role: "agent"`, gated on the lease's requester: driving a device is an agent's job, but --
+ * unlike `driver.passthrough`, which only builds a string -- this one actually runs a command
+ * against a machine, so it is gated on the caller being who the lease was granted to (see the
+ * `authorize` hook below). `leaseId` is that proof and nothing more: the command's own
+ * arguments still name the device (a udid, a serial), and the daemon parses none of them.
+ *
+ * A bare `adb shell` (nothing to run) is refused by the driver on this path, because there is
+ * no terminal to attach it to and it would otherwise sit until `exec.timeoutMs` -- the same
+ * `PASSTHROUGH_REFUSED` a lifecycle verb gets. Locally, where the CLI hands the tool its own
+ * terminal, it stays allowed and interactive.
  *
  * `stdin` is a **one-shot string**, not a stream: it is written to the child's stdin and the
  * pipe is then closed. ADR §19c is explicit that there is no pseudo-terminal here, so
@@ -254,6 +267,15 @@ export const deviceExec = defineOperation({
       tool: z.enum(["simctl", "adb"]),
       args: z.array(z.string()),
       stdin: z.string().optional(),
+      /**
+       * Who this command is being run *for* -- the requester the lease is attributed to (ADR
+       * 0003 §4), not the connection's principal. Read **only on an admin session**, where it
+       * is the gateway case: a gateway holds one admin session over its uplink and proxies
+       * many agents through it, each under its own namespaced requester id (ADR 0005
+       * §19b/§27). An agent session's own is ignored for authorization -- it is gated on the
+       * lease it actually owns -- so this can never be used to borrow another agent's device.
+       */
+      requesterId: z.string().optional(),
     })
     .strict(),
   /**
@@ -263,7 +285,36 @@ export const deviceExec = defineOperation({
    * to speak of either.
    */
   output: z.object({ exitCode: z.number() }),
-  authorize: ownsLease((input) => input.leaseId),
+  /**
+   * `ownsLease` for an agent, and something stricter for an admin.
+   *
+   * An **agent** session is gated exactly like `lease.renew`: its principal against the
+   * lease's `ownerId`. Whatever `requesterId` it sent is ignored here, which is what makes
+   * that field unusable as a way to borrow somebody else's device.
+   *
+   * An **admin** session does not get `ownsLease`'s bypass on this operation. Every other
+   * admin-bypasses hook is about an operator reaching past ownership on their own machine;
+   * this one is the check a gateway's uplink session runs against, and a bypass there would
+   * mean any admin-role connection could drive every lease on the worker -- the exact hole
+   * §19b's "ownership is checked at the gateway, and again at the worker" exists to close.
+   * So an admin is held to the lease's `requesterId` instead: it names the agent it is
+   * proxying for (defaulting to its own principal), and a mismatch is `FORBIDDEN`. An
+   * operator who means to reach another agent's device names that agent explicitly, which is
+   * a deliberate act rather than an implicit privilege.
+   *
+   * An unknown lease id resolves to `undefined` on either lookup and is treated as
+   * authorized, the same convention `ownsLease` uses, so the handler's own `UNKNOWN_LEASE`
+   * surfaces instead of a misleading `FORBIDDEN`.
+   */
+  authorize: (input, context) => {
+    if (context.role !== "admin") {
+      const ownerId = context.ownerId(input.leaseId);
+      return ownerId === undefined || ownerId === context.principal;
+    }
+    const requesterId = input.requesterId ?? context.principal;
+    const leaseRequesterId = context.leaseRequesterId(input.leaseId);
+    return leaseRequesterId === undefined || leaseRequesterId === requesterId;
+  },
 });
 
 // ---- lease.list (new, ADR §9) -----------------------------------------------------------------

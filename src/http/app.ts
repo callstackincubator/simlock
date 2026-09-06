@@ -82,6 +82,14 @@ const execBodySchema = z.object({
   tool: z.enum(["simctl", "adb"]),
   args: z.array(z.string()),
   stdin: z.string().optional(),
+  /**
+   * Honoured only for an `operator` token (which resolves to the `admin` session role, where
+   * the operation reads it); an `agent` token's is dropped before dispatch rather than sent
+   * on to be ignored, so the one identity an agent request can ever act under is its own
+   * token's -- the same rule that already makes requester identity non-client-declared over
+   * HTTP (see "Authentication" in docs/HTTP-API.md).
+   */
+  requesterId: z.string().optional(),
 });
 
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
@@ -364,7 +372,8 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     async (c) => {
       const identity = c.get("identity");
       const leaseId = c.req.param("id");
-      const body = c.req.valid("json");
+      const { requesterId, ...body } = c.req.valid("json");
+      const proxiedRequester = identity.role === "operator" ? requesterId : undefined;
 
       // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
       // route mutates a device, so it answers `device.exec`'s own `ownsLease` hook -- 403 for
@@ -383,7 +392,11 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       const settled = deps
         .dispatch(
           "device.exec",
-          { leaseId, ...body },
+          {
+            leaseId,
+            ...body,
+            ...(proxiedRequester === undefined ? {} : { requesterId: proxiedRequester }),
+          },
           buildHttpSession(identity, {
             onOutput: (stream, chunk) => {
               if (deliver !== undefined) {

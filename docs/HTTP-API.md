@@ -116,7 +116,9 @@ Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 ### `GET /v1/status`
 
 Role: `agent`. The same view `simlock status --json` reads: daemon health
-(`starting`/`running`), managed/running capacity per platform, active
+(`starting`/`running`), `mode` (`worker`/`gateway` — always `worker` in this
+version, and what a client reads to tell whether the device it leased is on
+this daemon's own machine), managed/running capacity per platform, active
 leases, managed devices, queue depth.
 
 The daemon block also carries **`mode`** (`"worker" | "gateway"`), which is
@@ -373,7 +375,19 @@ lease: the lease id is the ownership proof.
 
 `stdin` (optional) is written to the command once and the pipe is then closed.
 There is no pseudo-terminal, so line-oriented commands work and full-screen or
-interactive ones do not.
+interactive ones do not — a bare `adb shell`, which *is* the interactive shell,
+is refused (`422 PASSTHROUGH_REFUSED`) rather than left to hang on a pipe until
+the timeout.
+
+`requesterId` (optional) names the agent this command is being run *for*, and
+is honoured **only for an `operator` token**. Identity is otherwise never
+client-declared here (see [Authentication](#authentication)): an `agent`
+token's own `requesterId` is dropped, and that token is authorized against the
+lease it holds, exactly as it is for renew and release. An operator token is
+held to this field instead of getting the usual operator bypass — it must name
+the requester the lease was granted to, or the call is `403 FORBIDDEN`. That is
+what lets a future gateway proxy many agents over one operator credential
+without any of them reaching another's device.
 
 → `200`, `Content-Type: text/event-stream`, the same SSE shape
 `/v1/lease-requests/{id}/events` uses. One event per chunk of output as it is
@@ -398,9 +412,11 @@ command is still running; a client that wants lines assembles them itself. A
 
 A failure that lands **before any output** is answered as an ordinary JSON
 error with its own status instead of a stream: `403 FORBIDDEN` for another
-requester's lease (dispatched through the same `ownsLease` hook as renew and
-release), `404 UNKNOWN_LEASE` for an id that names none, `400 BAD_REQUEST` for
-a malformed body, `422 PASSTHROUGH_REFUSED` for a refused verb. Once a byte
+requester's lease (dispatched through the operation's own ownership hook, like
+renew and release), `404 UNKNOWN_LEASE` for an id that names none,
+`400 BAD_REQUEST` for a malformed body, `422 PASSTHROUGH_REFUSED` for a refused
+verb, `422 UNKNOWN_PASSTHROUGH_TOOL` for a tool no driver on that machine
+claims. Once a byte
 has been written the status is already `200`, so a later failure arrives as a
 terminal event instead:
 

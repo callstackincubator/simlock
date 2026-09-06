@@ -273,6 +273,8 @@ export class Dispatcher {
       const context: AuthorizeContext = {
         ownerId: (leaseId) =>
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId,
+        leaseRequesterId: (leaseId) =>
+          this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.requesterId,
         pendingRequestOwner: (requesterId) => this.options.queue.pendingRequestOwner(requesterId),
         principal: session.principal,
         role: session.role,
@@ -322,6 +324,11 @@ export class Dispatcher {
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       health: this.options.health(),
       leases: [...snapshot.leases],
+      // ADR 0005 §1: one daemon, one mode, and today there is exactly one mode to be in --
+      // this daemon owns devices, so it is a worker. Reported rather than assumed because it
+      // is what tells a client whether the device it leased is on this machine (§19c); #117
+      // makes it configurable and can then report `"gateway"` here.
+      mode: "worker" as const,
       queueDepth: this.options.queue.queueDepth,
     };
   };
@@ -471,7 +478,13 @@ export class Dispatcher {
     );
     if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
 
-    const command = this.options.passthrough.passthrough(input.tool, input.args);
+    // `hasTerminal: false` is the one thing this path tells the driver about its caller: the
+    // command runs here, with pipes and no pty (ADR 0005 §19c), so a driver may refuse
+    // something it allows a local `simlock <tool>` invocation -- a bare `adb shell` would
+    // otherwise sit on those pipes until `exec.timeoutMs` killed it.
+    const command = this.options.passthrough.passthrough(input.tool, input.args, {
+      hasTerminal: false,
+    });
     const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
       env: { ...this.options.execEnv, ...command.env },
       onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),

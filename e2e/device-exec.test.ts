@@ -69,6 +69,7 @@ describe("device.exec over HTTP", () => {
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
     });
     await env.driverScript.set({
+      android: { knownModels: ["Pixel 8"], availableOsVersions: ["35"] },
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -160,6 +161,75 @@ describe("device.exec over HTTP", () => {
     expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
       "PASSTHROUGH_REFUSED",
     );
+
+    // The daemon tells the driver there is no terminal on this path, and the driver refuses
+    // what needs one -- an interactive shell that would otherwise sit on a pipe until
+    // `exec.timeoutMs`. Android's rule; the fake driver mirrors it for the same platform.
+    const androidToken = await env.cli(["token", "create", "--role", "agent"]);
+    expect(androidToken.code).toBe(0);
+    const androidAuth = {
+      authorization: `Bearer ${(androidToken.json as { secret: string }).secret}`,
+      "content-type": "application/json",
+    };
+    const androidCreated = await fetch(`${baseUrl}/v1/lease-requests`, {
+      body: JSON.stringify({ device: "Pixel 8", platform: "android" }),
+      headers: androidAuth,
+      method: "POST",
+    });
+    expect(androidCreated.status).toBe(201);
+    const androidRequestId = ((await androidCreated.json()) as { request: { id: string } }).request
+      .id;
+    let androidLease: { id: string } | undefined;
+    await waitFor(
+      async () => {
+        const polled = await fetch(`${baseUrl}/v1/lease-requests/${androidRequestId}?wait=10`, {
+          headers: androidAuth,
+        });
+        const body = (await polled.json()) as {
+          request: { state: string; lease?: { id: string } };
+        };
+        androidLease = body.request.lease;
+        return body.request.state === "granted";
+      },
+      { label: "the android lease request is granted", timeout: 30_000 },
+    );
+
+    const bareShell = await fetch(`${baseUrl}/v1/leases/${androidLease?.id ?? ""}/exec`, {
+      body: JSON.stringify({ args: ["shell"], tool: "adb" }),
+      headers: androidAuth,
+      method: "POST",
+    });
+    expect(bareShell.status).toBe(422);
+    expect(((await bareShell.json()) as { error: { code: string } }).error.code).toBe(
+      "PASSTHROUGH_REFUSED",
+    );
+
+    // The same command with something to run is not the interactive shell, and goes through.
+    const shellWithCommand = await fetch(`${baseUrl}/v1/leases/${androidLease?.id ?? ""}/exec`, {
+      body: JSON.stringify({ args: ["shell", "getprop"], tool: "adb" }),
+      headers: androidAuth,
+      method: "POST",
+    });
+    expect(shellWithCommand.status).toBe(200);
+    expect((await readSse(shellWithCommand)).at(-1)).toEqual({
+      data: { exitCode: 0 },
+      event: "exit",
+    });
+    await env.cli(["release", androidLease?.id ?? ""]);
+
+    // A lease this token does not own is refused before anything runs -- ownership is the
+    // dispatcher's own hook, not something this route re-implements.
+    const otherToken = await env.cli(["token", "create", "--role", "agent"]);
+    const otherExec = await fetch(`${baseUrl}/v1/leases/${leaseId}/exec`, {
+      body: JSON.stringify({ args: ["list"], tool: "simctl" }),
+      headers: {
+        authorization: `Bearer ${(otherToken.json as { secret: string }).secret}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+    expect(otherExec.status).toBe(403);
+    expect(((await otherExec.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
 
     // An id that names no lease answers 404 rather than running anything.
     const unknown = await fetch(`${baseUrl}/v1/leases/lse_nope/exec`, {

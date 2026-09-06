@@ -51,7 +51,6 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` naming a worker the gateway does not know |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
-| 15 | `EXEC_TIMEOUT` | a command run on the daemon's machine (`simlock simctl`/`simlock adb` against a remote daemon) outran `exec.timeoutMs` and was killed |
 
 Every row but 14 matches the `cliExitCode` column of the contract's error
 table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
