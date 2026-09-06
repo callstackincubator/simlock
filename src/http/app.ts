@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
+import { describeSchemaIssues } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -18,6 +19,7 @@ import {
   unknownRequest,
 } from "./errors.js";
 import { LeaseNoticeBuffer } from "./notices.js";
+import { OutputRelay } from "./output-relay.js";
 import { pipeSse } from "./sse.js";
 import type { TokenIdentity } from "./token-store.js";
 import {
@@ -69,6 +71,35 @@ const leaseRequestBodySchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
   ttlMs: z.number().int().positive().optional(),
 });
+
+/**
+ * `POST /v1/leases/{id}/exec`'s body: `device.exec`'s input minus `leaseId`, which the path
+ * already names. Restated here rather than derived from the operation schema because that is
+ * how every other route in this file states its body -- and because omitting `leaseId` from a
+ * `.strict()` operation schema is not something `z.omit` can express without also dropping the
+ * strictness that makes a typo an error.
+ *
+ * `tool` is a plain string, matching the operation: a name no driver on this machine wraps is
+ * `UNKNOWN_PASSTHROUGH_TOOL` (422) from the driver catalog, not a malformed body -- `400` here
+ * means the body's *shape* is wrong, nothing more.
+ *
+ * `stdin` and `requesterId` accept `null` as well as an omitted key, and normalize it to
+ * omitted: the documented example sends `"stdin": null, "requesterId": null` to show the
+ * fields exist, and a serializer that writes every optional field as `null` should not be a
+ * `400`.
+ */
+const execBodySchema = z
+  .object({
+    tool: z.string().min(1),
+    args: z.array(z.string()),
+    stdin: z.string().nullish().transform(nullToUndefined),
+    requesterId: z.string().nullish().transform(nullToUndefined),
+  })
+  .strict();
+
+function nullToUndefined<Value>(value: Value | null | undefined): Value | undefined {
+  return value ?? undefined;
+}
 
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
   return {
@@ -194,7 +225,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     agentAuth,
     zValidator("json", leaseRequestBodySchema, (result, c) => {
       if (!result.success) {
-        return errorResponse(c, badRequest(formatZodIssues(result.error.issues)));
+        return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
       }
     }),
     async (c) => {
@@ -331,6 +362,89 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       notices: notices.drain(id),
     });
   });
+
+  app.post(
+    "/v1/leases/:id/exec",
+    agentAuth,
+    zValidator("json", execBodySchema, (result, c) => {
+      if (!result.success) {
+        return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
+      }
+    }),
+    async (c) => {
+      const identity = c.get("identity");
+      const leaseId = c.req.param("id");
+      const { requesterId, ...body } = c.req.valid("json");
+      // Requester identity is the token's over HTTP, never the body's -- except for an
+      // `operator` token, which is the proxying case `device.exec` reads it for. An agent
+      // token that supplies one at all is refused rather than quietly ignored: a request that
+      // names an identity and is answered as if it had not is the kind of silence that reads
+      // like authorization.
+      if (requesterId !== undefined && identity.role !== "operator") {
+        throw forbidden("requesterId may only be supplied by an operator token");
+      }
+
+      // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
+      // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for
+      // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
+      // a `lease.list` filter would produce (see `findOwnedLease`'s comment).
+      // Where a chunk goes at each stage of this request's life, including after the client
+      // disconnects -- see `OutputRelay`, which is where the "retain nothing then" rule lives
+      // and is tested.
+      const relay = new OutputRelay();
+      let onStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        onStarted = resolve;
+      });
+
+      const settled = deps
+        .dispatch(
+          "device.exec",
+          { leaseId, ...body, ...(requesterId === undefined ? {} : { requesterId }) },
+          buildHttpSession(identity, {
+            onStarted: () => onStarted(),
+            // The relay's answer is this chunk's SSE write, and returning it is what stops
+            // the command while a client is not reading (ADR 0005 §19e).
+            onOutput: (stream, chunk) => relay.push({ chunk, stream }),
+          }),
+        )
+        .then(
+          (result) => ({ exitCode: result.exitCode, kind: "exited" }) as const,
+          (error: unknown) => ({ error, kind: "failed" }) as const,
+        );
+
+      // An SSE response cannot take back its status code, so the decision point is the moment
+      // the process exists: every failure that can precede one -- an unowned lease, an unknown
+      // one, a refused verb, an unknown tool, a daemon still starting -- lands before
+      // `onStarted` and is answered as an ordinary JSON error with its own status. After it,
+      // the stream is committed, which is what gets a silent long-running command its `200`
+      // and its keepalives immediately, and what makes `EXEC_TIMEOUT` always arrive as the
+      // stream's terminal `error` event (ADR 0005 §19e).
+      const outcome = await Promise.race([settled, started.then(() => undefined)]);
+      if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
+
+      return pipeSse(c, deps.clock, {
+        subscribe(send, end) {
+          relay.attach((chunk) => send({ data: chunk, event: "output" }));
+          void settled.then((result) => {
+            if (result.kind === "exited") {
+              send({ data: { exitCode: result.exitCode }, event: "exit" });
+            } else {
+              const mapped = mapError(result.error);
+              send({
+                data: { error: { code: mapped.code, message: mapped.message } },
+                event: "error",
+              });
+            }
+            end();
+          });
+          // The command keeps running after a client disconnects; what ends here is this
+          // route's interest in its output, terminally.
+          return () => relay.drop();
+        },
+      });
+    },
+  );
 
   app.get("/v1/leases/:id/events", agentAuth, async (c) => {
     const identity = c.get("identity");
@@ -535,16 +649,6 @@ function parseDuration(value: string): number {
   const milliseconds = amount * multiplier;
   if (!Number.isSafeInteger(milliseconds)) throw badRequest(`Invalid duration: ${value}`);
   return milliseconds;
-}
-
-function formatZodIssues(
-  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
-): string {
-  return issues
-    .map((issue) =>
-      issue.path.length === 0 ? issue.message : `${issue.path.join(".")}: ${issue.message}`,
-    )
-    .join("; ");
 }
 
 function errorMessage(error: unknown): string {

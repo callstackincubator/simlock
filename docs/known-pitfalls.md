@@ -1,19 +1,53 @@
 # Known pitfalls
 
+## A SIGKILLed lease holder keeps its device until the TTL expires
+
+A lease ends in exactly one of two ways: somebody releases it, or its TTL
+runs out ([ADR 0004](adr/0004-ttl-first-leases-on-every-transport.md)). A
+running `simlock lease` — or an MCP session — releases on the way out, so a
+normal exit, a `SIGINT`/`SIGTERM`, or the death of the holder's parent all
+free the device at once, exactly as before. That is the holder's own policy,
+though, and it needs the holder to run code.
+
+**The pitfall:** a holder killed with `SIGKILL`, or lost with its machine,
+runs nothing. Nothing else steps in for it — the daemon released leases on
+socket close before ADR 0004 and no longer does, on any transport — so the
+device stays `leased` until `ttlDeadline`, at most the lease's own TTL after
+its last renew: `lease.defaultTtlMs` (15 minutes by default) unless the
+request asked for more, never more than `lease.maxTtlMs`. `simlock status` shows
+the lease and its "last renewed" time throughout; an operator who does not
+want to wait can end it now with `simlock release <lease-id>`.
+
+**Why it is accepted:** the alternative is a `releaseOnDisconnect` flag
+honoured only by transports that have a connection, which puts
+per-connection lease state back into the daemon and at every gateway hop, and
+gives "when does this lease end" a second answer that HTTP can never provide.
+ADR 0004 considered and rejected it; a short default TTL is the accepted
+trade, and it buys the reverse case too — a machine sleep, a daemon upgrade,
+or a socket hiccup no longer costs a live holder its device.
+
+**The knob:** `lease.defaultTtlMs` bounds the leak globally, and `--ttl` (or
+`ttlMs` on a request) bounds it for one lease. Both are worth lowering in a
+CI-shaped fleet where holders are killed routinely; both cost more renew
+traffic and a tighter deadline for a holder that stalls. See
+[CONFIGURATION.md](CONFIGURATION.md).
+
 ## Orphaned lease holders (resolved)
 
-The primary lease mechanism is process-held: `simlock lease` runs in the
-background, holds an open socket to the daemon (connection-alive acts as the
-heartbeat), and the agent kills the process to release the lease.
+`simlock lease` runs in the background, renews its lease on a timer, and
+releases it when it exits.
 
 **The pitfall:** if the agent crashed or was killed, its backgrounded `lease`
 process did *not* die with it — it got reparented (to launchd on macOS) and
-kept the socket open, holding the lease indefinitely. This silently
-reintroduced the "crashed agent holds a device forever" problem the tool
-exists to solve, and it blocked CLI held mode from declaring the heartbeat
-capability: a reparented holder is alive and would answer heartbeats
-forever, which would have turned the bounded TTL-backstop leak into an
-unbounded one.
+kept running, holding the lease indefinitely. This silently reintroduced the
+"crashed agent holds a device forever" problem the tool exists to solve.
+
+Under ADR 0004 it is the one failure the TTL cannot bound. Every other way of
+losing a holder ends at the deadline, because nothing is renewing (see the
+section above). A reparented holder is *alive*: its renew timer keeps firing
+against a lease nobody wants any more, pushing the deadline out ahead of
+itself forever. The TTL is a bound on silence, and this holder is not
+silent.
 
 **Fix:** the holder watches its parent through the `ParentWatch` port
 (`src/ports/parent-watch.ts`) and self-terminates the moment that parent
@@ -29,11 +63,11 @@ native addon, which this package does not take on, so the shipped adapter
 (`NodeParentWatch`) instead polls `process.kill(pid, 0)` for liveness —
 portable across platforms with no native dependency. It satisfies the same
 `ParentWatch` port a future native adapter would, so replacing it later
-touches only that one file. CLI held mode now declares the `heartbeat`
-capability, same as MCP.
+touches only that one file.
 
-Machine sleep and zombie sockets still fall back to the daemon-side TTL
-backstop; this fix is about a holder outliving its owner, nothing more.
+This fix is about a holder outliving its owner, nothing more. A holder that
+dies without running its release path is the section above, and the TTL is
+what bounds that one.
 
 ## Crash recovery cannot restore in-device session state
 
@@ -46,8 +80,11 @@ the process and a reboot cannot bring it back: a launched app, a `log
 stream`, an Appium/XCUITest session, a port forward. Simlock has no visibility
 into what was running there, so it cannot even enumerate what was lost, let
 alone restore it. This is why recovery notifies the holder
-(`device-unhealthy` / `device-recovered` in held mode) rather than healing
-silently — the agent has to notice and re-establish its own session state.
+(`device-unhealthy` / `device-recovered` — pushed to a running `simlock
+lease`'s stderr, and drained from the `notices` array on `POST
+/v1/leases/{id}/renew` by a polling HTTP client, which has no connection to
+push to) rather than healing silently — the agent has to notice and
+re-establish its own session state.
 
 Detection also has residual latency by design: a crash isn't declared until
 `health.stableObservations` consecutive `stopped` observations, spaced
@@ -121,6 +158,37 @@ they detect a device erased or deleted out from under a live lease, which
 containment makes rare but cannot make impossible. Do not remove them on the
 grounds that the root already proves ownership — the root proves *whose device
 it is*, the marks prove *what happened to it*.
+
+**`device.exec` sits inside the same boundary, not outside it.** The check it
+makes is that the caller owns the lease it names ([ADR
+0005](adr/0005-gateway-and-worker-modes.md) §19a); what the *command* then
+points at is the tool's business. So an agent token holding any one lease can
+run `adb -s <someone-else's-serial> shell …` or `simctl --udid <someone
+else's udid> …`, and the daemon will run it: the target device is in the same
+root, reachable from the same scoped `simctl`/`adb`, and the arguments are
+passed through unread. Ownership is proven for the *lease*, not re-derived
+for every device id inside the argv.
+
+That is deliberate. Refusing `-s` / `-t` / `--udid` outright would break the
+ordinary case — a lease holder naming its own device explicitly, which every
+`adb` invocation in a script does — and refusing only *other people's* ids
+means parsing each tool's argument grammar well enough to decide which token
+is a device id, on a surface that changes with the platform tools rather than
+with simlock. A parser that is wrong in the permissive direction refuses
+nothing extra; one that is wrong in the strict direction refuses commands
+that were always fine. The flags simlock *does* refuse
+([CLI.md](CLI.md)) are the ones that move a device's lifecycle behind the
+registry's back or escape containment altogether — `adb kill-server`, `-P` /
+`-L` / `-H` / `--server-port`, `simctl delete` — which is a list of verbs and
+scope switches, not a judgement about identity. `-s` / `-t` / `-d` / `-e`
+select a device *within* the containment simlock already established, so they
+stay.
+
+The consequence follows the same rule as the rest of this section: mutually
+untrusted agents on one machine need OS-level isolation. Agents that trust
+each other not to be malicious — the fleet this tool is for — get exactly
+what the roots buy them, which is that nobody reaches another agent's device
+*by accident*.
 
 **Status:** accepted by design. Anything that needs a real trust boundary
 (multi-tenant machines, untrusted agents) needs OS-level isolation, which is
@@ -227,7 +295,7 @@ JSON lines and MCP `notifications/progress`) has no `downloading` stage. Both
 drivers' `resolveSpec` — where a runtime or system-image install actually
 happens — runs before `LeaseAcquisitionCoordinator#drive`'s provisioning
 step, and `Driver.resolveSpec`'s signature carries no progress callback the
-way `provision`/`makeReady` do. A held-mode CLI or MCP caller waiting on a
+way `provision`/`makeReady` do. A CLI or MCP caller waiting on a
 multi-minute install today sees nothing on the wire between its request and
 either the eventual grant or a timeout; the only visibility is the daemon's
 own `component.install-started` bus event (`simlock events --follow`) and log
@@ -291,12 +359,18 @@ the daemon's core:
 
 **The pitfall:** both reset on a daemon restart (in-memory, no persistence),
 and both are HTTP-specific reimplementations of "track something about a
-request/lease across calls" that the socket frontends don't need because
-they hold a live connection instead. A daemon restart loses in-flight
-lease-request tracking state and buffered notices the same way it always
-did pre-ADR 0003 — see [Lifecycle semantics](HTTP-API.md#lifecycle-semantics)
-for the documented recovery loop (`404` → re-request → maybe `409` → `GET`),
-which exists specifically because the tracker does not survive a restart.
+request/lease across calls". The socket frontends need neither, but not because
+a connection holds anything — under ADR 0004 it holds nothing. They need
+neither because a socket client is *there* when the fact happens: the daemon
+pushes a device-health fact to whatever connections own the lease at that
+moment, and a request's progress rides the call that made it. A polling HTTP
+client is absent between calls by construction, so something has to hold the
+fact until it comes back, and today that something lives in the frontend. A
+daemon restart loses in-flight lease-request tracking state and buffered
+notices the same way it always did pre-ADR 0003 — see [Lifecycle
+semantics](HTTP-API.md#lifecycle-semantics) for the documented recovery loop
+(`404` → re-request → maybe `409` → `GET`), which exists specifically because
+the tracker does not survive a restart.
 
 **Status:** known, and explicitly called out as the ADR's own unfinished
 seam, not an oversight: "the HTTP tracker and notice buffer remain the known
@@ -380,6 +454,111 @@ Once those exist, `src/http/errors.ts` should stop constructing ad hoc `HttpApiE
 these four and instead go through the same `ERROR_TABLE`-driven path `mapError` already uses
 for every contract-declared code, the same way `UNKNOWN_LEASE`/`FORBIDDEN`/`BAD_REQUEST` do
 today.
+
+## A `device.exec` command is authorized once, at its start
+
+`device.exec` ([ADR 0005](adr/0005-gateway-and-worker-modes.md) §19a) checks
+that the caller owns the lease it names, then spawns the command and streams
+its output. The check happens once. A command that is still running when its
+lease ends -- expired on its TTL, released by its holder, force-released by an
+operator -- keeps running, and the device it is pointed at may by then have
+been reclaimed and granted to somebody else.
+
+**The pitfall:** it is tempting to read the ownership check as covering the
+command's whole lifetime. It covers its *start*. Nothing kills a running child
+when a lease ends, and nothing re-checks the lease while it runs.
+
+Three things bound the exposure, none of which closes it:
+
+- `exec.timeoutMs` (ten minutes by default) is a hard ceiling on how long any
+  one command can outlive anything.
+- Reclaim is not instant, and a device goes through `reclaiming` before it can
+  be granted again -- so the window is a straggler's, not a routine one.
+- The refusal list still applies: a command that outlives its lease cannot be
+  one that changes a device's lifecycle behind the registry's back.
+
+**Status:** accepted for now. Killing the child on `lease.expired` /
+`lease.released` is the obvious fix and is cheap to add, but it makes the
+worse trade in the common case: the reason a disconnect does not kill a
+running command is that a half-applied `simctl install` interrupted by a
+tunnel blip is worse than one that finishes with nobody watching, and a lease
+that expires *while its holder is mid-install* is the same situation with the
+same answer. Revisit it with the gateway work (#115), where a proxied exec
+adds a second place a lease can end without the worker noticing at once.
+
+## `device.exec` carries no files (ADR 0005)
+
+A remote agent drives its leased device with `device.exec` — `simlock simctl`
+/ `simlock adb` against a gateway, or `POST /v1/leases/{id}/exec` over HTTP.
+The command runs on the machine that owns the device, which is what makes it
+work at all across a fleet.
+
+**The pitfall:** the *arguments* travel, the *files* do not. `simctl install
+/tmp/MyApp.app` and `adb install ./app-debug.apk` resolve their path on the
+worker's filesystem, so a build sitting on the agent's own machine is simply
+not there — the command fails with the tool's own "no such file" rather than
+with anything simlock says, which reads like a broken lease until you notice
+which machine ran it. The same applies in reverse for output: `simctl io
+booted screenshot shot.png` writes `shot.png` on the worker.
+
+**Why it is accepted:** a file transfer is a second, byte-heavy concern with
+its own questions (size caps, resumability, where the bytes land, who deletes
+them), and answering them badly inside the lease path is worse than not
+answering them. v1's honest position is that artifacts arrive out of band — a
+shared volume, a checkout the CI job already did on that machine, an
+`scp` the operator's own tooling does.
+
+**Status:** accepted for v1 and designed around rather than designed out.
+[ADR 0005](adr/0005-gateway-and-worker-modes.md) leaves the seam open
+deliberately: `device.upload` would stream chunks as request-scoped pushes
+over the same wire, into a per-lease scratch directory deleted on release.
+Nothing about `device.exec`'s shape has to change to add it.
+
+**Possible future fix:** `device.upload`, a post-v1 idea rather than planned
+work — it belongs with the byte-heavy concerns
+[ADR 0005](adr/0005-gateway-and-worker-modes.md) lists as non-goals.
+
+## `device.exec` has no pseudo-terminal, so interactive commands break
+
+Locally — `simlock simctl` / `simlock adb` against a worker over its unix
+socket — the CLI spawns the tool with inherited stdio, so an interactive `adb
+shell` is a real interactive shell and always has been.
+
+**The pitfall:** through a gateway, or over HTTP, the same command goes
+through `device.exec` instead, and there is no PTY on the far end. `stdin` is
+one string sent with the request and then closed. Line-oriented commands are
+fine (`adb shell getprop`, `adb shell input tap 100 200`, `simctl install`);
+anything that wants a terminal is not — a full-screen program renders as
+escape sequences, and a tool that stops to ask a question waits for input
+that can never come until the timeout kills it. The failure is quiet in the
+worst case: the command hangs until `exec.timeoutMs` (ten minutes) and then
+fails `EXEC_TIMEOUT`.
+
+The one shape of this that is *not* quiet is the most likely one. A bare `adb
+shell` with no command — the thing a human types first — is refused up front
+by the worker with `PASSTHROUGH_REFUSED` (CLI exit 2, HTTP `422`) and a
+message saying it needs a terminal. It is the only refusal `device.exec` adds
+to the passthrough list, and it exists precisely because the honest failure
+for that command is immediate and legible, while the natural one is a
+ten-minute stall ending in a timeout that says nothing about terminals. It
+does not generalize: simlock cannot tell in advance which *other* commands
+will block for input, so everything past this one case is still bounded by
+the timeout rather than by a refusal.
+
+**Why it is accepted:** a PTY is not a bigger version of a pipe. It needs
+terminal allocation on the worker, window-size propagation, signal
+forwarding, and a bidirectional stream where v1 has request-scoped pushes —
+and it exists to serve a human at a keyboard, which is not who this control
+plane is for. Agents send commands and read output.
+
+**Status:** accepted by design, and the boundary is drawn where the docs say
+it is: same command, same refusals, same exit code, no terminal. The local
+path keeps its inherited stdio, so nobody loses an interactive shell they had
+before.
+
+**Possible future fix:** an interactive TTY is part of the reserved
+`dataPlane` ([ADR 0005](adr/0005-gateway-and-worker-modes.md) lists it among
+the non-goals), not a follow-up to `device.exec`.
 
 ## iOS slim mode: accepted costs and feature loss (#87)
 

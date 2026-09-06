@@ -207,8 +207,8 @@ describe("GET /v1/status, /v1/catalog", () => {
     const { app, dispatcher } = buildHarness();
     const status = {
       capacity: {},
+      daemon: { health: "running", mode: "worker" },
       devices: [{ id: "dev_1" }],
-      health: "running",
       leases: [],
       queueDepth: 0,
     };
@@ -695,6 +695,261 @@ describe("lease routes", () => {
     const frames = await framesPromise;
 
     expect(frames.map((frame) => frame.event)).toEqual(["device_unhealthy", "lease_lost"]);
+  });
+
+  /**
+   * ADR 0005 §19a's HTTP frontend. The route's whole job is to turn one dispatched
+   * `device.exec` into a stream: `output` per chunk, one terminal `exit` or `error`. What the
+   * command does is the dispatcher's business (see `daemon/dispatcher.test.ts`).
+   */
+  describe("POST /v1/leases/:id/exec", () => {
+    function postExec(
+      app: App,
+      body: Record<string, unknown> = { args: ["list"], tool: "simctl" },
+    ) {
+      return app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify(body),
+        headers: { ...agentAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+    }
+
+    it("streams a chunk per output event and ends with the command's exit code", async () => {
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      // The path names the lease; the body is the rest of the operation's input.
+      expect(call.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
+
+      // The stream opens when the process starts, not when it first speaks (ADR 0005 §19e).
+      // This chunk lands in the window between the two, which is the only thing the route's
+      // handoff buffer is for: it must still arrive, and still arrive first.
+      call.session.onStarted?.();
+      call.session.onOutput?.("stdout", "one");
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+
+      const framesPromise = readSseFrames(response, 3);
+      await Promise.resolve();
+      call.session.onOutput?.("stderr", "two");
+      call.resolve({ exitCode: 5 });
+      const frames = await framesPromise;
+
+      expect(frames.map((frame) => frame.event)).toEqual(["output", "output", "exit"]);
+      expect(frames.map((frame) => frame.data)).toEqual([
+        { chunk: "one", stream: "stdout" },
+        { chunk: "two", stream: "stderr" },
+        { exitCode: 5 },
+      ]);
+    });
+
+    it("answers a failure that lands before any output with its own status, not a stream", async () => {
+      // An SSE response cannot take back its status code, so ownership and the refusal list
+      // have to be answered ahead of the stream -- 403 here, exactly as `renew`/`release` do.
+      const { app, dispatcher } = buildHarness();
+      dispatcher.handlers["device.exec"] = () => {
+        throw new DispatchError("FORBIDDEN", "Not authorized for device.exec");
+      };
+
+      const response = await postExec(app);
+      expect(response.status).toBe(403);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    });
+
+    it("reports a failure that lands after output began as a terminal error event", async () => {
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
+      call.session.onOutput?.("stdout", "working");
+      const response = await responsePromise;
+
+      const framesPromise = readSseFrames(response, 2);
+      await Promise.resolve();
+      call.reject(new DispatchError("EXEC_TIMEOUT", "exceeded exec.timeoutMs (1000ms)"));
+      const frames = await framesPromise;
+
+      expect(frames.map((frame) => frame.event)).toEqual(["output", "error"]);
+      expect(frames.at(-1)?.data).toMatchObject({ error: { code: "EXEC_TIMEOUT" } });
+    });
+
+    it("forwards requesterId for an operator token and 403s an agent that supplies one", async () => {
+      // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
+      // "Authentication"): the token is the identity. The one exception is an operator token
+      // proxying for someone -- the case ADR 0005 §19b/§27 needs. An agent that names an
+      // identity is refused rather than answered as if it had not: silence there would read
+      // like the field had been honoured.
+      const { app, dispatcher } = buildHarness();
+
+      const asOperator = app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify({ args: ["list"], requesterId: "agent-7", tool: "simctl" }),
+        headers: { ...operatorAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+      const operatorCall = await waitForDispatch(dispatcher, "device.exec");
+      expect(operatorCall.input).toEqual({
+        args: ["list"],
+        leaseId: "lse_1",
+        requesterId: "agent-7",
+        tool: "simctl",
+      });
+      operatorCall.session.onStarted?.();
+      operatorCall.resolve({ exitCode: 0 });
+      await asOperator;
+
+      const asAgent = await app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify({ args: ["list"], requesterId: "agent-7", tool: "simctl" }),
+        headers: { ...agentAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+      expect(asAgent.status).toBe(403);
+      expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+      expect(dispatcher.calls.filter((call) => call.operation === "device.exec")).toHaveLength(1);
+
+      // A `null` for either optional is the documented example's own spelling, and normalizes
+      // to an omitted field rather than a 400 -- including for an agent, which is not
+      // "supplying a requesterId".
+      const withNulls = app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify({ args: ["list"], requesterId: null, stdin: null, tool: "simctl" }),
+        headers: { ...agentAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+      const nullCall = await waitForDispatch(dispatcher, "device.exec", 1);
+      expect(nullCall.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
+      nullCall.session.onStarted?.();
+      nullCall.resolve({ exitCode: 0 });
+      await withNulls;
+    });
+
+    it("dispatches an unwrapped tool rather than rejecting it, and 400s a malformed body", async () => {
+      // Which wrappers exist is the drivers' answer: `bash` is a tool this host does not wrap
+      // (`UNKNOWN_PASSTHROUGH_TOOL`, 422, from the driver catalog -- see the dispatcher suite),
+      // not a malformed request. `400` here is about the body's shape only.
+      const { app, dispatcher } = buildHarness();
+
+      const unwrapped = postExec(app, { args: [], tool: "bash" });
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      expect(call.input).toEqual({ args: [], leaseId: "lse_1", tool: "bash" });
+      call.reject(
+        new DispatchError("UNKNOWN_PASSTHROUGH_TOOL", "No driver provides a bash passthrough"),
+      );
+      const refused = await unwrapped;
+      expect(refused.status).toBe(422);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+        "UNKNOWN_PASSTHROUGH_TOOL",
+      );
+
+      for (const body of [
+        { args: [] },
+        { args: "list", tool: "simctl" },
+        { args: [], tool: "simctl", unexpected: true },
+      ]) {
+        const response = await postExec(app, body);
+        expect(response.status).toBe(400);
+        expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+          "BAD_REQUEST",
+        );
+      }
+      expect(dispatcher.calls.filter((call) => call.operation === "device.exec")).toHaveLength(1);
+    });
+
+    it("opens the stream when the process starts, before it has written anything", async () => {
+      // ADR 0005 §19e: a command that prints nothing for nine minutes still gets its `200` and
+      // its keepalives, and an `EXEC_TIMEOUT` therefore always arrives as the stream's terminal
+      // event rather than as a status the client can no longer be given.
+      const { app, clock, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+
+      const framesPromise = readSseFrames(response, 1);
+      await Promise.resolve();
+      // Nothing written yet, and the connection is already alive enough to keep alive.
+      clock.advance(15_000);
+      call.reject(new DispatchError("EXEC_TIMEOUT", "exceeded exec.timeoutMs (600000ms)"));
+      const frames = await framesPromise;
+      expect(frames).toEqual([
+        { data: { error: { code: "EXEC_TIMEOUT", message: expect.any(String) } }, event: "error" },
+      ]);
+    });
+
+    it("stalls the command when the client stops reading, instead of buffering for it", async () => {
+      // ADR 0005 §19e end to end. The route hands each chunk's SSE write back through
+      // `onOutput`, the process runner awaits it, so a client that opened the stream and does
+      // not read stops the command at its own pipe -- the alternative being an unbounded
+      // in-process queue for exactly the client least able to consume it.
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      const reader = response.body?.getReader();
+      await Promise.resolve();
+
+      const settled: number[] = [];
+      let pending: number | undefined;
+      for (let index = 0; index < 64 && pending === undefined; index += 1) {
+        const delivery = Promise.resolve(call.session.onOutput?.("stdout", `chunk-${index}`)).then(
+          () => settled.push(index),
+        );
+        // A delivery that has not settled after the microtask queue drains is the stream
+        // refusing more, which is the state this test exists to reach.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (!settled.includes(index)) {
+          pending = index;
+          void delivery;
+        }
+      }
+      expect(pending, "the unread stream never applied backpressure").toBeDefined();
+
+      // Reading again lets the queued writes through, and the stalled delivery completes --
+      // the command resumes rather than having been dropped. Each read is bounded: once the
+      // queue is empty a further read would block on the very producer this test has stalled.
+      for (let attempt = 0; attempt < 8 && !settled.includes(pending as number); attempt += 1) {
+        await Promise.race([reader?.read(), new Promise((resolve) => setTimeout(resolve, 20))]);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      expect(settled).toContain(pending);
+
+      await reader?.cancel();
+      call.resolve({ exitCode: 0 });
+      await responsePromise;
+    });
+
+    it("survives a client that disconnects while the command keeps writing", async () => {
+      // The command runs on deliberately, so chunks keep arriving at a route with nowhere to
+      // put them. They go nowhere and the request still settles normally -- what "nowhere"
+      // means precisely, and that nothing accumulates, is `output-relay.test.ts`.
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      const reader = response.body?.getReader();
+      await Promise.resolve();
+      await reader?.cancel();
+      await Promise.resolve();
+
+      const chunk = "x".repeat(1_024);
+      for (let index = 0; index < 1_000; index += 1) call.session.onOutput?.("stdout", chunk);
+
+      // The relay is dropped, not merely detached: a chunk after the disconnect is discarded
+      // outright, which is observable as the delivery no longer being something to wait for.
+      // (Without the `relay.drop()` in the route's unsubscribe, this returns the pending write
+      // of a stream nobody will ever read.)
+      expect(call.session.onOutput?.("stdout", chunk)).toBeUndefined();
+
+      call.resolve({ exitCode: 0 });
+      await expect(responsePromise).resolves.toBeDefined();
+    });
   });
 
   it("DELETE /v1/leases/:id releases and answers 202 with the device's post-release state", async () => {

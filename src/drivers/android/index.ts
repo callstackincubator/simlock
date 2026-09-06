@@ -16,6 +16,7 @@ import {
   type ObservedMark,
   type PassthroughCommand,
   PassthroughRefusedError,
+  type PassthroughContext,
   type ReclaimResult,
   RuntimeMissingError,
 } from "../../core/driver.js";
@@ -235,6 +236,55 @@ const REFUSED_ADB_VERB = "kill-server";
 const STOPS_A_RUNNING_DEVICE =
   "it stops a device Simlock still believes is running, which reports as drift on the next reconcile.";
 
+/**
+ * Global flags that would point `adb` at a different server than the one Simlock owns. adb
+ * takes the **last** `-P` on the line, so a caller-supplied one silently wins over the one
+ * this driver inserts and the command lands on the machine's default server, outside
+ * containment entirely (safety rule 9) -- the same hole the iOS driver closes by refusing a
+ * caller-supplied `--set`/`--profiles`.
+ *
+ * `-P` and `--server-port` name the port, `-H` the host, `-L` the whole listen address
+ * (`tcp:host:port`). The single-letter pair is matched **attached as well as separated**
+ * (`-P5037`, `-Hother-host`) because adb's own parser is `strncmp(argv[0], "-P", 2)`: it takes
+ * the rest of the argument as the value, so a check that only knew `-P` as a whole word would
+ * refuse the spelling adb accepts and pass the one it also accepts. `-P=5037` needs no entry
+ * of its own -- adb would read the value as `=5037` and fail -- but the attached rule catches
+ * it anyway, which is the right way round.
+ *
+ * Deliberately **not** here: `-s`, `-t`, `-d`, `-e`. Those select which device on Simlock's own
+ * server a command talks to, which is what the arguments are *for*; refusing them would break
+ * every multi-device invocation to prevent nothing, since every device they can name is one
+ * Simlock already manages. What that does mean -- any lease holder can name any Simlock device
+ * on this machine -- is the accident boundary ADR 0001 draws, not a hole in this list; see
+ * `docs/known-pitfalls.md`.
+ */
+const ATTACHED_SCOPE_FLAGS: readonly string[] = ["-P", "-H"];
+const EXACT_SCOPE_FLAGS: readonly string[] = ["-L", "--server-port"];
+
+/** adb globals whose value is the next argument, so it is not the subcommand however much it
+ * looks like one (`-s emulator-5554 shell ...`). `-d`, `-e` and `-a` take none. */
+const VALUE_TAKING_GLOBALS: readonly string[] = ["-s", "-t", "-L", "-H", "-P", "--server-port"];
+
+/**
+ * The caller-supplied scope flag in the *globals* region, if any: adb's globals come before
+ * the subcommand, and everything from the subcommand onwards is that subcommand's operand --
+ * `adb shell echo -Please` is a word to echo, not an attempt to move the server. Same scan the
+ * iOS driver runs for `--set`/`--profiles`, for the same reason.
+ */
+function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    // The first argument that is not a flag is the subcommand, and everything from there on is
+    // its own -- unless it is the *value* of a global that takes one (`-s <serial>`), which is
+    // why this walks adb's small global grammar rather than stopping at the first bare word.
+    if (!argument.startsWith("-")) return undefined;
+    if (EXACT_SCOPE_FLAGS.includes(argument)) return argument;
+    if (ATTACHED_SCOPE_FLAGS.some((flag) => argument.startsWith(flag))) return argument;
+    if (VALUE_TAKING_GLOBALS.includes(argument)) index += 1;
+  }
+  return undefined;
+}
+
 const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
   readonly reason: string;
@@ -250,6 +300,18 @@ const REFUSED_ADB_SEQUENCES: readonly {
     sequence: ["emu", "avd", "snapshot", "delete"],
   },
 ];
+
+/**
+ * Whether this is `adb shell` with nothing after it -- the interactive shell. Recognised by
+ * `shell` being the last argument rather than by parsing adb's option grammar: everything
+ * before it is a global (`-s <serial>`, `-P <port>`) and everything after it is the command
+ * to run, so "nothing after it" is exactly the case with no command. `adb shell -t` and
+ * friends still pass, deliberately: they name a flag rather than a command, and refusing on
+ * a guess would cost a working invocation to catch a hang the timeout already bounds.
+ */
+function isBareShell(args: readonly string[]): boolean {
+  return args.at(-1) === "shell";
+}
 
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
@@ -453,8 +515,8 @@ export class AndroidDriver implements Driver {
    * that re-execs itself stays on the same server; it says the same thing `-P` does, and
    * saying it twice costs nothing.
    */
-  passthrough(args: readonly string[]): PassthroughCommand {
-    this.#assertProxyable(args);
+  passthrough(args: readonly string[], context?: PassthroughContext): PassthroughCommand {
+    this.#assertProxyable(args, context);
     return {
       args: ["-P", String(this.#adbServerPort), ...args],
       command: this.#sdk.adb,
@@ -462,7 +524,18 @@ export class AndroidDriver implements Driver {
     };
   }
 
-  #assertProxyable(args: readonly string[]): void {
+  #assertProxyable(args: readonly string[], context?: PassthroughContext): void {
+    // A shell with nothing to run *is* the interactive shell, and an interactive shell
+    // without a terminal is a process that reads a pipe that will never carry anything --
+    // it hangs until whatever timeout its caller has. Refused only where there is no
+    // terminal (`device.exec`, ADR 0005 §19c); the local `simlock adb shell`, which inherits
+    // the CLI's own tty, is untouched and still the way to get one.
+    if (context?.hasTerminal === false && isBareShell(args)) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        "Refusing `simlock adb shell` with no command: an interactive shell needs a terminal, and this one runs on the device's own machine with none. Pass the command to run (`simlock adb shell getprop`), or run `simlock adb shell` on that machine.",
+      );
+    }
     if (args.includes(REFUSED_ADB_VERB)) {
       throw new PassthroughRefusedError(
         this.passthroughTool,
@@ -476,6 +549,14 @@ export class AndroidDriver implements Driver {
       throw new PassthroughRefusedError(
         this.passthroughTool,
         `Refusing \`simlock adb ${refused.sequence.join(" ")}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
+      );
+    }
+
+    const scopeFlag = callerSuppliedScopeFlag(args);
+    if (scopeFlag !== undefined) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock adb ${scopeFlag}\`: \`simlock adb\` supplies the adb server itself, and adb takes the last one on the line -- a caller-supplied one would point the command at a server that cannot see Simlock's devices, or at one it must not touch. Drop the flag -- the command is already scoped -- or run \`adb\` directly if you mean to leave Simlock's server.`,
       );
     }
   }

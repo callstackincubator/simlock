@@ -171,6 +171,14 @@ export interface CliEnvironment {
    * child process, the same way every other external effect here is injected.
    */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
+  /**
+   * Reads this process's piped stdin to EOF, for the one command that can forward it: a
+   * `device.exec` passthrough, whose `stdin` is a one-shot string (ADR 0005 §19c). Resolves
+   * `undefined` when stdin is a terminal -- nothing was piped in, and reading would block on a
+   * human. A hook rather than a direct `process.stdin` read for the usual reason: an external
+   * effect a test has to be able to script.
+   */
+  readonly readStdin?: () => Promise<string | undefined>;
 }
 
 /**
@@ -345,6 +353,8 @@ export interface CliEnvironmentPorts {
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   /** Injected so the `simctl` / `adb` wrappers are testable without spawning a child. */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
+  /** See `CliEnvironment.readStdin`. */
+  readonly readStdin?: () => Promise<string | undefined>;
   readonly parentPid?: number;
 }
 
@@ -403,6 +413,7 @@ export function buildCliEnvironment(
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
     },
     runPassthrough: ports.runPassthrough ?? spawnPassthrough,
+    readStdin: ports.readStdin ?? readPipedStdin,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -437,6 +448,19 @@ export function buildCliEnvironment(
     stdout: ports.stdout ?? process.stdout,
     confirm: ports.confirm ?? confirmTerminal,
   };
+}
+
+/**
+ * Reads piped stdin to EOF, or `undefined` when stdin is a terminal (nothing was piped, and
+ * reading would block on a human). The only caller is the remote passthrough path, whose
+ * `stdin` is one shot -- see `CliEnvironment.readStdin`.
+ */
+async function readPipedStdin(): Promise<string | undefined> {
+  if (process.stdin.isTTY === true) return undefined;
+  process.stdin.setEncoding("utf8");
+  let contents = "";
+  for await (const chunk of process.stdin) contents += chunk as string;
+  return contents;
 }
 
 function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
@@ -548,7 +572,15 @@ export async function runCli(
         // entirely in the driver (architecture rule 2 is about knowledge, not about names).
         // Every argument after the tool name is the tool's, verbatim -- including `--help`,
         // which belongs to `simctl`/`adb` and not to Simlock. `simlock --help` lists these.
-        return await runPassthrough(rest[0] ?? "", rest.slice(1), environment, token);
+        // Narrowed here rather than passed as a bare string: both operations take an open
+        // `tool` (which wrappers exist is the drivers' answer, not the contract's), but this
+        // CLI publishes exactly two wrapper commands, and this switch already knows which.
+        return await runPassthrough(
+          rest[0] === "adb" ? "adb" : "simctl",
+          rest.slice(1),
+          environment,
+          token,
+        );
       case "mcp":
         return await runMcp(rest.slice(1), environment);
       default:
@@ -586,30 +618,210 @@ function cliErrorCode(error: unknown): string {
  * interactive `adb shell` gets a tty and its exit code travels back to the caller's shell.
  */
 async function runPassthrough(
-  tool: string,
+  tool: "simctl" | "adb",
   args: readonly string[],
   environment: CliEnvironment,
   token: string | undefined,
 ): Promise<number> {
-  const run = environment.runPassthrough;
-  if (run === undefined) throw new Error("Tool passthrough is unavailable");
+  // `--lease` is accepted on both paths so one command line works against either kind of
+  // daemon (docs/CLI.md), and it is stripped here, before the branch, for the same reason:
+  // whether it is *meaningful* depends on the daemon's mode, but whether it is the tool's
+  // argument must not. Scanning stops at the first argument that is not `--lease` -- from
+  // there on everything belongs to the tool, `adb shell ... --lease x` included.
+  const { leaseFlag, rest } = extractLeaseFlag(args);
   const client = await connectDaemonClient(environment, token);
+  // ADR 0005 §19c: which path this invocation takes is a fact about the daemon, not a flag --
+  // a `worker` owns the devices it serves, so the command it resolves can be spawned right
+  // here with a real terminal; a `gateway` owns none, so the command has to run on whichever
+  // worker does. The daemon says which it is, rather than the CLI guessing from its transport.
+  let daemon;
+  try {
+    ({ daemon } = await client.getStatus());
+  } catch (error: unknown) {
+    await client.close();
+    throw error;
+  }
+  if (daemon.mode === "gateway") {
+    try {
+      return await runRemotePassthrough(tool, rest, environment, client, leaseFlag);
+    } finally {
+      await client.close();
+    }
+  }
+  // Only the local path spawns anything, so only it needs a spawner -- and the connection is
+  // this function's to close on the way out, even when there is nothing to run it with.
+  const run = environment.runPassthrough;
+  if (run === undefined) {
+    await client.close();
+    throw new Error("Tool passthrough is unavailable");
+  }
   let command;
   try {
-    command = await client.resolvePassthrough({ args: [...args], tool });
+    // `rest`, not `args`: a `--lease` in front of the tool's own arguments is Simlock's, and
+    // ignoring it here (rather than forwarding it to `simctl`/`adb`, which would fail) is what
+    // "accepted so one command line works against either" means.
+    command = await client.resolvePassthrough({ args: [...rest], tool });
   } catch (error: unknown) {
     // A verb the driver refuses is the caller getting it wrong, not a daemon fault, so it
-    // surfaces as usage rather than as an internal error.
-    if (isSimlockError(error) && error.code === "PASSTHROUGH_REFUSED") {
-      throw new UsageError(error.message);
-    }
-    throw error;
+    // surfaces as usage rather than as an internal error -- through the same relabelling the
+    // remote path uses, so both answer a refusal identically.
+    throw asUsageIfRefused(error);
   } finally {
     // Resolved before the command runs, so an interactive `adb shell` does not hold a daemon
     // connection open for its whole session.
     await client.close();
   }
   return run(command);
+}
+
+/**
+ * ADR 0005 §19c's other half: the command runs on the daemon's machine and its output is
+ * streamed here. Nothing about the arguments changes -- the daemon resolves them through the
+ * same driver passthrough, with the same refusals -- so the only visible differences are the
+ * ones §19c names: no pseudo-terminal, and a lease has to be named.
+ *
+ * The connection is held for the whole command, unlike the local path (which closes it before
+ * spawning): the output arrives on it.
+ */
+async function runRemotePassthrough(
+  tool: "simctl" | "adb",
+  args: readonly string[],
+  environment: CliEnvironment,
+  client: SimlockAdminClient,
+  leaseFlag: string | undefined,
+): Promise<number> {
+  try {
+    const leaseId = leaseFlag ?? (await resolveRemoteLeaseId(client, environment));
+    // Read to EOF before the command starts, because `stdin` is one shot (ADR 0005 §19c):
+    // there is no channel to feed it through afterwards. Nothing is read when stdin is a
+    // terminal -- a `simlock adb shell input text hi` typed at a prompt must not block
+    // waiting for the human to press ^D.
+    const stdin = await environment.readStdin?.();
+    // `requesterId` is read only on an admin session (see the operation's `authorize` hook),
+    // and on one it is required to match the lease. An agent-role connection is gated on the
+    // lease it owns instead, so it sends none rather than a value that would be ignored.
+    const requesterId = client.role === "admin" ? environment.requesterId : undefined;
+    const { exitCode } = await client.exec(
+      {
+        args: [...args],
+        leaseId,
+        tool,
+        ...(requesterId === undefined ? {} : { requesterId }),
+        ...(stdin === undefined ? {} : { stdin }),
+      },
+      {
+        // Written straight through, unbuffered and unjoined: whatever the command wrote, where
+        // it wrote it. A caller piping `simlock adb logcat` sees the same bytes in the same
+        // order it would have seen locally.
+        onOutput: (chunk) => {
+          const sink = chunk.stream === "stdout" ? environment.stdout : environment.stderr;
+          sink.write(chunk.chunk);
+        },
+      },
+    );
+    return exitCode;
+  } catch (error: unknown) {
+    throw asUsageIfRefused(error);
+  }
+}
+
+/**
+ * The daemon's refusals, rendered the way this CLI renders a caller's mistake: `USAGE`, exit 2,
+ * with the daemon's own message. Both refusal codes and both paths go through this one
+ * function -- the local `driver.passthrough` and the remote `device.exec` refuse with the same
+ * two codes for the same reasons (ADR 0005 §19c: the CLI keeps no copy of the list, it relabels
+ * what comes back), and a caller who typed `simlock adb kill-server` should not be able to tell
+ * from the answer which path answered. Anything else is left exactly as it arrived.
+ */
+function asUsageIfRefused(error: unknown): unknown {
+  if (
+    isSimlockError(error) &&
+    (error.code === "PASSTHROUGH_REFUSED" || error.code === "UNKNOWN_PASSTHROUGH_TOOL")
+  ) {
+    return new UsageError(error.message);
+  }
+  return error;
+}
+
+/**
+ * Pulls a leading `--lease <id>` (or `--lease=<id>`) off the argument list, leaving the rest
+ * for the tool.
+ *
+ * Scanning **stops at the first argument that is not `--lease`** -- a bare word, the tool's
+ * own flag, anything. That is the whole reason this can exist at all next to "every argument
+ * after the tool name is the tool's": everything from that point on is the tool's, including
+ * something spelled `--lease`. So `simlock adb --lease lse_1 shell input text --lease` names
+ * a lease once and types the word once, and `simlock adb -s emulator-5554 --lease lse_1 ...`
+ * does not name one at all -- the `-s` ended the scan, so the `--lease` after it goes to
+ * `adb`, which is the same rule read from the other side rather than a special case.
+ *
+ * It is accepted on both paths, not just the remote one: only a gateway *needs* it (the
+ * command runs against a lease there), but a caller should be able to write one command line
+ * and have it work against either kind of daemon, so a worker takes the flag and ignores it.
+ */
+function extractLeaseFlag(args: readonly string[]): {
+  readonly leaseFlag: string | undefined;
+  readonly rest: readonly string[];
+} {
+  let leaseFlag: string | undefined;
+  let index = 0;
+  while (index < args.length) {
+    const argument = args[index] as string;
+    if (argument === "--lease") {
+      const value = args[index + 1];
+      if (value === undefined) throw new UsageError("--lease requires a lease id");
+      leaseFlag = value;
+      index += 2;
+      continue;
+    }
+    if (argument.startsWith("--lease=")) {
+      leaseFlag = argument.slice("--lease=".length);
+      if (leaseFlag === "") throw new UsageError("--lease requires a lease id");
+      index += 1;
+      continue;
+    }
+    // Any other flag is the tool's, and so is everything from here on: a flag Simlock does not
+    // know cannot be told apart from one whose *value* looks like a flag, so the scan stops
+    // rather than guessing.
+    break;
+  }
+  return { leaseFlag, rest: args.slice(index) };
+}
+
+/**
+ * Which lease the remote command runs against: the one this invocation's requester id holds.
+ *
+ * `lease.list` already answers per role -- an agent-role connection sees only the leases it
+ * owns, an admin-role one sees every lease on the daemon -- so the requester filter is applied
+ * only in the admin case, where it is the difference between "my lease" and "somebody's".
+ * Filtering an agent's own list by `requesterId` too would drop a lease it demonstrably owns
+ * whenever the requester id differs from the principal (an `--agent-id` used on the lease but
+ * not on this invocation): a refusal with no safety behind it.
+ *
+ * Identity rather than a flag, in either case: `--agent-id`/`SIMLOCK_AGENT_ID` already names
+ * who is asking, `simlock lease` attributes a lease to it, and one requester holds at most one
+ * lease -- so the usual invocation needs nothing, and `--lease` is there for the rest.
+ */
+async function resolveRemoteLeaseId(
+  client: SimlockAdminClient,
+  environment: CliEnvironment,
+): Promise<string> {
+  const { leases } = await client.listLeases();
+  const own =
+    client.role === "admin"
+      ? leases.filter((lease) => lease.requesterId === environment.requesterId)
+      : leases;
+  if (own.length === 0) {
+    throw new UsageError(
+      `No lease is held by ${environment.requesterId}: run \`simlock lease\` first, or set SIMLOCK_AGENT_ID to the id that holds it`,
+    );
+  }
+  if (own.length > 1) {
+    throw new UsageError(
+      `${environment.requesterId} holds more than one lease (${own.map((lease) => lease.id).join(", ")}); run this command under the agent id that holds the device you mean`,
+    );
+  }
+  return (own[0] as { readonly id: string }).id;
 }
 
 /** ADR §7: "CLI exit codes and HTTP status codes are columns of the same error table, not
@@ -1552,7 +1764,7 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput): string {
-  const { capacity, devices, health, leases, queueDepth } = status;
+  const { capacity, daemon, devices, leases, queueDepth } = status;
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
@@ -1577,7 +1789,7 @@ function formatStatus(status: StatusGetOutput): string {
       `Lease ${lease.id}: ${lease.requesterId} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
-    `Daemon: ${health}`,
+    `Daemon: ${daemon.health} (${daemon.mode})`,
     globalLine,
     ...capacityLines,
     ...deviceLines,

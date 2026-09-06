@@ -9,7 +9,7 @@ import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import type { LeaseRecord, Platform } from "./domain.js";
-import type { DeviceRequest, Driver, PassthroughCommand } from "./driver.js";
+import type { DeviceRequest, Driver, PassthroughCommand, PassthroughContext } from "./driver.js";
 import { DriverCatalog, type PlatformCatalog } from "./driver-catalog.js";
 import {
   LeaseAcquisitionCoordinator,
@@ -279,8 +279,12 @@ export class LeaseEngine {
 
   /** Scoped command for a `simlock <tool>` wrapper, built by whichever driver claims it. */
   // fallow-ignore-next-line unused-class-member -- called through PassthroughResolver by DaemonServer.
-  passthrough(tool: string, args: readonly string[]): PassthroughCommand {
-    return this.#drivers.passthrough(tool, args);
+  passthrough(
+    tool: string,
+    args: readonly string[],
+    context?: PassthroughContext,
+  ): PassthroughCommand {
+    return this.#drivers.passthrough(tool, args, context);
   }
 
   get queueDepth(): number {

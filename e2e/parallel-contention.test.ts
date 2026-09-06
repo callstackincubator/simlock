@@ -95,6 +95,6 @@ describe("parallel contention invariant", () => {
     await waitForLeaseCount(env, 0);
     const finalStatus = await env.cli(["status", "--json"]);
     expect(finalStatus.code).toBe(0);
-    expect((finalStatus.json as { health: string }).health).toBe("running");
+    expect((finalStatus.json as { daemon: { health: string } }).daemon.health).toBe("running");
   });
 });

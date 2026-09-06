@@ -1800,6 +1800,87 @@ describe("AndroidDriver.create", () => {
     );
   });
 
+  it("refuses a caller-supplied server flag in the globals, in every spelling adb accepts", async () => {
+    // `adb` takes the *last* `-P` on the line, so a caller-supplied one silently wins over the
+    // one this driver inserts and the command lands on whatever server that names -- the
+    // machine's default one included, which is outside Simlock's containment entirely (safety
+    // rule 9). Same hole `--set`/`--profiles` closes on the iOS side, same answer.
+    //
+    // The attached spellings matter most: adb parses `-P` with `strncmp(argv[0], "-P", 2)`, so
+    // `-P5037` is a normal way to write it, and a whole-word check would have refused the
+    // separated form while passing the one that actually escapes.
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    for (const args of [
+      ["-P", "5037", "devices"],
+      ["-P5037", "devices"],
+      ["-P=5037", "devices"],
+      ["--server-port", "5037", "devices"],
+      ["-H", "other-host", "devices"],
+      ["-Hother-host", "devices"],
+      ["-L", "tcp:127.0.0.1:5037", "devices"],
+      ["-s", "emulator-5554", "-P5037", "shell", "getprop"],
+    ]) {
+      expect(() => driver.passthrough(args), args.join(" ")).toThrow(PassthroughRefusedError);
+      expect(() => driver.passthrough(args, { hasTerminal: false }), args.join(" ")).toThrow(
+        /supplies the adb server itself/,
+      );
+    }
+
+    // Past the subcommand every argument is that subcommand's operand, so one that merely
+    // looks like a global travels through: refusing `echo -Please` would break a working
+    // command to prevent nothing.
+    for (const args of [
+      ["shell", "echo", "-Please"],
+      ["shell", "getprop", "-P5037"],
+      ["-s", "emulator-5554", "devices"],
+      ["--version"],
+    ]) {
+      expect(driver.passthrough(args).args, args.join(" ")).toEqual([
+        "-P",
+        String(adbServerPort),
+        ...args,
+      ]);
+    }
+  });
+
+  it("refuses a bare `adb shell` only where the caller has no terminal", async () => {
+    // ADR 0005 §19c: `device.exec` runs the command on this machine with pipes and no pty, so
+    // an interactive shell there is a process reading a pipe nothing will ever write to --
+    // it would hang until `exec.timeoutMs` killed it. Locally, where the CLI hands the tool
+    // its own tty, it is exactly the command a lease holder wants, so it stays allowed.
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["shell"], { hasTerminal: false })).toThrow(
+      PassthroughRefusedError,
+    );
+    expect(() => driver.passthrough(["shell"], { hasTerminal: false })).toThrow(/terminal/);
+    expect(() =>
+      driver.passthrough(["-s", "emulator-5586", "shell"], { hasTerminal: false }),
+    ).toThrow(PassthroughRefusedError);
+
+    // A shell with something to run is not the interactive shell, and neither is anything
+    // else -- the refusal is about the missing command, not about `shell`.
+    expect(driver.passthrough(["shell", "getprop"], { hasTerminal: false }).args).toEqual([
+      "-P",
+      String(adbServerPort),
+      "shell",
+      "getprop",
+    ]);
+    expect(driver.passthrough(["devices"], { hasTerminal: false }).args).toContain("devices");
+
+    // And with a terminal (the local `simlock adb shell`, and the default when nothing says
+    // otherwise) it is proxied like any other command.
+    expect(driver.passthrough(["shell"], { hasTerminal: true }).args).toEqual([
+      "-P",
+      String(adbServerPort),
+      "shell",
+    ]);
+    expect(driver.passthrough(["shell"]).args).toContain("shell");
+  });
+
   it("proxies the emu subcommands that do not stop a device", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
@@ -2185,15 +2266,9 @@ async function createDriver(
       : adbServerPort;
   await recordRunningAdbServer(filesystem, configuredPort);
   return AndroidDriver.create({
-    ...(options.acceptAndroidLicenses === undefined
-      ? {}
-      : { acceptAndroidLicenses: options.acceptAndroidLicenses }),
+    ...onlyProvided(options),
     clock: options.clock ?? new FakeClock(),
     driverConfig,
-    ...(options.diskSpaceGuard === undefined ? {} : { diskSpaceGuard: options.diskSpaceGuard }),
-    ...(options.downloadTimeoutMs === undefined
-      ? {}
-      : { downloadTimeoutMs: options.downloadTimeoutMs }),
     env: { ANDROID_HOME: sdk },
     filesystem,
     homeDirectory: home,
@@ -2202,15 +2277,37 @@ async function createDriver(
       generate: () => options.ids?.[nextId++] ?? `device-${nextId}`,
     },
     instanceId,
-    ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
-    ...(options.readinessTimeoutMs === undefined
-      ? {}
-      : { readinessTimeoutMs: options.readinessTimeoutMs }),
     processRunner,
     processSupervisor: new FakeProcessSupervisor([adbServerPid]),
     simlockHome,
     tcpProbe: options.tcpProbe ?? new FakeTcpProbe([configuredPort]),
   });
+}
+
+/** The options this helper only forwards when a test actually set one -- `AndroidDriver.create`
+ * declares them optional under `exactOptionalPropertyTypes`, so an absent one must be absent
+ * rather than `undefined`. Split out of `createDriver` so that the list can keep growing
+ * without the helper itself turning into a pile of conditionals. */
+function onlyProvided(options: {
+  readonly acceptAndroidLicenses?: boolean;
+  readonly diskSpaceGuard?: DiskSpaceGuard;
+  readonly downloadTimeoutMs?: number;
+  readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
+  readonly readinessTimeoutMs?: number;
+}) {
+  return {
+    ...(options.acceptAndroidLicenses === undefined
+      ? {}
+      : { acceptAndroidLicenses: options.acceptAndroidLicenses }),
+    ...(options.diskSpaceGuard === undefined ? {} : { diskSpaceGuard: options.diskSpaceGuard }),
+    ...(options.downloadTimeoutMs === undefined
+      ? {}
+      : { downloadTimeoutMs: options.downloadTimeoutMs }),
+    ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
+    ...(options.readinessTimeoutMs === undefined
+      ? {}
+      : { readinessTimeoutMs: options.readinessTimeoutMs }),
+  };
 }
 
 /** The `adb-server.json` a previous daemon would have left behind for the adoption above. */

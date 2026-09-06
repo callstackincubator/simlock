@@ -198,7 +198,7 @@ describe("startDaemon startup readiness", () => {
         protocolVersion: DAEMON_PROTOCOL_VERSION,
       });
       const starting = await client.request("status.get", {});
-      expect(starting.payload).toMatchObject({ health: "starting" });
+      expect(starting.payload).toMatchObject({ daemon: { health: "starting" } });
 
       const parkedLease = client.request("lease.request", {
         model: "iPhone 16",
@@ -220,7 +220,7 @@ describe("startDaemon startup readiness", () => {
 
       await expect(parkedLease).resolves.toMatchObject({ ok: true });
       const running = await client.request("status.get", {});
-      expect(running.payload).toMatchObject({ health: "running" });
+      expect(running.payload).toMatchObject({ daemon: { health: "running" } });
     } finally {
       client.socket.end();
     }
@@ -274,7 +274,7 @@ describe("startDaemon HTTP gateway startup readiness", () => {
     // `listen()`), so there is no single microtask boundary to await here the way the
     // socket-side test above can just retry-connect on the unix socket.
     const statusBeforeConvergence = await pollUntilListening(port, secret);
-    expect(statusBeforeConvergence).toMatchObject({ health: "starting" });
+    expect(statusBeforeConvergence).toMatchObject({ daemon: { health: "starting" } });
 
     const parkedStatusPromise = fetch(`http://127.0.0.1:${port}/v1/leases`, {
       headers: { authorization: `Bearer ${secret}` },

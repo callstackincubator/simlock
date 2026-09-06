@@ -2,6 +2,7 @@ import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
 import { defineOperation, OPERATIONS, type OperationName } from "./operations.js";
+import { PUSH_SCHEMAS } from "./pushes.js";
 import { ROLES, type Role } from "./roles.js";
 
 describe("defineOperation", () => {
@@ -50,6 +51,11 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "events.unsubscribe", input: {}, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
+  {
+    name: "device.exec",
+    input: { args: ["devices"], leaseId: "lease_1", tool: "adb" },
+    role: "agent",
+  },
   { name: "token.list", input: {}, role: "admin" },
   { name: "token.revoke", input: { id: "tok_1" }, role: "admin" },
 ];
@@ -192,7 +198,7 @@ describe("operation input/output round trips", () => {
         },
         global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
       },
-      health: "running",
+      daemon: { health: "running", mode: "worker" },
       queueDepth: 0,
     };
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
@@ -203,6 +209,58 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["list.get"].output.parse([{ name: "idle-shutdown" }])).toEqual([
       { name: "idle-shutdown" },
     ]);
+  });
+
+  it("device.exec: parses a command, keeps stdin optional, and refuses anything else", () => {
+    // ADR 0005 §19a. `.strict()` is doing real work here: a client that sent `input` or `env`
+    // hoping either would reach the child must be told no, not have it silently dropped.
+    expect(
+      OPERATIONS["device.exec"].input.parse({
+        args: ["shell", "getprop"],
+        leaseId: "lse_1",
+        stdin: "y\n",
+        tool: "adb",
+      }),
+    ).toEqual({ args: ["shell", "getprop"], leaseId: "lse_1", stdin: "y\n", tool: "adb" });
+
+    expect(
+      OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "simctl" }),
+    ).toEqual({ args: [], leaseId: "lse_1", tool: "simctl" });
+
+    // `tool` is an open string, exactly as `driver.passthrough`'s is: which wrappers exist is
+    // the drivers' answer, so a name none of them wraps parses fine here and comes back as
+    // `UNKNOWN_PASSTHROUGH_TOOL` from the driver catalog rather than as a malformed body.
+    expect(
+      OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "bash" }),
+    ).toEqual({ args: [], leaseId: "lse_1", tool: "bash" });
+    expect(() =>
+      OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "" }),
+    ).toThrow();
+    expect(() =>
+      OPERATIONS["device.exec"].input.parse({
+        args: [],
+        leaseId: "lse_1",
+        tool: "simctl",
+        env: {},
+      }),
+    ).toThrow();
+    expect(() => OPERATIONS["device.exec"].input.parse({ args: [], tool: "simctl" })).toThrow();
+
+    expect(OPERATIONS["device.exec"].output.parse({ exitCode: 0 })).toEqual({ exitCode: 0 });
+  });
+
+  it("the output push carries a frame id, a stream, and a chunk", () => {
+    // The `output` family is request-scoped exactly like `progress` (ADR 0005 §19a), which is
+    // the property that lets one connection run more than one command at a time.
+    expect(PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdout" })).toEqual({
+      chunk: "hello",
+      requestId: 7,
+      stream: "stdout",
+    });
+    expect(() =>
+      PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdin" }),
+    ).toThrow();
+    expect(() => PUSH_SCHEMAS.output.parse({ chunk: "hello", stream: "stdout" })).toThrow();
   });
 
   it("config.get: round-trips a representative config", () => {
@@ -219,6 +277,7 @@ describe("operation input/output round trips", () => {
         },
       },
       lease: { defaultTtlMs: 1, maxTtlMs: 1 },
+      exec: { timeoutMs: 1 },
       diskPressure: { freeBytesThreshold: 1 },
       eventBuffer: { capacity: 1 },
       log: { level: "info", rotateBytes: 1 },

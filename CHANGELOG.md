@@ -1,5 +1,211 @@
 # Changelog
 
+## Unreleased
+
+ADR 0004 (`docs/adr/0004-ttl-first-leases-on-every-transport.md`): there is
+now one kind of lease, on every transport. A lease carries a TTL, and the
+only thing that keeps it alive is a client-initiated `lease.renew` arriving
+before the deadline — on the unix socket, over HTTP, over MCP, and through a
+gateway alike. Held mode is gone as a daemon concept; staying alive to renew
+and releasing on exit is now the CLI's and the MCP session's own policy over
+an ordinary lease. This is a breaking release for the contract, three config
+keys, and one user-visible behaviour; see below.
+
+ADR 0004 is **Accepted — not yet implemented**: the entries in this section
+describe the decided end state, and they land with the PRs that implement it
+(the client's renew timers, and the daemon's heartbeat removal, config
+rename, and protocol bump).
+
+### ⚠ BREAKING CHANGES
+
+- **The daemon protocol is now 5**, `{min: 5, max: 5}`, with no compatibility
+  shim — the same no-shim rule that took it to 4. ADR 0005 adds `device.exec`
+  and its `output` push family, and moves `status.get`'s `health` into a
+  `daemon` block that also carries `mode`, so
+  advertising 4 would claim a compatibility path that does not exist. A client
+  built against 4 does not overlap this daemon and its `hello` fails with
+  `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges; `daemon.stop` stays the
+  frozen exception, so `simlock daemon stop` then starting the new daemon is
+  the upgrade path.
+- **Contract:** `lease.heartbeat` is removed as an operation, and `heartbeat`
+  is removed as a `hello` capability. The daemon never pushes to a client to
+  prove liveness any more; nothing replaces it, because `lease.renew` already
+  did the job on every transport that has one.
+- **`mode` leaves the contract.** `lease.request` no longer accepts it, and the
+  lease record no longer carries it. `ttlMs` is now accepted on **every**
+  `lease.request` — supplying it used to be `BAD_REQUEST` for a held lease —
+  and is capped at `lease.maxTtlMs`, above which a request or a renew is
+  `BAD_REQUEST` rather than silently clamped. A caller reading `lease.mode` off
+  a grant now reads `undefined`, which is falsy, not an error; there is nothing
+  to branch on any more.
+- **A body-less renew re-applies the lease's own TTL, not
+  `lease.defaultTtlMs`.** The lease record stores the `ttlMs` it was granted
+  with (or last renewed with, when a renew carried one), and `lease.renew`
+  without a `ttlMs` resets the deadline to now + that width.
+  `lease.defaultTtlMs` now applies in exactly one place: a `lease.request` that
+  names no `ttlMs`. A caller that relied on renew snapping every lease back to
+  the 15-minute default will find a four-hour lease staying four hours wide.
+- **`lastRenewedAt` replaces `lastHeartbeatAt` — as a new stored field, not a
+  rename.** `lastHeartbeatAt` was never persisted: the dispatcher derived it as
+  `ttlDeadline - heldTtlBackstopMs`, which only worked because every held lease
+  shared one backstop width. With per-lease TTLs that arithmetic has no answer,
+  so the daemon now writes `lastRenewedAt` onto the lease record at grant and
+  on every renew, and `simlock status` renders it as "last renewed". A consumer
+  reading `lastHeartbeatAt` gets `undefined`.
+- **Socket protocol:** moves to protocol 5 with no compatibility shim; the
+  range a daemon and client advertise is `{min: 5, max: 5}`. (ADR 0004's own
+  break took it to 4; `device.exec` and the `status.get` daemon block, in this
+  same unreleased set, take it the rest of the way — one release, one
+  version.) A version-mismatched client fails `hello` with
+  `PROTOCOL_VERSION_UNSUPPORTED` and never restarts the daemon — run
+  `simlock daemon stop` once it's idle.
+  `daemon.stop` remains a frozen exception, accepted at any protocol version
+  the daemon has ever spoken.
+- **Config:** three `lease.*` keys are retired — `lease.detachedTtlMs`,
+  `lease.heldTtlBackstopMs`, and `lease.heartbeatIntervalMs`. All three are now
+  simply unrecognized: `simlock config` warns about each and ignores it,
+  exactly as it does for any other unknown key. **None of them is aliased onto
+  a new key**, so a config still setting `lease.detachedTtlMs` gets
+  `lease.defaultTtlMs`'s default rather than the value it wrote — copy the
+  value across. New: `lease.defaultTtlMs` (15 minutes, applied to a request
+  that names no `ttlMs`) and `lease.maxTtlMs` (4 hours). Both must be positive
+  numbers with `lease.defaultTtlMs <= lease.maxTtlMs`; a config that breaks
+  either rule is **rejected at load and the daemon does not start**, naming the
+  offending key, rather than being clamped. Note the two treatments are
+  different on purpose: a retired key is warned about and ignored, because it
+  is a leftover; a TTL pair that contradicts itself has no safe fallback to be
+  ignored in favour of. See `docs/CONFIGURATION.md#retired-lease-keys`.
+- **Upgrading over a live held lease:** a lease a pre-ADR-0004 daemon
+  persisted in held mode survives the upgrade with its persisted deadline
+  intact — up to the old one-hour `lease.heldTtlBackstopMs`. Nothing can
+  renew it: its holder speaks protocol 3 and the new daemon speaks
+  `{min: 5, max: 5}`, so its `hello` fails. The lease simply expires on that
+  deadline and its device is reclaimed, or `simlock release <lease-id>` ends
+  it sooner. Stopping the old daemon while it is idle, as the protocol-
+  mismatch error already advises, avoids the situation entirely.
+- **A holder killed with `SIGKILL` keeps its device until the TTL expires.**
+  The daemon keeps no per-connection lease state and releases nothing when a
+  connection closes, on any transport — so a holder that dies without running
+  its own release path (`SIGKILL`, a crash, a lost machine) holds its device
+  until `expiresAt`, at most the lease's own TTL after its last renew —
+  `lease.defaultTtlMs` unless the request asked for more, never more than
+  `lease.maxTtlMs` — against today's immediate release on socket close. A
+  holder that exits normally, is `SIGTERM`ed, or whose parent dies still
+  releases at once, because that is its own policy. This is the one behaviour
+  change a local user notices, and it is the accepted price of a single
+  mechanism; the reverse case improves, as a machine sleep or a socket hiccup
+  no longer costs a live holder its device. `lease.defaultTtlMs` and `--ttl`
+  bound it — see `docs/known-pitfalls.md`.
+- **`simlock daemon stop` no longer releases leases**, and there is no
+  orphaned-lease sweep at daemon startup. Leases persist across a restart and
+  the next daemon restores each one's TTL timer from its deadline; one whose
+  deadline passed in between expires as soon as a daemon is there to expire it.
+- **Events:** `lease.granted`'s payload drops `mode`. `lease.released` loses
+  the `closed` and `orphaned` reasons — a closing connection is not a release
+  and never was a fact worth emitting, and there is no startup sweep to produce
+  an orphan. `explicit`, `killed`, and `device-lost` remain.
+- **`simlock/client`:** `onLeaseLost` no longer fires with reason
+  `daemon-connection-lost` when a connection dies. The lease is still granted
+  and still yours — reconnect and renew it, or let its TTL run out.
+  `onConnectionLost` is what reports the dead connection; `onLeaseLost` now
+  only ever reports a lease the daemon actually ended.
+- **The MCP server's renew timer reconnects, but never launches a daemon.** ADR
+  0003 §10/§11 gave MCP one lazy reconnect trigger, the next tool call; ADR
+  0004 adds a second. When the renew timer fires against a dead client the
+  session reconnects and renews, so an idle session no longer loses its lease
+  waiting for a call that may not come. That trigger only ever connects to a
+  daemon that is already listening — auto-launch stays a tool-call concern, so
+  an operator's `simlock daemon stop` is not undone by an idle session, and a
+  lease held across a stopped daemon expires unless the daemon is back before
+  its deadline.
+- **A running `simlock lease` exits `1` when its daemon connection dies**,
+  writing one `DAEMON_CONNECTION_LOST` line that names the lease id and its
+  `ttlDeadline`. The CLI still does not reconnect (ADR 0003 §10), so it can
+  neither renew nor release — but it no longer implies the lease went with it.
+  The lease stands until its deadline and any later invocation can
+  `simlock lease renew <lease-id>` it. Exit `14` keeps its narrower meaning:
+  the daemon ended the lease while the connection was alive.
+
+### Features
+
+These ship with the PRs that implement ADR 0004; this section describes what
+those changes add, alongside the breaking changes above.
+
+- **cli:** `simlock lease` (without `--detach`) renews its own lease at one
+  third of the lease's TTL for as long as it runs — sending no TTL of its
+  own, so the deadline keeps the width the lease was granted with — and
+  releases on exit, parent death, or `SIGINT`/`SIGTERM`. `--detach` prints
+  the grant and exits; the lease it leaves behind is the same kind of lease,
+  and renewing it is the caller's job.
+- **cli:** `simlock lease --ttl <duration>` sets a lease's initial TTL in
+  place of `lease.defaultTtlMs`, capped by `lease.maxTtlMs`.
+- **daemon:** one expiry path for every frontend — startup restores every
+  lease's TTL timer from its persisted deadline, and the held-lease
+  bookkeeping kept for release-on-close is deleted along with the
+  `StartupConverger` orphan sweep that existed to clean up after it.
+- **config:** `lease.maxTtlMs` bounds what any caller may ask for, so one
+  client cannot pin a device for a day by naming a large `ttlMs`.
+- **contract, daemon, http, cli:** `device.exec` runs `simctl`/`adb` **on the
+  machine that owns the device** and streams the output back, so an agent that
+  is not on that machine can drive the device it leased
+  ([ADR 0005](docs/adr/0005-gateway-and-worker-modes.md) §19a-§19e). The daemon
+  resolves the command through the same driver passthrough `simlock simctl` /
+  `simlock adb` already use — the same root scoping, the same refusal list —
+  and pushes each chunk as it arrives (a new request-scoped `output` push
+  family) rather than buffering any of it; the call resolves with the
+  command's exit code. Over HTTP it is `POST /v1/leases/{id}/exec`, answering
+  Server-Sent Events: an `output` event per chunk, then a terminal `exit` or
+  `error`. `simlock/client` gains `exec(input, { onOutput })`.
+  `simlock simctl` / `simlock adb` are unchanged against a `worker` — they
+  still spawn with inherited stdio, so an interactive `adb shell` keeps its
+  terminal — and take this path against a `gateway`, which owns no devices;
+  the CLI reads which it is talking to from `mode` in `status.get`'s daemon
+  block rather than guessing from its transport, and both commands now accept
+  `--lease <id>` (ignored against a worker, so one command line works against
+  either). `stdin` is a one-shot string, read from a pipe to EOF before the
+  command starts: there is no pseudo-terminal, so line-oriented commands work,
+  full-screen ones do not, and a bare `adb shell` is refused
+  (`PASSTHROUGH_REFUSED`) rather than left to hang. On this one operation
+  **`admin` does not bypass ownership**: an admin session names the
+  `requesterId` it is running the command for and the daemon compares it to
+  the lease's own, which is what keeps a proxy holding one admin credential
+  from reaching every lease on the machine.
+- **contract:** `status.get` gains a `daemon` block, `{ health, mode }`.
+  `health` moves into it from the top level, and `mode` (`worker`/`gateway`,
+  from the new `mode` config key and always `worker` in this release) joins it
+  — the one field that tells a client which kind of daemon answered, and what
+  `simlock simctl` / `simlock adb` branch on. `simlock status` renders it as
+  `Daemon: running (worker)`.
+- **android:** `simlock adb` now refuses a caller-supplied `-P`, `-H`, `-L`,
+  or `--server-port` anywhere in adb's globals — the arguments before the
+  subcommand — including the attached forms `-P5037`/`-Hhost` and one that
+  follows another global's value (`-s emulator-5554 -P 5037 shell …`), the way
+  `simlock simctl` already refuses `--set`/`--profiles`. `adb` takes the
+  _last_ `-P` on the line, so one supplied by a caller silently won over the
+  one Simlock inserts and pointed the command at another server — including
+  the machine's default one, outside Simlock's containment entirely. Past the
+  subcommand those spellings are operands and still pass through
+  (`simlock adb shell echo -Please`), and `-s`/`-t`/`-d`/`-e` are not refused
+  at all: they select a device inside the containment rather than leaving it.
+- **config:** `exec.timeoutMs` (default ten minutes) bounds one `device.exec`
+  command; past it the process is killed and the call fails with the new
+  `EXEC_TIMEOUT` error code (CLI exit `10`, the code the other "ran out of
+  time" outcome already uses, and HTTP `504`) rather than reporting the exit
+  code the kill produced.
+
+### Documentation
+
+- record ADR 0004 as **Accepted — not yet implemented**
+  (`docs/adr/0004-ttl-first-leases-on-every-transport.md` and
+  `docs/adr/README.md`): the documentation describes the decided end state;
+  the code catches up in the changes that implement ADR 0004.
+- rewrite the lease model across `docs/CLI.md`, `docs/CLIENT.md`,
+  `docs/HTTP-API.md`, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`
+  ("Leases", the frontend topology, and startup convergence),
+  `docs/EVENTS.md`, `docs/ABOUT.md`, and `README.md`; record the SIGKILLed
+  holder and re-frame the reparented-holder fix around renew timers in
+  `docs/known-pitfalls.md`.
+
 ## [0.3.0](https://github.com/callstackincubator/simlock/compare/v0.2.0...v0.3.0) (2026-09-03)
 
 ADR 0003 (`docs/adr/0003-one-typed-daemon-contract-behind-every-frontend.md`):

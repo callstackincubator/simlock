@@ -44,6 +44,13 @@ export function buildHttpSession(
   identity: TokenIdentity,
   extra?: {
     readonly onProgress?: (progress: LeaseProgress) => void;
+    /** ADR 0005 §19a: the `POST /v1/leases/{id}/exec` route's own override -- each chunk
+     * becomes one SSE `output` event on that request's response. Same per-call shape as
+     * `onProgress`, and inert for every other route for the same reason. */
+    readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
+    /** ADR 0005 §19e: the exec route opens its event stream here rather than on the first
+     * chunk, so a command that prints nothing still gets a `200` and its keepalives. */
+    readonly onStarted?: () => void;
     readonly manageEventSubscription?: (subscribe: boolean) => string | undefined;
   },
 ): DispatchSession {
@@ -52,5 +59,7 @@ export function buildHttpSession(
     principal: identity.requesterId,
     role: toRole(identity.role),
     ...(extra?.onProgress === undefined ? {} : { onProgress: extra.onProgress }),
+    ...(extra?.onOutput === undefined ? {} : { onOutput: extra.onOutput }),
+    ...(extra?.onStarted === undefined ? {} : { onStarted: extra.onStarted }),
   };
 }

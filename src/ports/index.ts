@@ -46,12 +46,16 @@ export { FakeTcpProbe, NodeTcpProbe } from "./tcp-probe.js";
 export type { FakeSend } from "./tcp-probe.js";
 export type { TcpProbe } from "./tcp-probe.js";
 export {
+  exitCodeOf,
   NodeProcessRunner,
   type ProcessHandle,
   ProcessSpawnError,
   type ProcessResult,
   type ProcessRunner,
   type ProcessRunOptions,
+  type ProcessStreamOptions,
   ScriptedProcessRunner,
   type ScriptedProcessExpectation,
+  type StreamingProcessHandle,
+  type StreamingProcessResult,
 } from "./process-runner.js";

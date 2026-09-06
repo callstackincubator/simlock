@@ -98,6 +98,45 @@ describe("loadConfig", () => {
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
   });
 
+  it("defaults mode to worker and accepts only the two it knows", async () => {
+    // ADR 0005 §1: one daemon, one mode, and it decides what the process *is* -- so it is
+    // config rather than a flag, and a typo has to fail at load rather than leave a daemon
+    // running as something nobody asked for.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    const defaulted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(defaulted.mode).toBe("worker");
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "gateway" }));
+    const gateway = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(gateway.mode).toBe("gateway");
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "broker" }));
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("mode");
+  });
+
+  it("defaults exec.timeoutMs to ten minutes and rejects a non-positive one", async () => {
+    // ADR 0005 §19e's per-command bound. Rejected rather than clamped, like every other
+    // duration here: a caller given a limit it did not write cannot tell which one applied.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    const defaulted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(defaulted.exec).toEqual({ timeoutMs: 600_000 });
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ exec: { timeoutMs: 30_000 } }));
+    const overridden = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(overridden.exec.timeoutMs).toBe(30_000);
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ exec: { timeoutMs: 0 } }));
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("exec.timeoutMs");
+  });
+
   it("applies a file-level log override", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");

@@ -1,5 +1,11 @@
 import type { DeviceSpec, Platform } from "./domain.js";
-import type { DeviceRequest, Driver, DriverCatalogEntry, PassthroughCommand } from "./driver.js";
+import type {
+  DeviceRequest,
+  Driver,
+  DriverCatalogEntry,
+  PassthroughCommand,
+  PassthroughContext,
+} from "./driver.js";
 
 /** Thrown when no installed driver can serve the requested platform. */
 export class NoDriverError extends Error {
@@ -42,10 +48,14 @@ export class DriverCatalog {
    * environment must carry are decided inside the driver, so a third driver can add a
    * wrapper without a line changing here (architecture rules 2 and 3).
    */
-  passthrough(tool: string, args: readonly string[]): PassthroughCommand {
+  passthrough(
+    tool: string,
+    args: readonly string[],
+    context?: PassthroughContext,
+  ): PassthroughCommand {
     for (const driver of this.#drivers.values()) {
       if (driver.passthroughTool === tool && driver.passthrough !== undefined) {
-        return driver.passthrough(args);
+        return driver.passthrough(args, context);
       }
     }
     throw new UnknownPassthroughToolError(tool);

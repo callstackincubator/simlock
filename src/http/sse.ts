@@ -16,9 +16,14 @@ export interface SseEvent {
  * One live feed. `subscribe` is called once per connection; it must invoke `send` for every
  * event to emit (in order) and `end` exactly once the stream should close after flushing
  * whatever `send` calls are already queued. The returned function unsubscribes.
+ *
+ * `send` returns a promise that resolves when *that* event has been written -- after the ones
+ * queued before it, and after the client's stream has accepted the bytes. A source that
+ * produces faster than the client reads awaits it and stops producing; one that cannot slow
+ * down (a lease notice, a bus event) ignores it exactly as before.
  */
 export interface SseSource {
-  subscribe(send: (event: SseEvent) => void, end: () => void): () => void;
+  subscribe(send: (event: SseEvent) => Promise<void>, end: () => void): () => void;
 }
 
 /**
@@ -43,10 +48,13 @@ export function pipeSse(c: Context, clock: Clock, source: SseSource): Response {
 
     // Serializes writes: `send` can be invoked synchronously (an immediate current-state
     // event on subscribe) or later from an event-bus callback, and writes must land in order.
+    // The promise for *this* event is handed back so a source that can slow down does; the
+    // chain itself swallows the failure so an event nobody awaited cannot become an unhandled
+    // rejection.
     let writeChain: Promise<void> = Promise.resolve();
-    const send = (event: SseEvent) => {
-      if (stream.closed) return;
-      writeChain = writeChain.then(async () => {
+    const send = (event: SseEvent): Promise<void> => {
+      if (stream.closed) return Promise.resolve();
+      const written = writeChain.then(async () => {
         if (stream.closed) return;
         await stream.writeSSE({
           data: JSON.stringify(event.data),
@@ -54,6 +62,8 @@ export function pipeSse(c: Context, clock: Clock, source: SseSource): Response {
           ...(event.id === undefined ? {} : { id: event.id }),
         });
       });
+      writeChain = written.catch(() => undefined);
+      return written;
     };
 
     let keepaliveTimer = clock.setTimer(KEEPALIVE_MS, tickKeepalive);

@@ -20,10 +20,11 @@ import type {
   PassthroughResolver,
   QueueControl,
 } from "../core/lease-ports.js";
-import type { Clock, IpcConnection, Logger } from "../ports/index.js";
+import type { Clock, IpcConnection, Logger, ProcessRunner } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { parseRequestFrame, serializeFrame, type RequestFrame } from "../daemon-protocol/index.js";
 import {
+  describeSchemaIssues,
   helloRequestSchema,
   helloReplySchema,
   leaseRelease,
@@ -49,6 +50,13 @@ type RequestId = string | number;
 
 interface Connection {
   readonly socket: IpcConnection;
+  /**
+   * Detaches this connection's request-scoped pushes (`progress` for an in-flight
+   * `lease.request`, `output` for an in-flight `device.exec`) when the socket goes away, so a
+   * push callback that outlives the connection writes nothing instead of throwing into whatever
+   * operation is still running. One set for both families: they are disposed for the same
+   * reason and at the same moment.
+   */
   readonly progressDisposers: Set<() => void>;
   readonly progressRequesters: Set<string>;
   buffer: string;
@@ -114,6 +122,11 @@ export interface DaemonServerOptions {
   readonly nuke?: Nuke;
   /** Builds the scoped command behind `simlock simctl` / `simlock adb`; absent in tests that never use them. */
   readonly passthrough?: PassthroughResolver;
+  /** Runs what `device.exec` resolves (ADR 0005 §19a); absent in tests that never exec. */
+  readonly processRunner?: ProcessRunner;
+  /** Base environment for a `device.exec` child, before the driver's scoping keys (see
+   * `DispatcherOptions.execEnv`). */
+  readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
   /** ADR 0003 §11: threaded straight into the `Dispatcher` for `token.create|list|revoke`. */
   readonly tokens?: TokenStore;
@@ -173,6 +186,43 @@ export interface DaemonServerOptions {
 
 type DaemonHealth = "starting" | "running" | "failed";
 
+/**
+ * Builds the one shared `Dispatcher` (ADR 0003 §2) from this server's options. Extracted from
+ * the constructor rather than inlined there because almost all of it is the same conditional
+ * spread repeated per optional dependency -- `exactOptionalPropertyTypes` means an absent
+ * option must be *absent*, not `undefined` -- and that list grows with every operation that
+ * needs a new dependency (`device.exec` added two). The two closures the dispatcher needs from
+ * the server's own live state are passed in rather than reached for.
+ */
+function buildDispatcher(
+  options: DaemonServerOptions,
+  hooks: {
+    readonly awaitReady: () => Promise<void>;
+    readonly health: () => DaemonHealth;
+  },
+): Dispatcher {
+  return new Dispatcher({
+    awaitReady: hooks.awaitReady,
+    capacity: options.capacity,
+    catalog: options.catalog,
+    clock: options.clock,
+    config: options.config,
+    ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
+    eventBus: options.eventBus,
+    health: hooks.health,
+    leases: options.leases,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
+    ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
+    ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
+    ...(options.execEnv === undefined ? {} : { execEnv: options.execEnv }),
+    queue: options.queue,
+    reaper: options.reaper,
+    registry: options.registry,
+    ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+  });
+}
+
 export class DaemonServer {
   readonly #connections = new Set<Connection>();
   readonly #protocolRange: ProtocolRange;
@@ -207,23 +257,9 @@ export class DaemonServer {
     // consumes too (see `ownerRoutedFacts` getter and `main.ts`) -- one bus subscription
     // per raw event, not one per consumer.
     this.#ownerRoutedFacts = new OwnerRoutedFactBus(options.eventBus, options.registry);
-    this.#dispatcher = new Dispatcher({
+    this.#dispatcher = buildDispatcher(options, {
       awaitReady: () => this.#awaitReady(),
-      capacity: options.capacity,
-      catalog: options.catalog,
-      clock: options.clock,
-      config: options.config,
-      ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
-      eventBus: options.eventBus,
       health: () => this.#health,
-      leases: options.leases,
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
-      ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
-      ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
-      queue: options.queue,
-      reaper: options.reaper,
-      registry: options.registry,
-      ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
     });
   }
 
@@ -895,6 +931,10 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "device.exec":
+        // Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
+        // per-call push wiring `lease.request` needs, and gets it the same way.
+        return this.#execDevice(connection, frame.id, frame.payload);
       case "config.get":
         return this.#dispatcher.dispatch(
           "config.get",
@@ -1001,6 +1041,73 @@ export class DaemonServer {
     // client that reconnects can renew it, and if none does it expires at its deadline like
     // any other.
     return grant;
+  }
+
+  /**
+   * ADR 0005 §19a's output relay, and the exact counterpart of `#requestLease` above: the
+   * operation itself is the dispatcher's `device.exec` handler; what lives here is the part
+   * that depends on *this connection* -- turning each chunk into an `output` push carrying this
+   * call's frame id, and stopping the moment the socket goes away.
+   *
+   * The command keeps running after a disconnect rather than being killed with it. That is the
+   * same answer ADR 0004 §3 gives for leases (a dead connection is not a dead lease) and the
+   * only safe one here: a half-applied `simctl install` interrupted because a client's tunnel
+   * blipped is worse than one that finishes with nobody listening, and the daemon has no way to
+   * know which half a kill would land in. Its exit code is simply lost with the connection, and
+   * `exec.timeoutMs` still bounds how long it can run.
+   */
+  async #execDevice(
+    connection: Connection,
+    requestId: RequestId,
+    value: unknown,
+  ): Promise<unknown> {
+    let outputSocket: IpcConnection | undefined = connection.socket;
+    const disposeOutput = () => {
+      outputSocket = undefined;
+    };
+    connection.progressDisposers.add(disposeOutput);
+    try {
+      return await this.#dispatcher.dispatch("device.exec", value ?? {}, {
+        ...this.#session(connection),
+        // Returned rather than fired and forgotten, which is what applies backpressure: the
+        // dispatcher hands this promise to the process runner, which stops reading the child
+        // until the frame has actually been written (ADR 0005 §19e -- "streamed, never
+        // buffered" is only true end to end if a client that does not read slows the command
+        // down instead of filling this process). A write that fails on a socket which died
+        // between the check and the write (EPIPE) resolves rather than rejecting: the chunk is
+        // lost with the connection, the command carries on, and a rejection here would both
+        // wedge the child and, unhandled, take the daemon down over a client that hung up.
+        onOutput: async (stream, chunk) => {
+          if (outputSocket === undefined) return;
+          await this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
+        },
+      });
+    } finally {
+      connection.progressDisposers.delete(disposeOutput);
+      disposeOutput();
+    }
+  }
+
+  /**
+   * ADR 0005 §19a: `output` carries the originating request's frame id, exactly as `progress`
+   * does, so a connection running more than one command routes each chunk to its own call.
+   *
+   * The returned promise is the backpressure signal, so it has to mean "this frame is out":
+   * `IpcConnection.write` resolves on the socket's own write callback, which Node fires once
+   * the chunk has been flushed rather than merely queued -- so awaiting it is waiting for the
+   * drain a `write()` returning `false` would otherwise announce. `#execDevice` returns it to
+   * the dispatcher, which stops reading the child until then.
+   */
+  async #pushOutput(
+    socket: IpcConnection,
+    requestId: RequestId,
+    stream: "stdout" | "stderr",
+    chunk: string,
+  ): Promise<void> {
+    return writeFrame(socket, {
+      push: "output",
+      payload: this.#parseOutput(PUSH_SCHEMAS.output, { chunk, requestId, stream }, "push:output"),
+    });
   }
 
   /**
@@ -1189,10 +1296,7 @@ class ProtocolError extends Error {
 function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
   const result = schema.safeParse(value);
   if (result.success) return result.data;
-  const description = result.error.issues
-    .map((issue) => `${issue.path.length > 0 ? `${issue.path.join(".")}: ` : ""}${issue.message}`)
-    .join("; ");
-  throw new ProtocolError("BAD_REQUEST", description);
+  throw new ProtocolError("BAD_REQUEST", describeSchemaIssues(result.error.issues));
 }
 
 /**

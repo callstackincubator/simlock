@@ -43,6 +43,15 @@ export const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
 /**
+ * `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
+ * on this worker before it is killed and the operation fails with `EXEC_TIMEOUT`. Ten minutes,
+ * because the commands this wraps are installs and boots-worth of `adb wait-for-device`, not
+ * sub-second reads -- and because a stuck command holds no lease of its own, so the cost of a
+ * generous bound is one process, not a device.
+ */
+const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;
+
+/**
  * `never` forbids installs even when a request passes `--allow-download` (locked-down
  * machines/CI). `on-request` (default) preserves today's contract: install only when the
  * request itself carries the flag. `always` lets the daemon install missing components for
@@ -50,7 +59,18 @@ const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
  */
 export type DownloadPolicy = "never" | "on-request" | "always";
 
+/**
+ * Which shape a daemon runs as (ADR 0005 §1): a `worker` owns the devices on its machine --
+ * every daemon today -- and a `gateway` owns none and fronts the workers that joined it. One
+ * daemon runs exactly one mode, and it is a config value rather than a flag because it decides
+ * what the process *is*, not what one invocation does.
+ */
+export type DaemonMode = "worker" | "gateway";
+
 export interface Config {
+  /** See `DaemonMode`. Reported on `status.get`'s daemon block, which is how a client tells
+   * the two apart; the gateway behaviour itself lands with #117. */
+  readonly mode: DaemonMode;
   readonly capacity: CapacityConfig;
   /**
    * Per-driver settings, opaque to the core: stored, merged, and handed to the driver
@@ -92,6 +112,12 @@ export interface Config {
      * silent clamp, so a caller is never left believing it has more time than it does. */
     readonly maxTtlMs: number;
   };
+  /**
+   * ADR 0005 §19e. Platform-agnostic on purpose: it bounds the *daemon's* willingness to wait
+   * on a child, not anything either driver knows about, so it sits at the top level rather
+   * than under `drivers.*`.
+   */
+  readonly exec: { readonly timeoutMs: number };
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
@@ -290,6 +316,7 @@ function asObject(value: unknown): Layer {
 
 function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName): Config {
   return {
+    mode: "worker",
     capacity: {
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
@@ -316,6 +343,7 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
       defaultTtlMs: DEFAULT_LEASE_TTL_MS,
       maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
     },
+    exec: { timeoutMs: DEFAULT_EXEC_TIMEOUT_MS },
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
@@ -383,6 +411,7 @@ function validateConfigLayer(
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
+const DAEMON_MODES: readonly DaemonMode[] = ["worker", "gateway"];
 
 /**
  * The `capacity.config` validator is the selected strategy's own, so a strategy
@@ -390,6 +419,7 @@ const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "al
  */
 function configValidators(strategy: CapacityStrategyName): Record<string, Validator> {
   return {
+    mode: stringUnion(DAEMON_MODES),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),
       config: capacityStrategyValidator(strategy),
@@ -420,6 +450,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       defaultTtlMs: positiveNumber,
       maxTtlMs: positiveNumber,
     }),
+    exec: objectValidator({ timeoutMs: positiveNumber }),
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
