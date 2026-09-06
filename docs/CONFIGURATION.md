@@ -55,6 +55,13 @@ offending key — it is not clamped to something the operator did not write.
 That is the opposite treatment from the retired keys below, which are only
 warned about and ignored: an unrecognized key is a leftover, while a TTL pair
 that contradicts itself has no safe interpretation to fall back on.
+
+`lease.maxTtlMs` bounds what a request or a renew may **ask for**; it is not
+re-applied to leases that already exist. A lease holding a larger stored
+`ttlMs` — granted before an operator lowered the cap, or carried over from an
+older record — keeps re-applying that width on every body-less renew, so
+lowering the cap does not shorten it. Release it, or renew it once with an
+explicit smaller `--ttl`, and the new width sticks from then on.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
 

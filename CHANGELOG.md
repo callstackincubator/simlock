@@ -63,6 +63,14 @@ rename, and protocol bump).
   different on purpose: a retired key is warned about and ignored, because it
   is a leftover; a TTL pair that contradicts itself has no safe fallback to be
   ignored in favour of. See `docs/CONFIGURATION.md#retired-lease-keys`.
+- **Upgrading over a live held lease:** a lease a pre-ADR-0004 daemon
+  persisted in held mode survives the upgrade with its persisted deadline
+  intact — up to the old one-hour `lease.heldTtlBackstopMs`. Nothing can
+  renew it: its holder speaks protocol 3 and the new daemon speaks
+  `{min: 4, max: 4}`, so its `hello` fails. The lease simply expires on that
+  deadline and its device is reclaimed, or `simlock release <lease-id>` ends
+  it sooner. Stopping the old daemon while it is idle, as the protocol-
+  mismatch error already advises, avoids the situation entirely.
 - **A holder killed with `SIGKILL` keeps its device until the TTL expires.**
   The daemon keeps no per-connection lease state and releases nothing when a
   connection closes, on any transport — so a holder that dies without running
