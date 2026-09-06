@@ -136,13 +136,18 @@ applies to HTTP automatically because there is only one code path to fix.
 
 **Protocol versions are negotiated as `{min, max}` ranges** and honestly:
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
-ADR 0004 removes `lease.heartbeat` and `mode` from the contract with no shim
-behind them, so the range both sides advertise is `{min: 4, max: 4}` — a
-protocol-3 client and a protocol-4 daemon simply do not overlap, and `hello`
-fails with `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges. `daemon.stop`
-stays the frozen exception, accepted at any version the daemon has ever
-spoken, so the upgrade path (`simlock daemon stop`, then start the new
-daemon) exists at all.
+Two changes have moved it since. ADR 0004 removed `lease.heartbeat` and
+`mode` from the contract with no shim behind them, taking the wire to
+protocol 4; ADR 0005 adds `device.exec` and its `output` push family, again
+with no compatibility path kept, taking it to 5. So the range both sides
+advertise is `{min: 5, max: 5}`, an older client and a current daemon simply
+do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
+both ranges. The same negotiation runs over a worker's uplink, which is why a
+worker older than ADR 0005 shows up in a gateway's views as `incompatible`
+rather than as a mystery (see [Gateway and worker
+modes](#gateway-and-worker-modes-adr-0005)). `daemon.stop` stays the frozen
+exception, accepted at any version the daemon has ever spoken, so the upgrade
+path (`simlock daemon stop`, then start the new daemon) exists at all.
 
 **Two roles**, `agent` and `admin`, declared in `src/contract/roles.ts`.
 Read-only and lease-lifecycle operations are `agent`; anything that reads or
@@ -185,8 +190,8 @@ without adding real protection against the thing socket identity cannot
 stop anyway (see the ADR's "Alternatives considered").
 
 **Admin authority comes only from a credential presented at `hello`, never
-from the socket itself.** Two credentials are accepted, checked in this
-order:
+from the socket itself.** Three credentials are accepted, the first two
+checked in this order on any client connection:
 
 1. **An operator token**, minted with `simlock token create --role
    operator` and stored (hashed) in `tokens.json`. Long-lived, revocable —
@@ -199,6 +204,28 @@ order:
    creation, and removed on graceful stop. `hello` verifies against the
    in-memory hash, so a credential can be checked before the file has even
    landed on disk.
+3. **The worker's own uplink** (ADR 0005 §5). When a daemon joins a fleet it
+   dials the gateway named in *its own* `gateway.url` and presents its
+   `gateway.token`; the gateway checks that join token, and is then the
+   protocol client on the resulting session, which the worker grants the
+   `admin` role. What proves that role is the worker's configuration, not
+   anything the transport asserts — the same principle as the two above (ADR
+   0003 §5) reached from the other end: nothing inbound is trusted, and the
+   worker is the party that decided which gateway to obey.
+
+   **Joining a fleet therefore grants that gateway admin over the daemon that
+   joined.** That is the real scope of the decision, and it is not a side
+   effect: a gateway has to `lease.request`, `lease.release`, `list.get`,
+   `config.get`, and `events.subscribe` on its workers, which is exactly what
+   an admin CLI does. Point a worker only at a gateway you would hand an
+   operator token to.
+
+   The join token is a **bearer credential**, presented in the
+   `Authorization` header of the uplink's upgrade request, so anything that
+   can read that request can replay it. `gateway.url` should therefore be
+   `wss://` — or plain `ws://`/`http://` only over loopback or inside the
+   operator's own tunnel, the same rule the HTTP API already states for
+   itself and for the same reason: Simlock terminates no TLS in v1.
 
 A missing or wrong credential fails the handshake with
 `ADMIN_AUTHENTICATION_FAILED` before any other request on that connection
@@ -314,9 +341,13 @@ The uplink is also the reachability signal, so nothing polls for liveness: a
 worker whose uplink is open is `connected`, one whose uplink is closed is
 `disconnected` and keeps its last-known view (greyed, never dispatched to)
 until an operator removes it or `gateway.disconnectedRetentionMs` (24 hours)
-elapses — never while the gateway still knows of gateway-issued leases on
-it, because forgetting a worker that is holding someone's device is how a
-lease becomes unroutable.
+elapses. That clock is **held** while the gateway still knows of
+gateway-issued leases on the worker, because forgetting a worker that is
+holding someone's device is how a lease becomes unroutable — and the hold
+ends when the last of those leases passes its deadline, since a lease nobody
+can renew is one the worker has already expired on its own clock. The hold is
+therefore bounded by a TTL rather than open-ended: a worker gone longer than
+every lease it held has nothing left to protect.
 
 The uplink is a port on both sides — `UplinkListenerFactory` on the gateway,
 `UplinkConnector` on the worker — with a WebSocket adapter (`ws`) as the one
@@ -327,11 +358,22 @@ manually-advanced `Clock`, exactly as the core's tests script drivers.
 
 A **worker view** is what the gateway currently knows about one worker: its
 id, `label`, daemon health and version, negotiated protocol range, capacity
-per platform, queue depth, leases, devices, catalog, and drain state. On
-connect the gateway calls `status.get`, `list.get`, `catalog.get`, and
-`events.subscribe` on the worker and builds the view from the answers; it
-refreshes status and list on every worker event that changes capacity or
-leases, and on a slow periodic tick as a backstop.
+per platform, queue depth, leases, devices, catalog, effective download
+policy, and drain state. On connect the gateway calls `status.get`,
+`list.get`, `catalog.get`, `config.get`, and `events.subscribe` on the worker
+and builds the view from the answers; it refreshes status and list on every
+worker event that changes capacity or leases, and on a slow periodic tick as
+a backstop.
+
+`config.get` is the one of those read **once per connect** rather than on the
+refresh path: config is daemon input, read at start, so a worker whose
+`downloads.policy` changed has already restarted and reconnected. It is an
+admin operation, which the uplink session is. The gateway keeps exactly one
+field out of it — the effective `downloads.policy` — because routing has to
+know whether a worker is even *allowed* to install a missing runtime before
+it sends that worker a request which depends on one. It is a routing input
+and never an override: the worker still clamps `allowDownload` through its
+own policy, whatever the view said.
 
 The view is **rebuilt, never persisted**. A gateway restart loses nothing it
 cannot ask for again, and a worker stays the authority on its own state. Two
@@ -352,12 +394,20 @@ keeps its existing leases and receives no new dispatches — the tool for
 taking a machine down without killing anyone's device.
 
 Drain is the one piece of worker state the gateway *decides* rather than
-observes, so it is the one piece that survives a reconnect: a drained worker
-whose daemon restarts comes back drained, because otherwise a machine taken
-out of rotation for maintenance would quietly rejoin it at the worst possible
-moment. It does not survive a **gateway** restart — nothing the gateway holds
-does — so re-draining after one is an operator's job, and `simlock worker
-list` is where they would see that it is needed.
+observes, and it is why the **worker registry** and the worker *view* are two
+different things. The view is the observation: rebuilt on every connect,
+never persisted. The registry is the gateway's own record of which workers it
+knows and which of them an operator has drained (ADR 0005, "Worker registry
+(gateway side)"), and it **is** persisted — a small JSON file under the
+gateway's `SIMLOCK_HOME`, written with owner-only permissions like everything
+else simlock keeps there.
+
+A drain therefore survives both a worker reconnect and a gateway restart.
+Both halves matter: a machine taken out of rotation for maintenance must not
+rejoin it because its own daemon restarted, and must not rejoin because the
+*gateway* restarted either — an operator who drained a worker and walked away
+has no reason to expect a process they never touched to undo it. `undrain` is
+the only thing that ends a drain.
 
 ### The fleet queue and dispatch
 
@@ -370,10 +420,14 @@ mean exactly what they mean on a worker.
 queued request, oldest first, the routing policy picks a worker and the
 gateway sends it `lease.request` with **`noWait: true`**:
 
-- a grant, or an answer that says device work is already under way, moves the
-  request to `dispatched`;
-- `NO_CAPACITY` means the view was stale: the gateway refreshes that worker's
-  view and the request stays queued, no worse off than before;
+- the request becomes `dispatched` on either of two signals from that
+  worker: the grant itself, or the first `progress` push for it
+  (`provisioning`, `booting`, `reclaiming`) — device work has started, so the
+  request belongs to that worker and dispatch stops considering it;
+- an **immediate `NO_CAPACITY`** is the only answer that leaves it queued: it
+  means the view was stale, so the gateway refreshes that worker's view and
+  the request waits, no worse off than before. A failure *after* work has
+  begun is the request's own terminal failure, not a return to the queue;
 - a request no worker can serve right now is **passed over, not blocked on**,
   so an Android request behind an iOS one proceeds the moment Android
   capacity frees.
@@ -417,10 +471,13 @@ worker's own. There is nothing to emulate and no timer to run: a client that
 stops renewing loses its lease on the worker's clock, gateway or no gateway.
 
 - **The lease id names its worker.** A gateway lease id is the owning
-  worker's id and the worker's own lease id joined by a `.`
-  (`3f81a2c4.lse_9f2c`), so renew, release, and reads route by reading the id
-  rather than by consulting state a restart could lose. Clients treat it as
-  opaque, exactly as they already treat `lse_9f2c`.
+  worker's id, then a `.`, then the worker's own lease id — so renew,
+  release, and reads route by splitting on the **first** `.` rather than by
+  consulting state a restart could lose. A worker id is its instance
+  identity, a UUID, so a real one reads
+  `3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; every example in these
+  docs abbreviates it to its first segment for legibility. Clients treat the
+  whole thing as opaque, exactly as they already treat `lse_9f2c`.
 - **The lease object gains `worker: { id, label }`** (additive) so a client
   and the console can say *where* the device lives. A worker's network
   address is never on it: clients reach devices through the gateway.
@@ -447,29 +504,53 @@ stops renewing loses its lease on the worker's clock, gateway or no gateway.
 
 `driver.passthrough` resolves a root-scoped command string for the *caller*
 to spawn, which only works on the worker's own machine. `device.exec` (role
-`agent`, and the caller must own the lease) is the operation that works
-everywhere: `{ leaseId, tool: "simctl" | "adb", args, stdin? }`.
+`agent`) is the operation that works everywhere:
+`{ leaseId, tool: "simctl" | "adb", args, stdin?, requesterId? }`.
 
 The **worker** resolves the command through the same driver passthrough logic
 — same root scoping, same refusal list for verbs that would change a device's
-lifecycle behind the registry's back — and runs it through its
-`ProcessRunner`. Output streams back as request-scoped `output` pushes
-(`stream: "stdout" | "stderr"` plus a chunk, keyed by the frame id exactly
-like `progress`), and the operation resolves with `{ exitCode }`.
+lifecycle behind the registry's back (`PASSTHROUGH_REFUSED`, or
+`UNKNOWN_PASSTHROUGH_TOOL` for a `tool` it does not wrap) — and runs it
+through its `ProcessRunner`. Output streams back as request-scoped `output`
+pushes (`stream: "stdout" | "stderr"` plus a chunk, keyed by the frame id
+exactly like `progress`), and the operation resolves with `{ exitCode }`. The
+refusal list gains one entry this operation needs and the local passthrough
+does not: a bare `adb shell` with no command is refused
+(`PASSTHROUGH_REFUSED`, "needs a terminal") rather than accepted into a
+session nobody can type into, which would otherwise sit there until the
+timeout killed it.
 
-The **gateway proxies** it to the owning worker over the uplink and relays
-those pushes to the calling connection unchanged. It parses nothing about the
-command: ownership is checked at the gateway against its own lease index, and
-again at the worker, where the forwarded namespaced requester has to own the
-lease there. Because output is streamed rather than buffered there is no size
-cap; what bounds a command is one timeout (`exec.timeoutMs` on the worker,
-`gateway.execTimeoutMs` on the gateway, both ten minutes, the worker's
-authoritative), after which the process is killed and the operation fails
-with `EXEC_TIMEOUT`.
+**Ownership is proven on both hops, and admin does not skip the second one.**
+`requesterId` is the same optional field `lease.request` already takes: an
+admin session may name one, any other session may not, and it defaults to the
+principal (ADR 0003 §4). The worker compares it against the lease's own
+`requesterId` and refuses a mismatch — and unlike `lease.renew` or
+`lease.release`, an `admin` session does **not** bypass that comparison on
+this operation. The uplink is the reason: the gateway's session on a worker
+*is* an admin session, so an admin bypass would leave "the gateway checked
+its own lease index" as the only thing between one fleet agent and another
+agent's device. Two independent checks, one per hop, is what that ownership
+actually rests on — the gateway checks its lease index and forwards the
+namespaced requester, and the worker checks that requester against the lease
+in front of it.
+
+The **gateway proxies** the call to the owning worker over the uplink and
+relays those pushes to the calling connection unchanged. It parses nothing
+about the command. Because output is streamed rather than buffered there is
+no size cap; what bounds a command is a timeout on each hop. `exec.timeoutMs`
+on the worker (ten minutes) is the authoritative one, because that is the
+side owning the process and able to kill it; `gateway.execTimeoutMs` (eleven
+minutes) is a backstop for the case where the worker never answers at all —
+deliberately the longer of the two, so an ordinary timeout surfaces as the
+worker's own `EXEC_TIMEOUT` instead of racing the gateway's.
 
 Two deliberate limits: `stdin` is a single string sent with the request, not
 an incremental channel, and there is no pseudo-terminal — line-oriented
-commands work, full-screen ones do not. And `device.exec` runs against the
+commands work, full-screen ones do not. (ADR 0005 is not of one mind here:
+§19a declares `stdin` as a field on the input and §19c calls it "forwarded as
+a stream". The field is what these docs specify, because a stream is only
+useful with a terminal to attach it to, and §19c's own next clause is that
+there is no pseudo-terminal.) And `device.exec` runs against the
 **worker's** filesystem, so an artifact a command names (`simctl install
 <path>`, `adb install <apk>`) has to get there out of band. The seam for a
 later `device.upload` — chunks streamed as request-scoped pushes into a
@@ -514,16 +595,23 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
 - **Gateway restart.** In-flight requests are lost, exactly as a worker
   restart loses them today (durable requests arrive with #72, for both).
   Leases survive on their workers; workers reconnect on their backoff and the
-  gateway rebuilds every view and its lease index from them. Clients keep
-  their leases and resume renewing once the gateway answers again — a lease
-  whose deadline passes while the gateway is down expires on the worker, like
-  any other unrenewed lease.
+  gateway rebuilds every view and its lease index from them, while the worker
+  registry — which workers it knows, and which are drained — comes back off
+  disk rather than being re-derived. Clients keep their leases and resume
+  renewing once the gateway answers again; a lease whose deadline passes
+  while the gateway is down expires on the worker, like any other unrenewed
+  lease.
 - **Version skew.** `hello` over the uplink negotiates the protocol range
-  exactly as over the socket (ADR 0003 §6). A worker outside the gateway's
-  range is marked `incompatible` in its view, with both ranges shown, and is
-  never dispatched to. It is not hidden: an operator needs to see the machine
-  that needs upgrading, and an incompatible worker still serves its own local
-  clients perfectly well.
+  exactly as over the socket (ADR 0003 §6). ADR 0005 moves the wire to
+  protocol `{min: 5, max: 5}` with no compatibility shim — `device.exec` and
+  its `output` push family are new frames, and the honesty rule says a range
+  widens only where a compatibility path is actually kept — so **every worker
+  older than ADR 0005 is `incompatible` by range**, by construction rather
+  than by accident. That is the ordinary upgrade path, not a failure mode:
+  upgrade the worker. An incompatible worker is marked `incompatible` in its
+  view with both ranges shown and is never dispatched to, and it is not
+  hidden either — that is the machine an operator has to go and upgrade, and
+  it keeps serving its own local clients on its own protocol meanwhile.
 
 ### Why this is safe
 

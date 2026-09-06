@@ -202,11 +202,27 @@ thrown error. Output is streamed rather than buffered, so there is no size
 cap and nothing accumulates in memory unless your handler accumulates it.
 Omit `onOutput` and the output is simply dropped.
 
-Four things to know before building on it:
+`exec` takes the same optional `requesterId` `requestLease` does — an admin
+connection may name one, an agent connection may not, and it defaults to the
+principal (ADR 0003 §4). A host process proxying several agents has to pass
+the one that holds the lease:
 
-- **It is scoped to a lease you own.** The daemon checks ownership the same
-  way `renewLease`/`releaseLease` do; another requester's lease is
-  `FORBIDDEN`.
+```ts
+await admin.exec(
+  { leaseId, tool: "adb", args: ["shell", "getprop"], requesterId: "agent-7" },
+  { onOutput },
+);
+```
+
+Five things to know before building on it:
+
+- **It is scoped to a lease that requester owns**, and this is the one
+  lease-scoped operation where **`admin` does not bypass the ownership
+  check**. `renewLease` and `releaseLease` let an admin connection act on any
+  lease; `exec` does not, because a gateway's session on a worker is itself
+  an admin session, and an admin bypass would leave one fleet agent's device
+  protected only by the gateway's own index. Pass the right `requesterId` or
+  get `FORBIDDEN`.
 - **The command runs on the machine that owns the device**, against that
   machine's filesystem. A path in `args` (`simctl install <path>`, `adb
   install <apk>`) resolves *there*, so getting an artifact to a remote worker
@@ -215,12 +231,16 @@ Four things to know before building on it:
   is no pseudo-terminal. Line-oriented commands work; full-screen ones do
   not.
 - **It is bounded by one timeout** (`exec.timeoutMs`, ten minutes by
-  default). A command that outlives it is killed and the call rejects with
-  `EXEC_TIMEOUT`.
+  default, on the machine that runs the command). A command that outlives it
+  is killed and the call rejects with `EXEC_TIMEOUT`.
 
-The same refusals `simlock simctl` / `simlock adb` document apply — verbs
-that would change a device's lifecycle behind the registry's back are
-rejected by the daemon, not merely by the CLI.
+The same refusals `simlock simctl` / `simlock adb` document apply, and they
+are the daemon's, not the CLI's: a verb that would change a device's
+lifecycle behind the registry's back rejects with `PASSTHROUGH_REFUSED`, and
+a `tool` outside `simctl`/`adb` with `UNKNOWN_PASSTHROUGH_TOOL`. One refusal
+is particular to `exec`: a bare `adb shell` with no command is
+`PASSTHROUGH_REFUSED` ("needs a terminal") rather than a call that hangs
+until the timeout, since there is no pseudo-terminal for it to attach to.
 
 ## A gateway is just a daemon, as far as this client knows
 
