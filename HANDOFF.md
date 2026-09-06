@@ -41,14 +41,22 @@ claude/adr-0005-117-gateway-skeleton    7470820   PR #129  gateway skeleton
 This is the only piece of work that is **not** in a reviewed state. An agent
 was part-way through fixing PR #128's third-round findings when the session
 stopped; its 15 modified files were committed verbatim to that branch so they
-would not be lost. **It had never run a full `pnpm check`, and the agent had
-not finished its own pass.** Treat every hunk as a draft.
+would not be lost.
 
-Do this: check out the branch, run `pnpm check`, read the diff against
-`4e6fe22` critically, finish anything half-done, then fast-forward
-`claude/adr-0005-116-device-exec` onto it (or cherry-pick, or redo it — your
-call once you have read it). Do **not** assume it is correct because it is
-committed.
+**It is green but unreviewed.** A full `pnpm check` was run on `96a41bc`
+*after* the snapshot was taken and passed end to end (exit 0): typecheck, e2e
+typecheck, lint, format, **1480 unit tests** passing / 2 skipped — seven more
+than the 1473 baseline, so the new tests are real — and 53 e2e passing, 1
+expected fail, 9 skipped. What it has **not** had is the agent's own finishing
+pass or any review round. Treat every hunk as a draft that compiles and passes,
+not as a landed fix.
+
+Do this: check out the branch, read the diff against `4e6fe22` critically —
+especially the F1 parser rewrite, where "green" proves much less than usual
+because the *old* tests passed against the vulnerable parser too — then
+fast-forward `claude/adr-0005-116-device-exec` onto it (or cherry-pick, or redo
+it — your call once you have read it), and run a fourth isolated review. Do
+**not** assume it is correct because it is committed and green.
 
 The six findings it is meant to close, from the third isolated review of #128:
 
