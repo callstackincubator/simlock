@@ -41,6 +41,7 @@ import type {
   TokenListOutput,
 } from "../simlock-client/client.js";
 import { connectSimlockAdmin } from "../admin/index.js";
+import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import {
   buildCliEnvironment,
   errorExitCode,
@@ -1334,6 +1335,437 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
   });
 });
 
+/**
+ * ADR 0004 §2: held mode is a client policy -- this process renews on a timer at a third of the
+ * remaining TTL and releases explicitly, rather than ponging a daemon push and relying on the
+ * socket closing. The wire is untouched in this slice (`mode: "held"` still goes out); what is
+ * asserted here is the CLI's own behaviour while it holds.
+ */
+describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
+  /** Lets `runLease` get past `requestLease` and arm its timer before the clock is advanced. */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("renews at a third of the TTL the daemon returned, re-deriving the cadence from each renewal", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const renewals: Array<{ leaseId: string; at: number }> = [];
+    let released: string | undefined;
+    const client = fakeClient({
+      renewLease: (input) => {
+        renewals.push({ at: clock.now(), leaseId: input.leaseId });
+        // Half the grant's TTL comes back, so the next renewal must be half as far out too.
+        return Promise.resolve({
+          deviceId: "dev_1",
+          grantedAt: 0,
+          id: input.leaseId,
+          mode: "held",
+          ownerId: "test-requester",
+          requesterId: "test-requester",
+          ttlDeadline: clock.now() + 30_000,
+        });
+      },
+      releaseLease: (input) => {
+        released = input.leaseId;
+        return Promise.resolve({ leaseId: input.leaseId });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock,
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+
+    // The grant's deadline is 60_000, so the first renewal is due at 20_000 -- and not before.
+    clock.advance(19_999);
+    await settle();
+    expect(renewals).toEqual([]);
+    clock.advance(1);
+    await settle();
+    expect(renewals).toEqual([{ at: 20_000, leaseId: "lse_1" }]);
+
+    // 30_000ms of TTL came back at 20_000, so the next renewal is at 30_000, not at 40_000.
+    clock.advance(10_000);
+    await settle();
+    expect(renewals).toEqual([
+      { at: 20_000, leaseId: "lse_1" },
+      { at: 30_000, leaseId: "lse_1" },
+    ]);
+
+    signals.emit("SIGINT");
+    expect(await runPromise).toBe(0);
+    // The release is the CLI's own call, not a side effect of the socket closing.
+    expect(released).toBe("lse_1");
+    // And the timer is gone with it: no renewal can race the release, and nothing keeps the
+    // process alive after the command returns.
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    expect(renewals).toHaveLength(2);
+  });
+
+  it("declares no heartbeat capability at hello, in either mode (ADR 0004 §4)", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const declared: Array<boolean | undefined> = [];
+    const environment = output.environmentWith({
+      clock: new FakeClock(0),
+      connectAdmin: async (_resolveCredential, options) => {
+        declared.push(options?.heartbeat);
+        return fakeClient();
+      },
+      signals: signals as unknown as CliEnvironment["signals"],
+    });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      environment,
+    );
+
+    // Held mode is the case ADR 0004 §4 is actually about: it is the mode the daemon's push
+    // keys off, and the one that used to declare the capability.
+    const heldRun = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      environment,
+    );
+    await settle();
+    signals.emit("SIGINT");
+    expect(await heldRun).toBe(0);
+
+    expect(declared).toEqual([false, false]);
+  });
+
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "releases explicitly on %s (ADR 0004 §2's catchable signals)",
+    async (signal) => {
+      const output = outputCapture();
+      const signals = new EventEmitter();
+      let released: string | undefined;
+      const client = fakeClient({
+        releaseLease: (input) => {
+          released = input.leaseId;
+          return Promise.resolve({ leaseId: input.leaseId });
+        },
+      });
+      const runPromise = runCli(
+        ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+        output.environmentWith({
+          clock: new FakeClock(0),
+          connectAdmin: async () => client,
+          signals: signals as unknown as CliEnvironment["signals"],
+        }),
+      );
+      await settle();
+      signals.emit(signal);
+
+      expect(await runPromise).toBe(0);
+      expect(released).toBe("lse_1");
+    },
+  );
+
+  it("reports a failed renewal on stderr and keeps holding the lease", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    let released: string | undefined;
+    const client = fakeClient({
+      renewLease: () =>
+        Promise.reject(new SimlockError("INTERNAL", "domain", "could not persist the lease", {})),
+      releaseLease: (input) => {
+        released = input.leaseId;
+        return Promise.resolve({ leaseId: input.leaseId });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock,
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    clock.advance(20_000);
+    await settle();
+
+    const errorLines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.error !== undefined);
+    expect(errorLines).toContainEqual({
+      error: { code: "INTERNAL", message: "could not persist the lease" },
+    });
+
+    // A failed renewal is not an exit condition: the holder still holds, and still releases.
+    signals.emit("SIGINT");
+    expect(await runPromise).toBe(0);
+    expect(released).toBe("lse_1");
+  });
+
+  it("exits 14 without a farewell release when a renewal is answered UNKNOWN_LEASE", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let released = false;
+    let renewals = 0;
+    const client = fakeClient({
+      renewLease: () => {
+        renewals += 1;
+        return Promise.reject(
+          new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lse_1" }),
+        );
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+    clock.advance(20_000);
+
+    // The daemon's answer is final: this ends the same way the lease-lost push does, rather
+    // than repeating the rejection until the deadline and then sitting alive.
+    expect(await runPromise).toBe(14);
+    expect(released, "asking again would only raise UNKNOWN_LEASE").toBe(false);
+    expect(renewals).toBe(1);
+    expect(clock.pendingTimerCount).toBe(0);
+
+    // The same stderr line the push path writes, so a script tailing for `push: "lease-lost"`
+    // sees this way of losing a lease too, with the error line after it as the detail.
+    const lines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toContainEqual({
+      push: "lease-lost",
+      deviceId: "dev_1",
+      leaseId: "lse_1",
+      reason: "renew-rejected",
+    });
+    expect(lines.at(-1)).toEqual({
+      error: { code: "UNKNOWN_LEASE", message: "no such lease" },
+    });
+  });
+
+  it("exits 14 when renewal gives up, rather than holding a lease it cannot keep", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let released = false;
+    const client = fakeClient({
+      // Never terminal, never successful: the ladder retries until the lease's own deadline
+      // passes, and then there is nothing left to hold.
+      renewLease: () =>
+        Promise.reject(new SimlockError("INTERNAL", "domain", "could not persist", {})),
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+    clock.advance(20_000); // first attempt, fails, retries
+    await settle();
+    clock.advance(60_000); // the retry lands past the lease's 60_000 deadline
+
+    expect(await runPromise).toBe(14);
+    expect(released, "a lease that expired is not this process's to release").toBe(false);
+    const lines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines).toContainEqual({
+      push: "lease-lost",
+      deviceId: "dev_1",
+      leaseId: "lse_1",
+      reason: "renew-failed",
+    });
+  });
+
+  it("writes one lease-lost line when a rejected renewal and the daemon's push both arrive", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let leaseLostListener:
+      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
+      | undefined;
+    const client = fakeClient({
+      onLeaseLost: (listener) => {
+        leaseLostListener = listener;
+        return () => {};
+      },
+      renewLease: () =>
+        Promise.reject(
+          new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lse_1" }),
+        ),
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+    clock.advance(20_000);
+    await settle();
+    // The daemon's own push for the same lease follows the renewal's answer. One ending, one
+    // line: a script tailing stderr must not read this as two devices lost.
+    leaseLostListener?.({ deviceId: "dev_1", leaseId: "lse_1", reason: "expired" });
+
+    expect(await runPromise).toBe(14);
+    const leaseLostLines = output.stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.push === "lease-lost");
+    expect(leaseLostLines).toEqual([
+      { push: "lease-lost", deviceId: "dev_1", leaseId: "lse_1", reason: "renew-rejected" },
+    ]);
+  });
+
+  it("gives up on a farewell release the daemon never answers, instead of hanging", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const client = fakeClient({ releaseLease: () => new Promise(() => {}) });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({
+        clock,
+        connectAdmin: async () => client,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    signals.emit("SIGINT");
+    await settle();
+
+    clock.advance(RELEASE_TIMEOUT_MS);
+
+    expect(await runPromise).toBe(0);
+    expect(output.stderr).toContain("Timed out releasing lease lse_1");
+    expect(clock.pendingTimerCount).toBe(0);
+  });
+
+  it("still releases the lease when printing the grant throws (--export-env with a bad key)", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let released: string | undefined;
+    const client = fakeClient({
+      requestLease: () =>
+        Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "ios", model: "x", osVersion: "26.5" },
+          },
+          // A driver-supplied key that is not a shell identifier fails the command rather than
+          // being silently dropped -- and that throw must not cost the device.
+          environment: { "NOT A KEY": "value" },
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            mode: "held" as const,
+            grantedAt: 0,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        }),
+      releaseLease: (input) => {
+        released = input.leaseId;
+        return Promise.resolve({ leaseId: input.leaseId });
+      },
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--export-env"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(released, "an exit through a throw is still an exit, and still owes a release").toBe(
+      "lse_1",
+    );
+    expect(clock.pendingTimerCount).toBe(0);
+  });
+
+  it("arms no renew timer for --detach: it prints and exits, exactly as before", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let renewed = 0;
+    const client = fakeClient({
+      renewLease: () => {
+        renewed += 1;
+        return Promise.reject(new Error("--detach must not renew"));
+      },
+    });
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    expect(renewed).toBe(0);
+  });
+
+  it("stops renewing when the lease is lost, and still does not re-release it", async () => {
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let leaseLostListener:
+      | ((push: { leaseId: string; deviceId: string; reason: string }) => void)
+      | undefined;
+    let renewed = 0;
+    let released = false;
+    const client = fakeClient({
+      onLeaseLost: (listener) => {
+        leaseLostListener = listener;
+        return () => {};
+      },
+      renewLease: (input) => {
+        renewed += 1;
+        return Promise.resolve({
+          deviceId: "dev_1",
+          grantedAt: 0,
+          id: input.leaseId,
+          mode: "held",
+          ownerId: "test-requester",
+          requesterId: "test-requester",
+          ttlDeadline: clock.now() + 60_000,
+        });
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+    leaseLostListener?.({ deviceId: "dev_1", leaseId: "lse_1", reason: "ttl-backstop" });
+
+    expect(await runPromise).toBe(14);
+    expect(released).toBe(false);
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    expect(renewed).toBe(0);
+  });
+});
+
 describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
   it("does not load the MCP stdio module unless the mcp command runs", async () => {
     const output = outputCapture();
@@ -1640,9 +2072,10 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
       const stdoutOut = { write: (value: string) => (capture.stdout += value) };
       if (ports === undefined) {
         return {
+          // Overridable through `environmentWith({ clock })` -- see the renew-cadence suite.
+          clock: new FakeClock(0),
           configPath: "/simlock/config.json",
           requesterId: "test-requester",
-          now: () => 0,
           connectAdmin: async () => fakeClient(),
           connectExistingAdmin: async () => fakeClient(),
           readAdminTokenFile: async () => undefined,

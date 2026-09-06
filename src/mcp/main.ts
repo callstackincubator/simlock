@@ -9,6 +9,7 @@ import {
   NodeIpcTransport,
   resolveSimlockHome,
   SystemClock,
+  type Clock,
 } from "../ports/index.js";
 import { connectWithAutoLaunch } from "./connect.js";
 import { McpSession } from "./session.js";
@@ -32,6 +33,8 @@ export interface McpTransport {
 }
 
 export interface McpStdioEnvironment {
+  /** The `Clock` the session's renew timer runs on; a real one unless a test injects otherwise. */
+  readonly clock?: Clock;
   readonly connect?: () => Promise<SimlockClient>;
   readonly createServer?: (session: McpSession) => McpServer;
   readonly createTransport?: () => McpTransport;
@@ -64,8 +67,12 @@ export async function startMcpStdio(
 ): Promise<McpStdioRunner> {
   const env = environment.env ?? process.env;
   const requesterId = environment.requesterId ?? env.SIMLOCK_AGENT_ID ?? `mcp:${process.pid}`;
-  const defaults = defaultEnvironment(requesterId);
+  // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
+  // loop must not be able to disagree about what time it is (architecture rule 9).
+  const clock = environment.clock ?? new SystemClock();
+  const defaults = defaultEnvironment(requesterId, clock);
   const session = new McpSession({
+    clock,
     connect: environment.connect ?? defaults.connect,
   });
   const server = (environment.createServer ?? createMcpServer)(session);
@@ -139,9 +146,9 @@ export async function startMcpStdio(
 
 function defaultEnvironment(
   requesterId: string,
+  clock: Clock,
 ): Required<Pick<McpStdioEnvironment, "connect" | "createTransport">> {
   const dataDirectory = resolveSimlockHome();
-  const clock = new SystemClock();
   const ipc = new NodeIpcTransport();
   const socketPath = join(dataDirectory, "daemon.sock");
   const logPath = join(dataDirectory, "daemon.log");
@@ -149,10 +156,11 @@ function defaultEnvironment(
     connect: () =>
       connectWithAutoLaunch({
         clock,
-        // MCP's holder process dies with its agent (stdin EOF -> session.close()), so a
-        // sliding TTL is safe here. CLI held mode declares the same capability now that
-        // it self-terminates on parent death too — see docs/known-pitfalls.md.
-        heartbeat: true,
+        // ADR 0004 §2/§4: the session keeps its lease alive with its own `lease.renew` timer
+        // and releases explicitly when the agent goes away (stdin EOF -> session.close()), so
+        // it no longer declares the daemon-initiated heartbeat. CLI held mode dropped the same
+        // capability in the same change.
+        heartbeat: false,
         ipc,
         launcher: new NodeDaemonLauncher({
           args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],

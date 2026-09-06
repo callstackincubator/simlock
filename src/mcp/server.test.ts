@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { SimlockError } from "../client/index.js";
+import { FakeClock } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { McpSession } from "./session.js";
 import { createMcpServer } from "./server.js";
@@ -292,7 +293,7 @@ describe("MCP server (smoke)", () => {
 });
 
 async function connectedServer(client: FakeSimlockClient) {
-  const session = new McpSession({ connect: async () => client });
+  const session = new McpSession({ clock: new FakeClock(), connect: async () => client });
   const server = createMcpServer(session);
   const mcpClient = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

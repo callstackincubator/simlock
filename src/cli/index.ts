@@ -33,6 +33,12 @@ import {
 } from "../admin/index.js";
 import type { Role } from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
+import {
+  awaitWithin,
+  RELEASE_TIMEOUT_MS,
+  startLeaseRenewal,
+  type LeaseRenewal,
+} from "../lease-policy/index.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 
@@ -106,12 +112,16 @@ type McpStdioRunner = () => Promise<void>;
  * one connection helper instead of two.
  */
 export interface CliEnvironment {
+  /**
+   * The `Clock` port (architecture rule 9). Held mode's renew timer runs on it, so a test can
+   * drive the cadence by hand instead of waiting out a real TTL.
+   */
+  readonly clock: Clock;
   readonly configPath: string;
   /** ADR §4's requester default and this connection's fixed principal -- see §9's
    * "SIMLOCK_AGENT_ID and --agent-id still set the requester id ... they are not the
    * principal": `--agent-id` overrides `lease.request`'s `requesterId` field, never this. */
   readonly requesterId: string;
-  readonly now?: () => number;
   /**
    * Connects (auto-launching the daemon if it is not already running) and completes `hello`
    * with whatever `resolveCredential` resolves to.
@@ -378,9 +388,9 @@ export function buildCliEnvironment(
   };
 
   return {
+    clock,
     configPath,
     requesterId,
-    now: () => clock.now(),
     connectAdmin: (resolveCredential, options) =>
       connect(autoLaunchIpc, resolveCredential, options),
     connectExistingAdmin: (resolveCredential, options) => connect(ipc, resolveCredential, options),
@@ -697,7 +707,11 @@ async function runLease(
     ? undefined
     : waitForTermination(environment.signals, environment.parentWatch, watchedPid);
 
-  const client = await connectDaemonClient(environment, token, { heartbeat: !detached });
+  // ADR 0004 §2/§4: held mode is a client policy now -- this process renews on its own timer
+  // (below) instead of ponging the daemon's push, so neither mode declares the heartbeat
+  // capability any more. The daemon still has the push, and still slides a lease for any
+  // connection that asks for it; this one no longer asks.
+  const client = await connectDaemonClient(environment, token, { heartbeat: false });
   // Set once the daemon says this connection's lease ended without us asking. ADR 0003 §8:
   // lease-scoped pushes go to every live connection sharing the lease's owner, in either mode
   // -- filtered below against this connection's own granted lease id, the same way the
@@ -710,11 +724,29 @@ async function runLease(
   const leaseLostSignal = new Promise<void>((resolve) => {
     notifyLeaseLost = resolve;
   });
-  const offLeaseLost = client.onLeaseLost((push) => {
-    if (push.leaseId !== ourLeaseId) return;
-    environment.stderr.write(`${JSON.stringify({ push: "lease-lost", ...push })}\n`);
+  /**
+   * The lease ended without this process asking, from either of the two places that can find
+   * out -- the daemon's push, or a renewal it rejects. Both write the one `lease-lost` line a
+   * script tails for (whichever gets there first; the flag is what makes that structural
+   * rather than a matter of ordering), stop the wait, skip the release this process can no
+   * longer perform, and leave `runLease` returning the lost-lease code.
+   */
+  let wroteLeaseLost = false;
+  const markLeaseLost = (notice: {
+    readonly deviceId: string;
+    readonly leaseId: string;
+    readonly reason: string;
+  }): void => {
+    if (!wroteLeaseLost) {
+      wroteLeaseLost = true;
+      environment.stderr.write(`${JSON.stringify({ push: "lease-lost", ...notice })}\n`);
+    }
     leaseLost = true;
     notifyLeaseLost?.();
+  };
+  const offLeaseLost = client.onLeaseLost((push) => {
+    if (push.leaseId !== ourLeaseId) return;
+    markLeaseLost(push);
   });
   const offUnhealthy = client.onDeviceUnhealthy((push) => {
     environment.stderr.write(`${JSON.stringify({ push: "device-unhealthy", ...push })}\n`);
@@ -722,6 +754,39 @@ async function runLease(
   const offRecovered = client.onDeviceRecovered((push) => {
     environment.stderr.write(`${JSON.stringify({ push: "device-recovered", ...push })}\n`);
   });
+  /**
+   * ADR 0004 §2/§3: the release a held holder owes when it stops holding -- an exit, parent
+   * death, a catchable signal, or a throw on the way to any of them. It runs from the `finally`
+   * below so no exit path can skip it (a broken `--export-env` key or an EPIPE on a closed pipe
+   * both throw between the grant and the wait), and it is the call that will still be here when
+   * the daemon stops releasing on connection close in PR B.
+   *
+   * Set only for held mode, and cleared as it runs, so it happens exactly once and never for
+   * `--detach` (whose lease deliberately outlives this process) or for a lease the daemon has
+   * already ended (`leaseLost` -- asking again would only raise UNKNOWN_LEASE).
+   */
+  let heldLeaseId: string | undefined;
+  const releaseHeldLease = async (): Promise<void> => {
+    if (heldLeaseId === undefined || leaseLost) return;
+    const leaseId = heldLeaseId;
+    heldLeaseId = undefined;
+    try {
+      // Bounded like MCP's farewell release: a daemon that accepts the frame and never answers
+      // must not leave `simlock lease` hanging after a Ctrl-C.
+      await awaitWithin(
+        environment.clock,
+        RELEASE_TIMEOUT_MS,
+        client.releaseLease({ leaseId }),
+        `Timed out releasing lease ${leaseId}`,
+      );
+    } catch (error: unknown) {
+      // Non-fatal: the process still exits 0 after a signal, but the release
+      // failure is still diagnostic output, so it stays a structured stderr
+      // line rather than reverting to prose.
+      writeError(environment, error);
+    }
+  };
+  let renewal: LeaseRenewal | undefined;
   try {
     const grant = await client.requestLease(
       {
@@ -742,6 +807,8 @@ async function runLease(
       },
     );
     ourLeaseId = grant.lease.id;
+    // Owed from here on, whatever happens next -- see `releaseHeldLease`.
+    if (!detached) heldLeaseId = grant.lease.id;
     // ADR §5: "simlock lease output includes the resolved role" -- the one field this CLI
     // adds on top of the contract's `LeaseGrant` shape, everything else passed through as-is.
     const result = { ...grant, role: client.role };
@@ -749,22 +816,40 @@ async function runLease(
     // changes what stdout carries, never how long the lease lives.
     if (values["export-env"] === true) writeExportEnv(environment, result);
     else writeResult(environment, result);
-    if (detached || termination === undefined) return 0;
+    // `--detach` is the only invocation without a termination watch: it prints and exits,
+    // with no timer and no release, exactly as it did before ADR 0004.
+    if (termination === undefined) return 0;
+    // ADR 0004 §2: what a held holder does while alive is renew on a timer at a third of the
+    // TTL -- computed from the deadline the daemon just returned, not from a config value this
+    // process does not have.
+    renewal = startLeaseRenewal({
+      clock: environment.clock,
+      leaseId: grant.lease.id,
+      ttlDeadline: grant.lease.ttlDeadline,
+      renew: (leaseId) => client.renewLease({ leaseId }),
+      // A retryable attempt failed (see `startLeaseRenewal`): diagnostic output on the same
+      // structured stderr channel as a failed release, and not an exit condition -- the lease
+      // is still this process's until something says otherwise.
+      onError: (error) => writeError(environment, error),
+      // Something did say otherwise: renewal ended, either because the daemon answered that
+      // this lease is gone or not ours (`renew-rejected`) or because it could not be kept
+      // alive to its deadline (`renew-failed`). Both are the same ending as the `lease-lost`
+      // push -- the same stderr line, so a script watching for `push: "lease-lost"` sees every
+      // way of losing a lease; exit 14; and no farewell release for a lease this process can
+      // no longer speak for. The error line follows as the detail of why.
+      onLeaseGone: (reason, error) => {
+        markLeaseLost({ deviceId: grant.lease.deviceId, leaseId: grant.lease.id, reason });
+        writeError(environment, error);
+      },
+    });
     await Promise.race([termination.settled, leaseLostSignal]);
-    if (leaseLost) {
-      // The daemon already released it; asking again would only raise UNKNOWN_LEASE.
-      return LEASE_LOST_EXIT_CODE;
-    }
-    try {
-      await client.releaseLease({ leaseId: grant.lease.id });
-    } catch (error: unknown) {
-      // Non-fatal: the process still exits 0 after a signal, but the release
-      // failure is still diagnostic output, so it stays a structured stderr
-      // line rather than reverting to prose.
-      writeError(environment, error);
-    }
-    return 0;
+    // The daemon already released a lost lease; `releaseHeldLease` skips it for that reason.
+    return leaseLost ? LEASE_LOST_EXIT_CODE : 0;
   } finally {
+    // Stopped before the release, always: a renew must never race the release of the lease it
+    // is renewing, and no timer may outlive this command.
+    renewal?.stop();
+    await releaseHeldLease();
     termination?.dispose();
     offLeaseLost();
     offUnhealthy();
@@ -1043,7 +1128,7 @@ async function runEvents(
   try {
     const sinceTs =
       typeof values.since === "string"
-        ? (environment.now ?? Date.now)() - parseDuration(values.since)
+        ? environment.clock.now() - parseDuration(values.since)
         : undefined;
     for (const event of await client.replayEvents(sinceTs === undefined ? {} : { sinceTs })) {
       writeResult(environment, event);
