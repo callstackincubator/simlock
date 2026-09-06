@@ -73,9 +73,10 @@ implement them ([ADR 0005](adr/0005-gateway-and-worker-modes.md)):
   as sent is not one this daemon will take", which is what exit `2` already
   means for `USAGE` and `BAD_REQUEST`. Neither is retryable as written: the
   fix is a different command, or the same command against a different daemon.
-  `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional —
+  `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
   `nuke`, `cleanup`, `doctor`, and `driver.passthrough` stay per-worker
-  operations rather than waiting on some later fleet-wide version.
+  operations rather than waiting on some later fleet-wide version (ADR 0005
+  §34).
 - `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
   thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
   that is what it is: a worker id the gateway has no record of.
@@ -974,11 +975,10 @@ Against a **gateway** this is the fleet's stream: every connected worker's
 business events, republished on the gateway's bus with `workerId` added to
 the payload, interleaved with the gateway's own `worker.connected` /
 `worker.disconnected` / `worker.rejected` / `worker.removed` /
-`worker.drain-started` / `worker.drain-ended` / `request.dispatched` facts —
-`worker.rejected` being the one not named in ADR 0005 §22, since an uplink
-refused at the door leaves no other trace and "why did that machine never
-appear" is exactly what an operator comes here to answer. It is one ring
-buffer like
+`worker.drain-started` / `worker.drain-ended` / `request.dispatched` facts.
+`worker.rejected` is how you find out why a machine never appeared in
+`simlock worker list` at all — it reports an uplink refused at the door,
+which nothing else records. It is one ring buffer like
 any other, so it resets when the gateway restarts and it holds only what
 arrived while the gateway was up — a worker's events from before its uplink
 connected are not backfilled.

@@ -111,10 +111,10 @@ no devices. All are **planned (ADR 0005)**.
 | `worker.drain-ended` | worker id, label | `worker.undrain` committed and the worker became dispatchable again. Nothing else ends a drain: the flag lives in the gateway's persisted worker registry, so it survives both a worker reconnect and a gateway restart, and this fact only ever follows an explicit undrain | WorkerRegistry | planned (ADR 0005) |
 | `request.dispatched` | request id, worker id, requester id, platform, model, selection reason (warm-hit/free-capacity), time spent queued | the gateway's dispatch sent a queued request to a worker and the worker took it (a grant, or device work already under way). A `NO_CAPACITY` refusal is a stale view, not a dispatch, and emits nothing — the request stays queued | FleetDispatcher | planned (ADR 0005) |
 
-`worker.rejected` exists because the alternative is silence: a worker whose
-credential is refused produces no `worker.connected`, and without this fact
-an operator staring at `simlock worker list` sees a machine that simply never
-appears, with nothing anywhere to say why. It is deliberately *not* a
+`worker.rejected` exists because the alternative is silence (ADR 0005 §22): a
+worker whose credential is refused produces no `worker.connected`, and
+without this fact an operator staring at `simlock worker list` sees a machine
+that simply never appears, with nothing anywhere to say why. It is deliberately *not* a
 `worker.disconnected` with another reason — nothing connected, so nothing
 disconnected, and a fact whose subject never existed should not borrow the
 vocabulary of one that did.
