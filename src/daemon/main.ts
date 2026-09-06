@@ -115,7 +115,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // that resets on restart (see ARCHITECTURE.md "Event bus"), so a component simlock installed
   // is only attributable later through the daemon's own log file.
   wireComponentInstallLogging(eventBus, logger);
-  const registry = await Registry.load({ clock, eventBus, filesystem, idGenerator, statePath });
+  // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
+  // written before it has no stored width of its own, and takes the configured default rather
+  // than a guess derived from its deadline.
+  const registry = await Registry.load({
+    clock,
+    defaultTtlMs: config.lease.defaultTtlMs,
+    eventBus,
+    filesystem,
+    idGenerator,
+    statePath,
+  });
   // Before discovery, because every root a driver validates is checked against it, and it
   // is written exactly once per home and never regenerated (ADR 0001, decision 2).
   const instanceId = await loadInstanceId({
@@ -214,11 +224,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // the way it did before the gateway moved to firing concurrently with convergence. `stopAuxiliary`
   // below *also* awaits this -- that is what closes review finding S5: without it, `stopAuxiliary`
   // could return having stopped nothing (because `stopHttpGateway` isn't assigned yet, the
-  // gateway still being mid-`start()`), and `#stop()` would go on to release leases, settle, and
-  // dispose while the gateway finishes binding and starts accepting requests against a daemon
-  // already being torn down -- see `server.ts`'s `stopAuxiliary` doc: it "must be shut off before
-  // held-lease release and lease/queue teardown begin". When HTTP is disabled there is nothing to
-  // wait for, so this resolves immediately.
+  // gateway still being mid-`start()`), and `#stop()` would go on to settle and dispose while
+  // the gateway finishes binding and starts accepting requests against a daemon already being
+  // torn down -- see `server.ts`'s `stopAuxiliary` doc: it must be shut off before lease/queue
+  // teardown begins. When HTTP is disabled there is nothing to wait for, so this resolves
+  // immediately.
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
   /** Whether `onSocketClaimed` ever fired, i.e. whether anything will ever settle
@@ -267,9 +277,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // see doctor.ts) that already runs interleaved with live lease/reclaim activity
     // whenever a client issues `doctor.run` mid-session, so running it alongside
     // startup's own registry work is nothing this codebase doesn't already do.
-    // convergeRunningCapacity() no longer awaits an orphaned lease's device reclaim
-    // inline either (#43): that erase (~34s for one simulator) proceeds in the
-    // background, off this critical path, once its lease is released registry-only.
+    // convergeRunningCapacity() releases no leases at all any more (ADR 0004 removed the
+    // orphan sweep), so the only device work left on this path is interrupted-reclaim
+    // recovery and the capacity sweep's own shutdowns -- and a reclaim a previous daemon
+    // left in flight is finished off in the background, off this critical path (#43).
     converge: async () => {
       await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
     },
@@ -293,12 +304,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     // Review finding S5: waits for the concurrently-started gateway to either finish binding
     // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
-    // stop) *before* returning -- `#stop()` awaits this call before releasing leases, settling,
-    // and disposing (see `server.ts`), so by the time any of that runs, the gateway is
-    // guaranteed to be either stopped or never listening in the first place. `gatewayStarted`'s
-    // rejection (a bind failure) is not this function's problem to surface -- the
-    // `Promise.allSettled` at the bottom of this function, or the standalone `daemon.stop()`
-    // call after it, already handle that -- so it is swallowed here.
+    // stop) *before* returning -- `#stop()` awaits this call before settling and disposing
+    // (see `server.ts`; the leases themselves are left alone, ADR 0004 §3), so by the time
+    // either of those runs, the gateway is guaranteed to be either stopped or never listening
+    // in the first place. `gatewayStarted`'s rejection (a bind failure) is not this function's
+    // problem to surface -- the `Promise.allSettled` at the bottom of this function, or the
+    // standalone `daemon.stop()` call after it, already handle that -- so it is swallowed
+    // here.
     stopAuxiliary: async () => {
       await gatewayStarted.catch(() => undefined);
       await stopHttpGateway?.();

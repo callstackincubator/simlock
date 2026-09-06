@@ -3,16 +3,13 @@
  * schema:
  *
  * - Request-scoped (`progress`): carries the originating request's frame id.
- * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id.
- * - Connection-scoped (`lease.heartbeat`, `event` -- `event` carries a subscription id).
+ * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
+ *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
+ *   these; they are facts about the device, not a liveness channel).
+ * - Connection-scoped (`event`, which carries a subscription id).
  *
- * Today's `progress` push carries no correlation id at all (see the daemon inventory); adding
- * one to the schema is this PR's job. Actually routing a push to "every live connection whose
- * principal owns the lease" (§8) is not -- that needs the `ownerId`/principal work in PR 2. The
- * schemas here describe the target shape; `src/daemon/server.ts` is updated in this PR to
- * populate the two ids that don't need ownership at all (`progress`'s request id, `event`'s
- * subscription id) but still routes lease-scoped pushes the old way (single
- * `heldLeaseIds`-membership lookup) until PR 2.
+ * ADR 0004 removes the fourth kind: `lease.heartbeat` was a daemon-initiated liveness push,
+ * and nothing replaces it -- a client-initiated `lease.renew` is the whole mechanism now.
  */
 import { z } from "zod";
 
@@ -49,8 +46,6 @@ const deviceRecoveredPushSchema = z.object({
   attempts: z.number(),
 });
 
-const heartbeatPushSchema = z.object({ nonce: z.number() });
-
 const eventPushSchema = z.object({
   subscriptionId: z.string(),
   event: eventEnvelopeSchema,
@@ -61,6 +56,5 @@ export const PUSH_SCHEMAS = {
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
   "device-recovered": deviceRecoveredPushSchema,
-  "lease.heartbeat": heartbeatPushSchema,
   event: eventPushSchema,
 } as const;

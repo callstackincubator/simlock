@@ -32,7 +32,6 @@ export type LeaseRecord = OpOutput<"lease.renew">;
 export type LeaseReleaseInput = OpInput<"lease.release">;
 export type LeaseReleaseOutput = OpOutput<"lease.release">;
 export type LeaseListOutput = OpOutput<"lease.list">;
-export type LeaseHeartbeatOutput = OpOutput<"lease.heartbeat">;
 export type DoctorRunInput = OpInput<"doctor.run">;
 export type DoctorReport = OpOutput<"doctor.run">;
 export type DriverPassthroughInput = OpInput<"driver.passthrough">;
@@ -68,9 +67,13 @@ export type EventPush = z.infer<(typeof PUSH_SCHEMAS)["event"]>;
 export interface LeaseLostPush {
   readonly leaseId: string;
   readonly deviceId: string;
-  /** A server-reported reason (`"expired"`, `"explicit"`, `"closed"`, ...) or, when this
-   * client's own connection died, the client-synthesized `"daemon-connection-lost"` (ADR
-   * §10). Not a closed enum on the wire, so kept as `string` here rather than invented. */
+  /**
+   * Why the daemon ended this lease: `"expired"`, `"explicit"`, `"killed"`, or
+   * `"device-lost"`. Always server-reported -- ADR 0004 §3 removed the client-synthesized
+   * `"daemon-connection-lost"`, because a dead connection ends no lease, and `"closed"` left
+   * the daemon's own vocabulary with it. Not a closed enum on the wire, so kept as `string`
+   * here rather than invented.
+   */
   readonly reason: string;
 }
 

@@ -9,8 +9,10 @@ import {
 
 describe("daemon protocol", () => {
   it("keeps the current protocol version and newline framing", () => {
-    // ADR 0003 §6: protocol 3, no compatibility shim.
-    expect(DAEMON_PROTOCOL_VERSION).toBe(3);
+    // ADR 0004: protocol 4, no compatibility shim -- `lease.heartbeat` and `mode` left the
+    // wire with nothing behind them, so under ADR 0003 §6's honesty rule the range does not
+    // widen to keep speaking 3.
+    expect(DAEMON_PROTOCOL_VERSION).toBe(4);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 

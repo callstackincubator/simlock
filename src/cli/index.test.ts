@@ -54,6 +54,13 @@ import {
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
+
+/**
+ * Yields to the macrotask queue, so `runLease` gets past `requestLease` and reaches its wait
+ * point -- its push listeners registered and its renew timer armed -- before a test fires a
+ * push or advances the clock.
+ */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 /** A minimal daemon lease response, for the tests that only care what the CLI prints. */
 const detachedGrant: LeaseGrant = {
   device: {
@@ -67,8 +74,9 @@ const detachedGrant: LeaseGrant = {
     deviceId: "device-1",
     requesterId: "test-requester",
     ownerId: "test-requester",
-    mode: "detached",
     grantedAt: 0,
+    lastRenewedAt: 0,
+    ttlMs: 60_000,
     ttlDeadline: 61_000,
   },
   timing: {
@@ -372,7 +380,7 @@ describe("CLI: exit codes", () => {
     const parentWatch = new FakeParentWatch();
     const heldGrant: LeaseGrant = {
       ...detachedGrant,
-      lease: { ...detachedGrant.lease, id: "lse_parent_death", mode: "held" },
+      lease: { ...detachedGrant.lease, id: "lse_parent_death" },
     };
     const released: unknown[] = [];
 
@@ -405,7 +413,7 @@ describe("CLI: exit codes", () => {
     const parentWatch = new FakeParentWatch();
     const heldGrant: LeaseGrant = {
       ...detachedGrant,
-      lease: { ...detachedGrant.lease, id: "lse_bind_pid", mode: "held" },
+      lease: { ...detachedGrant.lease, id: "lse_bind_pid" },
     };
     const released: unknown[] = [];
 
@@ -888,14 +896,14 @@ describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
     let wrote = false;
     await expect(
       runCli(
-        ["config", "set", "lease.heldTtlBackstopMs", "not-a-number"],
+        ["config", "set", "lease.defaultTtlMs", "not-a-number"],
         output.environmentWith({
           readConfigFile: async () => ({}),
           writeConfigFile: async () => {
             wrote = true;
           },
           validateConfig: async () => {
-            throw new Error("lease.heldTtlBackstopMs must be a number");
+            throw new Error("lease.defaultTtlMs must be a number");
           },
         }),
       ),
@@ -945,7 +953,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     const output = outputCapture(realCliEnvironmentPorts());
     let wrote = false;
     const exitCode = await runCli(
-      ["config", "set", "lease.heldTtlBackstop", "60000"],
+      ["config", "set", "lease.defaultTtl", "60000"],
       output.environmentWith({
         readConfigFile: async () => ({}),
         writeConfigFile: async () => {
@@ -961,9 +969,9 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     const output = outputCapture(realCliEnvironmentPorts());
     let written: Record<string, unknown> | undefined;
     const exitCode = await runCli(
-      // Well above the default heartbeat interval (5 min) * 4, so this doesn't also trip
-      // `validateHeartbeatInterval` -- this test is only about the key itself validating clean.
-      ["config", "set", "lease.heldTtlBackstopMs", "2400000"],
+      // Comfortably under the default `lease.maxTtlMs` (4h), so this doesn't also trip the
+      // TTL pair rule -- this test is only about the key itself validating clean.
+      ["config", "set", "lease.defaultTtlMs", "2400000"],
       output.environmentWith({
         readConfigFile: async () => ({}),
         writeConfigFile: async (contents) => {
@@ -972,7 +980,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       }),
     );
     expect(exitCode).toBe(0);
-    expect(written).toEqual({ lease: { heldTtlBackstopMs: 2400000 } });
+    expect(written).toEqual({ lease: { defaultTtlMs: 2400000 } });
   });
 
   it("does not let a stray file at the scratch validation path change the outcome", async () => {
@@ -1139,7 +1147,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     );
     // Let requestLease resolve and runLease reach the `Promise.race` wait point before firing
     // the push -- otherwise the listener registered by `client.onLeaseLost` may not exist yet.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     leaseLostListener?.({ leaseId: "lse_1", deviceId: "dev_1", reason: "ttl-backstop" });
     const exitCode = await runPromise;
     expect(exitCode).toBe(14);
@@ -1171,11 +1179,11 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
         signals: signals as unknown as CliEnvironment["signals"],
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     // A push for another lease this same principal owns (e.g. an earlier `--detach`'d lease) --
     // must not be treated as this invocation's own lease being lost.
     leaseLostListener?.({ leaseId: "some-other-lease", deviceId: "dev_2", reason: "ttl-backstop" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     signals.emit("SIGINT");
     const exitCode = await runPromise;
     expect(exitCode).toBe(0);
@@ -1212,8 +1220,9 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "detached",
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1265,8 +1274,9 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "detached",
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1313,8 +1323,9 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "detached",
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1336,15 +1347,12 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
 });
 
 /**
- * ADR 0004 §2: held mode is a client policy -- this process renews on a timer at a third of the
- * remaining TTL and releases explicitly, rather than ponging a daemon push and relying on the
- * socket closing. The wire is untouched in this slice (`mode: "held"` still goes out); what is
- * asserted here is the CLI's own behaviour while it holds.
+ * ADR 0004 §2/§3: holding is a client policy -- this process renews on a timer at a third of
+ * the remaining TTL and releases explicitly, and the daemon does neither on its behalf. There
+ * is no mode on the wire any more, so what is asserted here is entirely the CLI's own
+ * behaviour while it holds, and what it does when the connection under it dies.
  */
-describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
-  /** Lets `runLease` get past `requestLease` and arm its timer before the clock is advanced. */
-  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
+describe("CLI: holder renew and release (ADR 0004 §2)", () => {
   it("renews at a third of the TTL the daemon returned, re-deriving the cadence from each renewal", async () => {
     const clock = new FakeClock(0);
     const output = outputCapture();
@@ -1359,9 +1367,10 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
           deviceId: "dev_1",
           grantedAt: 0,
           id: input.leaseId,
-          mode: "held",
           ownerId: "test-requester",
           requesterId: "test-requester",
+          lastRenewedAt: 0,
+          ttlMs: 60_000,
           ttlDeadline: clock.now() + 30_000,
         });
       },
@@ -1407,34 +1416,176 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
     expect(renewals).toHaveLength(2);
   });
 
-  it("declares no heartbeat capability at hello, in either mode (ADR 0004 §4)", async () => {
+  it("exits 1 on a dead connection, naming the lease that outlived it, and releases nothing", async () => {
+    // ADR 0004 §3: the daemon released nothing when the socket died, so the lease is still
+    // granted -- the holder says so, says until when, and does not pretend to release it.
+    const output = outputCapture();
+    let connectionLostListener: ((error: AnySimlockError) => void) | undefined;
+    let released = false;
+    const client = fakeClient({
+      onConnectionLost: (listener) => {
+        connectionLostListener = listener;
+        return () => {};
+      },
+      releaseLease: () => {
+        released = true;
+        return Promise.resolve({ leaseId: "lse_1" });
+      },
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ connectAdmin: async () => client }),
+    );
+    // Let `requestLease` resolve and `runLease` reach its wait point, so the listener exists.
+    await settle();
+    connectionLostListener?.(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
+    );
+
+    expect(await runPromise).toBe(1);
+    const line = JSON.parse(output.stderr.trim().split("\n").at(-1) as string) as {
+      error: { code: string; message: string };
+    };
+    expect(line.error.code).toBe("DAEMON_CONNECTION_LOST");
+    expect(line.error.message).toContain("lse_1");
+    expect(line.error.message).toContain("60000");
+    // Nothing to release over a connection that is already gone -- and nothing that should be.
+    expect(released).toBe(false);
+  });
+
+  it("names the latest deadline in that line, not the one the grant carried", async () => {
+    // The deadline moves on every renewal, and this line is the only place a holder reports
+    // it. Quoting the grant-time one would, after about a TTL of uptime, name a moment in the
+    // past on a lease that is perfectly alive.
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let connectionLostListener: ((error: AnySimlockError) => void) | undefined;
+    const client = fakeClient({
+      onConnectionLost: (listener) => {
+        connectionLostListener = listener;
+        return () => {};
+      },
+      renewLease: (input) =>
+        Promise.resolve({
+          deviceId: "dev_1",
+          grantedAt: 0,
+          id: input.leaseId,
+          ownerId: "test-requester",
+          requesterId: "test-requester",
+          lastRenewedAt: clock.now(),
+          ttlMs: 60_000,
+          ttlDeadline: clock.now() + 60_000,
+        }),
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+
+    // Two renewals: the grant's deadline was 60_000, so they land at 20_000 and 40_000, each
+    // answering with a deadline a full TTL further out.
+    clock.advance(20_000);
+    await settle();
+    clock.advance(20_000);
+    await settle();
+
+    connectionLostListener?.(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
+    );
+    expect(await runPromise).toBe(1);
+
+    const line = JSON.parse(output.stderr.trim().split("\n").at(-1) as string) as {
+      error: { message: string };
+    };
+    expect(line.error.message).toContain("100000");
+    // The grant-time deadline (60_000) is not what it reports any more.
+    expect(line.error.message).not.toContain("60000");
+  });
+
+  it("writes one line for a lost connection, even with a renewal in flight when it dies", async () => {
+    // The same socket carries both: the connection-lost listener writes the line that names
+    // the lease and its deadline, and the `lease.renew` that was in flight rejects with
+    // `DAEMON_CONNECTION_LOST`. That rejection is a retryable failure as far as
+    // `startLeaseRenewal` knows -- not a `lease-lost` -- so the holder must not answer it with
+    // a second line saying the daemon is gone, this one without the lease id a reader needs.
+    // Two things stop that, and this pins the outcome rather than either mechanism: the
+    // `finally` stops renewal (nothing is reported after `stop()`), and `onError` checks
+    // `connectionLost` so the answer does not depend on which of the two microtask chains
+    // wins.
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let connectionLostListener: ((error: AnySimlockError) => void) | undefined;
+    let rejectRenew: ((error: unknown) => void) | undefined;
+    const client = fakeClient({
+      onConnectionLost: (listener) => {
+        connectionLostListener = listener;
+        return () => {};
+      },
+      renewLease: () =>
+        new Promise((_resolve, reject) => {
+          rejectRenew = reject;
+        }),
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+
+    // The grant's deadline is 60_000: the first renewal starts at 20_000 and never answers.
+    clock.advance(20_000);
+    await settle();
+    expect(rejectRenew).toBeDefined();
+
+    // The socket dies. In that order, deliberately: `SimlockClient.onConnectionLost` promises
+    // that "every in-flight call has already rejected `DAEMON_CONNECTION_LOST` by the time
+    // this listener runs", so the renewal's rejection is queued first and its handler runs
+    // after the listener has had its say.
+    rejectRenew?.(new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}));
+    connectionLostListener?.(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
+    );
+
+    expect(await runPromise).toBe(1);
+    const errorLines = output.stderr
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { error?: { code: string; message: string } })
+      .filter((line) => line.error !== undefined);
+    expect(errorLines).toHaveLength(1);
+    expect(errorLines[0]?.error?.code).toBe("DAEMON_CONNECTION_LOST");
+    expect(errorLines[0]?.error?.message).toContain("lse_1");
+  });
+
+  it("sends --ttl as the request's own ttlMs, and nothing when it is not given", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
-    const declared: Array<boolean | undefined> = [];
+    const requested: Array<number | undefined> = [];
     const environment = output.environmentWith({
       clock: new FakeClock(0),
-      connectAdmin: async (_resolveCredential, options) => {
-        declared.push(options?.heartbeat);
-        return fakeClient();
-      },
+      connectAdmin: async () =>
+        fakeClient({
+          requestLease: (input) => {
+            requested.push(input.ttlMs);
+            return Promise.resolve(detachedGrant);
+          },
+        }),
       signals: signals as unknown as CliEnvironment["signals"],
     });
+    await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--ttl", "30m"],
+      environment,
+    );
     await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
       environment,
     );
 
-    // Held mode is the case ADR 0004 §4 is actually about: it is the mode the daemon's push
-    // keys off, and the one that used to declare the capability.
-    const heldRun = runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
-      environment,
-    );
-    await settle();
-    signals.emit("SIGINT");
-    expect(await heldRun).toBe(0);
-
-    expect(declared).toEqual([false, false]);
+    // ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
+    // TTL at all, so the daemon's own default applies rather than a number the CLI invented.
+    expect(requested).toEqual([30 * 60_000, undefined]);
   });
 
   it.each(["SIGINT", "SIGTERM"] as const)(
@@ -1672,8 +1823,9 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
             deviceId: "dev_1",
             requesterId: "test-requester",
             ownerId: "test-requester",
-            mode: "held" as const,
             grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
             ttlDeadline: 60_000,
           },
           timing: {
@@ -1740,9 +1892,10 @@ describe("CLI: held-mode renew and release (ADR 0004 §2)", () => {
           deviceId: "dev_1",
           grantedAt: 0,
           id: input.leaseId,
-          mode: "held",
           ownerId: "test-requester",
           requesterId: "test-requester",
+          lastRenewedAt: 0,
+          ttlMs: 60_000,
           ttlDeadline: clock.now() + 60_000,
         });
       },
@@ -1884,7 +2037,8 @@ describe("CLI smoke test (ADR 0003 §12: one per frontend)", () => {
     );
     expect(leaseExit).toBe(0);
     const grant = JSON.parse(leaseOut.stdout) as LeaseGrant;
-    expect(grant.lease.mode).toBe("detached");
+    // ADR 0004: one kind of lease -- what `--detach` changes is this process, not the grant.
+    expect(grant.lease).toMatchObject({ ttlMs: expect.any(Number) });
 
     const statusOut = outputCapture();
     await runCli(
@@ -1999,8 +2153,9 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       deviceId: "dev_1",
       requesterId: "test-requester",
       ownerId: "test-requester",
-      mode: "held",
       grantedAt: 0,
+      lastRenewedAt: 0,
+      ttlMs: 60_000,
       ttlDeadline: 60_000,
     },
     timing: {
@@ -2022,7 +2177,6 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
     listLeases: () => Promise.resolve(emptyLeaseList),
-    heartbeat: () => Promise.resolve({ leases: [] }),
     runDoctor: () => Promise.resolve(emptyDoctor),
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
@@ -2315,7 +2469,7 @@ function testConfig(): Config {
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 5_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
     capacity: {
       strategy: "resource",
       config: {

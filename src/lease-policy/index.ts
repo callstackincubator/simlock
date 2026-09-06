@@ -6,27 +6,30 @@
  * It lives in its own module, outside both frontends and outside `simlock/client`, for two
  * reasons:
  *
- * - the CLI's held mode and the MCP session follow the *same* policy, and a second copy of a
+ * - the CLI's holder and the MCP session follow the *same* policy, and a second copy of a
  *   liveness loop is exactly the duplication ADR 0004 exists to remove;
  * - the typed client deliberately owns no renew loop (ADR 0003 §10, `docs/CLIENT.md`): renew
  *   and reconnect policy is a frontend concern, so this is a helper frontends *choose*, never
  *   something `connectSimlock` starts on their behalf. Nothing here is exported from
  *   `simlock/client` or `simlock/admin`.
  *
- * The cadence is computed only from the deadline the daemon returned with the grant (and with
- * every renewal since), never from a TTL config value: a client does not have the daemon's
- * config, and the daemon is free to hand back a shorter deadline than the one asked for.
+ * Everything here comes from what the daemon actually answered -- the lease's own `ttlMs` and
+ * `ttlDeadline`, from the grant and from every renewal since -- never from a TTL config value:
+ * a client does not have the daemon's config, and the daemon is free to grant a narrower width
+ * than the one asked for.
  *
- * Two things follow from deriving the interval as `ttlDeadline - clock.now()`:
+ * The two are used for different things, deliberately:
  *
- * - it assumes the daemon and this client read the same wall clock. True on the unix socket,
- *   where they are processes on one machine, and the reason `ttlDeadline` is usable as-is
- *   today. It is not true across a network hop, where a client's clock may sit minutes from
- *   the daemon's and this arithmetic would renew far too early or far too late.
- * - the fix for that is ADR 0004's own: once a lease record carries `ttlMs` (PR B), the
- *   cadence becomes `ttlMs / 3` -- a duration, which needs no shared epoch -- and the deadline
- *   is left as what it really is, a bound to stop renewing at rather than a clock to schedule
- *   from. This module is where that change lands; nothing above it has to move.
+ * - **`ttlMs` sets the cadence**: renew every `ttlMs / 3`. It is a duration, so it needs no
+ *   shared epoch, and a client whose clock sits minutes from the daemon's still renews at the
+ *   right rate. That is what makes this loop correct across a network hop (ADR 0004's own
+ *   reason for storing the width on the record), not just on the unix socket.
+ * - **`ttlDeadline` bounds it**: it is when this holder stops having a lease, so it caps each
+ *   scheduled wait (never schedule past the moment being scheduled for) and it is what the
+ *   give-up test reads. That one comparison is the only place a shared wall clock is assumed,
+ *   and it fails safe in both directions -- a client running fast gives up early on a lease it
+ *   could have kept, one running slow keeps trying against a lease the daemon has expired,
+ *   and neither can extend a lease the daemon did not.
  */
 import { isSimlockError } from "../contract/index.js";
 import type { Clock, TimerHandle } from "../ports/index.js";
@@ -84,8 +87,14 @@ export async function awaitWithin<T>(
   }
 }
 
-/** The subset of a `LeaseRecord` renewal needs back: the daemon's new deadline. */
+/**
+ * The subset of a `LeaseRecord` renewal needs back: the width the lease now has, and when it
+ * ends. `ttlMs` is optional only so a caller with an older record shape (or a test double
+ * scripting one answer) still type-checks -- when it is absent the cadence falls back to the
+ * remaining time, which is what this module did before the width existed.
+ */
 export interface RenewedLease {
+  readonly ttlMs?: number;
   readonly ttlDeadline: number;
 }
 
@@ -106,8 +115,24 @@ export interface LeaseRenewalOptions {
   readonly leaseId: string;
   /** The deadline the grant (or a previous renewal) returned, in `clock.now()`'s epoch. */
   readonly ttlDeadline: number;
+  /** The width the grant (or a previous renewal) returned -- `LeaseRecord.ttlMs`, the thing
+   * the cadence is a third of. Optional for the same reason it is optional on `RenewedLease`. */
+  readonly ttlMs?: number;
   /** Calls `lease.renew` for this lease -- `client.renewLease({ leaseId })`, in practice. */
   readonly renew: (leaseId: string) => Promise<RenewedLease>;
+  /**
+   * Reports each answer this renewal adopts, so a holder that shows the deadline to somebody
+   * can keep saying something true. The CLI's `DAEMON_CONNECTION_LOST` line names it, to say
+   * how long the lease that outlived the connection has left; without this hook that line
+   * would still quote the grant-time deadline, which after roughly one TTL of uptime is a
+   * moment in the past on a lease that is perfectly alive.
+   *
+   * Called on every adopted answer -- which is every answer from the newest attempt, and whose
+   * deadline may be equal to or *earlier* than the previous one, since the daemon's newest
+   * word wins in both directions (a body-less renew re-applying a narrower stored width, say).
+   * Never called after `stop()`.
+   */
+  readonly onRenewed?: (renewed: RenewedLease) => void;
   /**
    * Reports every failed attempt that is worth retrying, and the failure that finally ends
    * renewal. Never called after `stop()`, and never for the terminal answers `onLeaseGone`
@@ -135,9 +160,16 @@ export interface LeaseRenewal {
   stop(): void;
 }
 
-/** The delay before the next renewal, given how much of the TTL is left. */
-function renewDelayMs(remainingMs: number): number {
-  const delay = Math.max(MINIMUM_RENEW_DELAY_MS, Math.floor(remainingMs / RENEW_DIVISOR));
+/**
+ * The delay before the next renewal: a third of the lease's own width, clamped so an attempt
+ * still starts before the deadline it is renewing towards. The clamp matters whenever the two
+ * disagree -- a lease renewed to a shorter deadline than its width (a daemon restart mid-TTL,
+ * a clock that jumped), where scheduling a full `ttlMs / 3` would sleep straight past the
+ * moment the lease ends.
+ */
+function renewDelayMs(remainingMs: number, ttlMs: number | undefined): number {
+  const fromWidth = ttlMs === undefined ? remainingMs : Math.min(ttlMs, remainingMs);
+  const delay = Math.max(MINIMUM_RENEW_DELAY_MS, Math.floor(fromWidth / RENEW_DIVISOR));
   return Math.min(MAXIMUM_RENEW_DELAY_MS, delay);
 }
 
@@ -178,9 +210,11 @@ function isLeaseGone(error: unknown): boolean {
  * is over, or was never this holder's -- so renewal stops at once and `onLeaseGone` says so.
  */
 export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
-  const { clock, leaseId, onError, onLeaseGone, renew } = options;
-  /** The last deadline the daemon actually gave us -- the only input to the cadence. */
+  const { clock, leaseId, onError, onLeaseGone, onRenewed, renew } = options;
+  /** The last deadline the daemon actually gave us: the bound this renewal races. */
   let deadline = options.ttlDeadline;
+  /** The lease's own width, as of the same answer: what the cadence is derived from. */
+  let ttlMs = options.ttlMs;
   /** Whichever timer is armed right now: the wait between renewals, or an attempt's bound. */
   let timer: TimerHandle | undefined;
   let stopped = false;
@@ -205,9 +239,17 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       // it -- see the `void tick()` below, which nothing awaits.
     }
   };
-  /** Ends renewal and says why, once. Isolated for the same reason `report` is. */
+  /**
+   * Ends renewal and says why, once. Isolated for the same reason `report` is, and silent once
+   * renewal has stopped for any other reason -- including a `stop()` the holder made from
+   * inside `onError` a moment ago, which is a holder saying it is done with this lease and
+   * must not be answered with news about it. Cancels the armed timer for the same reason
+   * `stop()` does: this is the end of the loop, and nothing may outlive it.
+   */
   const giveUp = (reason: LeaseGoneReason, error: unknown): void => {
+    if (stopped) return;
     stopped = true;
+    cancelTimer();
     if (onLeaseGone === undefined) return;
     try {
       onLeaseGone(reason, error);
@@ -216,9 +258,23 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     }
   };
 
+  /** The one place `deadline` moves, so `onRenewed` can never drift from what the cadence
+   * itself is scheduling against. Callers apply the newest-answer-wins rule before calling it;
+   * this only records the answer and reports it, isolated for the same reason `report` is. */
+  const adoptDeadline = (renewed: RenewedLease): void => {
+    deadline = renewed.ttlDeadline;
+    ttlMs = renewed.ttlMs;
+    if (onRenewed === undefined) return;
+    try {
+      onRenewed(renewed);
+    } catch {
+      // A holder that cannot record the new deadline must still keep renewing towards it.
+    }
+  };
+
   const schedule = (): void => {
     if (stopped) return;
-    timer = clock.setTimer(renewDelayMs(deadline - clock.now()), () => {
+    timer = clock.setTimer(renewDelayMs(deadline - clock.now(), ttlMs), () => {
       timer = undefined;
       // Nothing awaits this: an unhandled rejection here would take the whole process down,
       // and with it the release the holder still owes.
@@ -253,7 +309,7 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
         // deadline the daemon has already replaced.
         if (stopped || attemptId <= newestAnswered) return;
         newestAnswered = attemptId;
-        deadline = renewed.ttlDeadline;
+        adoptDeadline(renewed);
       },
       () => undefined,
     );
@@ -263,7 +319,7 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
         (error: unknown) => ({ attemptId, error, ok: false }),
       ),
       new Promise<Attempt>((resolve) => {
-        timer = clock.setTimer(renewDelayMs(deadline - clock.now()), () => {
+        timer = clock.setTimer(renewDelayMs(deadline - clock.now(), ttlMs), () => {
           timer = undefined;
           resolve({
             attemptId,
@@ -305,10 +361,11 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
     }
 
     // Applied by this attempt's own number, exactly as a late answer is (`attemptRenew` above
-    // has usually already done it for this very answer; both paths agree).
+    // has usually already done it for this very answer; both paths agree, and both go through
+    // `adoptDeadline`, so `onRenewed` sees each adopted answer exactly once).
     if (attempt.attemptId > newestAnswered) {
       newestAnswered = attempt.attemptId;
-      deadline = attempt.renewed.ttlDeadline;
+      adoptDeadline(attempt.renewed);
     }
     if (attempt.renewed.ttlDeadline <= clock.now()) {
       // A deadline that is not in the future cannot be renewed towards -- scheduling off it
@@ -320,8 +377,8 @@ export function startLeaseRenewal(options: LeaseRenewalOptions): LeaseRenewal {
       return;
     }
     // The cadence follows the newest answer in both directions: the daemon may hand back a
-    // *shorter* deadline than the one asked for -- a lowered `lease.heldTtlBackstopMs`, a
-    // `ttlMs` it clamped -- and a longer, older belief does not override it.
+    // *shorter* deadline than the one asked for -- a body-less renew re-applying a narrower
+    // stored width, say -- and a longer, older belief does not override it.
     schedule();
   };
 

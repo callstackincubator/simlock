@@ -1,12 +1,13 @@
 /**
  * The renew cadence ADR 0004 §2 specifies, exercised on a hand-advanced `FakeClock`: a third of
- * the *remaining* TTL, recomputed from the deadline the daemon returned every time, and nothing
- * at all after `stop()`.
+ * the lease's own `ttlMs`, bounded by the deadline the daemon returned, recomputed from every
+ * answer, and nothing at all after `stop()`.
  */
 import { describe, expect, it } from "vitest";
 
 import { SimlockError } from "../contract/index.js";
 import { FakeClock } from "../ports/index.js";
+import type { LeaseRenewal } from "./index.js";
 import { awaitWithin, RELEASE_TIMEOUT_MS, startLeaseRenewal } from "./index.js";
 
 /** Lets the awaited `renew` call settle; the fake clock never moves on its own. */
@@ -60,6 +61,121 @@ describe("startLeaseRenewal", () => {
     expect(renewedAt).toEqual([4_000, 5_000]);
 
     renewal.stop();
+  });
+
+  it("takes the cadence from the lease's own width, not from the time left on the deadline", async () => {
+    // The two disagree on purpose: a third of the width is 20_000, a third of the remaining
+    // time is 30_000. ADR 0004 stores the width on the record precisely so a client can renew
+    // at the right *rate* without sharing a clock with the daemon, so the width is what the
+    // cadence follows -- and the deadline stays what it is, the bound.
+    const clock = new FakeClock(0);
+    const renewedAt: number[] = [];
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      renew: () => {
+        renewedAt.push(clock.now());
+        return Promise.resolve({ ttlMs: 60_000, ttlDeadline: clock.now() + 90_000 });
+      },
+      ttlMs: 60_000,
+      ttlDeadline: 90_000,
+    });
+
+    clock.advance(19_999);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([]);
+    clock.advance(1);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([20_000]);
+
+    // And again off the answer's own width, not off its (further out) deadline.
+    clock.advance(20_000);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([20_000, 40_000]);
+  });
+
+  it("clamps the cadence to the deadline when the width would overshoot it", async () => {
+    // A lease whose deadline is closer than its width -- a renewal that came back short, a
+    // clock that jumped -- must not sleep a full third of the width straight past the moment
+    // it is renewing towards.
+    const clock = new FakeClock(0);
+    const renewedAt: number[] = [];
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      renew: () => {
+        renewedAt.push(clock.now());
+        return Promise.resolve({ ttlMs: 60_000, ttlDeadline: clock.now() + 60_000 });
+      },
+      ttlMs: 60_000,
+      // 9_000 left, not 60_000: the first attempt is due at 3_000, well before it.
+      ttlDeadline: 9_000,
+    });
+
+    clock.advance(3_000);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([3_000]);
+
+    // Once the answer restores a full-width deadline, the width sets the pace again.
+    clock.advance(20_000);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([3_000, 23_000]);
+  });
+
+  it("falls back to the remaining time when an answer carries no width", async () => {
+    // A caller with an older record shape (or a test double scripting one field) still gets
+    // the pre-width behaviour rather than no cadence at all.
+    const clock = new FakeClock(0);
+    const renewedAt: number[] = [];
+    startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      renew: () => {
+        renewedAt.push(clock.now());
+        return Promise.resolve({ ttlDeadline: clock.now() + 9_000 });
+      },
+      ttlDeadline: 9_000,
+    });
+
+    clock.advance(3_000);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([3_000]);
+    clock.advance(3_000);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([3_000, 6_000]);
+  });
+
+  it("says nothing more after a holder stops renewal from inside onError", async () => {
+    // A holder that hears a failed attempt and decides it is done with the lease (the CLI's
+    // `finally`, an MCP session ending) calls `stop()` from inside the handler. The very next
+    // line of `tick` would otherwise notice the deadline has passed and announce the lease
+    // gone -- news about a lease nobody is holding any more, delivered after the loop was
+    // promised to be silent.
+    const clock = new FakeClock(0);
+    const errors: unknown[] = [];
+    const gone: string[] = [];
+    const renewal: LeaseRenewal = startLeaseRenewal({
+      clock,
+      leaseId: "lse_1",
+      onError: (error) => {
+        errors.push(error);
+        renewal.stop();
+      },
+      onLeaseGone: (reason) => gone.push(reason),
+      renew: () => Promise.reject(new Error("INTERNAL")),
+      // The first (and only) attempt is due at 250, exactly when the lease runs out: the
+      // rejection is reported, and the give-up test right after it would fire.
+      ttlDeadline: 250,
+    });
+
+    clock.advance(250);
+    await flushMicrotasks();
+
+    expect(errors).toHaveLength(1);
+    expect(gone, "stopped means stopped, including the ending it was about to announce").toEqual(
+      [],
+    );
+    expect(clock.pendingTimerCount).toBe(0);
   });
 
   it("stops cleanly: the pending timer is cancelled and no renewal follows", async () => {
@@ -513,8 +629,9 @@ describe("startLeaseRenewal", () => {
       onLeaseGone: (reason) => gone.push({ reason }),
       renew: () => {
         renewedAt.push(clock.now());
-        // A daemon answering with a deadline that is not in the future -- reachable with
-        // `lease.heldTtlBackstopMs: 0`, which the config validator allows.
+        // A daemon answering with a deadline that is not in the future. `lease.defaultTtlMs`
+        // must be positive (ADR 0004), so this is a clock jump or a daemon bug rather than a
+        // configuration -- and either way a cadence derived from it would be a hot loop.
         return Promise.resolve({ ttlDeadline: clock.now() });
       },
       // Already expired at the grant: the floor keeps even this from being an instant loop.

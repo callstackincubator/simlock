@@ -59,9 +59,9 @@ describe("CleanupExecutor", () => {
     const device = await seedReady(harness);
     await harness.registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
 

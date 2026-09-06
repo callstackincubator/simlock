@@ -11,7 +11,7 @@ export interface StartupRegistry {
   };
 }
 
-/** Restores persisted lease deadlines before any startup device work begins. */
+/** Restores every persisted lease's TTL timer before any startup device work begins. */
 export interface LeaseTimerRestorer {
   restoreExpiryTimers(): Promise<void>;
 }
@@ -24,16 +24,6 @@ export interface InterruptedReclaimRecovery {
 /** Re-arms retry timers for devices still `quarantined` at startup, from persisted state. */
 export interface QuarantineRestorer {
   restore(): void;
-}
-
-/**
- * Releases a lease orphaned by a daemon restart. A held lease's liveness is
- * its daemon connection, so any held lease found at startup has no holder by
- * definition; this port drives it through the normal release path (reason
- * `orphaned`) so the device is reclaimed and `lease.released` is emitted.
- */
-export interface OrphanedLeaseRelease {
-  releaseOrphaned(leaseId: string): Promise<void>;
 }
 
 /** Read-only operation claim view used to avoid an in-flight device operation. */
@@ -49,7 +39,6 @@ export interface StartupConvergerOptions {
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
-  readonly releases: OrphanedLeaseRelease;
   readonly timers: LeaseTimerRestorer;
 }
 
@@ -61,7 +50,10 @@ export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
 
   async converge(): Promise<void> {
-    await this.#releaseOrphanedHeldLeases();
+    // ADR 0004: every lease's timer is restored from its own persisted deadline, and nothing
+    // is swept -- a restart does not prove a holder is dead, so no lease is released on the
+    // strength of one. A lease whose deadline already passed while no daemon was running
+    // expires here, through the ordinary expiry path `restore` drives.
     await this.options.timers.restoreExpiryTimers();
     // Independent of lease/reclaim recovery above: a `quarantined` device already
     // finished its release-time reclaim, so re-arming its retry timer never races
@@ -81,25 +73,6 @@ export class StartupConverger {
         target: candidate.id,
       });
       if (!executed) refused.add(candidate.id);
-    }
-  }
-
-  /**
-   * A held lease's liveness is its daemon connection, so any lease still in
-   * `held` mode at startup is orphaned by definition — it cannot have a live
-   * holder across a restart. Release it (reason `orphaned`) before timers are
-   * restored, so its timer is never re-armed, and before capacity
-   * convergence, so the freed device is visible to it. Detached leases are
-   * untouched here; their liveness is the TTL, not a connection.
-   */
-  async #releaseOrphanedHeldLeases(): Promise<void> {
-    const orphanedLeaseIds = await this.options.decisions.run(() =>
-      this.options.registry.snapshot.leases
-        .filter((lease) => lease.mode === "held")
-        .map((lease) => lease.id),
-    );
-    for (const leaseId of orphanedLeaseIds) {
-      await this.options.releases.releaseOrphaned(leaseId);
     }
   }
 

@@ -16,7 +16,6 @@ import {
   type LeaseCancelInput,
   type LeaseCancelOutput,
   type LeaseGrant,
-  type LeaseHeartbeatOutput,
   type LeaseListOutput,
   type LeaseLostPush,
   type LeaseReleaseInput,
@@ -67,7 +66,6 @@ export class FakeSimlockClient implements SimlockClient {
   releaseLeaseImpl: (input: LeaseReleaseInput) => Promise<LeaseReleaseOutput> =
     notStubbed("releaseLease");
   listLeasesImpl: () => Promise<LeaseListOutput> = notStubbed("listLeases");
-  heartbeatImpl: () => Promise<LeaseHeartbeatOutput> = notStubbed("heartbeat");
   runDoctorImpl: (input: DoctorRunInput) => Promise<DoctorReport> = notStubbed("runDoctor");
   resolvePassthroughImpl: (input: DriverPassthroughInput) => Promise<PassthroughCommand> =
     notStubbed("resolvePassthrough");
@@ -118,12 +116,6 @@ export class FakeSimlockClient implements SimlockClient {
   listLeases(): Promise<LeaseListOutput> {
     this.calls.push({ input: undefined, method: "listLeases" });
     return this.#dead ? this.#deadConnection() : this.listLeasesImpl();
-  }
-
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls lease.heartbeat (the client handles it internally).
-  heartbeat(): Promise<LeaseHeartbeatOutput> {
-    this.calls.push({ input: undefined, method: "heartbeat" });
-    return this.#dead ? this.#deadConnection() : this.heartbeatImpl();
   }
 
   // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls doctor.run.
@@ -211,9 +203,10 @@ export function sampleGrant(overrides: { readonly leaseId?: string } = {}): Leas
       deviceId: "device-1",
       grantedAt: 0,
       id: leaseId,
-      mode: "held",
       ownerId: "mcp-test",
       requesterId: "mcp-test",
+      lastRenewedAt: 0,
+      ttlMs: 60_000,
       ttlDeadline: 12_345,
     },
     timing: {

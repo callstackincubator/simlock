@@ -4,17 +4,18 @@ import type { DeviceRequest, PassthroughCommand } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
 import type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
 
-/** Client-requestable subset only -- deliberately excludes internally-originated reasons
- * like `orphaned` (startup orphan cleanup), which no client can ask for. */
-export type LeaseReleaseReason = "closed" | "explicit" | "killed";
+/** Client-requestable subset only -- deliberately excludes the internally-originated
+ * `device-lost` (crash recovery giving up), which no client can ask for. Narrowed with
+ * `LeaseReleaseCoordinator`'s own union under ADR 0004 §3: `closed` is gone because a closing
+ * connection is not a release, and `orphaned` because there is no startup sweep left. */
+export type LeaseReleaseReason = "explicit" | "killed";
 
 /** Lease commands used by daemon request handlers. */
 export interface LeaseCommands {
   request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant>;
   release(leaseId: string, reason: LeaseReleaseReason): Promise<void>;
-  releaseAll(reason: Exclude<LeaseReleaseReason, "closed">): Promise<readonly string[]>;
+  releaseAll(reason: LeaseReleaseReason): Promise<readonly string[]>;
   renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord>;
-  heartbeat(leaseId: string): Promise<LeaseRecord>;
 }
 
 /** Pending-demand operations used by status and connection cleanup. */

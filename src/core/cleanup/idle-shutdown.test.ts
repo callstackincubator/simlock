@@ -28,7 +28,7 @@ const config: Config = {
       retryBackoffMultiplier: 2,
     },
   },
-  lease: { detachedTtlMs: 1, heldTtlBackstopMs: 1, heartbeatIntervalMs: 1 },
+  lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
   capacity: {
     strategy: "resource",
     config: {

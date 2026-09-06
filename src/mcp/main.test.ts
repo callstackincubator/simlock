@@ -4,11 +4,15 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 
+import { FakeClock } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { startMcpStdio, type McpTransport } from "./main.js";
 
-const { connectWithAutoLaunch } = vi.hoisted(() => ({ connectWithAutoLaunch: vi.fn() }));
-vi.mock("./connect.js", () => ({ connectWithAutoLaunch }));
+const { connectToRunningDaemon, connectWithAutoLaunch } = vi.hoisted(() => ({
+  connectToRunningDaemon: vi.fn(),
+  connectWithAutoLaunch: vi.fn(),
+}));
+vi.mock("./connect.js", () => ({ connectToRunningDaemon, connectWithAutoLaunch }));
 
 describe("MCP stdio lifecycle", () => {
   it.each(["transport", "SIGINT", "SIGTERM"])("closes once on %s", async (cause) => {
@@ -93,6 +97,55 @@ describe("MCP stdio lifecycle", () => {
     await runner.finished;
     expect(client.closeCalls).toBe(1);
     await mcpClient.close();
+  });
+
+  it("never renews over an embedder's connect, which may launch a daemon", async () => {
+    // ADR 0004 §2: the renew timer reaches only a daemon that is already listening, so an
+    // operator's `simlock daemon stop` is not undone by an idle session. An embedder that
+    // supplies just `connect` must therefore get the non-launching default for renewals rather
+    // than a second use of the one it supplied -- there is no way to tell whether *that* one
+    // launches anything.
+    const clock = new FakeClock(0);
+    const toolCallClient = new FakeSimlockClient();
+    toolCallClient.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    const renewClient = new FakeSimlockClient();
+    renewClient.renewLeaseImpl = (input) =>
+      Promise.resolve({ ...sampleGrant().lease, id: input.leaseId });
+    renewClient.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+    connectToRunningDaemon.mockReset().mockResolvedValue(renewClient);
+    let embedderConnects = 0;
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const runner = await startMcpStdio({
+      clock,
+      connect: async () => {
+        embedderConnects += 1;
+        return toolCallClient;
+      },
+      createTransport: () => serverTransport,
+      requesterId: "mcp-test",
+      signals: new FakeSignals(),
+    });
+    const mcpClient = new Client({ name: "test", version: "1.0.0" });
+    await mcpClient.connect(clientTransport);
+    await mcpClient.request(
+      {
+        method: "tools/call",
+        params: { arguments: { model: "iPhone", platform: "ios" }, name: "lease_simulator" },
+      },
+      CallToolResultSchema,
+    );
+
+    // The connection dies with no tool call in sight, and the renew timer comes due.
+    toolCallClient.emitConnectionLost();
+    clock.advance(4_115);
+    for (let index = 0; index < 10; index += 1) await Promise.resolve();
+
+    expect(embedderConnects, "the timer did not reach for the connect it was not given").toBe(1);
+    expect(connectToRunningDaemon).toHaveBeenCalledTimes(1);
+    expect(renewClient.calls.map((call) => call.method)).toEqual(["renewLease"]);
+
+    await mcpClient.close();
+    await runner.shutdown();
   });
 
   it("sources the connection principal from SIMLOCK_AGENT_ID when no requesterId is given explicitly", async () => {

@@ -11,7 +11,7 @@ import {
   SystemClock,
   type Clock,
 } from "../ports/index.js";
-import { connectWithAutoLaunch } from "./connect.js";
+import { connectToRunningDaemon, connectWithAutoLaunch } from "./connect.js";
 import { McpSession } from "./session.js";
 import { createMcpServer } from "./server.js";
 
@@ -36,6 +36,10 @@ export interface McpStdioEnvironment {
   /** The `Clock` the session's renew timer runs on; a real one unless a test injects otherwise. */
   readonly clock?: Clock;
   readonly connect?: () => Promise<SimlockClient>;
+  /** The renew timer's connect (ADR 0004 §2) -- never launches a daemon. Falls back only to
+   * the non-launching default, never to `connect`, so injecting `connect` alone cannot hand
+   * the timer an auto-launching path; a test that wants both usually injects both. */
+  readonly connectForRenew?: () => Promise<SimlockClient>;
   readonly createServer?: (session: McpSession) => McpServer;
   readonly createTransport?: () => McpTransport;
   /** Source for `SIMLOCK_AGENT_ID` when `requesterId` is not given explicitly. */
@@ -74,6 +78,10 @@ export async function startMcpStdio(
   const session = new McpSession({
     clock,
     connect: environment.connect ?? defaults.connect,
+    // Never falls back to `connect`: that one may auto-launch a daemon, and ADR 0004 §2 is
+    // explicit that the renew timer must not -- an embedder supplying only `connect` gets the
+    // non-launching default rather than a timer that could undo an operator's `daemon stop`.
+    connectForRenew: environment.connectForRenew ?? defaults.connectForRenew,
   });
   const server = (environment.createServer ?? createMcpServer)(session);
   const transport = (environment.createTransport ?? defaults.createTransport)();
@@ -147,20 +155,19 @@ export async function startMcpStdio(
 function defaultEnvironment(
   requesterId: string,
   clock: Clock,
-): Required<Pick<McpStdioEnvironment, "connect" | "createTransport">> {
+): Required<Pick<McpStdioEnvironment, "connect" | "connectForRenew" | "createTransport">> {
   const dataDirectory = resolveSimlockHome();
   const ipc = new NodeIpcTransport();
   const socketPath = join(dataDirectory, "daemon.sock");
   const logPath = join(dataDirectory, "daemon.log");
   return {
+    // The tool-call trigger: auto-launches a daemon that is not running, exactly as the CLI
+    // does. ADR 0004 §2/§4: the session keeps its lease alive with its own `lease.renew` timer
+    // and releases explicitly when the agent goes away (stdin EOF -> session.close()), so it
+    // declares no daemon-initiated heartbeat -- there is none left to declare.
     connect: () =>
       connectWithAutoLaunch({
         clock,
-        // ADR 0004 §2/§4: the session keeps its lease alive with its own `lease.renew` timer
-        // and releases explicitly when the agent goes away (stdin EOF -> session.close()), so
-        // it no longer declares the daemon-initiated heartbeat. CLI held mode dropped the same
-        // capability in the same change.
-        heartbeat: false,
         ipc,
         launcher: new NodeDaemonLauncher({
           args: [join(dirname(fileURLToPath(import.meta.url)), "../daemon/main.js")],
@@ -171,6 +178,10 @@ function defaultEnvironment(
         principal: requesterId,
         socketPath,
       }),
+    // The renew timer's trigger: connects to a daemon that is already listening and never
+    // launches one, so an operator's `simlock daemon stop` is not undone by an idle session
+    // (ADR 0004 §2).
+    connectForRenew: () => connectToRunningDaemon({ ipc, principal: requesterId, socketPath }),
     createTransport: () => new StdioServerTransport(),
   };
 }

@@ -27,7 +27,6 @@ export type {
   LeaseCancelInput,
   LeaseCancelOutput,
   LeaseGrant,
-  LeaseHeartbeatOutput,
   LeaseListOutput,
   LeaseLostPush,
   LeaseProgress,
@@ -56,7 +55,6 @@ export interface ConnectSimlockOptions {
   readonly endpoint?: string;
   readonly ipc?: IpcConnector;
   readonly principal?: string;
-  readonly heartbeat?: boolean;
 }
 
 /** Opens one connection to the daemon and completes the `hello` handshake as an agent-role
@@ -72,7 +70,6 @@ export async function connectSimlock(options: ConnectSimlockOptions): Promise<Si
       : {}),
     ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
     ...(options.principal === undefined ? {} : { principal: options.principal }),
-    ...(options.heartbeat === undefined ? {} : { heartbeat: options.heartbeat }),
   };
   return connectSimlockClient(resolved, false);
 }

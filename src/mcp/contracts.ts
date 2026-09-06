@@ -18,17 +18,17 @@ import { leaseRecordSchema, OPERATIONS } from "../contract/index.js";
 // ---- lease_simulator ---------------------------------------------------------------------
 
 /**
- * `lease.request`'s input, minus the three fields this tool never lets the caller set:
- * `requesterId` (session-controlled -- see `session.ts`'s `#requesterId`, never caller-supplied,
- * for the same reason the daemon never lets a request rename its own principal), `mode` (this
- * tool always leases `"held"`), and `ttlMs` (only meaningful for a detached lease, which this
- * tool never requests -- and is `BAD_REQUEST` for a held one per the contract's own
- * `superRefine`). `.innerType()` unwraps the contract schema's `superRefine` wrapper down to
- * the plain (still `.strict()`) object so `.omit()` is available -- see zod's `ZodEffects`.
+ * `lease.request`'s input, minus the one field this tool never lets the caller set:
+ * `requesterId` (session-controlled -- see `main.ts`'s requester resolution, never
+ * caller-supplied, for the same reason the daemon never lets a request rename its own
+ * principal). `ttlMs` is no longer omitted: ADR 0004 accepts it on every request, so this tool
+ * inherits it from the contract like every other field -- `lease.defaultTtlMs` when the caller
+ * names none, `BAD_REQUEST` above `lease.maxTtlMs`. `mode` is gone from the contract itself,
+ * and with it the `superRefine` wrapper that used to need unwrapping before `.omit()`.
  */
-export const leaseSimulatorInputSchema = OPERATIONS["lease.request"].input
-  .innerType()
-  .omit({ mode: true, requesterId: true, ttlMs: true });
+export const leaseSimulatorInputSchema = OPERATIONS["lease.request"].input.omit({
+  requesterId: true,
+});
 
 /** `lease.request`'s output verbatim -- the device/lease/timing grant. */
 export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output;
@@ -57,9 +57,10 @@ export const leaseStatusInputSchema = OPERATIONS["lease.list"].input;
  * principal only -- it can include leases this session never requested (see
  * `McpSession#status`'s doc comment). `session.ts` narrows that array down to at most one
  * entry -- the lease this session's own `lease()` call obtained, if any -- before this schema
- * flattens it onto a `held` discriminant. Flat and all-optional -- not a discriminated union --
- * because the MCP SDK validates `structuredContent` against `outputSchema` as a plain object
- * shape.
+ * flattens it onto a `held` discriminant. `held` is this tool's own word for "the lease this
+ * session is renewing", not a daemon-side lease mode; there is only one kind of lease (ADR
+ * 0004). Flat and all-optional -- not a discriminated union -- because the MCP SDK validates
+ * `structuredContent` against `outputSchema` as a plain object shape.
  */
 export const leaseStatusOutputSchema = leaseRecordSchema.partial().extend({ held: z.boolean() });
 

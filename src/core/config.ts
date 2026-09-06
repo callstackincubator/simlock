@@ -32,6 +32,17 @@ import {
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
 /**
+ * `lease.defaultTtlMs`'s default (ADR 0004 §4): the width a request that names no `ttlMs` is
+ * granted. Exported because `Registry` needs the same number to migrate a lease record written
+ * before ADR 0004, which has no stored width of its own -- one definition, read from both
+ * places, rather than the same fifteen minutes spelled twice.
+ */
+export const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
+
+/** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
+const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
+
+/**
  * `never` forbids installs even when a request passes `--allow-download` (locked-down
  * machines/CI). `on-request` (default) preserves today's contract: install only when the
  * request itself carries the flag. `always` lets the daemon install missing components for
@@ -70,9 +81,16 @@ export interface Config {
     };
   };
   readonly lease: {
-    readonly heldTtlBackstopMs: number;
-    readonly detachedTtlMs: number;
-    readonly heartbeatIntervalMs: number;
+    /**
+     * ADR 0004 §4: the TTL applied to a lease whose `lease.request` carried no `ttlMs` -- that
+     * request only. It is deliberately *not* the renew fallback: a `lease.renew` given no
+     * explicit TTL re-applies the lease's own stored width, so a lease granted for longer
+     * keeps it.
+     */
+    readonly defaultTtlMs: number;
+    /** The largest TTL a request or a renew may ask for; more is `BAD_REQUEST`, never a
+     * silent clamp, so a caller is never left believing it has more time than it does. */
+    readonly maxTtlMs: number;
   };
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
@@ -167,7 +185,7 @@ export async function loadConfig({
     mergeConfig(defaultConfig(systemStats, strategy), fileConfig),
     overrideConfig,
   ) as unknown as Config;
-  validateHeartbeatInterval(merged);
+  validateLeaseTtls(merged);
   return deepFreeze(merged);
 }
 
@@ -185,13 +203,16 @@ export function effectiveAllowDownload(policy: DownloadPolicy, requested: boolea
 }
 
 /**
- * Cross-field check: the heartbeat cadence must be frequent enough, relative to the
- * backstop, that a few missed beats (context compaction, a slow tick) still land well
- * before the backstop deadline rather than racing it.
+ * Cross-field check (ADR 0004's Consequences): the default TTL a request falls back to cannot
+ * exceed the cap every request is measured against, or every defaulted request would be born
+ * asking for more than the daemon will grant. A violating config fails the daemon start naming
+ * the offending key rather than being clamped to a value the operator never wrote -- the
+ * opposite treatment from a retired key, which is a leftover with a safe reading ("ignore it")
+ * where a self-contradicting TTL pair has none.
  */
-function validateHeartbeatInterval(config: Config): void {
-  if (config.lease.heartbeatIntervalMs > config.lease.heldTtlBackstopMs / 4) {
-    throw invalidValue("lease.heartbeatIntervalMs", "at most lease.heldTtlBackstopMs / 4");
+function validateLeaseTtls(config: Config): void {
+  if (config.lease.defaultTtlMs > config.lease.maxTtlMs) {
+    throw invalidValue("lease.defaultTtlMs", "at most lease.maxTtlMs");
   }
 }
 
@@ -292,9 +313,8 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
       },
     },
     lease: {
-      heldTtlBackstopMs: 60 * 60_000,
-      detachedTtlMs: 15 * 60_000,
-      heartbeatIntervalMs: 5 * 60_000,
+      defaultTtlMs: DEFAULT_LEASE_TTL_MS,
+      maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
     },
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
@@ -392,10 +412,13 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
         maxRetryBackoffMs: nonNegativeNumber,
       }),
     }),
+    // The three pre-ADR-0004 keys (`lease.detachedTtlMs`, `lease.heldTtlBackstopMs`,
+    // `lease.heartbeatIntervalMs`) are deliberately absent rather than aliased: `objectValidator`
+    // warns about each as an unrecognized key and ignores it, so an old config still boots and
+    // gets the new key's default rather than the value it wrote. See docs/CONFIGURATION.md.
     lease: objectValidator({
-      heldTtlBackstopMs: nonNegativeNumber,
-      detachedTtlMs: nonNegativeNumber,
-      heartbeatIntervalMs: positiveInteger,
+      defaultTtlMs: positiveNumber,
+      maxTtlMs: positiveNumber,
     }),
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),

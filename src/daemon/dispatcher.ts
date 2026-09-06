@@ -8,13 +8,11 @@ import {
   type DeviceRequest,
   type Doctor,
   type LeaseProgress,
-  type LeaseRecord,
   type Nuke,
   type Registry,
   effectiveAllowDownload,
   RuntimeMissingError,
   transitionEnteredAt,
-  UnknownLeaseError,
 } from "../core/index.js";
 import type {
   CapacityReader,
@@ -41,12 +39,11 @@ import type { TokenStore } from "../http/token-store.js";
  *
  * `principal`/`role` are the ADR §4/§5 identity: fixed for the connection's lifetime once
  * `hello` resolves them (see `session.ts`'s `SessionRoleResolver` seam -- PR 2's credential
- * handshake replaces how `role` is computed, not this shape). `heldLeaseIds`/
- * `heartbeatCapability` are connection-scoped facts `DaemonServer` already owns (ADR §2: the
- * dispatcher does not do "held-lease tracking" or "connection lifecycle", the transport does);
- * they are threaded in read-only because `lease.heartbeat`'s ownership rule ("this connection's
- * held leases") needs them. `onProgress` and `manageEventSubscription` are the two places a
- * request-scoped or connection-scoped push actually reaches the wire -- `DaemonServer` supplies
+ * handshake replaces how `role` is computed, not this shape). ADR 0004 removes the two
+ * connection-scoped fields that used to sit beside them (`heldLeaseIds`,
+ * `heartbeatCapability`): the daemon keeps no per-connection lease state at all any more, and
+ * the one operation that read them is gone. `onProgress` and `manageEventSubscription` are the
+ * two places a request-scoped or connection-scoped push actually reaches the wire -- `DaemonServer` supplies
  * closures that write socket frames; an HTTP session (next PR) can leave `onProgress` unset and
  * fail loudly (or no-op) on `events.subscribe`, since HTTP has no open connection to push
  * through even in principle (ADR §8's "the HTTP notice buffer stays").
@@ -54,8 +51,6 @@ import type { TokenStore } from "../http/token-store.js";
 export interface DispatchSession {
   readonly principal: string;
   readonly role: Role;
-  readonly heldLeaseIds: ReadonlySet<string>;
-  readonly heartbeatCapability: boolean;
   /** Called for each progress update while this specific `lease.request` call is in flight.
    * Ignored by every other operation. */
   readonly onProgress?: (progress: LeaseProgress) => void;
@@ -185,7 +180,6 @@ export class Dispatcher {
       "lease.renew": this.#leaseRenew,
       "lease.release": this.#leaseRelease,
       "lease.list": this.#leaseList,
-      "lease.heartbeat": this.#leaseHeartbeat,
       "driver.passthrough": this.#driverPassthrough,
       "doctor.run": this.#doctorRun,
       "lease.release-all": this.#leaseReleaseAll,
@@ -288,7 +282,7 @@ export class Dispatcher {
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       health: this.options.health(),
-      leases: snapshot.leases.map((lease) => this.#decorateLease(lease)),
+      leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
     };
   };
@@ -301,14 +295,13 @@ export class Dispatcher {
       ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
       ...(input.full ? { full: true } : {}),
     };
-    const mode = input.mode ?? "held";
+    this.#requireTtlWithinCap(input.ttlMs);
     const requesterId = input.requesterId ?? session.principal;
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
     try {
       return await this.options.leases.request(request, {
         allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
-        mode,
         noWait: input.noWait ?? false,
         // ADR §4: the lease's owner is always the session principal -- never client-supplied,
         // unlike `requesterId`.
@@ -340,40 +333,56 @@ export class Dispatcher {
     return { result };
   };
 
-  #leaseRenew: Handler<"lease.renew"> = async (input) =>
-    this.options.leases.renew(input.leaseId, input.ttlMs);
+  /**
+   * ADR 0004 §1: the one keep-alive, on every transport. An omitted `ttlMs` re-applies the
+   * lease's own stored width (`LeaseLifecycle#renew`), never `lease.defaultTtlMs`.
+   */
+  #leaseRenew: Handler<"lease.renew"> = async (input) => {
+    this.#requireTtlWithinCap(input.ttlMs);
+    return this.options.leases.renew(input.leaseId, input.ttlMs);
+  };
+
+  /**
+   * ADR 0004 §4's cap, applied identically to a request and a renew. It lives here rather than
+   * in the contract schema because `lease.maxTtlMs` is a daemon config value, and the contract
+   * module cannot see one; it lives in the dispatcher rather than in each transport because
+   * every transport reaches leases through this one shared object (ADR 0003 §2), so HTTP gets
+   * the same `400 BAD_REQUEST` the socket gets from the same line of code. Rejecting rather
+   * than clamping is the point: a caller silently given less time than it asked for would go
+   * on believing it had the time it named.
+   */
+  #requireTtlWithinCap(ttlMs: number | undefined): void {
+    const maxTtlMs = this.options.config.lease.maxTtlMs;
+    if (ttlMs !== undefined && ttlMs > maxTtlMs) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `ttlMs ${String(ttlMs)} exceeds lease.maxTtlMs (${String(maxTtlMs)})`,
+      );
+    }
+  }
 
   #leaseRelease: Handler<"lease.release"> = async (input) => {
     await this.options.leases.release(input.leaseId, "explicit");
     return { leaseId: input.leaseId };
   };
 
+  /**
+   * `killed`, not `explicit`: `docs/EVENTS.md` splits the two by who ended the lease and
+   * whether its holder asked. An operator's `simlock release --all` (and `nuke`, which already
+   * reports `killed` through `NukeService`) takes leases away from holders that never asked --
+   * which is exactly what a `lease-lost` reader needs to tell apart from the holder's own
+   * `lease.release` on its way out.
+   */
   #leaseReleaseAll: Handler<"lease.release-all"> = async () => {
-    const leaseIds = await this.options.leases.releaseAll("explicit");
+    const leaseIds = await this.options.leases.releaseAll("killed");
     return { leaseIds: [...leaseIds] };
   };
 
   #leaseList: Handler<"lease.list"> = (_input, session) => {
-    const leases = this.options.registry.snapshot.leases
-      .filter((lease) => session.role === "admin" || lease.ownerId === session.principal)
-      .map((lease) => this.#decorateLease(lease));
+    const leases = this.options.registry.snapshot.leases.filter(
+      (lease) => session.role === "admin" || lease.ownerId === session.principal,
+    );
     return { leases };
-  };
-
-  #leaseHeartbeat: Handler<"lease.heartbeat"> = async (_input, session) => {
-    if (!session.heartbeatCapability) {
-      throw new DispatchError("BAD_REQUEST", "Connection did not declare the heartbeat capability");
-    }
-    const acked: Array<{ readonly leaseId: string; readonly ttlDeadline: number }> = [];
-    for (const leaseId of session.heldLeaseIds) {
-      try {
-        const renewed = await this.options.leases.heartbeat(leaseId);
-        acked.push({ leaseId: renewed.id, ttlDeadline: renewed.ttlDeadline });
-      } catch (error: unknown) {
-        if (!(error instanceof UnknownLeaseError)) throw error;
-      }
-    }
-    return { leases: acked };
   };
 
   /**
@@ -408,7 +417,7 @@ export class Dispatcher {
     const snapshot = this.options.registry.snapshot;
     switch (input.kind) {
       case "leases":
-        return snapshot.leases.map((lease) => this.#decorateLease(lease));
+        return [...snapshot.leases];
       case "rules":
         return this.options.reaper.rules;
       case "devices":
@@ -467,20 +476,6 @@ export class Dispatcher {
       throw new DispatchError("INTERNAL", "Token store is unavailable");
     }
     return this.options.tokens;
-  }
-
-  /**
-   * Adds a derived `lastHeartbeatAt` for held leases, without a new `LeaseRecord` field: since
-   * `heartbeat()` writes through the registry, `ttlDeadline - heldTtlBackstopMs` is exactly the
-   * moment of the most recent slide (or grant, if there hasn't been one yet). Moved verbatim
-   * from `DaemonServer`.
-   */
-  #decorateLease(lease: LeaseRecord): LeaseRecord & { readonly lastHeartbeatAt?: number } {
-    if (lease.mode !== "held") return lease;
-    return {
-      ...lease,
-      lastHeartbeatAt: lease.ttlDeadline - this.options.config.lease.heldTtlBackstopMs,
-    };
   }
 
   /** Moved verbatim from `DaemonServer`; see its former comment there. */

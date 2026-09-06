@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon } from "./helpers/index.js";
 
 interface McpErrorPayload {
   readonly code: string;
@@ -92,10 +92,12 @@ describe("MCP session semantics", () => {
       });
       expect(warning.logger).toBe("simlock");
       expect(warning.level).toBe("warning");
+      // `killed`: an operator took the lease away, which is not the same fact as its holder
+      // releasing it (docs/EVENTS.md, and `Dispatcher#leaseReleaseAll`).
       expect(warning.data).toMatchObject({
         deviceId: expect.any(String),
         leaseId: leased.lease.id,
-        reason: "explicit",
+        reason: "killed",
       });
 
       const statusAfter = await mcp.client.callTool({ name: "lease_status", arguments: {} });
@@ -126,12 +128,16 @@ describe("MCP session semantics", () => {
     }
   });
 
-  // Regression for PR #35 ("reconnect the session after a daemon restart"): before
-  // that fix, an MCP server whose daemon connection died mid-session would surface
-  // the *next* tool call as an opaque INTERNAL error instead of transparently
-  // reconnecting.
-  it("reconnects after the daemon restarts under a live MCP server process (PR #35)", async () => {
-    const env = await withDaemon();
+  // Regression for PR #35 ("reconnect the session after a daemon restart"), now covering
+  // ADR 0004's second reconnect trigger as well: before #35 an MCP server whose daemon
+  // connection died mid-session surfaced the *next* tool call as an opaque INTERNAL error
+  // instead of reconnecting; before ADR 0004 the restart also cost it the lease outright.
+  it("keeps its lease across a daemon restart, renewing it over a connection of its own", async () => {
+    // ADR 0004: a restart releases nothing, so the session's lease is still granted
+    // afterwards -- and its renew timer reconnects to the daemon that is listening again and
+    // renews it, without waiting for a tool call that may never come (§2's second reconnect
+    // trigger). The short TTL is what makes the timer fire inside this test.
+    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 6_000 } } });
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
@@ -144,22 +150,45 @@ describe("MCP session semantics", () => {
       });
       const leased = leaseResult.structuredContent as { lease: { id: string } };
 
-      const lostNotice = mcp.waitForNotification((notification) => {
-        if (notification.kind !== "logging") return undefined;
-        const data = notification.params.data as { leaseId?: string; reason?: string } | undefined;
-        return data?.leaseId === leased.lease.id ? data.reason : undefined;
+      await env.restartDaemon();
+
+      const leaseRow = async (): Promise<{ ttlDeadline: number } | undefined> => {
+        const rows = (await env.cli(["list", "--leases"])).json as {
+          id: string;
+          ttlDeadline: number;
+        }[];
+        return rows.find((row) => row.id === leased.lease.id);
+      };
+
+      // Still granted the moment the new daemon is up: nothing swept it, and its timer was
+      // restored from the persisted deadline.
+      const afterRestart = await leaseRow();
+      expect(afterRestart, "the lease should have survived the restart").toBeDefined();
+      const deadlineAfterRestart = afterRestart?.ttlDeadline ?? 0;
+
+      // No tool call in between: the only thing that can push this deadline out is the
+      // session's own renew timer, over a connection it built for itself.
+      await waitFor(async () => ((await leaseRow())?.ttlDeadline ?? 0) > deadlineAfterRestart, {
+        timeout: 20_000,
+        label: "the MCP session renews its lease after the restart",
       });
 
-      await env.restartDaemon();
-      expect(await lostNotice).toBe("daemon-connection-lost");
-
+      // And the session still knows the lease is its own.
       const statusAfterRestart = await mcp.client.callTool({ name: "lease_status", arguments: {} });
       expect(statusAfterRestart.isError).toBeFalsy();
-      expect(statusAfterRestart.structuredContent).toEqual({ held: false });
+      expect(statusAfterRestart.structuredContent).toMatchObject({
+        held: true,
+        id: leased.lease.id,
+      });
 
       const devices = await mcp.client.callTool({ name: "list_devices", arguments: {} });
       expect(devices.isError, "expected a clean reconnect, not an INTERNAL error").toBeFalsy();
       expect(devices.structuredContent).toMatchObject({ platforms: expect.any(Array) });
+
+      await mcp.client.callTool({
+        name: "release_simulator",
+        arguments: { leaseId: leased.lease.id },
+      });
     } finally {
       await mcp.close();
     }

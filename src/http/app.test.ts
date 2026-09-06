@@ -376,11 +376,50 @@ describe("POST /v1/lease-requests", () => {
     expect(secondBody.request.id).toBe(firstId);
   });
 
+  it("refuses a ttlMs above lease.maxTtlMs with 400, before the request resource exists", async () => {
+    const { app, dispatcher } = buildHarness({
+      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
+    });
+
+    const response = await postLeaseRequest(app, { ...defaultBody, ttlMs: 120_001 });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+    expect(
+      dispatcher.calls.filter((call) => call.operation === "lease.request"),
+      "nothing was admitted, so there is no request resource to poll either",
+    ).toHaveLength(0);
+  });
+
+  it("refuses it the same way when allowDownload makes the 201 settle without waiting", async () => {
+    // The shape that made this route need its own cap check: with `allowDownload: true` the
+    // tracker answers `201 Created` as soon as the dispatch is *started*, so a rejection the
+    // dispatcher raises afterwards would land on the request resource instead of on this
+    // response -- a 201 for a TTL `docs/HTTP-API.md` promises is a 400.
+    const { app, dispatcher } = buildHarness({
+      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
+    });
+
+    const response = await postLeaseRequest(app, {
+      ...defaultBody,
+      allowDownload: true,
+      ttlMs: 120_001,
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+    expect(dispatcher.calls.filter((call) => call.operation === "lease.request")).toHaveLength(0);
+  });
+
   it("passes a caller-supplied ttlMs straight onto the dispatch input -- no separate renew call (ADR §9)", async () => {
     const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, { ...defaultBody, ttlMs: 60_000 });
     const call = await waitForDispatch(dispatcher, "lease.request");
-    expect(call.input).toMatchObject({ mode: "detached", ttlMs: 60_000 });
+    expect(call.input).toMatchObject({ ttlMs: 60_000 });
     call.resolve(makeGrant({ lease: { grantedAt: 1_000, id: "lse_1", ttlDeadline: 61_000 } }));
     await responsePromise;
     expect(dispatcher.calls.filter((c) => c.operation === "lease.renew")).toHaveLength(0);
@@ -552,7 +591,6 @@ describe("lease routes", () => {
       deviceId: "dev_1",
       grantedAt: 1_000,
       id: (input as { leaseId: string }).leaseId,
-      mode: "detached",
       ownerId: "tok_agent",
       requesterId: "tok_agent",
       ttlDeadline: 2_000 + ((input as { ttlMs?: number }).ttlMs ?? 900_000),
@@ -593,7 +631,6 @@ describe("lease routes", () => {
         deviceId: "dev_1",
         grantedAt: 1_000,
         id: "lse_1",
-        mode: "detached",
         ownerId: "tok_agent",
         requesterId: "tok_agent",
         ttlDeadline: 2_000,
@@ -829,13 +866,18 @@ describe("hardening from review", () => {
     );
   });
 
-  it("reports the mode-default ttlMs for a lease the tracker has no record of", async () => {
-    const { app, config, registry } = buildHarness();
+  it("reports the lease's own stored ttlMs, with nothing gateway-side to remember", async () => {
+    // ADR 0004: the width lives on the lease record, so a payload served by a gateway that
+    // never saw the request (after a daemon restart, say) still reports the real width
+    // instead of a mode default standing in for one.
+    const { app, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1" })];
-    registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent" })];
+    registry.leases = [
+      makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_agent", ttlMs: 123_000 }),
+    ];
 
     const response = await app.request("/v1/leases/lse_1", { headers: agentAuth });
     const body = (await response.json()) as { lease: { ttlMs: number } };
-    expect(body.lease.ttlMs).toBe(config.lease.detachedTtlMs);
+    expect(body.lease.ttlMs).toBe(123_000);
   });
 });

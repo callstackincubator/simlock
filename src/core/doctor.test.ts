@@ -37,9 +37,9 @@ describe("Doctor", () => {
     });
     await registry.createLease({
       deviceId: registered.id,
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 9_000,
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -156,9 +156,9 @@ describe("Doctor", () => {
     });
     await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 99_000,
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -285,9 +285,9 @@ describe("Doctor", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 99_000,
     });
     await registry.beginRelease(lease.id);
@@ -401,9 +401,9 @@ describe("Doctor", () => {
     });
     await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 9_000,
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -672,9 +672,9 @@ describe("Doctor", () => {
     const reclaiming = await readyDevice(registry, "simlock-reclaiming", "ios");
     const lease = await registry.createLease({
       deviceId: reclaiming.id,
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 999_999,
     });
     await registry.beginRelease(lease.id);
@@ -868,9 +868,9 @@ describe("Doctor", () => {
       const device = await readyDevice(registry, "simlock-killed", "ios");
       const lease = await registry.createLease({
         deviceId: device.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 999_999,
       });
       await registry.beginRelease(lease.id);
@@ -921,9 +921,9 @@ describe("Doctor", () => {
       const device = await readyDevice(registry, "simlock-slow-clean", "ios");
       const lease = await registry.createLease({
         deviceId: device.id,
-        mode: "held",
         requesterId: "agent",
         ownerId: "agent",
+        ttlMs: 60_000,
         ttlDeadline: 999_999,
       });
       await registry.beginRelease(lease.id);
@@ -1080,7 +1080,6 @@ describe("Doctor", () => {
               deviceId: "dev_1",
               grantedAt: 1,
               id: "lse_1",
-              mode: "held",
               requesterId: "agent",
               ownerId: "agent",
               ttlDeadline: 999_999,
@@ -1173,9 +1172,9 @@ describe("Doctor", () => {
     const device = await readyDevice(registry, "simlock-leased", "ios");
     await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 999_999,
     });
 
@@ -1699,9 +1698,9 @@ describe("Doctor with a platform it cannot observe", () => {
     const device = registry.snapshot.devices[0]!;
     await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       ownerId: "agent",
       requesterId: "agent",
+      ttlMs: 60_000,
       ttlDeadline: 90_000,
     });
 
@@ -1864,7 +1863,7 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       stableObservations: 2,
     },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
     capacity: {
       strategy: "resource",
       config: {

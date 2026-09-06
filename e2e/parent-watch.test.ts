@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import { waitForLeaseCount, withDaemon } from "./helpers/index.js";
 
-/** Stands in for the agent process a held CLI lease watches, without pulling in a real one. */
+/** Stands in for the agent process a running `simlock lease` watches, without pulling in a
+ * real one. */
 async function spawnFakeAgent(): Promise<ChildProcess> {
   const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120_000)"], {
     stdio: "ignore",
@@ -18,7 +19,10 @@ async function spawnFakeAgent(): Promise<ChildProcess> {
 
 describe("parent-watch", () => {
   it("self-terminates and releases when its --bind-pid parent dies, without itself being signaled", async () => {
-    const env = await withDaemon();
+    // A long TTL on purpose: ADR 0004 leaves an unreleased lease standing until its
+    // deadline, so a lease freed within seconds here can only be the holder's own release
+    // path running -- which is exactly what this test is about. Nothing waits on expiry.
+    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 600_000 } } });
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
@@ -47,9 +51,10 @@ describe("parent-watch", () => {
 
       fakeAgent.kill("SIGKILL");
 
-      // Nothing signals the holder itself -- it must notice on its own that the pid
-      // it is bound to is gone, then release and exit through the same path a
-      // SIGTERM would take.
+      // Nothing signals the holder itself -- it must notice on its own that the pid it is
+      // bound to is gone, then release and exit through the same path a SIGTERM would take.
+      // Under ADR 0004 that release is the only thing that can free the device this quickly:
+      // the daemon releases nothing when the connection closes.
       const result = await held.waitForExit(15_000);
       expect(result.code).toBe(0);
 

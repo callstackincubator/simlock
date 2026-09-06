@@ -244,9 +244,9 @@ describe("Registry", () => {
 
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     const reloaded = await Registry.load(options);
@@ -288,9 +288,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -356,9 +356,9 @@ describe("Registry", () => {
     });
     await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
 
@@ -387,9 +387,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -428,9 +428,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -476,9 +476,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "detached",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.beginRelease(lease.id);
@@ -755,9 +755,9 @@ describe("Registry", () => {
     });
     const lease = await registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "agent-1",
       ownerId: "agent-1",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await registry.markRecoveryAttempt(device.id, 1_200);
@@ -791,8 +791,9 @@ describe("Registry", () => {
             id: "lse_1",
             deviceId: "dev_1",
             requesterId: "agent-1",
-            mode: "held",
             grantedAt: 1_000,
+            lastRenewedAt: 1_000,
+            ttlMs: 60_000,
             ttlDeadline: 2_000,
             // No `ownerId` -- exactly what a pre-ADR-0003 daemon wrote.
           },
@@ -814,8 +815,9 @@ describe("Registry", () => {
         deviceId: "dev_1",
         requesterId: "agent-1",
         ownerId: "agent-1",
-        mode: "held",
         grantedAt: 1_000,
+        lastRenewedAt: 1_000,
+        ttlMs: 60_000,
         ttlDeadline: 2_000,
       },
     ]);
@@ -824,7 +826,7 @@ describe("Registry", () => {
     // written file now carries `ownerId` explicitly (it is no longer an "unknown field"
     // preserved verbatim -- see `#unknownLeaseFields` -- but the registry's own understanding
     // of the record).
-    await registry.renewLease("lse_1", 3_000);
+    await registry.renewLease("lse_1", 3_000, 60_000);
     const reloaded = await Registry.load({
       clock,
       eventBus: new EventBus(clock),
@@ -834,6 +836,187 @@ describe("Registry", () => {
     });
     expect(reloaded.snapshot.leases).toEqual(registry.snapshot.leases);
     expect(reloaded.snapshot.leases[0]?.ownerId).toBe("agent-1");
+  });
+
+  it("migrates a lease record written before ADR 0004's ttlMs/lastRenewedAt, dropping mode", async () => {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(5_000);
+    await filesystem.mkdirp("/home/agent/.simlock");
+    // Exactly what a pre-ADR-0004 daemon persisted: a `mode`, and neither of the two fields a
+    // record carries now. Neither is recoverable from what is on disk -- `ttlDeadline -
+    // grantedAt` is the grant-time width only until the first renewal moved the deadline -- so
+    // each takes its documented default rather than a guess dressed up as arithmetic.
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 0,
+            driverData: {},
+            driverDeviceId: "driver_1",
+            id: "dev_1",
+            spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+            state: "leased",
+          },
+        ],
+        leases: [
+          {
+            deviceId: "dev_1",
+            grantedAt: 1_000,
+            id: "lse_1",
+            mode: "held",
+            ownerId: "agent-1",
+            requesterId: "agent-1",
+            ttlDeadline: 2_000,
+          },
+        ],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      defaultTtlMs: 900_000,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.snapshot.leases).toEqual([
+      {
+        id: "lse_1",
+        deviceId: "dev_1",
+        requesterId: "agent-1",
+        ownerId: "agent-1",
+        grantedAt: 1_000,
+        // `lease.defaultTtlMs`, which the daemon passes in from its own config.
+        ttlMs: 900_000,
+        ttlDeadline: 2_000,
+        // A lease that has never been renewed reports the moment it was granted.
+        lastRenewedAt: 1_000,
+      },
+    ]);
+
+    // `mode` is a retired concept, not a field from a newer schema, so the next write drops it
+    // rather than preserving it through the unknown-field forward-compatibility path.
+    await registry.renewLease("lse_1", 9_000, 7_000);
+    const written = JSON.parse(await filesystem.readFile(statePath)) as {
+      leases: Record<string, unknown>[];
+    };
+    expect(written.leases[0]).toEqual({
+      deviceId: "dev_1",
+      grantedAt: 1_000,
+      id: "lse_1",
+      lastRenewedAt: 5_000,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlDeadline: 9_000,
+      ttlMs: 7_000,
+    });
+  });
+
+  it.each([
+    ["zero", 0],
+    ["negative", -1],
+    ["not a number", "soon"],
+    ["not finite", Number.POSITIVE_INFINITY],
+  ])("falls back to the default width for a %s ttlMs on disk", async (_label, stored) => {
+    // A stored width has to be a positive, finite duration: `0` or a negative one would make
+    // every renewal of this lease resolve to a deadline in the past, which the expiry
+    // scheduler reads as "expire immediately". An unusable value takes the same default an
+    // absent one does -- refusing the whole registry over one field would cost the operator
+    // every device Simlock knows about.
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(5_000);
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 0,
+            driverData: {},
+            driverDeviceId: "driver_1",
+            id: "dev_1",
+            spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+            state: "leased",
+          },
+        ],
+        leases: [
+          {
+            deviceId: "dev_1",
+            grantedAt: 1_000,
+            id: "lse_1",
+            lastRenewedAt: 1_500,
+            ownerId: "agent-1",
+            requesterId: "agent-1",
+            ttlDeadline: 2_000,
+            ttlMs: stored,
+          },
+        ],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      defaultTtlMs: 900_000,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    expect(registry.snapshot.leases).toMatchObject([{ id: "lse_1", ttlMs: 900_000 }]);
+    // A `lastRenewedAt` that is usable is kept as it is -- only the unusable field migrates.
+    expect(registry.snapshot.leases[0]?.lastRenewedAt).toBe(1_500);
+  });
+
+  it("falls back to grantedAt for an unusable lastRenewedAt on disk", async () => {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(5_000);
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 0,
+            driverData: {},
+            driverDeviceId: "driver_1",
+            id: "dev_1",
+            spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+            state: "leased",
+          },
+        ],
+        leases: [
+          {
+            deviceId: "dev_1",
+            grantedAt: 1_000,
+            id: "lse_1",
+            lastRenewedAt: null,
+            ownerId: "agent-1",
+            requesterId: "agent-1",
+            ttlDeadline: 2_000,
+            ttlMs: 60_000,
+          },
+        ],
+      }),
+    );
+
+    const registry = await Registry.load({
+      clock,
+      defaultTtlMs: 900_000,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "unexpected" },
+      statePath,
+    });
+
+    // Unlike a width, a timestamp of `0` is a legitimate answer, so only non-numbers and
+    // non-finite values migrate -- and the stored width is untouched.
+    expect(registry.snapshot.leases).toMatchObject([
+      { id: "lse_1", lastRenewedAt: 1_000, ttlMs: 60_000 },
+    ]);
   });
 
   it("rejects a lease record whose ownerId is present but not a string", async () => {
@@ -850,8 +1033,9 @@ describe("Registry", () => {
             deviceId: "dev_1",
             requesterId: "agent-1",
             ownerId: 42,
-            mode: "held",
             grantedAt: 1_000,
+            lastRenewedAt: 1_000,
+            ttlMs: 60_000,
             ttlDeadline: 2_000,
           },
         ],

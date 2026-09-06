@@ -38,7 +38,7 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25, ...overrides },
+    lease: { defaultTtlMs: 100, maxTtlMs: 14_400_000, ...overrides },
     capacity: {
       strategy: "resource",
       config: {
@@ -152,14 +152,12 @@ describe("LeaseEngine", () => {
     });
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "first",
       requesterId: "first",
     });
 
     const release = harness.engine.release(first.lease.id, "explicit");
     const second = harness.engine.request(request, {
-      mode: "held",
       ownerId: "second",
       requesterId: "second",
     });
@@ -189,7 +187,6 @@ describe("LeaseEngine", () => {
     });
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "first",
       requesterId: "first",
     });
@@ -197,7 +194,6 @@ describe("LeaseEngine", () => {
     await harness.engine.release(first.lease.id, "explicit");
     const progress: LeaseProgress[] = [];
     const second = harness.engine.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update),
       requesterId: "second",
       ownerId: "second",
@@ -225,13 +221,11 @@ describe("LeaseEngine", () => {
     });
     const harness = await createHarness({ driver });
     await harness.engine.request(request, {
-      mode: "held",
       ownerId: "holder",
       requesterId: "holder",
     });
     const progress: LeaseProgress[] = [];
     void harness.engine.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update),
       requesterId: "queued",
       ownerId: "queued",
@@ -251,7 +245,6 @@ describe("LeaseEngine", () => {
       },
     });
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "first",
       requesterId: "first",
     });
@@ -283,7 +276,6 @@ describe("LeaseEngine", () => {
     const different = { ...request, model: "iPhone SE" };
 
     const grant = await harness.engine.request(different, {
-      mode: "held",
       noWait: true,
       requesterId: "new-spec",
       ownerId: "new-spec",
@@ -326,7 +318,6 @@ describe("LeaseEngine", () => {
 
     await expect(
       harness.engine.request(request, {
-        mode: "held",
         ownerId: "ios-demand",
         requesterId: "ios-demand",
       }),
@@ -355,7 +346,6 @@ describe("LeaseEngine", () => {
       harness.engine.request(
         { ...request, model: "iPhone SE" },
         {
-          mode: "held",
           noWait: true,
           requesterId: "new-spec",
           ownerId: "new-spec",
@@ -377,7 +367,6 @@ describe("LeaseEngine", () => {
     const grant = await harness.engine.request(
       { ...request, model: "iPhone SE" },
       {
-        mode: "held",
         requesterId: "new-spec",
         ownerId: "new-spec",
       },
@@ -396,7 +385,6 @@ describe("LeaseEngine", () => {
     driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "first",
       requesterId: "first",
     });
@@ -427,7 +415,6 @@ describe("LeaseEngine", () => {
     // one, which is exactly the bug quarantine exists to prevent (#21).
     await expect(
       harness.engine.request(request, {
-        mode: "held",
         noWait: true,
         ownerId: "second",
         requesterId: "second",
@@ -446,7 +433,6 @@ describe("LeaseEngine", () => {
     driver.failOn("makeReady", 2, new Error("not ready"));
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "first",
       requesterId: "first",
     });
@@ -475,7 +461,6 @@ describe("LeaseEngine", () => {
       },
     });
     const holder = await harness.engine.request(request, {
-      mode: "held",
       requesterId: "ios-holder",
       ownerId: "ios-holder",
     });
@@ -483,7 +468,6 @@ describe("LeaseEngine", () => {
 
     await expect(
       harness.engine.request(androidRequest, {
-        mode: "held",
         noWait: true,
         requesterId: "android-no-wait",
         ownerId: "android-no-wait",
@@ -495,7 +479,6 @@ describe("LeaseEngine", () => {
     await harness.engine.release(holder.lease.id, "explicit");
     await expect(
       harness.engine.request(androidRequest, {
-        mode: "held",
         ownerId: "android",
         requesterId: "android",
       }),
@@ -514,9 +497,9 @@ describe("LeaseEngine", () => {
     const unleasedDevice = await seedReady(harness);
     await harness.registry.createLease({
       deviceId: leasedDevice.id,
-      mode: "detached",
       requesterId: "active",
       ownerId: "active",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
 
@@ -563,9 +546,9 @@ describe("LeaseEngine", () => {
     const device = await seedReady(harness);
     const lease = await harness.registry.createLease({
       deviceId: device.id,
-      mode: "held",
       requesterId: "former",
       ownerId: "former",
+      ttlMs: 60_000,
       ttlDeadline: 2_000,
     });
     await harness.registry.beginRelease(lease.id);
@@ -588,9 +571,9 @@ describe("LeaseEngine", () => {
       const device = await seedReady(harness);
       await harness.registry.createLease({
         deviceId: device.id,
-        mode: "detached",
         ownerId: requesterId,
         requesterId,
+        ttlMs: 60_000,
         ttlDeadline: 2_000,
       });
     }
@@ -601,7 +584,6 @@ describe("LeaseEngine", () => {
     expect(harness.engine.runningCapacity.global.overLimit).toBe(true);
     await expect(
       harness.engine.request(request, {
-        mode: "held",
         noWait: true,
         ownerId: "three",
         requesterId: "three",
@@ -621,12 +603,10 @@ describe("LeaseEngine", () => {
     const harness = await createHarness({ driver });
 
     const first = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     const second = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
@@ -659,12 +639,10 @@ describe("LeaseEngine", () => {
     driver.hangMakeReady();
 
     void harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     void harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
@@ -686,12 +664,10 @@ describe("LeaseEngine", () => {
     const harness = await createHarness({ driver });
 
     const first = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     const second = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
@@ -717,7 +693,6 @@ describe("LeaseEngine", () => {
     const progress: string[] = [];
 
     const grant = await harness.engine.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update.stage),
       requesterId: "agent-1",
       ownerId: "agent-1",
@@ -740,7 +715,6 @@ describe("LeaseEngine", () => {
 
     const progress: string[] = [];
     const grant = await harness.engine.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update.stage),
       requesterId: "agent-1",
       ownerId: "agent-1",
@@ -776,7 +750,6 @@ describe("LeaseEngine", () => {
     await seedReady(harness);
 
     const grant = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
@@ -801,7 +774,6 @@ describe("LeaseEngine", () => {
     const provisioned: string[] = [];
 
     const provisionedGrant = await harness.engine.request(request, {
-      mode: "held",
       onProgress: (progress) => provisioned.push(progress.stage),
       requesterId: "provisioned",
       ownerId: "provisioned",
@@ -818,7 +790,6 @@ describe("LeaseEngine", () => {
     });
     const booted: string[] = [];
     await harness.engine.request(request, {
-      mode: "held",
       onProgress: (progress) => booted.push(progress.stage),
       requesterId: "shutdown",
       ownerId: "shutdown",
@@ -831,13 +802,11 @@ describe("LeaseEngine", () => {
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const harness = await createHarness({ driver });
     const holder = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "holder",
       requesterId: "holder",
     });
     const progress: string[] = [];
     const queued = harness.engine.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update.stage),
       requesterId: "queued",
       ownerId: "queued",
@@ -847,7 +816,6 @@ describe("LeaseEngine", () => {
 
     await expect(
       harness.engine.request(request, {
-        mode: "held",
         noWait: true,
         onProgress: () => progress.push("unexpected"),
         requesterId: "no-wait",
@@ -862,7 +830,6 @@ describe("LeaseEngine", () => {
     const callbackFailure = await createHarness();
     await expect(
       callbackFailure.engine.request(request, {
-        mode: "held",
         onProgress: () => {
           throw new Error("client disconnected");
         },
@@ -876,13 +843,11 @@ describe("LeaseEngine", () => {
   it("detaches progress from a queued request without cancelling its lease", async () => {
     const harness = await createHarness();
     const holder = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "holder",
       requesterId: "holder",
     });
     const progress: string[] = [];
     const queued = harness.engine.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update.stage),
       requesterId: "queued",
       ownerId: "queued",
@@ -900,12 +865,10 @@ describe("LeaseEngine", () => {
   it("cancels a queued request through the QueueControl facade and frees the requester for a later grant", async () => {
     const harness = await createHarness();
     const holder = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "holder",
       requesterId: "holder",
     });
     const queued = harness.engine.request(request, {
-      mode: "held",
       ownerId: "queued",
       requesterId: "queued",
     });
@@ -917,29 +880,25 @@ describe("LeaseEngine", () => {
 
     await harness.engine.release(holder.lease.id, "explicit");
     await expect(
-      harness.engine.request(request, { mode: "held", ownerId: "queued", requesterId: "queued" }),
+      harness.engine.request(request, { ownerId: "queued", requesterId: "queued" }),
     ).resolves.toMatchObject({ lease: { ownerId: "queued", requesterId: "queued" } });
   });
 
   it("queues at capacity in FIFO order across three waiters", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     const second = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
     const third = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-3",
       requesterId: "agent-3",
     });
     const fourth = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-4",
       requesterId: "agent-4",
     });
@@ -962,17 +921,14 @@ describe("LeaseEngine", () => {
   it("wakes exactly the queue head on release and reuses its reclaimed ready device", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     const second = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
     const third = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-3",
       requesterId: "agent-3",
     });
@@ -1002,12 +958,10 @@ describe("LeaseEngine", () => {
     });
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     const queued = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
@@ -1023,14 +977,12 @@ describe("LeaseEngine", () => {
   it("rejects a no-wait request at capacity with a typed error", async () => {
     const harness = await createHarness();
     await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
 
     await expect(
       harness.engine.request(request, {
-        mode: "held",
         noWait: true,
         ownerId: "agent-2",
         requesterId: "agent-2",
@@ -1041,20 +993,17 @@ describe("LeaseEngine", () => {
   it("rejects a timed-out queue entry and skips it on a later release", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     const progress: string[] = [];
     const timedOut = harness.engine.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update.stage),
       requesterId: "agent-2",
       ownerId: "agent-2",
       timeoutMs: 10,
     });
     const next = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-3",
       requesterId: "agent-3",
     });
@@ -1070,15 +1019,13 @@ describe("LeaseEngine", () => {
     });
   });
 
-  it("expires an un-renewed held lease, serves the queue, and extends detached leases", async () => {
-    const harness = await createHarness({ lease: { detachedTtlMs: 20, heldTtlBackstopMs: 10 } });
+  it("expires an un-renewed lease at its deadline and serves the queue with its device", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 10 } });
     await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
     const queued = harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-2",
       requesterId: "agent-2",
     });
@@ -1089,35 +1036,35 @@ describe("LeaseEngine", () => {
     await expect(queued).resolves.toMatchObject({
       lease: { ownerId: "agent-2", requesterId: "agent-2" },
     });
+  });
 
-    const detachedHarness = await createHarness({ lease: { detachedTtlMs: 20 } });
-    const detached = await detachedHarness.engine.request(request, {
-      mode: "detached",
+  it("keeps a renewed lease past the deadline it was granted with", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 20 } });
+    const granted = await harness.engine.request(request, {
       requesterId: "agent-3",
       ownerId: "agent-3",
     });
-    const renewed = await detachedHarness.engine.renew(detached.lease.id, 30);
-    detachedHarness.clock.advance(20);
+    const renewed = await harness.engine.renew(granted.lease.id, 30);
+    harness.clock.advance(20);
     await flush();
 
     expect(renewed.ttlDeadline).toBe(1_030);
-    expect(detachedHarness.registry.snapshot.leases).toHaveLength(1);
+    expect(harness.registry.snapshot.leases).toHaveLength(1);
   });
 
-  it("renews a held lease via the engine, keeping it alive past its original backstop", async () => {
-    const harness = await createHarness({ lease: { detachedTtlMs: 20, heldTtlBackstopMs: 10 } });
-    const held = await harness.engine.request(request, {
-      mode: "held",
+  it("renews via the engine, re-arming the expiry timer at the new deadline", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 10 } });
+    const granted = await harness.engine.request(request, {
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
 
     harness.clock.advance(6);
-    const renewed = await harness.engine.renew(held.lease.id, 20);
+    const renewed = await harness.engine.renew(granted.lease.id, 20);
     expect(renewed.ttlDeadline).toBe(1_026);
 
-    // The original backstop deadline (1_010) has now passed, but the renewal re-armed
-    // the expiry timer at the new deadline, so the lease must still be alive.
+    // The grant-time deadline (1_010) has now passed, but the renewal re-armed the expiry
+    // timer at the new one, so the lease must still be alive.
     harness.clock.advance(4);
     await flush();
     expect(harness.registry.snapshot.leases).toHaveLength(1);
@@ -1127,16 +1074,33 @@ describe("LeaseEngine", () => {
     expect(harness.registry.snapshot.leases).toHaveLength(0);
   });
 
+  it("grants at the request's own ttlMs, and re-applies that width on a body-less renew", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 10 } });
+    const granted = await harness.engine.request(request, {
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      ttlMs: 40,
+    });
+    expect(granted.lease).toMatchObject({ ttlMs: 40, ttlDeadline: 1_040 });
+
+    harness.clock.advance(5);
+    // No TTL named: the lease keeps its own 40ms width rather than snapping back to the
+    // 10ms `lease.defaultTtlMs` (ADR 0004 §4).
+    await expect(harness.engine.renew(granted.lease.id)).resolves.toMatchObject({
+      ttlMs: 40,
+      ttlDeadline: 1_045,
+    });
+  });
+
   it("enforces one active request or lease per requester, then permits another after release", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
 
     await expect(
-      harness.engine.request(request, { mode: "held", ownerId: "agent-1", requesterId: "agent-1" }),
+      harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
     ).rejects.toMatchObject({
       existingLeaseId: first.lease.id,
       message: expect.stringContaining(first.lease.id),
@@ -1146,7 +1110,7 @@ describe("LeaseEngine", () => {
     await harness.engine.settle();
     expect(harness.clock.pendingTimerCount).toBe(0);
     await expect(
-      harness.engine.request(request, { mode: "held", ownerId: "agent-1", requesterId: "agent-1" }),
+      harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
     ).resolves.toMatchObject({ lease: { ownerId: "agent-1", requesterId: "agent-1" } });
   });
 
@@ -1157,7 +1121,6 @@ describe("LeaseEngine", () => {
     const harness = await createHarness({ driver });
 
     const grant = await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
@@ -1176,7 +1139,7 @@ describe("LeaseEngine", () => {
     const harness = await createHarness({ driver });
 
     await expect(
-      harness.engine.request(request, { mode: "held", ownerId: "agent-1", requesterId: "agent-1" }),
+      harness.engine.request(request, { ownerId: "agent-1", requesterId: "agent-1" }),
     ).rejects.toBeInstanceOf(BootTimeoutError);
 
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
@@ -1188,7 +1151,6 @@ describe("LeaseEngine", () => {
     const harness = await createHarness();
 
     await harness.engine.request(request, {
-      mode: "held",
       ownerId: "agent-1",
       requesterId: "agent-1",
     });
@@ -1208,7 +1170,7 @@ describe("LeaseEngine", () => {
 // that replaced it: the lease is released registry-only on the convergence path,
 // and its reclaim proceeds in the background.
 describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
-  it("converges without waiting for an orphaned held lease's reclaim, and a fresh request is served immediately after", async () => {
+  it("converges without waiting for an in-flight reclaim, and a fresh request is served immediately after", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
@@ -1226,14 +1188,14 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
         maxRunning: 2,
       },
     });
-    // A held lease with no live holder: exactly what an ungraceful restart leaves in
-    // the registry (nothing renews or releases it -- the daemon process it lived on
-    // is gone).
-    const orphan = await harness.engine.request(request, {
-      mode: "held",
-      ownerId: "orphan",
-      requesterId: "orphan",
+    // Under ADR 0004 convergence itself releases nothing -- there is no orphan sweep left --
+    // so the in-flight reclaim it must not block on is produced the way one actually arises:
+    // a release commits the registry half and hands the 34s purge off to the background.
+    const released = await harness.engine.request(request, {
+      ownerId: "previous-holder",
+      requesterId: "previous-holder",
     });
+    await harness.engine.release(released.lease.id, "explicit");
 
     const convergeStartedAt = harness.clock.now();
     await harness.engine.convergeRunningCapacity();
@@ -1241,18 +1203,17 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     // the 34s reclaim above.
     expect(harness.clock.now()).toBe(convergeStartedAt);
     expect(
-      harness.registry.snapshot.devices.find((device) => device.id === orphan.device.id)?.state,
+      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
     ).toBe("reclaiming");
     expect(harness.registry.snapshot.leases).toEqual([]);
 
-    // A fresh request is servable right away -- capacity allows a second device, and
-    // the orphaned one being mid-reclaim never blocks it. Still 0ms elapsed.
+    // A fresh request is servable right away -- capacity allows a second device, and the
+    // one still mid-reclaim never blocks it. Still 0ms elapsed.
     const granted = await harness.engine.request(request, {
-      mode: "held",
       requesterId: "new-agent",
       ownerId: "new-agent",
     });
-    expect(granted.device.id).not.toBe(orphan.device.id);
+    expect(granted.device.id).not.toBe(released.device.id);
     expect(harness.clock.now()).toBe(convergeStartedAt);
   });
 
@@ -1272,11 +1233,11 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
         maxRunning: 1,
       },
     });
-    const orphan = await harness.engine.request(request, {
-      mode: "held",
-      ownerId: "orphan",
-      requesterId: "orphan",
+    const released = await harness.engine.request(request, {
+      ownerId: "previous-holder",
+      requesterId: "previous-holder",
     });
+    await harness.engine.release(released.lease.id, "explicit");
 
     await harness.engine.convergeRunningCapacity();
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
@@ -1287,7 +1248,6 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     // one still mid-reclaim.
     await expect(
       harness.engine.request(request, {
-        mode: "held",
         noWait: true,
         ownerId: "new-agent",
         requesterId: "new-agent",
@@ -1301,11 +1261,10 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     // Once the reclaim genuinely finishes, the same device becomes grantable again.
     await expect(
       harness.engine.request(request, {
-        mode: "held",
         ownerId: "new-agent",
         requesterId: "new-agent",
       }),
-    ).resolves.toMatchObject({ device: { id: orphan.device.id } });
+    ).resolves.toMatchObject({ device: { id: released.device.id } });
   });
 
   it("shuts down already-ready excess capacity during convergence without waiting on an in-flight reclaim, and the reclaim settles inside the same limit", async () => {
@@ -1328,11 +1287,11 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
         maxRunning: 1,
       },
     });
-    const orphan = await harness.engine.request(request, {
-      mode: "held",
-      ownerId: "orphan",
-      requesterId: "orphan",
+    const released = await harness.engine.request(request, {
+      ownerId: "previous-holder",
+      requesterId: "previous-holder",
     });
+    await harness.engine.release(released.lease.id, "explicit");
     const extraReady = await seedReady(harness);
 
     await harness.engine.convergeRunningCapacity();
@@ -1348,7 +1307,7 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
       harness.registry.snapshot.devices.find((device) => device.id === extraReady.id)?.state,
     ).toBe("shutdown");
     expect(
-      harness.registry.snapshot.devices.find((device) => device.id === orphan.device.id)?.state,
+      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
     ).toBe("reclaiming");
 
     // The background reclaim settles afterward. Its own capacity check
@@ -1358,7 +1317,7 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     clock.advance(34_000);
     await flush();
     expect(
-      harness.registry.snapshot.devices.find((device) => device.id === orphan.device.id)?.state,
+      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
     ).toBe("ready");
     expect(harness.engine.runningCapacity.ios.overLimit).toBe(false);
   });
@@ -1403,12 +1362,13 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
       systemStats: systemStats(),
     });
     const granted = await engine1.request(request, {
-      mode: "held",
-      ownerId: "orphan",
-      requesterId: "orphan",
+      ownerId: "previous-holder",
+      requesterId: "previous-holder",
     });
+    // The holder released, so the purge behind it is running in the background...
+    await engine1.release(granted.lease.id, "explicit");
 
-    // Ungraceful restart of the *same* process: convergence backgrounds the reclaim...
+    // ...convergence leaves it alone (it is claimed by this process)...
     await engine1.convergeRunningCapacity();
     expect(registry1.snapshot.devices).toMatchObject([
       { id: granted.device.id, state: "reclaiming" },
@@ -1450,24 +1410,23 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
   });
 
-  it("leaves no armed timer behind for a detached lease it is disposed with", async () => {
-    const harness = await createHarness({ lease: { detachedTtlMs: 900_000 } });
+  it("leaves no armed timer behind for a lease it is disposed with", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 900_000 } });
     await harness.engine.request(request, {
-      mode: "detached",
-      ownerId: "detached-holder",
-      requesterId: "detached-holder",
+      ownerId: "holder",
+      requesterId: "holder",
     });
     expect(harness.clock.pendingTimerCount).toBeGreaterThan(0);
 
     harness.engine.dispose();
 
     // A real `setTimeout` holds the event loop open, so a timer surviving disposal is a
-    // daemon that has decided to stop and cannot: `daemon stop` used to hang for the
-    // fifteen minutes of an outstanding detached lease's TTL. Held leases hid it, because
-    // shutdown releases them and releasing cancels the timer.
+    // daemon that has decided to stop and cannot: `daemon stop` used to hang for the whole
+    // of an outstanding lease's TTL. Under ADR 0004 that is every lease, since a stop
+    // releases none of them.
     expect(harness.clock.pendingTimerCount).toBe(0);
     // The lease itself is untouched -- disposal cancels a timer, it does not expire a
-    // lease, which is what lets a detached lease survive the restart.
+    // lease, which is what lets a lease survive the restart with its deadline intact.
     expect(harness.registry.snapshot.leases).toHaveLength(1);
   });
 });
