@@ -99,6 +99,92 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
 - **Daemon**: owns all state, serializes all decisions. Started on demand,
   reachable over a unix socket.
 
+## Gateway and worker modes (ADR 0005)
+
+`config.mode` selects what a daemon *is*. Everything above describes a
+**worker**: the default, and what every simlock daemon was before ADR 0005 —
+it owns the devices on one machine. A **gateway** owns no devices at all.
+Workers connect *to* it, and it fronts them:
+
+```
+                                 ┌──────────────── gateway (mode: "gateway") ─────────────┐
+agent / console ──token auth──>  │ HTTP frontend + unix socket                            │
+                                 │ GatewayDispatcher  ── worker views ──┐                 │
+                                 └──────────────────────────────────────┼─────────────────┘
+                                              ▲ one inbound port        │
+                                   uplink ────┘  (ws upgrade on         │ status.get, list.get,
+                          (worker dials out)     /v1/uplink)            │ catalog.get, config.get,
+                                              ▲                         ▼ events.subscribe
+             ┌────────────────────────────────┴─────┐   ┌───────────────────────────────┐
+             │ worker (mode: "worker", the default) │   │ worker                        │
+             │ drivers · registry · capacity · …    │   │ …                             │
+             └──────────────────────────────────────┘   └───────────────────────────────┘
+```
+
+- **Workers dial out; the gateway never reaches in.** The only inbound port in
+  a fleet is the gateway's, so a worker behind NAT, on a laptop, or on a CI
+  runner joins with two config keys: `gateway.url` (the gateway's base URL,
+  from which `/v1/uplink` is derived) and `gateway.token`, a join token minted
+  on the gateway with `simlock token create --role worker`. A `worker`-role
+  token opens an uplink and nothing else — it is `403` on every other `/v1`
+  route, and an `agent`/`operator` token is `403` at `/v1/uplink`.
+- **The uplink carries the existing contract, with the gateway as the protocol
+  client.** It is the same newline-delimited JSON framing the unix socket uses,
+  upgraded from the gateway's own HTTP listener. The worker's `DaemonServer`
+  accepts it as one more connection and grants that session the `admin` role —
+  not because of the transport (ADR 0003 §5 forbids that), but because *this
+  daemon dialled out*, to the URL in its own config, with the token from that
+  same file, which the gateway verified before the connection existed. An
+  operator who does not want a gateway administering a machine removes two
+  config keys.
+- **A gateway is a second implementation of the contract's handlers, not a
+  second contract** (`src/gateway/`). Same dispatch pipeline, same operation
+  declarations, same role checks; the handlers read *worker views* instead of a
+  registry and a lease engine. Every frontend — CLI, MCP, HTTP,
+  `simlock/client` — works against a gateway unchanged, because they only ever
+  see the contract.
+- **A worker view** is what the gateway knows about one worker: id (the
+  worker's own `instance.json` identity), label, connection state
+  (`connected` / `disconnected` / `incompatible`), daemon health and version,
+  capacity per platform, download policy, queue depth, leases, devices,
+  catalog, drain state, and a last-seen timestamp. It is rebuilt over the
+  uplink — `status.get`, `list.get`, `catalog.get`, `config.get` and
+  `events.subscribe` on connect, a refresh on every worker event about a lease
+  or a device, and a slow periodic tick as a backstop — and never persisted.
+  A gateway restart re-derives every view from the workers that reconnect.
+- **The uplink is the reachability signal**: no polling. A closed uplink flips
+  the view to `disconnected` immediately and keeps its last-known state, so a
+  machine that vanished holding a device is still visible. The view is
+  forgotten only when every lease on it has passed its deadline *and*
+  `gateway.disconnectedRetentionMs` (default 24 h) has elapsed, or when an
+  operator runs `simlock worker remove` — which refuses a worker that is still
+  connected.
+- **Aggregation.** `status.get` on a gateway returns the same shape a worker
+  does — capacity summed over connected workers, every device and lease
+  carrying a `workerId`, the gateway's own queue depth — plus a `workers`
+  array of views and `daemon.mode: "gateway"`. `catalog.get` is the union of
+  the connected workers' catalogs, each model and runtime annotated with the
+  workers that have it. Worker events are republished on the gateway's bus
+  with `workerId` added, so `simlock events --follow` against a gateway shows
+  the fleet.
+- **What a gateway does not do.** It starts no drivers, validates no device
+  roots, and runs no reaper, health monitor or capacity strategy; of the
+  config it reads only `mode`, `http.*`, `log.*`, `lease.*`, `eventBuffer.*`
+  and `gateway.*` (worker-only keys warn and are ignored). It always listens
+  on HTTP — that is how agents reach it and what the uplink upgrades from — so
+  `http.enabled: false` in gateway mode fails the start rather than being
+  silently overridden. `nuke.run`, `cleanup.run`, `doctor.run` and
+  `driver.passthrough` answer `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they
+  act on one machine's devices, and stay per-worker. The lease lifecycle
+  (`lease.request`/`renew`/`release`/`cancel`/`release-all`) answers the same
+  code until the fleet queue and routing land; reads — `lease.list`,
+  `list.get`, `status.get`, `catalog.get`, `events.*` — already answer for the
+  whole fleet.
+- **The one piece of persisted gateway state** is the drained set
+  (`workers.json`, owner-only): drain is an operator's decision about a
+  machine, not a fact the machine reports, so it must survive both the
+  reconnect an operator is about to cause and a gateway restart.
+
 ## Contract, dispatcher, and roles (ADR 0003)
 
 Every daemon operation is declared exactly once, in `src/contract/`: a name
