@@ -1093,7 +1093,7 @@ function testConfig(
 ): Config {
   return {
     mode: "worker",
-    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000 },
+    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
     drivers: {},
     exec: { timeoutMs: 600_000, ...execOverrides },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },

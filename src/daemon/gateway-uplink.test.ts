@@ -46,7 +46,7 @@ function uplink(
     // is Math.random; jitter itself is asserted separately below.
     random: () => 1,
     token: "join-secret",
-    url: "ws://gateway.test/v1/uplink",
+    url: "ws://gateway.test",
     workerId: "wrk_1",
     ...overrides,
   });
@@ -61,12 +61,10 @@ describe("GatewayUplink", () => {
     link.start();
     await vi.waitFor(() => expect(accepted).toHaveLength(1));
 
+    // The base URL travels verbatim: deriving `/v1/uplink` is the adapter's job, so a test of
+    // the supervisor asserts what the operator configured.
     expect(connector.dials).toEqual([
-      {
-        token: "join-secret",
-        url: "ws://gateway.test/v1/uplink",
-        workerId: "wrk_1",
-      },
+      { token: "join-secret", url: "ws://gateway.test", workerId: "wrk_1" },
     ]);
     await link.stop();
   });
@@ -196,7 +194,7 @@ describe("GatewayUplink", () => {
     const accepted: string[] = [];
     await transport.listen({
       accept: (uplinkConnection) => accepted.push(uplinkConnection.workerId),
-      authenticate: async (token) => token === "join-secret",
+      authenticate: async (token) => (token === "join-secret" ? "accept" : "unauthenticated"),
     });
     const { link } = uplink(transport);
 

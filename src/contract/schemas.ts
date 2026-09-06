@@ -459,6 +459,7 @@ export const configSchema = z.object({
     token: z.string().optional(),
     label: z.string().optional(),
     disconnectedRetentionMs: z.number(),
+    execTimeoutMs: z.number(),
   }),
   stalledTransition: z.object({
     thresholdMultiplier: z.number(),
@@ -548,6 +549,15 @@ export const workerViewSchema = z.object({
     .object({ gateway: protocolRangeShapeSchema, worker: protocolRangeShapeSchema })
     .optional(),
   capacity: statusCapacitySchema.optional(),
+  /**
+   * The worker's effective `downloads.policy`, read once with `config.get` when the uplink
+   * connects. It is on the view because it is a *routing input*, not decoration: ADR 0005 §13
+   * says a request that would need a download is only eligible on a worker whose policy allows
+   * one, and #118's policy reads it from here rather than asking at dispatch time. Absent for
+   * a worker whose `config.get` the gateway could not read (an incompatible one, or a call
+   * that failed).
+   */
+  downloads: z.object({ policy: z.enum(["never", "on-request", "always"]) }).optional(),
   /** The worker's *own* queue depth -- local agents on that machine. The gateway's fleet queue
    * is reported separately by `status.get` and arrives with #118. */
   queueDepth: z.number().optional(),

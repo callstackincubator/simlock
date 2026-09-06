@@ -29,7 +29,8 @@ export const DEFAULT_UPLINK_BACKOFF: UplinkBackoff = {
 export interface GatewayUplinkOptions {
   readonly clock: Clock;
   readonly connector: UplinkConnector;
-  /** `gateway.url`. */
+  /** `gateway.url` -- the gateway's base URL. The uplink endpoint (`/v1/uplink`) is derived
+   * from it by the connector, so this is exactly what the operator configured. */
   readonly url: string;
   /** `gateway.token`, the join token this worker presents. */
   readonly token: string;

@@ -297,13 +297,23 @@ describe("operation input/output round trips", () => {
     expect(parsed.platforms[0]?.modelWorkers).toEqual({ "iPhone 17": ["wrk_1", "wrk_2"] });
   });
 
-  it("worker.remove: `removed` is a literal true, never a quiet false", () => {
-    expect(OPERATIONS["worker.remove"].output.parse({ workerId: "wrk_1", removed: true })).toEqual({
+  it("worker.remove reports whether there was a view to forget; drain never lies", () => {
+    // `remove` is idempotent: forgetting a worker the gateway has already forgotten is done,
+    // not an error -- so `false` is a legitimate outcome, the same shape `token.revoke` uses.
+    expect(OPERATIONS["worker.remove"].output.parse({ workerId: "wrk_1", removed: false })).toEqual(
+      { workerId: "wrk_1", removed: false },
+    );
+    // Drain and undrain each report the state they establish, and only that state: an
+    // `undrain` answering `drained: true` would be a contradiction rather than an outcome.
+    expect(OPERATIONS["worker.drain"].output.parse({ workerId: "wrk_1", drained: true })).toEqual({
       workerId: "wrk_1",
-      removed: true,
+      drained: true,
     });
     expect(() =>
-      OPERATIONS["worker.remove"].output.parse({ workerId: "wrk_1", removed: false }),
+      OPERATIONS["worker.drain"].output.parse({ workerId: "wrk_1", drained: false }),
+    ).toThrow();
+    expect(() =>
+      OPERATIONS["worker.undrain"].output.parse({ workerId: "wrk_1", drained: true }),
     ).toThrow();
   });
 
@@ -369,7 +379,7 @@ describe("operation input/output round trips", () => {
   it("config.get: round-trips a representative config", () => {
     const config = {
       mode: "worker",
-      gateway: { disconnectedRetentionMs: 86_400_000 },
+      gateway: { disconnectedRetentionMs: 86_400_000, execTimeoutMs: 660_000 },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },

@@ -94,8 +94,18 @@ export interface ErrorDetailsMap {
   /** ADR 0005 §8: `worker.remove` on a worker whose uplink is currently open. Carries the id
    * so a caller can say which one without re-parsing the message. */
   WORKER_CONNECTED: { readonly workerId: string };
-  /** No worker view with that id -- never connected, or already removed/retired. */
+  /** `worker.drain`/`worker.undrain` naming a worker the gateway has no view of. (`worker.remove`
+   * answers `{removed: false}` instead: forgetting something already forgotten is done, not an
+   * error.) */
   UNKNOWN_WORKER: { readonly workerId: string };
+  /**
+   * ADR 0005 §28: the worker that owns this lease (or would serve this request) has no open
+   * uplink. `kind: "transport"`, because it says the same thing `DAEMON_CONNECTION_LOST` says
+   * one hop further out -- the operation did not fail on its merits, the machine that would
+   * decide is unreachable. Declared here now, with the rest of the closed set; #118 is what
+   * throws it, once there is a lease to forward.
+   */
+  WORKER_UNREACHABLE: { readonly workerId: string };
 
   /** ADR §7's forward-compatibility escape hatch: a code the client does not know (a newer
    * daemon) wraps as this instead of throwing a parse failure. Never sent by a daemon this
@@ -222,9 +232,17 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 501,
   },
   // 409, like every other "the resource is not in a state that allows this": the worker is
-  // there, connected, and removing it is a contradiction rather than a missing thing.
-  WORKER_CONNECTED: { code: "WORKER_CONNECTED", kind: "domain", cliExitCode: 1, httpStatus: 409 },
+  // there, connected, and removing it is a contradiction rather than a missing thing. Exit 2
+  // for the same reason `UNSUPPORTED_IN_GATEWAY_MODE` takes it -- the caller asked for
+  // something that cannot apply, rather than hitting a state of the fleet.
+  WORKER_CONNECTED: { code: "WORKER_CONNECTED", kind: "domain", cliExitCode: 2, httpStatus: 409 },
   UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  WORKER_UNREACHABLE: {
+    code: "WORKER_UNREACHABLE",
+    kind: "transport",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
   UNKNOWN_DAEMON_ERROR: {
     code: "UNKNOWN_DAEMON_ERROR",
     kind: "protocol",

@@ -170,6 +170,56 @@ export interface EventMap {
     readonly reason: string;
   };
   "doctor.reconciled": { readonly driftFindings: unknown };
+  // ---- gateway facts (ADR 0005 §22) ---------------------------------------------------------
+  //
+  // Emitted only by a daemon in gateway mode, about the workers connected to it. A worker's own
+  // events are *republished* on the gateway's bus under their original names with `workerId`
+  // added to the payload, so `simlock events` against a gateway shows the fleet; these five are
+  // the facts only the gateway can know.
+  /** A worker's uplink opened and its `hello` completed: the gateway can now drive it. An
+   * uplink that never gets this far is `worker.rejected` instead. */
+  "worker.connected": {
+    readonly workerId: string;
+    readonly label?: string;
+    readonly version?: string;
+  };
+  /**
+   * An uplink reached the gateway and was turned away before any session existed. Two reasons,
+   * and they are worth telling apart: `unauthenticated` is a join token the gateway does not
+   * hold with role `worker` (revoked, mistyped, or the wrong kind of token), and
+   * `incompatible` is ADR 0005 §31's version skew -- the token was fine, `hello` found no
+   * overlapping protocol range, and `protocol` carries both.
+   *
+   * `workerId` is optional because an unauthenticated peer is not a known worker: it is
+   * whatever the connection *claimed* in its header, and may be absent entirely.
+   */
+  "worker.rejected": {
+    readonly reason: "incompatible" | "unauthenticated";
+    readonly workerId?: string;
+    readonly label?: string;
+    readonly protocol?: {
+      readonly gateway: { readonly min: number; readonly max: number };
+      readonly worker: { readonly min: number; readonly max: number };
+    };
+  };
+  /** A worker's uplink closed. `leaseCount` is what the view still shows it holding at that
+   * moment -- the number an operator needs to know how much is stranded, and the reason the
+   * view is not dropped immediately (§6). */
+  "worker.disconnected": {
+    readonly workerId: string;
+    readonly label?: string;
+    readonly leaseCount: number;
+  };
+  /** A disconnected worker's view was forgotten: by an operator (`worker.remove`) or because
+   * `gateway.disconnectedRetentionMs` elapsed. */
+  "worker.removed": {
+    readonly workerId: string;
+    readonly label?: string;
+    readonly reason: "operator" | "retention";
+  };
+  /** ADR 0005 §9: the worker keeps its leases and receives no new dispatches from here on. */
+  "worker.drain-started": { readonly workerId: string; readonly label?: string };
+  "worker.drain-ended": { readonly workerId: string; readonly label?: string };
   /** Payloads owned by the driver module that refused the root; see `DriverRejection`. */
   "driver.root-rejected": {
     readonly platform: string;

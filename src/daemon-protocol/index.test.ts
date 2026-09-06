@@ -9,10 +9,11 @@ import {
 
 describe("daemon protocol", () => {
   it("keeps the current protocol version and newline framing", () => {
-    // ADR 0005: protocol 5, no compatibility shim -- `device.exec`, its `output` push family
-    // and `status.get`'s always-present `mode` land on the wire with nothing kept behind them,
-    // exactly as ADR 0004's removals took it to 4, so under ADR 0003 §6's honesty rule the
-    // range does not widen to keep speaking 4.
+    // ADR 0005: protocol 5, no compatibility shim -- `device.exec`, its `output` push family,
+    // `status.get`'s always-present `mode`, and the gateway surface (`worker.*`, `workerId`,
+    // the `worker` token role) all land on the wire with nothing kept behind them, exactly as
+    // ADR 0004's removals took it to 4, so under ADR 0003 §6's honesty rule the range does not
+    // widen to keep speaking 4.
     expect(DAEMON_PROTOCOL_VERSION).toBe(5);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });

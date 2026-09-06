@@ -152,6 +152,12 @@ describe("EventBus", () => {
       | "doctor.reconciled"
       | "driver.root-rejected"
       | "driver.adb-server-rejected"
+      | "worker.connected"
+      | "worker.rejected"
+      | "worker.disconnected"
+      | "worker.removed"
+      | "worker.drain-started"
+      | "worker.drain-ended"
     >();
     expectTypeOf<EventMap>().toMatchTypeOf<Record<EventName, object>>();
   });

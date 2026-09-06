@@ -968,7 +968,10 @@ describe("loadConfig modes (ADR 0005)", () => {
 
     expect(config.mode).toBe("worker");
     expect(config.http.enabled).toBe(false);
-    expect(config.gateway).toEqual({ disconnectedRetentionMs: 24 * 60 * 60_000 });
+    expect(config.gateway).toEqual({
+      disconnectedRetentionMs: 24 * 60 * 60_000,
+      execTimeoutMs: 11 * 60_000,
+    });
   });
 
   it("rejects a mode outside the two the ADR names", async () => {
@@ -1050,12 +1053,27 @@ describe("loadConfig modes (ADR 0005)", () => {
 
   it("keeps a worker's gateway.url/token/label", async () => {
     const config = await load({
-      gateway: { url: "wss://fleet.example/v1/uplink", token: "join-secret", label: "mac-1" },
+      gateway: { url: "wss://fleet.example", token: "join-secret", label: "mac-1" },
     });
 
-    expect(config.gateway.url).toBe("wss://fleet.example/v1/uplink");
+    expect(config.gateway.url).toBe("wss://fleet.example");
     expect(config.gateway.token).toBe("join-secret");
     expect(config.gateway.label).toBe("mac-1");
+  });
+
+  it("refuses a worker that names a gateway but no join token, and the reverse", async () => {
+    // Either alone is an operator half-finishing a join, and a worker that silently never
+    // joined looks exactly like one whose gateway is down -- so this fails the start instead.
+    await expect(load({ gateway: { url: "ws://fleet.example" } })).rejects.toThrow("gateway.token");
+    await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
+  });
+
+  it("does not pair those keys on a gateway, which reads neither", async () => {
+    const warn = vi.fn();
+    await expect(
+      load({ mode: "gateway", gateway: { url: "ws://fleet.example" } }, { warn }),
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
   });
 
   it.each(["http://fleet.example/v1/uplink", "fleet.example", "not a url"])(
@@ -1069,6 +1087,14 @@ describe("loadConfig modes (ADR 0005)", () => {
     await expect(load({ gateway: { disconnectedRetentionMs: 0 } })).rejects.toThrow(
       "gateway.disconnectedRetentionMs",
     );
+  });
+
+  it("defaults the gateway exec backstop above the worker's own ten minutes", async () => {
+    // ADR 0005 §19e: the worker's timeout is authoritative, so the gateway's must not fire
+    // first -- a gateway that timed out earlier would report a failure for a command still
+    // running on the machine that owns the device. #118 is what reads it.
+    const config = await load({ mode: "gateway" });
+    expect(config.gateway.execTimeoutMs).toBe(11 * 60_000);
   });
 
   it("lets an override name the mode, like every other key", async () => {

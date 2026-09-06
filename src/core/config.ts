@@ -45,6 +45,10 @@ const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 /** `gateway.disconnectedRetentionMs`'s default (ADR 0005 §6): 24 hours. */
 const DEFAULT_DISCONNECTED_RETENTION_MS = 24 * 60 * 60_000;
 
+/** `gateway.execTimeoutMs`'s default (ADR 0005 §19e): eleven minutes, one more than the
+ * worker's authoritative ten, so the worker's timeout is the one that fires. */
+const DEFAULT_GATEWAY_EXEC_TIMEOUT_MS = 11 * 60_000;
+
 /**
  * `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
  * on this worker before it is killed and the operation fails with `EXEC_TIMEOUT`. Ten minutes,
@@ -176,9 +180,18 @@ export interface Config {
      * How long a gateway keeps a disconnected worker's view before forgetting it (§6).
      * Gateway-side. Default 24 hours: long enough that a machine rebooting overnight is still
      * the same machine in the morning, short enough that a decommissioned one does not haunt
-     * `simlock status` forever. A view holding leases is never dropped on this timer.
+     * `simlock status` forever. A view whose leases have not all expired is never dropped on
+     * this timer, however long it has been gone.
      */
     readonly disconnectedRetentionMs: number;
+    /**
+     * Gateway-side backstop on a proxied `device.exec` (ADR 0005 §19e). Deliberately longer
+     * than the worker's own `exec.timeoutMs` (ten minutes): the worker's is authoritative and
+     * should be what kills a runaway command, so a gateway that timed out first would report
+     * a failure for a command still running on the machine that owns the device. Read by #118,
+     * which is what proxies `device.exec`; declared now so the key does not appear mid-series.
+     */
+    readonly execTimeoutMs: number;
   };
   readonly stalledTransition: {
     /**
@@ -255,8 +268,11 @@ export async function loadConfig({
   if (mode === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn);
     requireGatewayHttp(merged);
+  } else {
+    // Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
+    // them there would fail a start over a value nothing reads.
+    validateGatewayMembership(merged);
   }
-  validateGatewayUrl(merged);
   return deepFreeze(merged);
 }
 
@@ -303,7 +319,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
- * `disconnectedRetentionMs` is the one the gateway itself reads. */
+ * `disconnectedRetentionMs` and `execTimeoutMs` are the ones the gateway itself reads. */
 const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
 
 /**
@@ -355,22 +371,37 @@ function requireGatewayHttp(config: Config): void {
 }
 
 /**
- * A worker's `gateway.url` is a WebSocket endpoint (ADR 0005 §4). Checked here rather than at
- * dial time so a typo fails the daemon start naming the key, instead of surfacing as an
- * endless reconnect loop hours later. The path is not checked -- the gateway publishes
- * `/v1/uplink`, but an operator behind a reverse proxy may legitimately be given another.
+ * A worker's fleet membership, checked at load rather than at dial time so a typo fails the
+ * daemon start naming the key instead of surfacing as an endless reconnect loop hours later.
+ *
+ * `gateway.url` is the gateway's **base** URL (`ws://host:port`); the worker derives the
+ * uplink endpoint (`/v1/uplink`) from it, so nothing here inspects the path -- a URL that
+ * already carries one is accepted and the endpoint is resolved against it, which is what makes
+ * a reverse proxy on a sub-path work.
+ *
+ * The two keys are required together: a URL with no token cannot authenticate and a token with
+ * no URL has nowhere to go, and either alone is an operator half-finishing a join. Failing the
+ * start is right where ignoring would be wrong -- a worker that silently never joined would
+ * look identical to one whose gateway is down.
  */
-function validateGatewayUrl(config: Config): void {
-  const url = config.gateway.url;
-  if (url === undefined) return;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+function validateGatewayMembership(config: Config): void {
+  const { token, url } = config.gateway;
+  if (url !== undefined) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+    }
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+    }
   }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+  if (url !== undefined && token === undefined) {
+    throw invalidValue("gateway.token", "a join token, since gateway.url is set");
+  }
+  if (token !== undefined && url === undefined) {
+    throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
   }
 }
 
@@ -515,7 +546,10 @@ function defaultConfig(
         bootTimeoutMs: 600_000,
       },
     },
-    gateway: { disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS },
+    gateway: {
+      disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
+      execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
+    },
     stalledTransition: {
       thresholdMultiplier: 3,
       minimumThresholdMs: 60_000,
@@ -579,6 +613,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       token: stringValue,
       label: stringValue,
       disconnectedRetentionMs: positiveNumber,
+      execTimeoutMs: positiveNumber,
     }),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),
