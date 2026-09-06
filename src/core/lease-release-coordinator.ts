@@ -195,9 +195,10 @@ export class LeaseReleaseCoordinator
       // information the caller can act on, so it proceeds in the background and the
       // caller gets its turn back immediately. That matters most for an agent
       // releasing through MCP or the CLI, which would otherwise sit on a tool call
-      // waiting for a device it has already given up, and for startup convergence
-      // (StartupConverger#releaseOrphanedHeldLeases), where N orphaned leases used
-      // to cost N serial erases on the critical path (#43).
+      // waiting for a device it has already given up, and for an operator's
+      // `release --all` or `nuke`, where N leases would otherwise cost N serial
+      // erases before the command answers (#43). Startup used to be the third such
+      // caller, through an orphan sweep ADR 0004 deleted.
       //
       // Kicked off here rather than queued, so every device's reclaim starts
       // immediately (not one-after-another): queuing would let a healthy reclaim sit

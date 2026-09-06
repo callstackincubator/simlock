@@ -90,7 +90,10 @@ describe("lease liveness & restart", () => {
   });
 
   it("keeps a lease across an ungraceful daemon restart, with its TTL timer restored", async () => {
-    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 15_000 } } });
+    // 30s, not 15: a kill-and-restart sits inside this window (and waits, best-effort, for the
+    // old process to be gone), so a tighter TTL could expire the lease before the "still there
+    // right after the restart" check runs and turn a real regression into a flake.
+    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 30_000 } } });
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
@@ -134,7 +137,7 @@ describe("lease liveness & restart", () => {
 
     // With nothing left renewing it, the restored timer expires the lease on its own
     // deadline: the record persisted, and so did the deadline it carried.
-    await waitForLeaseCount(env, 0, { timeout: 30_000 });
+    await waitForLeaseCount(env, 0, { timeout: 45_000 });
     await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
     await env.expectEvents(["lease.expired"]);
   });

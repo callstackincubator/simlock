@@ -207,4 +207,105 @@ describe("HTTP API", () => {
     const afterRelease = await fetch(`${baseUrl}/v1/leases/${lease.id}`, { headers: agentAuth });
     expect(afterRelease.status).toBe(404);
   });
+
+  it("refuses a ttlMs above lease.maxTtlMs on both routes, whatever shape the request takes", async () => {
+    // ADR 0004 §4 and docs/HTTP-API.md: over the cap is `400 BAD_REQUEST`, never a silent
+    // clamp and never a `201` that fails later on the request resource.
+    const port = await reservePort();
+    const env = await withDaemon({
+      configOverrides: {
+        http: { enabled: true, host: "127.0.0.1", port },
+        lease: { defaultTtlMs: 60_000, maxTtlMs: 120_000 },
+      },
+    });
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+    });
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    const token = await env.cli(["token", "create", "--role", "agent"]);
+    expect(token.code).toBe(0);
+    const agentAuth = {
+      authorization: `Bearer ${(token.json as { secret: string }).secret}`,
+    };
+    const postJson = (path: string, body: unknown): Promise<Response> =>
+      fetch(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: { ...agentAuth, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    const overCap = await postJson("/v1/lease-requests", {
+      platform: "ios",
+      device: "iPhone 16",
+      os: "18.4",
+      ttlMs: 120_001,
+    });
+    expect(overCap.status).toBe(400);
+    expect((await overCap.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+
+    // The same request with `allowDownload: true`, which settles its own `201` synchronously
+    // rather than waiting on the dispatch -- the case that used to slip past the cap and fail
+    // later on the request resource instead.
+    const overCapWithDownload = await postJson("/v1/lease-requests", {
+      platform: "ios",
+      device: "iPhone 16",
+      os: "18.4",
+      allowDownload: true,
+      ttlMs: 120_001,
+    });
+    expect(overCapWithDownload.status).toBe(400);
+    expect((await overCapWithDownload.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+
+    // Nothing was admitted by either refusal.
+    expect((await env.cli(["list", "--leases"])).json).toEqual([]);
+
+    // At the cap it is granted, and the width it asked for is what the lease carries.
+    const granted = await postJson("/v1/lease-requests", {
+      platform: "ios",
+      device: "iPhone 16",
+      os: "18.4",
+      ttlMs: 120_000,
+    });
+    expect(granted.status).toBe(201);
+    const requestId = ((await granted.json()) as { request: { id: string } }).request.id;
+    let lease: LeasePayload | undefined;
+    await waitFor(
+      async () => {
+        const response = await fetch(`${baseUrl}/v1/lease-requests/${requestId}?wait=10`, {
+          headers: agentAuth,
+        });
+        const body = (await response.json()) as {
+          request: { state: string; lease?: LeasePayload };
+        };
+        lease = body.request.lease;
+        return body.request.state === "granted";
+      },
+      { timeout: 30_000, label: "the at-cap request is granted" },
+    );
+    expect(lease?.ttlMs).toBe(120_000);
+
+    // And the renew route answers the cap the same way.
+    const renewOverCap = await postJson(`/v1/leases/${lease?.id ?? ""}/renew`, { ttlMs: 120_001 });
+    expect(renewOverCap.status).toBe(400);
+    expect((await renewOverCap.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+
+    // A body-less renew still re-applies the lease's own width.
+    const renewed = await fetch(`${baseUrl}/v1/leases/${lease?.id ?? ""}/renew`, {
+      method: "POST",
+      headers: agentAuth,
+    });
+    expect(renewed.status).toBe(200);
+    expect((await env.cli(["list", "--leases"])).json).toEqual([
+      expect.objectContaining({ id: lease?.id, ttlMs: 120_000 }),
+    ]);
+
+    await env.cli(["release", lease?.id ?? ""]);
+  });
 });

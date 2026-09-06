@@ -412,14 +412,19 @@ describe("McpSession", () => {
         deviceId: "device-1",
         grantedAt: 0,
         id: input.leaseId,
-        mode: "held" as const,
+        lastRenewedAt: clock.now(),
         ownerId: "mcp-test",
         requesterId: "mcp-test",
+        ttlMs: 12_345,
         ttlDeadline: clock.now() + 12_345,
       });
     };
     client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
-    const session = new McpSession({ clock, connect: async () => client });
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
 
     // Nothing here limits a session to one lease -- the daemon's one-lease-per-requester rule
     // is the authority (ADR 0003 §11). Whatever it grants, this session has to keep alive and
@@ -519,7 +524,11 @@ describe("McpSession", () => {
         answerGrant = resolve;
       });
     client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
-    const session = new McpSession({ clock, connect: async () => client });
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
 
     const leasing = session.lease({ model: "iPhone 17 Pro", platform: "ios" });
     await flushMicrotasks();
