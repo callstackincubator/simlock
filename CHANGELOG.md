@@ -52,10 +52,13 @@ rename, and protocol bump).
   so the daemon now writes `lastRenewedAt` onto the lease record at grant and
   on every renew, and `simlock status` renders it as "last renewed". A consumer
   reading `lastHeartbeatAt` gets `undefined`.
-- **Socket protocol:** moves to protocol 4 with no compatibility shim; the
-  range a daemon and client advertise is `{min: 4, max: 4}`. A
-  version-mismatched client fails `hello` with `PROTOCOL_VERSION_UNSUPPORTED`
-  and never restarts the daemon — run `simlock daemon stop` once it's idle.
+- **Socket protocol:** moves to protocol 5 with no compatibility shim; the
+  range a daemon and client advertise is `{min: 5, max: 5}`. (ADR 0004's own
+  break took it to 4; `device.exec` and the `status.get` daemon block, in this
+  same unreleased set, take it the rest of the way — one release, one
+  version.) A version-mismatched client fails `hello` with
+  `PROTOCOL_VERSION_UNSUPPORTED` and never restarts the daemon — run
+  `simlock daemon stop` once it's idle.
   `daemon.stop` remains a frozen exception, accepted at any protocol version
   the daemon has ever spoken.
 - **Config:** three `lease.*` keys are retired — `lease.detachedTtlMs`,
@@ -76,7 +79,7 @@ rename, and protocol bump).
   persisted in held mode survives the upgrade with its persisted deadline
   intact — up to the old one-hour `lease.heldTtlBackstopMs`. Nothing can
   renew it: its holder speaks protocol 3 and the new daemon speaks
-  `{min: 4, max: 4}`, so its `hello` fails. The lease simply expires on that
+  `{min: 5, max: 5}`, so its `hello` fails. The lease simply expires on that
   deadline and its device is reclaimed, or `simlock release <lease-id>` ends
   it sooner. Stopping the old daemon while it is idle, as the protocol-
   mismatch error already advises, avoids the situation entirely.
@@ -152,12 +155,12 @@ those changes add, alongside the breaking changes above.
   family) rather than buffering any of it; the call resolves with the
   command's exit code. Over HTTP it is `POST /v1/leases/{id}/exec`, answering
   Server-Sent Events: an `output` event per chunk, then a terminal `exit` or
-  `error`. `simlock/client` gains `execDevice(input, { onOutput })`.
+  `error`. `simlock/client` gains `exec(input, { onOutput })`.
   `simlock simctl` / `simlock adb` are unchanged against a `worker` — they
   still spawn with inherited stdio, so an interactive `adb shell` keeps its
   terminal — and take this path against a `gateway`, which owns no devices;
-  the CLI reads which it is talking to from `status.get`'s new `mode` field
-  rather than guessing from its transport, and both commands now accept
+  the CLI reads which it is talking to from `mode` in `status.get`'s daemon
+  block rather than guessing from its transport, and both commands now accept
   `--lease <id>` (ignored against a worker, so one command line works against
   either). `stdin` is a one-shot string, read from a pipe to EOF before the
   command starts: there is no pseudo-terminal, so line-oriented commands work,
@@ -173,12 +176,17 @@ those changes add, alongside the breaking changes above.
   — the one field that tells a client which kind of daemon answered, and what
   `simlock simctl` / `simlock adb` branch on. `simlock status` renders it as
   `Daemon: running (worker)`.
-- **android:** `simlock adb` now refuses a caller-supplied `-P`,
-  `--server-port`, `-L`, or `-H` in any spelling, the way `simlock simctl`
-  already refuses `--set`/`--profiles`. `adb` takes the _last_ `-P` on the
-  line, so one supplied by a caller silently won over the one Simlock inserts
-  and pointed the command at another server — including the machine's default
-  one, outside Simlock's containment entirely.
+- **android:** `simlock adb` now refuses a caller-supplied `-P`, `-H`, `-L`,
+  or `--server-port` anywhere in adb's globals — the arguments before the
+  subcommand — including the attached forms `-P5037`/`-Hhost` and one that
+  follows another global's value (`-s emulator-5554 -P 5037 shell …`), the way
+  `simlock simctl` already refuses `--set`/`--profiles`. `adb` takes the
+  _last_ `-P` on the line, so one supplied by a caller silently won over the
+  one Simlock inserts and pointed the command at another server — including
+  the machine's default one, outside Simlock's containment entirely. Past the
+  subcommand those spellings are operands and still pass through
+  (`simlock adb shell echo -Please`), and `-s`/`-t`/`-d`/`-e` are not refused
+  at all: they select a device inside the containment rather than leaving it.
 - **config:** `exec.timeoutMs` (default ten minutes) bounds one `device.exec`
   command; past it the process is killed and the call fails with the new
   `EXEC_TIMEOUT` error code (CLI exit `10`, the code the other "ran out of

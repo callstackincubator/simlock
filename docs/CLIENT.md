@@ -118,11 +118,15 @@ it does not own is `FORBIDDEN`, and an id that names no lease is
 
 An **admin-role** client (`simlock/admin` with a credential) does *not* get the
 usual admin bypass here. It passes `requesterId` — the agent it is running the
-command for, defaulting to its own principal — and it must match the requester
-the lease was granted to, or the call is `FORBIDDEN`. The field exists for a
-proxy holding one admin connection on behalf of many agents; an operator
-reaching another agent's device names that agent deliberately rather than
-getting there implicitly.
+command for — and it must match the requester the lease was granted to, or the
+call is `FORBIDDEN`. Omitting it is not a bypass either: the *daemon* fills it
+in with the connection's own principal and then applies the same comparison,
+so an admin connection that names nobody reaches only the leases granted to
+itself. The field exists for a proxy holding one admin connection on behalf of
+many agents; an operator reaching another agent's device names that agent
+deliberately rather than getting there implicitly. An agent-role client has no
+say in it at all — its `requesterId` is ignored, and it is authorized against
+the lease it owns.
 
 Three limits worth knowing:
 

@@ -307,7 +307,10 @@ reaching one assumes the caller shares that machine's filesystem.
 { "tool": "simctl", "args": ["list", "devices"], "stdin": "y\n" }
 ```
 
-`tool` is `simctl` or `adb`; `args` are passed through unchanged. The daemon
+`tool` names a driver passthrough — `simctl` or `adb` on the machines this
+version runs on. The contract does not close that set; the drivers installed
+there do, and one they do not claim is `422 UNKNOWN_PASSTHROUGH_TOOL`. `args`
+are passed through unchanged. The daemon
 resolves them through the same driver passthrough `simlock simctl` /
 `simlock adb` use — the same scoping flags, and the same refusal list, so a
 verb the driver will not proxy (`simctl delete`, `adb kill-server`, …) is
@@ -352,15 +355,21 @@ the daemon, so there is no size cap and the first chunk arrives while the
 command is still running; a client that wants lines assembles them itself. A
 `: keepalive` comment every ~15s keeps idle tunnels open, as elsewhere.
 
-A failure that lands **before any output** is answered as an ordinary JSON
-error with its own status instead of a stream: `403 FORBIDDEN` for another
-requester's lease (dispatched through the operation's own ownership hook, like
-renew and release), `404 UNKNOWN_LEASE` for an id that names none,
+A failure that lands **before the command is spawned** is answered as an
+ordinary JSON error with its own status instead of a stream: `403 FORBIDDEN`
+for another requester's lease (dispatched through the operation's own
+ownership hook, like renew and release) and for an `agent` token that sent a
+`requesterId` at all, `404 UNKNOWN_LEASE` for an id that names none,
 `400 BAD_REQUEST` for a malformed body, `422 PASSTHROUGH_REFUSED` for a refused
 verb, `422 UNKNOWN_PASSTHROUGH_TOOL` for a tool no driver on that machine
-claims. Once a byte
-has been written the status is already `200`, so a later failure arrives as a
-terminal event instead:
+claims.
+
+The status commits at the **spawn**, not at the first byte: the moment the
+child process exists the response is `200` and the stream is open, even if the
+command has not written anything yet (`simctl install` on a large bundle says
+nothing for a while, and a client should not have to guess whether that
+silence means the request was accepted). Everything after that point arrives
+as a terminal event instead:
 
 ```
 event: error

@@ -50,7 +50,11 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
-`mode` must be exactly `"worker"` or `"gateway"`.
+`mode` must be exactly `"worker"` or `"gateway"`. `"gateway"` is *reachable*
+in this release and inert: the config loads, the daemon starts, and
+`simlock status` reports the mode, but nothing joins a gateway and no request
+is dispatched anywhere until the gateway work lands (#117). Setting it today
+buys a daemon that serves no devices.
 `exec.timeoutMs` must be a positive number.
 `lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
 `lease.defaultTtlMs` must be `<=` `lease.maxTtlMs`. A config that violates

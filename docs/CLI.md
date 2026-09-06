@@ -400,9 +400,9 @@ The lease the remote command runs against is the one your agent identity holds
 identity](#agent-identity)) — an id that holds no lease, or more than one, is a
 usage error naming it — or `--lease <id>`, which names one explicitly. The flag
 is accepted against a worker too, where it is simply ignored, so one command
-line works against either kind of daemon; it is read only ahead of the tool's
-own arguments, so `simlock adb --lease lse_1 shell input text --lease` names a
-lease once and types the word once.
+line works against either kind of daemon; it is read only while it is the
+*first* argument left, so `simlock adb --lease lse_1 shell input text --lease`
+names a lease once and types the word once.
 
 An **admin-role** invocation — the usual case, since the CLI connects as admin
 whenever `admin.token` is readable — sends its resolved agent id as
@@ -453,9 +453,10 @@ which a bare `simctl` cannot see.
 command runs through `device.exec`, which is scoped to a lease; see [When the
 device is on another machine](#when-the-device-is-on-another-machine). Against
 a daemon that owns the device it is unnecessary, and accepted so that one
-command line works against either. It is read only in front of the tool's own
-arguments: once `simctl`'s or `adb`'s subcommand has appeared, a later
-`--lease` is that subcommand's.
+command line works against either. Put it first: the scan stops at the first
+argument that is not `--lease`, so anything after that — the subcommand, or a
+tool flag like `adb -s <serial>` — takes every later `--lease` with it as its
+own argument.
 
 ```bash
 simlock simctl install booted ./MyApp.app
@@ -473,11 +474,14 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
   ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
 - `runtime delete` — it deletes a runtime shared with Xcode, and Simlock will
   not download one back. Delete it through Xcode if that is what you mean.
-- `--set` and `--profiles`, in any spelling — `simlock simctl` supplies the
-  device set itself. A caller-supplied one would point simctl outside what
-  Simlock manages, and (because their value is a separate argument) would let
-  a refused verb read as an ordinary operand. Run `xcrun simctl` directly if
-  you mean to leave Simlock's set.
+- `--set` and `--profiles`, wherever they appear *before* the subcommand and
+  however they are spelled (`-set`, `--set <path>`, `--set=<path>`) —
+  `simlock simctl` supplies the device set itself. A caller-supplied one would
+  point simctl outside what Simlock manages, and (because their value is a
+  separate argument) would let a refused verb read as an ordinary operand. Run
+  `xcrun simctl` directly if you mean to leave Simlock's set. Past the
+  subcommand they are that subcommand's own operands and are left alone —
+  `simlock simctl spawn booted foo --set x` is passing `--set x` to `foo`.
 
 ## `simlock adb [--lease <lease-id>] <args...>`
 
@@ -491,8 +495,8 @@ simlock adb logcat -d
 ```
 
 Refused, all exit 2 with `USAGE` and a message naming what to run instead.
-Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
-`-P 1 kill-server` are caught too:
+The refused *verbs* are matched anywhere in the arguments, so
+`-s <serial> emu kill` is caught too:
 
 - `kill-server` — it would detach every leased emulator at once. (Simlock's
   server rejects `kill-server` outright in any case.)
@@ -501,14 +505,27 @@ Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
 - `emu avd snapshot delete` — it destroys the clean-boot snapshot Simlock
   restores from, turning every later reclaim of that device from a snapshot
   load into a full wipe.
-- `-P`, `--server-port`, `-L`, and `-H`, in any spelling — `simlock adb`
-  supplies the server itself, and `adb` takes the *last* one on the line, so a
-  caller-supplied one would silently win and point the command at a server
-  that cannot see Simlock's devices (or at one Simlock must not touch). Run
-  `adb` directly if you mean to leave Simlock's server.
 
-Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
-instead.
+For those three, use `simlock release` (which reclaims the device for you) or
+`simlock cleanup` instead.
+
+The server-scope flags are refused by *position* rather than anywhere on the
+line, because past the subcommand they are no longer adb's:
+
+- `-P`, `-H`, `-L`, and `--server-port`, anywhere in adb's globals — the
+  arguments before the subcommand — including the attached forms `-P5037` and
+  `-Hhost`, and including one that follows another global's value
+  (`-s emulator-5554 -P 5037 shell …`). `simlock adb` supplies the server
+  itself, and `adb` takes the *last* one on the line, so a caller-supplied one
+  would silently win and point the command at a server that cannot see
+  Simlock's devices (or at one Simlock must not touch). Run `adb` directly if
+  you mean to leave Simlock's server.
+
+From the subcommand onwards those spellings are operands and pass through:
+`simlock adb shell echo -Please` echoes a word. `-s`, `-t`, `-d` and `-e`
+are *not* refused — they select a device inside the containment Simlock
+already established rather than escaping it (see
+[known-pitfalls.md](known-pitfalls.md)).
 
 ## `simlock release <lease-id> | --all`
 

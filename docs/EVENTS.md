@@ -93,6 +93,15 @@ progress gap this leaves.
 | `driver.root-rejected` | platform, root path, reason (not-absolute/missing-marker/invalid-marker/wrong-instance/symlink/wrong-owner/wrong-permissions/non-empty-unowned-root/unreadable) | a driver's device root failed ownership validation at startup, so that platform's driver did not start | DaemonServer | implemented |
 | `driver.adb-server-rejected` | port, reason (occupied/start-failed/invalid-port) | Simlock's own adb server could not be established — the port was occupied by a server it does not own, the server it started never began listening, or the configured port is not usable — so the Android driver did not start | DaemonServer | implemented |
 
+**`device.exec` emits no event, and that is deliberate.** It is the one
+operation [ADR 0005](adr/0005-gateway-and-worker-modes.md) adds with no fact
+of its own. Running a command against a device is not a state change simlock
+owns — the lease that authorizes it already emitted `lease.granted`, the
+device's own state is untouched, and a fleet where every `adb shell input tap`
+produced a bus event would push everything else out of the ring buffer within
+minutes. An audit trail of what agents ran on their devices is a different
+feature with different retention needs, not a line in this catalogue.
+
 ## Conventions recap
 
 - Every event carries: `timestamp`, `event`, `payload`, emitting module.
