@@ -7,6 +7,7 @@ import {
   FakeDriver,
   LeaseEngine,
   Nuke,
+  PassthroughRefusedError,
   Registry,
   type Config,
 } from "../core/index.js";
@@ -16,6 +17,8 @@ import {
   FakeClock,
   FakeSystemStats,
   MemoryFilesystem,
+  ScriptedProcessRunner,
+  type ProcessRunner,
 } from "../ports/index.js";
 import { TokenStore } from "../http/token-store.js";
 import type { DispatchSession } from "./dispatcher.js";
@@ -51,6 +54,12 @@ async function buildDispatcher(
     readonly passthroughTool?: string;
     /** Narrows the lease TTL knobs (ADR 0004), for the cap and default-width rules. */
     readonly lease?: Partial<Config["lease"]>;
+    /** Wires `device.exec`'s runner (ADR 0005 §19a); absent by default, like the option it
+     * feeds, so no other test pays for a scripted process. */
+    readonly processRunner?: ProcessRunner;
+    /** Narrows `exec.timeoutMs` so the timeout path can be driven with a short clock advance
+     * rather than ten minutes of one. */
+    readonly exec?: Partial<Config["exec"]>;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -70,15 +79,26 @@ async function buildDispatcher(
     ...(overrides.passthroughTool === undefined
       ? {}
       : {
-          passthrough: (args: readonly string[]) => ({
-            args: ["--set", "/root", ...args],
-            command: overrides.passthroughTool as string,
-            env: { SIMLOCK_SCOPED: "1" },
-          }),
+          passthrough: (args: readonly string[]) => {
+            // The refusal half of a real driver's passthrough, in the smallest form that
+            // proves `device.exec` inherits it: `driver.passthrough` and `device.exec` call
+            // this same function, so a verb refused for one is refused for the other.
+            if (args.includes("delete")) {
+              throw new PassthroughRefusedError(
+                overrides.passthroughTool as string,
+                "Refusing `simlock simctl delete`: use `simlock release` instead.",
+              );
+            }
+            return {
+              args: ["--set", "/root", ...args],
+              command: overrides.passthroughTool as string,
+              env: { SIMLOCK_SCOPED: "1" },
+            };
+          },
           passthroughTool: overrides.passthroughTool,
         }),
   });
-  const config = testConfig(overrides.downloadsPolicy, overrides.lease ?? {});
+  const config = testConfig(overrides.downloadsPolicy, overrides.lease ?? {}, overrides.exec ?? {});
   const engine = new LeaseEngine({
     clock,
     config,
@@ -129,6 +149,8 @@ async function buildDispatcher(
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
     passthrough: engine,
+    ...(overrides.processRunner === undefined ? {} : { processRunner: overrides.processRunner }),
+    execEnv: { PATH: "/usr/bin" },
     queue: engine,
     reaper,
     registry,
@@ -691,6 +713,185 @@ async function flush(): Promise<void> {
   }
 }
 
+/**
+ * ADR 0005 §19a-§19e. The operation's whole job is to run, on this machine, exactly what
+ * `driver.passthrough` would have handed a caller who was already on it -- so these check the
+ * two things that are genuinely new (the process and its output) and the three the operation
+ * inherits and must not lose (root scoping, the refusal list, ownership).
+ */
+describe("Dispatcher: device.exec", () => {
+  const command = { args: ["--set", "/root", "list", "devices"], command: "simctl" };
+
+  async function withLease(overrides: Parameters<typeof buildDispatcher>[0] = {}): Promise<{
+    readonly dispatcher: Awaited<ReturnType<typeof buildDispatcher>>["dispatcher"];
+    readonly clock: FakeClock;
+    readonly leaseId: string;
+  }> {
+    const built = await buildDispatcher({ passthroughTool: "simctl", ...overrides });
+    const grant = await built.dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_agent" }),
+    );
+    return {
+      clock: built.clock,
+      dispatcher: built.dispatcher,
+      leaseId: (grant as { lease: { id: string } }).lease.id,
+    };
+  }
+
+  it("runs the driver-resolved command and answers its exit code", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: command, result: { code: 3, stderr: "", stdout: "" } },
+    ]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).resolves.toEqual({ exitCode: 3 });
+
+    // The scoping the driver injected is on the command, and its environment is layered over
+    // the daemon's own rather than replacing it -- a child given only `SIMLOCK_SCOPED` would
+    // have no PATH to find `simctl` with.
+    expect(runner.calls[0]).toMatchObject({
+      args: ["--set", "/root", "list", "devices"],
+      command: "simctl",
+      options: { env: { PATH: "/usr/bin", SIMLOCK_SCOPED: "1" } },
+    });
+  });
+
+  it("streams stdout and stderr chunks to the session in arrival order, unjoined", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        chunks: [
+          { chunk: "first", stream: "stdout" },
+          { chunk: "warning\n", stream: "stderr" },
+          { chunk: " and second\n", stream: "stdout" },
+        ],
+        match: command,
+      },
+    ]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+    const seen: string[] = [];
+
+    await dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({
+        onOutput: (stream, chunk) => seen.push(`${stream}:${chunk}`),
+        principal: "tok_agent",
+      }),
+    );
+
+    // Order across both streams, and each chunk exactly as written: a handler that buffered or
+    // line-joined would show two stdout chunks merged, or stderr after both of them.
+    expect(seen).toEqual(["stdout:first", "stderr:warning\n", "stdout: and second\n"]);
+  });
+
+  it("writes stdin to the child once and closes it", async () => {
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, stdin: "yes\n", tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+
+    expect(runner.calls[0]?.options.input).toBe("yes\n");
+  });
+
+  it("kills a command that outruns exec.timeoutMs and fails with EXEC_TIMEOUT", async () => {
+    const runner = new ScriptedProcessRunner([{ hangs: true, match: command }]);
+    const { clock, dispatcher, leaseId } = await withLease({
+      exec: { timeoutMs: 1_000 },
+      processRunner: runner,
+    });
+
+    const pending = dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    await flush();
+    clock.advance(1_000);
+
+    // EXEC_TIMEOUT, not the exit code the kill produced: "we stopped it" and "it failed" are
+    // different facts, and only the first tells a caller to raise the limit (ADR §19e).
+    await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+  });
+
+  it("refuses a verb the driver refuses, exactly as driver.passthrough does", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["delete", "ABCD"], leaseId, tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toThrow(/Refusing/);
+    // Refused before anything was spawned -- the point of the refusal list is that the command
+    // never runs, not that its output is discarded.
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("rejects a lease this principal does not own with FORBIDDEN, and admin bypasses", async () => {
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(runner.calls).toEqual([]);
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
+        session({ principal: "tok_admin", role: "admin" }),
+      ),
+    ).resolves.toEqual({ exitCode: 0 });
+  });
+
+  it("answers UNKNOWN_LEASE for an id that names no lease, rather than running the command", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId: "lse_gone", tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toThrow(/Unknown lease: lse_gone/);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("rejects a tool outside the contract's closed set before touching a driver", async () => {
+    const { dispatcher, leaseId } = await withLease({
+      processRunner: new ScriptedProcessRunner([]),
+    });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "bash" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
 function sequence() {
   let next = 1;
   return { generate: () => `${next++}` };
@@ -699,10 +900,11 @@ function sequence() {
 function testConfig(
   downloadsPolicy: Config["downloads"]["policy"] = "on-request",
   leaseOverrides: Partial<Config["lease"]> = {},
+  execOverrides: Partial<Config["exec"]> = {},
 ): Config {
   return {
     drivers: {},
-    exec: { timeoutMs: 600_000 },
+    exec: { timeoutMs: 600_000, ...execOverrides },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
     health: {

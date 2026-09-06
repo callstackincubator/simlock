@@ -270,6 +270,44 @@ describe("pushes", () => {
     expect(onProgress).toHaveBeenCalledTimes(1);
   });
 
+  it("routes device.exec output chunks to that call's onOutput, in order, and stops at its reply", async () => {
+    // ADR 0005 §19a: `output` is request-scoped like `progress`, so it reaches the call that is
+    // still waiting on its frame id and nothing else.
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const onOutput = vi.fn();
+    const execPromise = client.execDevice(
+      { args: ["list", "devices"], leaseId: "lease_1", tool: "simctl" },
+      { onOutput },
+    );
+    await flushMicrotasks();
+    const execCall = connection.lastSentOf("device.exec")!;
+    expect(execCall.payload).toEqual({
+      args: ["list", "devices"],
+      leaseId: "lease_1",
+      tool: "simctl",
+    });
+
+    connection.push("output", { chunk: "one", requestId: execCall.id, stream: "stdout" });
+    connection.push("output", { chunk: "two", requestId: execCall.id, stream: "stderr" });
+    connection.reply(execCall.id, { exitCode: 7 });
+
+    await expect(execPromise).resolves.toEqual({ exitCode: 7 });
+    expect(onOutput.mock.calls.map(([chunk]) => chunk)).toEqual([
+      { chunk: "one", stream: "stdout" },
+      { chunk: "two", stream: "stderr" },
+    ]);
+
+    // The call is no longer tracked, so a late chunk is dropped rather than delivered to a
+    // caller that has already been told the command finished.
+    connection.push("output", { chunk: "late", requestId: execCall.id, stream: "stdout" });
+    expect(onOutput).toHaveBeenCalledTimes(2);
+  });
+
   it("de-duplicates a repeated device-unhealthy push for the same lease (same state twice in a row)", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });

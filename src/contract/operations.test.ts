@@ -2,6 +2,7 @@ import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
 import { defineOperation, OPERATIONS, type OperationName } from "./operations.js";
+import { PUSH_SCHEMAS } from "./pushes.js";
 import { ROLES, type Role } from "./roles.js";
 
 describe("defineOperation", () => {
@@ -208,6 +209,54 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["list.get"].output.parse([{ name: "idle-shutdown" }])).toEqual([
       { name: "idle-shutdown" },
     ]);
+  });
+
+  it("device.exec: parses a command, keeps stdin optional, and refuses anything else", () => {
+    // ADR 0005 §19a. `.strict()` is doing real work here: a client that sent `input` or `env`
+    // hoping either would reach the child must be told no, not have it silently dropped.
+    expect(
+      OPERATIONS["device.exec"].input.parse({
+        args: ["shell", "getprop"],
+        leaseId: "lse_1",
+        stdin: "y\n",
+        tool: "adb",
+      }),
+    ).toEqual({ args: ["shell", "getprop"], leaseId: "lse_1", stdin: "y\n", tool: "adb" });
+
+    expect(
+      OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "simctl" }),
+    ).toEqual({ args: [], leaseId: "lse_1", tool: "simctl" });
+
+    // The tool is a closed set, unlike `driver.passthrough`'s open string: this operation
+    // spawns what it resolves.
+    expect(() =>
+      OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "bash" }),
+    ).toThrow();
+    expect(() =>
+      OPERATIONS["device.exec"].input.parse({
+        args: [],
+        leaseId: "lse_1",
+        tool: "simctl",
+        env: {},
+      }),
+    ).toThrow();
+    expect(() => OPERATIONS["device.exec"].input.parse({ args: [], tool: "simctl" })).toThrow();
+
+    expect(OPERATIONS["device.exec"].output.parse({ exitCode: 0 })).toEqual({ exitCode: 0 });
+  });
+
+  it("the output push carries a frame id, a stream, and a chunk", () => {
+    // The `output` family is request-scoped exactly like `progress` (ADR 0005 §19a), which is
+    // the property that lets one connection run more than one command at a time.
+    expect(PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdout" })).toEqual({
+      chunk: "hello",
+      requestId: 7,
+      stream: "stdout",
+    });
+    expect(() =>
+      PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdin" }),
+    ).toThrow();
+    expect(() => PUSH_SCHEMAS.output.parse({ chunk: "hello", stream: "stdout" })).toThrow();
   });
 
   it("config.get: round-trips a representative config", () => {

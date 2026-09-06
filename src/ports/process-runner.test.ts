@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { NodeProcessRunner, ProcessSpawnError, ScriptedProcessRunner } from "./index.js";
+import {
+  exitCodeOf,
+  NodeProcessRunner,
+  ProcessSpawnError,
+  ScriptedProcessRunner,
+} from "./index.js";
 
 describe("ScriptedProcessRunner", () => {
   it("returns the scripted result for a matching invocation", async () => {
@@ -68,6 +73,109 @@ describe("ScriptedProcessRunner", () => {
     }
 
     expect(lines).toEqual(["booting", "ready"]);
+  });
+});
+
+describe("ScriptedProcessRunner: spawnStreaming", () => {
+  it("replays scripted chunks in order across both streams", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        chunks: [
+          { chunk: "out-1", stream: "stdout" },
+          { chunk: "err-1", stream: "stderr" },
+          { chunk: "out-2", stream: "stdout" },
+        ],
+        match: { args: ["logcat"], command: "adb" },
+        result: { code: 4, stderr: "", stdout: "" },
+      },
+    ]);
+    const seen: string[] = [];
+
+    const handle = runner.spawnStreaming("adb", ["logcat"], {
+      onChunk: (stream, chunk) => seen.push(`${stream}:${chunk}`),
+    });
+
+    expect(seen).toEqual(["stdout:out-1", "stderr:err-1", "stdout:out-2"]);
+    await expect(handle.wait()).resolves.toEqual({ code: 4, signal: null });
+  });
+
+  it("records the invocation and settles a hanging command only when it is killed", async () => {
+    const runner = new ScriptedProcessRunner([
+      { hangs: true, match: { args: ["logcat"], command: "adb" } },
+    ]);
+
+    const handle = runner.spawnStreaming("adb", ["logcat"], {
+      env: { PATH: "/usr/bin" },
+      input: "y\n",
+      onChunk: () => {},
+    });
+    expect(runner.calls).toEqual([
+      { args: ["logcat"], command: "adb", options: { env: { PATH: "/usr/bin" }, input: "y\n" } },
+    ]);
+
+    const result = handle.wait();
+    handle.kill("SIGKILL");
+    await expect(result).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  });
+});
+
+describe("NodeProcessRunner: spawnStreaming", () => {
+  it("forwards chunks as they arrive and reports the child's exit code", async () => {
+    const runner = new NodeProcessRunner();
+    const seen: Array<{ stream: string; chunk: string }> = [];
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      ["-e", "process.stdout.write('out'); process.stderr.write('err'); process.exitCode = 5;"],
+      { onChunk: (stream, chunk) => seen.push({ chunk, stream }) },
+    );
+    const result = await handle.wait();
+
+    expect(result.code).toBe(5);
+    expect(seen.filter((entry) => entry.stream === "stdout").map((entry) => entry.chunk)).toEqual([
+      "out",
+    ]);
+    expect(seen.filter((entry) => entry.stream === "stderr").map((entry) => entry.chunk)).toEqual([
+      "err",
+    ]);
+  });
+
+  it("writes `input` to the child's stdin and then closes it", async () => {
+    // ADR 0005 §19c's one-shot stdin: the child sees the string and then EOF, which is what
+    // lets a line-oriented command that reads stdin finish at all.
+    const runner = new NodeProcessRunner();
+    let stdout = "";
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      ["-e", "process.stdin.on('data', (d) => process.stdout.write(`saw:${d}`));"],
+      { input: "hello", onChunk: (_stream, chunk) => (stdout += chunk) },
+    );
+    await handle.wait();
+
+    expect(stdout).toBe("saw:hello");
+  });
+
+  it("kills the child's whole process group, so a signalled command reports one", async () => {
+    const runner = new NodeProcessRunner();
+
+    const handle = runner.spawnStreaming(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+      onChunk: () => {},
+    });
+    handle.kill("SIGKILL");
+
+    const result = await handle.wait();
+    expect(result.code).toBeNull();
+    expect(exitCodeOf(result)).toBeGreaterThan(128);
+  });
+
+  it("reports a spawn that never produced a process, like `spawn` does", async () => {
+    const runner = new NodeProcessRunner();
+
+    expect(() =>
+      runner.spawnStreaming("/nonexistent/simlock-adb", [], { onChunk: () => {} }),
+    ).toThrow(ProcessSpawnError);
+    await new Promise((resolve) => setImmediate(resolve));
   });
 });
 
