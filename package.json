@@ -58,11 +58,13 @@
     "@hono/zod-validator": "^0.9.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "hono": "^4.13.5",
+    "ws": "8.18.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@release-it/conventional-changelog": "^11.0.1",
     "@types/node": "^26.1.1",
+    "@types/ws": "8.18.1",
     "fallow": "^3.6.0",
     "lefthook": "^2.1.10",
     "oxfmt": "^0.59.0",

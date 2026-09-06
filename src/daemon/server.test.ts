@@ -19,6 +19,7 @@ import {
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
+  createConnectionPair,
   CryptoTokenSecrets,
   FakeClock,
   FakeSystemStats,
@@ -53,8 +54,8 @@ interface Client {
 }
 
 interface ServerFrame {
-  readonly error?: { readonly code: string; readonly message: string };
-  readonly id?: string | null;
+  readonly error?: { readonly code: string; readonly message: string; readonly details?: unknown };
+  readonly id?: string | number | null;
   readonly ok?: boolean;
   readonly payload?: unknown;
   readonly push?:
@@ -2484,7 +2485,99 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await requester.close();
     await observer.close();
   });
+
+  /**
+   * ADR 0005 §5: over the uplink the gateway is the protocol client, and the worker grants that
+   * session `admin` because *it* opened the connection to the gateway named in its own config.
+   * The harness resolves every ordinary session to `agent` here, so the contrast is the point:
+   * the same `hello`, with no credential at all, is agent over the socket and admin over the
+   * uplink.
+   */
+  it("grants an accepted uplink the admin role without a credential (ADR 0005 §5)", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const [workerEnd, gatewayEnd] = createConnectionPair();
+    harness.daemon.acceptUplink(workerEnd);
+    const gateway = driveConnection(gatewayEnd);
+
+    const reply = await gateway.request("hello", {
+      clientVersion: "gateway",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal: "gw:instance-1",
+    });
+
+    expect(reply).toMatchObject({ ok: true, payload: { role: "admin" } });
+    // ...and the role is real, not cosmetic: an admin-only operation answers.
+    await expect(gateway.request("list.get", { kind: "devices" })).resolves.toMatchObject({
+      ok: true,
+    });
+
+    // Meanwhile a plain socket connection on the same daemon is still an agent.
+    const local = await createClient(harness.socketPath);
+    await local.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
+    await expect(local.request("list.get", {})).resolves.toMatchObject({
+      error: { code: "FORBIDDEN" },
+    });
+    await local.close();
+  });
+
+  it("negotiates the protocol range over an uplink exactly as over the socket (ADR 0005 §31)", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const [workerEnd, gatewayEnd] = createConnectionPair();
+    harness.daemon.acceptUplink(workerEnd);
+    const gateway = driveConnection(gatewayEnd);
+
+    const reply = await gateway.request("hello", {
+      clientVersion: "gateway",
+      protocolRange: { min: 99, max: 99 },
+    });
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: { code: "PROTOCOL_VERSION_UNSUPPORTED" },
+    });
+    // Both ranges travel, which is what a gateway puts on an `incompatible` worker view.
+    expect(reply.error).toMatchObject({
+      details: { client: { min: 99, max: 99 }, daemon: PROTOCOL_VERSION_RANGE },
+    });
+  });
 });
+
+/** Drives an in-memory `IpcConnection` the way `createClient` drives a real socket -- enough to
+ * send request frames and await their replies. Used for uplink tests, where there is no socket
+ * at all: the connection is the one a worker dialled out and handed to its own daemon. */
+function driveConnection(connection: IpcConnection): {
+  request(type: string, payload: unknown): Promise<ServerFrame>;
+} {
+  let buffer = "";
+  let nextId = 1;
+  const waiters = new Map<number, (frame: ServerFrame) => void>();
+  connection.onData((chunk) => {
+    buffer += chunk;
+    for (;;) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      if (line.trim() === "") continue;
+      const frame = JSON.parse(line) as ServerFrame;
+      if (typeof frame.id !== "number") continue;
+      const waiter = waiters.get(frame.id);
+      waiters.delete(frame.id);
+      waiter?.(frame);
+    }
+  });
+  return {
+    request: async (type, payload) => {
+      const id = nextId++;
+      const settled = new Promise<ServerFrame>((resolve) => waiters.set(id, resolve));
+      await connection.write(`${JSON.stringify({ id, payload, type })}\n`);
+      return settled;
+    },
+  };
+}
 
 async function helloAs(
   client: Client,
