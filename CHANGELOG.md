@@ -193,6 +193,69 @@ those changes add, alongside the breaking changes above.
   time" outcome already uses, and HTTP `504`) rather than reporting the exit
   code the kill produced.
 
+### Features — gateway and worker modes (ADR 0005)
+
+`config.mode` gives a daemon a second shape. A **worker** is what every
+simlock daemon has been: it owns the devices on one machine. A **gateway**
+owns none, and fronts the workers that connect to it. This entry covers the
+first PR of that series — the fleet is made _visible_; routing leases through
+it follows.
+
+- **config:** `mode: "worker" | "gateway"` (default `worker`). A worker joins
+  a fleet with `gateway.url` (the gateway's base URL) and `gateway.token` (a
+  join token); `gateway.label` names it in the gateway's views. A gateway
+  reads `gateway.disconnectedRetentionMs` (default 24 h) and
+  `gateway.execTimeoutMs` (default 11 minutes, for the PR that proxies device
+  commands), warns about every worker-only key it is given, defaults
+  `http.enabled` to `true`, and refuses to start with it explicitly `false` —
+  HTTP is how agents reach a fleet and what the worker uplink upgrades from.
+  A worker naming one of `gateway.url`/`gateway.token` without the other
+  fails its start rather than silently never joining.
+- **daemon:** a worker keeps one outbound WebSocket to its gateway,
+  reconnecting with capped, jittered backoff after any disconnect; a revoked
+  join token keeps retrying at the cap rather than giving up. Over that uplink
+  the _gateway_ is the protocol client, driving the worker's own dispatcher
+  with the same contract a local admin CLI uses — the worker grants that
+  session `admin` because it dialled out to the gateway named in its own
+  config. `ws` (pinned) is the one new runtime dependency: Node 22 ships no
+  WebSocket server, and its client cannot set the request headers the join
+  token and worker id travel in.
+- **gateway:** `src/gateway/` implements the contract from worker views.
+  `status.get` returns the shape a worker returns — capacity summed across
+  connected workers, `workerId` on every device and lease, the gateway's own
+  queue depth — plus a `workers` array and `daemon.mode: "gateway"`. `catalog.get` is
+  the union of the connected workers' catalogs, annotated with which workers
+  have each model and runtime. `lease.list` and `list.get` report the fleet.
+  Worker events are republished on the gateway's bus with `workerId` added,
+  so `simlock events --follow` shows the fleet.
+- **contract:** `worker.list|drain|undrain|remove` (admin), the `worker` token
+  role, `daemon.mode: "gateway"` on `status.get`, and error codes
+  `UNSUPPORTED_IN_GATEWAY_MODE`, `WORKER_CONNECTED`, `UNKNOWN_WORKER` and
+  `WORKER_UNREACHABLE`. All additive except the protocol range, which moves to
+  `{min: 5, max: 5}` with no shim (see the breaking note below).
+- **http:** `GET /v1/workers`, `POST`/`DELETE /v1/workers/{id}/drain` and
+  `DELETE /v1/workers/{id}` on a gateway (operator role; on a worker these
+  paths are `404`), and `GET /v1/uplink`, the WebSocket upgrade a worker
+  dials. A `worker` token is `403` on every other `/v1` route, and an
+  `agent`/`operator` token is `403` at `/v1/uplink`.
+- **cli:** `simlock worker list|drain|undrain|remove`, `simlock token create
+--role worker`, and `simlock status` rendering the fleet — the mode on the
+  daemon line, one line per worker, and `on <workerId>` against each device
+  and lease when a gateway answered.
+- **operators:** a gateway keeps one small file of its own, `workers.json`
+  (owner-only), holding the ids of drained workers — drain is a decision about
+  a machine rather than something the machine reports, so it survives both the
+  worker's reconnect and a gateway restart.
+
+**Breaking, alongside ADR 0004's:** the protocol range moves from
+`{min: 4, max: 4}` to `{min: 5, max: 5}` with no compatibility shim, so a
+client or worker from before this release does not overlap and `hello` fails
+with `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges. `daemon.stop` stays
+the frozen exception, so the upgrade path is what it has always been: stop the
+old daemon, start the new one. A pre-0005 worker whose uplink reaches a
+gateway is marked `incompatible` in its view, with both ranges, and is never
+dispatched to.
+
 ### Documentation
 
 - record ADR 0004 as **Accepted — not yet implemented**
@@ -205,6 +268,14 @@ those changes add, alongside the breaking changes above.
   `docs/EVENTS.md`, `docs/ABOUT.md`, and `README.md`; record the SIGKILLed
   holder and re-frame the reparented-holder fix around renew timers in
   `docs/known-pitfalls.md`.
+- document gateway and worker modes: the topology, the uplink and worker views
+  in `docs/ARCHITECTURE.md`; `simlock worker` and the `worker` token role in
+  `docs/CLI.md`; the worker routes, `/v1/uplink` and gateway-mode behaviour in
+  `docs/HTTP-API.md` (which drops "multi-host brokering" from _Not
+  implemented_); `mode` and the `gateway.*` keys in `docs/CONFIGURATION.md`;
+  the six `worker.*` facts and event republishing in `docs/EVENTS.md`. Those
+  docs now say "HTTP frontend" for `src/http`, reserving "gateway" for ADR
+  0005's process.
 
 ## [0.3.0](https://github.com/callstackincubator/simlock/compare/v0.2.0...v0.3.0) (2026-09-03)
 

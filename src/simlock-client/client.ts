@@ -69,6 +69,11 @@ import type {
   TokenListOutput,
   TokenRevokeInput,
   TokenRevokeOutput,
+  WorkerDrainInput,
+  WorkerDrainOutput,
+  WorkerListOutput,
+  WorkerRemoveOutput,
+  WorkerUndrainOutput,
 } from "./types.js";
 
 export type {
@@ -116,6 +121,12 @@ export type {
   TokenListOutput,
   TokenRevokeInput,
   TokenRevokeOutput,
+  WorkerDrainInput,
+  WorkerDrainOutput,
+  WorkerListOutput,
+  WorkerRemoveOutput,
+  WorkerUndrainOutput,
+  WorkerView,
 } from "./types.js";
 export {
   isSimlockError,
@@ -205,6 +216,12 @@ export interface SimlockAdminClient extends SimlockClient {
   createToken(input: TokenCreateInput): Promise<TokenCreateOutput>;
   listTokens(): Promise<TokenListOutput>;
   revokeToken(input: TokenRevokeInput): Promise<TokenRevokeOutput>;
+
+  /** ADR 0005 §23. Gateway-only: a worker answers `UNKNOWN_REQUEST`, since it has no fleet. */
+  listWorkers(): Promise<WorkerListOutput>;
+  drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput>;
+  undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput>;
+  removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput>;
 }
 
 /** Internal: builds either client. `admin` toggles only which methods the returned object
@@ -327,6 +344,10 @@ function buildDegradedClient(
     createToken: () => rejected(),
     listTokens: () => rejected(),
     revokeToken: () => rejected(),
+    listWorkers: () => rejected(),
+    drainWorker: () => rejected(),
+    undrainWorker: () => rejected(),
+    removeWorker: () => rejected(),
   };
   return client;
 }
@@ -515,6 +536,22 @@ class SimlockClientImpl {
 
   revokeToken(input: TokenRevokeInput): Promise<TokenRevokeOutput> {
     return this.#call("token.revoke", input);
+  }
+
+  listWorkers(): Promise<WorkerListOutput> {
+    return this.#call("worker.list", {});
+  }
+
+  drainWorker(input: WorkerDrainInput): Promise<WorkerDrainOutput> {
+    return this.#call("worker.drain", input);
+  }
+
+  undrainWorker(input: WorkerDrainInput): Promise<WorkerUndrainOutput> {
+    return this.#call("worker.undrain", input);
+  }
+
+  removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput> {
+    return this.#call("worker.remove", input);
   }
 
   // ---- abort (ADR §10) ------------------------------------------------------------------------

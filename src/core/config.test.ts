@@ -939,6 +939,172 @@ describe("loadConfig legacy capacity keys", () => {
   });
 });
 
+/**
+ * ADR 0005 §1/§2: `mode` selects what the daemon is, and a gateway reads only `mode`, `http.*`,
+ * `log.*`, `lease.*`, `eventBuffer.*` and `gateway.*`.
+ */
+describe("loadConfig modes (ADR 0005)", () => {
+  async function load(
+    contents: unknown,
+    options: {
+      readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly warn?: (message: string) => void;
+    } = {},
+  ) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+    return loadConfig({
+      configPath,
+      filesystem,
+      systemStats: createStats(),
+      ...(options.overrides === undefined ? {} : { overrides: options.overrides }),
+      ...(options.warn === undefined ? {} : { warn: options.warn }),
+    });
+  }
+
+  it("defaults to worker mode, with HTTP off and a 24h disconnected-view retention", async () => {
+    const config = await load({});
+
+    expect(config.mode).toBe("worker");
+    expect(config.http.enabled).toBe(false);
+    expect(config.gateway).toEqual({
+      disconnectedRetentionMs: 24 * 60 * 60_000,
+      execTimeoutMs: 11 * 60_000,
+    });
+  });
+
+  it("rejects a mode outside the two the ADR names", async () => {
+    await expect(load({ mode: "hybrid" })).rejects.toThrow("mode");
+  });
+
+  it("turns HTTP on by default in gateway mode -- a gateway is the fleet's contact point", async () => {
+    const config = await load({ mode: "gateway" });
+
+    expect(config.http.enabled).toBe(true);
+    expect(config.http.port).toBe(4700);
+  });
+
+  it("refuses a gateway that switches HTTP off, naming the key", async () => {
+    await expect(load({ mode: "gateway", http: { enabled: false } })).rejects.toThrow(
+      "http.enabled",
+    );
+  });
+
+  it("keeps an explicit gateway http host/port", async () => {
+    const config = await load({ mode: "gateway", http: { host: "0.0.0.0", port: 4800 } });
+
+    expect(config.http).toEqual({ enabled: true, host: "0.0.0.0", port: 4800 });
+  });
+
+  it("warns about worker-only keys in a gateway's config and ignores them", async () => {
+    const warn = vi.fn();
+    const config = await load(
+      {
+        mode: "gateway",
+        capacity: { strategy: "fixed", config: { maxRunning: 3 } },
+        ios: { slim: { enabled: true } },
+        lease: { defaultTtlMs: 60_000 },
+      },
+      { warn },
+    );
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "capacity"'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "ios"'));
+    // Ignored, not rejected: the file still loads, and the gateway-readable keys still apply.
+    expect(config.lease.defaultTtlMs).toBe(60_000);
+    // "Ignored" means "nothing in gateway mode reads it" -- the value is still parsed and
+    // merged, so a config file can be shared between a worker and a gateway with only `mode`
+    // differing. The warning is what makes that visible rather than silent.
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Ignoring "lease"'));
+  });
+
+  it("warns about the worker-side gateway.* keys on a gateway, but not the gateway's own", async () => {
+    const warn = vi.fn();
+    const config = await load({
+      mode: "gateway",
+      gateway: {
+        url: "ws://127.0.0.1:4700/v1/uplink",
+        token: "secret",
+        label: "ignored",
+        disconnectedRetentionMs: 60_000,
+      },
+    });
+
+    expect(config.gateway.disconnectedRetentionMs).toBe(60_000);
+
+    const warned = await load(
+      { mode: "gateway", gateway: { url: "ws://127.0.0.1:4700/v1/uplink" } },
+      { warn },
+    );
+    expect(warned.mode).toBe("gateway");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('Ignoring "gateway.disconnectedRetentionMs"'),
+    );
+  });
+
+  it("says nothing about worker keys on a worker, which is every daemon today", async () => {
+    const warn = vi.fn();
+    await load({ capacity: { strategy: "fixed", config: { maxRunning: 3 } } }, { warn });
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a worker's gateway.url/token/label", async () => {
+    const config = await load({
+      gateway: { url: "wss://fleet.example", token: "join-secret", label: "mac-1" },
+    });
+
+    expect(config.gateway.url).toBe("wss://fleet.example");
+    expect(config.gateway.token).toBe("join-secret");
+    expect(config.gateway.label).toBe("mac-1");
+  });
+
+  it("refuses a worker that names a gateway but no join token, and the reverse", async () => {
+    // Either alone is an operator half-finishing a join, and a worker that silently never
+    // joined looks exactly like one whose gateway is down -- so this fails the start instead.
+    await expect(load({ gateway: { url: "ws://fleet.example" } })).rejects.toThrow("gateway.token");
+    await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
+  });
+
+  it("does not pair those keys on a gateway, which reads neither", async () => {
+    const warn = vi.fn();
+    await expect(
+      load({ mode: "gateway", gateway: { url: "ws://fleet.example" } }, { warn }),
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
+  });
+
+  it.each(["http://fleet.example/v1/uplink", "fleet.example", "not a url"])(
+    "rejects a gateway.url that is not a WebSocket URL: %s",
+    async (url) => {
+      await expect(load({ gateway: { url } })).rejects.toThrow("gateway.url");
+    },
+  );
+
+  it("rejects a non-positive disconnected retention", async () => {
+    await expect(load({ gateway: { disconnectedRetentionMs: 0 } })).rejects.toThrow(
+      "gateway.disconnectedRetentionMs",
+    );
+  });
+
+  it("defaults the gateway exec backstop above the worker's own ten minutes", async () => {
+    // ADR 0005 §19e: the worker's timeout is authoritative, so the gateway's must not fire
+    // first -- a gateway that timed out earlier would report a failure for a command still
+    // running on the machine that owns the device. #118 is what reads it.
+    const config = await load({ mode: "gateway" });
+    expect(config.gateway.execTimeoutMs).toBe(11 * 60_000);
+  });
+
+  it("lets an override name the mode, like every other key", async () => {
+    const config = await load({}, { overrides: { mode: "gateway" } });
+
+    expect(config.mode).toBe("gateway");
+    expect(config.http.enabled).toBe(true);
+  });
+});
+
 describe("effectiveAllowDownload", () => {
   it("grants downloads for every request under the always policy", () => {
     expect(effectiveAllowDownload("always", false)).toBe(true);

@@ -36,6 +36,9 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 2 | `BAD_REQUEST` | request payload failed validation |
 | 2 | `PASSTHROUGH_REFUSED` | a `simlock simctl`/`simlock adb` verb the driver will not proxy (rendered as the `USAGE` line above) |
 | 2 | `UNKNOWN_PASSTHROUGH_TOOL` | no driver on the daemon's machine wraps that tool |
+| 2 | `UNKNOWN_REQUEST` | the daemon does not implement that operation (a `worker.*` command against a worker) |
+| 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | the operation acts on one machine's devices, or is not routable yet, and this daemon is a gateway |
+| 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open |
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
 | 10 | `EXEC_TIMEOUT` | a command run on the daemon's machine (`simlock simctl`/`simlock adb` against a gateway) outran `exec.timeoutMs` and was killed |
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
@@ -44,6 +47,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
+| 12 | `UNKNOWN_WORKER` | no worker view with that id (`worker drain`/`undrain`) |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 
@@ -387,13 +391,15 @@ its daemon block: a `worker` owns the devices it serves, so the command it resol
 spawned right here with a real terminal; a `gateway` owns none, so the command
 has to run on whichever worker does. That is the whole switch — no flag, and
 nothing about which transport the CLI happens to be using. The cost is one
-extra round trip, and one consequence worth knowing: a daemon that cannot be
-reached fails the command with that call's own error rather than with a
-passthrough error. Today every daemon reports `worker`, so these commands
-always take the local path; the gateway work (#115) is what makes the other one
-reachable from this CLI, and the same operation is already reachable over the
+extra round trip. The same operation is reachable over the
 [HTTP API](HTTP-API.md) (`POST /v1/leases/{id}/exec`) and from
-`simlock/client`'s `exec` (see [CLIENT.md](CLIENT.md)).
+`simlock/client`'s `exec` (see [CLIENT.md](CLIENT.md)), and takes the same
+switch there.
+
+A gateway answers `device.exec` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit `2`)
+until fleet routing lands: forwarding a command to the worker that owns the
+lease needs the lease index that comes with routing (#118). Everything below
+describes that path once it does.
 
 The lease the remote command runs against is the one your agent identity holds
 (`--agent-id`, or `SIMLOCK_AGENT_ID`; see [Agent
@@ -625,13 +631,21 @@ A device currently `provisioning` or `reclaiming` carries a derived
 and `list --devices` well before it crosses the threshold that would make
 `doctor` flag it as stalled.
 
-Human-oriented overview: daemon health, managed capacity (used/limit per
-platform), running and reserved capacity (globally and per platform), every
-managed device with its state, current leases (who — the agent id, see [Agent
-identity](#agent-identity) — since when, and when each was last renewed), and
-queue depth. `--json` for the structured equivalent. `overLimit` is true when a
-lowered limit cannot yet be met, for example because active leases consume all
-running slots.
+Human-oriented overview: daemon health *and mode*, managed capacity
+(used/limit per platform), running and reserved capacity (globally and per
+platform), every managed device with its state, current leases (who — the agent
+id, see [Agent identity](#agent-identity) — since when, and when each was last
+renewed), and queue depth. `--json` for the structured equivalent. `overLimit`
+is true when a lowered limit cannot yet be met, for example because active
+leases consume all running slots.
+
+Against a **gateway** (`config.mode: "gateway"`, ADR 0005) the same command
+answers for the whole fleet, in the same shape: the daemon line reads
+`running (gateway)`, capacity is summed across the connected workers, one line
+per worker precedes the devices, and every device and lease names the worker it
+lives on (`Device dev_7 on wrk_a: leased`). `--json` gains a `workers` array of
+[worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each
+device and lease; `daemon.mode` says which kind of daemon answered.
 
 The daemon block carries `health` and `mode` (`"worker"` or `"gateway"`) — the
 one field that tells a client which kind of daemon answered, and what
@@ -646,6 +660,13 @@ rules. Defaults to `--devices`. Each lease record's `requesterId` is the
 agent id (see [Agent identity](#agent-identity)) that holds it, and its
 `lastRenewedAt` is when the lease was last renewed (set at grant, then on
 every renew) — the same field `status` renders as "last renewed".
+
+Against a gateway, `--devices` and `--leases` list the whole fleet with a
+`workerId` on every row. The device rows are the narrower shape `status`
+returns rather than a worker's full registry records: a gateway has never held
+a device's driver address or a driver's private data, and does not invent one.
+`--rules` lists nothing on a gateway — cleanup rules are a machine's own
+configuration, and a gateway runs no reaper.
 
 ## `simlock catalog [--platform <ios|android>] [--json]`
 
@@ -750,7 +771,10 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 ## `simlock daemon <start|stop|status|logs>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
-exists for operators and debugging. `stop` does not touch leases: they persist,
+exists for operators and debugging. `start` starts whichever mode
+`config.mode` selects — a worker (the default) or a gateway (ADR 0005) — and
+`status` reports it, both in the human line (`Daemon: running (gateway)`) and
+as `daemon.mode` under `--json`. `stop` does not touch leases: they persist,
 and the next daemon restores each one's TTL timer from its deadline. What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
@@ -783,6 +807,39 @@ handled errors. Growth is bounded: once the file passes `log.rotateBytes` it is
 rotated to `daemon.log.1` (replacing any previous generation), so `logs` always
 shows the current file with the immediately preceding one prepended.
 
+## `simlock worker <list|drain|undrain|remove>`
+
+The operator's view of a fleet (ADR 0005). Every subcommand is an admin
+operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
+(exit 2), because a worker has no worker registry to answer from.
+
+- `list [--json]` — one line per worker: its id (the worker's own instance
+  identity — stable across restarts, and not its label or host name), its
+  label if it set one, connection state, capacity, and how many leases it
+  holds. A worker the gateway cannot speak to shows `incompatible` with both
+  protocol ranges, which is what version skew looks like from here. `--json`
+  prints the raw worker views, which is what the console renders.
+- `drain <worker-id>` / `undrain <worker-id>` — a drained worker keeps its
+  existing leases and receives no new dispatches: the way to take a machine
+  out of service without killing anyone's device. The flag is persisted by the
+  gateway, so it survives both the worker's reconnect and a gateway restart —
+  draining a machine and then rebooting it does not quietly put it back into
+  rotation. Both are idempotent; an id the gateway has no view of is
+  `UNKNOWN_WORKER` (exit 12).
+- `remove <worker-id>` — forgets a **disconnected** worker's view. A connected
+  one is refused with `WORKER_CONNECTED` (exit 2): it would announce itself
+  again on its very next frame. An id with no view answers
+  `{"removed":false}` rather than failing — forgetting something already
+  forgotten is done, not an error. A view is also forgotten automatically once
+  every lease on it has passed its deadline and
+  `gateway.disconnectedRetentionMs` (default 24 h) has elapsed.
+
+```console
+$ simlock worker list
+wrk_9f2c (mac-mini-1): connected -- ios 1/2, android 0/1, 1 lease(s)
+wrk_4a10 (ci-runner-3): disconnected, drained -- ios 0/4, android 0/2, 0 lease(s)
+```
+
 ## `simlock config [get <key>|set <key> <value>]`
 
 Show the effective configuration (defaults + config file + overrides):
@@ -798,8 +855,9 @@ before Simlock provisions or boots a shutdown device.
 ## Admin credential resolution
 
 Several commands (`list`, `cleanup`, `nuke`, `events`, `config get`,
-`daemon stop`, `token create|list|revoke`, and cross-process `lease renew`
-and `release`) need the daemon's `admin` role. The CLI resolves a credential
+`daemon stop`, `token create|list|revoke`, `worker list|drain|undrain|remove`,
+and cross-process `lease renew` and `release`) need the daemon's `admin`
+role. The CLI resolves a credential
 to send at handshake, in order:
 
 1. `--token <secret>` — accepted anywhere on the command line.
@@ -821,12 +879,25 @@ pid-derived identity: all of them connect as admin (when the local file is
 readable), and admin bypasses the per-connection ownership check that would
 otherwise apply.
 
-## `simlock token create --role <agent|operator> [--label <text>]` / `list` / `revoke <token-id>`
+## `simlock token create --role <agent|operator|worker> [--label <text>]` / `list` / `revoke <token-id>`
 
 Mint and manage bearer tokens for the HTTP API. `token.create|list|revoke`
 are daemon operations (admin role) — the daemon is the only process that
 ever reads or writes `tokens.json`; the CLI is a thin client over the same
 `simlock/admin` connection every other admin command uses.
+
+Three roles:
+
+- `agent` — the ordinary HTTP bearer token; one token is one requester.
+- `operator` — everything an agent can do, plus the admin-only routes; also
+  accepted as the admin credential at `hello` (see
+  [admin credential resolution](#admin-credential-resolution)).
+- `worker` — a **join token** (ADR 0005): minted on a *gateway* and put in a
+  worker's `gateway.token`. It authorizes exactly one thing, opening an uplink
+  at `GET /v1/uplink`, and is `403` on every other `/v1` route; conversely an
+  `agent` or `operator` token is `403` at `/v1/uplink`. Revoking one closes the
+  uplink at the worker's next reconnect, and the worker keeps retrying at its
+  backoff cap until an operator mints a replacement.
 
 `create` prints the minted secret **once**, alongside the token record:
 

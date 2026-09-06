@@ -1611,6 +1611,265 @@ describe("CLI: token operations never write tokens.json directly", () => {
   });
 });
 
+describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
+  const connectedWorker = {
+    capacity: {
+      android: {
+        limit: 2,
+        maxRunning: 2,
+        overLimit: false,
+        reserved: 0,
+        running: 0,
+        used: 0,
+        warm: 0,
+      },
+      global: { maxRunning: 4, overLimit: false, reserved: 0, running: 1, warm: 1 },
+      ios: { limit: 2, maxRunning: 2, overLimit: false, reserved: 0, running: 1, used: 1, warm: 1 },
+    },
+    catalog: [],
+    connection: "connected" as const,
+    devices: [],
+    drained: false,
+    id: "wrk_1",
+    label: "mac-mini-1",
+    lastSeenAt: 1_000,
+    leases: [
+      {
+        deviceId: "dev_1",
+        grantedAt: 1,
+        id: "lease_1",
+        lastRenewedAt: 1,
+        ownerId: "agent-1",
+        requesterId: "agent-1",
+        ttlDeadline: 2,
+        ttlMs: 1,
+      },
+    ],
+  };
+
+  it("renders each worker's state, capacity and lease count", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ listWorkers: () => Promise.resolve({ workers: [connectedWorker] }) }),
+    });
+
+    await expect(runCli(["worker", "list"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected");
+    expect(output.stdout).toContain("ios 1/2");
+    expect(output.stdout).toContain("1 lease(s)");
+  });
+
+  it("says so plainly when no worker has ever connected", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({ connectAdmin: async () => fakeClient() });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toContain("No workers have connected");
+  });
+
+  it("names the protocol skew on an incompatible worker", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          listWorkers: () =>
+            Promise.resolve({
+              workers: [
+                {
+                  ...connectedWorker,
+                  connection: "incompatible" as const,
+                  leases: [],
+                  protocol: { gateway: { max: 5, min: 5 }, worker: { max: 4, min: 4 } },
+                },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toContain("incompatible");
+    expect(output.stdout).toContain("protocol 4-4 vs gateway 5-5");
+  });
+
+  it("emits the raw contract value under --json", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({ listWorkers: () => Promise.resolve({ workers: [connectedWorker] }) }),
+    });
+
+    await runCli(["worker", "list", "--json"], environment);
+
+    expect(JSON.parse(output.stdout)).toMatchObject({ workers: [{ id: "wrk_1" }] });
+  });
+
+  it("drains, undrains and removes by id", async () => {
+    const calls: string[] = [];
+    const client = fakeClient({
+      drainWorker: (input) => {
+        calls.push(`drain:${input.workerId}`);
+        return Promise.resolve({ drained: true as const, workerId: input.workerId });
+      },
+      removeWorker: (input) => {
+        calls.push(`remove:${input.workerId}`);
+        return Promise.resolve({ removed: true, workerId: input.workerId });
+      },
+      undrainWorker: (input) => {
+        calls.push(`undrain:${input.workerId}`);
+        return Promise.resolve({ drained: false as const, workerId: input.workerId });
+      },
+    });
+    const environment = outputCapture().environmentWith({ connectAdmin: async () => client });
+
+    await expect(runCli(["worker", "drain", "wrk_1"], environment)).resolves.toBe(0);
+    await expect(runCli(["worker", "undrain", "wrk_1"], environment)).resolves.toBe(0);
+    await expect(runCli(["worker", "remove", "wrk_2"], environment)).resolves.toBe(0);
+
+    expect(calls).toEqual(["drain:wrk_1", "undrain:wrk_1", "remove:wrk_2"]);
+  });
+
+  it("requires a worker id, and rejects an unknown subcommand", async () => {
+    const environment = outputCapture().environmentWith({
+      connectAdmin: async () => fakeClient(),
+    });
+
+    await expect(runCli(["worker", "drain"], environment)).resolves.toBe(2);
+    await expect(runCli(["worker", "explode"], environment)).resolves.toBe(2);
+  });
+
+  it("prints usage without connecting to anything", async () => {
+    const output = outputCapture();
+    let connected = false;
+    const environment = output.environmentWith({
+      connectAdmin: async () => {
+        connected = true;
+        return fakeClient();
+      },
+    });
+
+    await expect(runCli(["worker"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toContain("simlock worker list");
+    expect(connected).toBe(false);
+  });
+
+  it("mints a worker join token (ADR 0005 §8)", async () => {
+    const roles: string[] = [];
+    const client = fakeClient({
+      createToken: (input) => {
+        roles.push(input.role);
+        return Promise.resolve({
+          secret: "sec_join",
+          token: { createdAt: 0, id: "tok_1", role: input.role },
+        });
+      },
+    });
+    const output = outputCapture();
+    const environment = output.environmentWith({ connectAdmin: async () => client });
+
+    await expect(runCli(["token", "create", "--role", "worker"], environment)).resolves.toBe(0);
+
+    expect(roles).toEqual(["worker"]);
+    expect(JSON.parse(output.stdout)).toMatchObject({ token: { role: "worker" } });
+  });
+
+  it("still rejects a role that is not one of the three", async () => {
+    const environment = outputCapture().environmentWith({
+      connectAdmin: async () => fakeClient(),
+    });
+
+    await expect(runCli(["token", "create", "--role", "root"], environment)).resolves.toBe(2);
+  });
+});
+
+describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () => {
+  it("names the mode, each worker, and which worker a device and a lease live on", async () => {
+    const output = outputCapture();
+    const status = {
+      capacity: {
+        android: {
+          limit: 0,
+          maxRunning: 0,
+          overLimit: false,
+          reserved: 0,
+          running: 0,
+          used: 0,
+          warm: 0,
+        },
+        global: { maxRunning: 2, overLimit: false, reserved: 0, running: 1, warm: 0 },
+        ios: {
+          limit: 2,
+          maxRunning: 2,
+          overLimit: false,
+          reserved: 0,
+          running: 1,
+          used: 1,
+          warm: 0,
+        },
+      },
+      daemon: { health: "running" as const, mode: "gateway" as const },
+      devices: [
+        {
+          id: "dev_1",
+          spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
+          state: "leased" as const,
+          workerId: "wrk_1",
+        },
+      ],
+      leases: [
+        {
+          deviceId: "dev_1",
+          grantedAt: 1,
+          id: "lease_1",
+          lastRenewedAt: 1,
+          ownerId: "agent-1",
+          requesterId: "agent-1",
+          ttlDeadline: 2,
+          ttlMs: 1,
+          workerId: "wrk_1",
+        },
+      ],
+      queueDepth: 0,
+      workers: [
+        {
+          capacity: undefined,
+          catalog: [],
+          connection: "connected" as const,
+          devices: [],
+          drained: true,
+          id: "wrk_1",
+          lastSeenAt: 1,
+          leases: [],
+        },
+      ],
+    };
+    const environment = output.environmentWith({
+      connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+    });
+
+    await runCli(["status"], environment);
+
+    expect(output.stdout).toContain("Daemon: running (gateway)");
+    expect(output.stdout).toContain("wrk_1: connected, drained");
+    expect(output.stdout).toContain("Device dev_1 on wrk_1: leased");
+    expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
+  });
+
+  it("says worker on a worker, and leaves its devices and leases unqualified", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({ connectAdmin: async () => fakeClient() });
+
+    await runCli(["status"], environment);
+
+    expect(output.stdout).toContain("Daemon: running (worker)");
+    expect(output.stdout).not.toContain(" on wrk_");
+  });
+});
+
 describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", () => {
   it("exits 14 on a lost lease and does not attempt to re-release it", async () => {
     const output = outputCapture();
@@ -2689,6 +2948,11 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       }),
     listTokens: () => Promise.resolve(emptyTokenList),
     revokeToken: () => Promise.resolve({ revoked: true }),
+    listWorkers: () => Promise.resolve({ workers: [] }),
+    drainWorker: (input) => Promise.resolve({ drained: true as const, workerId: input.workerId }),
+    undrainWorker: (input) =>
+      Promise.resolve({ drained: false as const, workerId: input.workerId }),
+    removeWorker: (input) => Promise.resolve({ removed: true, workerId: input.workerId }),
     ...overrides,
   };
   return base;
@@ -2947,6 +3211,7 @@ function testConfig(): Config {
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
+    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
     drivers: {},
     eventBuffer: { capacity: 100 },
     health: {

@@ -5,11 +5,13 @@ import { classifyError } from "../daemon/error-code.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 
-/** Every status this gateway ever answers with; keeps `mapError` exhaustive by construction.
- * 504 is `EXEC_TIMEOUT`'s (ADR 0005 §19e): a `device.exec` command the daemon killed for
- * outrunning `exec.timeoutMs` is the one case where what this gateway was waiting on never
- * finished, which is exactly what a gateway timeout says. */
-export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503 | 504;
+/** Every status this frontend ever answers with; keeps `mapError` exhaustive by construction.
+ * 501 is `UNSUPPORTED_IN_GATEWAY_MODE`'s (ADR 0005 §34): the request was well-formed and the
+ * daemon is healthy, this endpoint simply does not implement that operation. 504 is
+ * `EXEC_TIMEOUT`'s (ADR 0005 §19e): a `device.exec` command the daemon killed for outrunning
+ * `exec.timeoutMs` is the one case where what this frontend was waiting on never finished,
+ * which is exactly what a gateway timeout says. */
+export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 501 | 503 | 504;
 
 /**
  * Uniform `{status, code}` pair a route or middleware raises directly (auth, ownership,
@@ -131,13 +133,31 @@ export function mapError(error: unknown): MappedError {
   const extra =
     error instanceof RequesterAlreadyLeasedError && error.existingLeaseId !== undefined
       ? { existingLeaseId: error.existingLeaseId }
-      : undefined;
+      : // ADR 0003 §7: `details` are contract, message text is not -- so a `DispatchError`
+        // carrying them (`WORKER_CONNECTED`'s `workerId`,
+        // `UNSUPPORTED_IN_GATEWAY_MODE`'s `operation`) puts them in the response body, where a
+        // client can branch on them instead of parsing prose.
+        isDetailsObject(error)
+        ? error.details
+        : undefined;
   return {
     status: entry.httpStatus as HttpStatus,
     code: entry.code,
     message: recognized && error instanceof Error ? error.message : "Internal error",
     ...(extra === undefined ? {} : { extra }),
   };
+}
+
+/** A `DispatchError` whose `details` are a plain object worth putting on the wire. */
+function isDetailsObject(error: unknown): error is DispatchError & {
+  readonly details: Record<string, unknown>;
+} {
+  return (
+    error instanceof DispatchError &&
+    typeof error.details === "object" &&
+    error.details !== null &&
+    !Array.isArray(error.details)
+  );
 }
 
 /** Writes `mapError`'s result as the standard `{"error":{...}}` body, plus `Retry-After` for NO_CAPACITY. */

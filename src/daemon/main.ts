@@ -54,9 +54,20 @@ import {
   type ProcessSupervisor,
   type TcpProbe,
 } from "../ports/index.js";
+import {
+  FileDrainStore,
+  GatewayDispatcher,
+  GatewayService,
+  type GatewayServiceOptions,
+} from "../gateway/index.js";
+import {
+  WebSocketUplinkConnector,
+  WebSocketUplinkListenerFactory,
+} from "../ports/uplink-websocket.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminSecretManager } from "./admin-secret.js";
+import { GatewayUplink } from "./gateway-uplink.js";
 import { createCredentialRoleResolver } from "./session.js";
 
 export interface StartDaemonOptions {
@@ -115,6 +126,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // that resets on restart (see ARCHITECTURE.md "Event bus"), so a component simlock installed
   // is only attributable later through the daemon's own log file.
   wireComponentInstallLogging(eventBus, logger);
+  // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
+  // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
+  // branch is here, before any of that is built, rather than as a set of conditionals threaded
+  // through the worker's composition below.
+  if (config.mode === "gateway") {
+    return startGatewayDaemon({
+      clock,
+      config,
+      dataDirectory,
+      eventBus,
+      filesystem,
+      idGenerator,
+      ipc,
+      logger,
+      socketPath,
+      version: options.version ?? "1.0.0",
+    });
+  }
   // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
   // written before it has no stored width of its own, and takes the configured default rather
   // than a guess derived from its deadline.
@@ -213,8 +242,26 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
     verifyAdminSecret: (secret) => adminSecret.verify(secret),
   });
-  // Reassigned once the HTTP gateway actually starts, but must exist as a stable closure now:
-  // `stopAuxiliary` is fixed at `DaemonServer` construction time, before the gateway itself
+  /**
+   * ADR 0005 §3/§4: two config keys join a fleet. Undefined here means this worker has no
+   * gateway, which is every worker today -- and the daemon is otherwise completely unchanged
+   * either way, which is the point of the uplink being outbound.
+   */
+  const gatewayUplink =
+    config.gateway.url === undefined || config.gateway.token === undefined
+      ? undefined
+      : new GatewayUplink({
+          accept: (connection) => daemon.acceptUplink(connection),
+          clock,
+          connector: new WebSocketUplinkConnector(),
+          logger: logger.child("uplink"),
+          token: config.gateway.token,
+          url: config.gateway.url,
+          workerId: instanceId,
+          ...(config.gateway.label === undefined ? {} : { label: config.gateway.label }),
+        });
+  // Reassigned once the HTTP frontend actually starts, but must exist as a stable closure now:
+  // `stopAuxiliary` is fixed at `DaemonServer` construction time, before the frontend itself
   // exists.
   let stopHttpGateway: (() => Promise<void>) | undefined;
   // Settles once the HTTP gateway either finishes starting or fails to -- resolved/rejected from
@@ -321,6 +368,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     stopAuxiliary: async () => {
       await gatewayStarted.catch(() => undefined);
       await stopHttpGateway?.();
+      // Stopped with the other auxiliary frontends, and for the same reason: the uplink is a
+      // live connection into this daemon's dispatcher, so it must be shut before lease/queue
+      // teardown begins. Stopping it also stops the reconnect loop, so a shutting-down worker
+      // does not redial the gateway it just left.
+      await gatewayUplink?.stop();
     },
     // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
     // being refused". Firing the gateway's own `start()` from here (not after `daemon.start()`
@@ -337,7 +389,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
             void startHttpGateway().then(
               () => resolveGatewayStarted?.(),
               (error: unknown) => {
-                logger.error("HTTP gateway failed to start", { message: errorMessage(error) });
+                logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
                 rejectGatewayStarted?.(error);
               },
             );
@@ -345,6 +397,12 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         }
       : {}),
   });
+
+  // Dialled once the socket is claimed and the dispatcher can answer -- the gateway's first
+  // `status.get` then parks on startup readiness exactly like any other request, instead of
+  // racing convergence. Nothing awaits it: a worker whose gateway is down must still come up
+  // and serve its local agents (`GatewayUplink` retries on its own backoff).
+  gatewayUplink?.start();
 
   async function startHttpGateway(): Promise<void> {
     const httpLogger = logger.child("http");
@@ -402,6 +460,193 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   }
   if (daemonResult.status === "rejected") throw daemonResult.reason;
   if (gatewayResult.status === "rejected") throw gatewayResult.reason;
+  return daemon;
+}
+
+interface GatewayDaemonOptions {
+  readonly clock: Clock;
+  readonly config: Config;
+  readonly dataDirectory: string;
+  readonly eventBus: EventBus;
+  readonly filesystem: Filesystem;
+  readonly idGenerator: IdGenerator;
+  readonly ipc: IpcConnector & IpcListenerFactory;
+  readonly logger: Logger;
+  readonly socketPath: string;
+  readonly version: string;
+}
+
+/**
+ * A daemon in gateway mode (ADR 0005 §2, §32): no drivers, no registry, no reaper, no health
+ * monitor, no capacity strategy. What it has instead is a worker registry fed by uplinks, and
+ * `GatewayDispatcher` answering the same contract from those views.
+ *
+ * Two things are unconditional here where a worker makes them optional, and both follow from
+ * §2's "a gateway always listens on HTTP (it is the fleet's contact point) and on its unix
+ * socket": HTTP is started (the config loader refuses `http.enabled: false` in this mode), and
+ * the uplink listener is attached to that same HTTP server, so the whole fleet has exactly one
+ * inbound port.
+ */
+// fallow-ignore-next-line complexity -- explicit production composition, exactly like `startDaemon`'s worker half.
+async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<DaemonServer> {
+  const { clock, config, dataDirectory, eventBus, filesystem, idGenerator, logger } = options;
+  // The gateway's own identity, used to namespace the principal it announces to each worker
+  // (ADR 0005 §27's shape) so a worker's logs attribute what the gateway did to the gateway.
+  const instanceId = await loadInstanceId({
+    filesystem,
+    idGenerator,
+    path: join(dataDirectory, "instance.json"),
+  });
+  // ADR 0005 §24: a gateway has its own token store and mints its own credentials. A gateway
+  // token is never valid on a worker and vice versa -- they are different stores on different
+  // machines, which is what makes that true without any code enforcing it.
+  const tokens = new TokenStore({
+    clock,
+    filesystem,
+    idGenerator,
+    path: join(dataDirectory, "tokens.json"),
+    secrets: new CryptoTokenSecrets(),
+  });
+  const adminSecret = new AdminSecretManager({
+    filesystem,
+    secrets: new CryptoTokenSecrets(),
+    path: join(dataDirectory, "admin.token"),
+  });
+  const resolveRole = createCredentialRoleResolver({
+    verifyOperatorToken: async (secret) => (await tokens.verify(secret))?.role === "operator",
+    verifyAdminSecret: (secret) => adminSecret.verify(secret),
+  });
+
+  const uplinks = new WebSocketUplinkListenerFactory();
+  const gatewayService = new GatewayService({
+    // ADR 0005 §4/§25: only a `worker`-role token opens an uplink. A token of another role is
+    // real and simply has no authority here (403); anything else is unauthenticated (401).
+    authenticate: async (credential) => {
+      if (credential === undefined) return "unauthenticated";
+      const identity = await tokens.verify(credential);
+      if (identity === undefined) return "unauthenticated";
+      return identity.role === "worker" ? "accept" : "forbidden";
+    },
+    clock,
+    drainStore: new FileDrainStore({
+      filesystem,
+      logger: logger.child("gateway"),
+      path: join(dataDirectory, "workers.json"),
+    }),
+    eventBus,
+    logger: logger.child("gateway"),
+    principal: `gw:${instanceId}`,
+    retentionMs: config.gateway.disconnectedRetentionMs,
+    uplinks,
+  } satisfies GatewayServiceOptions);
+
+  let stopHttpGateway: (() => Promise<void>) | undefined;
+  let resolveHttpStarted: (() => void) | undefined;
+  let rejectHttpStarted: ((error: unknown) => void) | undefined;
+  let socketClaimed = false;
+  const httpStarted = new Promise<void>((resolveStarted, rejectStarted) => {
+    resolveHttpStarted = resolveStarted;
+    rejectHttpStarted = rejectStarted;
+  });
+
+  const daemon = new DaemonServer({
+    adminSecret,
+    clock,
+    config,
+    defaultRequesterId: process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
+    // ADR 0005 §32: the contract's second implementation, serving the same transport.
+    dispatcher: new GatewayDispatcher({
+      awaitReady: () => Promise.resolve(),
+      config,
+      eventBus,
+      health: () => daemon.health,
+      logger: logger.child("gateway"),
+      tokens,
+      workers: gatewayService.workers,
+    }),
+    eventBus,
+    host: new DaemonEndpointHost({
+      connector: options.ipc,
+      endpoint: options.socketPath,
+      filesystem,
+      listenerFactory: options.ipc,
+      logger: logger.child("connection-host"),
+    }),
+    logger: logger.child("server"),
+    resolveRole,
+    version: options.version,
+    // A gateway's "convergence" is starting to accept uplinks and arming the refresh tick.
+    // Running it here rather than before `start()` keeps one lifecycle: a listener that cannot
+    // start fails the daemon start, and `status.get` answers throughout (a fleet with no views
+    // yet is a true answer, not an unready one). A worker that dials in the window before this
+    // resolves is refused and redials on its own backoff.
+    converge: async () => {
+      await gatewayService.start();
+    },
+    dispose: async () => {
+      await gatewayService.stop();
+    },
+    stopAuxiliary: async () => {
+      await httpStarted.catch(() => undefined);
+      await stopHttpGateway?.();
+    },
+    onSocketClaimed: () => {
+      socketClaimed = true;
+      void startHttpFrontend().then(
+        () => resolveHttpStarted?.(),
+        (error: unknown) => {
+          logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
+          rejectHttpStarted?.(error);
+        },
+      );
+    },
+  });
+
+  async function startHttpFrontend(): Promise<void> {
+    const httpLogger = logger.child("http");
+    const app = createHttpApp({
+      clock,
+      config,
+      dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
+      eventBus,
+      idGenerator,
+      logger: httpLogger,
+      // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
+      // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).
+      ownerRoutedFacts: daemon.ownerRoutedFacts,
+      // A gateway owns no devices, so there is no registry to read one from. The routes that
+      // decorate a response with a device record are lease routes, which answer
+      // `UNSUPPORTED_IN_GATEWAY_MODE` here anyway; the fleet's devices come from `status.get`.
+      registry: { snapshot: { devices: [] } },
+      tokens,
+    });
+    const gateway = new HttpGateway(app, {
+      host: config.http.host,
+      logger: httpLogger,
+      // ADR 0005 §4: the uplink upgrades on this same listener, so the fleet has one inbound
+      // port. The factory only needs the server's `upgrade` event, which is all it is given.
+      onServerCreated: (server) => uplinks.attach(server),
+      port: config.http.port,
+    });
+    await gateway.start();
+    stopHttpGateway = async () => {
+      await gateway.stop();
+      app.dispose();
+    };
+  }
+
+  const daemonStarted = daemon.start().finally(() => {
+    if (!socketClaimed) resolveHttpStarted?.();
+  });
+  const [daemonResult, httpResult] = await Promise.allSettled([daemonStarted, httpStarted]);
+  if (httpResult.status === "rejected" && daemonResult.status === "fulfilled") {
+    // The gateway itself came up but its HTTP listener never bound -- which for a gateway means
+    // no agent can reach it and no worker can join it. Tear it down, after the start is a
+    // settled fact so `daemon.stopping` cannot precede `daemon.started`.
+    await daemon.stop("http-start-failed").catch(() => undefined);
+  }
+  if (daemonResult.status === "rejected") throw daemonResult.reason;
+  if (httpResult.status === "rejected") throw httpResult.reason;
   return daemon;
 }
 

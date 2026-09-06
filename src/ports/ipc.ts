@@ -189,6 +189,27 @@ export class MemoryIpcTransport implements IpcConnector, IpcListenerFactory {
   }
 }
 
+/**
+ * Adds `listener` to `listeners` and returns the unsubscribe every `on*` method on
+ * `IpcConnection` hands back.
+ *
+ * Three lines, but written out per event per implementation it was nine copies of the same
+ * add-then-delete dance across the in-memory transport, the paired connection behind the
+ * uplink port, and the WebSocket adapter -- and the dance is all they shared, since what
+ * differs between those classes is what *emits*, never how one subscribes. Set-backed
+ * implementations only: `NodeIpcConnection` above delegates to the socket's own
+ * `EventEmitter`, which already owns this bookkeeping.
+ */
+export function subscribeListener<Listener>(
+  listeners: Set<Listener>,
+  listener: Listener,
+): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 class MemoryIpcConnection implements IpcConnection {
   readonly #closeListeners = new Set<() => void>();
   readonly #dataListeners = new Set<(chunk: string) => void>();
@@ -205,18 +226,15 @@ class MemoryIpcConnection implements IpcConnection {
   }
 
   onData(listener: (chunk: string) => void): () => void {
-    this.#dataListeners.add(listener);
-    return () => this.#dataListeners.delete(listener);
+    return subscribeListener(this.#dataListeners, listener);
   }
 
   onClose(listener: () => void): () => void {
-    this.#closeListeners.add(listener);
-    return () => this.#closeListeners.delete(listener);
+    return subscribeListener(this.#closeListeners, listener);
   }
 
   onError(listener: (error: Error) => void): () => void {
-    this.#errorListeners.add(listener);
-    return () => this.#errorListeners.delete(listener);
+    return subscribeListener(this.#errorListeners, listener);
   }
 
   async write(contents: string): Promise<void> {

@@ -70,4 +70,17 @@ describe("requireAuth", () => {
       identity: { requesterId: "tok_op", role: "operator" },
     });
   });
+
+  it("403s a worker join token: it can open an uplink and nothing else (ADR 0005 §25)", async () => {
+    const tokens = new FakeTokens();
+    tokens.register("slk_join", { requesterId: "tok_join", role: "worker" });
+    const response = await appWithAuth(tokens).request("/resource", {
+      headers: { authorization: "Bearer slk_join" },
+    });
+    // 403, not 401: the token is real and was recognized, it just has no authority here.
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: { code: "FORBIDDEN", message: expect.any(String) },
+    });
+  });
 });

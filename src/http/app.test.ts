@@ -1136,3 +1136,132 @@ describe("hardening from review", () => {
     expect(body.lease.ttlMs).toBe(123_000);
   });
 });
+
+/**
+ * ADR 0005 §23. The routes themselves are thin -- one dispatch each -- so what is worth
+ * asserting is which daemon has them at all, that the gateway-only ones reach the right
+ * operation with the id from the path, and that a refusal's typed `details` reach the body.
+ */
+describe("worker routes (gateway mode)", () => {
+  function gatewayHarness() {
+    return buildHarness({ config: testConfig({}, "gateway") });
+  }
+
+  it("are not routes at all on a worker", async () => {
+    const { app } = buildHarness();
+
+    const response = await app.request("/v1/workers", { headers: operatorAuth });
+
+    // 404, not 501: a worker has no worker registry, so this is not an endpoint that exists
+    // and is switched off -- it is not an endpoint.
+    expect(response.status).toBe(404);
+  });
+
+  it("GET /v1/workers returns the views", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    dispatcher.handlers["worker.list"] = () => ({
+      workers: [
+        {
+          catalog: [],
+          connection: "connected",
+          devices: [],
+          drained: false,
+          id: "wrk_1",
+          lastSeenAt: 1,
+          leases: [],
+        },
+      ],
+    });
+
+    const response = await app.request("/v1/workers", { headers: operatorAuth });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ workers: [{ id: "wrk_1" }] });
+  });
+
+  it("maps drain, undrain and remove onto their operations, with the id from the path", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    dispatcher.handlers["worker.drain"] = (input: never) => ({
+      drained: true,
+      workerId: (input as { workerId: string }).workerId,
+    });
+    dispatcher.handlers["worker.undrain"] = (input: never) => ({
+      drained: false,
+      workerId: (input as { workerId: string }).workerId,
+    });
+    dispatcher.handlers["worker.remove"] = (input: never) => ({
+      removed: true,
+      workerId: (input as { workerId: string }).workerId,
+    });
+
+    const drained = await app.request("/v1/workers/wrk_1/drain", {
+      headers: operatorAuth,
+      method: "POST",
+    });
+    expect(await drained.json()).toEqual({ drained: true, workerId: "wrk_1" });
+    const undrained = await app.request("/v1/workers/wrk_1/drain", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+    expect(await undrained.json()).toEqual({ drained: false, workerId: "wrk_1" });
+    const removed = await app.request("/v1/workers/wrk_2", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+    expect(await removed.json()).toEqual({ removed: true, workerId: "wrk_2" });
+
+    expect(dispatcher.calls.map((call) => call.operation)).toEqual([
+      "worker.drain",
+      "worker.undrain",
+      "worker.remove",
+    ]);
+  });
+
+  it("leaves the role check to the shared dispatcher, which 403s an agent token", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    dispatcher.handlers["worker.list"] = () => {
+      throw new DispatchError("FORBIDDEN", "Operation worker.list requires role admin");
+    };
+
+    const response = await app.request("/v1/workers", { headers: agentAuth });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("puts a refusal's typed details in the body, so a client need not parse prose", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    dispatcher.handlers["worker.remove"] = () => {
+      throw new DispatchError("WORKER_CONNECTED", "Worker wrk_1 is still connected", {
+        workerId: "wrk_1",
+      });
+    };
+
+    const response = await app.request("/v1/workers/wrk_1", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: { code: "WORKER_CONNECTED", message: expect.any(String), workerId: "wrk_1" },
+    });
+  });
+
+  it("answers 501 for an operation a gateway does not implement", async () => {
+    const { app, dispatcher } = gatewayHarness();
+    dispatcher.handlers["lease.request"] = () => {
+      throw new DispatchError(
+        "UNSUPPORTED_IN_GATEWAY_MODE",
+        "lease.request is not available on a gateway yet",
+        { operation: "lease.request" },
+      );
+    };
+
+    const response = await postLeaseRequest(app, defaultBody);
+
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({
+      error: { code: "UNSUPPORTED_IN_GATEWAY_MODE", operation: "lease.request" },
+    });
+  });
+});

@@ -9,6 +9,15 @@ export interface HttpGatewayOptions {
   readonly host: string;
   readonly port: number;
   readonly logger: Logger;
+  /**
+   * Called once, with the Node HTTP server, as soon as it exists (before it is listening).
+   * ADR 0005 §4 puts the worker uplink on this same listener -- upgraded on `/v1/uplink` -- so
+   * that the whole fleet has exactly one inbound port. The uplink adapter needs the server's
+   * `upgrade` event to do that, and this is the only thing it needs; handing it the server
+   * here keeps `HttpGateway` from growing any knowledge of WebSockets, uplinks, or workers.
+   * Undefined on a worker, which upgrades nothing.
+   */
+  readonly onServerCreated?: (server: Server) => void;
 }
 
 /**
@@ -42,6 +51,7 @@ export class HttpGateway {
   readonly #port: number;
   readonly #logger: Logger;
   readonly #sockets = new Set<Socket>();
+  readonly #onServerCreated: ((server: Server) => void) | undefined;
   #server: Server | undefined;
 
   constructor(app: FetchApp, options: HttpGatewayOptions) {
@@ -49,6 +59,7 @@ export class HttpGateway {
     this.#host = options.host;
     this.#port = options.port;
     this.#logger = options.logger;
+    this.#onServerCreated = options.onServerCreated;
   }
 
   /** Resolves once listening, with the actual bound port (matches the configured one in v1, since port 0 is never used here). */
@@ -76,6 +87,10 @@ export class HttpGateway {
         socket.once("close", () => this.#sockets.delete(socket));
       });
       this.#server = server;
+      // Before `listening` fires deliberately: an upgrade cannot arrive until the server is
+      // listening, and wiring it here means there is no window where a connection is accepted
+      // with no `upgrade` handler attached.
+      this.#onServerCreated?.(server);
     });
   }
 

@@ -42,6 +42,13 @@ export const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 /** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
+/** `gateway.disconnectedRetentionMs`'s default (ADR 0005 §6): 24 hours. */
+const DEFAULT_DISCONNECTED_RETENTION_MS = 24 * 60 * 60_000;
+
+/** `gateway.execTimeoutMs`'s default (ADR 0005 §19e): eleven minutes, one more than the
+ * worker's authoritative ten, so the worker's timeout is the one that fires. */
+const DEFAULT_GATEWAY_EXEC_TIMEOUT_MS = 11 * 60_000;
+
 /**
  * `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
  * on this worker before it is killed and the operation fails with `EXEC_TIMEOUT`. Ten minutes,
@@ -69,7 +76,7 @@ export type DaemonMode = "worker" | "gateway";
 
 export interface Config {
   /** See `DaemonMode`. Reported on `status.get`'s daemon block, which is how a client tells
-   * the two apart; the gateway behaviour itself lands with #117. */
+   * the two apart. Default `"worker"`. */
   readonly mode: DaemonMode;
   readonly capacity: CapacityConfig;
   /**
@@ -144,6 +151,48 @@ export interface Config {
       readonly bootTimeoutMs: number;
     };
   };
+  /**
+   * ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
+   * on `mode`:
+   *
+   * - a **worker** reads `url`, `token`, and `label` -- the two keys that join a fleet, plus a
+   *   display name. Absent `url`/`token` simply means "this worker has no gateway", which is
+   *   every worker today.
+   * - a **gateway** reads `disconnectedRetentionMs` and ignores the other three with a
+   *   warning (`loadConfig` reports every worker-only key it finds in a gateway's config).
+   *
+   * Kept as one block rather than `gateway.*` / `worker.*` blocks because both halves are
+   * facts about the same relationship, and a `worker.gateway.url` spelling reads worse than
+   * the thing it configures.
+   */
+  readonly gateway: {
+    /** The gateway's uplink endpoint, `ws://host:port/v1/uplink` or `wss://...`. Worker-side. */
+    readonly url?: string;
+    /** A join token minted on the gateway with `simlock token create --role worker`.
+     * Worker-side. It is a secret, and it sits in the daemon's config file like any other
+     * value there: `config.get` is admin-role and returns the config as written, so this key
+     * is exactly as sensitive as `config.json`'s file permissions make it. See
+     * docs/CONFIGURATION.md. */
+    readonly token?: string;
+    /** Display-only name for this worker in the gateway's views (§3a, §13). Worker-side. */
+    readonly label?: string;
+    /**
+     * How long a gateway keeps a disconnected worker's view before forgetting it (§6).
+     * Gateway-side. Default 24 hours: long enough that a machine rebooting overnight is still
+     * the same machine in the morning, short enough that a decommissioned one does not haunt
+     * `simlock status` forever. A view whose leases have not all expired is never dropped on
+     * this timer, however long it has been gone.
+     */
+    readonly disconnectedRetentionMs: number;
+    /**
+     * Gateway-side backstop on a proxied `device.exec` (ADR 0005 §19e). Deliberately longer
+     * than the worker's own `exec.timeoutMs` (ten minutes): the worker's is authoritative and
+     * should be what kills a runaway command, so a gateway that timed out first would report
+     * a failure for a command still running on the machine that owns the device. Read by #118,
+     * which is what proxies `device.exec`; declared now so the key does not appear mid-series.
+     */
+    readonly execTimeoutMs: number;
+  };
   readonly stalledTransition: {
     /**
      * Applied to the driver's own estimate (`provision + boot` for `provisioning`,
@@ -194,6 +243,10 @@ export async function loadConfig({
   // defaulted: it decides which options block `capacity.config` is, and which
   // defaults the merge starts from.
   const strategy = resolveStrategyName([fromFile, fromOverrides]);
+  // Same reason as the strategy above: `mode` decides which keys are read at all, and what
+  // `http.enabled` defaults to, so it has to be known before anything is defaulted or warned
+  // about.
+  const mode = resolveMode([fromFile, fromOverrides]);
   const validators = configValidators(strategy);
 
   const fileConfig = normalizeLayer(
@@ -208,10 +261,18 @@ export async function loadConfig({
   );
 
   const merged = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy), fileConfig),
+    mergeConfig(defaultConfig(systemStats, strategy, mode), fileConfig),
     overrideConfig,
   ) as unknown as Config;
   validateLeaseTtls(merged);
+  if (mode === "gateway") {
+    warnWorkerOnlyKeys([fromFile, fromOverrides], warn);
+    requireGatewayHttp(merged);
+  } else {
+    // Worker-side only: a gateway ignores these keys entirely (it dials nobody), so pairing
+    // them there would fail a start over a value nothing reads.
+    validateGatewayMembership(merged);
+  }
   return deepFreeze(merged);
 }
 
@@ -240,6 +301,122 @@ function validateLeaseTtls(config: Config): void {
   if (config.lease.defaultTtlMs > config.lease.maxTtlMs) {
     throw invalidValue("lease.defaultTtlMs", "at most lease.maxTtlMs");
   }
+}
+
+/**
+ * The config keys a gateway reads (ADR 0005 §2). Everything else in a gateway's config is a
+ * worker-only key: it configures drivers, devices, capacity, or cleanup, none of which a
+ * gateway has. Listed here rather than derived from `Config`'s shape because the *set* is the
+ * decision -- adding a key to `Config` should not silently make it gateway-relevant.
+ */
+const GATEWAY_CONFIG_KEYS: readonly string[] = [
+  "mode",
+  "http",
+  "log",
+  "lease",
+  "eventBuffer",
+  "gateway",
+];
+
+/** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
+ * `disconnectedRetentionMs` and `execTimeoutMs` are the ones the gateway itself reads. */
+const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
+
+/**
+ * ADR 0005 §2: "worker-only keys in a gateway's config are ignored with a warning, as unknown
+ * keys are today". Warned per key the operator actually wrote (the file and override layers),
+ * never per defaulted key -- a gateway's own defaults contain the whole worker-side `Config`
+ * shape, and warning about those would fire on every start with nothing to fix.
+ *
+ * Ignoring rather than failing is the deliberate choice the ADR makes, and it is what lets one
+ * config file be copied between a worker and a gateway while only `mode` differs.
+ */
+function warnWorkerOnlyKeys(layers: readonly unknown[], warn: Warn): void {
+  for (const layer of layers) {
+    const object = requireObject(layer, "config");
+    for (const key of Object.keys(object)) {
+      if (!GATEWAY_CONFIG_KEYS.includes(key)) {
+        warn(`Ignoring "${key}": it configures a worker, and this daemon runs in gateway mode.`);
+      }
+    }
+    const gateway = object["gateway"];
+    if (gateway === undefined) continue;
+    for (const key of Object.keys(requireObject(gateway, "gateway"))) {
+      if (WORKER_ONLY_GATEWAY_KEYS.includes(key)) {
+        warn(
+          `Ignoring "gateway.${key}": it points a worker at its gateway, ` +
+            `and this daemon runs in gateway mode.`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * ADR 0005 §2: "a gateway always listens on HTTP (it is the fleet's contact point) and on its
+ * unix socket". HTTP is not optional for a gateway in a way it is for a worker: it is how
+ * every agent reaches the fleet *and* the transport the worker uplink upgrades from
+ * (`/v1/uplink`), so a gateway with `http.enabled: false` is a process nothing can reach and
+ * no worker can join.
+ *
+ * The default is flipped to `true` for a gateway (see `defaultConfig`), so this only ever
+ * fires for a config that says `false` out loud. That is refused rather than silently
+ * overridden, on the same reasoning as `lease.defaultTtlMs > lease.maxTtlMs`: a value the
+ * operator wrote and the daemon quietly inverted is worse than a start that says why.
+ */
+function requireGatewayHttp(config: Config): void {
+  if (!config.http.enabled) {
+    throw invalidValue("http.enabled", "true in gateway mode (a gateway is reached over HTTP)");
+  }
+}
+
+/**
+ * A worker's fleet membership, checked at load rather than at dial time so a typo fails the
+ * daemon start naming the key instead of surfacing as an endless reconnect loop hours later.
+ *
+ * `gateway.url` is the gateway's **base** URL (`ws://host:port`); the worker derives the
+ * uplink endpoint (`/v1/uplink`) from it, so nothing here inspects the path -- a URL that
+ * already carries one is accepted and the endpoint is resolved against it, which is what makes
+ * a reverse proxy on a sub-path work.
+ *
+ * The two keys are required together: a URL with no token cannot authenticate and a token with
+ * no URL has nowhere to go, and either alone is an operator half-finishing a join. Failing the
+ * start is right where ignoring would be wrong -- a worker that silently never joined would
+ * look identical to one whose gateway is down.
+ */
+function validateGatewayMembership(config: Config): void {
+  const { token, url } = config.gateway;
+  if (url !== undefined) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+    }
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+    }
+  }
+  if (url !== undefined && token === undefined) {
+    throw invalidValue("gateway.token", "a join token, since gateway.url is set");
+  }
+  if (token !== undefined && url === undefined) {
+    throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
+  }
+}
+
+/** Last layer that names a mode wins; absent everywhere means `worker` (ADR 0005 §1). */
+function resolveMode(layers: readonly unknown[]): DaemonMode {
+  let resolved: DaemonMode = "worker";
+  for (const layer of layers) {
+    const candidate = requireObject(layer, "config")["mode"];
+    if (candidate === undefined) continue;
+    if (candidate !== "worker" && candidate !== "gateway") {
+      throw invalidValue("mode", 'one of "worker", "gateway"');
+    }
+    resolved = candidate;
+  }
+  return resolved;
 }
 
 /** Last layer that names a strategy wins; absent everywhere means the default. */
@@ -314,9 +491,13 @@ function asObject(value: unknown): Layer {
   return isObject(value) ? value : {};
 }
 
-function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName): Config {
+function defaultConfig(
+  systemStats: SystemStats,
+  strategy: CapacityStrategyName,
+  mode: DaemonMode,
+): Config {
   return {
-    mode: "worker",
+    mode,
     capacity: {
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
@@ -347,7 +528,10 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
+    // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
+    // something every operator has to remember to switch on; a worker's HTTP gateway stays
+    // opt-in exactly as before.
+    http: { enabled: mode === "gateway", host: "127.0.0.1", port: 4700 },
     health: {
       enabled: true,
       probeIntervalMs: 30_000,
@@ -361,6 +545,10 @@ function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName)
         enabled: false,
         bootTimeoutMs: 600_000,
       },
+    },
+    gateway: {
+      disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
+      execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
     },
     stalledTransition: {
       thresholdMultiplier: 3,
@@ -410,8 +598,8 @@ function validateConfigLayer(
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
-const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 const DAEMON_MODES: readonly DaemonMode[] = ["worker", "gateway"];
+const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 
 /**
  * The `capacity.config` validator is the selected strategy's own, so a strategy
@@ -420,6 +608,13 @@ const DAEMON_MODES: readonly DaemonMode[] = ["worker", "gateway"];
 function configValidators(strategy: CapacityStrategyName): Record<string, Validator> {
   return {
     mode: stringUnion(DAEMON_MODES),
+    gateway: objectValidator({
+      url: stringValue,
+      token: stringValue,
+      label: stringValue,
+      disconnectedRetentionMs: positiveNumber,
+      execTimeoutMs: positiveNumber,
+    }),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),
       config: capacityStrategyValidator(strategy),

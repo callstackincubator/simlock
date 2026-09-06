@@ -170,6 +170,61 @@ export interface EventMap {
     readonly reason: string;
   };
   "doctor.reconciled": { readonly driftFindings: unknown };
+  // ---- gateway facts (ADR 0005 §22) ---------------------------------------------------------
+  //
+  // Emitted only by a daemon in gateway mode, about the workers connected to it. A worker's own
+  // events are *republished* on the gateway's bus under their original names with `workerId`
+  // added to the payload, so `simlock events` against a gateway shows the fleet; these five are
+  // the facts only the gateway can know.
+  /** A worker's uplink opened and its `hello` completed: the gateway can now drive it. An
+   * uplink that authenticated but negotiated no protocol emits nothing at all (ADR 0005 §31):
+   * it is in the registry as `incompatible`, which is where an operator finds it. */
+  "worker.connected": {
+    readonly workerId: string;
+    readonly label?: string;
+    readonly version?: string;
+  };
+  /**
+   * An uplink was turned away at the door, before any session existed (ADR 0005 §4/§22).
+   * Two reasons, and they are the same two the rest of the API tells apart:
+   * `unauthenticated` (`401`) is a missing or unrecognized join token -- a revoked or mistyped
+   * one lands here -- and `forbidden` (`403`) is a real token whose role is not `worker`.
+   *
+   * Version skew is deliberately *not* one of these: a worker whose `hello` finds no
+   * overlapping protocol range authenticated fine, so it enters the registry as
+   * `incompatible` and emits nothing (§31). This event is only ever about the door.
+   *
+   * Every field but `reason` is optional because a dial that fails authentication proves no
+   * identity: `workerId` and `label` are whatever the connection *claimed* in its headers, and
+   * may be absent entirely.
+   */
+  "worker.rejected": {
+    readonly reason: "forbidden" | "unauthenticated";
+    readonly workerId?: string;
+    readonly label?: string;
+    readonly protocol?: {
+      readonly gateway: { readonly min: number; readonly max: number };
+      readonly worker: { readonly min: number; readonly max: number };
+    };
+  };
+  /** A worker's uplink closed. `leaseCount` is what the view still shows it holding at that
+   * moment -- the number an operator needs to know how much is stranded, and the reason the
+   * view is not dropped immediately (§6). */
+  "worker.disconnected": {
+    readonly workerId: string;
+    readonly label?: string;
+    readonly leaseCount: number;
+  };
+  /** A disconnected worker's view was forgotten: by an operator (`worker.remove`) or because
+   * `gateway.disconnectedRetentionMs` elapsed. */
+  "worker.removed": {
+    readonly workerId: string;
+    readonly label?: string;
+    readonly reason: "operator" | "retention";
+  };
+  /** ADR 0005 §9: the worker keeps its leases and receives no new dispatches from here on. */
+  "worker.drain-started": { readonly workerId: string; readonly label?: string };
+  "worker.drain-ended": { readonly workerId: string; readonly label?: string };
   /** Payloads owned by the driver module that refused the root; see `DriverRejection`. */
   "driver.root-rejected": {
     readonly platform: string;

@@ -7,7 +7,6 @@ import {
   type DeviceRecord,
   type DeviceRequest,
   type Doctor,
-  type LeaseProgress,
   type Nuke,
   type Registry,
   effectiveAllowDownload,
@@ -31,66 +30,26 @@ import type {
 } from "../ports/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
-  describeSchemaIssues,
   OPERATIONS,
-  type OperationDefinition,
+  type GatewayOnlyOperationName,
   type OperationName,
-  type AuthorizeContext,
-  type Role,
 } from "../contract/index.js";
 import type { TokenStore } from "../http/token-store.js";
+import {
+  DispatchError,
+  runDispatch,
+  type DispatchSession,
+  type ErasedHandler,
+} from "./dispatch.js";
 
-/**
- * ADR 0003 §2's "session" argument to `dispatch`. Constructed fresh per call by the transport
- * (today: `DaemonServer`, one per socket request) from whatever longer-lived state it owns --
- * this type does not itself track anything across calls.
- *
- * `principal`/`role` are the ADR §4/§5 identity: fixed for the connection's lifetime once
- * `hello` resolves them (see `session.ts`'s `SessionRoleResolver` seam -- PR 2's credential
- * handshake replaces how `role` is computed, not this shape). ADR 0004 removes the two
- * connection-scoped fields that used to sit beside them (`heldLeaseIds`,
- * `heartbeatCapability`): the daemon keeps no per-connection lease state at all any more, and
- * the one operation that read them is gone. `onProgress` and `manageEventSubscription` are the
- * two places a request-scoped or connection-scoped push actually reaches the wire -- `DaemonServer` supplies
- * closures that write socket frames; an HTTP session (next PR) can leave `onProgress` unset and
- * fail loudly (or no-op) on `events.subscribe`, since HTTP has no open connection to push
- * through even in principle (ADR §8's "the HTTP notice buffer stays").
+export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
+
+/*
+ * `DispatchSession`, `DispatchError`, and `ContractDispatcher` moved to `./dispatch.js` when
+ * ADR 0005 gave the contract a second dispatcher implementation (`src/gateway/`), which needs
+ * them without importing this file's `src/core` dependencies. They are re-exported above, so
+ * every existing `from "./dispatcher.js"` import keeps working.
  */
-export interface DispatchSession {
-  readonly principal: string;
-  readonly role: Role;
-  /** Called for each progress update while this specific `lease.request` call is in flight.
-   * Ignored by every other operation. */
-  readonly onProgress?: (progress: LeaseProgress) => void;
-  /**
-   * Called for each chunk a `device.exec` command writes, as it writes it (ADR 0005 §19a's
-   * `output` push family). Ignored by every other operation, and left unset by a transport
-   * that has nowhere to put a chunk -- in which case the command still runs and still reports
-   * its exit code, and the output is simply not relayed. The same shape as `onProgress`, for
-   * the same reason: both are request-scoped pushes, and the dispatcher stays out of framing.
-   *
-   * **May return a promise**, and the command is stopped at its pipe until that resolves (see
-   * `ProcessStreamOptions.onChunk`). A transport returns one when placing a chunk is not
-   * instantaneous -- an SSE write, a socket frame -- so a client that reads slowly slows the
-   * command rather than filling this process with its output (§19e).
-   */
-  readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>;
-  /**
-   * Called once, for a `device.exec` call, the moment its process is running -- after every
-   * failure that can happen *before* one exists (a refused verb, an unknown tool, an unowned
-   * lease, a daemon still starting) and before any output. A transport that has to commit to
-   * a response shape uses it as the decision point: HTTP opens its event stream here, so a
-   * command that prints nothing for nine minutes still gets its `200` and its keepalives, and
-   * an `EXEC_TIMEOUT` always arrives as that stream's terminal event rather than as a status
-   * code the client cannot receive any more (ADR 0005 §19e).
-   */
-  readonly onStarted?: () => void;
-  /** `events.subscribe`/`events.unsubscribe` stay push-shaped (ADR §2: "pushes" stay with the
-   * transport), so the dispatcher's handler for them does nothing but call this: `true` to
-   * (re)subscribe, returning the new subscription id; `false` to tear an existing one down. */
-  readonly manageEventSubscription: (subscribe: boolean) => string | undefined;
-}
-
 /**
  * How long a timed-out `device.exec` child gets between SIGTERM and SIGKILL (ADR 0005 §19e).
  * Fixed rather than derived from `exec.timeoutMs`: it is a termination-cleanup budget, not a
@@ -102,18 +61,6 @@ const EXEC_SIGKILL_GRACE_MS = 10_000;
 /** The `Promise.race` marker for "the timeout won". A unique object rather than a string, so
  * it can never collide with something a `StreamingProcessHandle` could resolve with. */
 const EXEC_EXPIRED = Symbol("exec-expired");
-
-/** Thrown for a role/ownership rejection or a malformed request; `DaemonServer` maps this the
- * same way it already maps its own protocol errors (see `errorCode` in `server.ts`). */
-export class DispatchError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "DispatchError";
-  }
-}
 
 export class DoctorUnavailableError extends Error {
   constructor() {
@@ -195,15 +142,10 @@ type Handler<Op extends OperationName> = (
   session: DispatchSession,
 ) => Promise<unknown> | unknown;
 
-/** The type `#handlers` and `dispatch()` actually traffic in: a `Handler<Op>` for some
- * particular `Op`, erased to `never` input so the lookup table can hold every operation's
- * handler side by side (a function accepting a narrower/`never` input is a valid supertype
- * target for one accepting a wider input, so every concrete `Handler<Op>` assigns into this).
- * `dispatch()` casts its already-schema-validated `input` to `never` at the one call site that
- * needs it -- the same "trust the runtime validation, not the type checker" boundary every
- * other generic-over-a-closed-union dispatch table in this codebase (e.g. `OPERATIONS` itself)
- * accepts. */
-type AnyHandler = (input: never, session: DispatchSession) => Promise<unknown> | unknown;
+/** Every operation this (worker-mode) dispatcher implements: the contract's set minus
+ * `daemon.stop` (intercepted by `DaemonServer` itself, ADR 0003 §6) and minus the
+ * gateway-only ones (ADR 0005 §23). */
+type WorkerOperationName = Exclude<OperationName, "daemon.stop" | GatewayOnlyOperationName>;
 
 /**
  * The transport-independent dispatcher (ADR 0003 §2). One `dispatch()` call does, in order:
@@ -211,7 +153,8 @@ type AnyHandler = (input: never, session: DispatchSession) => Promise<unknown> |
  * output. Handlers never see a raw payload or run their own role/ownership check -- both
  * already happened by the time a handler's function body runs.
  *
- * Deliberately excludes `hello` (protocol-level, answered before a session exists) and
+ * Deliberately excludes `hello` (protocol-level, answered before a session exists), the
+ * gateway-only `worker.*` operations (ADR 0005 §23 -- see `#handlers`), and
  * `daemon.stop` (ADR §6's frozen exception -- scoped to the protocol-version gate only, so it
  * stays reachable across a version mismatch; still requires a completed handshake and the
  * `admin` role, checked in `DaemonServer#dispatchLine` itself) -- both stay in `DaemonServer`,
@@ -220,12 +163,20 @@ type AnyHandler = (input: never, session: DispatchSession) => Promise<unknown> |
 export class Dispatcher {
   readonly #logger: Logger;
   /**
-   * Total over every operation but `daemon.stop`. Deliberately *not* a partial map: a
-   * declared operation whose handler was never written is otherwise invisible to the
-   * compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
+   * Total over every operation but `daemon.stop` and the gateway-only ones. Deliberately *not*
+   * a partial map: a declared operation whose handler was never written is otherwise invisible
+   * to the compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
    * `driver.passthrough` came to be declared, dispatched, and unimplemented at once.
+   *
+   * `GATEWAY_ONLY_OPERATIONS` (ADR 0005 §23: `worker.list|drain|undrain|remove`) are excluded
+   * from the type rather than given handlers that throw. A worker daemon has no worker
+   * registry to answer them from, and the honest answer is the one `dispatch()`'s own
+   * missing-handler guard already gives -- `UNKNOWN_REQUEST`, "this daemon does not implement
+   * that operation". Excluding them here also means adding a gateway operation cannot silently
+   * acquire a meaningless worker-side implementation: it either lands in
+   * `GATEWAY_ONLY_OPERATIONS` or the compiler asks for a handler in this map.
    */
-  readonly #handlers: Record<Exclude<OperationName, "daemon.stop">, AnyHandler>;
+  readonly #handlers: Record<WorkerOperationName, ErasedHandler>;
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
@@ -256,59 +207,31 @@ export class Dispatcher {
     };
   }
 
-  async dispatch<Op extends OperationName>(
+  /** ADR 0003 §2's pipeline, run by the shared `runDispatch` (see `./dispatch.js`) over this
+   * dispatcher's own handlers, lease lookups, and startup gate. The ordering and the checks
+   * are the contract's; only the three inputs below are this implementation's. */
+  dispatch<Op extends OperationName>(
     operation: Op,
     rawInput: unknown,
     session: DispatchSession,
   ): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
-    // Same "generic-over-a-closed-union" cast `AnyHandler` needed above: `OPERATIONS[operation]`
-    // for a generic `Op` collapses to a union across every operation, and TypeScript refuses to
-    // call a union of functions (`.role`, `.authorize`) with a generically-typed argument even
-    // though each concrete instantiation is sound. `OPERATIONS` is a closed, exhaustively-typed
-    // record (see `operations.ts`) validated by its own test suite -- this cast trusts that
-    // shape, not the runtime, so it is not the same kind of escape hatch as `input as never`
-    // below (that one truly is unverified until `parseInput` runs).
-    const definition = OPERATIONS[operation] as unknown as OperationDefinition;
-    // `#handlers` is total over every operation but `daemon.stop`, so the only `Op` this
-    // lookup can miss is that one -- and `DaemonServer` intercepts it before `dispatch()`.
-    // The cast states that; the guard below still covers a caller that ignores the rule,
-    // since an absent handler must not become `undefined is not a function`.
-    const handler: AnyHandler | undefined =
-      this.#handlers[operation as Exclude<OperationName, "daemon.stop">];
-    if (handler === undefined) {
-      throw new DispatchError("UNKNOWN_REQUEST", `Unknown request type: ${operation}`);
-    }
-
-    const input = parseInput(definition.input, rawInput ?? {});
-    const requiredRole: Role =
-      typeof definition.role === "function" ? definition.role(input) : definition.role;
-    if (!roleSatisfies(session.role, requiredRole)) {
-      throw new DispatchError(
-        "FORBIDDEN",
-        `Operation ${operation} requires role ${requiredRole}, session is ${session.role}`,
-      );
-    }
-    if (definition.authorize !== undefined) {
-      const context: AuthorizeContext = {
+    return runDispatch(operation, rawInput, session, {
+      handlers: this.#handlers,
+      authorizeLookups: {
         ownerId: (leaseId) =>
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId,
         leaseRequesterId: (leaseId) =>
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.requesterId,
         pendingRequestOwner: (requesterId) => this.options.queue.pendingRequestOwner(requesterId),
-        principal: session.principal,
-        role: session.role,
-      };
-      if (!definition.authorize(input, context)) {
-        throw new DispatchError("FORBIDDEN", `Not authorized for ${operation}`);
-      }
-    }
-
-    if (operation !== "status.get") {
-      await this.options.awaitReady();
-    }
-
-    const output = await handler(input as never, session);
-    return this.#parseOutput(definition.output, output, operation);
+      },
+      awaitReady: () => this.options.awaitReady(),
+      onOutputMismatch: (operationName, issues) => {
+        this.#logger.error("Operation output failed contract validation", {
+          operation: operationName,
+          issues,
+        });
+      },
+    });
   }
 
   // ---- handlers ---------------------------------------------------------------------------
@@ -646,18 +569,6 @@ export class Dispatcher {
     if (enteredAt === undefined) return device;
     return { ...device, transitionAgeMs: this.options.clock.now() - enteredAt };
   }
-
-  #parseOutput<Output>(schema: z.ZodType<Output>, value: unknown, operationName: string): Output {
-    const result = schema.safeParse(value);
-    if (result.success) return result.data;
-    this.#logger.error("Operation output failed contract validation", {
-      operation: operationName,
-      issues: result.error.issues,
-    });
-    throw new Error(
-      `Internal: ${operationName} produced a response that does not match its contract output schema`,
-    );
-  }
 }
 
 /** A child that exited between the timer firing and the signal landing is not an error worth
@@ -668,14 +579,4 @@ function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): vo
   } catch {
     // Already gone.
   }
-}
-
-function roleSatisfies(sessionRole: Role, required: Role): boolean {
-  return sessionRole === "admin" || required === "agent";
-}
-
-function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
-  const result = schema.safeParse(value);
-  if (result.success) return result.data;
-  throw new DispatchError("BAD_REQUEST", describeSchemaIssues(result.error.issues));
 }

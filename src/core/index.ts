@@ -1,6 +1,8 @@
 export {
   type Config,
   type ConfigOverrides,
+  // fallow-ignore-next-line unused-type -- public Config surface (config.mode, ADR 0005 §1); every in-tree reader gets it structurally off `Config`
+  type DaemonMode,
   // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
   type DownloadPolicy,
   effectiveAllowDownload,

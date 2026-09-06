@@ -30,6 +30,7 @@ import {
   type LeaseGrant,
   type SimlockAdminClient,
   type StatusGetOutput,
+  type WorkerView,
 } from "../admin/index.js";
 import type { Role } from "../contract/index.js";
 import type { PassthroughCommand } from "../client/index.js";
@@ -47,6 +48,8 @@ const USAGE = `Usage: simlock <command> [options]
 Commands:
   lease, release, status, list, catalog, cleanup, doctor, nuke, events,
   daemon, config, token
+  worker <list|drain|undrain|remove>
+                              Inspect and manage the workers of a gateway
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
@@ -528,6 +531,11 @@ function extractGlobalToken(argv: readonly string[]): {
   return { token, rest };
 }
 
+/**
+ * The command switch: one arm per published command, each one line handing off to that
+ * command's own function.
+ */
+// fallow-ignore-next-line complexity -- flat dispatch: the cyclomatic count is the number of commands Simlock publishes (cognitive complexity is 6, and every arm is a single delegation). `worker` is ADR 0005's addition to it; splitting the switch would hide the CLI's surface rather than simplify it.
 export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment = defaultCliEnvironment(),
@@ -563,6 +571,8 @@ export async function runCli(
         return await runConfig(rest.slice(1), environment, token);
       case "token":
         return await runToken(rest.slice(1), environment, token);
+      case "worker":
+        return await runWorker(rest.slice(1), environment, token);
       case "simctl":
       case "adb":
         // Named here rather than discovered from the drivers on purpose: these are
@@ -1568,7 +1578,7 @@ async function runToken(
   const command = argv[0];
   if (command === undefined || isHelp(command)) {
     environment.stdout.write(
-      "Usage: simlock token create --role <agent|operator> [--label <text>]\n" +
+      "Usage: simlock token create --role <agent|operator|worker> [--label <text>]\n" +
         "       simlock token list\n" +
         "       simlock token revoke <token-id>\n",
     );
@@ -1597,7 +1607,7 @@ async function runTokenCreate(
   });
   if (values.help) {
     environment.stdout.write(
-      "Usage: simlock token create --role <agent|operator> [--label <text>]\n",
+      "Usage: simlock token create --role <agent|operator|worker> [--label <text>]\n",
     );
     return 0;
   }
@@ -1640,10 +1650,116 @@ async function runTokenRevoke(
   return 0;
 }
 
-function parseTokenRole(value: unknown): "agent" | "operator" {
-  if (value !== "agent" && value !== "operator")
-    throw new UsageError(withHelpHint("token create requires --role <agent|operator>"));
+/**
+ * ADR 0005 §8 adds `worker`: a join token, minted on a gateway and put in a worker's
+ * `gateway.token`. It is deliberately mintable on either mode -- the CLI does not know which
+ * daemon it is talking to, and a token minted on a worker is simply a credential nothing will
+ * ever present to it, which is not worth a mode check the daemon would have to duplicate.
+ */
+function parseTokenRole(value: unknown): "agent" | "operator" | "worker" {
+  if (value !== "agent" && value !== "operator" && value !== "worker")
+    throw new UsageError(withHelpHint("token create requires --role <agent|operator|worker>"));
   return value;
+}
+
+/**
+ * ADR 0005 §8/§23: the operator's view of a fleet. Every subcommand is one admin operation on
+ * the gateway, so this function is argument parsing and rendering and nothing else -- a worker
+ * daemon answers `UNKNOWN_REQUEST` for all four, which surfaces as the daemon's own error line
+ * rather than a mode check the CLI would have to keep in step.
+ */
+async function runWorker(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  token: string | undefined,
+): Promise<number> {
+  const command = argv[0];
+  if (command === undefined || isHelp(command)) {
+    environment.stdout.write(
+      "Usage: simlock worker list [--json]\n" +
+        "       simlock worker drain <worker-id>\n" +
+        "       simlock worker undrain <worker-id>\n" +
+        "       simlock worker remove <worker-id>\n",
+    );
+    return 0;
+  }
+  const client = await connectDaemonClient(environment, token);
+  try {
+    if (command === "list") return await runWorkerList(argv.slice(1), client, environment);
+    if (command === "drain" || command === "undrain" || command === "remove") {
+      return await runWorkerAction(command, argv.slice(1), client, environment);
+    }
+    throw new UsageError(withHelpHint(`Unknown worker command: ${command}`));
+  } finally {
+    await client.close();
+  }
+}
+
+async function runWorkerList(
+  argv: readonly string[],
+  client: SimlockAdminClient,
+  environment: CliEnvironment,
+): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+  });
+  if (values.help) {
+    environment.stdout.write("Usage: simlock worker list [--json]\n");
+    return 0;
+  }
+  const result = await client.listWorkers();
+  if (values.json) writeResult(environment, result);
+  else environment.stdout.write(`${formatWorkers(result.workers)}\n`);
+  return 0;
+}
+
+async function runWorkerAction(
+  command: "drain" | "undrain" | "remove",
+  argv: readonly string[],
+  client: SimlockAdminClient,
+  environment: CliEnvironment,
+): Promise<number> {
+  const values = commandArgs(argv, { help: { type: "boolean", short: "h" } });
+  if (values.help) {
+    environment.stdout.write(`Usage: simlock worker ${command} <worker-id>\n`);
+    return 0;
+  }
+  const workerId = requiredPositional(values.positionals, "worker-id");
+  const result =
+    command === "drain"
+      ? await client.drainWorker({ workerId })
+      : command === "undrain"
+        ? await client.undrainWorker({ workerId })
+        : await client.removeWorker({ workerId });
+  writeResult(environment, result);
+  return 0;
+}
+
+/**
+ * One line per worker, in the shape an operator scans: state first (that is the question), then
+ * identity, then what it is carrying. `simlock worker list --json` is the machine-readable
+ * answer, so this stays a summary rather than a dump.
+ */
+function formatWorkers(workers: WorkerView[]): string {
+  if (workers.length === 0) return "No workers have connected to this gateway.";
+  return workers
+    .map((worker) => {
+      const label = worker.label === undefined ? worker.id : `${worker.id} (${worker.label})`;
+      const state = worker.drained ? `${worker.connection}, drained` : worker.connection;
+      const capacity =
+        worker.capacity === undefined
+          ? "capacity unknown"
+          : `ios ${worker.capacity.ios.running}/${worker.capacity.ios.limit}, ` +
+            `android ${worker.capacity.android.running}/${worker.capacity.android.limit}`;
+      const skew =
+        worker.protocol === undefined
+          ? ""
+          : ` protocol ${worker.protocol.worker.min}-${worker.protocol.worker.max}` +
+            ` vs gateway ${worker.protocol.gateway.min}-${worker.protocol.gateway.max}`;
+      return `${label}: ${state} -- ${capacity}, ${String(worker.leases.length)} lease(s)${skew}`;
+    })
+    .join("\n");
 }
 
 function commandArgs(
@@ -1764,12 +1880,17 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput): string {
-  const { capacity, daemon, devices, leases, queueDepth } = status;
+  const { capacity, daemon, devices, leases, queueDepth, workers } = status;
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
     return `Capacity ${platform}: managed ${usage.used}/${usage.limit}, running ${usage.running} + ${usage.reserved} reserved/${usage.maxRunning}, warm ${usage.warm}${usage.overLimit ? " (over limit)" : ""}`;
   });
+  // ADR 0005 §20: on a gateway every device and lease names the worker it lives on, and the
+  // fleet itself is a block of its own above them. On a worker `workers` is absent and this is
+  // exactly the output it has always been.
+  const workerLines =
+    workers === undefined ? [] : [formatWorkers(workers), ""].filter((line) => line !== "");
   const deviceLines = devices.map((device) => {
     const markers = [
       device.foreignStateDetectedAt === undefined ? undefined : "foreign state change",
@@ -1780,18 +1901,20 @@ function formatStatus(status: StatusGetOutput): string {
         : `mid-transition ${device.transitionAgeMs}ms`,
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
-    return `Device ${device.id}: ${device.state}${suffix}`;
+    const where = device.workerId === undefined ? "" : ` on ${device.workerId}`;
+    return `Device ${device.id}${where}: ${device.state}${suffix}`;
   });
   // ADR 0004: `lastRenewedAt` is a stored field written at grant and on every renew, so unlike
   // the derived `lastHeartbeatAt` it replaces, every lease has one to render.
   const leaseLines = leases.map(
     (lease) =>
-      `Lease ${lease.id}: ${lease.requesterId} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
+      `Lease ${lease.id}: ${lease.requesterId}${lease.workerId === undefined ? "" : ` on ${lease.workerId}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
     `Daemon: ${daemon.health} (${daemon.mode})`,
     globalLine,
     ...capacityLines,
+    ...workerLines,
     ...deviceLines,
     ...leaseLines,
     `Queue depth: ${queueDepth}`,
