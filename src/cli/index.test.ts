@@ -1811,7 +1811,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           warm: 0,
         },
       },
-      daemon: { mode: "gateway" as const },
+      mode: "gateway" as const,
       devices: [
         {
           id: "dev_1",

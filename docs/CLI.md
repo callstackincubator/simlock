@@ -391,13 +391,15 @@ its daemon block: a `worker` owns the devices it serves, so the command it resol
 spawned right here with a real terminal; a `gateway` owns none, so the command
 has to run on whichever worker does. That is the whole switch — no flag, and
 nothing about which transport the CLI happens to be using. The cost is one
-extra round trip, and one consequence worth knowing: a daemon that cannot be
-reached fails the command with that call's own error rather than with a
-passthrough error. Today every daemon reports `worker`, so these commands
-always take the local path; the gateway work (#115) is what makes the other one
-reachable from this CLI, and the same operation is already reachable over the
+extra round trip. The same operation is reachable over the
 [HTTP API](HTTP-API.md) (`POST /v1/leases/{id}/exec`) and from
-`simlock/client`'s `exec` (see [CLIENT.md](CLIENT.md)).
+`simlock/client`'s `exec` (see [CLIENT.md](CLIENT.md)), and takes the same
+switch there.
+
+A gateway answers `device.exec` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit `2`)
+until fleet routing lands: forwarding a command to the worker that owns the
+lease needs the lease index that comes with routing (#118). Everything below
+describes that path once it does.
 
 The lease the remote command runs against is the one your agent identity holds
 (`--agent-id`, or `SIMLOCK_AGENT_ID`; see [Agent
@@ -643,7 +645,7 @@ answers for the whole fleet, in the same shape: the daemon line reads
 per worker precedes the devices, and every device and lease names the worker it
 lives on (`Device dev_7 on wrk_a: leased`). `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each
-device and lease; `daemon.mode` says which kind of daemon answered.
+device and lease; `mode` says which kind of daemon answered.
 
 The daemon block carries `health` and `mode` (`"worker"` or `"gateway"`) — the
 one field that tells a client which kind of daemon answered, and what
@@ -772,7 +774,7 @@ Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
 `config.mode` selects — a worker (the default) or a gateway (ADR 0005) — and
 `status` reports it, both in the human line (`Daemon: running (gateway)`) and
-as `daemon.mode` under `--json`. `stop` does not touch leases: they persist,
+as `mode` under `--json`. `stop` does not touch leases: they persist,
 and the next daemon restores each one's TTL timer from its deadline. What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease

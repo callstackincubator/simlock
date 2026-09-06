@@ -399,7 +399,7 @@ const capacityConfigSchema = z.discriminatedUnion("strategy", [
 /** Mirrors `Config` (src/core/config.ts) field for field. */
 export const configSchema = z.object({
   /** ADR 0005 §1. `config.get` is how a caller learns which mode the daemon it is talking to
-   * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
+   * runs in without inferring it from behaviour; `status.get`'s `mode` is the
    * agent-role answer to the same question. */
   mode: z.enum(["worker", "gateway"]),
   capacity: capacityConfigSchema,

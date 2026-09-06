@@ -16,6 +16,7 @@
 import type { z } from "zod";
 
 import {
+  describeSchemaIssues,
   OPERATIONS,
   type AuthorizeContext,
   type OperationDefinition,
@@ -130,7 +131,10 @@ export interface DispatchPipeline {
    * with no lease state of its own may leave this out: an absent context answers `undefined`
    * for both lookups, which every hook treats as authorized on purpose, so the handler's own
    * error surfaces instead of a misleading `FORBIDDEN`. */
-  readonly authorizeLookups?: Pick<AuthorizeContext, "ownerId" | "pendingRequestOwner">;
+  readonly authorizeLookups?: Pick<
+    AuthorizeContext,
+    "leaseRequesterId" | "ownerId" | "pendingRequestOwner"
+  >;
   /** ADR 0003 §2 step 4: every operation but `status.get` parks here before its handler runs.
    * Omitted when there is nothing to wait for. */
   readonly awaitReady?: () => Promise<void>;
@@ -178,6 +182,7 @@ export async function runDispatch<Op extends OperationName>(
   }
   if (definition.authorize !== undefined) {
     const context: AuthorizeContext = {
+      leaseRequesterId: pipeline.authorizeLookups?.leaseRequesterId ?? (() => undefined),
       ownerId: pipeline.authorizeLookups?.ownerId ?? (() => undefined),
       pendingRequestOwner: pipeline.authorizeLookups?.pendingRequestOwner ?? (() => undefined),
       principal: session.principal,
@@ -208,10 +213,7 @@ export function roleSatisfies(sessionRole: Role, required: Role): boolean {
 export function parseDispatchInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
   const result = schema.safeParse(value);
   if (result.success) return result.data;
-  const description = result.error.issues
-    .map((issue) => `${issue.path.length > 0 ? `${issue.path.join(".")}: ` : ""}${issue.message}`)
-    .join("; ");
-  throw new DispatchError("BAD_REQUEST", description);
+  throw new DispatchError("BAD_REQUEST", describeSchemaIssues(result.error.issues));
 }
 
 /**

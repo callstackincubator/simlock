@@ -157,7 +157,7 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
 - **Aggregation.** `status.get` on a gateway returns the same shape a worker
   does — capacity summed over connected workers, every device and lease
   carrying a `workerId`, the gateway's own queue depth — plus a `workers`
-  array of views and `daemon.mode: "gateway"`. `catalog.get` is the union of
+  array of views and `mode: "gateway"`. `catalog.get` is the union of
   the connected workers' catalogs, each model and runtime annotated with the
   workers that have it. Worker events are republished on the gateway's bus
   with `workerId` added, so `simlock events --follow` against a gateway shows
@@ -171,8 +171,9 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   silently overridden. `nuke.run`, `cleanup.run`, `doctor.run` and
   `driver.passthrough` answer `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they
   act on one machine's devices, and stay per-worker. The lease lifecycle
-  (`lease.request`/`renew`/`release`/`cancel`/`release-all`) answers the same
-  code until the fleet queue and routing land; reads — `lease.list`,
+  (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`
+  answer the same code until the fleet queue and routing land; reads —
+  `lease.list`,
   `list.get`, `status.get`, `catalog.get`, `events.*` — already answer for the
   whole fleet.
 - **The one piece of persisted gateway state** is the drained set

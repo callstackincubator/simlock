@@ -430,7 +430,7 @@ same auth, same error shapes — with three differences.
 
 **`GET /v1/status` and `GET /v1/catalog` aggregate.** Status returns the shape
 a worker returns, with capacity summed over the connected workers, `workerId`
-on every device and lease, `daemon.mode: "gateway"`, and an additive `workers`
+on every device and lease, `mode: "gateway"`, and an additive `workers`
 array of worker views. Catalog is the union of the connected workers'
 catalogs, each model and runtime annotated with `modelWorkers` /
 `runtimeWorkers` — which workers have it.
@@ -465,8 +465,9 @@ another role, `404` for any other path — so an unauthorized peer never reaches
 the protocol at all. A worker's `gateway.url` is the gateway's **base** URL;
 the worker derives this path itself.
 
-**What a gateway refuses.** `POST /v1/lease-requests` and the lease lifecycle
-routes answer `501 UNSUPPORTED_IN_GATEWAY_MODE` until fleet routing lands;
+**What a gateway refuses.** `POST /v1/lease-requests`, the lease lifecycle
+routes and `POST /v1/leases/{id}/exec` answer `501
+UNSUPPORTED_IN_GATEWAY_MODE` until fleet routing lands;
 `driver.passthrough`-backed routes and the per-machine maintenance operations
 (`nuke`, `cleanup`, `doctor`) answer it permanently — they act on one
 machine's devices and stay per-worker.

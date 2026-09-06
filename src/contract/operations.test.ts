@@ -205,7 +205,6 @@ describe("operation input/output round trips", () => {
       },
       daemon: { health: "running", mode: "worker" },
       queueDepth: 0,
-      daemon: { mode: "worker" },
     };
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
   });
@@ -249,7 +248,7 @@ describe("operation input/output round trips", () => {
       capacity,
       health: "running",
       queueDepth: 0,
-      daemon: { mode: "gateway" },
+      mode: "gateway",
       workers: [
         {
           id: "wrk_1",
