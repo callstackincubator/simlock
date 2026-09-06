@@ -236,7 +236,9 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // for the same reason `UNSUPPORTED_IN_GATEWAY_MODE` takes it -- the caller asked for
   // something that cannot apply, rather than hitting a state of the fleet.
   WORKER_CONNECTED: { code: "WORKER_CONNECTED", kind: "domain", cliExitCode: 2, httpStatus: 409 },
-  UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  // Exit 12, beside `UNKNOWN_MODEL`: the "what you named does not exist" class, which a script
+  // branches on differently from "the fleet is busy" or "that cannot apply here".
+  UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 12, httpStatus: 404 },
   WORKER_UNREACHABLE: {
     code: "WORKER_UNREACHABLE",
     kind: "transport",

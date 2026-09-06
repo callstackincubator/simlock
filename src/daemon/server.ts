@@ -751,7 +751,16 @@ export class DaemonServer {
       } else {
         this.#logger.debug("Handled request error", { code, type: frame.type });
       }
-      await this.#respondError(connection.socket, frame.id, code, this.#describeError(error));
+      // ADR 0003 §7's typed `details` travel with the code when the thrown error carries any
+      // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`),
+      // so a socket client can narrow on them exactly as an HTTP one does.
+      await this.#respondError(
+        connection.socket,
+        frame.id,
+        code,
+        this.#describeError(error),
+        error instanceof DispatchError ? error.details : undefined,
+      );
     }
   }
 
