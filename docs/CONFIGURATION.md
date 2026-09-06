@@ -7,6 +7,7 @@ a warning. Inspect the effective, merged configuration at any time with
 
 | Property                          | Description                                                                                                                                                                                                                  | Default                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `mode`                            | Which shape this daemon runs as: `worker` (owns devices on this machine) or `gateway` (owns none, fronts the workers that join it). See [Modes: gateway and worker](#modes-gateway-and-worker).                              | `worker`                                                        |
 | `capacity.strategy`               | Which policy decides how many devices may exist and run at once: `resource` or `fixed`. The options under `capacity.config` are that strategy's own -- see [Capacity strategies](#capacity-strategies).                     | `resource`                                                      |
 | `idle.shutdownAfterMs`            | How long an unused device sits idle before Simlock shuts it down (tier 1, reclaims RAM).                                                                                                                                     | `10 minutes`                                                    |
 | `idle.deleteAfterMs`              | How long a shut-down device sits idle before Simlock deletes it (tier 2, reclaims disk).                                                                                                                                     | `1 hour`                                                        |
@@ -16,7 +17,14 @@ a warning. Inspect the effective, merged configuration at any time with
 | `warmPool.quarantine.maxRetryBackoffMs` | Cap on the quarantine retry backoff.                                                                                                                                                                                   | `5 minutes`                                                      |
 | `lease.defaultTtlMs`              | TTL applied to a lease whose `lease.request` carried no `ttlMs` — **that request only**. It is *not* the renew fallback: a renew given no explicit TTL re-applies the lease's own stored width, so a lease granted for longer keeps it. A lease not renewed before its deadline expires and its device is reclaimed. | `15 minutes`                                                    |
 | `lease.maxTtlMs`                  | Largest TTL a request or a renew may ask for. A larger `ttlMs` is rejected with `BAD_REQUEST` rather than silently clamped, so a caller is never left believing it has more time than it does.                               | `4 hours`                                                       |
-| `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`.                                                                              | `false`                                                          |
+| `gateway.url`                     | **Worker side.** Base URL of the gateway this worker joins, e.g. `http://gw.local:4700`; the worker dials `<url>/v1/uplink` and upgrades it to a WebSocket. Unset means "do not join a fleet" — the default, and the only thing that changes about a joined worker.                    | unset                                                            |
+| `gateway.token`                   | **Worker side.** The join token (`simlock token create --role worker`, minted on the gateway) this worker presents when it opens its uplink. Required whenever `gateway.url` is set.                                          | unset                                                            |
+| `gateway.label`                   | **Worker side.** Display name for this worker in `simlock worker list`, `status`, the console, and on the lease's `worker` block. Display-only: nothing routes on it and it need not be unique.                              | the worker's own id                                              |
+| `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
+| `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1: warm hit first, then the most free running capacity for the platform. See [Routing](ARCHITECTURE.md#routing).                     | `warm-then-free`                                                 |
+| `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker's view is kept (greyed, never dispatched to) before the gateway forgets it. A worker still holding gateway-issued leases is never forgotten, however long it has been gone.  | `24 hours`                                                       |
+| `gateway.execTimeoutMs`           | **Gateway side.** How long the gateway waits on a proxied `device.exec` before giving up on it. A backstop over the worker's own `exec.timeoutMs`, which is the authoritative one.                                            | `10 minutes`                                                     |
+| `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
@@ -48,6 +56,14 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
+`mode` must be exactly `"worker"` or `"gateway"`. `gateway.url` must be an
+absolute `http`/`https` (or `ws`/`wss`) URL and `gateway.token` a non-empty
+string; setting either without the other is **rejected at load and the daemon
+does not start**, because a half-configured uplink would otherwise come up
+looking like an ordinary standalone worker. `gateway.label` is a non-empty
+string, `gateway.routing` one of the registered routing policies,
+and `exec.timeoutMs`, `gateway.execTimeoutMs`, and
+`gateway.disconnectedRetentionMs` positive numbers.
 `lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
 `lease.defaultTtlMs` must be `<=` `lease.maxTtlMs`. A config that violates
 either rule is **rejected at load and the daemon does not start**, naming the
@@ -83,6 +99,58 @@ new key's default, not the value it wrote:
 A warning rather than a hard failure keeps an old config bootable, and a
 warning rather than an alias keeps the key set honest — there is one name for
 this setting, and it is the one in the table above.
+
+## Modes: gateway and worker
+
+`mode` decides what the daemon this config belongs to *is*, so it also
+decides which of the keys above mean anything ([ADR
+0005](adr/0005-gateway-and-worker-modes.md)). One daemon runs exactly one
+mode; `simlock daemon start` starts whichever is configured, and switching is
+`simlock config set mode gateway` followed by a restart.
+
+**A worker (`mode: "worker"`, the default) reads every key in this
+document.** It is today's simlock, unchanged. Joining a fleet adds exactly
+two keys — `gateway.url` and `gateway.token` — plus the optional
+`gateway.label`, and changes nothing else about it: same drivers, same
+registry, same capacity limits, same local unix socket, and its own local
+agents keep leasing from it as before. `http.enabled` is *not* required for a
+worker, because the uplink is outbound.
+
+**A gateway (`mode: "gateway"`) owns no devices**, so most of this document
+does not apply to it. It reads:
+
+| Key group | Why |
+|---|---|
+| `mode` | to be a gateway at all |
+| `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs` | how to run the fleet |
+| `http.*` | it is the fleet's contact point |
+| `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched |
+| `log.*`, `eventBuffer.*` | logging and the event ring buffer, as anywhere |
+
+Everything else — `capacity.*`, `idle.*`, `warmPool.*`, `health.*`,
+`stalledTransition.*`, `drivers.*`, `ios.slim.*`, `diskPressure.*`,
+`downloads.*`, and the worker-side `gateway.url`/`gateway.token`/
+`gateway.label`/`exec.timeoutMs` — is **ignored with a warning**, exactly as
+an unknown key is. That is deliberately the softer treatment: a gateway's
+config file is usually a worker's config file with `mode` flipped, and a
+warning names each key that stopped mattering rather than refusing to start
+over a leftover.
+
+There is one hard failure: **`mode: "gateway"` with `http.enabled: false` is
+rejected at load and the daemon does not start**, naming the key. A gateway
+with no HTTP listener is unreachable by definition — no worker could open an
+uplink to it and no agent could lease through it — so there is no safe way to
+interpret that pair, the same reasoning that rejects a `lease.defaultTtlMs`
+above `lease.maxTtlMs`.
+
+The `gateway.*` block reads in both directions on purpose: on a worker it
+says *which gateway to join*, on a gateway it says *how to be one*. The table
+above marks which is which, and each key is only ever read in one mode.
+
+A machine that should both front a fleet and own devices runs **two daemons**
+with distinct `SIMLOCK_HOME`s (and distinct `drivers.android.adbServerPort`
+values, see below): one gateway, one worker, the worker joining over
+localhost. There is no hybrid mode.
 
 ## Device roots
 
