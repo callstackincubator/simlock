@@ -84,14 +84,18 @@ function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): Leas
 }
 
 /**
- * ADR 0004 §4's cap, answered before the request is ever admitted. The dispatcher enforces it
- * too -- it is the one place every transport shares -- but that answer only becomes this
- * route's answer while the dispatch is still what the response is waiting on. `POST
- * /v1/lease-requests` is an async resource: an `allowDownload: true` request settles its `201`
- * synchronously (a driver install can run for minutes before the first progress callback, see
- * `LeaseRequestTracker#submit`), so a rejection landing afterwards would surface as a failed
- * request resource rather than the `400 BAD_REQUEST` `docs/HTTP-API.md` promises. Checking here
- * keeps the promise for every shape of request.
+ * ADR 0004 §4's cap, for the one route that cannot wait for the dispatcher's answer. The
+ * dispatcher enforces it for every transport, and every route that *awaits* its dispatch
+ * inherits that answer -- but `POST /v1/lease-requests` is an async resource, and an
+ * `allowDownload: true` request settles its `201` synchronously (a driver install can run for
+ * minutes before the first progress callback, see `LeaseRequestTracker#submit`), so a
+ * rejection landing afterwards would surface as a failed request resource rather than the
+ * `400 BAD_REQUEST` `docs/HTTP-API.md` promises.
+ *
+ * Deliberately not used on `POST /v1/leases/{id}/renew`: that route awaits its dispatch, so
+ * the shared cap already answers it -- and answers it *after* `ownsLease`, which is what keeps
+ * another requester's lease a `403` instead of a `400` about a TTL that caller could never
+ * have set anyway.
  */
 function requireTtlWithinCap(ttlMs: number | undefined, config: Config): void {
   if (ttlMs !== undefined && ttlMs > config.lease.maxTtlMs) {
@@ -304,15 +308,17 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     if (ttlMs !== undefined && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
       throw badRequest("ttlMs must be a positive number");
     }
-    requireTtlWithinCap(ttlMs, deps.config);
 
     // Dispatched directly (not via `findOwnedLease`/`lease.list`) so `lease.renew`'s own
     // `ownsLease` authorize hook answers -- an unowned lease is `FORBIDDEN`/403, matching the
     // socket transport, rather than the `UNKNOWN_LEASE`/404 a `lease.list` filter would produce
-    // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself; the
-    // cap was already answered above (`requireTtlWithinCap`), and the dispatcher would answer
-    // it again on the way through. An omitted `ttlMs` re-applies the lease's own stored width
-    // (ADR 0004 §4), which is why nothing is recorded here afterwards.
+    // (S6). An unknown id still surfaces as `UNKNOWN_LEASE`/404 from the handler itself, and a
+    // `ttlMs` above `lease.maxTtlMs` as `BAD_REQUEST`/400 -- the cap lives in the shared
+    // dispatcher, and this route awaits it, so there is nothing to restate here. Answering it
+    // earlier would answer it *before* `ownsLease` and turn another requester's lease into a
+    // 400 about its TTL where the socket and `docs/HTTP-API.md` both say 403. An omitted
+    // `ttlMs` re-applies the lease's own stored width (ADR 0004 §4), which is why nothing is
+    // recorded here afterwards.
     const renewed = await deps.dispatch(
       "lease.renew",
       { leaseId: id, ...(ttlMs === undefined ? {} : { ttlMs }) },

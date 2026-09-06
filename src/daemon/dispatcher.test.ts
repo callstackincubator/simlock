@@ -497,8 +497,8 @@ describe("Dispatcher: lease.release-all", () => {
     expect(registry.snapshot.leases).toHaveLength(1);
   });
 
-  it("admin releases every held lease, regardless of owner, and reports every released id", async () => {
-    const { dispatcher, registry } = await buildDispatcher();
+  it("admin releases every lease, regardless of owner, and reports every released id", async () => {
+    const { dispatcher, eventBus, registry } = await buildDispatcher();
     const first = await dispatcher.dispatch(
       "lease.request",
       { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -519,6 +519,14 @@ describe("Dispatcher: lease.release-all", () => {
 
     expect(new Set(result.leaseIds)).toEqual(new Set([first.lease.id, second.lease.id]));
     expect(registry.snapshot.leases).toHaveLength(0);
+    // `killed`, not `explicit`: nobody's holder asked for this (docs/EVENTS.md), and that is
+    // the distinction a `lease-lost` reader acts on.
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.released")
+        .map((event) => (event.payload as { reason: string }).reason),
+    ).toEqual(["killed", "killed"]);
   });
 });
 
