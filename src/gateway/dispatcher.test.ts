@@ -14,6 +14,7 @@ const gatewayConfig = {
   diskPressure: { freeBytesThreshold: 1 },
   downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },
   eventBuffer: { capacity: 100 },
+  exec: { timeoutMs: 600_000 },
   gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
   health: {
     enabled: false,
@@ -111,7 +112,7 @@ describe("GatewayDispatcher", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(status.daemon.mode).toBe("gateway");
+    expect(status.mode).toBe("gateway");
     expect(status.workers).toHaveLength(1);
     expect(status.devices).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
@@ -272,6 +273,7 @@ describe("GatewayDispatcher", () => {
       ["lease.release", { leaseId: "lease_1" }],
       ["lease.cancel", {}],
       ["lease.release-all", {}],
+      ["device.exec", { leaseId: "lease_1", tool: "adb", args: ["devices"] }],
     ] as const)("%s waits for fleet routing", async (operation, input) => {
       const { dispatcher } = harness();
 

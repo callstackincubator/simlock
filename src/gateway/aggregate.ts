@@ -59,7 +59,7 @@ export function aggregateStatus(
 ): StatusOutput {
   return {
     capacity: sumCapacity(views.filter((view) => view.connection === "connected")),
-    daemon: { mode: "gateway" },
+    mode: "gateway",
     devices: views.flatMap((view) =>
       view.devices.map((device) => ({ ...device, workerId: view.id })),
     ),

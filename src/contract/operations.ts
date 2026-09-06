@@ -92,19 +92,8 @@ export const statusGet = defineOperation({
      * neither is a fact about a device; `health` moved in here from the top level with the
      * same protocol bump that added `mode`.
      */
-    daemon: z.object({ health: daemonHealthSchema, mode: z.enum(["worker", "gateway"]) }),
+    daemon: z.object({ health: daemonHealthSchema, mode: daemonModeSchema }),
     queueDepth: z.number(),
-    /**
-     * ADR 0005 §1/§20: which mode answered. A gateway returns the same shape a worker does --
-     * capacity summed over its connected workers, every device and lease carrying a
-     * `workerId`, and the *gateway's* own queue depth -- so this block is how a caller tells
-     * "one machine" from "a fleet" without a second operation. Its own object rather than a
-     * bare `mode` field so the daemon-level facts that already live here (`health`) and the
-     * ones #118+ will add have somewhere to go without another top-level key each; `health`
-     * itself stays where it is, since moving it would break every existing reader for
-     * cosmetics.
-     */
-    daemon: z.object({ mode: daemonModeSchema }),
     /**
      * ADR 0005 §20: one entry per worker view, additive and gateway-only. Absent (not empty)
      * from a worker's answer -- a worker has no fleet, and an empty array would read as "a

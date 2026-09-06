@@ -33,7 +33,7 @@ export function statusFixture(overrides: Partial<StatusGetOutput> = {}): StatusG
       global: { maxRunning: 4, overLimit: false, reserved: 0, running: 0, warm: 0 },
       ios: { ...emptyPlatformCapacity },
     },
-    daemon: { mode: "worker" },
+    mode: "worker",
     devices: [],
     health: "running",
     leases: [],

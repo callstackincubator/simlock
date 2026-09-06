@@ -30,7 +30,6 @@ import type {
 } from "../ports/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
-  describeSchemaIssues,
   OPERATIONS,
   type GatewayOnlyOperationName,
   type OperationName,
@@ -264,10 +263,6 @@ export class Dispatcher {
     );
     return {
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
-      // ADR 0005 §1: a worker says so. The mode is read from config rather than hard-coded so
-      // there is exactly one source of truth for it -- the same value `main.ts` branched on to
-      // build this dispatcher in the first place.
-      daemon: { mode: this.options.config.mode },
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
       // config rather than being assumed, because it is what tells a client whether the device

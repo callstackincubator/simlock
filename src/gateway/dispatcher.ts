@@ -13,7 +13,8 @@
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`
  *    and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole.
  * 3. **Refused until #118** (`unsupportedUntilRouting`): the lease *lifecycle* --
- *    `lease.request`, `renew`, `release`, `cancel`, `release-all`. The fleet queue, routing and
+ *    `lease.request`, `renew`, `release`, `cancel`, `release-all` -- and `device.exec`, which
+ *    a gateway proxies to the worker that owns the device (§19b). The fleet queue, routing and
  *    forwarding are that PR's; this one deliberately makes the fleet visible before it is
  *    routable.
  *
@@ -124,6 +125,7 @@ export class GatewayDispatcher {
       "lease.release": unsupportedUntilRouting("lease.release"),
       "lease.cancel": unsupportedUntilRouting("lease.cancel"),
       "lease.release-all": unsupportedUntilRouting("lease.release-all"),
+      "device.exec": unsupportedUntilRouting("device.exec"),
       // "daemon.stop" is absent for the same reason it is absent from the worker's table: the
       // transport intercepts it ahead of any dispatch (ADR 0003 §6's frozen exception).
     };

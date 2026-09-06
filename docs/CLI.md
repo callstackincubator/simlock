@@ -880,7 +880,7 @@ answers for the whole fleet, in the same shape: the daemon line reads
 per worker precedes the devices, and every device and lease names the worker it
 lives on (`Device dev_7 on wrk_a: leased`). `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each
-device and lease; `daemon.mode` says which kind of daemon answered.
+device and lease; `mode` says which kind of daemon answered.
 
 The daemon block carries `mode` (`"worker"` or `"gateway"`) — the one field
 that tells a client which kind of daemon answered. Against a **gateway** the
@@ -1033,7 +1033,7 @@ Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
 `config.mode` selects — a worker (the default) or a gateway (ADR 0005) — and
 `status` reports it, both in the human line (`Daemon: running (gateway)`) and
-as `daemon.mode` under `--json`. `stop` does not touch leases: they persist,
+as `mode` under `--json`. `stop` does not touch leases: they persist,
 and the next daemon restores each one's TTL timer from its deadline. What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
