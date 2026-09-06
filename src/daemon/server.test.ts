@@ -28,6 +28,7 @@ import {
   NodeFilesystem,
   NodeIpcTransport,
   ScriptedProcessRunner,
+  type IpcConnection,
   type Logger,
   type ProcessRunner,
   type ProcessStreamOptions,
@@ -35,7 +36,7 @@ import {
   type StreamingProcessResult,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
-import { DaemonEndpointHost } from "./connection-host.js";
+import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
 import { AdminSecretManager } from "./admin-secret.js";
@@ -670,6 +671,58 @@ describe("DaemonServer", () => {
     await hello(survivor);
     await expect(survivor.request("status.get", {})).resolves.toMatchObject({ ok: true });
     await survivor.close();
+  });
+
+  it("stops reading the command while a frame is still going out", async () => {
+    // ADR 0005 §19e end to end on this transport: `#pushOutput`'s promise is what
+    // `device.exec` hands the process runner, so a client whose socket has not drained stops
+    // the command at its pipe instead of growing this daemon's write queue. Driven through a
+    // connection whose `write` this test settles by hand -- a real socket would need megabytes
+    // to fill a kernel buffer, which is the same property tested by luck.
+    const clock = new FakeClock(1_000);
+    const driver = passthroughDriver(clock);
+    const runner = new ControllableStreamingRunner();
+    const connection = new BlockingConnection();
+    const harness = await createHarness({
+      clock,
+      driver,
+      host: new SingleConnectionHost(connection),
+      processRunner: runner,
+    });
+    expect(harness.daemon.health).toBeDefined();
+
+    await connection.request(
+      { clientVersion: "test", protocolVersion: DAEMON_PROTOCOL_VERSION },
+      "hello",
+    );
+    const grant = await connection.request(
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      "lease.request",
+    );
+    connection.releaseAll();
+
+    void connection.request(
+      { args: ["list", "devices"], leaseId: leaseIdOf(grant), tool: "simctl" },
+      "device.exec",
+      "exec-slow",
+    );
+    await waitFor(() => runner.handle !== undefined);
+
+    // The client stops draining: the next frame's write never completes.
+    connection.block();
+    let firstDelivered = false;
+    void Promise.resolve(runner.handle?.emit("stdout", "first")).then(() => {
+      firstDelivered = true;
+    });
+    await flush();
+    expect(firstDelivered).toBe(false);
+
+    connection.releaseAll();
+    await flush();
+    expect(firstDelivered).toBe(true);
+
+    runner.handle?.finish(0);
+    await flush();
   });
 
   it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
@@ -2484,6 +2537,8 @@ async function createHarness(
     readonly downloads?: Partial<Config["downloads"]>;
     /** Wires `device.exec`'s runner (ADR 0005 §19a); absent by default like the option itself. */
     readonly processRunner?: ProcessRunner;
+    /** Replaces the real socket host, for a test that has to control a frame's write. */
+    readonly host?: ConnectionHost;
   } = {},
 ) {
   const directory =
@@ -2548,12 +2603,14 @@ async function createHarness(
       : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
-    host: new DaemonEndpointHost({
-      connector: new NodeIpcTransport(),
-      endpoint: socketPath,
-      filesystem: new NodeFilesystem(),
-      listenerFactory: new NodeIpcTransport(),
-    }),
+    host:
+      options.host ??
+      new DaemonEndpointHost({
+        connector: new NodeIpcTransport(),
+        endpoint: socketPath,
+        filesystem: new NodeFilesystem(),
+        listenerFactory: new NodeIpcTransport(),
+      }),
     leases: engine,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     passthrough: engine,
@@ -2573,6 +2630,75 @@ async function createHarness(
   }
 
   return { clock, config, daemon, driver, engine, eventBus, registry, socketPath, stateFilesystem };
+}
+
+/**
+ * A `ConnectionHost` that hands `DaemonServer` one connection this test owns, so a frame's
+ * write can be held open deliberately. `DaemonEndpointHost` over a real socket cannot express
+ * "this write has not completed" without filling a kernel buffer.
+ */
+class SingleConnectionHost implements ConnectionHost {
+  readonly endpoint = "memory://test";
+
+  constructor(private readonly connection: BlockingConnection) {}
+
+  async start(accept: (connection: IpcConnection) => void): Promise<void> {
+    accept(this.connection);
+  }
+
+  async stop(): Promise<void> {}
+}
+
+/** One side of a connection whose writes complete only when this test says so. */
+class BlockingConnection implements IpcConnection {
+  readonly closed = false;
+  readonly frames: Record<string, unknown>[] = [];
+  #blocked = false;
+  #pending: Array<() => void> = [];
+  #dataListeners = new Set<(chunk: string) => void>();
+
+  onData(listener: (chunk: string) => void): () => void {
+    this.#dataListeners.add(listener);
+    return () => this.#dataListeners.delete(listener);
+  }
+
+  onClose(): () => void {
+    return () => {};
+  }
+
+  onError(): () => void {
+    return () => {};
+  }
+
+  async write(contents: string): Promise<void> {
+    for (const line of contents.split("\n")) {
+      if (line.trim() !== "") this.frames.push(JSON.parse(line) as Record<string, unknown>);
+    }
+    if (!this.#blocked) return;
+    await new Promise<void>((resolve) => this.#pending.push(resolve));
+  }
+
+  async close(): Promise<void> {}
+
+  block(): void {
+    this.#blocked = true;
+  }
+
+  releaseAll(): void {
+    this.#blocked = false;
+    const pending = this.#pending;
+    this.#pending = [];
+    for (const resolve of pending) resolve();
+  }
+
+  /** Sends a request frame and waits for its reply, which arrives on `frames`. */
+  async request(payload: unknown, type: string, id = type): Promise<ServerFrame> {
+    for (const listener of this.#dataListeners) {
+      listener(`${JSON.stringify({ id, payload, type })}\n`);
+    }
+    await waitFor(() => this.frames.some((frame) => frame.id === id));
+    return this.frames.find((frame) => frame.id === id) as ServerFrame;
+  }
 }
 
 /** A `FakeDriver` that claims the `simctl` wrapper, for the `device.exec` flows. */
@@ -2622,14 +2748,16 @@ class ControllableStreamingHandle implements StreamingProcessHandle {
   readonly #result: Promise<StreamingProcessResult>;
   #resolve!: (result: StreamingProcessResult) => void;
 
-  constructor(private readonly onChunk: (stream: "stdout" | "stderr", chunk: string) => void) {
+  constructor(
+    private readonly onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
+  ) {
     this.#result = new Promise((resolve) => {
       this.#resolve = resolve;
     });
   }
 
-  emit(stream: "stdout" | "stderr", chunk: string): void {
-    this.onChunk(stream, chunk);
+  emit(stream: "stdout" | "stderr", chunk: string): void | Promise<void> {
+    return this.onChunk(stream, chunk);
   }
 
   finish(code: number): void {

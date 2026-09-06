@@ -16,7 +16,9 @@ describe("OutputRelay", () => {
     relay.push({ chunk: "two", stream: "stderr" });
     expect(relay.bufferedCount).toBe(2);
 
-    relay.attach((chunk) => written.push(`${chunk.stream}:${chunk.chunk}`));
+    relay.attach(async (chunk) => {
+      written.push(`${chunk.stream}:${chunk.chunk}`);
+    });
     expect(written).toEqual(["stdout:one", "stderr:two"]);
     expect(relay.bufferedCount).toBe(0);
 
@@ -31,7 +33,9 @@ describe("OutputRelay", () => {
     // memory-exhaustion lever with no cap on it -- which is the same defect as buffering.
     const relay = new OutputRelay();
     const written: string[] = [];
-    relay.attach((chunk) => written.push(chunk.chunk));
+    relay.attach(async (chunk) => {
+      written.push(chunk.chunk);
+    });
 
     relay.drop();
     for (let index = 0; index < 1_000; index += 1) {
@@ -40,6 +44,31 @@ describe("OutputRelay", () => {
 
     expect(relay.bufferedCount).toBe(0);
     expect(written).toEqual([]);
+  });
+
+  it("hands a delivery's promise back, so a slow client can stop the command", async () => {
+    // ADR 0005 §19e end to end: the process runner awaits what `onOutput` returns, and what
+    // `onOutput` returns is this. A client that opened the stream and stopped reading
+    // therefore stalls the command rather than filling this process with its output.
+    const relay = new OutputRelay();
+    let releaseWrite!: () => void;
+    const write = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    relay.attach(() => write);
+
+    let delivered = false;
+    void Promise.resolve(relay.push({ chunk: "one", stream: "stdout" })).then(() => {
+      delivered = true;
+    });
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+    expect(relay.bufferedCount).toBe(0);
+
+    releaseWrite();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(delivered).toBe(true);
   });
 
   it("keeps nothing when the client leaves before the stream ever opened either", () => {
@@ -55,7 +84,9 @@ describe("OutputRelay", () => {
     // And a late `attach` -- an SSE callback that runs after the abort -- delivers nothing
     // rather than resurrecting the stream.
     const written: string[] = [];
-    relay.attach((chunk) => written.push(chunk.chunk));
+    relay.attach(async (chunk) => {
+      written.push(chunk.chunk);
+    });
     relay.push({ chunk: "after", stream: "stdout" });
     expect(written).toEqual([]);
   });

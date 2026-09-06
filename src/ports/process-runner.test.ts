@@ -110,11 +110,47 @@ describe("ScriptedProcessRunner: spawnStreaming", () => {
     const seen: string[] = [];
 
     const handle = runner.spawnStreaming("adb", ["logcat"], {
-      onChunk: (stream, chunk) => seen.push(`${stream}:${chunk}`),
+      onChunk: (stream, chunk) => {
+        seen.push(`${stream}:${chunk}`);
+      },
     });
 
-    expect(seen).toEqual(["stdout:out-1", "stderr:err-1", "stdout:out-2"]);
+    // The chunks are delivered one at a time, each awaited before the next -- so they land by
+    // the time the command reports its exit, which is the ordering every consumer relies on.
     await expect(handle.wait()).resolves.toEqual({ code: 4, signal: null });
+    expect(seen).toEqual(["stdout:out-1", "stderr:err-1", "stdout:out-2"]);
+  });
+
+  it("waits for a slow consumer before delivering the next chunk", async () => {
+    // The scripted counterpart of pausing a real child's readable: a delivery that has not
+    // resolved is a consumer that cannot take more yet, and nothing may run ahead of it.
+    const runner = new ScriptedProcessRunner([
+      {
+        chunks: [
+          { chunk: "one", stream: "stdout" },
+          { chunk: "two", stream: "stdout" },
+        ],
+        match: { args: ["logcat"], command: "adb" },
+      },
+    ]);
+    const seen: string[] = [];
+    let releaseFirst!: () => void;
+    const firstDelivered = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const handle = runner.spawnStreaming("adb", ["logcat"], {
+      onChunk: (_stream, chunk) => {
+        seen.push(chunk);
+        return seen.length === 1 ? firstDelivered : undefined;
+      },
+    });
+    await Promise.resolve();
+    expect(seen).toEqual(["one"]);
+
+    releaseFirst();
+    await handle.wait();
+    expect(seen).toEqual(["one", "two"]);
   });
 
   it("models a child that ignores SIGTERM, so only SIGKILL settles it", async () => {
@@ -154,6 +190,42 @@ describe("ScriptedProcessRunner: spawnStreaming", () => {
 });
 
 describe("NodeProcessRunner: spawnStreaming", () => {
+  it("stops reading the child while a delivery is pending, and resumes once it resolves", async () => {
+    // ADR 0005 §19e end to end: "never buffered" only holds if the slow end can push back, so
+    // a delivery that has not resolved pauses the child's stream. The child below writes far
+    // more than a pipe buffer holds, so if this leaked the whole thing would arrive anyway.
+    const runner = new NodeProcessRunner();
+    const seen: string[] = [];
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      [
+        "-e",
+        "const line = 'x'.repeat(16 * 1024);" +
+          "for (let index = 0; index < 64; index += 1) process.stdout.write(line);",
+      ],
+      {
+        onChunk: (_stream, chunk) => {
+          seen.push(chunk);
+          return seen.length === 1 ? blocked : undefined;
+        },
+      },
+    );
+
+    // Long enough for an unpaused stream to have delivered the rest several times over.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(seen).toHaveLength(1);
+
+    release();
+    await handle.wait();
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.join("").length).toBe(64 * 16 * 1024);
+  });
+
   it("forwards chunks as they arrive and reports the child's exit code", async () => {
     const runner = new NodeProcessRunner();
     const seen: Array<{ stream: string; chunk: string }> = [];
@@ -161,7 +233,11 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     const handle = runner.spawnStreaming(
       process.execPath,
       ["-e", "process.stdout.write('out'); process.stderr.write('err'); process.exitCode = 5;"],
-      { onChunk: (stream, chunk) => seen.push({ chunk, stream }) },
+      {
+        onChunk: (stream, chunk) => {
+          seen.push({ chunk, stream });
+        },
+      },
     );
     const result = await handle.wait();
 
@@ -183,7 +259,12 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     const handle = runner.spawnStreaming(
       process.execPath,
       ["-e", "process.stdin.on('data', (d) => process.stdout.write(`saw:${d}`));"],
-      { input: "hello", onChunk: (_stream, chunk) => (stdout += chunk) },
+      {
+        input: "hello",
+        onChunk: (_stream, chunk) => {
+          stdout += chunk;
+        },
+      },
     );
     await handle.wait();
 
@@ -224,7 +305,11 @@ describe("NodeProcessRunner: spawnStreaming", () => {
           "process.stdout.write(String(child.pid));" +
           "setInterval(() => {}, 1000);",
       ],
-      { onChunk: (_stream, chunk) => (stdout += chunk) },
+      {
+        onChunk: (_stream, chunk) => {
+          stdout += chunk;
+        },
+      },
     );
 
     await waitUntil(() => stdout !== "");

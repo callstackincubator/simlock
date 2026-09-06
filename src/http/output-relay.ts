@@ -23,7 +23,7 @@ export interface RelayedChunk {
 
 export class OutputRelay {
   readonly #buffered: RelayedChunk[] = [];
-  #deliver: ((chunk: RelayedChunk) => void) | undefined;
+  #deliver: ((chunk: RelayedChunk) => Promise<void>) | undefined;
   #dropped = false;
 
   /** How many chunks are held right now. Only the starting window can be non-zero; a test
@@ -32,20 +32,25 @@ export class OutputRelay {
     return this.#buffered.length;
   }
 
-  push(chunk: RelayedChunk): void {
-    if (this.#dropped) return;
-    if (this.#deliver !== undefined) {
-      this.#deliver(chunk);
-      return;
-    }
+  /**
+   * Returns what the delivery returned: while the stream is open that is the promise for this
+   * chunk's write, and a caller who awaits it (the process runner, through
+   * `DispatchSession.onOutput`) stops the command until the client has taken it. That is the
+   * whole backpressure story on this side -- a client that opens the stream and never reads
+   * slows the command down instead of filling this process (ADR 0005 §19e).
+   */
+  push(chunk: RelayedChunk): void | Promise<void> {
+    if (this.#dropped) return undefined;
+    if (this.#deliver !== undefined) return this.#deliver(chunk);
     this.#buffered.push(chunk);
+    return undefined;
   }
 
   /** The stream is open: flush what arrived before it was, in order, then write straight
    * through from here on. */
-  attach(deliver: (chunk: RelayedChunk) => void): void {
+  attach(deliver: (chunk: RelayedChunk) => Promise<void>): void {
     if (this.#dropped) return;
-    for (const chunk of this.#buffered) deliver(chunk);
+    for (const chunk of this.#buffered) void deliver(chunk).catch(() => undefined);
     this.#buffered.length = 0;
     this.#deliver = deliver;
   }

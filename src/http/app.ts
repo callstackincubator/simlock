@@ -403,6 +403,8 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
           { leaseId, ...body, ...(requesterId === undefined ? {} : { requesterId }) },
           buildHttpSession(identity, {
             onStarted: () => onStarted(),
+            // The relay's answer is this chunk's SSE write, and returning it is what stops
+            // the command while a client is not reading (ADR 0005 §19e).
             onOutput: (stream, chunk) => relay.push({ chunk, stream }),
           }),
         )
