@@ -103,14 +103,21 @@ cannot starve the fleet. Deferred: it adds a worker-side concept for a
 problem the worker views already make *visible*, and an operator who sees one
 machine's local load can drain it instead.
 
-## Fan-out `doctor` / `cleanup` across a fleet
+## A fleet-wide doctor, as a new operation
 
-`nuke.run`, `cleanup.run`, and `doctor.run` stay per-worker in v1 and answer
-`UNSUPPORTED_IN_GATEWAY_MODE` on a gateway. A gateway could fan the read-only
-half out to every worker and merge the findings, which is exactly what a
-multi-worker console wants to render. Deferred, and the destructive half
-(`--fix`, `cleanup`, `nuke`) deliberately more so: a fleet-wide destructive
-command from one endpoint is not something v1 should offer.
+`nuke.run`, `cleanup.run`, and `doctor.run` stay per-worker, and a gateway's
+`UNSUPPORTED_IN_GATEWAY_MODE` for them is permanent rather than a placeholder
+([ADR 0005](adr/0005-gateway-and-worker-modes.md), "Alternatives
+considered"). What is deferred is not those three answering differently one
+day — it is a **new operation** that fans the read-only half out to every
+worker and merges the findings, which is exactly what a multi-worker console
+wants to render. Giving it its own name is the point: `doctor.run` means "one
+machine", a fleet-wide reconnaissance pass means something else, and a caller
+should be able to tell which one it invoked from the name rather than from
+which daemon happened to answer. The destructive half (`--fix`, `cleanup`,
+`nuke`) is deferred harder still: a fleet-wide destructive command from one
+endpoint is not something this tool should offer casually, whatever it is
+called.
 
 ## Richer routing: label selectors and requester affinity
 
