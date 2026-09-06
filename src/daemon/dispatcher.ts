@@ -7,7 +7,6 @@ import {
   type DeviceRecord,
   type DeviceRequest,
   type Doctor,
-  type LeaseProgress,
   type Nuke,
   type Registry,
   effectiveAllowDownload,
@@ -33,64 +32,23 @@ import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
   describeSchemaIssues,
   OPERATIONS,
+  type GatewayOnlyOperationName,
   type OperationDefinition,
   type OperationName,
   type AuthorizeContext,
   type Role,
 } from "../contract/index.js";
 import type { TokenStore } from "../http/token-store.js";
+import { DispatchError, type DispatchSession } from "./dispatch.js";
 
-/**
- * ADR 0003 §2's "session" argument to `dispatch`. Constructed fresh per call by the transport
- * (today: `DaemonServer`, one per socket request) from whatever longer-lived state it owns --
- * this type does not itself track anything across calls.
- *
- * `principal`/`role` are the ADR §4/§5 identity: fixed for the connection's lifetime once
- * `hello` resolves them (see `session.ts`'s `SessionRoleResolver` seam -- PR 2's credential
- * handshake replaces how `role` is computed, not this shape). ADR 0004 removes the two
- * connection-scoped fields that used to sit beside them (`heldLeaseIds`,
- * `heartbeatCapability`): the daemon keeps no per-connection lease state at all any more, and
- * the one operation that read them is gone. `onProgress` and `manageEventSubscription` are the
- * two places a request-scoped or connection-scoped push actually reaches the wire -- `DaemonServer` supplies
- * closures that write socket frames; an HTTP session (next PR) can leave `onProgress` unset and
- * fail loudly (or no-op) on `events.subscribe`, since HTTP has no open connection to push
- * through even in principle (ADR §8's "the HTTP notice buffer stays").
+export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
+
+/*
+ * `DispatchSession`, `DispatchError`, and `ContractDispatcher` moved to `./dispatch.js` when
+ * ADR 0005 gave the contract a second dispatcher implementation (`src/gateway/`), which needs
+ * them without importing this file's `src/core` dependencies. They are re-exported above, so
+ * every existing `from "./dispatcher.js"` import keeps working.
  */
-export interface DispatchSession {
-  readonly principal: string;
-  readonly role: Role;
-  /** Called for each progress update while this specific `lease.request` call is in flight.
-   * Ignored by every other operation. */
-  readonly onProgress?: (progress: LeaseProgress) => void;
-  /**
-   * Called for each chunk a `device.exec` command writes, as it writes it (ADR 0005 §19a's
-   * `output` push family). Ignored by every other operation, and left unset by a transport
-   * that has nowhere to put a chunk -- in which case the command still runs and still reports
-   * its exit code, and the output is simply not relayed. The same shape as `onProgress`, for
-   * the same reason: both are request-scoped pushes, and the dispatcher stays out of framing.
-   *
-   * **May return a promise**, and the command is stopped at its pipe until that resolves (see
-   * `ProcessStreamOptions.onChunk`). A transport returns one when placing a chunk is not
-   * instantaneous -- an SSE write, a socket frame -- so a client that reads slowly slows the
-   * command rather than filling this process with its output (§19e).
-   */
-  readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>;
-  /**
-   * Called once, for a `device.exec` call, the moment its process is running -- after every
-   * failure that can happen *before* one exists (a refused verb, an unknown tool, an unowned
-   * lease, a daemon still starting) and before any output. A transport that has to commit to
-   * a response shape uses it as the decision point: HTTP opens its event stream here, so a
-   * command that prints nothing for nine minutes still gets its `200` and its keepalives, and
-   * an `EXEC_TIMEOUT` always arrives as that stream's terminal event rather than as a status
-   * code the client cannot receive any more (ADR 0005 §19e).
-   */
-  readonly onStarted?: () => void;
-  /** `events.subscribe`/`events.unsubscribe` stay push-shaped (ADR §2: "pushes" stay with the
-   * transport), so the dispatcher's handler for them does nothing but call this: `true` to
-   * (re)subscribe, returning the new subscription id; `false` to tear an existing one down. */
-  readonly manageEventSubscription: (subscribe: boolean) => string | undefined;
-}
-
 /**
  * How long a timed-out `device.exec` child gets between SIGTERM and SIGKILL (ADR 0005 §19e).
  * Fixed rather than derived from `exec.timeoutMs`: it is a termination-cleanup budget, not a
@@ -102,18 +60,6 @@ const EXEC_SIGKILL_GRACE_MS = 10_000;
 /** The `Promise.race` marker for "the timeout won". A unique object rather than a string, so
  * it can never collide with something a `StreamingProcessHandle` could resolve with. */
 const EXEC_EXPIRED = Symbol("exec-expired");
-
-/** Thrown for a role/ownership rejection or a malformed request; `DaemonServer` maps this the
- * same way it already maps its own protocol errors (see `errorCode` in `server.ts`). */
-export class DispatchError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "DispatchError";
-  }
-}
 
 export class DoctorUnavailableError extends Error {
   constructor() {
@@ -205,13 +151,19 @@ type Handler<Op extends OperationName> = (
  * accepts. */
 type AnyHandler = (input: never, session: DispatchSession) => Promise<unknown> | unknown;
 
+/** Every operation this (worker-mode) dispatcher implements: the contract's set minus
+ * `daemon.stop` (intercepted by `DaemonServer` itself, ADR 0003 §6) and minus the
+ * gateway-only ones (ADR 0005 §23). */
+type WorkerOperationName = Exclude<OperationName, "daemon.stop" | GatewayOnlyOperationName>;
+
 /**
  * The transport-independent dispatcher (ADR 0003 §2). One `dispatch()` call does, in order:
  * parse input, role check, `authorize` hook, park on startup readiness, call handler, parse
  * output. Handlers never see a raw payload or run their own role/ownership check -- both
  * already happened by the time a handler's function body runs.
  *
- * Deliberately excludes `hello` (protocol-level, answered before a session exists) and
+ * Deliberately excludes `hello` (protocol-level, answered before a session exists), the
+ * gateway-only `worker.*` operations (ADR 0005 §23 -- see `#handlers`), and
  * `daemon.stop` (ADR §6's frozen exception -- scoped to the protocol-version gate only, so it
  * stays reachable across a version mismatch; still requires a completed handshake and the
  * `admin` role, checked in `DaemonServer#dispatchLine` itself) -- both stay in `DaemonServer`,
@@ -220,12 +172,20 @@ type AnyHandler = (input: never, session: DispatchSession) => Promise<unknown> |
 export class Dispatcher {
   readonly #logger: Logger;
   /**
-   * Total over every operation but `daemon.stop`. Deliberately *not* a partial map: a
-   * declared operation whose handler was never written is otherwise invisible to the
-   * compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
+   * Total over every operation but `daemon.stop` and the gateway-only ones. Deliberately *not*
+   * a partial map: a declared operation whose handler was never written is otherwise invisible
+   * to the compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
    * `driver.passthrough` came to be declared, dispatched, and unimplemented at once.
+   *
+   * `GATEWAY_ONLY_OPERATIONS` (ADR 0005 §23: `worker.list|drain|undrain|remove`) are excluded
+   * from the type rather than given handlers that throw. A worker daemon has no worker
+   * registry to answer them from, and the honest answer is the one `dispatch()`'s own
+   * missing-handler guard already gives -- `UNKNOWN_REQUEST`, "this daemon does not implement
+   * that operation". Excluding them here also means adding a gateway operation cannot silently
+   * acquire a meaningless worker-side implementation: it either lands in
+   * `GATEWAY_ONLY_OPERATIONS` or the compiler asks for a handler in this map.
    */
-  readonly #handlers: Record<Exclude<OperationName, "daemon.stop">, AnyHandler>;
+  readonly #handlers: Record<WorkerOperationName, AnyHandler>;
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
@@ -273,8 +233,7 @@ export class Dispatcher {
     // lookup can miss is that one -- and `DaemonServer` intercepts it before `dispatch()`.
     // The cast states that; the guard below still covers a caller that ignores the rule,
     // since an absent handler must not become `undefined is not a function`.
-    const handler: AnyHandler | undefined =
-      this.#handlers[operation as Exclude<OperationName, "daemon.stop">];
+    const handler: AnyHandler | undefined = this.#handlers[operation as WorkerOperationName];
     if (handler === undefined) {
       throw new DispatchError("UNKNOWN_REQUEST", `Unknown request type: ${operation}`);
     }
@@ -340,6 +299,10 @@ export class Dispatcher {
     );
     return {
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
+      // ADR 0005 §1: a worker says so. The mode is read from config rather than hard-coded so
+      // there is exactly one source of truth for it -- the same value `main.ts` branched on to
+      // build this dispatcher in the first place.
+      daemon: { mode: this.options.config.mode },
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
       // config rather than being assumed, because it is what tells a client whether the device

@@ -2,7 +2,19 @@ import { dirname } from "node:path";
 
 import type { Clock, Filesystem, IdGenerator, TokenSecrets } from "../ports/index.js";
 
-export type TokenRole = "agent" | "operator";
+/**
+ * ADR 0003 §5 (`agent`, `operator`) plus ADR 0005 §8/§25's `worker`: a *join token*, minted on
+ * a gateway with `simlock token create --role worker` and presented by a worker when it opens
+ * its uplink. It authorizes exactly one thing -- opening an uplink -- and nothing else: the
+ * HTTP bearer adapter answers `403` for a `worker` token on any `/v1` route (`auth.ts`), and
+ * it resolves to no daemon session role at all. Revoking it closes the uplink, because the
+ * gateway re-verifies on every reconnect and the worker is then refused.
+ */
+export type TokenRole = "agent" | "operator" | "worker";
+
+/** The same three values as a list, for `isTokenRole`'s membership check -- one branch there
+ * instead of one per role. Module-private: `TokenRole` is the exported vocabulary. */
+const TOKEN_ROLES: readonly TokenRole[] = ["agent", "operator", "worker"];
 
 export interface TokenRecord {
   readonly id: string;
@@ -53,6 +65,7 @@ export class TokenStore {
     this.#path = options.path;
   }
 
+  // fallow-ignore-next-line unused-class-member -- called by `Dispatcher`'s `token.create` handler through `#requireTokens()`'s return value (src/daemon/dispatcher.ts); the audit does not follow a member access on a method's result.
   async create(role: TokenRole, label?: string): Promise<{ record: TokenRecord; secret: string }> {
     const secret = this.#secrets.generateSecret();
     const record: TokenRecord = {
@@ -74,6 +87,7 @@ export class TokenStore {
     return this.#readAll();
   }
 
+  // fallow-ignore-next-line unused-class-member -- same as `create` above: reached through `#requireTokens()`'s return value.
   async revoke(id: string): Promise<boolean> {
     const records = await this.#readAll();
     const index = records.findIndex((record) => record.id === id);
@@ -130,10 +144,14 @@ function isTokenRecord(value: unknown): value is TokenRecord {
   return (
     typeof record.id === "string" &&
     typeof record.hash === "string" &&
-    (record.role === "agent" || record.role === "operator") &&
+    isTokenRole(record.role) &&
     (record.label === undefined || typeof record.label === "string") &&
     typeof record.createdAt === "number"
   );
+}
+
+function isTokenRole(value: unknown): value is TokenRole {
+  return typeof value === "string" && (TOKEN_ROLES as readonly string[]).includes(value);
 }
 
 function errorMessage(error: unknown): string {

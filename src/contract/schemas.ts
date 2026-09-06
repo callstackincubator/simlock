@@ -106,6 +106,13 @@ export const statusDeviceSchema = z.object({
   quarantineNextRetryAt: z.number().optional(),
   /** Decoration added by `status.get`; absent for a device not mid-transition. */
   transitionAgeMs: z.number().optional(),
+  /**
+   * ADR 0005 §20: which worker this device lives on. Additive and gateway-only -- a worker
+   * answers `status.get` about its own devices and has no second machine to name, so it never
+   * sets this; a gateway sets it on every device in the aggregate, because "device dev_7" is
+   * ambiguous across a fleet in a way it never is on one host.
+   */
+  workerId: z.string().optional(),
 });
 
 /**
@@ -243,6 +250,16 @@ export const platformCatalogSchema = z.object({
   models: z.array(z.string()),
   runtimes: z.array(z.string()),
   defaultRuntime: z.string().optional(),
+  /**
+   * ADR 0005 §21: on a gateway, `models`/`runtimes` are the *union* over the fleet, and these
+   * two maps say which workers each entry came from (`{"iPhone 16": ["wrk_a", "wrk_b"]}`).
+   * Additive and gateway-only: a worker's own catalog needs no attribution, and a renderer
+   * that predates the fleet still reads `models`/`runtimes` unchanged. Kept as annotations
+   * beside the flat lists rather than as a change to their element type precisely so that
+   * stays true.
+   */
+  modelWorkers: z.record(z.string(), z.array(z.string())).optional(),
+  runtimeWorkers: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 export const proposalSchema = z.object({
@@ -381,6 +398,10 @@ const capacityConfigSchema = z.discriminatedUnion("strategy", [
 
 /** Mirrors `Config` (src/core/config.ts) field for field. */
 export const configSchema = z.object({
+  /** ADR 0005 §1. `config.get` is how a caller learns which mode the daemon it is talking to
+   * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
+   * agent-role answer to the same question. */
+  mode: z.enum(["worker", "gateway"]),
   capacity: capacityConfigSchema,
   downloads: z.object({
     policy: z.enum(["never", "on-request", "always"]),
@@ -430,6 +451,15 @@ export const configSchema = z.object({
       bootTimeoutMs: z.number(),
     }),
   }),
+  /** ADR 0005 §3/§6. `url`/`token`/`label` are the worker's half, `disconnectedRetentionMs`
+   * the gateway's; a daemon carries the whole block whichever mode it runs in, and simply
+   * reads the half that applies (see `Config["gateway"]`). */
+  gateway: z.object({
+    url: z.string().optional(),
+    token: z.string().optional(),
+    label: z.string().optional(),
+    disconnectedRetentionMs: z.number(),
+  }),
   stalledTransition: z.object({
     thresholdMultiplier: z.number(),
     minimumThresholdMs: z.number(),
@@ -439,17 +469,99 @@ export const configSchema = z.object({
 // ---- tokens -----------------------------------------------------------------------------------
 
 /**
- * `TokenRole` (agent/operator token store roles, src/http/token-store.ts) is a deliberately
- * different vocabulary from the daemon session `Role` (agent/admin, see `roles.ts`) -- a
- * `token.create --role operator` mints a credential that *resolves to* the admin session role
- * at `hello` (ADR §5), it is not itself that role. Keeping the two enums textually distinct
- * here (rather than reusing `roleSchema`) is deliberate, not an oversight.
+ * `TokenRole` (agent/operator/worker token store roles, src/http/token-store.ts) is a
+ * deliberately different vocabulary from the daemon session `Role` (agent/admin, see
+ * `roles.ts`) -- a `token.create --role operator` mints a credential that *resolves to* the
+ * admin session role at `hello` (ADR 0003 §5), it is not itself that role. Keeping the two
+ * enums textually distinct here (rather than reusing `roleSchema`) is deliberate, not an
+ * oversight.
+ *
+ * ADR 0005 §8/§25 adds `worker`: a join token, presented by a worker when it opens its uplink
+ * to a gateway. It resolves to no session role at all -- it can open an uplink and nothing
+ * else, and a `worker`-role token on a `/v1` route is `403` (see `src/http/auth.ts`). That is
+ * why it is a third value here rather than a reuse of `agent`: the whole point is a credential
+ * whose authority is a single transport, not a set of operations.
  */
-export const tokenRoleSchema = z.enum(["agent", "operator"]);
+export const tokenRoleSchema = z.enum(["agent", "operator", "worker"]);
 
 export const tokenRecordSchema = z.object({
   id: z.string(),
   role: tokenRoleSchema,
   label: z.string().optional(),
   createdAt: z.number(),
+});
+
+// ---- modes and worker views (ADR 0005) --------------------------------------------------------
+
+/**
+ * Which mode a daemon runs in (ADR 0005 §1). A worker owns devices -- drivers, registry,
+ * capacity, leases -- and is what every simlock daemon has been until now, so it is the
+ * default. A gateway owns none of that and fronts the workers connected to it. One process,
+ * one mode.
+ */
+export const daemonModeSchema = z.enum(["worker", "gateway"]);
+export type DaemonMode = z.infer<typeof daemonModeSchema>;
+
+/** Mirrors `ProtocolRange` (protocol.ts). Re-declared rather than imported so this file stays
+ * the one place a wire *shape* is written down; `protocol.ts` owns the negotiation logic. */
+const protocolRangeShapeSchema = z.object({ min: z.number().int(), max: z.number().int() });
+
+/**
+ * ADR 0005 §6: the uplink is the reachability signal. `connected` means the worker's uplink is
+ * open and its session negotiated a protocol version; `disconnected` means it closed and the
+ * view is the last-known one (kept until `gateway.disconnectedRetentionMs` elapses or an
+ * operator removes it); `incompatible` means the uplink is open but `hello` found no
+ * overlapping protocol version (§31) -- the view then carries both ranges and nothing else the
+ * gateway would have had to ask for over a protocol it cannot speak.
+ */
+export const workerConnectionStateSchema = z.enum(["connected", "disconnected", "incompatible"]);
+
+/**
+ * What the gateway currently knows about one worker (ADR 0005's vocabulary table, §7, §31).
+ * Rebuilt over the uplink, never persisted: a gateway restart re-derives every field from the
+ * workers that reconnect (§30).
+ *
+ * The optional fields are exactly the ones that come from a `status.get`/`catalog.get` round
+ * trip the gateway may not have been able to make: an `incompatible` worker is never asked
+ * anything, and a `disconnected` view keeps whatever the last successful refresh saw. They are
+ * absent rather than zeroed on purpose -- "no capacity reported" and "no capacity free" are
+ * different facts, and a console that dims one must not read the other as a full machine.
+ */
+export const workerViewSchema = z.object({
+  /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across
+   * restarts, unique by construction, opaque to clients. Never a host name or an address. */
+  id: z.string(),
+  /** `gateway.label` from the worker's config -- display only, need not be unique, and never
+   * used to route (§13: "label is display-only"). */
+  label: z.string().optional(),
+  connection: workerConnectionStateSchema,
+  /** ADR 0005 §9: a drained worker keeps its leases and receives no new dispatches. */
+  drained: z.boolean(),
+  /** When the gateway last had this worker's uplink open, or last refreshed its view. */
+  lastSeenAt: z.number(),
+  health: daemonHealthSchema.optional(),
+  /** The worker daemon's own version string, as reported by its `hello` reply. */
+  version: z.string().optional(),
+  /** Set only for an `incompatible` worker (§31), naming both ranges so an operator can see
+   * which side to upgrade. */
+  protocol: z
+    .object({ gateway: protocolRangeShapeSchema, worker: protocolRangeShapeSchema })
+    .optional(),
+  capacity: statusCapacitySchema.optional(),
+  /** The worker's *own* queue depth -- local agents on that machine. The gateway's fleet queue
+   * is reported separately by `status.get` and arrives with #118. */
+  queueDepth: z.number().optional(),
+  leases: z.array(leaseRecordSchema),
+  devices: z.array(statusDeviceSchema),
+  catalog: z.array(platformCatalogSchema),
+});
+
+/**
+ * `status.get`'s lease shape. Identical to `leaseRecordSchema` plus the gateway's additive
+ * `workerId` (ADR 0005 §20) -- an extension rather than a change to `leaseRecordSchema` itself,
+ * so `lease.renew`/`lease.list`'s shapes are untouched by this PR.
+ */
+export const statusLeaseSchema = leaseRecordSchema.extend({
+  /** Which worker holds this lease; absent on a worker's own answer, set by a gateway. */
+  workerId: z.string().optional(),
 });

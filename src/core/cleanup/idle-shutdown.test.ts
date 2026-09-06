@@ -7,6 +7,8 @@ const config: Config = {
   mode: "worker",
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
+  mode: "worker",
+  gateway: { disconnectedRetentionMs: 24 * 60 * 60_000 },
   drivers: {},
   eventBuffer: { capacity: 1 },
   health: {

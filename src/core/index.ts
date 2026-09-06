@@ -1,6 +1,8 @@
 export {
   type Config,
   type ConfigOverrides,
+  /** ADR 0005 §1: which mode a daemon runs in. */
+  type DaemonMode,
   // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
   type DownloadPolicy,
   effectiveAllowDownload,
