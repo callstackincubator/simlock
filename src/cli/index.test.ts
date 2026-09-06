@@ -1503,6 +1503,62 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     expect(line.error.message).not.toContain("60000");
   });
 
+  it("writes one line for a lost connection, even with a renewal in flight when it dies", async () => {
+    // The same socket carries both: the connection-lost listener writes the line that names
+    // the lease and its deadline, and the `lease.renew` that was in flight rejects with
+    // `DAEMON_CONNECTION_LOST`. That rejection is a retryable failure as far as
+    // `startLeaseRenewal` knows -- not a `lease-lost` -- so the holder must not answer it with
+    // a second line saying the daemon is gone, this one without the lease id a reader needs.
+    // Two things stop that, and this pins the outcome rather than either mechanism: the
+    // `finally` stops renewal (nothing is reported after `stop()`), and `onError` checks
+    // `connectionLost` so the answer does not depend on which of the two microtask chains
+    // wins.
+    const clock = new FakeClock(0);
+    const output = outputCapture();
+    let connectionLostListener: ((error: AnySimlockError) => void) | undefined;
+    let rejectRenew: ((error: unknown) => void) | undefined;
+    const client = fakeClient({
+      onConnectionLost: (listener) => {
+        connectionLostListener = listener;
+        return () => {};
+      },
+      renewLease: () =>
+        new Promise((_resolve, reject) => {
+          rejectRenew = reject;
+        }),
+    });
+    const runPromise = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro"],
+      output.environmentWith({ clock, connectAdmin: async () => client }),
+    );
+    await settle();
+
+    // The grant's deadline is 60_000: the first renewal starts at 20_000 and never answers.
+    clock.advance(20_000);
+    await settle();
+    expect(rejectRenew).toBeDefined();
+
+    // The socket dies. In that order, deliberately: `SimlockClient.onConnectionLost` promises
+    // that "every in-flight call has already rejected `DAEMON_CONNECTION_LOST` by the time
+    // this listener runs", so the renewal's rejection is queued first and its handler runs
+    // after the listener has had its say.
+    rejectRenew?.(new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}));
+    connectionLostListener?.(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
+    );
+
+    expect(await runPromise).toBe(1);
+    const errorLines = output.stderr
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { error?: { code: string; message: string } })
+      .filter((line) => line.error !== undefined);
+    expect(errorLines).toHaveLength(1);
+    expect(errorLines[0]?.error?.code).toBe("DAEMON_CONNECTION_LOST");
+    expect(errorLines[0]?.error?.message).toContain("lse_1");
+  });
+
   it("sends --ttl as the request's own ttlMs, and nothing when it is not given", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();

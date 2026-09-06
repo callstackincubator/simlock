@@ -863,6 +863,9 @@ async function runLease(
     renewal = startLeaseRenewal({
       clock: environment.clock,
       leaseId: grant.lease.id,
+      // Both, and they do different jobs: the width sets the cadence (a duration needs no
+      // shared clock), the deadline bounds it.
+      ttlMs: grant.lease.ttlMs,
       ttlDeadline: grant.lease.ttlDeadline,
       renew: (leaseId) => client.renewLease({ leaseId }),
       // Every renewal moves the deadline, and the `DAEMON_CONNECTION_LOST` line above names
@@ -874,7 +877,15 @@ async function runLease(
       // A retryable attempt failed (see `startLeaseRenewal`): diagnostic output on the same
       // structured stderr channel as a failed release, and not an exit condition -- the lease
       // is still this process's until something says otherwise.
-      onError: (error) => writeError(environment, error),
+      //
+      // Except once the connection is gone: a `lease.renew` in flight when the socket dies
+      // rejects with `DAEMON_CONNECTION_LOST` too, and that would print a second line saying
+      // the same thing right after the one the listener above already wrote -- the one that
+      // names the lease and its deadline. A holder loses its daemon once, so it says so once.
+      onError: (error) => {
+        if (connectionLost) return;
+        writeError(environment, error);
+      },
       // Something did say otherwise: renewal ended, either because the daemon answered that
       // this lease is gone or not ours (`renew-rejected`) or because it could not be kept
       // alive to its deadline (`renew-failed`). Both are the same ending as the `lease-lost`
