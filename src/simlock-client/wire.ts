@@ -18,7 +18,7 @@ import {
   type Role,
 } from "../contract/index.js";
 import { parseDaemonResponse, serializeFrame } from "../daemon-protocol/index.js";
-import type { LeaseProgress } from "./types.js";
+import type { DeviceOutputChunk, LeaseProgress } from "./types.js";
 
 /** The one legacy code a protocol-2 daemon answers `hello` with. There is no live protocol-2
  * daemon left in this repository to negotiate against, so this constant documents the historical
@@ -45,6 +45,9 @@ interface PendingCall {
   readonly resolve: (payload: unknown) => void;
   readonly reject: (error: Error) => void;
   readonly onProgress?: ((progress: LeaseProgress) => void) | undefined;
+  /** ADR 0005 §19a's `output` push, routed exactly like `progress`: by frame id, to the call
+   * that is still waiting on it. */
+  readonly onOutput?: ((chunk: DeviceOutputChunk) => void) | undefined;
 }
 
 export type LeaseScopedPush =
@@ -182,9 +185,10 @@ export class SimlockWire {
     type: string,
     payload: unknown,
     onProgress?: (progress: LeaseProgress) => void,
+    onOutput?: (chunk: DeviceOutputChunk) => void,
   ): Promise<unknown> {
     if (this.#dead !== undefined) return Promise.reject(this.#dead);
-    return this.#send(type, payload, onProgress);
+    return this.#send(type, payload, onProgress, onOutput);
   }
 
   onLeaseScopedPush(listener: (push: LeaseScopedPush) => void): () => void {
@@ -214,10 +218,11 @@ export class SimlockWire {
     type: string,
     payload: unknown,
     onProgress?: (progress: LeaseProgress) => void,
+    onOutput?: (chunk: DeviceOutputChunk) => void,
   ): Promise<unknown> {
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { onProgress, reject, resolve });
+      this.#pending.set(id, { onOutput, onProgress, reject, resolve });
       void this.#connection.write(serializeFrame({ id, payload, type })).catch((error: unknown) => {
         this.#pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -278,6 +283,18 @@ export class SimlockWire {
         const id = typeof requestId === "number" ? requestId : Number(requestId);
         const pending = this.#pending.get(id);
         pending?.onProgress?.(parsed.data.progress);
+        return;
+      }
+      case "output": {
+        const parsed = PUSH_SCHEMAS.output.safeParse(payload);
+        if (!parsed.success) return;
+        // Same routing as `progress` directly above, deliberately: both are request-scoped, and
+        // a chunk for a call that already settled (or was never this connection's) is dropped
+        // rather than surfaced anywhere -- ADR 0003 §8's rule for ids no longer tracked.
+        const requestId = parsed.data.requestId;
+        const id = typeof requestId === "number" ? requestId : Number(requestId);
+        const pending = this.#pending.get(id);
+        pending?.onOutput?.({ chunk: parsed.data.chunk, stream: parsed.data.stream });
         return;
       }
       case "lease-lost": {

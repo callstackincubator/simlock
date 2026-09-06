@@ -12,6 +12,8 @@ import {
   type DeviceUnhealthyPush,
   type DoctorReport,
   type DoctorRunInput,
+  type DeviceExecInput,
+  type DeviceExecOutput,
   type DriverPassthroughInput,
   type LeaseCancelInput,
   type LeaseCancelOutput,
@@ -69,6 +71,7 @@ export class FakeSimlockClient implements SimlockClient {
   runDoctorImpl: (input: DoctorRunInput) => Promise<DoctorReport> = notStubbed("runDoctor");
   resolvePassthroughImpl: (input: DriverPassthroughInput) => Promise<PassthroughCommand> =
     notStubbed("resolvePassthrough");
+  execDeviceImpl: (input: DeviceExecInput) => Promise<DeviceExecOutput> = notStubbed("execDevice");
 
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();
   readonly #deviceUnhealthyListeners = new Set<(push: DeviceUnhealthyPush) => void>();
@@ -86,7 +89,6 @@ export class FakeSimlockClient implements SimlockClient {
     return this.#dead ? this.#deadConnection() : this.getCatalogImpl(input);
   }
 
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls status.get.
   getStatus(): Promise<StatusGetOutput> {
     this.calls.push({ input: undefined, method: "getStatus" });
     return this.#dead ? this.#deadConnection() : this.getStatusImpl();
@@ -97,7 +99,6 @@ export class FakeSimlockClient implements SimlockClient {
     return this.#dead ? this.#deadConnection() : this.requestLeaseImpl(input, options);
   }
 
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls lease.cancel.
   cancelLease(input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
     this.calls.push({ input, method: "cancelLease" });
     return this.#dead ? this.#deadConnection() : this.cancelLeaseImpl(input);
@@ -118,16 +119,20 @@ export class FakeSimlockClient implements SimlockClient {
     return this.#dead ? this.#deadConnection() : this.listLeasesImpl();
   }
 
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls doctor.run.
   runDoctor(input: DoctorRunInput = {}): Promise<DoctorReport> {
     this.calls.push({ input, method: "runDoctor" });
     return this.#dead ? this.#deadConnection() : this.runDoctorImpl(input);
   }
 
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never resolves a passthrough.
   resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand> {
     this.calls.push({ input, method: "resolvePassthrough" });
     return this.#dead ? this.#deadConnection() : this.resolvePassthroughImpl(input);
+  }
+
+  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP exposes no device.exec tool of its own.
+  execDevice(input: DeviceExecInput): Promise<DeviceExecOutput> {
+    this.calls.push({ input, method: "execDevice" });
+    return this.#dead ? this.#deadConnection() : this.execDeviceImpl(input);
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {

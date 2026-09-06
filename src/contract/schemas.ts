@@ -403,6 +403,7 @@ export const configSchema = z.object({
     defaultTtlMs: z.number(),
     maxTtlMs: z.number(),
   }),
+  exec: z.object({ timeoutMs: z.number() }),
   diskPressure: z.object({ freeBytesThreshold: z.number() }),
   eventBuffer: z.object({ capacity: z.number() }),
   log: z.object({

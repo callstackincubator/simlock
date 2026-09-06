@@ -13,6 +13,7 @@ import {
   effectiveAllowDownload,
   RuntimeMissingError,
   transitionEnteredAt,
+  UnknownLeaseError,
 } from "../core/index.js";
 import type {
   CapacityReader,
@@ -21,9 +22,16 @@ import type {
   PassthroughResolver,
   QueueControl,
 } from "../core/lease-ports.js";
-import type { Clock, Logger } from "../ports/index.js";
-import { NoopLogger } from "../ports/index.js";
+import type {
+  Clock,
+  Logger,
+  ProcessRunner,
+  StreamingProcessHandle,
+  TimerHandle,
+} from "../ports/index.js";
+import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
+  describeSchemaIssues,
   OPERATIONS,
   type OperationDefinition,
   type OperationName,
@@ -54,11 +62,27 @@ export interface DispatchSession {
   /** Called for each progress update while this specific `lease.request` call is in flight.
    * Ignored by every other operation. */
   readonly onProgress?: (progress: LeaseProgress) => void;
+  /**
+   * Called for each chunk a `device.exec` command writes, as it writes it (ADR 0005 §19a's
+   * `output` push family). Ignored by every other operation, and left unset by a transport
+   * that has nowhere to put a chunk -- in which case the command still runs and still reports
+   * its exit code, and the output is simply not relayed. The same shape as `onProgress`, for
+   * the same reason: both are request-scoped pushes, and the dispatcher stays out of framing.
+   */
+  readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
   /** `events.subscribe`/`events.unsubscribe` stay push-shaped (ADR §2: "pushes" stay with the
    * transport), so the dispatcher's handler for them does nothing but call this: `true` to
    * (re)subscribe, returning the new subscription id; `false` to tear an existing one down. */
   readonly manageEventSubscription: (subscribe: boolean) => string | undefined;
 }
+
+/**
+ * How long a timed-out `device.exec` child gets between SIGTERM and SIGKILL (ADR 0005 §19e).
+ * Fixed rather than derived from `exec.timeoutMs`: it is a termination-cleanup budget, not a
+ * fraction of the command's own allowance -- the same reasoning, and the same ten seconds, as
+ * `NodeProcessRunner`'s `SIGTERM_TO_SIGKILL_GRACE_MS`.
+ */
+const EXEC_SIGKILL_GRACE_MS = 10_000;
 
 /** Thrown for a role/ownership rejection or a malformed request; `DaemonServer` maps this the
  * same way it already maps its own protocol errors (see `errorCode` in `server.ts`). */
@@ -102,6 +126,20 @@ export interface DispatcherOptions {
    * passthrough should not have to fabricate a resolver.
    */
   readonly passthrough?: PassthroughResolver;
+  /**
+   * Runs the command `device.exec` resolves (ADR 0005 §19a). Optional for the same reason as
+   * `passthrough`: the many tests that never exec should not have to fabricate a runner --
+   * `#deviceExec` answers `INTERNAL` when it is missing rather than crashing.
+   */
+  readonly processRunner?: ProcessRunner;
+  /**
+   * The environment a `device.exec` child starts from, before the driver's own scoping keys are
+   * layered on top. Injected rather than read from `process.env` here (architecture rule 9),
+   * and layered rather than replaced because `ProcessRunner` replaces a child's environment
+   * wholesale: a child given only `--set`/`-P` scoping would lose `PATH` and never find the
+   * tool it was pointed at.
+   */
+  readonly execEnv?: NodeJS.ProcessEnv;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly registry: Registry;
@@ -181,6 +219,7 @@ export class Dispatcher {
       "lease.release": this.#leaseRelease,
       "lease.list": this.#leaseList,
       "driver.passthrough": this.#driverPassthrough,
+      "device.exec": this.#deviceExec,
       "doctor.run": this.#doctorRun,
       "lease.release-all": this.#leaseReleaseAll,
       "list.get": this.#listGet,
@@ -402,6 +441,86 @@ export class Dispatcher {
     return this.options.passthrough.passthrough(input.tool, input.args);
   };
 
+  /**
+   * ADR 0005 §19a: the same command `driver.passthrough` would have handed back, run here
+   * instead of there. Everything a passthrough already decides is reused verbatim -- which
+   * flag scopes the tool to this daemon's root, which verbs the driver refuses -- because it
+   * is the same call: `#driverPassthrough` above and this handler differ only in who spawns
+   * the result.
+   *
+   * `leaseId` is proof of ownership and nothing else. It is checked against the registry here
+   * so an id that names no lease answers `UNKNOWN_LEASE` rather than running a command
+   * (`authorize`'s `ownsLease` deliberately lets an unknown id through so this handler can say
+   * that -- see `roles.ts`); the *device* the command touches is named by the command's own
+   * arguments, which this daemon does not parse. That is the same accident boundary ADR 0001
+   * draws for the local wrappers, reached over the wire.
+   *
+   * Nothing is buffered: each chunk goes straight to `session.onOutput` as it arrives (§19e),
+   * so a command that writes a gigabyte costs this process nothing, and a client sees the
+   * first line while the command is still running.
+   */
+  #deviceExec: Handler<"device.exec"> = async (input, session) => {
+    if (this.options.passthrough === undefined) {
+      throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");
+    }
+    if (this.options.processRunner === undefined) {
+      throw new DispatchError("INTERNAL", "Command execution is unavailable");
+    }
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+
+    const command = this.options.passthrough.passthrough(input.tool, input.args);
+    const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
+      env: { ...this.options.execEnv, ...command.env },
+      onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
+      ...(input.stdin === undefined ? {} : { input: input.stdin }),
+    });
+    return { exitCode: await this.#awaitExec(handle, input.tool, input.args) };
+  };
+
+  /**
+   * Waits for an exec'd command, killing it if it outruns `exec.timeoutMs` (ADR 0005 §19e).
+   * SIGTERM first, SIGKILL after a grace window, because a tool that ignores the first must
+   * not be able to hold this operation -- and the caller's connection -- open forever; that
+   * escalation mirrors `NodeProcessRunner#run`'s own. The timeout is reported as
+   * `EXEC_TIMEOUT` rather than as the exit code the kill produced: "we stopped it" and "it
+   * failed" are different facts, and only the first tells a caller to raise the limit.
+   */
+  async #awaitExec(
+    handle: StreamingProcessHandle,
+    tool: string,
+    args: readonly string[],
+  ): Promise<number> {
+    const timeoutMs = this.options.config.exec.timeoutMs;
+    let timedOut = false;
+    const escalate = () => {
+      timedOut = true;
+      killQuietly(handle, "SIGTERM");
+      return this.options.clock.setTimer(EXEC_SIGKILL_GRACE_MS, () => {
+        killQuietly(handle, "SIGKILL");
+      });
+    };
+    let killTimer: TimerHandle | undefined;
+    const timer = this.options.clock.setTimer(timeoutMs, () => {
+      killTimer = escalate();
+    });
+    try {
+      const result = await handle.wait();
+      if (timedOut) {
+        throw new DispatchError(
+          "EXEC_TIMEOUT",
+          `\`${tool} ${args.join(" ")}\` exceeded exec.timeoutMs (${String(timeoutMs)}ms) and was killed`,
+        );
+      }
+      return exitCodeOf(result);
+    } finally {
+      this.options.clock.cancel(timer);
+      if (killTimer !== undefined) this.options.clock.cancel(killTimer);
+    }
+  }
+
   #doctorRun: Handler<"doctor.run"> = async (input) => {
     if (this.options.doctor === undefined) throw new DoctorUnavailableError();
     // `purgeOrphans` travels as its own flag all the way down, never folded into `fix`:
@@ -498,6 +617,16 @@ export class Dispatcher {
   }
 }
 
+/** A child that exited between the timer firing and the signal landing is not an error worth
+ * failing the operation over -- the wait below is about to report how it ended anyway. */
+function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): void {
+  try {
+    handle.kill(signal);
+  } catch {
+    // Already gone.
+  }
+}
+
 function roleSatisfies(sessionRole: Role, required: Role): boolean {
   return sessionRole === "admin" || required === "agent";
 }
@@ -505,8 +634,5 @@ function roleSatisfies(sessionRole: Role, required: Role): boolean {
 function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
   const result = schema.safeParse(value);
   if (result.success) return result.data;
-  const description = result.error.issues
-    .map((issue) => `${issue.path.length > 0 ? `${issue.path.join(".")}: ` : ""}${issue.message}`)
-    .join("; ");
-  throw new DispatchError("BAD_REQUEST", description);
+  throw new DispatchError("BAD_REQUEST", describeSchemaIssues(result.error.issues));
 }

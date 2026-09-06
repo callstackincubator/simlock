@@ -2173,6 +2173,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     getStatus: () => Promise.resolve(emptyStatus),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
+    execDevice: () => Promise.resolve({ exitCode: 0 }),
     cancelLease: () => Promise.resolve({ result: "not-found" }),
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
@@ -2453,6 +2454,7 @@ async function startInMemoryDaemon(options: {
 
 function testConfig(): Config {
   return {
+    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},
     eventBuffer: { capacity: 100 },

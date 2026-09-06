@@ -6,6 +6,7 @@ import { idleDestroyRule } from "./idle-destroy.js";
 const gibibyte = 1024 ** 3;
 
 const config: Config = {
+  exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
   drivers: {},
   eventBuffer: { capacity: 1 },

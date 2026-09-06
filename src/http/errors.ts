@@ -5,8 +5,11 @@ import { classifyError } from "../daemon/error-code.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 
-/** Every status this gateway ever answers with; keeps `mapError` exhaustive by construction. */
-export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503;
+/** Every status this gateway ever answers with; keeps `mapError` exhaustive by construction.
+ * 504 is `EXEC_TIMEOUT`'s (ADR 0005 §19e): a `device.exec` command the daemon killed for
+ * outrunning `exec.timeoutMs` is the one case where what this gateway was waiting on never
+ * finished, which is exactly what a gateway timeout says. */
+export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 503 | 504;
 
 /**
  * Uniform `{status, code}` pair a route or middleware raises directly (auth, ownership,

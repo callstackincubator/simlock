@@ -15,6 +15,7 @@
 import type { z } from "zod";
 
 import {
+  describeSchemaIssues,
   fromWireError,
   isSimlockError,
   OPERATIONS,
@@ -33,10 +34,14 @@ import type {
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
+  DeviceExecInput,
+  DeviceExecOutput,
+  DeviceOutputChunk,
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
   EventPush,
+  ExecDeviceOptions,
   EventsReplayInput,
   EventsReplayOutput,
   LeaseCancelInput,
@@ -74,10 +79,14 @@ export type {
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
+  DeviceExecInput,
+  DeviceExecOutput,
+  DeviceOutputChunk,
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
   EventPush,
+  ExecDeviceOptions,
   EventsReplayInput,
   EventsReplayOutput,
   EventsSubscribeOutput,
@@ -151,6 +160,15 @@ export interface SimlockClient {
   /** Resolves the scoped command behind `simlock simctl` / `simlock adb` (ADR 0001, decision
    * 7). Resolution only -- the caller is the process with a terminal, so it runs it. */
   resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand>;
+  /**
+   * Runs `simctl`/`adb` **on the daemon's machine** against a device this client's principal
+   * leases, streaming the output to `options.onOutput` as it arrives and resolving with the
+   * command's exit code (ADR 0005 §19a). The counterpart to `resolvePassthrough`: that one
+   * hands back a command line for a caller sharing the machine, this one is for a caller that
+   * does not. `stdin` is written once and closed -- there is no pseudo-terminal, so
+   * line-oriented commands work and full-screen ones do not (§19c).
+   */
+  execDevice(input: DeviceExecInput, options?: ExecDeviceOptions): Promise<DeviceExecOutput>;
 
   /**
    * Reports a lease the *daemon* ended -- an expiry, an operator release, an unrecoverable
@@ -269,6 +287,7 @@ function buildDegradedClient(
     listLeases: () => rejected(),
     runDoctor: () => rejected(),
     resolvePassthrough: () => rejected(),
+    execDevice: () => rejected(),
 
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
@@ -408,6 +427,19 @@ class SimlockClientImpl {
 
   resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand> {
     return this.#call("driver.passthrough", input);
+  }
+
+  async execDevice(
+    input: DeviceExecInput,
+    options: ExecDeviceOptions = {},
+  ): Promise<DeviceExecOutput> {
+    const payload = await this.#callRaw(
+      "device.exec",
+      this.#parseInput("device.exec", input),
+      undefined,
+      options.onOutput,
+    );
+    return this.#parseOutput("device.exec", payload);
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {
@@ -628,10 +660,12 @@ class SimlockClientImpl {
   ): z.infer<(typeof OPERATIONS)[Name]["input"]> {
     const result = OPERATIONS[name].input.safeParse(input);
     if (result.success) return result.data;
-    const description = result.error.issues
-      .map((issue) => `${issue.path.length > 0 ? `${issue.path.join(".")}: ` : ""}${issue.message}`)
-      .join("; ");
-    throw new SimlockError("BAD_REQUEST", "protocol", description, {});
+    throw new SimlockError(
+      "BAD_REQUEST",
+      "protocol",
+      describeSchemaIssues(result.error.issues),
+      {},
+    );
   }
 
   #parseOutput<Name extends OperationName>(
@@ -660,9 +694,10 @@ class SimlockClientImpl {
     name: OperationName,
     input: unknown,
     onProgress?: (progress: LeaseProgress) => void,
+    onOutput?: (chunk: DeviceOutputChunk) => void,
   ): Promise<unknown> {
     const parsed = this.#parseInput(name, input);
-    return this.#wire.call(name, parsed, onProgress).catch((error: unknown) => {
+    return this.#wire.call(name, parsed, onProgress, onOutput).catch((error: unknown) => {
       throw toSimlockError(error);
     });
   }

@@ -50,6 +50,11 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "events.unsubscribe", input: {}, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
+  {
+    name: "device.exec",
+    input: { args: ["devices"], leaseId: "lease_1", tool: "adb" },
+    role: "agent",
+  },
   { name: "token.list", input: {}, role: "admin" },
   { name: "token.revoke", input: { id: "tok_1" }, role: "admin" },
 ];
@@ -219,6 +224,7 @@ describe("operation input/output round trips", () => {
         },
       },
       lease: { defaultTtlMs: 1, maxTtlMs: 1 },
+      exec: { timeoutMs: 1 },
       diskPressure: { freeBytesThreshold: 1 },
       eventBuffer: { capacity: 1 },
       log: { level: "info", rotateBytes: 1 },

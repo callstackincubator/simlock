@@ -171,6 +171,22 @@ export interface CliEnvironment {
    * child process, the same way every other external effect here is injected.
    */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
+  /**
+   * Which half of ADR 0005 §19c this invocation is.
+   *
+   * `"local"` (the default, and what `buildCliEnvironment` wires) is today's behaviour
+   * unchanged: the daemon resolves the scoped command and this process spawns it with
+   * inherited stdio, so `simlock adb shell` keeps its terminal and its interactivity. That is
+   * correct precisely because the CLI reaches the daemon over its unix socket, which means it
+   * is on the machine that owns the device.
+   *
+   * `"remote"` is for an invocation that is not: the command runs on the daemon's machine
+   * through `device.exec` and its output is streamed back to this process's own stdout/stderr.
+   * It is a separate mode rather than the default because it is strictly weaker -- no
+   * pseudo-terminal, so line-oriented commands work and full-screen ones do not (§19c) -- and
+   * because it needs a lease to name, which the local path does not.
+   */
+  readonly passthroughMode?: "local" | "remote";
 }
 
 /**
@@ -345,6 +361,8 @@ export interface CliEnvironmentPorts {
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   /** Injected so the `simctl` / `adb` wrappers are testable without spawning a child. */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
+  /** See `CliEnvironment.passthroughMode`; defaults to `"local"`. */
+  readonly passthroughMode?: "local" | "remote";
   readonly parentPid?: number;
 }
 
@@ -403,6 +421,11 @@ export function buildCliEnvironment(
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
     },
     runPassthrough: ports.runPassthrough ?? spawnPassthrough,
+    // The shipped CLI always talks to a daemon over its own machine's unix socket (see
+    // `connect` above), which is exactly the condition ADR 0005 §19c attaches the local spawn
+    // to. A frontend that reaches a daemon some other way -- a gateway, an HTTP transport --
+    // sets `"remote"` and gets `device.exec` instead.
+    passthroughMode: ports.passthroughMode ?? "local",
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -548,7 +571,15 @@ export async function runCli(
         // entirely in the driver (architecture rule 2 is about knowledge, not about names).
         // Every argument after the tool name is the tool's, verbatim -- including `--help`,
         // which belongs to `simctl`/`adb` and not to Simlock. `simlock --help` lists these.
-        return await runPassthrough(rest[0] ?? "", rest.slice(1), environment, token);
+        // Narrowed here rather than passed as a bare string: `device.exec` declares `tool` as
+        // the closed `simctl | adb` set (ADR 0005 §19a), and this switch is what already knows
+        // which of the two the user typed.
+        return await runPassthrough(
+          rest[0] === "adb" ? "adb" : "simctl",
+          rest.slice(1),
+          environment,
+          token,
+        );
       case "mcp":
         return await runMcp(rest.slice(1), environment);
       default:
@@ -586,11 +617,14 @@ function cliErrorCode(error: unknown): string {
  * interactive `adb shell` gets a tty and its exit code travels back to the caller's shell.
  */
 async function runPassthrough(
-  tool: string,
+  tool: "simctl" | "adb",
   args: readonly string[],
   environment: CliEnvironment,
   token: string | undefined,
 ): Promise<number> {
+  if (environment.passthroughMode === "remote") {
+    return runRemotePassthrough(tool, args, environment, token);
+  }
   const run = environment.runPassthrough;
   if (run === undefined) throw new Error("Tool passthrough is unavailable");
   const client = await connectDaemonClient(environment, token);
@@ -610,6 +644,79 @@ async function runPassthrough(
     await client.close();
   }
   return run(command);
+}
+
+/**
+ * ADR 0005 §19c's other half: the command runs on the daemon's machine and its output is
+ * streamed here. Nothing about the arguments changes -- the daemon resolves them through the
+ * same driver passthrough, with the same refusals -- so the only visible differences are the
+ * ones §19c names: no pseudo-terminal, and a lease has to be named.
+ *
+ * The connection is held for the whole command, unlike the local path (which closes it before
+ * spawning): the output arrives on it.
+ */
+async function runRemotePassthrough(
+  tool: "simctl" | "adb",
+  args: readonly string[],
+  environment: CliEnvironment,
+  token: string | undefined,
+): Promise<number> {
+  const client = await connectDaemonClient(environment, token);
+  try {
+    const leaseId = await resolveRemoteLeaseId(client, environment);
+    const { exitCode } = await client.execDevice(
+      { args: [...args], leaseId, tool },
+      {
+        // Written straight through, unbuffered and unjoined: whatever the command wrote, where
+        // it wrote it. A caller piping `simlock adb logcat` sees the same bytes in the same
+        // order it would have seen locally.
+        onOutput: (chunk) => {
+          const sink = chunk.stream === "stdout" ? environment.stdout : environment.stderr;
+          sink.write(chunk.chunk);
+        },
+      },
+    );
+    return exitCode;
+  } catch (error: unknown) {
+    // Same treatment the local path gives a refusal: the caller got the command wrong, so it
+    // is usage rather than an internal failure.
+    if (isSimlockError(error) && error.code === "PASSTHROUGH_REFUSED") {
+      throw new UsageError(error.message);
+    }
+    throw error;
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * Which lease the remote command runs against: the one this invocation's requester id holds.
+ *
+ * Identity, not a new flag, on purpose. Every argument after `simlock simctl` belongs to the
+ * tool (docs/CLI.md), so there is no room for a `--lease` of Simlock's own -- and there does
+ * not need to be: `--agent-id`/`SIMLOCK_AGENT_ID` already names who is asking, `simlock lease`
+ * already attributes a lease to it, and one requester holds at most one lease. Matching on
+ * `requesterId` rather than on the connection's principal is what makes that work across
+ * invocations: the principal defaults to this process's pid, which the next invocation will
+ * not share, while the requester id is the stable identity an agent exports.
+ */
+async function resolveRemoteLeaseId(
+  client: SimlockAdminClient,
+  environment: CliEnvironment,
+): Promise<string> {
+  const { leases } = await client.listLeases();
+  const own = leases.filter((lease) => lease.requesterId === environment.requesterId);
+  if (own.length === 0) {
+    throw new UsageError(
+      `No lease is held by ${environment.requesterId}: run \`simlock lease\` first, or set SIMLOCK_AGENT_ID to the id that holds it`,
+    );
+  }
+  if (own.length > 1) {
+    throw new UsageError(
+      `${environment.requesterId} holds more than one lease (${own.map((lease) => lease.id).join(", ")}); run this command under the agent id that holds the device you mean`,
+    );
+  }
+  return (own[0] as { readonly id: string }).id;
 }
 
 /** ADR §7: "CLI exit codes and HTTP status codes are columns of the same error table, not

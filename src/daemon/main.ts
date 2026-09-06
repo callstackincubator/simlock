@@ -261,6 +261,13 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     leases: leaseEngine,
     logger: logger.child("server"),
     passthrough: leaseEngine,
+    // ADR 0005 §19a: `device.exec` runs its command here, on the machine that owns the device.
+    // The runner is the same port every driver already shells out through, and `execEnv` is the
+    // daemon's own environment -- read here, in the composition root, because that is the only
+    // place allowed to touch process state (architecture rule 9); the driver's scoping keys are
+    // layered over it per command.
+    processRunner,
+    execEnv: process.env,
     queue: leaseEngine,
     reaper,
     nuke,

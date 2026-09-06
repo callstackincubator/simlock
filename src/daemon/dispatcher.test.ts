@@ -702,6 +702,7 @@ function testConfig(
 ): Config {
   return {
     drivers: {},
+    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
     health: {

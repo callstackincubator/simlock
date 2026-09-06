@@ -62,6 +62,13 @@ export interface ErrorDetailsMap {
   /** No registered driver answers to that `simlock <tool>` wrapper -- either the name is wrong
    * or the platform's driver refused to start. */
   UNKNOWN_PASSTHROUGH_TOOL: { readonly tool: string };
+  /**
+   * ADR 0005 §19e: a `device.exec` command outran `exec.timeoutMs` and was killed. No details:
+   * the timeout that applied is already in the message, and a client that wants the
+   * configured value reads `config.get`. `domain`, not `transport` -- nothing about the
+   * connection failed; the command did.
+   */
+  EXEC_TIMEOUT: Record<string, never>;
   DOCTOR_UNAVAILABLE: Record<string, never>;
   NUKE_UNAVAILABLE: Record<string, never>;
   INTERNAL: Record<string, never>;
@@ -168,6 +175,11 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 2,
     httpStatus: 422,
   },
+  // The command ran, and ran too long: a 504 for the same reason a proxy uses one (the thing
+  // this daemon was waiting on never finished), and its own CLI exit code rather than the
+  // generic 1, so a script can tell a killed command from one that merely failed. 15 is the
+  // next free code after `lease`'s own 14 (see the CLI's LEASE_LOST_EXIT_CODE).
+  EXEC_TIMEOUT: { code: "EXEC_TIMEOUT", kind: "domain", cliExitCode: 15, httpStatus: 504 },
   DOCTOR_UNAVAILABLE: {
     code: "DOCTOR_UNAVAILABLE",
     kind: "domain",
@@ -187,6 +199,28 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // actually produces this error today.
   CANCELLED: { code: "CANCELLED", kind: "domain", cliExitCode: 1, httpStatus: 499 },
 };
+
+/**
+ * Renders a schema validation failure as the one-line `path: message; path: message` string
+ * every transport puts in a `BAD_REQUEST`'s message.
+ *
+ * One function rather than the four identical copies that used to sit in `Dispatcher`,
+ * `DaemonServer`, the typed client, and the HTTP app: each threw its own error class around
+ * the same rendering, so the rendering is what they actually shared -- and a caller reading
+ * `path: message` off a socket, an HTTP body, or a client rejection is entitled to the same
+ * string in all three. Structurally typed over the issue list rather than importing zod's
+ * `ZodIssue`, so this stays a formatting utility with no opinion about which schema library
+ * produced the issues.
+ */
+export function describeSchemaIssues(
+  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
+): string {
+  return issues
+    .map((issue) =>
+      issue.path.length === 0 ? issue.message : `${issue.path.join(".")}: ${issue.message}`,
+    )
+    .join("; ");
+}
 
 /**
  * `SimlockError<Code>` carries `details` typed exactly for its own `Code`. A bare
