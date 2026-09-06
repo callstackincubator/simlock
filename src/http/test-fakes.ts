@@ -11,6 +11,7 @@ const gibibyte = 1024 * 1024 * 1024;
 export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
   return {
     mode: "worker",
+    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000 },
     drivers: {},
     capacity: {
       strategy: "resource",

@@ -14,6 +14,7 @@ import {
   cleanupRuleSummarySchema,
   configSchema,
   daemonHealthSchema,
+  daemonModeSchema,
   deviceRecordSchema,
   doctorReportSchema,
   eventEnvelopeSchema,
@@ -26,8 +27,10 @@ import {
   proposalSchema,
   statusCapacitySchema,
   statusDeviceSchema,
+  statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
+  workerViewSchema,
 } from "./schemas.js";
 
 export interface OperationDefinition<
@@ -78,7 +81,7 @@ export const statusGet = defineOperation({
     // `driverData` and reclamation/recovery bookkeeping off this response; see its doc comment
     // in schemas.ts. `list.get` (admin-only) is the operation that returns the full record.
     devices: z.array(statusDeviceSchema),
-    leases: z.array(leaseRecordSchema),
+    leases: z.array(statusLeaseSchema),
     capacity: statusCapacitySchema,
     /**
      * What this daemon *is*, as opposed to what it currently holds: its health, and its run
@@ -91,6 +94,23 @@ export const statusGet = defineOperation({
      */
     daemon: z.object({ health: daemonHealthSchema, mode: z.enum(["worker", "gateway"]) }),
     queueDepth: z.number(),
+    /**
+     * ADR 0005 §1/§20: which mode answered. A gateway returns the same shape a worker does --
+     * capacity summed over its connected workers, every device and lease carrying a
+     * `workerId`, and the *gateway's* own queue depth -- so this block is how a caller tells
+     * "one machine" from "a fleet" without a second operation. Its own object rather than a
+     * bare `mode` field so the daemon-level facts that already live here (`health`) and the
+     * ones #118+ will add have somewhere to go without another top-level key each; `health`
+     * itself stays where it is, since moving it would break every existing reader for
+     * cosmetics.
+     */
+    daemon: z.object({ mode: daemonModeSchema }),
+    /**
+     * ADR 0005 §20: one entry per worker view, additive and gateway-only. Absent (not empty)
+     * from a worker's answer -- a worker has no fleet, and an empty array would read as "a
+     * gateway with no workers".
+     */
+    workers: z.array(workerViewSchema).optional(),
   }),
 });
 
@@ -497,6 +517,68 @@ export const tokenRevoke = defineOperation({
   output: z.object({ revoked: z.boolean() }),
 });
 
+// ---- worker.list / worker.drain / worker.undrain / worker.remove (ADR 0005 §8, §23) ---------
+//
+// Gateway-only operations: they act on the gateway's worker registry, which a worker daemon
+// does not have. A worker's `Dispatcher` deliberately declares no handler for them at all
+// (see `src/daemon/dispatcher.ts`'s `#handlers` type), so asking a worker for one answers
+// `UNKNOWN_REQUEST` -- "this daemon does not implement that operation" -- rather than a
+// fabricated empty fleet. The gateway's own dispatcher implements all four.
+//
+// `admin` throughout: these are operator tools (drain a machine for maintenance, forget a
+// machine that is gone), and ADR 0003 §3's matrix puts every daemon-wide administrative
+// operation at that role.
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerList = defineOperation({
+  name: "worker.list",
+  role: "admin",
+  input: z.object({}),
+  output: z.object({ workers: z.array(workerViewSchema) }),
+});
+
+/**
+ * ADR 0005 §9: a drained worker keeps its existing leases and receives no new dispatches --
+ * the operator's tool for taking a machine down without killing anyone's device. This PR
+ * records the flag on the view and reports it; #118's dispatcher is what honours it, because
+ * this PR has no dispatch to skip yet.
+ *
+ * Answering with the updated view (rather than `{ok: true}`) is deliberate: an operator who
+ * drains a worker immediately wants to see what it still holds, which is exactly the leases
+ * on the view they get back.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerDrain = defineOperation({
+  name: "worker.drain",
+  role: "admin",
+  input: z.object({ workerId: z.string().min(1) }),
+  output: z.object({ worker: workerViewSchema }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerUndrain = defineOperation({
+  name: "worker.undrain",
+  role: "admin",
+  input: z.object({ workerId: z.string().min(1) }),
+  output: z.object({ worker: workerViewSchema }),
+});
+
+/**
+ * ADR 0005 §8: forgets a *disconnected* worker's view. A connected one is refused with
+ * `WORKER_CONNECTED` -- removing it would only make the gateway forget a machine that is about
+ * to announce itself again on its very next refresh, which is a confusing no-op rather than an
+ * operator action. `removed` is a literal `true` (never `false`) because an unknown worker id
+ * is `UNKNOWN_WORKER`, not a quiet "nothing to do": an operator who typed the wrong id should
+ * hear about it.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerRemove = defineOperation({
+  name: "worker.remove",
+  role: "admin",
+  input: z.object({ workerId: z.string().min(1) }),
+  output: z.object({ workerId: z.string(), removed: z.literal(true) }),
+});
+
 // ---- the full registry ----------------------------------------------------------------------
 
 export const OPERATIONS = {
@@ -522,6 +604,25 @@ export const OPERATIONS = {
   "token.create": tokenCreate,
   "token.list": tokenList,
   "token.revoke": tokenRevoke,
+  "worker.list": workerList,
+  "worker.drain": workerDrain,
+  "worker.undrain": workerUndrain,
+  "worker.remove": workerRemove,
 } as const;
+
+/**
+ * The operations only a gateway implements (ADR 0005 §23). Named as a set here, rather than
+ * spelled out again in each dispatcher, so "which operations are gateway-only" has exactly one
+ * answer: the worker's dispatcher excludes these from its handler table, and the gateway's
+ * implements them.
+ */
+export const GATEWAY_ONLY_OPERATIONS = [
+  "worker.list",
+  "worker.drain",
+  "worker.undrain",
+  "worker.remove",
+] as const satisfies readonly OperationName[];
+
+export type GatewayOnlyOperationName = (typeof GATEWAY_ONLY_OPERATIONS)[number];
 
 export type OperationName = keyof typeof OPERATIONS;

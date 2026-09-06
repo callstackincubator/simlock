@@ -73,6 +73,30 @@ export interface ErrorDetailsMap {
   NUKE_UNAVAILABLE: Record<string, never>;
   INTERNAL: Record<string, never>;
 
+  // -- domain, gateway mode (ADR 0005) --
+  /**
+   * ADR 0005 §34/§23: the operation exists in the contract, this daemon is a gateway, and a
+   * gateway is not the thing that can answer it. Two populations share the code, and
+   * `details.operation` is what tells them apart for a caller:
+   *
+   * - permanently, by design: `nuke.run`, `cleanup.run`, `doctor.run`, `driver.passthrough` --
+   *   operations that act on one machine's devices as a whole, which stay per-worker
+   *   (§34: "a fleet-wide destructive command from one endpoint is not something v1 should
+   *   offer", and a passthrough command string the client cannot run is worse than an error);
+   * - until #118: the lease family (`lease.request`, `lease.renew`, `lease.release`,
+   *   `lease.cancel`, `lease.list`, `lease.release-all`) and `device.exec`, which the fleet
+   *   queue and the forwarding path implement.
+   *
+   * It is not `UNKNOWN_REQUEST`: the operation is known, and the answer "ask a worker" is a
+   * different instruction from "that is not an operation".
+   */
+  UNSUPPORTED_IN_GATEWAY_MODE: { readonly operation: string };
+  /** ADR 0005 §8: `worker.remove` on a worker whose uplink is currently open. Carries the id
+   * so a caller can say which one without re-parsing the message. */
+  WORKER_CONNECTED: { readonly workerId: string };
+  /** No worker view with that id -- never connected, or already removed/retired. */
+  UNKNOWN_WORKER: { readonly workerId: string };
+
   /** ADR §7's forward-compatibility escape hatch: a code the client does not know (a newer
    * daemon) wraps as this instead of throwing a parse failure. Never sent by a daemon this
    * version of the contract can produce -- purely a client-side wrapping target. */
@@ -188,6 +212,19 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   },
   NUKE_UNAVAILABLE: { code: "NUKE_UNAVAILABLE", kind: "domain", cliExitCode: 1, httpStatus: 503 },
   INTERNAL: { code: "INTERNAL", kind: "domain", cliExitCode: 1, httpStatus: 500 },
+  // 501, not 400/503: the request was well-formed and the daemon is healthy -- this endpoint
+  // simply does not implement that operation, which is exactly what "Not Implemented" says.
+  // `cliExitCode: 2` puts it with the other "you asked the wrong thing" outcomes.
+  UNSUPPORTED_IN_GATEWAY_MODE: {
+    code: "UNSUPPORTED_IN_GATEWAY_MODE",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 501,
+  },
+  // 409, like every other "the resource is not in a state that allows this": the worker is
+  // there, connected, and removing it is a contradiction rather than a missing thing.
+  WORKER_CONNECTED: { code: "WORKER_CONNECTED", kind: "domain", cliExitCode: 1, httpStatus: 409 },
+  UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 1, httpStatus: 404 },
   UNKNOWN_DAEMON_ERROR: {
     code: "UNKNOWN_DAEMON_ERROR",
     kind: "protocol",

@@ -1,6 +1,6 @@
 import type { Context, MiddlewareHandler, Next } from "hono";
 
-import { unauthenticated } from "./errors.js";
+import { forbidden, unauthenticated } from "./errors.js";
 import type { TokenIdentity } from "./token-store.js";
 
 export interface AuthEnv {
@@ -30,6 +30,15 @@ function extractSecret(header: string | undefined): string | undefined {
  * `Dispatcher`'s role check and `authorize` hook (see `dispatcher-session.ts`) -- the same
  * checks the socket path runs, not a second HTTP-only copy. A route still needs *an* identity
  * to build the `DispatchSession` `dispatch()` takes, which is what this middleware supplies.
+ *
+ * The one role decision that *does* live here is ADR 0005 §25's: a `worker`-role join token is
+ * `403` on every `/v1` route. It is not a role gate of the kind that moved to the dispatcher --
+ * those compare an operation's required role to a session's. This is narrower and belongs at
+ * the transport: a join token authorizes one transport (the uplink upgrade, see
+ * `src/ports/uplink.ts`) and no operation at all, so there is no session to build from it and
+ * nothing further down the stack could tell the difference between it and an agent token.
+ * Refusing it here, before a `DispatchSession` exists, is what makes "it can open an uplink and
+ * nothing else" true rather than aspirational.
  */
 export function requireAuth(tokens: TokenVerifier): MiddlewareHandler<AuthEnv> {
   return async (c: Context<AuthEnv>, next: Next) => {
@@ -38,6 +47,11 @@ export function requireAuth(tokens: TokenVerifier): MiddlewareHandler<AuthEnv> {
 
     const identity = await tokens.verify(secret);
     if (identity === undefined) throw unauthenticated("Unknown bearer token");
+    // 403, not 401: the token is real and was recognized -- it simply has no authority here
+    // (ADR 0005 §25).
+    if (identity.role === "worker") {
+      throw forbidden("A worker join token can only open an uplink, not call the HTTP API");
+    }
 
     c.set("identity", identity);
     await next();
