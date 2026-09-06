@@ -37,9 +37,13 @@ programmatic client the CLI and MCP frontends are themselves built on (see
 - **Advisory coordination.** Simlock does not sandbox anything. It works
   because agents are instructed to never call `simctl` / `avdmanager` directly
   and to only use devices handed to them by a lease.
-- **Process-held leases.** The `lease` command stays running in the
-  background; the open connection to the daemon is the heartbeat. Killing the
-  process releases the lease. A daemon-side TTL is the backstop for zombies.
+- **TTL leases, one kind everywhere.** Every lease carries a TTL and lives
+  until it expires, is renewed, or is released — on the socket, over HTTP,
+  and over MCP alike. `simlock lease` stays running in the background,
+  renewing on a timer and releasing when it exits, so killing it normally
+  frees the device at once; `--detach` skips the staying alive and leaves the
+  renewing to you. A holder that dies without releasing costs its device only
+  until the TTL runs out.
 - **One lease per agent** (v1).
 - **Managed-device registry.** Simlock only ever shuts down, erases, or
   deletes devices it created itself. Everything else on the machine is
@@ -50,4 +54,5 @@ programmatic client the CLI and MCP frontends are themselves built on (see
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's built, [CLI.md](CLI.md)
 for the command surface, [CLIENT.md](CLIENT.md) for the programmatic client,
-and [known-pitfalls.md](known-pitfalls.md) for accepted gaps.
+[HTTP-API.md](HTTP-API.md) for the network API, and
+[known-pitfalls.md](known-pitfalls.md) for accepted gaps.
