@@ -572,9 +572,9 @@ export async function runCli(
         // entirely in the driver (architecture rule 2 is about knowledge, not about names).
         // Every argument after the tool name is the tool's, verbatim -- including `--help`,
         // which belongs to `simctl`/`adb` and not to Simlock. `simlock --help` lists these.
-        // Narrowed here rather than passed as a bare string: `device.exec` declares `tool` as
-        // the closed `simctl | adb` set (ADR 0005 §19a), and this switch is what already knows
-        // which of the two the user typed.
+        // Narrowed here rather than passed as a bare string: both operations take an open
+        // `tool` (which wrappers exist is the drivers' answer, not the contract's), but this
+        // CLI publishes exactly two wrapper commands, and this switch already knows which.
         return await runPassthrough(
           rest[0] === "adb" ? "adb" : "simctl",
           rest.slice(1),
@@ -626,8 +626,8 @@ async function runPassthrough(
   // `--lease` is accepted on both paths so one command line works against either kind of
   // daemon (docs/CLI.md), and it is stripped here, before the branch, for the same reason:
   // whether it is *meaningful* depends on the daemon's mode, but whether it is the tool's
-  // argument must not. Scanning stops at the first non-flag argument -- everything from the
-  // tool's own subcommand onwards belongs to the tool, `adb shell ... --lease x` included.
+  // argument must not. Scanning stops at the first argument that is not `--lease` -- from
+  // there on everything belongs to the tool, `adb shell ... --lease x` included.
   const { leaseFlag, rest } = extractLeaseFlag(args);
   const client = await connectDaemonClient(environment, token);
   // ADR 0005 §19c: which path this invocation takes is a fact about the daemon, not a flag --
@@ -663,11 +663,9 @@ async function runPassthrough(
     command = await client.resolvePassthrough({ args: [...rest], tool });
   } catch (error: unknown) {
     // A verb the driver refuses is the caller getting it wrong, not a daemon fault, so it
-    // surfaces as usage rather than as an internal error.
-    if (isSimlockError(error) && error.code === "PASSTHROUGH_REFUSED") {
-      throw new UsageError(error.message);
-    }
-    throw error;
+    // surfaces as usage rather than as an internal error -- through the same relabelling the
+    // remote path uses, so both answer a refusal identically.
+    throw asUsageIfRefused(error);
   } finally {
     // Resolved before the command runs, so an interactive `adb shell` does not hold a daemon
     // connection open for its whole session.
@@ -723,25 +721,39 @@ async function runRemotePassthrough(
     );
     return exitCode;
   } catch (error: unknown) {
-    // Same treatment the local path gives a refusal: the caller got the command wrong, so it
-    // is usage rather than an internal failure.
-    if (isSimlockError(error) && error.code === "PASSTHROUGH_REFUSED") {
-      throw new UsageError(error.message);
-    }
-    throw error;
+    throw asUsageIfRefused(error);
   }
+}
+
+/**
+ * The daemon's refusals, rendered the way this CLI renders a caller's mistake: `USAGE`, exit 2,
+ * with the daemon's own message. Both refusal codes and both paths go through this one
+ * function -- the local `driver.passthrough` and the remote `device.exec` refuse with the same
+ * two codes for the same reasons (ADR 0005 §19c: the CLI keeps no copy of the list, it relabels
+ * what comes back), and a caller who typed `simlock adb kill-server` should not be able to tell
+ * from the answer which path answered. Anything else is left exactly as it arrived.
+ */
+function asUsageIfRefused(error: unknown): unknown {
+  if (
+    isSimlockError(error) &&
+    (error.code === "PASSTHROUGH_REFUSED" || error.code === "UNKNOWN_PASSTHROUGH_TOOL")
+  ) {
+    return new UsageError(error.message);
+  }
+  return error;
 }
 
 /**
  * Pulls a leading `--lease <id>` (or `--lease=<id>`) off the argument list, leaving the rest
  * for the tool.
  *
- * Scanning **stops at the first non-flag argument**, which is the whole reason this can exist
- * at all next to "every argument after the tool name is the tool's": once `simctl`'s or
- * `adb`'s own subcommand has appeared, everything after it -- including something spelled
- * `--lease` -- is an argument to that subcommand, not to Simlock. So
- * `simlock adb --lease lse_1 shell input text --lease` names a lease once and types the word
- * once.
+ * Scanning **stops at the first argument that is not `--lease`** -- a bare word, the tool's
+ * own flag, anything. That is the whole reason this can exist at all next to "every argument
+ * after the tool name is the tool's": everything from that point on is the tool's, including
+ * something spelled `--lease`. So `simlock adb --lease lse_1 shell input text --lease` names
+ * a lease once and types the word once, and `simlock adb -s emulator-5554 --lease lse_1 ...`
+ * does not name one at all -- the `-s` ended the scan, so the `--lease` after it goes to
+ * `adb`, which is the same rule read from the other side rather than a special case.
  *
  * It is accepted on both paths, not just the remote one: only a gateway *needs* it (the
  * command runs against a lease there), but a caller should be able to write one command line
@@ -779,20 +791,26 @@ function extractLeaseFlag(args: readonly string[]): {
 /**
  * Which lease the remote command runs against: the one this invocation's requester id holds.
  *
- * Identity, not a new flag, on purpose. Every argument after `simlock simctl` belongs to the
- * tool (docs/CLI.md), so there is no room for a `--lease` of Simlock's own -- and there does
- * not need to be: `--agent-id`/`SIMLOCK_AGENT_ID` already names who is asking, `simlock lease`
- * already attributes a lease to it, and one requester holds at most one lease. Matching on
- * `requesterId` rather than on the connection's principal is what makes that work across
- * invocations: the principal defaults to this process's pid, which the next invocation will
- * not share, while the requester id is the stable identity an agent exports.
+ * `lease.list` already answers per role -- an agent-role connection sees only the leases it
+ * owns, an admin-role one sees every lease on the daemon -- so the requester filter is applied
+ * only in the admin case, where it is the difference between "my lease" and "somebody's".
+ * Filtering an agent's own list by `requesterId` too would drop a lease it demonstrably owns
+ * whenever the requester id differs from the principal (an `--agent-id` used on the lease but
+ * not on this invocation): a refusal with no safety behind it.
+ *
+ * Identity rather than a flag, in either case: `--agent-id`/`SIMLOCK_AGENT_ID` already names
+ * who is asking, `simlock lease` attributes a lease to it, and one requester holds at most one
+ * lease -- so the usual invocation needs nothing, and `--lease` is there for the rest.
  */
 async function resolveRemoteLeaseId(
   client: SimlockAdminClient,
   environment: CliEnvironment,
 ): Promise<string> {
   const { leases } = await client.listLeases();
-  const own = leases.filter((lease) => lease.requesterId === environment.requesterId);
+  const own =
+    client.role === "admin"
+      ? leases.filter((lease) => lease.requesterId === environment.requesterId)
+      : leases;
   if (own.length === 0) {
     throw new UsageError(
       `No lease is held by ${environment.requesterId}: run \`simlock lease\` first, or set SIMLOCK_AGENT_ID to the id that holds it`,

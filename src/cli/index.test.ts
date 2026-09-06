@@ -649,6 +649,178 @@ describe("CLI: exit codes", () => {
       expect(ran).toHaveLength(1);
     });
 
+    it("relabels an unknown passthrough tool as USAGE, like a refusal", async () => {
+      // ADR 0005 §19c: the CLI keeps no copy of the refusal list and relabels whatever the
+      // daemon answers. `UNKNOWN_PASSTHROUGH_TOOL` is the other half of that answer, and it
+      // has to read the same as a refused verb does -- exit 2, one `USAGE` line.
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "UNKNOWN_PASSTHROUGH_TOOL",
+                      "domain",
+                      "No driver provides a adb passthrough",
+                      { tool: "adb" },
+                    ),
+                  ),
+              }),
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("No driver provides") },
+      });
+    });
+
+    it("relabels the local path's unknown tool the same way", async () => {
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                resolvePassthrough: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "UNKNOWN_PASSTHROUGH_TOOL",
+                      "domain",
+                      "No driver provides a adb passthrough",
+                      { tool: "adb" },
+                    ),
+                  ),
+              }),
+            runPassthrough: async () => 0,
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("No driver provides") },
+      });
+    });
+
+    it("takes --lease as the last argument, and refuses an empty one", async () => {
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "lse_only"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { args: [], leaseId: "lse_only", requesterId: "test-requester", tool: "adb" },
+      ]);
+
+      const missingValue = outputCapture();
+      await expect(
+        runCli(
+          ["adb", "--lease"],
+          missingValue.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(gatewayStatus) }),
+          }),
+        ),
+      ).resolves.toBe(2);
+
+      const emptyValue = outputCapture();
+      await expect(
+        runCli(
+          ["adb", "--lease=", "devices"],
+          emptyValue.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(gatewayStatus) }),
+          }),
+        ),
+      ).resolves.toBe(2);
+    });
+
+    it("fails a local passthrough with the status.get error when the daemon cannot answer", async () => {
+      // The switch reads `mode` off `status.get`, so an unreachable daemon fails there rather
+      // than at the passthrough -- and the CLI reports that call's own error rather than
+      // dressing it up as a passthrough failure.
+      const output = outputCapture();
+      let ranLocally = false;
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "DAEMON_CONNECTION_LOST",
+                      "transport",
+                      "Daemon connection closed",
+                      {},
+                    ),
+                  ),
+              }),
+            runPassthrough: async () => {
+              ranLocally = true;
+              return 0;
+            },
+          }),
+        ),
+      ).resolves.toBe(1);
+      expect(ranLocally).toBe(false);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "DAEMON_CONNECTION_LOST", message: "Daemon connection closed" },
+      });
+    });
+
+    it("uses an agent connection's own lease list without filtering it by requester", async () => {
+      // `lease.list` already answers per role: an agent sees only what it owns. Filtering that
+      // by `requesterId` as well would drop a lease it demonstrably owns whenever the two
+      // differ -- an `--agent-id` used on the lease but not on this invocation.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                role: "agent",
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () =>
+                  Promise.resolve({
+                    leases: [{ ...ownLease, id: "lse_owned", requesterId: "another-agent-id" }],
+                  }),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", tool: "adb" }]);
+    });
+
     it("stops scanning for --lease at the tool's own first argument", async () => {
       // Everything from the tool's subcommand onwards is the tool's, so a `--lease` there is
       // an argument to *it* -- typed text, a filter, an operand -- and travels through.
