@@ -377,7 +377,10 @@ describe("CLI: exit codes", () => {
    * it resolved could not run here anyway. Nothing about the CLI's transport decides it.
    */
   describe("remote passthrough (ADR 0005 device.exec)", () => {
-    const gatewayStatus = { ...EMPTY_STATUS, mode: "gateway" as const };
+    const gatewayStatus = {
+      ...EMPTY_STATUS,
+      daemon: { health: "running" as const, mode: "gateway" as const },
+    };
     const ownLease = {
       deviceId: "dev_1",
       grantedAt: 0,
@@ -2446,8 +2449,7 @@ const EMPTY_STATUS: StatusGetOutput = {
     },
     global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
   },
-  health: "running",
-  mode: "worker",
+  daemon: { health: "running", mode: "worker" },
   queueDepth: 0,
 };
 
@@ -2770,6 +2772,7 @@ async function startInMemoryDaemon(options: {
 
 function testConfig(): Config {
   return {
+    mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},

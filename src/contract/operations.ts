@@ -80,15 +80,16 @@ export const statusGet = defineOperation({
     devices: z.array(statusDeviceSchema),
     leases: z.array(leaseRecordSchema),
     capacity: statusCapacitySchema,
-    health: daemonHealthSchema,
     /**
-     * Which run mode this daemon is in (ADR 0005 §1). Always `"worker"` today -- the mode that
-     * owns devices, which is every daemon that exists -- and declared now because it is what a
-     * client uses to tell whether the device it leased is on this machine: a `simlock simctl`
-     * against a `worker` spawns locally, against a `gateway` it goes through `device.exec`
-     * (§19c). #117 makes the value configurable; this is the field it fills in.
+     * What this daemon *is*, as opposed to what it currently holds: its health, and its run
+     * mode (ADR 0005 §1). `mode` is the one field that tells a client which kind of daemon
+     * answered -- a `worker` owns the devices it serves, a `gateway` owns none and fronts the
+     * workers that joined it -- which is what `simlock simctl` / `simlock adb` branch on
+     * (§19c). They live together in a block because they are both facts about the process and
+     * neither is a fact about a device; `health` moved in here from the top level with the
+     * same protocol bump that added `mode`.
      */
-    mode: z.enum(["worker", "gateway"]),
+    daemon: z.object({ health: daemonHealthSchema, mode: z.enum(["worker", "gateway"]) }),
     queueDepth: z.number(),
   }),
 });

@@ -634,14 +634,14 @@ async function runPassthrough(
   // a `worker` owns the devices it serves, so the command it resolves can be spawned right
   // here with a real terminal; a `gateway` owns none, so the command has to run on whichever
   // worker does. The daemon says which it is, rather than the CLI guessing from its transport.
-  let mode;
+  let daemon;
   try {
-    ({ mode } = await client.getStatus());
+    ({ daemon } = await client.getStatus());
   } catch (error: unknown) {
     await client.close();
     throw error;
   }
-  if (mode === "gateway") {
+  if (daemon.mode === "gateway") {
     try {
       return await runRemotePassthrough(tool, rest, environment, client, leaseFlag);
     } finally {
@@ -1746,7 +1746,7 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput): string {
-  const { capacity, devices, health, leases, queueDepth } = status;
+  const { capacity, daemon, devices, leases, queueDepth } = status;
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
@@ -1771,7 +1771,7 @@ function formatStatus(status: StatusGetOutput): string {
       `Lease ${lease.id}: ${lease.requesterId} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
-    `Daemon: ${health}`,
+    `Daemon: ${daemon.health} (${daemon.mode})`,
     globalLine,
     ...capacityLines,
     ...deviceLines,

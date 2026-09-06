@@ -207,8 +207,8 @@ describe("GET /v1/status, /v1/catalog", () => {
     const { app, dispatcher } = buildHarness();
     const status = {
       capacity: {},
+      daemon: { health: "running", mode: "worker" },
       devices: [{ id: "dev_1" }],
-      health: "running",
       leases: [],
       queueDepth: 0,
     };

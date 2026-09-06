@@ -20,7 +20,8 @@ rename, and protocol bump).
 
 - **The daemon protocol is now 5**, `{min: 5, max: 5}`, with no compatibility
   shim — the same no-shim rule that took it to 4. ADR 0005 adds `device.exec`
-  and its `output` push family, and makes `status.get` always carry `mode`, so
+  and its `output` push family, and moves `status.get`'s `health` into a
+  `daemon` block that also carries `mode`, so
   advertising 4 would claim a compatibility path that does not exist. A client
   built against 4 does not overlap this daemon and its `hello` fails with
   `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges; `daemon.stop` stays the
@@ -166,9 +167,12 @@ those changes add, alongside the breaking changes above.
   `requesterId` it is running the command for and the daemon compares it to
   the lease's own, which is what keeps a proxy holding one admin credential
   from reaching every lease on the machine.
-- **contract:** `status.get` reports `mode` (`worker`/`gateway`), always
-  `worker` in this release — the field a client reads to tell whether the
-  device it leased is on the daemon's own machine.
+- **contract:** `status.get` gains a `daemon` block, `{ health, mode }`.
+  `health` moves into it from the top level, and `mode` (`worker`/`gateway`,
+  from the new `mode` config key and always `worker` in this release) joins it
+  — the one field that tells a client which kind of daemon answered, and what
+  `simlock simctl` / `simlock adb` branch on. `simlock status` renders it as
+  `Daemon: running (worker)`.
 - **android:** `simlock adb` now refuses a caller-supplied `-P`,
   `--server-port`, `-L`, or `-H` in any spelling, the way `simlock simctl`
   already refuses `--set`/`--profiles`. `adb` takes the _last_ `-P` on the

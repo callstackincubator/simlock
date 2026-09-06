@@ -7,6 +7,7 @@ a warning. Inspect the effective, merged configuration at any time with
 
 | Property                          | Description                                                                                                                                                                                                                  | Default                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `mode`                            | Which shape this daemon runs as: `worker` (owns the devices on this machine) or `gateway` (owns none, fronts the workers that join it -- see [ADR 0005](adr/0005-gateway-and-worker-modes.md)). One daemon runs exactly one mode. Only `worker` does anything in this release; the value is reported on `simlock status`'s daemon block, which is how a client tells the two apart. | `worker`                                                        |
 | `capacity.strategy`               | Which policy decides how many devices may exist and run at once: `resource` or `fixed`. The options under `capacity.config` are that strategy's own -- see [Capacity strategies](#capacity-strategies).                     | `resource`                                                      |
 | `idle.shutdownAfterMs`            | How long an unused device sits idle before Simlock shuts it down (tier 1, reclaims RAM).                                                                                                                                     | `10 minutes`                                                    |
 | `idle.deleteAfterMs`              | How long a shut-down device sits idle before Simlock deletes it (tier 2, reclaims disk).                                                                                                                                     | `1 hour`                                                        |
@@ -49,6 +50,7 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
+`mode` must be exactly `"worker"` or `"gateway"`.
 `exec.timeoutMs` must be a positive number.
 `lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
 `lease.defaultTtlMs` must be `<=` `lease.maxTtlMs`. A config that violates

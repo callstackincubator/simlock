@@ -383,7 +383,7 @@ rather than the CLI keeping a copy of the list.
 
 **The CLI decides by asking, not by guessing.** Every `simlock simctl` /
 `simlock adb` invocation now begins with a `status.get` and reads `mode` off
-it: a `worker` owns the devices it serves, so the command it resolves is
+its daemon block: a `worker` owns the devices it serves, so the command it resolves is
 spawned right here with a real terminal; a `gateway` owns none, so the command
 has to run on whichever worker does. That is the whole switch — no flag, and
 nothing about which transport the CLI happens to be using. The cost is one
@@ -615,6 +615,12 @@ identity](#agent-identity) — since when, and when each was last renewed), and
 queue depth. `--json` for the structured equivalent. `overLimit` is true when a
 lowered limit cannot yet be met, for example because active leases consume all
 running slots.
+
+The daemon block carries `health` and `mode` (`"worker"` or `"gateway"`) — the
+one field that tells a client which kind of daemon answered, and what
+`simlock simctl` / `simlock adb` branch on ([Reaching a leased
+device](#reaching-a-leased-device)). Human output renders it as
+`Daemon: running (worker)`; `--json` as `{"daemon":{"health":"running","mode":"worker"}}`.
 
 ## `simlock list [--devices|--leases|--rules]`
 

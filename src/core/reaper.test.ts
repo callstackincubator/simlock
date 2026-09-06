@@ -44,6 +44,7 @@ class MutableFreeDiskFilesystem extends MemoryFilesystem {
 
 function config(): Config {
   return {
+    mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},

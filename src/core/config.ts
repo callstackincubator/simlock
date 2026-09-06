@@ -59,7 +59,18 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;
  */
 export type DownloadPolicy = "never" | "on-request" | "always";
 
+/**
+ * Which shape a daemon runs as (ADR 0005 §1): a `worker` owns the devices on its machine --
+ * every daemon today -- and a `gateway` owns none and fronts the workers that joined it. One
+ * daemon runs exactly one mode, and it is a config value rather than a flag because it decides
+ * what the process *is*, not what one invocation does.
+ */
+export type DaemonMode = "worker" | "gateway";
+
 export interface Config {
+  /** See `DaemonMode`. Reported on `status.get`'s daemon block, which is how a client tells
+   * the two apart; the gateway behaviour itself lands with #117. */
+  readonly mode: DaemonMode;
   readonly capacity: CapacityConfig;
   /**
    * Per-driver settings, opaque to the core: stored, merged, and handed to the driver
@@ -305,6 +316,7 @@ function asObject(value: unknown): Layer {
 
 function defaultConfig(systemStats: SystemStats, strategy: CapacityStrategyName): Config {
   return {
+    mode: "worker",
     capacity: {
       strategy,
       config: defaultCapacityOptions(strategy, systemStats),
@@ -399,6 +411,7 @@ function validateConfigLayer(
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
+const DAEMON_MODES: readonly DaemonMode[] = ["worker", "gateway"];
 
 /**
  * The `capacity.config` validator is the selected strategy's own, so a strategy
@@ -406,6 +419,7 @@ const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "al
  */
 function configValidators(strategy: CapacityStrategyName): Record<string, Validator> {
   return {
+    mode: stringUnion(DAEMON_MODES),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),
       config: capacityStrategyValidator(strategy),

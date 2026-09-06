@@ -94,11 +94,17 @@ Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 
 ### `GET /v1/status`
 
-Role: `agent`. The same view `simlock status --json` reads: daemon health
-(`starting`/`running`), `mode` (`worker`/`gateway` — always `worker` in this
-version, and what a client reads to tell whether the device it leased is on
-this daemon's own machine), managed/running capacity per platform, active
-leases, managed devices, queue depth.
+Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
+managed/running capacity per platform, active leases, managed devices, queue
+depth.
+
+The daemon block carries `health` (`starting`/`running`) and **`mode`**
+(`"worker" | "gateway"`), the one field that tells a client which kind of
+daemon answered — always `"worker"` in this version:
+
+```json
+{ "daemon": { "health": "running", "mode": "worker" } }
+```
 
 ### `GET /v1/catalog?platform=ios|android`
 
