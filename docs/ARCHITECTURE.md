@@ -7,7 +7,7 @@ agent ──spawns──> simlock CLI ──┐
                                 ├─ shared daemon client ──unix socket──> simlock daemon
 MCP client ──spawns──> stdio MCP ┘                                      │
                                                                          │
-remote agent ──token auth──> HTTP gateway ──same role interfaces────────┤
+remote agent ──token auth──> HTTP frontend ─same role interfaces────────┤
                                                                      ┌───┼─────────────┐
                                                                      │ core (platform-│
                                                                      │ agnostic)      │
@@ -28,13 +28,18 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
                                                                                 emulator/adb)
 ```
 
-- **CLI, stdio MCP server, and HTTP gateway**: sibling thin frontends over one
+That is one daemon, owning the devices on one machine — a **worker**, in ADR
+0005's vocabulary, and the only shape simlock has today. A **gateway** fronting
+several workers is the other one; see [Gateway and worker
+modes](#gateway-and-worker-modes-adr-0005) below for that topology.
+
+- **CLI, stdio MCP server, and HTTP frontend**: sibling thin frontends over one
   typed contract (ADR 0003; see "Contract, dispatcher, and roles" below). The
   core never knows which frontend made a request. The CLI and MCP server sit
   over `simlock/client`/`simlock/admin` (the typed daemon client, see
   [CLIENT.md](CLIENT.md)) and the unix socket; the CLI is the full operator
   interface, and the MCP server intentionally limits its tool surface to
-  leasing and releasing for an agent session. The HTTP gateway is different in
+  leasing and releasing for an agent session. The HTTP frontend is different in
   kind, not just transport: it is the one frontend meant to be reached over a
   real network, so it calls the daemon's dispatcher **in-process** — the exact
   same one the socket path calls — rather than going through the unix socket at
@@ -45,7 +50,7 @@ remote agent ──token auth──> HTTP gateway ──same role interfaces─�
   right after the socket claim, the same moment the unix socket itself starts
   accepting connections and before startup convergence runs (`DaemonServer`'s
   `onSocketClaimed` hook, see "Startup: claim first, converge after" below) — a
-  bug fix from the pre-ADR gateway, which started only once convergence had
+  bug fix from the pre-ADR HTTP frontend, which started only once convergence had
   already finished and so never needed to park anything. A request that arrives
   before convergence completes now waits on the shared dispatcher's readiness
   gate exactly like a socket request, instead of being refused. See
@@ -118,7 +123,7 @@ declares one, park on startup readiness (every operation but `status.get`),
 call the handler, parse the output. Handlers never see a raw payload or run
 a role check themselves. The unix socket server (`DaemonServer`) is framing
 plus connection/session lifecycle around this one dispatcher instance; the
-HTTP gateway (`src/http/app.ts`) calls the **exact same dispatcher
+HTTP frontend (`src/http/app.ts`) calls the **exact same dispatcher
 in-process** — `DaemonServer` exposes it as the one privileged seam an
 auxiliary frontend gets — via a bearer-token-to-`DispatchSession` adapter
 (`src/http/dispatcher-session.ts`). **HTTP never routes through the unix
@@ -227,6 +232,332 @@ See [CLIENT.md](CLIENT.md) for how `simlock/client`/`simlock/admin` expose
 for the CLI's own walkthrough of the same resolution order, and
 [HTTP-API.md](HTTP-API.md#authentication) for how HTTP's bearer-token roles
 map onto `agent`/`admin`.
+
+## Gateway and worker modes (ADR 0005)
+
+`config.mode` selects which of two shapes a daemon runs as, and one daemon
+runs exactly one of them:
+
+- **`worker`** (the default) is everything described above and below in this
+  document: drivers, device roots, registry, capacity, reaper, health
+  monitor, leases. Every simlock daemon before ADR 0005 is a worker.
+- **`gateway`** owns no devices at all. It starts no drivers, validates no
+  device roots, and runs no reaper, health monitor, or capacity strategy.
+  What it owns is *demand*: one fleet-wide queue of lease requests, a live
+  view of every worker connected to it, and the routing decision that puts
+  the two together.
+
+To a client the difference is invisible. A gateway implements the same typed
+contract (ADR 0003) towards its own clients that a worker does, so the CLI,
+MCP, the HTTP frontend, `simlock/client`, and the web console (#88) work
+against one with no frontend change — `mode` in `status.get`'s daemon block
+is the only field that tells them apart.
+
+```
+                    agents (CLI · MCP · simlock/client)
+                    web console (#88) · agent-device
+                                  │
+                       one URL / one unix socket
+                                  │
+                                  ▼
+                    ┌──────────────────────────────┐
+                    │ simlock daemon, mode gateway │
+                    │  worker views · fleet queue  │
+                    │  routing policy · dispatch   │
+                    │  lease index · event bus     │
+                    │        (no drivers)          │
+                    └───▲───────────────────────▲──┘
+                        │                       │   the gateway is the
+              uplink    │             uplink    │   protocol client here
+       (each worker dials out: WebSocket + join token)
+                        │                       │
+        ┌───────────────┴──────┐   ┌────────────┴─────────┐
+   ┌───▶│ simlock daemon,      │   │ simlock daemon,      │◀───┐
+   │    │ mode worker (Mac A)  │   │ mode worker (Mac B)  │    │
+   │    │ core · drivers ·     │   │ core · drivers ·     │    │
+   │    │ registry · capacity  │   │ registry · capacity  │    │
+   │    └──────────┬───────────┘   └──────────┬───────────┘    │
+   │               │ simctl / adb             │ simctl / adb   │
+   │               ▼                          ▼                │
+   │        iOS / Android devices      iOS / Android devices   │
+   │                                                           │
+ local agents on Mac A,                  local agents on Mac B
+ over that daemon's own unix socket — unchanged, and sharing its capacity
+```
+
+Only the gateway listens for inbound connections. Workers **dial out**, so a
+machine behind NAT, a laptop, or a CI runner joins a fleet with a URL and a
+token and needs no inbound port, no tunnel, and no address a client ever
+learns. A machine that should both front a fleet and own devices runs **two
+daemons** with distinct `SIMLOCK_HOME`s — a gateway and a worker, the worker
+joining over localhost. There is no hybrid mode: every gateway code path
+would need a "local" special case, and the gateway would hold device state.
+
+### The uplink
+
+A worker with `gateway.url` and `gateway.token` set opens one outbound
+WebSocket to `<gateway.url>/v1/uplink` on start, and again after any
+disconnect on exponential backoff, presenting its join token (role `worker`)
+and its instance id. The gateway verifies the token against its own token
+store; anything else is `401`.
+
+Over that one socket **the gateway is the protocol client**. It sends `hello`
+and issues ordinary contract operations to the worker's own dispatcher,
+exactly as a local admin CLI would over the unix socket — there is no second
+API and no second vocabulary between gateway and worker, so every operation
+added to the contract is available over the uplink for free. The worker
+grants that session the `admin` role because *it* opened the connection, to
+the gateway named in its own config; the trust runs from the worker's
+configuration, never from the transport (ADR 0003 §5).
+
+The uplink is also the reachability signal, so nothing polls for liveness: a
+worker whose uplink is open is `connected`, one whose uplink is closed is
+`disconnected` and keeps its last-known view (greyed, never dispatched to)
+until an operator removes it or `gateway.disconnectedRetentionMs` (24 hours)
+elapses — never while the gateway still knows of gateway-issued leases on
+it, because forgetting a worker that is holding someone's device is how a
+lease becomes unroutable.
+
+The uplink is a port on both sides — `UplinkListenerFactory` on the gateway,
+`UplinkConnector` on the worker — with a WebSocket adapter (`ws`) as the one
+real implementation, so tests script a whole fleet in memory against a
+manually-advanced `Clock`, exactly as the core's tests script drivers.
+
+### The worker view
+
+A **worker view** is what the gateway currently knows about one worker: its
+id, `label`, daemon health and version, negotiated protocol range, capacity
+per platform, queue depth, leases, devices, catalog, and drain state. On
+connect the gateway calls `status.get`, `list.get`, `catalog.get`, and
+`events.subscribe` on the worker and builds the view from the answers; it
+refreshes status and list on every worker event that changes capacity or
+leases, and on a slow periodic tick as a backstop.
+
+The view is **rebuilt, never persisted**. A gateway restart loses nothing it
+cannot ask for again, and a worker stays the authority on its own state. Two
+consequences are worth stating plainly:
+
+- The worker **id is the worker's existing instance identity**
+  (`${SIMLOCK_HOME}/instance.json`) — stable across restarts, unique by
+  construction, opaque to clients. `label` (`gateway.label`) is display-only
+  and need not be unique; nothing routes on it.
+- A view can be **stale by a moment**, and the design assumes it. Dispatch
+  treats a `NO_CAPACITY` answer from a worker as a stale view rather than as
+  a failure (below), which is what lets routing be an ordinary pure function
+  over the last known numbers instead of a distributed reservation protocol.
+
+`worker.list` (admin) returns the views; `worker.drain`, `worker.undrain`,
+and `worker.remove` are the operator's edits to them. A **drained** worker
+keeps its existing leases and receives no new dispatches — the tool for
+taking a machine down without killing anyone's device.
+
+Drain is the one piece of worker state the gateway *decides* rather than
+observes, so it is the one piece that survives a reconnect: a drained worker
+whose daemon restarts comes back drained, because otherwise a machine taken
+out of rotation for maintenance would quietly rejoin it at the worst possible
+moment. It does not survive a **gateway** restart — nothing the gateway holds
+does — so re-draining after one is an operator's job, and `simlock worker
+list` is where they would see that it is needed.
+
+### The fleet queue and dispatch
+
+A lease request arriving at a gateway enters **one gateway-side FIFO queue**,
+where `timeoutMs` (`QUEUE_TIMEOUT`), `noWait` (`NO_CAPACITY`),
+`lease.cancel`, and the `queued` progress state with its `queuePosition` all
+mean exactly what they mean on a worker.
+
+**Dispatch** runs whenever the queue or any worker view changes. For each
+queued request, oldest first, the routing policy picks a worker and the
+gateway sends it `lease.request` with **`noWait: true`**:
+
+- a grant, or an answer that says device work is already under way, moves the
+  request to `dispatched`;
+- `NO_CAPACITY` means the view was stale: the gateway refreshes that worker's
+  view and the request stays queued, no worse off than before;
+- a request no worker can serve right now is **passed over, not blocked on**,
+  so an Android request behind an iOS one proceeds the moment Android
+  capacity frees.
+
+`noWait` is what keeps the two queues from becoming one problem. Because a
+dispatch either takes immediately or refuses, **no gateway request ever sits
+in a worker's queue**: it can still be granted by whichever worker frees
+first, and local agents on the worker machine keep using their own daemon's
+queue without ever competing with the fleet for a queue slot. The two contend
+for *capacity* only, and the worker's own capacity accounting is the single
+arbiter of that — the same accounting that already arbitrates between two
+local agents.
+
+### Routing
+
+Routing is a pure function over the current worker views, in one module with
+one entry point selected by `gateway.routing`, the same shape as
+`CapacityStrategy`. Nothing else in the gateway knows how a worker is chosen.
+The v1 policy (`warm-then-free`), in order:
+
+1. drop workers that are disconnected, drained, incompatible, or lacking the
+   requested platform, model, or runtime — a download counts as available
+   only on a worker whose own `downloads.policy` would allow it;
+2. prefer a worker with an unleased `ready` device matching the request — a
+   **warm hit**, and a sub-second grant;
+3. otherwise the worker with the **most free running capacity** for that
+   platform.
+
+There is no other placement rule in v1: no requester affinity, no label
+selectors, no per-worker platform exclusions. Each of those is a future
+routing policy behind `gateway.routing`, not a change to the request shape —
+which is why a lease request has the same shape against a worker and against
+a gateway.
+
+### Leases through the gateway
+
+TTL-first leases (ADR 0004) are what let the gateway hold almost no lease
+state at all. `lease.renew`, `lease.release`, and single-lease reads are
+**forwarded** to the owning worker, and the `expiresAt` a client sees is the
+worker's own. There is nothing to emulate and no timer to run: a client that
+stops renewing loses its lease on the worker's clock, gateway or no gateway.
+
+- **The lease id names its worker.** A gateway lease id is the owning
+  worker's id and the worker's own lease id joined by a `.`
+  (`3f81a2c4.lse_9f2c`), so renew, release, and reads route by reading the id
+  rather than by consulting state a restart could lose. Clients treat it as
+  opaque, exactly as they already treat `lse_9f2c`.
+- **The lease object gains `worker: { id, label }`** (additive) so a client
+  and the console can say *where* the device lives. A worker's network
+  address is never on it: clients reach devices through the gateway.
+- **One lease per requester is fleet-wide.** A requester already holding a
+  gateway-issued lease on any worker gets `REQUESTER_ALREADY_LEASED` from the
+  gateway, naming the existing lease. The gateway enforces this from its own
+  index of the leases *it* issued, rebuilt from each worker's `lease.list` on
+  uplink connect.
+- **The requester id the gateway forwards is namespaced**:
+  `gw:<gateway instance id>:<requester>`. A local agent on the worker machine
+  and a remote agent behind the gateway therefore can never collide on the
+  worker's own one-lease rule, and every lease on the worker is attributable
+  to the fleet it came from. The namespace is worker-side bookkeeping: the
+  gateway reports the leases it issued under the client's own requester id.
+- **The gateway keeps no per-connection lease state** and releases nothing
+  when a client connection closes, exactly as a worker (ADR 0004 §3).
+- **Pushes are relayed, not re-invented.** Progress for a dispatched request,
+  and the lease-scoped `lease-lost` / `device-unhealthy` / `device-recovered`
+  facts the worker's event stream carries, are re-pushed to whichever gateway
+  connection owns the request or lease — the same owner routing rule a worker
+  applies (ADR 0003 §8).
+
+### Reaching a device: `device.exec`
+
+`driver.passthrough` resolves a root-scoped command string for the *caller*
+to spawn, which only works on the worker's own machine. `device.exec` (role
+`agent`, and the caller must own the lease) is the operation that works
+everywhere: `{ leaseId, tool: "simctl" | "adb", args, stdin? }`.
+
+The **worker** resolves the command through the same driver passthrough logic
+— same root scoping, same refusal list for verbs that would change a device's
+lifecycle behind the registry's back — and runs it through its
+`ProcessRunner`. Output streams back as request-scoped `output` pushes
+(`stream: "stdout" | "stderr"` plus a chunk, keyed by the frame id exactly
+like `progress`), and the operation resolves with `{ exitCode }`.
+
+The **gateway proxies** it to the owning worker over the uplink and relays
+those pushes to the calling connection unchanged. It parses nothing about the
+command: ownership is checked at the gateway against its own lease index, and
+again at the worker, where the forwarded namespaced requester has to own the
+lease there. Because output is streamed rather than buffered there is no size
+cap; what bounds a command is one timeout (`exec.timeoutMs` on the worker,
+`gateway.execTimeoutMs` on the gateway, both ten minutes, the worker's
+authoritative), after which the process is killed and the operation fails
+with `EXEC_TIMEOUT`.
+
+Two deliberate limits: `stdin` is a single string sent with the request, not
+an incremental channel, and there is no pseudo-terminal — line-oriented
+commands work, full-screen ones do not. And `device.exec` runs against the
+**worker's** filesystem, so an artifact a command names (`simctl install
+<path>`, `adb install <apk>`) has to get there out of band. The seam for a
+later `device.upload` — chunks streamed as request-scoped pushes into a
+per-lease scratch directory deleted on release — is left open by design, not
+built. See [known-pitfalls.md](known-pitfalls.md).
+
+This is also what closes the gap that left `dataPlane` reserved: a remote
+HTTP agent gets the same ability against a lone worker, with no gateway
+involved at all.
+
+### Aggregated reads
+
+`status.get` on a gateway returns the same shape a worker returns — capacity
+summed across connected workers, every gateway-issued and local lease, every
+device, the gateway queue's depth — plus an additive `workers` array of
+views, and `workerId` on every device and lease in the aggregate.
+`catalog.get` is the union of the worker catalogs, each model and runtime
+annotated with the workers that have it.
+
+Worker business events are republished on the gateway's bus with `workerId`
+added to the payload and land in the gateway's own ring buffer, so `simlock
+events --follow` against a gateway shows the whole fleet. The gateway also
+emits its own facts — `worker.connected`, `worker.disconnected`,
+`worker.removed`, `worker.drain-started`, `worker.drain-ended`, and
+`request.dispatched`; see [EVENTS.md](EVENTS.md).
+
+### Failure behaviour
+
+- **Uplink down.** No new dispatches to that worker. A renew or release for a
+  lease on it fails with `WORKER_UNREACHABLE` (`kind: "transport"`). The
+  worker's own TTL expires the lease and reclaims the device on its own
+  clock, and the gateway relays `lease-lost` once the uplink returns and it
+  sees the worker's `lease.expired` fact. **The gateway never guesses a lease
+  is gone before the worker says so** — it cannot tell a dead worker from an
+  unreachable one, and only one of those has released anything.
+- **Dispatched, then the uplink drops.** The request's client sees
+  `WORKER_UNREACHABLE`. If the worker actually granted it, that lease exists
+  on the worker and expires there on its TTL. A retry hits the fleet-wide
+  one-lease rule only once the uplink is back and the index is rebuilt —
+  which is the `409 → GET` recovery loop the HTTP API already documents,
+  applied across the uplink gap.
+- **Gateway restart.** In-flight requests are lost, exactly as a worker
+  restart loses them today (durable requests arrive with #72, for both).
+  Leases survive on their workers; workers reconnect on their backoff and the
+  gateway rebuilds every view and its lease index from them. Clients keep
+  their leases and resume renewing once the gateway answers again — a lease
+  whose deadline passes while the gateway is down expires on the worker, like
+  any other unrenewed lease.
+- **Version skew.** `hello` over the uplink negotiates the protocol range
+  exactly as over the socket (ADR 0003 §6). A worker outside the gateway's
+  range is marked `incompatible` in its view, with both ranges shown, and is
+  never dispatched to. It is not hidden: an operator needs to see the machine
+  that needs upgrading, and an incompatible worker still serves its own local
+  clients perfectly well.
+
+### Why this is safe
+
+**The gateway never touches a device.** Every invariant in
+[agent-rules/safety.md](agent-rules/safety.md) keeps holding by construction
+rather than through a second implementation of it: registry-only destruction,
+never touching a leased device, reconcile-before-trusting, and
+ownership-proven-not-inferred are all enforced where the registry and the
+drivers are, on the worker. The gateway forwards `allowDownload` and the
+worker clamps it through its own `downloads.policy`, so "no implicit multi-GB
+downloads" is decided by the machine that would do the downloading.
+
+That is also why the machine-wide operations stay per-worker: `nuke.run`,
+`cleanup.run`, `doctor.run`, and `driver.passthrough` answer
+`UNSUPPORTED_IN_GATEWAY_MODE` on a gateway in v1. Fanning a destructive
+command out to every machine in a fleet from one endpoint is not something v1
+should offer, and a passthrough command string the client cannot run is worse
+than an error. `config.get` on a gateway returns the gateway's own config.
+
+### Boundaries
+
+The gateway is a second implementation of the contract's **handlers** (ADR
+0003 §2), not a second contract: `src/gateway/` provides a `Dispatcher` whose
+handlers read worker views and forward over uplinks instead of calling
+`core`. That is the whole reason every existing frontend works against it
+unchanged.
+
+`src/gateway/` **imports nothing from `drivers`** — it has no concept of a
+UDID, an AVD, a snapshot, or an adb port — and from `core` only the
+platform-agnostic queue and bus modules it reuses, never the registry,
+capacity, or lifecycle modules. A boundary test in the same shape as
+`src/contract/boundary.test.ts` enforces it. The rule is not stylistic: a
+gateway that could reach a registry module is a gateway that could grow a
+device-state opinion, and the safety argument above rests on it having none.
 
 ## Core vs. drivers
 
