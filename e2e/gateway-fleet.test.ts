@@ -23,7 +23,7 @@ interface WorkerView {
 }
 
 interface StatusView {
-  readonly mode: string;
+  readonly daemon: { readonly mode: string };
   readonly capacity: { readonly ios: { readonly limit: number } };
   readonly workers?: readonly WorkerView[];
 }
@@ -122,7 +122,7 @@ describe("gateway fleet", () => {
     const status = await gateway.cli(["status", "--json"]);
     expect(status.code).toBe(0);
     const statusView = status.json as StatusView;
-    expect(statusView.mode).toBe("gateway");
+    expect(statusView.daemon.mode).toBe("gateway");
     expect(statusView.workers).toHaveLength(2);
     expect(iosLimit(joined[0])).toBeGreaterThan(0);
     expect(statusView.capacity.ios.limit).toBe(iosLimit(joined[0]) + iosLimit(joined[1]));

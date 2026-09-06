@@ -1811,7 +1811,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           warm: 0,
         },
       },
-      mode: "gateway" as const,
+      daemon: { health: "running" as const, mode: "gateway" as const },
       devices: [
         {
           id: "dev_1",
@@ -1820,7 +1820,6 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           workerId: "wrk_1",
         },
       ],
-      health: "running" as const,
       leases: [
         {
           deviceId: "dev_1",
@@ -3212,7 +3211,6 @@ function testConfig(): Config {
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    mode: "worker",
     gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
     drivers: {},
     eventBuffer: { capacity: 100 },

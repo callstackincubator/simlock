@@ -112,7 +112,7 @@ describe("GatewayDispatcher", () => {
 
     const status = await dispatcher.dispatch("status.get", {}, session());
 
-    expect(status.mode).toBe("gateway");
+    expect(status.daemon.mode).toBe("gateway");
     expect(status.workers).toHaveLength(1);
     expect(status.devices).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);

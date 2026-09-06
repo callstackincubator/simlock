@@ -201,7 +201,7 @@ export class WorkerLink {
     this.options.registry.refresh(this.workerId, {
       capacity: status.capacity,
       devices: viewDevicesSchema.parse(devices),
-      health: status.health,
+      health: status.daemon.health,
       leases: status.leases,
       queueDepth: status.queueDepth,
       version: client.daemonVersion,

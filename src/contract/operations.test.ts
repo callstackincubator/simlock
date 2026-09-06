@@ -246,9 +246,8 @@ describe("operation input/output round trips", () => {
       ],
       leases: [lease],
       capacity,
-      health: "running",
+      daemon: { health: "running", mode: "gateway" },
       queueDepth: 0,
-      mode: "gateway",
       workers: [
         {
           id: "wrk_1",

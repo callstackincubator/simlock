@@ -13,7 +13,6 @@ const config: Config = {
   mode: "worker",
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
-  mode: "worker",
   gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
   drivers: {},
   eventBuffer: { capacity: 100 },

@@ -430,7 +430,7 @@ same auth, same error shapes — with three differences.
 
 **`GET /v1/status` and `GET /v1/catalog` aggregate.** Status returns the shape
 a worker returns, with capacity summed over the connected workers, `workerId`
-on every device and lease, `mode: "gateway"`, and an additive `workers`
+on every device and lease, `daemon.mode: "gateway"`, and an additive `workers`
 array of worker views. Catalog is the union of the connected workers'
 catalogs, each model and runtime annotated with `modelWorkers` /
 `runtimeWorkers` — which workers have it.

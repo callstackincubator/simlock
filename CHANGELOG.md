@@ -223,13 +223,13 @@ it follows.
 - **gateway:** `src/gateway/` implements the contract from worker views.
   `status.get` returns the shape a worker returns — capacity summed across
   connected workers, `workerId` on every device and lease, the gateway's own
-  queue depth — plus a `workers` array, and `mode` now reads `"gateway"`. `catalog.get` is
+  queue depth — plus a `workers` array and `daemon.mode: "gateway"`. `catalog.get` is
   the union of the connected workers' catalogs, annotated with which workers
   have each model and runtime. `lease.list` and `list.get` report the fleet.
   Worker events are republished on the gateway's bus with `workerId` added,
   so `simlock events --follow` shows the fleet.
 - **contract:** `worker.list|drain|undrain|remove` (admin), the `worker` token
-  role, `mode: "gateway"` on `status.get`, and error codes
+  role, `daemon.mode: "gateway"` on `status.get`, and error codes
   `UNSUPPORTED_IN_GATEWAY_MODE`, `WORKER_CONNECTED`, `UNKNOWN_WORKER` and
   `WORKER_UNREACHABLE`. All additive except the protocol range, which moves to
   `{min: 5, max: 5}` with no shim (see the breaking note below).
