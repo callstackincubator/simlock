@@ -62,7 +62,7 @@ surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code — a renew by a running `simlock lease` is the
 exception, and exits `14`.
 
-The four ADR 0005 codes are placed on existing numbers rather than new ones,
+The five ADR 0005 codes are placed on existing numbers rather than new ones,
 and the numbers are fixed by the contract's error table in the PRs that
 implement them ([ADR 0005](adr/0005-gateway-and-worker-modes.md)):
 
@@ -441,14 +441,16 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
 
 Against a **gateway**, the device is on another machine, so the command runs
 there instead — see [Against a gateway](#against-a-gateway). The refusals
-above are unchanged, and are then enforced twice: the CLI still refuses them
-before sending (`USAGE`), and the worker refuses them again when it resolves
-the command (`PASSTHROUGH_REFUSED`, or `UNKNOWN_PASSTHROUGH_TOOL` for a tool
-it does not wrap). Both exit 2, so a script sees no difference; the codes
-differ because the checks are different things. The local one is a fast,
-specific message, and the worker's is the enforcement — a client is not what
-keeps a device's lifecycle honest, and a caller reaching `device.exec`
-directly over HTTP never passes through the CLI's check at all.
+above are unchanged, and where they are enforced does not change either:
+**the daemon refuses, the CLI reports.** The CLI holds no copy of the refusal
+list in either direction — frontends render the contract, and the list lives
+with the driver that owns the device (ADR 0003 §11). Locally that means
+`driver.passthrough` refuses and the CLI relabels the answer as `USAGE`
+(exit 2); through a gateway it sends `device.exec` and the worker refuses
+with `PASSTHROUGH_REFUSED`, or `UNKNOWN_PASSTHROUGH_TOOL` for a tool it does
+not wrap, which the CLI relabels exactly the same way it relabels the local
+one. Same exit code, same message, one source of truth — and a caller
+reaching `device.exec` over HTTP gets the daemon's own code, unrelabelled.
 
 ## `simlock adb [--lease <lease-id>] <args...>`
 
@@ -608,13 +610,16 @@ reaches the same operation as `POST /v1/leases/{id}/exec`; see
   your own lease, which the one-lease-per-requester rule makes unambiguous;
   `--lease <lease-id>` names one explicitly (and is required if you hold none
   under the identity you are running as — see [Agent
-  identity](#agent-identity)). The CLI sends your resolved agent id as
-  `device.exec`'s optional `requesterId`, because the worker checks that
-  against the lease's own requester and — unlike renew and release — **admin
-  does not bypass that check on this operation**. So running `simlock simctl
-  --lease <someone else's lease>` fails even from an admin-credentialed CLI:
-  set `--agent-id`/`SIMLOCK_AGENT_ID` to the identity that holds the lease if
-  you mean to drive that device.
+  identity](#agent-identity)). An **agent-role** invocation sends no
+  `requesterId` at all and is gated the ordinary way, its principal against
+  the lease's `ownerId`, exactly as `lease renew` and `release` are. An
+  **admin-role** one — the usual case, since the CLI connects as admin
+  whenever `admin.token` is readable — sends its resolved agent id as
+  `requesterId`, because on this one operation **admin does not bypass the
+  ownership check** and the worker compares that id to the lease's own. So
+  `simlock simctl --lease <someone else's lease>` fails even from an
+  admin-credentialed CLI; set `--agent-id`/`SIMLOCK_AGENT_ID` to the identity
+  that holds the lease if you mean to drive that device.
 - **There is no pseudo-terminal.** Line-oriented commands work; full-screen
   ones do not. If stdin is a pipe or a file, the CLI reads it to EOF *before*
   sending, and it travels as the request's one `stdin` string, written to the
@@ -731,14 +736,15 @@ with `WORKER_CONNECTED` (exit 2) — a connected worker would simply reappear,
 so removing one is a request that cannot mean what it says; drain it and stop
 its daemon (or revoke its join token, which closes the uplink) first.
 
-The three commands answer differently for an id the gateway does not know,
-and the difference is deliberate:
+On a worker the gateway knows, all three print the resulting state:
 
 ```json
 {"workerId":"3f81a2c4","drained":true}    // drain
 {"workerId":"3f81a2c4","drained":false}   // undrain
 {"workerId":"3f81a2c4","removed":true}    // remove
 ```
+
+For an id the gateway does **not** know they diverge, deliberately:
 
 - `drain` and `undrain` **fail** with `UNKNOWN_WORKER` (exit 12). Draining is
   an instruction about one specific machine, usually typed just before
@@ -967,8 +973,12 @@ lines. `--follow` keeps streaming; `--since 1h` replays recent history.
 Against a **gateway** this is the fleet's stream: every connected worker's
 business events, republished on the gateway's bus with `workerId` added to
 the payload, interleaved with the gateway's own `worker.connected` /
-`worker.disconnected` / `worker.removed` / `worker.drain-started` /
-`worker.drain-ended` / `request.dispatched` facts. It is one ring buffer like
+`worker.disconnected` / `worker.rejected` / `worker.removed` /
+`worker.drain-started` / `worker.drain-ended` / `request.dispatched` facts —
+`worker.rejected` being the one not named in ADR 0005 §22, since an uplink
+refused at the door leaves no other trace and "why did that machine never
+appear" is exactly what an operator comes here to answer. It is one ring
+buffer like
 any other, so it resets when the gateway restarts and it holds only what
 arrived while the gateway was up — a worker's events from before its uplink
 connected are not backfilled.
@@ -991,12 +1001,14 @@ answered but refused the connection (a bad admin credential, or a protocol
 version mismatch) — the two used to be reported identically as "stopped".
 
 A daemon that refuses to boot because of its configuration — a
-`lease.defaultTtlMs` above `lease.maxTtlMs`, or a non-positive value for
-either, see [CONFIGURATION.md](CONFIGURATION.md) — fails the start rather
-than picking a value the operator did not write. That validation runs before
-the socket is claimed, so a command that auto-starts the daemon (`simlock
-lease`, the MCP server) never gets a daemon to talk to: the launch times out
-and the command fails with exit 1 (`INTERNAL`). The error line says nothing
+`lease.defaultTtlMs` above `lease.maxTtlMs` or a non-positive value for
+either, `mode: "gateway"` with `http.enabled: false`, or, in worker mode,
+`gateway.url` without `gateway.token` or the reverse; see
+[CONFIGURATION.md](CONFIGURATION.md) for the full set — fails the start
+rather than picking a value the operator did not write. That validation runs
+before the socket is claimed, so a command that auto-starts the daemon
+(`simlock lease`, the MCP server) never gets a daemon to talk to: the launch
+times out and the command fails with exit 1 (`INTERNAL`). The error line says nothing
 about the config, because nothing ever answered — the reason is in `simlock
 daemon logs`, which reads the log file directly and so works even though the
 daemon never came up.

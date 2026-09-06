@@ -23,11 +23,13 @@ workers that dial out to it over a single WebSocket **uplink**. A gateway
 keeps one fleet-wide queue, dispatches each request to the worker best placed
 to serve it, proxies device commands to the worker that owns the device, and
 implements the same typed contract towards its own clients, so every existing
-frontend works against it unchanged. Unlike ADR 0004, nothing here is
-removed or repurposed and a daemon left in the default `mode: "worker"`
-behaves exactly as it does today — with one exception that is not additive at
-all: the socket wire moves to protocol 5, so a client and a daemon still have
-to be upgraded together.
+frontend works against it unchanged. Nothing here is removed or repurposed
+and a daemon left in the default `mode: "worker"` behaves exactly as it does
+today, so every one of the entries below is additive **except the protocol
+bump** — `device.exec` and its `output` pushes take the socket wire to
+protocol 5, which means a client and a daemon still have to be upgraded
+together. That one is listed under BREAKING CHANGES above, with ADR 0004's
+own bump, since it is the same wire and the same upgrade.
 
 ADR 0005 is **Accepted — not yet implemented** as well: the entries under
 "ADR 0005" below describe the decided end state, and they land with the PRs
@@ -62,8 +64,12 @@ finally these docs).
   so the daemon now writes `lastRenewedAt` onto the lease record at grant and
   on every renew, and `simlock status` renders it as "last renewed". A consumer
   reading `lastHeartbeatAt` gets `undefined`.
-- **Socket protocol:** moves to protocol 4 with no compatibility shim; the
-  range a daemon and client advertise is `{min: 4, max: 4}`. A
+- **Socket protocol:** moves twice in this release, once per ADR, each time
+  with no compatibility shim. ADR 0004 removes `lease.heartbeat` and `mode`,
+  taking the wire to protocol 4; ADR 0005 adds `device.exec` and its `output`
+  push family, taking it to 5. **What ships advertises `{min: 5, max: 5}`** —
+  4 is a step along the way, not a range anything releases with, since a
+  range widens only where a compatibility path is kept (ADR 0003 §6). A
   version-mismatched client fails `hello` with `PROTOCOL_VERSION_UNSUPPORTED`
   and never restarts the daemon — run `simlock daemon stop` once it's idle.
   `daemon.stop` remains a frozen exception, accepted at any protocol version
@@ -86,7 +92,7 @@ finally these docs).
   persisted in held mode survives the upgrade with its persisted deadline
   intact — up to the old one-hour `lease.heldTtlBackstopMs`. Nothing can
   renew it: its holder speaks protocol 3 and the new daemon speaks
-  `{min: 4, max: 4}`, so its `hello` fails. The lease simply expires on that
+  `{min: 5, max: 5}`, so its `hello` fails. The lease simply expires on that
   deadline and its device is reclaimed, or `simlock release <lease-id>` ends
   it sooner. Stopping the old daemon while it is idle, as the protocol-
   mismatch error already advises, avoids the situation entirely.
@@ -169,10 +175,11 @@ is the daemon that exists today.
   gateway involved at all. `stdin` is one string sent with the request and
   then closed; there is no pseudo-terminal, and a bare `adb shell` with no
   command is refused (`PASSTHROUGH_REFUSED`) rather than left to stall until
-  the timeout. Ownership is checked on both hops and **`admin` does not
-  bypass the worker-side check on this one operation** — the gateway's own
-  session on a worker is an admin session, so that check is what stands
-  between one fleet agent and another's device.
+  the timeout. A non-admin caller is gated the ordinary way, its principal
+  against the lease's `ownerId`; `requesterId` exists for the one session
+  that would otherwise bypass that check, the gateway's admin session on a
+  worker, and **`admin` does not bypass on this one operation** — the worker
+  compares the supplied `requesterId` to the lease's own.
 - **contract:** `worker.list|drain|undrain|remove` (admin) manage the workers
   connected to a gateway; `mode` joins `status.get`'s daemon block; `workers`
   joins its output; `workerId` joins every device and lease in a gateway's
@@ -188,14 +195,15 @@ is the daemon that exists today.
   `SIMLOCK_HOME` with owner-only permissions, so a drain survives both a
   worker reconnect and a gateway restart. Worker _views_ are rebuilt on every
   connect and never persisted.
-- **Socket protocol:** moves to protocol 5 with no compatibility shim; both
-  sides advertise `{min: 5, max: 5}`. `device.exec` and its `output` push
-  family are new frames and no compatibility path is kept for them, so under
-  ADR 0003 §6's honesty rule the range does not widen. Over the uplink this
-  is ordinary version negotiation: a worker older than ADR 0005 does not
-  overlap a gateway's range, shows as `incompatible` in `simlock worker
-list` with both ranges, is never dispatched to, and keeps serving its own
-  local clients until it is upgraded.
+- **Socket protocol:** the wire's second move this release, to protocol 5,
+  with no compatibility shim — see BREAKING CHANGES above, where it is
+  listed with ADR 0004's. `device.exec` and its `output` push family are new
+  frames and no compatibility path is kept for them, so under ADR 0003 §6's
+  honesty rule the range does not widen. Over the uplink this is ordinary
+  version negotiation: a worker older than ADR 0005 does not overlap a
+  gateway's range, is marked `incompatible` with both ranges shown, is never
+  dispatched to, and keeps serving its own local clients until it is
+  upgraded.
 - **daemon:** one fleet queue on the gateway, dispatched to workers with
   `noWait: true`, so a gateway request never sits in a worker's queue and can
   be granted by whichever worker frees first. A request becomes `dispatched`
@@ -223,9 +231,12 @@ list` with both ranges, is never dispatched to, and keeps serving its own
   that never answers, deliberately longer than the worker's own). Plus `mode`
   itself.
   Worker-only keys in a gateway's config are ignored with a warning, as
-  unknown keys already are; `mode: "gateway"` with `http.enabled: false` is
-  rejected at load and the daemon does not start, since a gateway with no
-  listener cannot be reached by anyone.
+  unknown keys already are. Two pairs are rejected at load instead, and the
+  daemon does not start: `mode: "gateway"` with `http.enabled: false`, since
+  a gateway with no listener cannot be reached by anyone; and, in
+  `mode: "worker"`, `gateway.url` without `gateway.token` or the reverse,
+  since a half-configured uplink would otherwise come up looking like an
+  ordinary standalone worker.
 - **http:** new routes. `GET /v1/uplink` (WebSocket upgrade, join-token
   bearer, role `worker`) is the one inbound connection in a fleet;
   `POST /v1/leases/{id}/exec` streams a command's output as Server-Sent
@@ -234,12 +245,15 @@ list` with both ranges, is never dispatched to, and keeps serving its own
   `DELETE /v1/workers/{id}` (all `operator`) are what the console (#88)
   renders. "Multi-host brokering" leaves `docs/HTTP-API.md`'s "Not
   implemented" list, since this is it.
-- **events:** `worker.connected`, `worker.disconnected`, `worker.removed`,
-  `worker.drain-started`, `worker.drain-ended`, and `request.dispatched` are
-  emitted by a gateway, and every worker's own business events are
-  republished on the gateway's bus with `workerId` added to the payload — an
-  additive change, so no exception to events rule 6 is needed this time. See
-  `docs/EVENTS.md`.
+- **events:** `worker.connected`, `worker.disconnected`, `worker.rejected`,
+  `worker.removed`, `worker.drain-started`, `worker.drain-ended`, and
+  `request.dispatched` are emitted by a gateway, and every worker's own
+  business events are republished on the gateway's bus with `workerId` added
+  to the payload — an additive change, so no exception to events rule 6 is
+  needed this time. `worker.rejected` is not in ADR 0005 §22's list: it is
+  added here because an uplink refused at the door otherwise leaves no trace
+  at all, and an operator looking for a machine that never appeared needs one.
+  See `docs/EVENTS.md`.
 - **contract:** five new error codes. `WORKER_UNREACHABLE` (`kind:
 "transport"`, CLI exit 1, HTTP 503 — where every other `transport`-kind
   code already sits) when a worker's uplink is down; `WORKER_CONNECTED`

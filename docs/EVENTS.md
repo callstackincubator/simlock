@@ -104,22 +104,30 @@ no devices. All are **planned (ADR 0005)**.
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
 | `worker.connected` | worker id, label, daemon version, negotiated protocol range, platforms, capacity per platform, download policy | a worker's uplink completed its `hello` and the gateway committed the resulting worker view — including a reconnect, which is a new connection and so a new fact | WorkerRegistry | planned (ADR 0005) |
-| `worker.rejected` | `{ workerId?, label?, protocol? }` — reason (`incompatible`/`unauthenticated`), and both protocol ranges when it is `incompatible` | an uplink was refused before it ever became a worker: `hello` found no overlapping protocol range, or the join token was missing, unrecognized, or not role `worker`. The fields are optional because an unauthenticated dial never proves an identity — there is no worker id to report for one, and nothing enters the registry | WorkerRegistry | planned (ADR 0005) |
+| `worker.rejected` | `{ reason, workerId?, label?, protocol? }` — reason is `unauthenticated` (the join token was missing or unrecognized, `401`) or `forbidden` (a valid token of the wrong role, `403`) | an uplink was refused at the door, before it could become a worker at all. Every field but `reason` is optional, because a dial that fails authentication proves no identity: there may be no worker id or label to report, and `protocol` is present only when the dial advertised a range before it was refused. Nothing enters the registry either way. A **version mismatch is not a rejection** — that uplink authenticated, so its worker enters the registry as `incompatible` (see `worker.connected` above, and the note under this table) | WorkerRegistry | planned (ADR 0005) |
 | `worker.disconnected` | worker id, label, reason (closed/token-revoked), connected duration, leases still held on it | the uplink closed and the view was marked `disconnected`. The worker's leases are *not* ended by this: the gateway never guesses a lease is gone before the worker says so | WorkerRegistry | planned (ADR 0005) |
 | `worker.removed` | worker id, label, initiator (operator/retention), time since disconnect | a disconnected worker's view was forgotten — by `worker.remove`, or because `gateway.disconnectedRetentionMs` elapsed. Never emitted for a connected worker (`WORKER_CONNECTED` refuses that), nor while gateway-issued leases on it are still known | WorkerRegistry | planned (ADR 0005) |
 | `worker.drain-started` | worker id, label, leases held at that moment | `worker.drain` committed: the worker takes no new dispatches and keeps the leases it has | WorkerRegistry | planned (ADR 0005) |
 | `worker.drain-ended` | worker id, label | `worker.undrain` committed and the worker became dispatchable again. Nothing else ends a drain: the flag lives in the gateway's persisted worker registry, so it survives both a worker reconnect and a gateway restart, and this fact only ever follows an explicit undrain | WorkerRegistry | planned (ADR 0005) |
 | `request.dispatched` | request id, worker id, requester id, platform, model, selection reason (warm-hit/free-capacity), time spent queued | the gateway's dispatch sent a queued request to a worker and the worker took it (a grant, or device work already under way). A `NO_CAPACITY` refusal is a stale view, not a dispatch, and emits nothing — the request stays queued | FleetDispatcher | planned (ADR 0005) |
 
-`worker.rejected` exists because the alternative is silence: a worker that
-cannot join produces no `worker.connected`, and without this fact an operator
-staring at `simlock worker list` sees a machine that simply never appears,
-with nothing anywhere to say why. It is deliberately *not* a
+`worker.rejected` exists because the alternative is silence: a worker whose
+credential is refused produces no `worker.connected`, and without this fact
+an operator staring at `simlock worker list` sees a machine that simply never
+appears, with nothing anywhere to say why. It is deliberately *not* a
 `worker.disconnected` with another reason — nothing connected, so nothing
 disconnected, and a fact whose subject never existed should not borrow the
-vocabulary of one that did. For the same reason `incompatible` is not one of
-`worker.disconnected`'s reasons: a range mismatch fails the handshake, so
-that uplink was never a connected worker to lose.
+vocabulary of one that did.
+
+**A protocol mismatch is neither of those.** That uplink presented a valid
+join token and authenticated; what failed was `hello`'s range negotiation. So
+the worker *does* enter the registry, with `state: "incompatible"` and both
+ranges on its view, visible in `simlock worker list` — which is the whole
+point, since that is the machine an operator has to go and upgrade. It is
+simply never dispatched to, and no `worker.connected` follows, because
+nothing usable connected. That is also why `incompatible` is not one of
+`worker.disconnected`'s reasons: an incompatible worker was never a connected
+worker to lose.
 
 **`device.exec` emits no event, and that is deliberate.** It is the one new
 operation here with no fact of its own. Running a command against a device is
