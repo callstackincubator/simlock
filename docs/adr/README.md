@@ -24,4 +24,4 @@ Status values:
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — not yet implemented |
-| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Proposed |
+| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — not yet implemented |

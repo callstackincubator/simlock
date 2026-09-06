@@ -93,6 +93,67 @@ progress gap this leaves.
 | `driver.root-rejected` | platform, root path, reason (not-absolute/missing-marker/invalid-marker/wrong-instance/symlink/wrong-owner/wrong-permissions/non-empty-unowned-root/unreadable) | a driver's device root failed ownership validation at startup, so that platform's driver did not start | DaemonServer | implemented |
 | `driver.adb-server-rejected` | port, reason (occupied/start-failed/invalid-port) | Simlock's own adb server could not be established — the port was occupied by a server it does not own, the server it started never began listening, or the configured port is not usable — so the Android driver did not start | DaemonServer | implemented |
 
+## Fleet (gateway mode)
+
+These are the facts a daemon running as a **gateway** emits about the workers
+connected to it ([ADR 0005](adr/0005-gateway-and-worker-modes.md)). A worker
+never emits them — it has no workers of its own — and a gateway emits none of
+the device- or lease-lifecycle facts above on its own behalf, because it owns
+no devices. All are **planned (ADR 0005)**.
+
+| Event | Payload (key fields) | Emitted when | Emitter | Status |
+|---|---|---|---|---|
+| `worker.connected` | worker id, label, daemon version, negotiated protocol range, platforms, capacity per platform, download policy | a worker's uplink completed its `hello` and the gateway committed the resulting worker view — including a reconnect, which is a new connection and so a new fact | WorkerRegistry | planned (ADR 0005) |
+| `worker.rejected` | `{ reason, workerId?, label?, protocol? }` — reason is `unauthenticated` (the join token was missing or unrecognized, `401`) or `forbidden` (a valid token of the wrong role, `403`) | an uplink was refused at the door, before it could become a worker at all. Every field but `reason` is optional, because a dial that fails authentication proves no identity: there may be no worker id or label to report, and `protocol` is present only when the dial advertised a range before it was refused. Nothing enters the registry either way. A **version mismatch is not a rejection** — that uplink authenticated, so its worker enters the registry as `incompatible` (see the note under this table) | WorkerRegistry | planned (ADR 0005) |
+| `worker.disconnected` | worker id, label, reason (closed/token-revoked), connected duration, leases still held on it | the uplink closed and the view was marked `disconnected`. The worker's leases are *not* ended by this: the gateway never guesses a lease is gone before the worker says so | WorkerRegistry | planned (ADR 0005) |
+| `worker.removed` | worker id, label, initiator (operator/retention), time since disconnect | a disconnected worker's view was forgotten — by `worker.remove`, or because `gateway.disconnectedRetentionMs` elapsed. Never emitted for a connected worker (`WORKER_CONNECTED` refuses that), nor while gateway-issued leases on it are still known | WorkerRegistry | planned (ADR 0005) |
+| `worker.drain-started` | worker id, label, leases held at that moment | `worker.drain` committed: the worker takes no new dispatches and keeps the leases it has | WorkerRegistry | planned (ADR 0005) |
+| `worker.drain-ended` | worker id, label | `worker.undrain` committed and the worker became dispatchable again. Nothing else ends a drain: the flag lives in the gateway's persisted worker registry, so it survives both a worker reconnect and a gateway restart, and this fact only ever follows an explicit undrain | WorkerRegistry | planned (ADR 0005) |
+| `request.dispatched` | request id, worker id, requester id, platform, model, selection reason (warm-hit/free-capacity), time spent queued | the gateway's dispatch sent a queued request to a worker and the worker took it (a grant, or device work already under way). A `NO_CAPACITY` refusal is a stale view, not a dispatch, and emits nothing — the request stays queued | FleetDispatcher | planned (ADR 0005) |
+
+`worker.rejected` exists because the alternative is silence (ADR 0005 §22): a
+worker whose credential is refused produces no `worker.connected`, and
+without this fact an operator staring at `simlock worker list` sees a machine
+that simply never appears, with nothing anywhere to say why. It is deliberately *not* a
+`worker.disconnected` with another reason — nothing connected, so nothing
+disconnected, and a fact whose subject never existed should not borrow the
+vocabulary of one that did.
+
+**A protocol mismatch is neither of those.** That uplink presented a valid
+join token and authenticated; what failed was `hello`'s range negotiation. So
+the worker *does* enter the registry, with `state: "incompatible"` and both
+ranges on its view, visible in `simlock worker list` — which is the whole
+point, since that is the machine an operator has to go and upgrade. It is
+simply never dispatched to, and no `worker.connected` follows, because
+nothing usable connected. That is also why `incompatible` is not one of
+`worker.disconnected`'s reasons: an incompatible worker was never a connected
+worker to lose.
+
+**`device.exec` emits no event, and that is deliberate.** It is the one new
+operation here with no fact of its own. Running a command against a device is
+not a state change simlock owns — the lease that authorizes it already
+emitted `lease.granted`, the device's own state is untouched, and a fleet
+where every `adb shell input tap` produced a bus event would push everything
+else out of a 1000-entry ring buffer within minutes. An audit trail of what
+agents ran on their devices is a different feature with different retention
+needs, not a line in this catalogue.
+
+**Every worker's own business events are republished on the gateway's bus**
+with `workerId` added to their payload, and land in the gateway's ring
+buffer, so `simlock events --follow` against a gateway shows the fleet
+(`lease.granted`, `device.ready`, `cleanup.executed`, and the rest, each
+naming the machine it happened on). That addition is additive per events rule
+6, and it is the only change: payloads are otherwise relayed as the worker
+emitted them, with the worker's own emitting module intact — the gateway
+observed the fact, it did not commit it, so re-attributing it would be a
+lie.
+
+Two consequences of relaying rather than owning: the gateway's ring buffer
+only holds what arrived while its uplinks were up (a worker's events from
+before it connected are not backfilled), and a worker's own
+`simlock events` keeps showing exactly what it always did, un-prefixed and
+unaware that anything is watching.
+
 ## Conventions recap
 
 - Every event carries: `timestamp`, `event`, `payload`, emitting module.

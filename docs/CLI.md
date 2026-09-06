@@ -31,16 +31,24 @@ longer dumped to stderr on every failure, only on request via `--help`.
 |---|---|---|
 | 0 | — | success (for a `lease` that stayed alive: the lease ended normally) |
 | 1 | `INTERNAL` | internal / unexpected error |
+| 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down) |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
+| 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine's devices and the daemon answering is a gateway; run it on the worker |
+| 2 | `WORKER_CONNECTED` | `worker remove` on a worker whose uplink is still open; `drain` it and let it disconnect first |
+| 2 | `UNKNOWN_REQUEST` | the daemon has no such operation — an operation this daemon's mode does not implement (`worker list` against a worker), or a client newer than the daemon |
+| 2 | `PASSTHROUGH_REFUSED` | a `simctl`/`adb` verb simlock refuses, a caller-supplied `--set`/`-P`, or a bare `adb shell` where there is no terminal to give it |
+| 2 | `UNKNOWN_PASSTHROUGH_TOOL` | a passthrough tool simlock does not wrap |
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
+| 10 | `EXEC_TIMEOUT` | a `simctl`/`adb` command run through `device.exec` outlived `exec.timeoutMs` and was killed |
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
+| 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` naming a worker the gateway does not know |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 
@@ -53,6 +61,36 @@ A daemon error code with no entry here (for example `UNKNOWN_LEASE`,
 surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code — a renew by a running `simlock lease` is the
 exception, and exits `14`.
+
+The five ADR 0005 codes are placed on existing numbers rather than new ones,
+and the numbers are fixed by the contract's error table in the PRs that
+implement them ([ADR 0005](adr/0005-gateway-and-worker-modes.md)):
+
+- `WORKER_UNREACHABLE` is `kind: "transport"`, the fleet's version of
+  `DAEMON_CONNECTION_LOST`: the thing you were talking to went away. Both
+  exit `1`, and the stderr line's `code` is what distinguishes them.
+- `WORKER_CONNECTED` and `UNSUPPORTED_IN_GATEWAY_MODE` are both "the request
+  as sent is not one this daemon will take", which is what exit `2` already
+  means for `USAGE` and `BAD_REQUEST`. Neither is retryable as written: the
+  fix is a different command, or the same command against a different daemon.
+  `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
+  `nuke`, `cleanup`, `doctor`, and `driver.passthrough` stay per-worker
+  operations rather than waiting on some later fleet-wide version (ADR 0005
+  §34).
+- `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
+  thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
+  that is what it is: a worker id the gateway has no record of.
+- `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, and `UNKNOWN_REQUEST`
+  are not new codes at all — they are already in the contract's table at exit
+  `2`, and they are listed here because `device.exec` and the `worker.*`
+  operations are new ways to reach them.
+- `EXEC_TIMEOUT` joins `QUEUE_TIMEOUT` on `10`, the number that already means
+  "a deadline elapsed". The two can never be confused, since only `lease`
+  produces one and only `simctl`/`adb` produce the other. What *can* collide
+  is a passthrough tool that itself exits `10` — `simlock simctl` and
+  `simlock adb` exit with the tool's own status — so for those two commands
+  branch on the stderr `{"error":{"code":...}}` line, which only simlock
+  writes, rather than on the number alone.
 
 ---
 
@@ -360,12 +398,25 @@ or not, the path has to reach the command line:
 xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices
 ```
 
-## `simlock simctl <args...>`
+Both ways describe paths and ports **on the machine that owns the device**.
+That is your own machine when you lease from a local worker, and somebody
+else's when you lease through a gateway or over HTTP — a device set path from
+another Mac is of no use locally, and `--export-env` cannot make it one. When
+the device is remote, reach it with `simlock simctl` / `simlock adb`, which
+run the command where the device is; see [Against a
+gateway](#against-a-gateway).
+
+## `simlock simctl [--lease <lease-id>] <args...>`
 
 Run `xcrun simctl` against Simlock's iOS device set. Every argument is passed
 through unchanged with `--set <deviceRoot>` inserted, so the command behaves
 exactly as documented by Apple — it just resolves the UDIDs Simlock manages,
 which a bare `simctl` cannot see.
+
+`--lease` is only meaningful against a **gateway**, where the device is on
+another machine and the command runs through `device.exec`, which is scoped
+to a lease; see [Against a gateway](#against-a-gateway). Against a worker it
+is unnecessary, and accepted so that one command line works against either.
 
 ```bash
 simlock simctl install booted ./MyApp.app
@@ -389,10 +440,24 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
   a refused verb read as an ordinary operand. Run `xcrun simctl` directly if
   you mean to leave Simlock's set.
 
-## `simlock adb <args...>`
+Against a **gateway**, the device is on another machine, so the command runs
+there instead — see [Against a gateway](#against-a-gateway). The refusals
+above are unchanged, and where they are enforced does not change either:
+**the daemon refuses, the CLI reports.** The CLI holds no copy of the refusal
+list in either direction — frontends render the contract, and the list lives
+with the driver that owns the device (ADR 0003 §11). Locally that means
+`driver.passthrough` refuses and the CLI relabels the answer as `USAGE`
+(exit 2); through a gateway it sends `device.exec` and the worker refuses
+with `PASSTHROUGH_REFUSED`, or `UNKNOWN_PASSTHROUGH_TOOL` for a tool it does
+not wrap, which the CLI relabels exactly the same way it relabels the local
+one. Same exit code, same message, one source of truth — and a caller
+reaching `device.exec` over HTTP gets the daemon's own code, unrelabelled.
+
+## `simlock adb [--lease <lease-id>] <args...>`
 
 Run `adb` against Simlock's adb server. Arguments pass through unchanged with
-`-P <adbServerPort>` inserted.
+`-P <adbServerPort>` inserted. `--lease` behaves exactly as it does for
+`simlock simctl` above.
 
 ```bash
 simlock adb shell input tap 100 200
@@ -412,7 +477,9 @@ Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
   load into a full wipe.
 
 Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
-instead.
+instead. As with `simlock simctl`, against a gateway the command runs on the
+worker that owns the device (see [Against a gateway](#against-a-gateway)) and
+the refusals above hold on both ends.
 
 ## `simlock release <lease-id> | --all`
 
@@ -436,6 +503,264 @@ will show `reclaiming` rather than `ready`. `simlock daemon stop` waits for
 in-flight purges before exiting, so a graceful shutdown still leaves the pool
 settled; a daemon killed mid-purge leaves its devices `reclaiming` for the next
 startup to recover.
+
+## Against a gateway
+
+A **gateway** is a simlock daemon that owns no devices and fronts the workers
+that joined it ([ADR 0005](adr/0005-gateway-and-worker-modes.md); see
+[CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for `mode` and
+the keys each side reads). Point the CLI at one the way you point it at any
+daemon: `SIMLOCK_HOME` selects the data directory, and the daemon socket in
+it is what the CLI connects to. **The commands do not change.** A gateway
+implements the same contract a worker does, so this whole document still
+applies; what follows is only the handful of places where you can tell.
+
+The CLI speaks the unix socket and nothing else — it has no HTTP transport
+and no `--url`, so "point the CLI at a gateway" means running it on the
+gateway's own machine (or wherever that socket is), typically as the
+operator. An agent on another machine reaches the fleet over the
+[HTTP API](HTTP-API.md), which is what the gateway is listening on and what
+that API exists for. Both get the identical contract; only the transport
+differs.
+
+**Leasing is identical.** `simlock lease` takes the same flags and prints the
+same grant line, including `--ttl`, `--no-wait`, `--timeout`, and
+`--allow-download` (forwarded to the chosen worker, which clamps it through
+its own `downloads.policy`). The request waits in the gateway's own
+fleet-wide FIFO queue, reporting `queued` with a `queuePosition` exactly as a
+worker's queue does, and is dispatched to the worker best placed to serve it
+— a machine with a matching warm device first, otherwise the one with the
+most free capacity. You do not name a machine and there is no flag to; where
+a device lives is the gateway's decision.
+
+The grant carries one additional block so you can see where it landed:
+
+```json
+{"lease":{"id":"3f81a2c4.lse_9f2c","worker":{"id":"3f81a2c4","label":"mac-studio-2"}}}
+```
+
+The lease id names its worker (that is how renew, release, and reads route
+with no gateway-side state to lose), but it is **opaque** — do not parse it.
+`worker.label` is display-only.
+
+**`lease renew`, `release`, and lease reads are forwarded** to the worker
+that owns the lease, and the `ttlDeadline` you see is that worker's own.
+Leases are TTL-first on every transport (ADR 0004), so a gateway emulates
+nothing: a `simlock lease` left running renews on its timer as always, and a
+client that stops renewing loses the lease on the worker's clock whether or
+not a gateway is in the path.
+
+**One lease per requester is fleet-wide.** Leasing while you already hold a
+gateway-issued lease on *any* worker in the fleet is `REQUESTER_ALREADY_LEASED`
+(exit 13) naming that lease, the same rule and the same code as on one
+machine.
+
+One thing an operator sees only from the other side: the requester id the
+gateway forwards to a worker is **namespaced**,
+`gw:<gateway instance id>:<requester>`. So `simlock status` on the *worker*
+shows a fleet lease as `gw:7c1e…:agent-1` while the gateway shows it as
+plain `agent-1`. That is what keeps a local `agent-1` on that machine and a
+remote `agent-1` behind the gateway from colliding on the worker's own
+one-lease rule — and it means a lease's attribution says which fleet it came
+from, not just who asked.
+
+**`simlock status` and `simlock list`** answer for the whole fleet: capacity
+summed over connected workers, every lease and device carrying the
+`workerId` it lives on, the gateway queue's depth — plus a `workers` block,
+one entry per worker view, which is what `simlock worker list` prints on its
+own. `status`'s daemon block carries `mode` (`"worker"` or `"gateway"`); that
+field is the only way a client tells the two apart.
+
+**`simlock release --all`** releases only the leases **this gateway
+issued**, on every connected worker, and never a worker's own local ones: the
+gateway did not issue those, does not know who holds them, and taking a local
+developer's device away from an endpoint they have never heard of is not an
+operator action anyone asked for. A worker it cannot reach is reported as
+`WORKER_UNREACHABLE` naming that worker while the reachable workers' leases
+are still released — a partial result stated plainly beats an all-or-nothing
+that leaves you guessing. Confirmation is still required unless `--yes`.
+Releasing a single lease by id is unchanged.
+
+**`simlock catalog`** is the union of the workers' catalogs, each model and
+runtime annotated with the workers that have it — so a `--device` the
+catalog lists is leasable *somewhere*, not necessarily everywhere.
+
+**`simlock events`** shows the fleet: every worker's business events are
+republished on the gateway's bus with `workerId` added to the payload,
+alongside the gateway's own `worker.*` and `request.dispatched` facts (see
+[EVENTS.md](EVENTS.md)). `--follow` and `--since` work as always, over the
+gateway's own ring buffer.
+
+**`simlock simctl` and `simlock adb`** keep working, but not the same way
+underneath. Against a **worker** they behave exactly as documented above: the
+daemon resolves a root-scoped command through `driver.passthrough` and the
+CLI spawns it locally with inherited stdio, so an interactive `adb shell` is
+still an interactive `adb shell`. Against a **gateway** the device is on
+another machine, so the CLI sends `device.exec` instead and prints the output
+it streams back — stdout to stdout, stderr to stderr, as it arrives — exiting
+with the tool's own exit code.
+
+The CLI picks between the two by reading `mode` off `status.get`, which it
+already calls: `gateway` means `device.exec`, anything else means
+`driver.passthrough`. It is not guesswork and not a flag — the daemon says
+what it is, and there is exactly one thing to branch on. (A remote agent
+reaches the same operation as `POST /v1/leases/{id}/exec`; see
+[HTTP-API.md](HTTP-API.md).) Three consequences:
+
+- **It needs a lease**, because `device.exec` is scoped to one. The CLI uses
+  your own lease, which the one-lease-per-requester rule makes unambiguous;
+  `--lease <lease-id>` names one explicitly (and is required if you hold none
+  under the identity you are running as — see [Agent
+  identity](#agent-identity)). An **agent-role** invocation sends no
+  `requesterId` at all and is gated the ordinary way, its principal against
+  the lease's `ownerId`, exactly as `lease renew` and `release` are. An
+  **admin-role** one — the usual case, since the CLI connects as admin
+  whenever `admin.token` is readable — sends its resolved agent id as
+  `requesterId`, because on this one operation **admin does not bypass the
+  ownership check** and the worker compares that id to the lease's own. So
+  `simlock simctl --lease <someone else's lease>` fails even from an
+  admin-credentialed CLI; set `--agent-id`/`SIMLOCK_AGENT_ID` to the identity
+  that holds the lease if you mean to drive that device.
+- **There is no pseudo-terminal.** Line-oriented commands work; full-screen
+  ones do not. If stdin is a pipe or a file, the CLI reads it to EOF *before*
+  sending, and it travels as the request's one `stdin` string, written to the
+  process and then closed — so `echo hello | simlock adb shell cat` works and
+  an interactive `adb shell` does not, because there is no channel to type
+  into once the request has gone. That last case does not hang waiting to
+  find out: the worker refuses a bare `adb shell` with no command outright,
+  `PASSTHROUGH_REFUSED` (exit 2) and a message saying it needs a terminal,
+  rather than starting a session nobody can type into and letting it sit
+  there for ten minutes until `EXEC_TIMEOUT`.
+- **A command that outlives `exec.timeoutMs`** (10 minutes, worker-side and
+  authoritative) is killed and the command fails with `EXEC_TIMEOUT`
+  (exit 10). Output is streamed, never buffered, so there is no size cap.
+
+Files do not travel with the command: `simctl install <path>` and `adb
+install <apk>` resolve their path on the **worker's** filesystem, so the
+artifact has to be there already (a shared volume, a CI checkout on that
+machine). See [known-pitfalls.md](known-pitfalls.md).
+
+**Three commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
+2): `simlock nuke`, `simlock cleanup`, and `simlock doctor`. Each acts on one
+machine's devices as a whole, and in v1 they stay per-worker, direct
+operations — run them against that worker's own daemon. A fleet-wide
+destructive command from one endpoint is not something v1 offers.
+`driver.passthrough`, the operation behind the *local* form of `simlock
+simctl` / `simlock adb`, answers the same way for the same reason: a
+root-scoped command string naming a device set on another machine is
+something the client cannot run, and handing it one would be worse than an
+error. That is why those two commands switch to `device.exec` here rather
+than failing.
+
+`simlock config get` on a gateway returns the gateway's own configuration,
+not any worker's. `simlock daemon <start|stop|status|logs>` manages the
+gateway process itself, exactly as it manages a worker's.
+
+**When a worker is unreachable** — its uplink is down — anything routed to it
+fails with `WORKER_UNREACHABLE` (exit 1, `kind: "transport"`): a renew, a
+release, a `simctl`/`adb`, or a request that had already been dispatched to
+it. The gateway does not guess that the lease is gone; the worker's own TTL
+ends it on the worker's clock, and the loss reaches you once the uplink is
+back. The recovery is the ordinary one: re-request, and if the worker had in
+fact granted you a lease, the fleet-wide one-lease rule names it once the
+gateway has rebuilt its index.
+
+## `simlock worker <list|drain|undrain|remove>`
+
+Operator commands for the workers connected to a **gateway**. All four need
+the `admin` role (see [Admin credential
+resolution](#admin-credential-resolution)). A worker has no workers of its
+own, so it does not implement these operations at all and answers
+`UNKNOWN_REQUEST` — they are not a gateway-mode refusal of something a worker
+could otherwise do, they are simply not part of a worker's surface. Output is
+JSON on stdout, unconditionally — `--json` is a usage error (exit 2), as
+everywhere except `status`/`catalog`/`daemon`.
+
+```
+simlock worker list
+simlock worker drain <worker-id>
+simlock worker undrain <worker-id>
+simlock worker remove <worker-id>
+```
+
+`list` prints one worker view per connected-or-remembered worker:
+
+```json
+{"workers":[{"id":"3f81a2c4","label":"mac-studio-2","state":"connected","drained":false,
+  "daemonVersion":"0.4.0","protocol":{"min":5,"max":5},
+  "connectedAt":1735689600000,"lastSeenAt":1735689930000,
+  "capacity":{"ios":{"running":2,"limit":4},"android":{"running":0,"limit":2}},
+  "downloads":{"policy":"on-request"},
+  "queueDepth":0,"leases":3,"devices":5}]}
+```
+
+`downloads.policy` is that worker's own effective policy, read once with
+`config.get` when its uplink connects — routing needs it to know whether a
+machine may install a missing runtime before sending it a request that needs
+one. `protocol` is the range that worker negotiated; ADR 0005 moves the wire
+to `{min: 5, max: 5}` with no shim, so a worker older than it does not
+overlap and shows as `incompatible`. Worker ids are UUIDs — the examples here
+abbreviate them to their first segment.
+
+`state` is `connected`, `disconnected`, or `incompatible`. A **disconnected**
+worker keeps its last-known view (nothing is dispatched to it) until an
+operator removes it or `gateway.disconnectedRetentionMs` (24 hours) elapses.
+The retention clock is held while the gateway still knows of gateway-issued
+leases on that worker — forgetting a worker that holds someone's device is
+how a lease becomes unroutable — and that hold ends when the **last of those
+leases passes its deadline**, since a lease the gateway cannot renew is one
+the worker has expired on its own clock. A worker gone longer than every
+lease it held is a worker with nothing left to protect.
+
+An **incompatible** worker is one whose protocol range does not overlap the
+gateway's; its view shows both ranges and it is never dispatched to, but it
+is not hidden — that is the machine an operator has to go and upgrade, and it
+still serves its own local clients fine.
+
+`drain` is how a machine is taken out of service without killing anyone's
+device: a drained worker **keeps its existing leases** and receives no new
+dispatches. Wait for its leases to end (`simlock status` shows them), then do
+the maintenance. `undrain` puts it back in rotation.
+
+Draining sticks until you undrain it. It is your intent about that machine,
+not something read off it, so it lives in the gateway's **worker registry** —
+the one piece of gateway state that is persisted (a small file under the
+gateway's `SIMLOCK_HOME`, owner-only) as opposed to the worker *view*, which
+is rebuilt on every connect. A drained worker that restarts comes back
+drained, and so does one whose *gateway* restarted. Nothing but `undrain`
+puts a machine back in rotation, which is the point: an operator who drained
+a worker and walked away should not have a process they never touched undo
+it.
+
+`remove` forgets a worker. A worker whose uplink is still open is refused
+with `WORKER_CONNECTED` (exit 2) — a connected worker would simply reappear,
+so removing one is a request that cannot mean what it says; drain it and stop
+its daemon (or revoke its join token, which closes the uplink) first.
+
+On a worker the gateway knows, all three print the resulting state:
+
+```json
+{"workerId":"3f81a2c4","drained":true}    // drain
+{"workerId":"3f81a2c4","drained":false}   // undrain
+{"workerId":"3f81a2c4","removed":true}    // remove
+```
+
+For an id the gateway does **not** know they diverge, deliberately:
+
+- `drain` and `undrain` **fail** with `UNKNOWN_WORKER` (exit 12). Draining is
+  an instruction about one specific machine, usually typed just before
+  someone walks over to it; succeeding silently against an id that is not
+  there would hide a typo in exactly the moment an operator most needs to
+  know the instruction landed.
+- `remove` **succeeds** with `{"removed":false}`, the way `token revoke`
+  answers for an unknown token id. "Forget this worker" is already true of a
+  worker the gateway has already forgotten, so there is nothing to report
+  and nothing for a script to special-case on a re-run.
+
+A worker is never *added* by a command. It appears by connecting: mint a join
+token on the gateway with `simlock token create --role worker`, put it in the
+worker's `gateway.token` alongside `gateway.url`, and start it. `simlock
+token revoke <token-id>` closes any uplink that token opened.
 
 ## `simlock mcp`
 
@@ -520,10 +845,21 @@ queue depth. `--json` for the structured equivalent. `overLimit` is true when a
 lowered limit cannot yet be met, for example because active leases consume all
 running slots.
 
+The daemon block carries `mode` (`"worker"` or `"gateway"`) — the one field
+that tells a client which kind of daemon answered. Against a **gateway** the
+same view is the fleet's: capacity summed over the connected workers, every
+lease and device tagged with the `workerId` it lives on, the gateway queue's
+depth, plus a `workers` array of worker views (the same records
+[`simlock worker list`](#simlock-worker-listdrainundrainremove) prints). See
+[Against a gateway](#against-a-gateway).
+
 ## `simlock list [--devices|--leases|--rules]`
 
 Scriptable listings of managed devices, active leases, or registered cleanup
-rules. Defaults to `--devices`. Each lease record's `requesterId` is the
+rules. Defaults to `--devices`. Against a gateway, `--devices` and `--leases`
+are the fleet's (each record naming its `workerId`) while `--rules` lists
+nothing at all: cleanup rules run where the devices and the reaper are, and a
+gateway has neither. Each lease record's `requesterId` is the
 agent id (see [Agent identity](#agent-identity)) that holds it, and its
 `lastRenewedAt` is when the lease was last renewed (set at grant, then on
 every renew) — the same field `status` renders as "last renewed".
@@ -551,7 +887,9 @@ structured equivalent:
 Run the cleanup reconciliation immediately. `--dry-run` prints the actions
 each rule *would* take (rule name, target, reason) without executing.
 `--rule` restricts to a single named rule (e.g. `--rule idle-destroy`); see
-`simlock list --rules` for the registered rules.
+`simlock list --rules` for the registered rules. A gateway owns no devices to
+clean up, so it answers `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2) — run this
+against the worker whose machine you mean.
 
 ## `simlock doctor [--fix] [--purge-orphans] [--yes]`
 
@@ -559,7 +897,9 @@ Reconcile the daemon's state with reality (`simctl list`, `adb devices`,
 running emulator processes): report orphaned processes, registry entries whose
 device vanished, devices booted outside simlock, expired leases whose device is
 still marked `leased`, devices stuck mid-transition, and orphans. `--fix`
-applies the safe corrections.
+applies the safe corrections. Reconciliation compares a registry against one
+machine's driver reality, so a gateway — which has neither — answers
+`UNSUPPORTED_IN_GATEWAY_MODE` (exit 2); run `doctor` on each worker.
 
 An **orphan** is a device sitting inside a Simlock device root with no registry
 record — almost always a daemon that died between creating a device and writing
@@ -621,12 +961,27 @@ runtimes that support it.
 
 Emergency reset: force-release all leases, kill emulator/simulator processes
 simlock started, clear the queue. With `--delete-devices`, also destroy every
-registry-managed device. Never touches devices outside the registry.
+registry-managed device. Never touches devices outside the registry. It stays
+a per-machine command: a gateway answers `UNSUPPORTED_IN_GATEWAY_MODE` (exit
+2), because a fleet-wide wipe from one endpoint is a footgun v1 does not
+offer.
 
 ## `simlock events [--follow] [--since <duration>]`
 
 Stream the business-event ring buffer (see [EVENTS.md](EVENTS.md)) as JSON
 lines. `--follow` keeps streaming; `--since 1h` replays recent history.
+
+Against a **gateway** this is the fleet's stream: every connected worker's
+business events, republished on the gateway's bus with `workerId` added to
+the payload, interleaved with the gateway's own `worker.connected` /
+`worker.disconnected` / `worker.rejected` / `worker.removed` /
+`worker.drain-started` / `worker.drain-ended` / `request.dispatched` facts.
+`worker.rejected` is how you find out why a machine never appeared in
+`simlock worker list` at all — it reports an uplink refused at the door,
+which nothing else records. It is one ring buffer like
+any other, so it resets when the gateway restarts and it holds only what
+arrived while the gateway was up — a worker's events from before its uplink
+connected are not backfilled.
 
 ## `simlock daemon <start|stop|status|logs>`
 
@@ -646,12 +1001,14 @@ answered but refused the connection (a bad admin credential, or a protocol
 version mismatch) — the two used to be reported identically as "stopped".
 
 A daemon that refuses to boot because of its configuration — a
-`lease.defaultTtlMs` above `lease.maxTtlMs`, or a non-positive value for
-either, see [CONFIGURATION.md](CONFIGURATION.md) — fails the start rather
-than picking a value the operator did not write. That validation runs before
-the socket is claimed, so a command that auto-starts the daemon (`simlock
-lease`, the MCP server) never gets a daemon to talk to: the launch times out
-and the command fails with exit 1 (`INTERNAL`). The error line says nothing
+`lease.defaultTtlMs` above `lease.maxTtlMs` or a non-positive value for
+either, `mode: "gateway"` with `http.enabled: false`, or, in worker mode,
+`gateway.url` without `gateway.token` or the reverse; see
+[CONFIGURATION.md](CONFIGURATION.md) for the full set — fails the start
+rather than picking a value the operator did not write. That validation runs
+before the socket is claimed, so a command that auto-starts the daemon
+(`simlock lease`, the MCP server) never gets a daemon to talk to: the launch
+times out and the command fails with exit 1 (`INTERNAL`). The error line says nothing
 about the config, because nothing ever answered — the reason is in `simlock
 daemon logs`, which reads the log file directly and so works even though the
 daemon never came up.
@@ -666,20 +1023,45 @@ shows the current file with the immediately preceding one prepended.
 
 ## `simlock config [get <key>|set <key> <value>]`
 
-Show the effective configuration (defaults + config file + overrides):
-managed and running capacity limits, idle tiers T1/T2/T3, TTLs, disk-pressure
-threshold, and the daemon's log level/rotation cap (`log.level`,
-`log.rotateBytes`). With no args, prints everything. The capacity numbers
+Show the effective configuration (defaults + config file + overrides): the
+daemon's `mode`, managed and running capacity limits, idle tiers T1/T2/T3,
+TTLs, disk-pressure threshold, and the daemon's log level/rotation cap
+(`log.level`, `log.rotateBytes`). With no args, prints everything. The capacity numbers
 come from the selected capacity strategy (`capacity.strategy`, configured
 under `capacity.config` — see
 [CONFIGURATION.md](CONFIGURATION.md#capacity-strategies)). Whichever strategy
 is running, both a global and a per-platform running limit must have room
 before Simlock provisions or boots a shutdown device.
 
+`simlock config set mode gateway` turns this daemon into a **gateway** — one
+that owns no devices and fronts the workers that join it — and `simlock
+config set mode worker` turns it back. Like every `config set`, it is a
+validated file write, and config is daemon *input*, read at start: the
+running daemon keeps running in the mode it started in until
+`simlock daemon stop` and the next start. The same command sets a worker's
+`gateway.url` and `gateway.token` to join a fleet. See
+[CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for which keys
+each mode reads.
+
+Switching to `gateway` is **two keys, not one**: `mode` and `http.enabled`.
+A gateway is the fleet's contact point, so it must listen on HTTP — workers
+open their uplinks there and remote agents lease through it — and
+`mode: "gateway"` with `http.enabled: false` is therefore rejected at load
+and the daemon does not start, naming the key. It is the one gateway config
+pair that fails rather than warns, for the same reason a `lease.defaultTtlMs`
+above `lease.maxTtlMs` fails: there is no safe way to read it. So:
+
+```sh
+simlock config set mode gateway
+simlock config set http.enabled true
+simlock daemon stop && simlock daemon start
+```
+
 ## Admin credential resolution
 
 Several commands (`list`, `cleanup`, `nuke`, `events`, `config get`,
-`daemon stop`, `token create|list|revoke`, and cross-process `lease renew`
+`daemon stop`, `token create|list|revoke`,
+`worker list|drain|undrain|remove`, and cross-process `lease renew`
 and `release`) need the daemon's `admin` role. The CLI resolves a credential
 to send at handshake, in order:
 
@@ -702,7 +1084,7 @@ pid-derived identity: all of them connect as admin (when the local file is
 readable), and admin bypasses the per-connection ownership check that would
 otherwise apply.
 
-## `simlock token create --role <agent|operator> [--label <text>]` / `list` / `revoke <token-id>`
+## `simlock token create --role <agent|operator|worker> [--label <text>]` / `list` / `revoke <token-id>`
 
 Mint and manage bearer tokens for the HTTP API. `token.create|list|revoke`
 are daemon operations (admin role) — the daemon is the only process that
@@ -724,6 +1106,23 @@ same as the CLI's `--agent-id`.
 the secret and its hash. `revoke <token-id>` prints `{"revoked":true}` or
 `{"revoked":false}` for an id that does not exist — the daemon's
 `token.revoke` operation does not treat an unknown id as an error.
+
+### The `worker` role: join tokens
+
+`--role worker` mints a **join token**: the credential a worker presents when
+it opens its uplink to a gateway ([ADR
+0005](adr/0005-gateway-and-worker-modes.md)). Mint it **on the gateway**,
+then put the secret in that worker's `gateway.token` beside its
+`gateway.url`. It is the narrowest role there is — a `worker` token can open
+an uplink and nothing else, and presenting one on any `/v1` route other than
+`/v1/uplink` is `403`, just as an `agent` or `operator` token presented at
+`/v1/uplink` is. Tokens
+do not cross machines either: a gateway's tokens are valid on that gateway
+and nowhere else, and a worker's own tokens are its own.
+
+`simlock token revoke <token-id>` on the gateway closes any uplink that token
+opened, which is the way to eject a worker that should no longer be in the
+fleet; `simlock worker remove` then forgets its view.
 
 ## Environment variables
 

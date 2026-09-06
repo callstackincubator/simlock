@@ -1,8 +1,9 @@
 ### A control plane so parallel coding agents stop fighting over the same simulator
 
 Simlock is a CLI-first control plane for iOS simulators and Android
-emulators, built for environments where multiple coding agents run on one
-machine at the same time. Agents don't touch `simctl` or `avdmanager`
+emulators, built for environments where multiple coding agents run at the
+same time — on one machine, or across a fleet of them behind a single
+address. Agents don't touch `simctl` or `avdmanager`
 directly — they ask Simlock for a device and get one back, booted and
 health-checked, that no other agent will touch until they're done with it.
 
@@ -29,6 +30,23 @@ device's process dies outside simlock, Simlock notices, reboots it under the
 same lease, and tells the holder — it can't restore whatever was running
 inside the device when it died, but the lease and its device don't just
 vanish.
+
+**One machine is a starting point, not a limit.** A simlock daemon runs
+either as a **worker** — what every daemon is today, owning the devices on
+its own machine — or as a **gateway**, which owns no devices and fronts the
+workers that have joined it ([ADR
+0005](docs/adr/0005-gateway-and-worker-modes.md)). Workers dial _out_ to the
+gateway over a single WebSocket uplink, so a Mac behind NAT joins a fleet
+with a URL and a join token and never needs an inbound port; the gateway
+keeps one fleet-wide queue and sends each request to the worker best placed
+to serve it — a warm device if one is free, otherwise the machine with the
+most free capacity. Agents and the console point at **one URL** and stop
+caring which machine a device lives on, because a gateway speaks the same
+contract a worker does: the same `lease`, `renew`, `release`, and `status`,
+with `simlock simctl` / `simlock adb` proxied through to the worker that owns
+the device. The gateway never touches a device itself — capacity, the
+registry, and every safety rule stay on the worker, which also keeps serving
+its own local agents as before.
 
 **It's advisory, not a sandbox.** Simlock doesn't wrap or intercept
 `simctl` / `avdmanager` — it works because agents are instructed to only use
