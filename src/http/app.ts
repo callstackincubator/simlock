@@ -497,6 +497,48 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     return c.json({ devices });
   });
 
+  // ADR 0005 §23's worker routes, registered only on a gateway. A worker daemon has no worker
+  // registry, so on one these paths are simply not routes -- a `404`, which is what "this
+  // endpoint has no such resource" means, rather than a `501` implying the fleet exists here
+  // and is switched off.
+  if (deps.config.mode === "gateway") {
+    // Operator-role in effect: `worker.*` are admin operations, so an agent token gets
+    // `FORBIDDEN`/403 from the shared dispatcher rather than from a second check here.
+    app.get("/v1/workers", agentAuth, async (c) =>
+      c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity")))),
+    );
+
+    app.post("/v1/workers/:id/drain", agentAuth, async (c) =>
+      c.json(
+        await deps.dispatch(
+          "worker.drain",
+          { workerId: c.req.param("id") },
+          buildHttpSession(c.get("identity")),
+        ),
+      ),
+    );
+
+    app.delete("/v1/workers/:id/drain", agentAuth, async (c) =>
+      c.json(
+        await deps.dispatch(
+          "worker.undrain",
+          { workerId: c.req.param("id") },
+          buildHttpSession(c.get("identity")),
+        ),
+      ),
+    );
+
+    app.delete("/v1/workers/:id", agentAuth, async (c) =>
+      c.json(
+        await deps.dispatch(
+          "worker.remove",
+          { workerId: c.req.param("id") },
+          buildHttpSession(c.get("identity")),
+        ),
+      ),
+    );
+  }
+
   app.get("/v1/events", agentAuth, async (c) => {
     const since = c.req.query("since");
     const sinceTs = since === undefined ? undefined : deps.clock.now() - parseDuration(since);

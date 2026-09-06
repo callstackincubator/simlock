@@ -50,6 +50,21 @@ type Handler<Op extends OperationName> = (
 
 type TokenRecord = z.infer<typeof tokenRecordSchema>;
 
+type DeepReadonly<Value> = Value extends (infer Item)[]
+  ? readonly DeepReadonly<Item>[]
+  : Value extends object
+    ? { readonly [Key in keyof Value]: DeepReadonly<Value[Key]> }
+    : Value;
+
+/**
+ * The config `config.get` answers with, as this module sees it: the contract's own shape, made
+ * deeply readonly so `src/core`'s `Config` (which is) assigns into it. Declared this way rather
+ * than by importing `Config` because `src/gateway` imports nothing from `core` (ADR 0005 §33),
+ * and the gateway has no business with the type's *meaning* anyway -- it stores this value and
+ * hands it back.
+ */
+export type GatewayConfig = DeepReadonly<z.infer<(typeof OPERATIONS)["config.get"]["output"]>>;
+
 /**
  * The token store, structurally. Narrower than importing `TokenStore` itself (which lives under
  * `src/http` for historical reasons): the gateway needs three methods, and depending on the
@@ -66,7 +81,7 @@ export interface GatewayTokenStore {
 
 export interface GatewayDispatcherOptions {
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
-  readonly config: z.infer<(typeof OPERATIONS)["config.get"]["output"]>;
+  readonly config: GatewayConfig;
   readonly eventBus: EventBus;
   readonly workers: WorkerRegistry;
   readonly tokens?: GatewayTokenStore;

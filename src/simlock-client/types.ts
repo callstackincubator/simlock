@@ -63,6 +63,21 @@ export type TokenListOutput = OpOutput<"token.list">;
 export type TokenRevokeInput = OpInput<"token.revoke">;
 export type TokenRevokeOutput = OpOutput<"token.revoke">;
 
+// ---- gateway-only operations (ADR 0005 §23) -------------------------------------------------
+//
+// Declared on the admin client like every other admin row. A *worker* has no worker registry
+// and implements none of them, so calling one against a worker answers `UNKNOWN_REQUEST` --
+// which is the honest answer, and the reason these are not gated client-side: the daemon says
+// what it is, rather than the client guessing from a mode it was never told.
+
+export type WorkerListOutput = OpOutput<"worker.list">;
+/** One worker as the gateway currently sees it -- the shape `simlock worker list` renders. */
+export type WorkerView = WorkerListOutput["workers"][number];
+export type WorkerDrainInput = OpInput<"worker.drain">;
+export type WorkerDrainOutput = OpOutput<"worker.drain">;
+export type WorkerUndrainOutput = OpOutput<"worker.undrain">;
+export type WorkerRemoveOutput = OpOutput<"worker.remove">;
+
 // ---- pushes ---------------------------------------------------------------------------------
 
 export type LeaseProgress = z.infer<typeof leaseProgressSchema>;

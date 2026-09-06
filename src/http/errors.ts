@@ -133,13 +133,31 @@ export function mapError(error: unknown): MappedError {
   const extra =
     error instanceof RequesterAlreadyLeasedError && error.existingLeaseId !== undefined
       ? { existingLeaseId: error.existingLeaseId }
-      : undefined;
+      : // ADR 0003 §7: `details` are contract, message text is not -- so a `DispatchError`
+        // carrying them (`WORKER_CONNECTED`'s `workerId`,
+        // `UNSUPPORTED_IN_GATEWAY_MODE`'s `operation`) puts them in the response body, where a
+        // client can branch on them instead of parsing prose.
+        isDetailsObject(error)
+        ? error.details
+        : undefined;
   return {
     status: entry.httpStatus as HttpStatus,
     code: entry.code,
     message: recognized && error instanceof Error ? error.message : "Internal error",
     ...(extra === undefined ? {} : { extra }),
   };
+}
+
+/** A `DispatchError` whose `details` are a plain object worth putting on the wire. */
+function isDetailsObject(error: unknown): error is DispatchError & {
+  readonly details: Record<string, unknown>;
+} {
+  return (
+    error instanceof DispatchError &&
+    typeof error.details === "object" &&
+    error.details !== null &&
+    !Array.isArray(error.details)
+  );
 }
 
 /** Writes `mapError`'s result as the standard `{"error":{...}}` body, plus `Retry-After` for NO_CAPACITY. */
