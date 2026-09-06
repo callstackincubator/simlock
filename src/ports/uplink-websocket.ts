@@ -44,6 +44,19 @@ export class WebSocketUplinkConnection implements IpcConnection {
   readonly #dataListeners = new Set<(chunk: string) => void>();
   readonly #closeListeners = new Set<() => void>();
   readonly #errorListeners = new Set<(error: Error) => void>();
+  /**
+   * Frames that arrived before anything subscribed. A real socket buffers what is sent to it
+   * until someone reads; `ws` does not -- it emits `message` events, and one emitted with no
+   * listener attached is simply gone.
+   *
+   * That gap is not theoretical here, it is the normal case: over the uplink the *gateway*
+   * speaks first (ADR 0005 §5), so its `hello` can be delivered in the same tick as the
+   * WebSocket's `open` -- before the worker's `DaemonServer` has been handed the connection and
+   * subscribed. Losing it deadlocks the link: the gateway waits forever for a reply to a frame
+   * the worker never saw. Buffering until the first `onData` makes this adapter behave the way
+   * every other `IpcConnection` in the tree already does.
+   */
+  readonly #pending: string[] = [];
   #closed = false;
 
   constructor(socket: WebSocket) {
@@ -57,6 +70,10 @@ export class WebSocketUplinkConnection implements IpcConnection {
         : Buffer.isBuffer(data)
           ? data.toString("utf8")
           : Buffer.from(data as ArrayBuffer).toString("utf8");
+      if (this.#dataListeners.size === 0) {
+        this.#pending.push(chunk);
+        return;
+      }
       for (const listener of this.#dataListeners) listener(chunk);
     });
     socket.on("close", () => this.#markClosed());
@@ -72,6 +89,12 @@ export class WebSocketUplinkConnection implements IpcConnection {
 
   onData(listener: (chunk: string) => void): () => void {
     this.#dataListeners.add(listener);
+    // Whatever arrived before anyone was listening is delivered to the first subscriber, in
+    // order, before it sees anything new -- see `#pending`.
+    if (this.#pending.length > 0) {
+      const buffered = this.#pending.splice(0);
+      for (const chunk of buffered) listener(chunk);
+    }
     return () => this.#dataListeners.delete(listener);
   }
 
@@ -207,13 +230,18 @@ export class WebSocketUplinkConnector implements UplinkConnector {
           : { [WORKER_LABEL_HEADER]: encodeURIComponent(options.label) }),
       },
     });
+    // Wrapped *before* awaiting `open`, not after: the gateway speaks first over an uplink, and
+    // its `hello` can be emitted in the same tick the socket opens. The wrapper's `message`
+    // listener has to be attached by then, or that frame is lost and the link deadlocks (see
+    // `WebSocketUplinkConnection#pending`).
+    const connection = new WebSocketUplinkConnection(socket);
     try {
       await waitForOpen(socket);
     } catch (error: unknown) {
       socket.terminate();
       throw error;
     }
-    return new WebSocketUplinkConnection(socket);
+    return connection;
   }
 }
 

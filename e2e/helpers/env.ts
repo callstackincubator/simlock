@@ -110,8 +110,11 @@ export interface WithDaemonOptions {
    * fake driver. "real" leaves driver discovery alone -- the daemon finds the real
    * iOS/Android drivers exactly as it would in production -- for the slow, real-SDK
    * lane; `driverScript`/`driverLog` are inert in that mode (nothing reads them).
+   * "none" wires no driver and seeds no driver-shaped config at all: what a
+   * `mode: "gateway"` daemon needs, since it starts no drivers and warns about every
+   * worker-only key it is given (ADR 0005 §2).
    */
-  readonly driver?: "fake" | "real";
+  readonly driver?: "fake" | "real" | "none";
 }
 
 export interface TestEnv {
@@ -169,7 +172,7 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
   const scriptPath = join(home, "fake-driver-script.json");
   const logCallPath = join(home, "fake-driver-calls.jsonl");
 
-  const useFakeDriver = options.driver !== "real";
+  const useFakeDriver = options.driver === undefined || options.driver === "fake";
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     SIMLOCK_HOME: home,
@@ -183,10 +186,12 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
     ...(options.agentId === undefined ? {} : { SIMLOCK_AGENT_ID: options.agentId }),
   };
 
-  const adbServerPort = useFakeDriver ? undefined : await freeLoopbackPort();
+  const adbServerPort = options.driver === "real" ? await freeLoopbackPort() : undefined;
   const seededConfig = useFakeDriver
     ? mergeDeep(FAKE_LANE_BASE_CONFIG, options.configOverrides ?? {})
-    : mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {});
+    : options.driver === "real"
+      ? mergeDeep({ drivers: { android: { adbServerPort } } }, options.configOverrides ?? {})
+      : (options.configOverrides ?? {});
   if (seededConfig !== undefined) {
     await writeFile(configPath, `${JSON.stringify(seededConfig, null, 2)}\n`, "utf8");
   }
@@ -394,7 +399,7 @@ async function readFileIfExists(path: string): Promise<string | undefined> {
  * other test env on this machine is already using, and the alternative (a fixed port) fails
  * every parallel run rather than an unlucky one.
  */
-async function freeLoopbackPort(): Promise<number> {
+export async function freeLoopbackPort(): Promise<number> {
   const server = createServer();
   try {
     const port = await new Promise<number>((resolve) => {

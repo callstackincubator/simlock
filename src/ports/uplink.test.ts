@@ -41,6 +41,33 @@ describe("createConnectionPair", () => {
     expect(closed).toHaveBeenCalledTimes(1);
   });
 
+  it("buffers what is written before anyone is listening, then delivers it in order", async () => {
+    // A real socket buffers; this pair must too, or the uplink's very first frame is lost --
+    // over an uplink the *gateway* speaks first, before the worker has handed the connection
+    // to its own server (ADR 0005 §5).
+    const [left, right] = createConnectionPair();
+    await left.write("first\n");
+    await left.write("second\n");
+
+    const received: string[] = [];
+    right.onData((chunk) => received.push(chunk));
+
+    expect(received).toEqual(["first\n", "second\n"]);
+  });
+
+  it("delivers the buffer only once, to the first reader", async () => {
+    const [left, right] = createConnectionPair();
+    await left.write("first\n");
+    const firstReader: string[] = [];
+    const secondReader: string[] = [];
+
+    right.onData((chunk) => firstReader.push(chunk));
+    right.onData((chunk) => secondReader.push(chunk));
+
+    expect(firstReader).toEqual(["first\n"]);
+    expect(secondReader).toEqual([]);
+  });
+
   it("drops a write to a closed peer instead of throwing", async () => {
     const [left, right] = createConnectionPair();
     const received: string[] = [];
