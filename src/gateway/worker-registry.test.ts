@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventEnvelope } from "../bus/index.js";
+import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { FakeClock } from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { leaseFixture } from "./test-support.js";
@@ -96,13 +97,13 @@ describe("WorkerRegistry", () => {
     const view = workers.incompatible(
       "wrk_1",
       "old-mac",
-      { gateway: { min: 5, max: 5 }, worker: { min: 4, max: 4 } },
+      { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
       "0.2.0",
     );
 
     expect(view).toMatchObject({
       connection: "incompatible",
-      protocol: { gateway: { min: 5, max: 5 }, worker: { min: 4, max: 4 } },
+      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
       version: "0.2.0",
     });
     // ADR 0005 §31: no event at all. Not `worker.connected`, because nothing usable
@@ -116,7 +117,7 @@ describe("WorkerRegistry", () => {
     workers.incompatible(
       "wrk_1",
       undefined,
-      { gateway: { min: 5, max: 5 }, worker: { min: 4, max: 4 } },
+      { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
       "0.2.0",
     );
 
@@ -332,7 +333,7 @@ describe("WorkerRegistry", () => {
       workers.incompatible(
         "wrk_1",
         undefined,
-        { gateway: { min: 5, max: 5 }, worker: { min: 4, max: 4 } },
+        { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
         undefined,
       );
 

@@ -10,6 +10,7 @@ import type { z } from "zod";
 
 import type { SimlockAdminClient, StatusGetOutput } from "../admin/index.js";
 import { SimlockError } from "../admin/index.js";
+import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import type { OPERATIONS, platformCatalogSchema } from "../contract/index.js";
 
 type CatalogOutput = z.infer<(typeof OPERATIONS)["catalog.get"]["output"]>;
@@ -114,30 +115,35 @@ export class ScriptedWorkerClient {
     return this as unknown as SimlockAdminClient;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getStatus(): Promise<StatusGetOutput> {
     this.calls.push("status.get");
     this.#throwIfFailing();
     return this.status;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async list(input: { readonly kind?: string }): Promise<unknown> {
     this.calls.push(`list.get:${input.kind ?? "devices"}`);
     this.#throwIfFailing();
     return this.devices;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getCatalog(): Promise<CatalogOutput> {
     this.calls.push("catalog.get");
     this.#throwIfFailing();
     return this.catalog;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getConfig(): Promise<{ readonly downloads: { readonly policy: DownloadPolicy } }> {
     this.calls.push("config.get");
     this.#throwIfFailing();
     return { downloads: { policy: this.downloadPolicy } };
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async subscribeEvents(
     listener: (push: { event: EventEnvelope }) => void,
   ): Promise<() => Promise<void>> {
@@ -149,6 +155,7 @@ export class ScriptedWorkerClient {
     };
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async close(): Promise<void> {
     this.closed = true;
   }
@@ -162,7 +169,7 @@ export class ScriptedWorkerClient {
  * found no overlapping protocol version (ADR 0003 §6) -- what marks a view `incompatible`. */
 export function protocolMismatchError(
   worker: { readonly min: number; readonly max: number },
-  gateway: { readonly min: number; readonly max: number } = { min: 5, max: 5 },
+  gateway: { readonly min: number; readonly max: number } = PROTOCOL_VERSION_RANGE,
   daemonVersion = "0.2.0",
 ): SimlockError<"PROTOCOL_VERSION_UNSUPPORTED"> {
   return new SimlockError(

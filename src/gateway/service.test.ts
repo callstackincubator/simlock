@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus, type EventEnvelope } from "../bus/index.js";
+import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { FakeClock, MemoryUplinkTransport, type UplinkAuthOutcome } from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { GatewayService } from "./service.js";
@@ -220,7 +221,7 @@ describe("GatewayService", () => {
     );
 
     expect(harness.service.workers.view("wrk_1")).toMatchObject({
-      protocol: { gateway: { min: 5, max: 5 }, worker: { min: 4, max: 4 } },
+      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);
