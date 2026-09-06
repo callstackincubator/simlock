@@ -367,6 +367,150 @@ describe("CLI: exit codes", () => {
     expect(seen).toEqual([{ args: ["--help"], tool: "adb" }]);
   });
 
+  /**
+   * ADR 0005 §19c's other half. Same command, same refusals, same exit code -- the only thing
+   * that changes is where the process runs and how its output gets here. `runPassthrough` is
+   * deliberately wired in each of these: a remote invocation that quietly spawned locally
+   * would pass every assertion about output and exit code while doing the wrong thing.
+   */
+  describe("remote passthrough (ADR 0005 device.exec)", () => {
+    const ownLease = {
+      deviceId: "dev_1",
+      grantedAt: 0,
+      id: "lse_mine",
+      lastRenewedAt: 0,
+      ownerId: "some-other-principal",
+      requesterId: "test-requester",
+      ttlDeadline: 60_000,
+      ttlMs: 60_000,
+    };
+
+    it("runs the command on the daemon, prints the streamed output, and exits with its code", async () => {
+      const output = outputCapture();
+      const seen: unknown[] = [];
+      let ranLocally = false;
+
+      await expect(
+        runCli(
+          ["adb", "shell", "getprop"],
+          output.environmentWith({
+            passthroughMode: "remote",
+            connectAdmin: async () =>
+              fakeClient({
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                execDevice: (input, options) => {
+                  seen.push(input);
+                  options?.onOutput?.({ chunk: "ro.build", stream: "stdout" });
+                  options?.onOutput?.({ chunk: "a warning\n", stream: "stderr" });
+                  options?.onOutput?.({ chunk: ".version=15\n", stream: "stdout" });
+                  return Promise.resolve({ exitCode: 9 });
+                },
+              }),
+            runPassthrough: async () => {
+              ranLocally = true;
+              return 0;
+            },
+          }),
+        ),
+      ).resolves.toBe(9);
+
+      expect(ranLocally).toBe(false);
+      expect(seen).toEqual([{ args: ["shell", "getprop"], leaseId: "lse_mine", tool: "adb" }]);
+      // Chunks land on the stream they were written to, unjoined and in order -- a caller
+      // piping this sees what it would have seen locally.
+      expect(output.stdout).toBe("ro.build.version=15\n");
+      // The agent-fallback notice this fixture's credential-less connection writes is the only
+      // other thing on stderr; the command's own chunk lands there verbatim.
+      expect(output.stderr).toContain("a warning\n");
+    });
+
+    it("names the lease from the requester id rather than from a flag of its own", async () => {
+      // Every argument after the tool name belongs to the tool (docs/CLI.md), so identity is
+      // the only thing left to select a lease with -- and `--agent-id`/`SIMLOCK_AGENT_ID`
+      // already is that identity. A requester holding no lease is a usage error naming it.
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            passthroughMode: "remote",
+            connectAdmin: async () =>
+              fakeClient({
+                listLeases: () =>
+                  Promise.resolve({
+                    leases: [{ ...ownLease, id: "lse_theirs", requesterId: "someone-else" }],
+                  }),
+              }),
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("test-requester") },
+      });
+    });
+
+    it("renders a refusal from the remote command as a USAGE error too", async () => {
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["simctl", "delete", "ABCD"],
+          output.environmentWith({
+            passthroughMode: "remote",
+            connectAdmin: async () =>
+              fakeClient({
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                execDevice: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "PASSTHROUGH_REFUSED",
+                      "domain",
+                      "Refusing `simlock simctl delete`: use `simlock release` instead.",
+                      { tool: "simctl" },
+                    ),
+                  ),
+              }),
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("simlock release") },
+      });
+    });
+
+    it("exits 15 when the daemon killed the command for outrunning exec.timeoutMs", async () => {
+      // The exit code comes from `ERROR_TABLE`'s own column (ADR 0003 §7), so a killed command
+      // is distinguishable from one that merely failed.
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "logcat"],
+          output.environmentWith({
+            passthroughMode: "remote",
+            connectAdmin: async () =>
+              fakeClient({
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                execDevice: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "EXEC_TIMEOUT",
+                      "domain",
+                      "`adb logcat` exceeded exec.timeoutMs (600000ms) and was killed",
+                      {},
+                    ),
+                  ),
+              }),
+          }),
+        ),
+      ).resolves.toBe(15);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "EXEC_TIMEOUT", message: expect.stringContaining("exec.timeoutMs") },
+      });
+    });
+  });
+
   it("lists both tool passthroughs in root help", async () => {
     const output = outputCapture();
 

@@ -697,6 +697,95 @@ describe("lease routes", () => {
     expect(frames.map((frame) => frame.event)).toEqual(["device_unhealthy", "lease_lost"]);
   });
 
+  /**
+   * ADR 0005 §19a's HTTP frontend. The route's whole job is to turn one dispatched
+   * `device.exec` into a stream: `output` per chunk, one terminal `exit` or `error`. What the
+   * command does is the dispatcher's business (see `daemon/dispatcher.test.ts`).
+   */
+  describe("POST /v1/leases/:id/exec", () => {
+    function postExec(
+      app: App,
+      body: Record<string, unknown> = { args: ["list"], tool: "simctl" },
+    ) {
+      return app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify(body),
+        headers: { ...agentAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+    }
+
+    it("streams a chunk per output event and ends with the command's exit code", async () => {
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      // The path names the lease; the body is the rest of the operation's input.
+      expect(call.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
+
+      // Written before the response even exists, which is the case the route's pre-stream
+      // handoff buffer exists for: it must still arrive, and still arrive first.
+      call.session.onOutput?.("stdout", "one");
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+
+      const framesPromise = readSseFrames(response, 3);
+      await Promise.resolve();
+      call.session.onOutput?.("stderr", "two");
+      call.resolve({ exitCode: 5 });
+      const frames = await framesPromise;
+
+      expect(frames.map((frame) => frame.event)).toEqual(["output", "output", "exit"]);
+      expect(frames.map((frame) => frame.data)).toEqual([
+        { chunk: "one", stream: "stdout" },
+        { chunk: "two", stream: "stderr" },
+        { exitCode: 5 },
+      ]);
+    });
+
+    it("answers a failure that lands before any output with its own status, not a stream", async () => {
+      // An SSE response cannot take back its status code, so ownership and the refusal list
+      // have to be answered ahead of the stream -- 403 here, exactly as `renew`/`release` do.
+      const { app, dispatcher } = buildHarness();
+      dispatcher.handlers["device.exec"] = () => {
+        throw new DispatchError("FORBIDDEN", "Not authorized for device.exec");
+      };
+
+      const response = await postExec(app);
+      expect(response.status).toBe(403);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+    });
+
+    it("reports a failure that lands after output began as a terminal error event", async () => {
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onOutput?.("stdout", "working");
+      const response = await responsePromise;
+
+      const framesPromise = readSseFrames(response, 2);
+      await Promise.resolve();
+      call.reject(new DispatchError("EXEC_TIMEOUT", "exceeded exec.timeoutMs (1000ms)"));
+      const frames = await framesPromise;
+
+      expect(frames.map((frame) => frame.event)).toEqual(["output", "error"]);
+      expect(frames.at(-1)?.data).toMatchObject({ error: { code: "EXEC_TIMEOUT" } });
+    });
+
+    it("400s a body naming a tool outside the contract's closed set", async () => {
+      const { app, dispatcher } = buildHarness();
+
+      const response = await postExec(app, { args: [], tool: "bash" });
+
+      expect(response.status).toBe(400);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        "BAD_REQUEST",
+      );
+      expect(dispatcher.calls.filter((call) => call.operation === "device.exec")).toEqual([]);
+    });
+  });
+
   it("DELETE /v1/leases/:id releases and answers 202 with the device's post-release state", async () => {
     const { app, dispatcher, registry } = buildHarness();
     registry.devices = [makeDevice({ id: "dev_1", state: "leased" })];

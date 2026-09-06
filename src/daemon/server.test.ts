@@ -27,7 +27,9 @@ import {
   MemoryLogSink,
   NodeFilesystem,
   NodeIpcTransport,
+  ScriptedProcessRunner,
   type Logger,
+  type ProcessRunner,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost } from "./connection-host.js";
@@ -57,6 +59,7 @@ interface ServerFrame {
     | "event"
     | "lease-lost"
     | "lease.heartbeat"
+    | "output"
     | "progress";
 }
 
@@ -504,6 +507,62 @@ describe("DaemonServer", () => {
       error: { code: "UNKNOWN_PASSTHROUGH_TOOL" },
       ok: false,
     });
+  });
+
+  /**
+   * ADR 0005 §19a over the socket. The dispatcher's own suite proves what the command does;
+   * this proves the one thing only this transport can: the chunks reach the wire as `output`
+   * pushes keyed by the request's frame id, ahead of the reply that carries the exit code.
+   */
+  it("pushes device.exec output frames keyed by the request id, then replies with the exit code", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: (args: readonly string[]) => ({
+        args: ["--set", "/root", ...args],
+        command: "simctl",
+        env: {},
+      }),
+      passthroughTool: "simctl",
+      platform: "ios",
+    });
+    const harness = await createHarness({
+      clock,
+      driver,
+      processRunner: new ScriptedProcessRunner([
+        {
+          chunks: [
+            { chunk: "booted", stream: "stdout" },
+            { chunk: "a warning", stream: "stderr" },
+          ],
+          match: { args: ["--set", "/root", "list", "devices"], command: "simctl" },
+          result: { code: 6, stderr: "", stdout: "" },
+        },
+      ]),
+    });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    const grant = await client.request("lease.request", {
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    const response = await client.request(
+      "device.exec",
+      { args: ["list", "devices"], leaseId: leaseIdOf(grant), tool: "simctl" },
+      "exec-frame",
+    );
+
+    expect(response).toMatchObject({ ok: true, payload: { exitCode: 6 } });
+    expect(client.frames().filter((frame) => frame.push === "output")).toEqual([
+      { payload: { chunk: "booted", requestId: "exec-frame", stream: "stdout" }, push: "output" },
+      {
+        payload: { chunk: "a warning", requestId: "exec-frame", stream: "stderr" },
+        push: "output",
+      },
+    ]);
   });
 
   it("recovers a stale socket file and refuses a second live daemon before running any device work", async () => {
@@ -2316,6 +2375,8 @@ async function createHarness(
     readonly resolveRole?: SessionRoleResolver;
     /** Overrides the `downloads` config block for tests that exercise the download policy. */
     readonly downloads?: Partial<Config["downloads"]>;
+    /** Wires `device.exec`'s runner (ADR 0005 §19a); absent by default like the option itself. */
+    readonly processRunner?: ProcessRunner;
   } = {},
 ) {
   const directory =
@@ -2389,6 +2450,7 @@ async function createHarness(
     leases: engine,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     passthrough: engine,
+    ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
     queue: engine,
     reaper,
     registry,
