@@ -20,7 +20,7 @@ export interface UplinkBackoff {
   readonly multiplier: number;
 }
 
-export const DEFAULT_UPLINK_BACKOFF: UplinkBackoff = {
+const DEFAULT_UPLINK_BACKOFF: UplinkBackoff = {
   initialMs: 1_000,
   maxMs: 30_000,
   multiplier: 2,

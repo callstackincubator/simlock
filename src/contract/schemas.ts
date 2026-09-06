@@ -501,7 +501,6 @@ export const tokenRecordSchema = z.object({
  * one mode.
  */
 export const daemonModeSchema = z.enum(["worker", "gateway"]);
-export type DaemonMode = z.infer<typeof daemonModeSchema>;
 
 /** Mirrors `ProtocolRange` (protocol.ts). Re-declared rather than imported so this file stays
  * the one place a wire *shape* is written down; `protocol.ts` owns the negotiation logic. */
@@ -515,7 +514,7 @@ const protocolRangeShapeSchema = z.object({ min: z.number().int(), max: z.number
  * overlapping protocol version (§31) -- the view then carries both ranges and nothing else the
  * gateway would have had to ask for over a protocol it cannot speak.
  */
-export const workerConnectionStateSchema = z.enum(["connected", "disconnected", "incompatible"]);
+const workerConnectionStateSchema = z.enum(["connected", "disconnected", "incompatible"]);
 
 /**
  * What the gateway currently knows about one worker (ADR 0005's vocabulary table, §7, §31).

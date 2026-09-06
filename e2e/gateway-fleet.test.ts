@@ -51,6 +51,29 @@ async function waitForWorkers(
   return workers;
 }
 
+/** A worker's per-platform limit, or 0 if the view has no capacity yet. Out here so the test
+ * body below stays a sequence of assertions rather than a chain of fallbacks. */
+function iosLimit(worker: WorkerView | undefined): number {
+  return worker?.capacity?.ios.limit ?? 0;
+}
+
+/** The id of the worker an operator would recognize by `label`. Throws rather than degrading
+ * to `""`, which would silently turn "no such worker" into a request for one. */
+function idOf(workers: readonly WorkerView[], label: string): string {
+  const worker = workers.find((candidate) => candidate.label === label);
+  if (worker === undefined) throw new Error(`No worker labelled ${label}`);
+  return worker.id;
+}
+
+function connectionOf(workers: readonly WorkerView[], label: string): string | undefined {
+  return workers.find((worker) => worker.label === label)?.connection;
+}
+
+function iosModels(json: unknown): readonly string[] {
+  const platforms = (json as { platforms: { platform: string; models?: string[] }[] }).platforms;
+  return platforms.find((entry) => entry.platform === "ios")?.models ?? [];
+}
+
 describe("gateway fleet", () => {
   it("two workers join, status aggregates them, a kill disconnects one, drain flags the other", async () => {
     const port = await freeLoopbackPort();
@@ -101,20 +124,13 @@ describe("gateway fleet", () => {
     const statusView = status.json as StatusView;
     expect(statusView.mode).toBe("gateway");
     expect(statusView.workers).toHaveLength(2);
-    const perWorkerIosLimit = joined[0]?.capacity?.ios.limit ?? 0;
-    expect(perWorkerIosLimit).toBeGreaterThan(0);
-    expect(statusView.capacity.ios.limit).toBe(
-      (joined[0]?.capacity?.ios.limit ?? 0) + (joined[1]?.capacity?.ios.limit ?? 0),
-    );
+    expect(iosLimit(joined[0])).toBeGreaterThan(0);
+    expect(statusView.capacity.ios.limit).toBe(iosLimit(joined[0]) + iosLimit(joined[1]));
 
     // 4. The catalog is the union, and says which worker each model came from.
     await waitFor(
       async () => {
-        const catalog = await gateway.cli(["catalog", "--json"]);
-        const models =
-          (catalog.json as { platforms: { platform: string; models: string[] }[] }).platforms.find(
-            (entry) => entry.platform === "ios",
-          )?.models ?? [];
+        const models = iosModels((await gateway.cli(["catalog", "--json"])).json);
         return models.includes("iPhone 16") && models.includes("iPhone 17");
       },
       { label: "the gateway's catalog unions both workers", timeout: 30_000 },
@@ -125,9 +141,7 @@ describe("gateway fleet", () => {
         platforms: { platform: string; modelWorkers?: Record<string, string[]> }[];
       }
     ).platforms.find((entry) => entry.platform === "ios");
-    expect(iosCatalog?.modelWorkers?.["iPhone 16"]).toEqual([
-      joined.find((worker) => worker.label === "worker-a")?.id,
-    ]);
+    expect(iosCatalog?.modelWorkers?.["iPhone 16"]).toEqual([idOf(joined, "worker-a")]);
 
     // 5. Killing a worker flips its view without anyone polling it: the uplink closing *is* the
     //    signal (ADR 0005 §6). The gateway's own backstop tick is 30s, and this must not need
@@ -135,17 +149,16 @@ describe("gateway fleet", () => {
     await workerA.killDaemon();
     const surviving = await waitForWorkers(
       gateway,
-      (workers) =>
-        workers.find((worker) => worker.label === "worker-a")?.connection === "disconnected",
+      (workers) => connectionOf(workers, "worker-a") === "disconnected",
       "the killed worker's view flipped to disconnected",
     );
     // The other worker is untouched, and the dead one's view is kept rather than dropped.
     expect(surviving).toHaveLength(2);
-    expect(surviving.find((worker) => worker.label === "worker-b")?.connection).toBe("connected");
+    expect(connectionOf(surviving, "worker-b")).toBe("connected");
 
     // 6. Draining flags the surviving worker (what #118's dispatch will honour), and the flag
     //    is on the view an operator reads back.
-    const workerBId = surviving.find((worker) => worker.label === "worker-b")?.id ?? "";
+    const workerBId = idOf(surviving, "worker-b");
     const drain = await gateway.cli(["worker", "drain", workerBId]);
     expect(drain.code).toBe(0);
     expect(drain.json).toEqual({ drained: true, workerId: workerBId });
@@ -156,7 +169,7 @@ describe("gateway fleet", () => {
     // 7. Removing a *connected* worker is refused; the disconnected one is forgotten.
     const refused = await gateway.cli(["worker", "remove", workerBId]);
     expect(refused.error?.code).toBe("WORKER_CONNECTED");
-    const workerAId = surviving.find((worker) => worker.label === "worker-a")?.id ?? "";
+    const workerAId = idOf(surviving, "worker-a");
     const removed = await gateway.cli(["worker", "remove", workerAId]);
     expect(removed.code).toBe(0);
     expect(await listWorkers(gateway)).toHaveLength(1);

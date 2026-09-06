@@ -19,7 +19,7 @@ import type { Duplex } from "node:stream";
 
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
-import type { IpcConnection } from "./ipc.js";
+import { subscribeListener, type IpcConnection } from "./ipc.js";
 import {
   resolveUplinkUrl,
   UPLINK_PATH,
@@ -39,7 +39,7 @@ import {
  * and every reader buffers by newline, so a message boundary that does not line up with a
  * frame boundary is harmless either way.
  */
-export class WebSocketUplinkConnection implements IpcConnection {
+class WebSocketUplinkConnection implements IpcConnection {
   readonly #socket: WebSocket;
   readonly #dataListeners = new Set<(chunk: string) => void>();
   readonly #closeListeners = new Set<() => void>();
@@ -88,14 +88,14 @@ export class WebSocketUplinkConnection implements IpcConnection {
   }
 
   onData(listener: (chunk: string) => void): () => void {
-    this.#dataListeners.add(listener);
+    const unsubscribe = subscribeListener(this.#dataListeners, listener);
     // Whatever arrived before anyone was listening is delivered to the first subscriber, in
     // order, before it sees anything new -- see `#pending`.
     if (this.#pending.length > 0) {
       const buffered = this.#pending.splice(0);
       for (const chunk of buffered) listener(chunk);
     }
-    return () => this.#dataListeners.delete(listener);
+    return unsubscribe;
   }
 
   onClose(listener: () => void): () => void {
@@ -103,13 +103,11 @@ export class WebSocketUplinkConnection implements IpcConnection {
       listener();
       return () => {};
     }
-    this.#closeListeners.add(listener);
-    return () => this.#closeListeners.delete(listener);
+    return subscribeListener(this.#closeListeners, listener);
   }
 
   onError(listener: (error: Error) => void): () => void {
-    this.#errorListeners.add(listener);
-    return () => this.#errorListeners.delete(listener);
+    return subscribeListener(this.#errorListeners, listener);
   }
 
   async write(contents: string): Promise<void> {

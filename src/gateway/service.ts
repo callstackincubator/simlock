@@ -29,7 +29,7 @@ import { WorkerRegistry } from "./worker-registry.js";
  * far below the shortest interesting lease TTL and far above anything that would make a fleet's
  * worth of `status.get` calls noticeable.
  */
-export const DEFAULT_WORKER_REFRESH_INTERVAL_MS = 30_000;
+const DEFAULT_WORKER_REFRESH_INTERVAL_MS = 30_000;
 
 export interface GatewayServiceOptions {
   readonly clock: Clock;
