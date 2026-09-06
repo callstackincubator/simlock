@@ -569,11 +569,22 @@ shell` is a real interactive shell and always has been.
 through `device.exec` instead, and there is no PTY on the far end. `stdin` is
 one string sent with the request and then closed. Line-oriented commands are
 fine (`adb shell getprop`, `adb shell input tap 100 200`, `simctl install`);
-anything that wants a terminal is not — an interactive `adb shell` gives you
-no prompt, a full-screen program renders as escape sequences, and a tool that
-asks a question waits for input that can never come until the timeout kills
-it. The failure is quiet in the worst case: the command simply hangs until
-`exec.timeoutMs` (ten minutes) and then fails `EXEC_TIMEOUT`.
+anything that wants a terminal is not — a full-screen program renders as
+escape sequences, and a tool that stops to ask a question waits for input
+that can never come until the timeout kills it. The failure is quiet in the
+worst case: the command hangs until `exec.timeoutMs` (ten minutes) and then
+fails `EXEC_TIMEOUT`.
+
+The one shape of this that is *not* quiet is the most likely one. A bare `adb
+shell` with no command — the thing a human types first — is refused up front
+by the worker with `PASSTHROUGH_REFUSED` (CLI exit 2, HTTP `422`) and a
+message saying it needs a terminal. It is the only refusal `device.exec` adds
+to the passthrough list, and it exists precisely because the honest failure
+for that command is immediate and legible, while the natural one is a
+ten-minute stall ending in a timeout that says nothing about terminals. It
+does not generalize: simlock cannot tell in advance which *other* commands
+will block for input, so everything past this one case is still bounded by
+the timeout rather than by a refusal.
 
 **Why it is accepted:** a PTY is not a bigger version of a pipe. It needs
 terminal allocation on the worker, window-size propagation, signal
@@ -649,7 +660,9 @@ costing a lease *only if it outlasts the TTL* is the same bargain a worker
 restart already makes with its own clients.
 
 **Status:** accepted. The bound is the lease's own TTL, so `lease.defaultTtlMs`
-and `--ttl` are the knobs: a longer TTL buys more tolerance for a gateway
+and `--ttl` are the knobs — the **gateway's** `lease.defaultTtlMs` for a
+fleet lease, since that is what fills in a request naming no `ttlMs` before
+it is dispatched anywhere. A longer TTL buys more tolerance for a gateway
 outage and costs more time to reclaim a device from a holder that vanished.
 Restarting a gateway is fast, and workers reconnect on their own backoff with
 no operator action.

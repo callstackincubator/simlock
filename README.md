@@ -1,8 +1,9 @@
 ### A control plane so parallel coding agents stop fighting over the same simulator
 
 Simlock is a CLI-first control plane for iOS simulators and Android
-emulators, built for environments where multiple coding agents run on one
-machine at the same time. Agents don't touch `simctl` or `avdmanager`
+emulators, built for environments where multiple coding agents run at the
+same time — on one machine, or across a fleet of them behind a single
+address. Agents don't touch `simctl` or `avdmanager`
 directly — they ask Simlock for a device and get one back, booted and
 health-checked, that no other agent will touch until they're done with it.
 

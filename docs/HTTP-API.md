@@ -48,8 +48,11 @@ terminal state. No route blocks on device work in flight.
 Every route requires `Authorization: Bearer slk_<secret>` except `GET
 /v1/healthz`. Missing or unrecognized tokens are `401 UNAUTHENTICATED`.
 
-Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)) —
-a local, no-daemon-round-trip command, like `config`. Each token record is
+Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
+Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
+the daemon is the only process that reads or writes `tokens.json`, so unlike
+`config set` these do go through the daemon (ADR 0003 §11). Each token record
+is
 `{ id, role, label?, createdAt }`, hashed at rest in `~/.simlock/tokens.json`
 (SHA-256; the plaintext secret is shown exactly once, at `create`, and never
 persisted). The token id doubles as the requester identity over HTTP: unlike
@@ -71,11 +74,12 @@ resource (a lease/request an `agent` token didn't create) is the same `403`,
 enforced per-resource rather than as a role gate.
 
 The `worker` role is deliberately not a superset or a subset of the other
-two, it is disjoint from both: a join token presented on any `/v1` route is
+two, it is disjoint from both. `/v1/uplink` is the one route a join token
+opens and the only route it opens: presented on any other `/v1` route it is
 `403`, and an `agent` or `operator` token presented at `/v1/uplink` is `403`
-just the same. It is minted with `simlock token create --role worker` on the
-**gateway**, and tokens never cross machines — a gateway's tokens are valid
-on that gateway and nowhere else ([ADR
+just the same. Join tokens are minted with `simlock token create --role
+worker` on the **gateway**, and tokens never cross machines — a gateway's
+tokens are valid on that gateway and nowhere else ([ADR
 0005](adr/0005-gateway-and-worker-modes.md)).
 
 ## Endpoints
@@ -231,6 +235,9 @@ already reached a terminal state — the body names the lease id if it was
 
 ### The lease object
 
+A lease issued by a **gateway** — a worker's own lease is the same object
+without the `workerId` and `worker` fields:
+
 ```json
 { "lease": {
     "id": "3f81a2c4.lse_9f2c", "requestId": "req_7d1a",
@@ -250,10 +257,14 @@ show it. `label` is display-only. A worker's network address is deliberately
 never here: clients reach the device through the gateway, with
 [`POST /v1/leases/{id}/exec`](#post-v1leasesidexec).
 
-The lease `id` names its worker (`<workerId>.<worker's own lease id>`), which
-is how a gateway routes renew, release, and reads with no state of its own to
-lose across a restart. **Treat it as opaque** — pass it back verbatim in
-paths and bodies, and read `worker.id` if you want the machine.
+The lease `id` names its worker (`<workerId>.<worker's own lease id>`, split
+on the **first** `.`), which is how a gateway routes renew, release, and
+reads with no state of its own to lose across a restart. A worker id is a
+UUID, so a real id reads
+`3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c`; the examples here and
+elsewhere in these docs abbreviate it to its first segment for legibility.
+**Treat the whole id as opaque** — pass it back verbatim in paths and bodies,
+and read `worker.id` when you want the machine.
 
 `dataPlane` is **reserved** and always `null` in this version: streaming a
 device's screen, forwarding a port, or opening an interactive TTY is a
@@ -359,18 +370,36 @@ the lease, with the same request and the same response either way ([ADR
 0005](adr/0005-gateway-and-worker-modes.md)).
 
 ```json
-{ "tool": "simctl", "args": ["install", "booted", "/tmp/MyApp.app"], "stdin": null }
+{ "tool": "simctl", "args": ["install", "booted", "/tmp/MyApp.app"],
+  "stdin": null, "requesterId": null }
 ```
 
 `tool` is `"simctl"` or `"adb"`; `args` is the argument vector, passed
 through unchanged. The daemon that owns the device resolves the command the
 same way `simlock simctl` / `simlock adb` do locally — same root scoping
 (`--set` for iOS, `-P` for Android, supplied by simlock and refused from the
-caller), same refusal list for verbs that would change a device's lifecycle
-behind the registry's back (`create`/`erase`/`delete`, `shutdown all`,
-`runtime delete`, `kill-server`, `emu kill`, …), which are `400 BAD_REQUEST`
-here. A gateway in the path parses none of it: it proxies the call to the
-owning worker and relays the stream back unchanged.
+caller), and the same refusal list for verbs that would change a device's
+lifecycle behind the registry's back (`create`/`erase`/`delete`, `shutdown
+all`, `runtime delete`, `kill-server`, `emu kill`, …). A refused verb is
+`422 PASSTHROUGH_REFUSED` and an unwrapped `tool` is `422
+UNKNOWN_PASSTHROUGH_TOOL` — the codes `driver.passthrough` already answers
+with, at the status they already carry; `400 BAD_REQUEST` here means a
+malformed body, nothing more. One refusal is particular to this route: a bare
+`adb shell` with no command is `422 PASSTHROUGH_REFUSED` ("needs a
+terminal"), because there is no pseudo-terminal to give it and accepting it
+would only stall the stream until the timeout. A gateway in the path parses
+none of this: it proxies the call to the owning worker and relays the stream
+back unchanged.
+
+`requesterId` (optional) is the same field `lease.request` takes: an
+`operator` token may name another requester, an `agent` token may not, and it
+defaults to the token's own requester id (ADR 0003 §4). Ownership is checked
+on both hops and an admin session does not skip the second — the gateway
+checks its own lease index, and the worker compares the forwarded
+(namespaced) requester against the lease it actually holds. That second check
+is not a formality: the gateway's session on a worker *is* an admin session,
+so without it one fleet agent's ownership would rest on the gateway's index
+alone.
 
 `stdin` (optional) is a **single string, sent with the request** and written
 to the process's stdin, which is then closed. There is no incremental stdin
@@ -408,17 +437,24 @@ a file on the device's own machine instead.
 Failures particular to this route:
 
 - `403 FORBIDDEN` — the lease belongs to another requester (same rule as
-  `renew`/`release`).
+  `renew`/`release`), or an `agent` token named a `requesterId` that is not
+  its own.
 - `404 UNKNOWN_LEASE` — no such lease, or it has expired or been released.
-- `400 BAD_REQUEST` — a refused verb, a caller-supplied `--set`/`-P`, or a
-  malformed body.
-- `502 WORKER_UNREACHABLE` — a gateway could not reach the worker holding
+- `422 PASSTHROUGH_REFUSED` — a refused verb, a caller-supplied `--set`/`-P`,
+  or a bare `adb shell`. `422 UNKNOWN_PASSTHROUGH_TOOL` for a `tool` outside
+  `simctl`/`adb`.
+- `400 BAD_REQUEST` — a malformed body.
+- `503 WORKER_UNREACHABLE` — a gateway could not reach the worker holding
   the lease.
-- `EXEC_TIMEOUT` — the command outlived `exec.timeoutMs` (ten minutes by
-  default, worker-side and authoritative; `gateway.execTimeoutMs` is the
-  gateway's backstop over it) and was killed. Because the response status is
-  already `200` by the time a command can time out, this arrives as the
-  stream's terminal `error` event rather than as a status code.
+- `EXEC_TIMEOUT` (`504` in the contract's error table) — the command outlived
+  `exec.timeoutMs`, ten minutes by default and worker-side, which is the
+  authoritative one because the worker owns the process;
+  `gateway.execTimeoutMs` (eleven minutes) is the gateway's backstop for a
+  worker that never answers at all, deliberately the longer of the two. On
+  *this* route the status never reaches the client — the response is already
+  `200` and streaming by the time a command can time out — so it arrives as
+  the stream's terminal `error` event. The status is documented anyway, for a
+  client mapping the code without a route in front of it.
 
 The artifact a command names has to exist **on the device's own machine**:
 `simctl install <path>` and `adb install <apk>` resolve their path there, and
@@ -468,12 +504,24 @@ workers of its own and does not implement the underlying operations at all.
 { "workers": [ {
     "id": "3f81a2c4", "label": "mac-studio-2",
     "state": "connected", "drained": false,
-    "daemonVersion": "0.4.0", "protocol": { "min": 4, "max": 4 },
+    "daemonVersion": "0.4.0", "protocol": { "min": 5, "max": 5 },
     "connectedAt": "2026-09-01T09:00:00Z", "lastSeenAt": "2026-09-01T09:14:30Z",
     "capacity": { "ios": { "running": 2, "limit": 4 }, "android": { "running": 0, "limit": 2 } },
+    "downloads": { "policy": "on-request" },
     "queueDepth": 0, "leases": 3, "devices": 5
 } ] }
 ```
+
+`downloads.policy` is that worker's own effective policy, read once with
+`config.get` when its uplink connects. Routing needs it to know whether a
+worker may install a missing runtime at all before sending it a request that
+depends on one; it is never an override, since the worker clamps
+`allowDownload` through the same policy regardless.
+
+`protocol` is the range that worker negotiated. ADR 0005 moves the wire to
+`{min: 5, max: 5}` with no compatibility shim, so a worker from before it
+does not overlap and shows as `incompatible` — the ordinary upgrade path, not
+a fault.
 
 `state` is `connected`, `disconnected`, or `incompatible`. A worker view is
 rebuilt over the uplink and never persisted, so these are current facts, not
@@ -482,21 +530,46 @@ route that *adds* one.
 
 A **disconnected** worker keeps its last-known view (greyed in the console,
 never dispatched to) until an operator removes it or
-`gateway.disconnectedRetentionMs` (24 hours) elapses — and never while the
-gateway still knows of gateway-issued leases on it, since forgetting a worker
-that holds someone's device is how a lease becomes unroutable.
+`gateway.disconnectedRetentionMs` (24 hours) elapses. The clock is held while
+the gateway still knows of gateway-issued leases on that worker — forgetting
+a worker that holds someone's device is how a lease becomes unroutable — and
+that hold ends when the last of those leases passes its deadline, since a
+lease nobody can renew is one the worker has expired on its own clock.
 
-Drain and undrain → `200 { "workerId": "3f81a2c4", "drained": true }`.
+`POST /v1/workers/{id}/drain` → `200 { "workerId": "3f81a2c4", "drained":
+true }`; `DELETE /v1/workers/{id}/drain` → `200 { "workerId": "3f81a2c4",
+"drained": false }`. Both are `404 UNKNOWN_WORKER` for an id the gateway does
+not know: draining is an instruction about a specific machine, and silently
+succeeding against one that is not there would hide a typo in exactly the
+situation — taking a machine out of service — where an operator most needs to
+know the instruction landed.
+
 `DELETE /v1/workers/{id}` → `200 { "workerId": "3f81a2c4", "removed": true }`,
 or `409 WORKER_CONNECTED` when its uplink is still open — a connected worker
 would simply reappear, so drain it and stop it (or revoke its join token)
-first. For an id the gateway does not know, all three answer `200` with the
-flag `false` rather than `404`: the state the caller asked for is the state
-that already holds, the same way `token.revoke` treats an unknown token id.
+first. Unknown ids are the one place remove differs: `200 { "removed": false
+}`, not `404`, because "forget this worker" is already true of a worker the
+gateway has already forgotten — the same reading `token.revoke` gives an
+unknown token id.
+
+On a **worker** daemon none of these routes exist: they are not registered at
+all, so they answer `404` like any other unrouted path rather than a
+gateway-mode refusal. There is nothing for them to act on.
 
 ### Operator routes
 
 Role: `operator` for all four.
+
+`DELETE /v1/leases/{id}` with an `operator` token already releases any single
+lease, on a gateway as anywhere else. The fleet-wide form of that — the CLI's
+`simlock release --all` — releases **only gateway-issued leases**, on every
+connected worker, and never a worker's own local leases: the gateway did not
+issue those, does not know who is holding them, and taking a local
+developer's device away from an endpoint they have never heard of is not an
+operator action anyone asked for. A worker it cannot reach is reported as
+`WORKER_UNREACHABLE` naming that worker, and the leases on the workers it
+could reach are still released — a partial result, said plainly, rather than
+an all-or-nothing that leaves the operator guessing.
 
 - `GET /v1/leases` — every active lease (`simlock list --leases`).
 - `GET /v1/devices` — every managed device, with state and
@@ -505,6 +578,13 @@ Role: `operator` for all four.
   ring buffer (`simlock events`).
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`).
+
+On a **gateway** all four are fleet-wide, which is what makes a single
+console possible: `/v1/leases` and `/v1/devices` return every connected
+worker's, each record carrying the `workerId` it lives on, and the two event
+routes carry the workers' republished events (also `workerId`-tagged)
+interleaved with the gateway's own `worker.*` and `request.dispatched`
+facts.
 
 ## Errors
 
@@ -516,26 +596,41 @@ Every failure is the same shape the daemon protocol uses:
 
 | HTTP | Codes |
 |---|---|
-| 400 | `BAD_REQUEST` (malformed body, bad query param, validation, a refused `exec` verb) |
+| 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
-| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request belongs to another requester; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease) |
-| 404 | `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
+| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request belongs to another requester; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease) |
+| 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open) |
-| 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` |
+| 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
 | 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine's devices, asked of a gateway) |
-| 502 | `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request; `kind: "transport"`) |
-| 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`) |
+| 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
+| 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`) |
 
-Two notes on the ADR 0005 codes. `UNSUPPORTED_IN_GATEWAY_MODE` has no route
-that can produce it *in this version* — `nuke`, `cleanup`, and `doctor` are
-absent from the HTTP surface (see [Not implemented](#not-implemented)) — but
-the status mapping is fixed now so that adding `POST /v1/doctor` or `POST
-/v1/cleanup` later is additive rather than a new decision. And `EXEC_TIMEOUT`
-is not in the table at all: `POST /v1/leases/{id}/exec` has already answered
-`200` and begun streaming by the time a command can outlive
-`exec.timeoutMs`, so it arrives as that stream's terminal `error` event
-instead of as a status code — as does a `WORKER_UNREACHABLE` that only
-happens mid-stream.
+Three notes on the ADR 0005 codes.
+
+`WORKER_UNREACHABLE` sits on `503` with `NO_CAPACITY` rather than on `502`,
+because its `kind` is `transport` and every other `transport`-kind code in
+the contract's table (`DAEMON_STOPPING`, `DAEMON_STARTUP_FAILED`,
+`DAEMON_CONNECTION_LOST`) is already a `503`. "Try again shortly, the thing
+behind this is not reachable right now" is the same answer in all four cases,
+and a client with one retry rule for `transport` should not need a second one
+because the unreachable thing happened to be a worker.
+
+`UNSUPPORTED_IN_GATEWAY_MODE` has no route that can produce it *in this
+version* — `nuke`, `cleanup`, and `doctor` are absent from the HTTP surface
+(see [Not implemented](#not-implemented)) — but the status is fixed now so
+adding `POST /v1/doctor` or `POST /v1/cleanup` later is additive rather than
+a fresh decision. `501` is also the honest status for it: this is not a
+temporary condition to retry past, it is an operation this daemon will never
+perform, and `nuke`/`cleanup`/`doctor`/`driver.passthrough` stay per-worker
+permanently rather than pending some later fan-out.
+
+`EXEC_TIMEOUT`'s `504` is documented for completeness rather than for the
+exec route: `POST /v1/leases/{id}/exec` has already answered `200` and begun
+streaming by the time a command can outlive `exec.timeoutMs`, so on that
+route it arrives as the stream's terminal `error` event — as does a
+`WORKER_UNREACHABLE` that only happens mid-stream. The status is what a
+client mapping the code without a route in front of it should use.
 
 ## Lifecycle semantics
 
@@ -565,7 +660,7 @@ happens mid-stream.
   their own backoff and let the gateway rebuild every view and its lease
   index. The recovery loop is the same one: `404` → re-request → (maybe)
   `409` → `GET`. While a worker's uplink is down, anything routed to it is
-  `502 WORKER_UNREACHABLE`; the gateway never reports a lease as gone before
+  `503 WORKER_UNREACHABLE`; the gateway never reports a lease as gone before
   the worker says so, and the lease meanwhile runs out its TTL on the
   worker's own clock.
 - **Shutdown.** `simlock daemon stop` closes the HTTP listener (and any open

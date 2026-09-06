@@ -1,7 +1,8 @@
 # Simlock
 
 Simlock is a control plane for iOS simulators and Android emulators, built for
-environments where multiple coding agents run in parallel on one machine.
+environments where multiple coding agents run in parallel — on one machine,
+or across a fleet of them behind a single address.
 
 ## The problem
 
