@@ -376,6 +376,45 @@ describe("POST /v1/lease-requests", () => {
     expect(secondBody.request.id).toBe(firstId);
   });
 
+  it("refuses a ttlMs above lease.maxTtlMs with 400, before the request resource exists", async () => {
+    const { app, dispatcher } = buildHarness({
+      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
+    });
+
+    const response = await postLeaseRequest(app, { ...defaultBody, ttlMs: 120_001 });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+    expect(
+      dispatcher.calls.filter((call) => call.operation === "lease.request"),
+      "nothing was admitted, so there is no request resource to poll either",
+    ).toHaveLength(0);
+  });
+
+  it("refuses it the same way when allowDownload makes the 201 settle without waiting", async () => {
+    // The shape that made this route need its own cap check: with `allowDownload: true` the
+    // tracker answers `201 Created` as soon as the dispatch is *started*, so a rejection the
+    // dispatcher raises afterwards would land on the request resource instead of on this
+    // response -- a 201 for a TTL `docs/HTTP-API.md` promises is a 400.
+    const { app, dispatcher } = buildHarness({
+      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
+    });
+
+    const response = await postLeaseRequest(app, {
+      ...defaultBody,
+      allowDownload: true,
+      ttlMs: 120_001,
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+    expect(dispatcher.calls.filter((call) => call.operation === "lease.request")).toHaveLength(0);
+  });
+
   it("passes a caller-supplied ttlMs straight onto the dispatch input -- no separate renew call (ADR §9)", async () => {
     const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, { ...defaultBody, ttlMs: 60_000 });

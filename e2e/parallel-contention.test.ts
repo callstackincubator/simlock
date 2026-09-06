@@ -83,6 +83,14 @@ describe("parallel contention invariant", () => {
     expect(servedDeviceByAgent.size, "every requester was eventually served").toBe(
       AGENT_IDS.length,
     );
+    // Eight agents, but only ever two devices to go round: the point of the cap is that the
+    // pool is *reused* as holders exit, not quietly grown past `ios.maxDevices` to serve
+    // everyone at once. The poll above can miss a moment; the set of devices actually handed
+    // out cannot.
+    expect(
+      new Set(servedDeviceByAgent.values()).size,
+      `eight requesters were served from more than the two devices the config allows: ${JSON.stringify([...servedDeviceByAgent])}`,
+    ).toBeLessThanOrEqual(2);
 
     await waitForLeaseCount(env, 0);
     const finalStatus = await env.cli(["status", "--json"]);

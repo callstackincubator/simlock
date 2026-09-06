@@ -366,8 +366,15 @@ export class Dispatcher {
     return { leaseId: input.leaseId };
   };
 
+  /**
+   * `killed`, not `explicit`: `docs/EVENTS.md` splits the two by who ended the lease and
+   * whether its holder asked. An operator's `simlock release --all` (and `nuke`, which already
+   * reports `killed` through `NukeService`) takes leases away from holders that never asked --
+   * which is exactly what a `lease-lost` reader needs to tell apart from the holder's own
+   * `lease.release` on its way out.
+   */
   #leaseReleaseAll: Handler<"lease.release-all"> = async () => {
-    const leaseIds = await this.options.leases.releaseAll("explicit");
+    const leaseIds = await this.options.leases.releaseAll("killed");
     return { leaseIds: [...leaseIds] };
   };
 

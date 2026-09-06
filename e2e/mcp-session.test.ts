@@ -92,10 +92,12 @@ describe("MCP session semantics", () => {
       });
       expect(warning.logger).toBe("simlock");
       expect(warning.level).toBe("warning");
+      // `killed`: an operator took the lease away, which is not the same fact as its holder
+      // releasing it (docs/EVENTS.md, and `Dispatcher#leaseReleaseAll`).
       expect(warning.data).toMatchObject({
         deviceId: expect.any(String),
         leaseId: leased.lease.id,
-        reason: "explicit",
+        reason: "killed",
       });
 
       const statusAfter = await mcp.client.callTool({ name: "lease_status", arguments: {} });
