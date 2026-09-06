@@ -424,6 +424,37 @@ these four and instead go through the same `ERROR_TABLE`-driven path `mapError` 
 for every contract-declared code, the same way `UNKNOWN_LEASE`/`FORBIDDEN`/`BAD_REQUEST` do
 today.
 
+## A `device.exec` command is authorized once, at its start
+
+`device.exec` ([ADR 0005](adr/0005-gateway-and-worker-modes.md) §19a) checks
+that the caller owns the lease it names, then spawns the command and streams
+its output. The check happens once. A command that is still running when its
+lease ends -- expired on its TTL, released by its holder, force-released by an
+operator -- keeps running, and the device it is pointed at may by then have
+been reclaimed and granted to somebody else.
+
+**The pitfall:** it is tempting to read the ownership check as covering the
+command's whole lifetime. It covers its *start*. Nothing kills a running child
+when a lease ends, and nothing re-checks the lease while it runs.
+
+Three things bound the exposure, none of which closes it:
+
+- `exec.timeoutMs` (ten minutes by default) is a hard ceiling on how long any
+  one command can outlive anything.
+- Reclaim is not instant, and a device goes through `reclaiming` before it can
+  be granted again -- so the window is a straggler's, not a routine one.
+- The refusal list still applies: a command that outlives its lease cannot be
+  one that changes a device's lifecycle behind the registry's back.
+
+**Status:** accepted for now. Killing the child on `lease.expired` /
+`lease.released` is the obvious fix and is cheap to add, but it makes the
+worse trade in the common case: the reason a disconnect does not kill a
+running command is that a half-applied `simctl install` interrupted by a
+tunnel blip is worse than one that finishes with nobody watching, and a lease
+that expires *while its holder is mid-install* is the same situation with the
+same answer. Revisit it with the gateway work (#115), where a proxied exec
+adds a second place a lease can end without the worker noticing at once.
+
 ## iOS slim mode: accepted costs and feature loss (#87)
 
 `ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
