@@ -178,6 +178,79 @@ provision/boot/reclaim — the daemon keeps doing the work, the caller just
 doesn't end up holding the result. This is recorded as a known gap in
 [known-pitfalls.md](known-pitfalls.md).
 
+## Running a command on the leased device: `exec`
+
+`exec` runs one `simctl` / `adb` command against a device you hold a lease
+on, wherever that device actually is, and streams its output back as it
+arrives ([ADR 0005](adr/0005-gateway-and-worker-modes.md)):
+
+```ts
+const { exitCode } = await client.exec(
+  { leaseId: grant.lease.id, tool: "simctl", args: ["install", "booted", "/tmp/MyApp.app"] },
+  {
+    onOutput: ({ stream, chunk }) => {
+      (stream === "stderr" ? process.stderr : process.stdout).write(chunk);
+    },
+  },
+);
+```
+
+`onOutput` fires per chunk, with `stream: "stdout" | "stderr"`, in the order
+the process produced it; the promise resolves once the command exits, with
+the tool's own `exitCode` — a non-zero one is the command's answer, not a
+thrown error. Output is streamed rather than buffered, so there is no size
+cap and nothing accumulates in memory unless your handler accumulates it.
+Omit `onOutput` and the output is simply dropped.
+
+Four things to know before building on it:
+
+- **It is scoped to a lease you own.** The daemon checks ownership the same
+  way `renewLease`/`releaseLease` do; another requester's lease is
+  `FORBIDDEN`.
+- **The command runs on the machine that owns the device**, against that
+  machine's filesystem. A path in `args` (`simctl install <path>`, `adb
+  install <apk>`) resolves *there*, so getting an artifact to a remote worker
+  is out of band in v1 — see [known-pitfalls.md](known-pitfalls.md).
+- **`stdin` is one string, sent with the request** and then closed, and there
+  is no pseudo-terminal. Line-oriented commands work; full-screen ones do
+  not.
+- **It is bounded by one timeout** (`exec.timeoutMs`, ten minutes by
+  default). A command that outlives it is killed and the call rejects with
+  `EXEC_TIMEOUT`.
+
+The same refusals `simlock simctl` / `simlock adb` document apply — verbs
+that would change a device's lifecycle behind the registry's back are
+rejected by the daemon, not merely by the CLI.
+
+## A gateway is just a daemon, as far as this client knows
+
+`connectSimlock`/`connectSimlockAdmin` connect to a **gateway** — a daemon
+that owns no devices and fronts a fleet of workers — exactly as they connect
+to an ordinary worker daemon, over its unix socket, with the same methods,
+the same types, and the same error codes ([ADR
+0005](adr/0005-gateway-and-worker-modes.md)). That is the point of the
+gateway implementing the same contract: nothing in this module knows the
+difference, and neither does code written against it.
+
+**The one way to tell is `mode` in `getStatus()`'s daemon block**
+(`"worker" | "gateway"`). Everything else you might reach for is a leaky
+inference rather than an answer: a lease from a gateway carries an additive
+`worker: { id, label }` block, but so might a future single-machine daemon's;
+a lease id from a gateway names its worker, but ids are opaque and parsing
+one is a bug waiting to happen.
+
+Two behaviours worth knowing when the daemon on the other end is a gateway,
+neither of which changes a call's shape:
+
+- The one-lease-per-requester rule is **fleet-wide** —
+  `REQUESTER_ALREADY_LEASED` can name a lease on a machine you have never
+  heard of.
+- A new error code, `WORKER_UNREACHABLE` (`kind: "transport"`), can come back
+  from any lease-scoped call when the worker holding that lease has lost its
+  uplink. Treat it as you would `DAEMON_CONNECTION_LOST` for that one lease:
+  the lease is not necessarily gone, you simply cannot reach it right now,
+  and it runs on the worker's TTL either way.
+
 ## What this client does not do
 
 - It does not start or stop the daemon. `connectSimlock`/`connectSimlockAdmin`
