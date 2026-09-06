@@ -1,6 +1,6 @@
 import type { CapacityPlatform, RunningCapacity } from "./capacity/index.js";
 import type { LeaseRecord, Platform } from "./domain.js";
-import type { DeviceRequest, PassthroughCommand } from "./driver.js";
+import type { DeviceRequest, PassthroughCommand, PassthroughContext } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
 import type { LeaseGrant, LeaseRequestOptions } from "./wait-queue.js";
 
@@ -54,7 +54,11 @@ export interface CatalogReader {
  * tooling rather than about devices, and nothing on the lease path needs it.
  */
 export interface PassthroughResolver {
-  passthrough(tool: string, args: readonly string[]): PassthroughCommand;
+  passthrough(
+    tool: string,
+    args: readonly string[],
+    context?: PassthroughContext,
+  ): PassthroughCommand;
 }
 
 /** Operator reset capability used by the nuke command facade. */

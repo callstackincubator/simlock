@@ -372,8 +372,12 @@ describe("CLI: exit codes", () => {
    * that changes is where the process runs and how its output gets here. `runPassthrough` is
    * deliberately wired in each of these: a remote invocation that quietly spawned locally
    * would pass every assertion about output and exit code while doing the wrong thing.
+   *
+   * The switch is the daemon's own `mode` (§19c): a `gateway` owns no devices, so a command
+   * it resolved could not run here anyway. Nothing about the CLI's transport decides it.
    */
   describe("remote passthrough (ADR 0005 device.exec)", () => {
+    const gatewayStatus = { ...EMPTY_STATUS, mode: "gateway" as const };
     const ownLease = {
       deviceId: "dev_1",
       grantedAt: 0,
@@ -394,9 +398,9 @@ describe("CLI: exit codes", () => {
         runCli(
           ["adb", "shell", "getprop"],
           output.environmentWith({
-            passthroughMode: "remote",
             connectAdmin: async () =>
               fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
                 execDevice: (input, options) => {
                   seen.push(input);
@@ -415,7 +419,17 @@ describe("CLI: exit codes", () => {
       ).resolves.toBe(9);
 
       expect(ranLocally).toBe(false);
-      expect(seen).toEqual([{ args: ["shell", "getprop"], leaseId: "lse_mine", tool: "adb" }]);
+      // `requesterId` rides along because this connection resolved to the admin role, where
+      // the operation reads it (and requires it to match the lease). See the agent-role case
+      // below for the other half.
+      expect(seen).toEqual([
+        {
+          args: ["shell", "getprop"],
+          leaseId: "lse_mine",
+          requesterId: "test-requester",
+          tool: "adb",
+        },
+      ]);
       // Chunks land on the stream they were written to, unjoined and in order -- a caller
       // piping this sees what it would have seen locally.
       expect(output.stdout).toBe("ro.build.version=15\n");
@@ -434,9 +448,9 @@ describe("CLI: exit codes", () => {
         runCli(
           ["adb", "devices"],
           output.environmentWith({
-            passthroughMode: "remote",
             connectAdmin: async () =>
               fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () =>
                   Promise.resolve({
                     leases: [{ ...ownLease, id: "lse_theirs", requesterId: "someone-else" }],
@@ -457,9 +471,9 @@ describe("CLI: exit codes", () => {
         runCli(
           ["simctl", "delete", "ABCD"],
           output.environmentWith({
-            passthroughMode: "remote",
             connectAdmin: async () =>
               fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
                 execDevice: () =>
                   Promise.reject(
@@ -479,18 +493,19 @@ describe("CLI: exit codes", () => {
       });
     });
 
-    it("exits 15 when the daemon killed the command for outrunning exec.timeoutMs", async () => {
-      // The exit code comes from `ERROR_TABLE`'s own column (ADR 0003 §7), so a killed command
-      // is distinguishable from one that merely failed.
+    it("exits 10 when the daemon killed the command for outrunning exec.timeoutMs", async () => {
+      // The exit code comes from `ERROR_TABLE`'s own column (ADR 0003 §7): 10, the same code
+      // the other "you ran out of time" outcome (`QUEUE_TIMEOUT`) uses, rather than the
+      // generic 1 a command that merely failed would get.
       const output = outputCapture();
 
       await expect(
         runCli(
           ["adb", "logcat"],
           output.environmentWith({
-            passthroughMode: "remote",
             connectAdmin: async () =>
               fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
                 listLeases: () => Promise.resolve({ leases: [ownLease] }),
                 execDevice: () =>
                   Promise.reject(
@@ -504,10 +519,131 @@ describe("CLI: exit codes", () => {
               }),
           }),
         ),
-      ).resolves.toBe(15);
+      ).resolves.toBe(10);
       expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
         error: { code: "EXEC_TIMEOUT", message: expect.stringContaining("exec.timeoutMs") },
       });
+    });
+
+    it("takes `--lease <id>` out of the arguments and runs against that lease", async () => {
+      // The flag exists only on this path, so it is stripped here rather than parsed with the
+      // CLI's own flags: locally every argument after the tool name belongs to the tool.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "lse_named", "shell", "getprop"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.reject(new Error("must not need the lease list")),
+                execDevice: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        {
+          args: ["shell", "getprop"],
+          leaseId: "lse_named",
+          requesterId: "test-requester",
+          tool: "adb",
+        },
+      ]);
+    });
+
+    it("reads piped stdin to EOF and sends it as the command's one-shot stdin", async () => {
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "shell", "cat"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                execDevice: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+            readStdin: async () => "piped payload\n",
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        {
+          args: ["shell", "cat"],
+          leaseId: "lse_mine",
+          requesterId: "test-requester",
+          stdin: "piped payload\n",
+          tool: "adb",
+        },
+      ]);
+    });
+
+    it("sends no requesterId when the connection fell back to the agent role", async () => {
+      // An agent session is gated on the lease it owns and its `requesterId` is ignored
+      // entirely, so sending one would be noise that reads like authorization.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                role: "agent",
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                execDevice: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", tool: "adb" }]);
+    });
+
+    it("spawns locally, with the arguments untouched, when the daemon is a worker", async () => {
+      // The other half of the same switch: a worker owns its devices, so the command it
+      // resolves runs here with a real terminal -- and `--lease` is not a flag on that path,
+      // it is an argument for the tool like any other.
+      const output = outputCapture();
+      const ran: unknown[] = [];
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "shell"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                execDevice: () => Promise.reject(new Error("must not exec remotely")),
+                resolvePassthrough: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ args: ["-P", "5038"], command: "adb", env: {} });
+                },
+              }),
+            runPassthrough: async (command) => {
+              ran.push(command);
+              return 0;
+            },
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([{ args: ["--lease", "shell"], tool: "adb" }]);
+      expect(ran).toHaveLength(1);
     });
   });
 
@@ -2260,26 +2396,30 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
   ) as unknown as AnySimlockError;
 }
 
-function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
-  const emptyStatus: StatusGetOutput = {
-    devices: [],
-    leases: [],
-    capacity: {
-      ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
-      android: {
-        limit: 1,
-        running: 0,
-        maxRunning: 1,
-        reserved: 0,
-        overLimit: false,
-        warm: 0,
-        used: 0,
-      },
-      global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
+/** Hoisted out of `fakeClient` so a test can hand back the same status with a different
+ * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
+const EMPTY_STATUS: StatusGetOutput = {
+  devices: [],
+  leases: [],
+  capacity: {
+    ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
+    android: {
+      limit: 1,
+      running: 0,
+      maxRunning: 1,
+      reserved: 0,
+      overLimit: false,
+      warm: 0,
+      used: 0,
     },
-    health: "running",
-    queueDepth: 0,
-  };
+    global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
+  },
+  health: "running",
+  mode: "worker",
+  queueDepth: 0,
+};
+
+function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
   const emptyDoctor: DoctorReport = { findings: [] };
   const emptyLeaseList: LeaseListOutput = { leases: [] };
@@ -2314,7 +2454,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     role: "admin",
     daemonVersion: "test",
     getCatalog: () => Promise.resolve(emptyCatalog),
-    getStatus: () => Promise.resolve(emptyStatus),
+    getStatus: () => Promise.resolve(EMPTY_STATUS),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
     execDevice: () => Promise.resolve({ exitCode: 0 }),

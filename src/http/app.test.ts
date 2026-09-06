@@ -773,6 +773,39 @@ describe("lease routes", () => {
       expect(frames.at(-1)?.data).toMatchObject({ error: { code: "EXEC_TIMEOUT" } });
     });
 
+    it("forwards requesterId for an operator token and drops it for an agent one", async () => {
+      // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
+      // "Authentication"): the token is the identity. The one exception is an operator token
+      // proxying for someone -- which is the case ADR 0005 §19b/§27 needs -- so an agent's
+      // `requesterId` is dropped before dispatch rather than sent on to be ignored.
+      const { app, dispatcher } = buildHarness();
+
+      const asOperator = app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify({ args: ["list"], requesterId: "agent-7", tool: "simctl" }),
+        headers: { ...operatorAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+      const operatorCall = await waitForDispatch(dispatcher, "device.exec");
+      expect(operatorCall.input).toEqual({
+        args: ["list"],
+        leaseId: "lse_1",
+        requesterId: "agent-7",
+        tool: "simctl",
+      });
+      operatorCall.resolve({ exitCode: 0 });
+      await asOperator;
+
+      const asAgent = app.request("/v1/leases/lse_1/exec", {
+        body: JSON.stringify({ args: ["list"], requesterId: "agent-7", tool: "simctl" }),
+        headers: { ...agentAuth, "content-type": "application/json" },
+        method: "POST",
+      });
+      const agentCall = await waitForDispatch(dispatcher, "device.exec", 1);
+      expect(agentCall.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
+      agentCall.resolve({ exitCode: 0 });
+      await asAgent;
+    });
+
     it("400s a body naming a tool outside the contract's closed set", async () => {
       const { app, dispatcher } = buildHarness();
 

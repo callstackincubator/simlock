@@ -16,6 +16,7 @@ import {
   type ObservedMark,
   type PassthroughCommand,
   PassthroughRefusedError,
+  type PassthroughContext,
   type ReclaimResult,
   RuntimeMissingError,
 } from "../../core/driver.js";
@@ -251,6 +252,18 @@ const REFUSED_ADB_SEQUENCES: readonly {
   },
 ];
 
+/**
+ * Whether this is `adb shell` with nothing after it -- the interactive shell. Recognised by
+ * `shell` being the last argument rather than by parsing adb's option grammar: everything
+ * before it is a global (`-s <serial>`, `-P <port>`) and everything after it is the command
+ * to run, so "nothing after it" is exactly the case with no command. `adb shell -t` and
+ * friends still pass, deliberately: they name a flag rather than a command, and refusing on
+ * a guess would cost a working invocation to catch a hang the timeout already bounds.
+ */
+function isBareShell(args: readonly string[]): boolean {
+  return args.at(-1) === "shell";
+}
+
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
 /** True when `sequence` appears as consecutive arguments starting anywhere in `args`. */
@@ -453,8 +466,8 @@ export class AndroidDriver implements Driver {
    * that re-execs itself stays on the same server; it says the same thing `-P` does, and
    * saying it twice costs nothing.
    */
-  passthrough(args: readonly string[]): PassthroughCommand {
-    this.#assertProxyable(args);
+  passthrough(args: readonly string[], context?: PassthroughContext): PassthroughCommand {
+    this.#assertProxyable(args, context);
     return {
       args: ["-P", String(this.#adbServerPort), ...args],
       command: this.#sdk.adb,
@@ -462,7 +475,18 @@ export class AndroidDriver implements Driver {
     };
   }
 
-  #assertProxyable(args: readonly string[]): void {
+  #assertProxyable(args: readonly string[], context?: PassthroughContext): void {
+    // A shell with nothing to run *is* the interactive shell, and an interactive shell
+    // without a terminal is a process that reads a pipe that will never carry anything --
+    // it hangs until whatever timeout its caller has. Refused only where there is no
+    // terminal (`device.exec`, ADR 0005 §19c); the local `simlock adb shell`, which inherits
+    // the CLI's own tty, is untouched and still the way to get one.
+    if (context?.hasTerminal === false && isBareShell(args)) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        "Refusing `simlock adb shell` with no command: an interactive shell needs a terminal, and this one runs on the device's own machine with none. Pass the command to run (`simlock adb shell getprop`), or run `simlock adb shell` on that machine.",
+      );
+    }
     if (args.includes(REFUSED_ADB_VERB)) {
       throw new PassthroughRefusedError(
         this.passthroughTool,

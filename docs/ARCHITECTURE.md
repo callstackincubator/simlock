@@ -281,6 +281,14 @@ on that machine and for whom a command line naming a device set would be
 useless. One resolution, one refusal list, two ways to reach it; the split is
 who spawns the process, never what is allowed.
 
+The one thing the resolution is told about its caller is whether there is a
+terminal behind it, because that is the one thing that genuinely differs: an
+exec'd command runs on pipes, so a driver may refuse there what it allows a
+local invocation with a tty (a bare `adb shell`). The fact travels to the
+driver rather than being decided in the daemon, for the same reason the rest of
+the list lives there -- knowing which of adb's commands needs a terminal is
+Android's business, not the core's.
+
 Ownership is proven when the driver starts, and re-proven
 (`Driver.revalidateRoot()`) immediately before `doctor --purge-orphans`
 destroys anything in a root: reporting can live with a proof taken days ago,

@@ -172,21 +172,13 @@ export interface CliEnvironment {
    */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
   /**
-   * Which half of ADR 0005 §19c this invocation is.
-   *
-   * `"local"` (the default, and what `buildCliEnvironment` wires) is today's behaviour
-   * unchanged: the daemon resolves the scoped command and this process spawns it with
-   * inherited stdio, so `simlock adb shell` keeps its terminal and its interactivity. That is
-   * correct precisely because the CLI reaches the daemon over its unix socket, which means it
-   * is on the machine that owns the device.
-   *
-   * `"remote"` is for an invocation that is not: the command runs on the daemon's machine
-   * through `device.exec` and its output is streamed back to this process's own stdout/stderr.
-   * It is a separate mode rather than the default because it is strictly weaker -- no
-   * pseudo-terminal, so line-oriented commands work and full-screen ones do not (§19c) -- and
-   * because it needs a lease to name, which the local path does not.
+   * Reads this process's piped stdin to EOF, for the one command that can forward it: a
+   * `device.exec` passthrough, whose `stdin` is a one-shot string (ADR 0005 §19c). Resolves
+   * `undefined` when stdin is a terminal -- nothing was piped in, and reading would block on a
+   * human. A hook rather than a direct `process.stdin` read for the usual reason: an external
+   * effect a test has to be able to script.
    */
-  readonly passthroughMode?: "local" | "remote";
+  readonly readStdin?: () => Promise<string | undefined>;
 }
 
 /**
@@ -361,8 +353,8 @@ export interface CliEnvironmentPorts {
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   /** Injected so the `simctl` / `adb` wrappers are testable without spawning a child. */
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
-  /** See `CliEnvironment.passthroughMode`; defaults to `"local"`. */
-  readonly passthroughMode?: "local" | "remote";
+  /** See `CliEnvironment.readStdin`. */
+  readonly readStdin?: () => Promise<string | undefined>;
   readonly parentPid?: number;
 }
 
@@ -421,11 +413,7 @@ export function buildCliEnvironment(
       return requireObject(JSON.parse(await filesystem.readFile(configPath)) as unknown);
     },
     runPassthrough: ports.runPassthrough ?? spawnPassthrough,
-    // The shipped CLI always talks to a daemon over its own machine's unix socket (see
-    // `connect` above), which is exactly the condition ADR 0005 §19c attaches the local spawn
-    // to. A frontend that reaches a daemon some other way -- a gateway, an HTTP transport --
-    // sets `"remote"` and gets `device.exec` instead.
-    passthroughMode: ports.passthroughMode ?? "local",
+    readStdin: ports.readStdin ?? readPipedStdin,
     writeConfigFile: async (contents) => {
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
@@ -460,6 +448,19 @@ export function buildCliEnvironment(
     stdout: ports.stdout ?? process.stdout,
     confirm: ports.confirm ?? confirmTerminal,
   };
+}
+
+/**
+ * Reads piped stdin to EOF, or `undefined` when stdin is a terminal (nothing was piped, and
+ * reading would block on a human). The only caller is the remote passthrough path, whose
+ * `stdin` is one shot -- see `CliEnvironment.readStdin`.
+ */
+async function readPipedStdin(): Promise<string | undefined> {
+  if (process.stdin.isTTY === true) return undefined;
+  process.stdin.setEncoding("utf8");
+  let contents = "";
+  for await (const chunk of process.stdin) contents += chunk as string;
+  return contents;
 }
 
 function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnvironment {
@@ -622,12 +623,32 @@ async function runPassthrough(
   environment: CliEnvironment,
   token: string | undefined,
 ): Promise<number> {
-  if (environment.passthroughMode === "remote") {
-    return runRemotePassthrough(tool, args, environment, token);
-  }
-  const run = environment.runPassthrough;
-  if (run === undefined) throw new Error("Tool passthrough is unavailable");
   const client = await connectDaemonClient(environment, token);
+  // ADR 0005 §19c: which path this invocation takes is a fact about the daemon, not a flag --
+  // a `worker` owns the devices it serves, so the command it resolves can be spawned right
+  // here with a real terminal; a `gateway` owns none, so the command has to run on whichever
+  // worker does. The daemon says which it is, rather than the CLI guessing from its transport.
+  let mode;
+  try {
+    ({ mode } = await client.getStatus());
+  } catch (error: unknown) {
+    await client.close();
+    throw error;
+  }
+  if (mode === "gateway") {
+    try {
+      return await runRemotePassthrough(tool, args, environment, client);
+    } finally {
+      await client.close();
+    }
+  }
+  // Only the local path spawns anything, so only it needs a spawner -- and the connection is
+  // this function's to close on the way out, even when there is nothing to run it with.
+  const run = environment.runPassthrough;
+  if (run === undefined) {
+    await client.close();
+    throw new Error("Tool passthrough is unavailable");
+  }
   let command;
   try {
     command = await client.resolvePassthrough({ args: [...args], tool });
@@ -659,13 +680,28 @@ async function runRemotePassthrough(
   tool: "simctl" | "adb",
   args: readonly string[],
   environment: CliEnvironment,
-  token: string | undefined,
+  client: SimlockAdminClient,
 ): Promise<number> {
-  const client = await connectDaemonClient(environment, token);
+  const { leaseFlag, rest } = extractLeaseFlag(args);
   try {
-    const leaseId = await resolveRemoteLeaseId(client, environment);
+    const leaseId = leaseFlag ?? (await resolveRemoteLeaseId(client, environment));
+    // Read to EOF before the command starts, because `stdin` is one shot (ADR 0005 §19c):
+    // there is no channel to feed it through afterwards. Nothing is read when stdin is a
+    // terminal -- a `simlock adb shell input text hi` typed at a prompt must not block
+    // waiting for the human to press ^D.
+    const stdin = await environment.readStdin?.();
+    // `requesterId` is read only on an admin session (see the operation's `authorize` hook),
+    // and on one it is required to match the lease. An agent-role connection is gated on the
+    // lease it owns instead, so it sends none rather than a value that would be ignored.
+    const requesterId = client.role === "admin" ? environment.requesterId : undefined;
     const { exitCode } = await client.execDevice(
-      { args: [...args], leaseId, tool },
+      {
+        args: [...rest],
+        leaseId,
+        tool,
+        ...(requesterId === undefined ? {} : { requesterId }),
+        ...(stdin === undefined ? {} : { stdin }),
+      },
       {
         // Written straight through, unbuffered and unjoined: whatever the command wrote, where
         // it wrote it. A caller piping `simlock adb logcat` sees the same bytes in the same
@@ -684,9 +720,39 @@ async function runRemotePassthrough(
       throw new UsageError(error.message);
     }
     throw error;
-  } finally {
-    await client.close();
   }
+}
+
+/**
+ * Pulls `--lease <id>` (or `--lease=<id>`) out of the argument list. Only ever called on the
+ * remote path: locally every argument after the tool name is the tool's, verbatim, and this
+ * flag does not exist -- which is why it is extracted here rather than parsed at the command
+ * boundary with the rest of the CLI's flags. A remote command needs a lease named somehow,
+ * and this is the explicit way; `resolveRemoteLeaseId` is the implicit one.
+ */
+function extractLeaseFlag(args: readonly string[]): {
+  readonly leaseFlag: string | undefined;
+  readonly rest: readonly string[];
+} {
+  const rest: string[] = [];
+  let leaseFlag: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (argument === "--lease") {
+      const value = args[index + 1];
+      if (value === undefined) throw new UsageError("--lease requires a lease id");
+      leaseFlag = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("--lease=")) {
+      leaseFlag = argument.slice("--lease=".length);
+      if (leaseFlag === "") throw new UsageError("--lease requires a lease id");
+      continue;
+    }
+    rest.push(argument);
+  }
+  return { leaseFlag, rest };
 }
 
 /**

@@ -35,6 +35,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
 | 10 | `QUEUE_TIMEOUT` | timed out waiting for a device (`--timeout` elapsed) |
+| 10 | `EXEC_TIMEOUT` | a command run on the daemon's machine (`simlock simctl`/`simlock adb` against a gateway) outran `exec.timeoutMs` and was killed |
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
@@ -43,7 +44,6 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
-| 15 | `EXEC_TIMEOUT` | a command run on the daemon's machine (`simlock simctl`/`simlock adb` against a remote daemon) outran `exec.timeoutMs` and was killed |
 
 Every row but 14 matches the `cliExitCode` column of the contract's error
 table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
@@ -375,34 +375,49 @@ So the command runs where the device is, through the daemon operation
 very same driver passthrough — same scoping flags, same refusal list below —
 runs the command on its own machine, and streams the output back to the
 caller's stdout and stderr as it arrives. The exit code is the command's own,
-exactly as on the local path. Which lease the command runs against comes from
-the caller's agent identity (`--agent-id`, or `SIMLOCK_AGENT_ID`; see [Agent
-identity](#agent-identity)) rather than from a flag of Simlock's, because
-every argument after the tool name belongs to the tool.
+exactly as on the local path, and a refusal is still exit `2` with a `USAGE`
+line naming what to run instead: the worker refuses, and the CLI relabels,
+rather than the CLI keeping a copy of the list.
 
-Today that is reached over the [HTTP API](HTTP-API.md)
-(`POST /v1/leases/{id}/exec`) or with `simlock/client`'s `execDevice` (see
-[CLIENT.md](CLIENT.md)): the shipped `simlock` CLI only ever talks to a daemon
-over its own machine's unix socket, so it always takes the local path above.
-It switches to this one the moment it is pointed at a daemon it does not share
-a machine with, which is what the gateway work adds.
+**The CLI decides by asking, not by guessing.** It reads `mode` from
+`status.get`: a `worker` owns the devices it serves, so the command it resolves
+is spawned right here with a real terminal; a `gateway` owns none, so the
+command has to run on whichever worker does. That is the whole switch — no
+flag, and nothing about which transport the CLI happens to be using. Today
+every daemon reports `worker`, so `simlock simctl` / `simlock adb` always take
+the local path; the gateway work (#115) is what makes the other one reachable
+from this CLI, and the same operation is already reachable over the [HTTP
+API](HTTP-API.md) (`POST /v1/leases/{id}/exec`) and from `simlock/client`'s
+`execDevice` (see [CLIENT.md](CLIENT.md)).
+
+Against a gateway, `simlock simctl` / `simlock adb` take one flag of Simlock's
+own, `--lease <id>`, naming the lease to run against. Without it the lease is
+the one your agent identity holds (`--agent-id`, or `SIMLOCK_AGENT_ID`; see
+[Agent identity](#agent-identity)) — an id that holds no lease, or more than
+one, is a usage error naming it. The flag exists only on this path: locally
+every argument after the tool name belongs to the tool, `--lease` included.
 
 Two differences worth knowing before you rely on it:
 
 - **There is no terminal.** Output is streamed, but the command runs without
   a pseudo-terminal, so line-oriented commands (`adb shell getprop`, `simctl
-  spawn`) work and full-screen or interactive ones (a bare `adb shell`, a
-  curses UI) do not. On the local path, where the CLI hands the tool its own
-  terminal, `adb shell` stays fully interactive.
-- **`stdin` is one shot.** What a remote invocation sends on stdin is
-  collected, written to the command once, and the pipe is then closed — enough
-  for a command that reads a prompt or a payload, not a channel you can type
-  into over time.
+  spawn`) work and full-screen or interactive ones do not. A bare `adb shell`,
+  which *is* the interactive shell, is refused outright (`PASSTHROUGH_REFUSED`,
+  exit `2`) rather than left to hang on a pipe until the timeout — pass the
+  command to run, or get a shell on that machine. On the local path, where the
+  CLI hands the tool its own terminal, `adb shell` stays fully interactive and
+  allowed.
+- **`stdin` is one shot.** Piped stdin is read to EOF *before* the command
+  starts, sent with it, and the pipe is then closed — enough for a command that
+  reads a prompt or a payload (`… | simlock adb shell cat > /sdcard/f`), not a
+  channel you can type into over time. Nothing is read when stdin is a
+  terminal.
 
 A command that runs longer than `exec.timeoutMs`
 ([CONFIGURATION.md](CONFIGURATION.md)) is killed and the invocation fails with
-`EXEC_TIMEOUT` (exit `15`) rather than reporting the exit code the kill
-produced — "we stopped it" and "it failed" are different answers.
+`EXEC_TIMEOUT` (exit `10`, the same code the other "you ran out of time"
+outcome uses) rather than reporting the exit code the kill produced — "we
+stopped it" and "it failed" are different answers.
 
 Files are the other thing distance costs: a command naming a path
 (`simctl install ./MyApp.app`, `adb install ./app.apk`) resolves it on the

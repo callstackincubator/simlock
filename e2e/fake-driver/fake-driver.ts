@@ -15,6 +15,7 @@ import {
   type ObservedMark,
   type ObservedRunState,
   type PassthroughCommand,
+  type PassthroughContext,
   PassthroughRefusedError,
 } from "../../dist/core/driver.js";
 import type { DeviceSpec, Platform } from "../../dist/core/domain.js";
@@ -332,7 +333,17 @@ export class OutOfProcessFakeDriver implements Driver {
    * behaviour under test, and a rule that depended on a prior script read would not be
    * exercised by the very first command a test runs.
    */
-  passthrough(args: readonly string[]): PassthroughCommand {
+  passthrough(args: readonly string[], context?: PassthroughContext): PassthroughCommand {
+    // Mirrors the Android driver's no-terminal rule (ADR 0005 §19c) in the smallest form that
+    // proves the fact travels: the daemon tells the driver there is no terminal, and the
+    // driver -- not the daemon -- decides what that rules out. Like the refusal lists above,
+    // this is a mirror and never evidence for the real driver's own rule.
+    if (context?.hasTerminal === false && this.platform === "android" && args.at(-1) === "shell") {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        "Refusing `simlock adb shell` with no command: an interactive shell needs a terminal.",
+      );
+    }
     const refused = PASSTHROUGH_REFUSALS[this.platform](args);
     if (refused !== undefined) {
       throw new PassthroughRefusedError(

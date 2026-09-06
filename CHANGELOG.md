@@ -144,16 +144,23 @@ those changes add, alongside the breaking changes above.
   command's exit code. Over HTTP it is `POST /v1/leases/{id}/exec`, answering
   Server-Sent Events: an `output` event per chunk, then a terminal `exit` or
   `error`. `simlock/client` gains `execDevice(input, { onOutput })`.
-  `simlock simctl` / `simlock adb` against a local daemon are unchanged — they
+  `simlock simctl` / `simlock adb` are unchanged against a `worker` — they
   still spawn with inherited stdio, so an interactive `adb shell` keeps its
-  terminal — and take this path only against a daemon they do not share a
-  machine with. `stdin` is a one-shot string written to the command and then
-  closed: there is no pseudo-terminal, so line-oriented commands work and
-  full-screen ones do not.
+  terminal — and take this path against a `gateway`, which owns no devices;
+  the CLI reads which it is talking to from `status.get`'s new `mode` field
+  rather than guessing from its transport, and takes `--lease <id>` on that
+  path only. `stdin` is a one-shot string, read from a pipe to EOF before the
+  command starts: there is no pseudo-terminal, so line-oriented commands work,
+  full-screen ones do not, and a bare `adb shell` is refused
+  (`PASSTHROUGH_REFUSED`) rather than left to hang.
+- **contract:** `status.get` reports `mode` (`worker`/`gateway`), always
+  `worker` in this release — the field a client reads to tell whether the
+  device it leased is on the daemon's own machine.
 - **config:** `exec.timeoutMs` (default ten minutes) bounds one `device.exec`
   command; past it the process is killed and the call fails with the new
-  `EXEC_TIMEOUT` error code (CLI exit `15`, HTTP `504`) rather than reporting
-  the exit code the kill produced.
+  `EXEC_TIMEOUT` error code (CLI exit `10`, the code the other "ran out of
+  time" outcome already uses, and HTTP `504`) rather than reporting the exit
+  code the kill produced.
 
 ### Documentation
 

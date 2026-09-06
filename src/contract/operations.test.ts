@@ -199,6 +199,7 @@ describe("operation input/output round trips", () => {
         global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
       },
       health: "running",
+      mode: "worker",
       queueDepth: 0,
     };
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();

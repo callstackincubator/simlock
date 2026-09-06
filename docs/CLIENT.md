@@ -110,14 +110,25 @@ wants lines assembles them itself. Nothing is buffered daemon-side and there is
 no size cap. The promise resolves with the command's own `exitCode`.
 
 `leaseId` is an ownership proof and nothing more: the *device* is named by the
-command's own arguments, which the daemon does not parse. A lease this
-client's principal does not own is `FORBIDDEN`; an id that names no lease is
+command's own arguments, which the daemon does not parse. An agent-role client
+is authorized against the lease it owns, exactly as for `renewLease` — a lease
+it does not own is `FORBIDDEN`, and an id that names no lease is
 `UNKNOWN_LEASE`.
+
+An **admin-role** client (`simlock/admin` with a credential) does *not* get the
+usual admin bypass here. It passes `requesterId` — the agent it is running the
+command for, defaulting to its own principal — and it must match the requester
+the lease was granted to, or the call is `FORBIDDEN`. The field exists for a
+proxy holding one admin connection on behalf of many agents; an operator
+reaching another agent's device names that agent deliberately rather than
+getting there implicitly.
 
 Three limits worth knowing:
 
 - **No pseudo-terminal.** Line-oriented commands work; full-screen and
-  interactive ones (a bare `adb shell`) do not.
+  interactive ones do not, and a bare `adb shell` -- which is exactly the
+  interactive shell -- is refused with `PASSTHROUGH_REFUSED` rather than left
+  to hang until the timeout.
 - **`stdin` is one shot.** The optional `stdin` string is written to the
   command once and the pipe is then closed — not a channel you can write to
   over time.

@@ -60,6 +60,9 @@ async function buildDispatcher(
     /** Narrows `exec.timeoutMs` so the timeout path can be driven with a short clock advance
      * rather than ten minutes of one. */
     readonly exec?: Partial<Config["exec"]>;
+    /** Collects the `PassthroughContext` each resolution was given, so a test can assert what
+     * the driver was told about its caller (ADR 0005 §19c's "no terminal"). */
+    readonly passthroughContextSink?: unknown[];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -79,7 +82,8 @@ async function buildDispatcher(
     ...(overrides.passthroughTool === undefined
       ? {}
       : {
-          passthrough: (args: readonly string[]) => {
+          passthrough: (args: readonly string[], context?: unknown) => {
+            overrides.passthroughContextSink?.push(context);
             // The refusal half of a real driver's passthrough, in the smallest form that
             // proves `device.exec` inherits it: `driver.passthrough` and `device.exec` call
             // this same function, so a verb refused for one is refused for the other.
@@ -841,10 +845,17 @@ describe("Dispatcher: device.exec", () => {
     expect(runner.calls).toEqual([]);
   });
 
-  it("rejects a lease this principal does not own with FORBIDDEN, and admin bypasses", async () => {
+  /**
+   * The four combinations of the operation's own hook (ADR 0005 §19b/§27), which is
+   * `ownsLease` for an agent and something stricter for an admin. The lease under test was
+   * granted to principal `tok_agent`, so its `ownerId` and its `requesterId` are both that.
+   */
+  it("gates an agent session on the lease it owns, ignoring any requesterId it sends", async () => {
     const runner = new ScriptedProcessRunner([{ match: command }]);
     const { dispatcher, leaseId } = await withLease({ processRunner: runner });
 
+    // (1) Someone else's lease: refused -- and naming its requester does not help, because an
+    // agent's `requesterId` is not read for authorization at all.
     await expect(
       dispatcher.dispatch(
         "device.exec",
@@ -852,15 +863,100 @@ describe("Dispatcher: device.exec", () => {
         session({ principal: "tok_other", role: "agent" }),
       ),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "tok_agent", tool: "simctl" },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(runner.calls).toEqual([]);
 
+    // (2) Its own lease: allowed, and a `requesterId` naming somebody else changes nothing --
+    // ignored means ignored in both directions.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "someone-else", tool: "simctl" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).resolves.toEqual({ exitCode: 0 });
+  });
+
+  it("holds an admin session to the lease's requester instead of letting it bypass", async () => {
+    // This is the check a gateway's own uplink session runs against: it holds one admin
+    // session and proxies many agents through it, so "admin bypasses" would let any
+    // admin-role connection drive every lease on the worker (ADR 0005 §19b).
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+    const admin = session({ principal: "gw:instance-1", role: "admin" });
+
+    // (3) No `requesterId`, so it defaults to the admin's own principal -- which is not who
+    // the lease was granted to.
     await expect(
       dispatcher.dispatch(
         "device.exec",
         { args: ["list", "devices"], leaseId, tool: "simctl" },
-        session({ principal: "tok_admin", role: "admin" }),
+        admin,
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "someone-else", tool: "simctl" },
+        admin,
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(runner.calls).toEqual([]);
+
+    // (4) Naming the agent it is proxying for: allowed.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "tok_agent", tool: "simctl" },
+        admin,
       ),
     ).resolves.toEqual({ exitCode: 0 });
+  });
+
+  it("refuses a tool no driver claims with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST", async () => {
+    // A well-formed request for a wrapper this daemon has no driver for is not a malformed
+    // one -- same distinction `driver.passthrough` draws, and the same error code.
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["devices"], leaseId, tool: "adb" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toThrow(/No driver provides a adb passthrough/);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("tells the driver there is no terminal, so it can refuse what needs one", async () => {
+    // ADR 0005 §19c: the command runs here, on pipes. The driver is the only thing that knows
+    // which of its own commands that rules out (a bare `adb shell`), so the fact travels to
+    // it rather than being decided here.
+    const seen: unknown[] = [];
+    const { dispatcher, leaseId } = await withLease({
+      passthroughContextSink: seen,
+      processRunner: new ScriptedProcessRunner([{ match: command }]),
+    });
+
+    await dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    await dispatcher.dispatch(
+      "driver.passthrough",
+      { args: ["list", "devices"], tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+
+    expect(seen).toEqual([{ hasTerminal: false }, undefined]);
   });
 
   it("answers UNKNOWN_LEASE for an id that names no lease, rather than running the command", async () => {
