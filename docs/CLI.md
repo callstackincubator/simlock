@@ -434,11 +434,14 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
   ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
 - `runtime delete` — it deletes a runtime shared with Xcode, and Simlock will
   not download one back. Delete it through Xcode if that is what you mean.
-- `--set` and `--profiles`, in any spelling — `simlock simctl` supplies the
-  device set itself. A caller-supplied one would point simctl outside what
-  Simlock manages, and (because their value is a separate argument) would let
-  a refused verb read as an ordinary operand. Run `xcrun simctl` directly if
-  you mean to leave Simlock's set.
+- `--set` and `--profiles`, wherever they appear *before* the subcommand and
+  however they are spelled (`-set`, `--set <path>`, `--set=<path>`) —
+  `simlock simctl` supplies the device set itself. A caller-supplied one would
+  point simctl outside what Simlock manages, and (because their value is a
+  separate argument) would let a refused verb read as an ordinary operand. Run
+  `xcrun simctl` directly if you mean to leave Simlock's set. Past the
+  subcommand they are that subcommand's own operands and are left alone —
+  `simlock simctl spawn booted foo --set x` is passing `--set x` to `foo`.
 
 Against a **gateway**, the device is on another machine, so the command runs
 there instead — see [Against a gateway](#against-a-gateway). The refusals
@@ -465,8 +468,8 @@ simlock adb logcat -d
 ```
 
 Refused, all exit 2 with `USAGE` and a message naming what to run instead.
-Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
-`-P 1 kill-server` are caught too:
+The refused *verbs* are matched anywhere in the arguments, so
+`-s <serial> emu kill` is caught too:
 
 - `kill-server` — it would detach every leased emulator at once. (Simlock's
   server rejects `kill-server` outright in any case.)
@@ -475,11 +478,6 @@ Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
 - `emu avd snapshot delete` — it destroys the clean-boot snapshot Simlock
   restores from, turning every later reclaim of that device from a snapshot
   load into a full wipe.
-- `-P`, `--server-port`, `-L`, and `-H`, in any spelling — `simlock adb`
-  supplies the server itself, and `adb` takes the *last* one on the line, so a
-  caller-supplied one would silently win and point the command at a server
-  that cannot see Simlock's devices (or at one Simlock must not touch). Run
-  `adb` directly if you mean to leave Simlock's server.
 
 Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
 instead. As with `simlock simctl`, against a gateway the command runs on the
