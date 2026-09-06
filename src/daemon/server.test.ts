@@ -1027,7 +1027,7 @@ describe("DaemonServer startup readiness", () => {
     await hello(client);
     await expect(client.request("status.get", {})).resolves.toMatchObject({
       ok: true,
-      payload: { health: "starting" },
+      payload: { daemon: { health: "starting", mode: "worker" } },
     });
 
     converge.resolve();
@@ -1035,7 +1035,7 @@ describe("DaemonServer startup readiness", () => {
 
     await expect(client.request("status.get", {})).resolves.toMatchObject({
       ok: true,
-      payload: { health: "running" },
+      payload: { daemon: { health: "running", mode: "worker" } },
     });
     await client.close();
   });
@@ -2752,6 +2752,7 @@ function testConfig(
   iosMaxDevices = 1,
 ): Config {
   return {
+    mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},

@@ -1071,7 +1071,12 @@ export class DaemonServer {
         ...this.#session(connection),
         onOutput: (stream, chunk) => {
           if (outputSocket !== undefined) {
-            void this.#pushOutput(outputSocket, requestId, stream, chunk);
+            // A write can still fail on a socket that died between this check and the write
+            // itself (EPIPE), and a rejected push must not become an unhandled rejection --
+            // which, under Node's default, would take the daemon down over a client that
+            // hung up mid-command. There is nothing to do about it: the chunk is lost with
+            // the connection, and the command carries on.
+            void this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
           }
         },
       });

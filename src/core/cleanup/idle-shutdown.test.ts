@@ -4,6 +4,7 @@ import type { Config, RegistryView } from "../index.js";
 import { idleShutdownRule } from "./idle-shutdown.js";
 
 const config: Config = {
+  mode: "worker",
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
   drivers: {},

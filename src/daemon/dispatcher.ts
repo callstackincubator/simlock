@@ -336,13 +336,12 @@ export class Dispatcher {
     return {
       capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
-      health: this.options.health(),
+      // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
+      // config rather than being assumed, because it is what tells a client whether the device
+      // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
+      // #117 is what makes `gateway` mean something beyond this field.
+      daemon: { health: this.options.health(), mode: this.options.config.mode },
       leases: [...snapshot.leases],
-      // ADR 0005 §1: one daemon, one mode, and today there is exactly one mode to be in --
-      // this daemon owns devices, so it is a worker. Reported rather than assumed because it
-      // is what tells a client whether the device it leased is on this machine (§19c); #117
-      // makes it configurable and can then report `"gateway"` here.
-      mode: "worker" as const,
       queueDepth: this.options.queue.queueDepth,
     };
   };

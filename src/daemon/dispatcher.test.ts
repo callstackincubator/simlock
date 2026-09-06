@@ -1055,6 +1055,7 @@ function testConfig(
   execOverrides: Partial<Config["exec"]> = {},
 ): Config {
   return {
+    mode: "worker",
     drivers: {},
     exec: { timeoutMs: 600_000, ...execOverrides },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },

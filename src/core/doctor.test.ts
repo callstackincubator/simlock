@@ -1851,6 +1851,7 @@ function withAdvisories(
 
 function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {}): Config {
   return {
+    mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 1 },
     drivers: {},
