@@ -491,7 +491,11 @@ describe("McpSession", () => {
     // would follow it ever comes back.
     client.listLeasesImpl = () => new Promise(() => {});
     client.releaseLeaseImpl = () => new Promise(() => {});
-    const session = new McpSession({ clock, connect: async () => client });
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
     await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
     void session.status().catch(() => undefined); // in flight, never answered
     await flushMicrotasks();
@@ -548,6 +552,83 @@ describe("McpSession", () => {
     ]);
     expect(client.calls.filter((call) => call.method === "renewLease")).toEqual([]);
     expect(clock.pendingTimerCount, "a closed session must leave no timer behind").toBe(0);
+  });
+
+  it("stops renewing before it asks to release, so a renew cannot overtake the answer", async () => {
+    // ADR 0003 §8: `onLeaseLost` never fires for a release this same client asked for. A timer
+    // left armed across an in-flight release breaks that -- the renew lands after
+    // `Registry#beginRelease` has dropped the record, comes back UNKNOWN_LEASE, and renewal
+    // reports the agent's own release to it as a lost device. Ordering hides it on a unix
+    // socket; a gateway hop (ADR 0003 §12) would not.
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    let answerRelease!: (result: { leaseId: string }) => void;
+    client.releaseLeaseImpl = () =>
+      new Promise((resolve) => {
+        answerRelease = resolve;
+      });
+    client.renewLeaseImpl = () =>
+      Promise.reject(
+        new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lease-1" }),
+      );
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    const releasing = session.release({ leaseId: "lease-1" });
+    await flushMicrotasks();
+
+    // The daemon has the release and has not answered yet. This is exactly the window a renew
+    // would land in -- and there is no timer left to send one.
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    await flushMicrotasks();
+    expect(client.calls.filter((call) => call.method === "renewLease")).toEqual([]);
+
+    answerRelease({ leaseId: "lease-1" });
+    await expect(releasing).resolves.toEqual({ leaseId: "lease-1", released: true });
+    expect(notices, "the agent asked for this; it is not news of a lost device").toEqual([]);
+
+    await session.close();
+  });
+
+  it("leaves the timer stopped when the release fails because the lease is already gone", async () => {
+    // The other side of restarting a stopped timer: an UNKNOWN_LEASE means there is nothing
+    // left to renew, so putting the timer back would only produce the same answer on a ladder
+    // until the deadline -- and announce it as a lease lost.
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    client.releaseLeaseImpl = () =>
+      Promise.reject(
+        new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", { leaseId: "lease-1" }),
+      );
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    await expect(session.release({ leaseId: "lease-1" })).rejects.toMatchObject({
+      code: "UNKNOWN_LEASE",
+    });
+
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    await flushMicrotasks();
+    expect(client.calls.filter((call) => call.method === "renewLease")).toEqual([]);
+    expect(notices).toEqual([]);
+
+    await session.close();
   });
 
   it("keeps renewing when a release fails, because the session still holds the device", async () => {
@@ -629,7 +710,11 @@ describe("McpSession", () => {
     // deadline passes and renewal gives up.
     client.renewLeaseImpl = () =>
       Promise.reject(new SimlockError("INTERNAL", "domain", "could not persist", {}));
-    const session = new McpSession({ clock, connect: async () => client });
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
     const notices: unknown[] = [];
     session.onLeaseLost((notice) => notices.push(notice));
     await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
@@ -706,6 +791,9 @@ describe("McpSession", () => {
       clock,
       connect: async () => {
         toolCallConnects += 1;
+        // Reached a second time only by a timer taking the launching path -- which would be
+        // the bug, so it fails loudly here rather than quietly handing back a client.
+        if (toolCallConnects > 1) throw new Error("the renew timer reached the launching connect");
         return first;
       },
       connectForRenew: async () => {
@@ -713,6 +801,8 @@ describe("McpSession", () => {
         return second;
       },
     });
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
 
     await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
     expect(toolCallConnects).toBe(1);
@@ -727,6 +817,118 @@ describe("McpSession", () => {
     expect(renewConnects).toBe(1);
     expect(toolCallConnects).toBe(1);
     expect(second.calls.map((call) => call.method)).toEqual(["renewLease"]);
+
+    // And the session listens to the connection it just built, not only to the one it started
+    // with: a lease-lost over the new wire is the agent's only warning that the device is
+    // gone, and a session that forgot to re-wire would sit silent through it.
+    second.emitLeaseLost({ deviceId: "device-1", leaseId: "lease-1", reason: "expired" });
+    expect(notices).toEqual([{ deviceId: "device-1", leaseId: "lease-1", reason: "expired" }]);
+
+    await session.close();
+  });
+
+  it("retries alone with the launching connect when a tool call joined a renew's attempt", async () => {
+    // `docs/CLI.md` and `docs/CLIENT.md` promise a tool call may start a daemon that is not
+    // running. Sharing `#connecting` with the renew timer is free in the other direction, but
+    // here it would hand the tool call the timer's weaker attempt -- and "nothing is
+    // listening" for something it was allowed to fix.
+    const clock = new FakeClock(0);
+    const first = new FakeSimlockClient();
+    first.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    const second = new FakeSimlockClient();
+    second.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    let toolCallConnects = 0;
+    let failRenewConnect!: (error: unknown) => void;
+    const session = new McpSession({
+      clock,
+      connect: async () => {
+        toolCallConnects += 1;
+        return toolCallConnects === 1 ? first : second;
+      },
+      connectForRenew: () =>
+        new Promise((_resolve, reject) => {
+          failRenewConnect = reject;
+        }),
+    });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+    first.emitConnectionLost();
+
+    // The renew timer starts a connect that cannot launch anything, and a tool call arrives
+    // while it is still in flight and joins it.
+    clock.advance(4_115);
+    await flushMicrotasks();
+    const listing = session.listDevices({});
+    await flushMicrotasks();
+    expect(toolCallConnects).toBe(1);
+
+    // Nothing is listening, so that attempt fails -- for the timer, which will try again on
+    // its own cadence, and for the tool call, which instead tries once more with the connect
+    // that may start a daemon.
+    failRenewConnect(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "nothing is listening", {}),
+    );
+
+    await expect(listing).resolves.toEqual({ platforms: [] });
+    expect(toolCallConnects, "the tool call's own attempt, made alone").toBe(2);
+
+    await session.close();
+  });
+
+  it("lets a renew tick share a tool call's connect, which is the direction that costs nothing", async () => {
+    // The timer wanted a connection and got one. That the tool call was going to launch a
+    // daemon anyway is the tool call's business, not the timer's doing -- so this direction
+    // stays shared, and the session ends up with one connection rather than two.
+    const clock = new FakeClock(0);
+    const first = new FakeSimlockClient();
+    first.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    const second = new FakeSimlockClient();
+    second.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    second.renewLeaseImpl = (input) =>
+      Promise.resolve({
+        deviceId: "device-1",
+        grantedAt: 0,
+        id: input.leaseId,
+        lastRenewedAt: clock.now(),
+        ownerId: "mcp-test",
+        requesterId: "mcp-test",
+        ttlMs: 60_000,
+        ttlDeadline: clock.now() + 60_000,
+      });
+    let toolCallConnects = 0;
+    let renewConnects = 0;
+    let answerToolCallConnect!: (client: FakeSimlockClient) => void;
+    const session = new McpSession({
+      clock,
+      connect: () => {
+        toolCallConnects += 1;
+        if (toolCallConnects === 1) return Promise.resolve(first);
+        return new Promise((resolve) => {
+          answerToolCallConnect = resolve;
+        });
+      },
+      connectForRenew: async () => {
+        renewConnects += 1;
+        return second;
+      },
+    });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+    first.emitConnectionLost();
+
+    // A tool call reconnects first, and is still waiting when the renew tick comes due.
+    const listing = session.listDevices({});
+    await flushMicrotasks();
+    expect(toolCallConnects).toBe(2);
+    clock.advance(4_115);
+    await flushMicrotasks();
+    expect(renewConnects, "it joined the attempt already in flight").toBe(0);
+
+    answerToolCallConnect(second);
+    await expect(listing).resolves.toEqual({ platforms: [] });
+    await flushMicrotasks();
+
+    expect(renewConnects).toBe(0);
+    expect(toolCallConnects).toBe(2);
+    expect(second.calls.filter((call) => call.method === "renewLease")).toHaveLength(1);
 
     await session.close();
   });
@@ -752,6 +954,46 @@ describe("McpSession", () => {
     await session.close();
     // Nothing to release either: the daemon already ended it.
     expect(client.calls.filter((call) => call.method === "releaseLease")).toEqual([]);
+  });
+
+  it("remembers the endings it announced up to a cap, dropping the oldest first", async () => {
+    // The dedupe memory of a long-lived session cannot grow without bound. It is a fixed
+    // window over the most recent endings, which is where duplicates actually live: a
+    // renewal's answer and the daemon's push about one lease arrive moments apart, never
+    // dozens of leases later.
+    const client = new FakeSimlockClient();
+    client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    const session = new McpSession({
+      clock: new FakeClock(),
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
+    await session.listDevices({}); // wires the push relays up
+    const notices: Array<{ leaseId: string }> = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+
+    // One past the cap, so the very first id has been dropped by the end of it.
+    const announced = 65;
+    for (let index = 0; index < announced; index += 1) {
+      client.emitLeaseLost({
+        deviceId: "device-1",
+        leaseId: `lease-${String(index)}`,
+        reason: "expired",
+      });
+    }
+    expect(notices).toHaveLength(announced);
+
+    // The newest endings still dedupe, which is the whole point of remembering them.
+    client.emitLeaseLost({ deviceId: "device-1", leaseId: "lease-64", reason: "expired" });
+    expect(notices).toHaveLength(announced);
+
+    // The oldest has aged out of the window, so its duplicate -- if one ever came, long after
+    // everything else -- would be announced again. That is the trade the cap makes.
+    client.emitLeaseLost({ deviceId: "device-1", leaseId: "lease-0", reason: "expired" });
+    expect(notices).toHaveLength(announced + 1);
+    expect(notices.at(-1)?.leaseId).toBe("lease-0");
+
+    await session.close();
   });
 
   it("relays the client's lease-lost, device-unhealthy, and device-recovered pushes to session listeners", async () => {
@@ -802,22 +1044,57 @@ describe("toMcpErrorResult", () => {
  * answering would let a test pass on a wire the real session had already closed.
  */
 describe("FakeSimlockClient", () => {
-  it("rejects every call once closed, the way the wire does", async () => {
+  it("answers before it is closed", async () => {
     const client = new FakeSimlockClient();
     client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
-    client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
 
     await expect(client.releaseLease({ leaseId: "lease-1" })).resolves.toEqual({
       leaseId: "lease-1",
     });
+  });
+
+  /**
+   * Every operation, not a sample of them: a fake that guards two methods and forgets a third
+   * lets a test pass on the one call the real session makes over a wire it has already closed.
+   * Each entry stubs its own implementation so a rejection can only be the dead guard's, never
+   * `notStubbed`'s.
+   */
+  it.each([
+    ["getCatalog", (client: FakeSimlockClient) => client.getCatalog({})],
+    ["getStatus", (client: FakeSimlockClient) => client.getStatus()],
+    [
+      "requestLease",
+      (client: FakeSimlockClient) =>
+        client.requestLease({ model: "iPhone 17 Pro", platform: "ios" }),
+    ],
+    ["cancelLease", (client: FakeSimlockClient) => client.cancelLease({})],
+    ["renewLease", (client: FakeSimlockClient) => client.renewLease({ leaseId: "lease-1" })],
+    ["releaseLease", (client: FakeSimlockClient) => client.releaseLease({ leaseId: "lease-1" })],
+    ["listLeases", (client: FakeSimlockClient) => client.listLeases()],
+    ["runDoctor", (client: FakeSimlockClient) => client.runDoctor({})],
+    [
+      "resolvePassthrough",
+      (client: FakeSimlockClient) => client.resolvePassthrough({ args: ["devices"], tool: "adb" }),
+    ],
+  ] as const)("rejects %s once closed, the way the wire does", async (_method, call) => {
+    const client = new FakeSimlockClient();
+    client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    client.getStatusImpl = notReached;
+    client.requestLeaseImpl = notReached;
+    client.cancelLeaseImpl = notReached;
+    client.renewLeaseImpl = notReached;
+    client.releaseLeaseImpl = notReached;
+    client.listLeasesImpl = notReached;
+    client.runDoctorImpl = notReached;
+    client.resolvePassthroughImpl = notReached;
 
     await client.close();
 
-    await expect(client.releaseLease({ leaseId: "lease-1" })).rejects.toMatchObject({
-      code: "DAEMON_CONNECTION_LOST",
-    });
-    await expect(client.getCatalog({})).rejects.toMatchObject({
-      code: "DAEMON_CONNECTION_LOST",
-    });
+    await expect(call(client)).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
   });
 });
+
+/** Any stub reached after `close()` is the guard failing, so every one of them says so. */
+function notReached(): never {
+  throw new Error("the fake answered a call over a closed connection");
+}
