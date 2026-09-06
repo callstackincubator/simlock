@@ -36,11 +36,24 @@ export const WORKER_ID_HEADER = "x-simlock-worker-id";
 /** Header carrying `gateway.label`, URI-encoded (it is free text and may be non-ASCII). */
 export const WORKER_LABEL_HEADER = "x-simlock-worker-label";
 /**
- * The path a gateway upgrades an uplink on (documented in `docs/HTTP-API.md`). A worker's
- * `gateway.url` normally ends in it; nothing on either side validates the path, so an operator
- * behind a reverse proxy may be given another.
+ * The one route a `worker`-role join token may use (ADR 0005 §25), and the only path a gateway
+ * upgrades an uplink on: `GET /v1/uplink`. A worker's `gateway.url` is the gateway's *base*
+ * URL and this is derived from it -- see `resolveUplinkUrl` -- so an operator configures one
+ * URL rather than remembering an endpoint.
  */
 export const UPLINK_PATH = "/v1/uplink";
+
+/**
+ * Derives the uplink endpoint from `gateway.url`. Resolved against the base rather than
+ * concatenated, so a gateway published under a sub-path by a reverse proxy
+ * (`wss://ci.example/simlock/`) lands on `wss://ci.example/simlock/v1/uplink` rather than at
+ * the host root. A base URL that already names the uplink path resolves to itself.
+ */
+export function resolveUplinkUrl(baseUrl: string): string {
+  if (new URL(baseUrl).pathname.endsWith(UPLINK_PATH)) return baseUrl;
+  const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  return new URL(UPLINK_PATH.slice(1), base).toString();
+}
 
 /** One accepted uplink: who opened it, and the frames it carries. */
 export interface AcceptedUplink {
@@ -55,13 +68,27 @@ export interface UplinkListener {
   close(): Promise<void>;
 }
 
+/**
+ * What the gateway makes of the credential presented at upgrade (ADR 0005 §4/§25). Three
+ * outcomes, not two, because the difference is the difference between "who are you" and "you
+ * are not allowed here":
+ *
+ * - `accept` -- a token the gateway holds with role `worker`.
+ * - `unauthenticated` (`401`) -- no token, or one the gateway does not know. A revoked join
+ *   token lands here, which is what closes an uplink after `simlock token revoke`.
+ * - `forbidden` (`403`) -- a real token of the wrong role. An `agent` or `operator` token is
+ *   valid elsewhere and carries no authority here, exactly as a `worker` token carries none on
+ *   any other `/v1` route.
+ */
+export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden";
+
 export interface UplinkHandlers {
   /**
-   * Verifies the join token presented in the `Authorization: Bearer` header at upgrade time
-   * (ADR 0005 §4). Resolving `false` answers `401` and the socket is destroyed without ever
-   * becoming a WebSocket -- an unauthenticated peer never reaches the daemon protocol at all.
+   * Verifies the join token presented in the `Authorization: Bearer` header at upgrade time.
+   * Anything but `accept` answers its HTTP status and destroys the socket without ever
+   * completing the upgrade -- an unauthorized peer never reaches the daemon protocol at all.
    */
-  authenticate(credential: string | undefined): Promise<boolean>;
+  authenticate(credential: string | undefined): Promise<UplinkAuthOutcome>;
   /** Called once per accepted uplink. */
   accept(uplink: AcceptedUplink): void;
 }
@@ -71,7 +98,8 @@ export interface UplinkListenerFactory {
 }
 
 export interface UplinkDialOptions {
-  /** `gateway.url`: `ws://host:port/v1/uplink` or `wss://...`. */
+  /** `gateway.url`: the gateway's **base** URL (`ws://host:port`, or `wss://...`). The adapter
+   * derives the uplink endpoint from it -- see `resolveUplinkUrl`. */
   readonly url: string;
   /** The join token, sent as `Authorization: Bearer <token>`. */
   readonly token: string;
@@ -131,8 +159,9 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
     if (handlers === undefined) {
       throw new UplinkError("unreachable", `No gateway is listening at ${options.url}`);
     }
-    if (!(await handlers.authenticate(options.token))) {
-      throw new UplinkError("rejected", "The gateway rejected this join token");
+    const outcome = await handlers.authenticate(options.token);
+    if (outcome !== "accept") {
+      throw new UplinkError("rejected", `The gateway rejected this join token: ${outcome}`);
     }
     const [workerEnd, gatewayEnd] = createConnectionPair();
     handlers.accept({

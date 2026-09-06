@@ -26,7 +26,7 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     mode: "worker",
-    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000 },
+    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
     drivers: {},
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },

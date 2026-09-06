@@ -21,6 +21,8 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import type { IpcConnection } from "./ipc.js";
 import {
+  resolveUplinkUrl,
+  UPLINK_PATH,
   UplinkError,
   WORKER_ID_HEADER,
   WORKER_LABEL_HEADER,
@@ -154,20 +156,30 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       respondAndDestroy(socket, 404, "Not Found");
       return;
     }
+    if (!isUplinkPath(request.url)) {
+      // The gateway upgrades exactly one path. Anything else is a client that guessed, or an
+      // HTTP route someone tried to upgrade; either way it is not an uplink.
+      respondAndDestroy(socket, 404, "Not Found");
+      return;
+    }
     const workerId = headerValue(request, WORKER_ID_HEADER);
     if (workerId === undefined) {
       respondAndDestroy(socket, 400, "Bad Request");
       return;
     }
-    let authenticated = false;
+    let outcome: Awaited<ReturnType<UplinkHandlers["authenticate"]>>;
     try {
-      authenticated = await handlers.authenticate(bearerToken(request));
+      outcome = await handlers.authenticate(bearerToken(request));
     } catch {
       // A token store that cannot be read is not an authenticated peer.
-      authenticated = false;
+      outcome = "unauthenticated";
     }
-    if (!authenticated) {
-      respondAndDestroy(socket, 401, "Unauthorized");
+    if (outcome !== "accept") {
+      // 403 for a real token of the wrong role, 401 for one the gateway does not know
+      // (ADR 0005 §25) -- the same distinction the HTTP frontend draws for a `worker` token on
+      // an ordinary `/v1` route, in the opposite direction.
+      if (outcome === "forbidden") respondAndDestroy(socket, 403, "Forbidden");
+      else respondAndDestroy(socket, 401, "Unauthorized");
       return;
     }
     const label = decodeLabel(headerValue(request, WORKER_LABEL_HEADER));
@@ -184,7 +196,9 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
 /** The worker's half: dials `gateway.url` with the join token and its instance id. */
 export class WebSocketUplinkConnector implements UplinkConnector {
   async connect(options: UplinkDialOptions): Promise<IpcConnection> {
-    const socket = new WebSocket(options.url, {
+    // `options.url` is `gateway.url`, the gateway's base URL; the endpoint is this worker's to
+    // derive (ADR 0005 §4), so an operator configures one URL and never an internal path.
+    const socket = new WebSocket(resolveUplinkUrl(options.url), {
       headers: {
         authorization: `Bearer ${options.token}`,
         [WORKER_ID_HEADER]: options.workerId,
@@ -250,6 +264,14 @@ function toUplinkError(error: unknown): UplinkError {
     error instanceof Error ? error.message : String(error),
     error,
   );
+}
+
+/** The upgrade request's path, compared without its query string. A request with no `url` at
+ * all (which Node's typings allow) is not the uplink. */
+function isUplinkPath(url: string | undefined): boolean {
+  if (url === undefined) return false;
+  const [path] = url.split("?");
+  return path === UPLINK_PATH;
 }
 
 function headerValue(request: IncomingMessage, name: string): string | undefined {

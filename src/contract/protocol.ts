@@ -14,19 +14,23 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /**
- * The range this contract's daemon speaks. Both ends are 5, and both moves that got it there
- * were breaking with no shim kept behind them, which is exactly when ADR 0003 §6's honesty
+ * The range this contract's daemon speaks. Both ends are 5, and every move that got it there
+ * was breaking with no shim kept behind them, which is exactly when ADR 0003 §6's honesty
  * rule says a range must *not* widen: ADR 0004 removed `lease.heartbeat` and `mode` from the
- * wire (taking it to 4), and ADR 0005 adds `device.exec`, its `output` push family, and a
- * `mode` field `status.get` now always carries (taking it to 5). A client from before either
- * change simply does not overlap this daemon, and `hello` fails with
- * `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges; `daemon.stop` stays the frozen exception
- * so the upgrade path (stop, then start the new daemon) exists at all.
+ * wire (taking it to 4), and ADR 0005 adds `device.exec` and its `output` push family, a
+ * `mode` field `status.get` now always carries, and the gateway surface -- `worker.*`,
+ * `workerId`, the `worker` token role -- on top (taking it to 5). It only ever widens once a
+ * second version is actually kept alive side by side with the first, which nothing here does.
  *
- * `status.get`'s `mode` is the clearest reason this had to move rather than stay at 4: an
- * older client parsing that response against a schema without the field is not a compatibility
- * story anyone kept, so advertising 4 would be a claim to a compatibility path that does not
- * exist.
+ * A client from before any of those changes simply does not overlap this daemon, and `hello`
+ * fails with `PROTOCOL_VERSION_UNSUPPORTED` naming both ranges; `daemon.stop` stays the frozen
+ * exception so the upgrade path (stop, then start the new daemon) exists at all. `status.get`'s
+ * `mode` is the clearest reason this had to move rather than stay at 4: an older client parsing
+ * that response against a schema without the field is not a compatibility story anyone kept, so
+ * advertising 4 would be a claim to a compatibility path that does not exist.
+ *
+ * The consequence ADR 0005 §31 names: a pre-0005 worker's uplink negotiates nothing, so its
+ * gateway marks it `incompatible` -- with both ranges on the view -- and never dispatches to it.
  */
 export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 5, max: 5 };
 
