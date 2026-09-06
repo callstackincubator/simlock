@@ -23,6 +23,13 @@ import type {
   ReleaseSimulatorOutput,
 } from "./contracts.js";
 
+/**
+ * How many ended leases `#announceLeaseLost` remembers, to keep one ending from reaching a
+ * listener twice. Generous: a session holds one lease at a time in practice, so this is only
+ * ever reached by a session that has churned through many.
+ */
+const ANNOUNCED_LOST_LIMIT = 64;
+
 export interface McpSessionOptions {
   /**
    * The `Clock` port (architecture rule 9): the session's renew timer and `close()`'s release
@@ -101,9 +108,9 @@ export function toMcpErrorResult(error: unknown): McpErrorResult {
  * a cache of lease *state* (§11's point): it is only the id of the lease this session's own
  * `lease()` last obtained, kept so `status()` can tell that lease apart from any other lease
  * `lease.list` happens to return under the same owner principal -- see `status()`'s doc
- * comment for why that distinction is load-bearing. Alongside it sits `#renewal`, the timer
- * that keeps that lease alive (ADR 0004 §2); the two are started, stopped, and cleared
- * together.
+ * comment for why that distinction is load-bearing. Alongside it sits `#renewals`, one timer
+ * per lease this session obtained (ADR 0004 §2): a lease enters it when `lease()` returns and
+ * leaves it the moment the session stops holding that lease, by release, by loss, or by close.
  */
 export class McpSession {
   readonly #clock: Clock;
@@ -268,9 +275,12 @@ export class McpSession {
 
   /**
    * `close()`'s tail: let the last tool call finish on a live wire, hand every lease back, then
-   * close. The wait is bounded because an in-flight `lease.request` can take minutes and an
-   * ending session cannot wait that long; past the bound the connection closes, the daemon
-   * rejects what was still pending, and any lease that slipped through ends at its deadline.
+   * close -- all inside **one** `RELEASE_TIMEOUT_MS` budget for the whole tail, not one per
+   * step. A session ending against an unresponsive daemon must cost a bounded wait, and "one
+   * timeout for the in-flight call plus one per lease" would let a dead daemon hold an MCP
+   * server open for a multiple of it. Whatever has not finished when the budget runs out is
+   * abandoned; the connection closes in the `finally`, the daemon rejects what was pending,
+   * and any lease that did not make it ends at its own deadline.
    */
   async #endSession(
     client: SimlockClient,
@@ -281,14 +291,22 @@ export class McpSession {
       await awaitWithin(
         this.#clock,
         RELEASE_TIMEOUT_MS,
-        inFlight,
-        "Timed out waiting for the last tool call to finish",
+        (async () => {
+          // `#mutations` never rejects (see `#mutate`), but a caller-supplied queue might.
+          await inFlight.catch(() => undefined);
+          for (const leaseId of heldLeaseIds) {
+            // One lease the daemon refuses (already expired, force-released) must not cost the
+            // rest of them their release.
+            await client.releaseLease({ leaseId }).catch(() => undefined);
+          }
+        })(),
+        "Timed out ending the session",
       );
     } catch {
       // Bounded by design -- see above.
+    } finally {
+      await this.#closeClient(client);
     }
-    for (const leaseId of heldLeaseIds) await this.#releaseQuietly(client, leaseId);
-    await this.#closeClient(client);
   }
 
   /**
@@ -297,6 +315,10 @@ export class McpSession {
    * answer never arrived), the connection may be dead, or the daemon may not answer at all --
    * none of which should hold up an ending session, and all of which end the same way in the
    * daemon regardless, at the lease's deadline.
+   *
+   * Used by the grant-after-close path in `lease()`, which runs *inside* `#endSession`'s own
+   * budget: this bound is the fallback for a caller that is not already bounded, and the outer
+   * one wins whenever it is shorter.
    */
   async #releaseQuietly(client: SimlockClient, leaseId: string): Promise<void> {
     try {
@@ -326,15 +348,12 @@ export class McpSession {
     const renewal = startLeaseRenewal({
       clock: this.#clock,
       leaseId: lease.id,
-      onLeaseGone: () => {
-        // The daemon says this lease is gone or not ours: the same ending as the push, which
+      onLeaseGone: (reason) => {
+        // Renewal is over -- the daemon says the lease is gone or not ours, or it could not be
+        // kept alive to its deadline. Either way this is the same ending as the push, which
         // may never arrive (a lease that expired while this connection was away has nothing
-        // left to push about).
-        this.#reportLeaseLost({
-          deviceId: lease.deviceId,
-          leaseId: lease.id,
-          reason: "renew-rejected",
-        });
+        // left to push about), and the session must stop counting the lease as its own.
+        this.#reportLeaseLost({ deviceId: lease.deviceId, leaseId: lease.id, reason });
       },
       renew: (id) => client.renewLease({ leaseId: id }),
       ttlDeadline: lease.ttlDeadline,
@@ -363,6 +382,13 @@ export class McpSession {
   #announceLeaseLost(notice: LeaseLostNotice): void {
     if (this.#announcedLost.has(notice.leaseId)) return;
     this.#announcedLost.add(notice.leaseId);
+    // Capped: a long-lived session that loses many leases must not accumulate their ids
+    // forever. A `Set` keeps insertion order, so this drops the oldest -- whose duplicate
+    // push, if it were ever coming, arrived long ago.
+    if (this.#announcedLost.size > ANNOUNCED_LOST_LIMIT) {
+      const oldest = this.#announcedLost.values().next().value;
+      if (oldest !== undefined) this.#announcedLost.delete(oldest);
+    }
     for (const listener of this.#leaseLostListeners) listener(notice);
   }
 
