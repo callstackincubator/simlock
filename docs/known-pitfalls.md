@@ -387,7 +387,7 @@ an unowned lease, the same way the mutating routes do today.
 ## HTTP error codes outside the closed contract union
 
 ADR §7: `SimlockError` has a `code` from the contract's closed union, and "a code the client
-does not know... wraps as `UNKNOWN_DAEMON_ERROR`". Four codes the HTTP gateway answers with
+does not know... wraps as `UNKNOWN_DAEMON_ERROR`". Four codes the HTTP frontend answers with
 today (`src/http/errors.ts`) have no row in that union
 (`src/contract/errors.ts`'s `ERROR_TABLE`), so a typed client built against the contract can
 only ever see them as `UNKNOWN_DAEMON_ERROR` with the real code buried in `details`:
@@ -527,3 +527,160 @@ a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
 on the same timers as any other idle device, since neither rule cares what a
 device's spec matches. Until those timers fire, though, it occupies a pool
 slot doing nothing.
+
+## `device.exec` carries no files (ADR 0005)
+
+A remote agent drives its leased device with `device.exec` — `simlock simctl`
+/ `simlock adb` against a gateway, or `POST /v1/leases/{id}/exec` over HTTP.
+The command runs on the machine that owns the device, which is what makes it
+work at all across a fleet.
+
+**The pitfall:** the *arguments* travel, the *files* do not. `simctl install
+/tmp/MyApp.app` and `adb install ./app-debug.apk` resolve their path on the
+worker's filesystem, so a build sitting on the agent's own machine is simply
+not there — the command fails with the tool's own "no such file" rather than
+with anything simlock says, which reads like a broken lease until you notice
+which machine ran it. The same applies in reverse for output: `simctl io
+booted screenshot shot.png` writes `shot.png` on the worker.
+
+**Why it is accepted:** a file transfer is a second, byte-heavy concern with
+its own questions (size caps, resumability, where the bytes land, who deletes
+them), and answering them badly inside the lease path is worse than not
+answering them. v1's honest position is that artifacts arrive out of band — a
+shared volume, a checkout the CI job already did on that machine, an
+`scp` the operator's own tooling does.
+
+**Status:** accepted for v1 and designed around rather than designed out.
+[ADR 0005](adr/0005-gateway-and-worker-modes.md) leaves the seam open
+deliberately: `device.upload` would stream chunks as request-scoped pushes
+over the same wire, into a per-lease scratch directory deleted on release.
+Nothing about `device.exec`'s shape has to change to add it.
+
+**Possible future fix:** `device.upload`, tracked in
+[IDEAS.md](IDEAS.md#gateway-side-file-upload-for-deviceexec).
+
+## `device.exec` has no pseudo-terminal, so interactive commands break
+
+Locally — `simlock simctl` / `simlock adb` against a worker over its unix
+socket — the CLI spawns the tool with inherited stdio, so an interactive `adb
+shell` is a real interactive shell and always has been.
+
+**The pitfall:** through a gateway, or over HTTP, the same command goes
+through `device.exec` instead, and there is no PTY on the far end. `stdin` is
+one string sent with the request and then closed. Line-oriented commands are
+fine (`adb shell getprop`, `adb shell input tap 100 200`, `simctl install`);
+anything that wants a terminal is not — an interactive `adb shell` gives you
+no prompt, a full-screen program renders as escape sequences, and a tool that
+asks a question waits for input that can never come until the timeout kills
+it. The failure is quiet in the worst case: the command simply hangs until
+`exec.timeoutMs` (ten minutes) and then fails `EXEC_TIMEOUT`.
+
+**Why it is accepted:** a PTY is not a bigger version of a pipe. It needs
+terminal allocation on the worker, window-size propagation, signal
+forwarding, and a bidirectional stream where v1 has request-scoped pushes —
+and it exists to serve a human at a keyboard, which is not who this control
+plane is for. Agents send commands and read output.
+
+**Status:** accepted by design, and the boundary is drawn where the docs say
+it is: same command, same refusals, same exit code, no terminal. The local
+path keeps its inherited stdio, so nobody loses an interactive shell they had
+before.
+
+**Possible future fix:** an interactive TTY is part of the reserved
+`dataPlane` (see [IDEAS.md](IDEAS.md#a-byte-heavy-data-plane)), not a
+follow-up to `device.exec`.
+
+## A dispatched request whose uplink drops may have granted a lease anyway
+
+The gateway dispatches a queued request to a worker with `noWait: true` and
+waits for the answer. If the uplink drops in that window, the client's
+request fails with `WORKER_UNREACHABLE`.
+
+**The pitfall:** "the request failed" does not mean "no lease exists". The
+worker may have granted one just before the socket died — the grant is
+committed *there*, on the worker's registry, and it stands. So the device is
+leased to you on a machine you cannot currently reach, burning TTL, while
+your client believes it got nothing. An immediate retry then meets the
+fleet-wide one-lease rule only *after* the uplink is back and the gateway has
+rebuilt its lease index from the worker's `lease.list` — until then, the
+gateway does not know that lease exists, and the retry is admitted and can
+land you a second device.
+
+**Why it is accepted:** the alternative is for the gateway to decide, on its
+own, that a lease it cannot see is gone — and that is the one thing it must
+never do. A worker that is unreachable is not a worker that is dead, and a
+gateway that guessed wrong would release a device out from under a running
+agent. The uncertainty window is bounded by the uplink's reconnect backoff,
+and the lease itself is bounded by its TTL: an orphan from this race expires
+on the worker's own clock without anyone intervening.
+
+**Status:** accepted, with the recovery loop documented rather than
+automated. It is the same `409 → GET` shape the HTTP API already documents
+for a daemon restart, applied across an uplink gap: re-request, and if the
+answer is `REQUESTER_ALREADY_LEASED`, read the lease it names — that is your
+earlier grant, found again.
+
+**Possible future fix:** durable, idempotent lease requests in the core
+([#72](https://github.com/callstackincubator/simlock/issues/72)) would let a
+retry be recognized as the same request rather than a new one, on a gateway
+and on a worker alike.
+
+## A lease survives a gateway restart, but nothing can renew it until the gateway is back
+
+Leases live on workers, not on the gateway, so a gateway restart destroys
+none of them — the same property that makes a gateway need no lease state at
+all (ADR 0004, ADR 0005).
+
+**The pitfall:** surviving is not the same as being reachable. While the
+gateway is down, a client behind it has no route to the worker at all —
+`renew`, `release`, and `exec` all fail, and there is deliberately no worker
+address on the lease for a client to fall back to. The lease keeps counting
+down on the worker's clock throughout. If the gateway is down for longer than
+the remaining TTL, the lease expires and the device is reclaimed, and the
+client's first successful renew afterwards answers `UNKNOWN_LEASE`. In-flight
+lease *requests* are lost outright, exactly as a worker restart loses them.
+
+**Why it is accepted:** the two alternatives are both worse. Giving clients a
+worker address reopens the NAT problem the uplink exists to remove and needs
+per-worker client credentials; having the gateway renew on the client's
+behalf reintroduces exactly the emulation ADR 0004 deleted, and would keep
+devices alive for clients that are themselves long gone. A gateway restart
+costing a lease *only if it outlasts the TTL* is the same bargain a worker
+restart already makes with its own clients.
+
+**Status:** accepted. The bound is the lease's own TTL, so `lease.defaultTtlMs`
+and `--ttl` are the knobs: a longer TTL buys more tolerance for a gateway
+outage and costs more time to reclaim a device from a holder that vanished.
+Restarting a gateway is fast, and workers reconnect on their own backoff with
+no operator action.
+
+## Local agents and the gateway share a worker's capacity
+
+A worker that joins a fleet keeps serving its own local clients. Nothing
+changes on it: same socket, same queue, same limits.
+
+**The pitfall:** the fleet does not get its own slice of that machine. A
+developer running builds against their local simlock, or an agent leasing
+over the worker's own unix socket, consumes the same running capacity the
+gateway is trying to dispatch into — so a machine that `simlock worker list`
+shows as part of the fleet can be, from the gateway's point of view,
+persistently full for reasons no one looking at the gateway can see. The
+gateway's dispatch handles it correctly (a `NO_CAPACITY` answer is treated as
+a stale view, the request stays queued and goes elsewhere), so this is a
+visibility and fairness problem rather than a correctness one.
+
+**Why it is accepted:** the worker's own capacity accounting is the single
+arbiter of its machine, and it should be — it is the thing that actually
+knows what is running there, and it already arbitrates between two local
+agents the same way. A reservation on the worker would add a fleet-shaped
+concept to a component whose whole job is to be local, for a problem the
+worker views already surface: local leases appear in the gateway's aggregate
+too, so an operator can see *why* a machine is full.
+
+**Status:** accepted for v1. `simlock worker drain` is the operator's tool
+when a machine should be left to its owner for a while — it stops new
+dispatches without touching the leases anyone already holds.
+
+**Possible future fix:** a reserved capacity slice per worker, deferred in
+[ADR 0005](adr/0005-gateway-and-worker-modes.md) and recorded in
+[IDEAS.md](IDEAS.md#capacity-slices-reserved-for-the-gateway).

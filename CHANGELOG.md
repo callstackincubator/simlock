@@ -16,6 +16,23 @@ describe the decided end state, and they land with the PRs that implement it
 (the client's renew timers, and the daemon's heartbeat removal, config
 rename, and protocol bump).
 
+ADR 0005 (`docs/adr/0005-gateway-and-worker-modes.md`): a simlock daemon now
+runs in one of two modes. A **worker** is what every daemon is today — it
+owns the devices on one machine — and a **gateway** owns none, fronting the
+workers that dial out to it over a single WebSocket **uplink**. A gateway
+keeps one fleet-wide queue, dispatches each request to the worker best placed
+to serve it, proxies device commands to the worker that owns the device, and
+implements the same typed contract towards its own clients, so every existing
+frontend works against it unchanged. Unlike ADR 0004, this one is **purely
+additive**: nothing is removed or repurposed, and a daemon left in the
+default `mode: "worker"` behaves exactly as it does today.
+
+ADR 0005 is **Accepted — not yet implemented** as well: the entries under
+"ADR 0005" below describe the decided end state, and they land with the PRs
+that implement it (`device.exec` on the worker, then the gateway skeleton and
+worker views, the fleet queue and forwarding, drain and reconnect, and
+finally these docs).
+
 ### ⚠ BREAKING CHANGES
 
 - **Contract:** `lease.heartbeat` is removed as an operation, and `heartbeat`
@@ -134,6 +151,75 @@ those changes add, alongside the breaking changes above.
 - **config:** `lease.maxTtlMs` bounds what any caller may ask for, so one
   client cannot pin a device for a day by naming a large `ttlMs`.
 
+### ADR 0005: gateway and worker modes
+
+These ship with the PRs that implement ADR 0005, and every one of them is
+additive: `mode` defaults to `worker`, so a daemon that ignores all of this
+is the daemon that exists today.
+
+- **contract:** `device.exec` (role `agent`, caller must own the lease) runs
+  one `simctl`/`adb` command against a leased device on the machine that owns
+  it — `{ leaseId, tool, args, stdin? }` in, `{ exitCode }` out, with output
+  streamed as request-scoped `output` pushes (`stream: "stdout" | "stderr"`
+  plus a chunk, keyed by frame id like `progress`). It works on the unix
+  socket, over HTTP, and over the uplink, so a remote HTTP agent can drive
+  its device against a lone worker with no gateway involved at all. `stdin`
+  is one string sent with the request and then closed; there is no
+  pseudo-terminal.
+- **contract:** `worker.list|drain|undrain|remove` (admin) manage the workers
+  connected to a gateway; `mode` joins `status.get`'s daemon block; `workers`
+  joins its output; `workerId` joins every device and lease in a gateway's
+  aggregate; `worker: { id, label }` joins the lease object; and `worker`
+  joins the token roles. All additive.
+- **daemon:** `config.mode` selects `worker` (default) or `gateway`. A
+  gateway starts no drivers, validates no device roots, and runs no reaper,
+  health monitor, or capacity strategy; `src/gateway/` implements the
+  contract's handlers over worker views and uplinks, importing nothing from
+  `drivers` and, from `core`, only the platform-agnostic queue and bus.
+- **daemon:** one fleet queue on the gateway, dispatched to workers with
+  `noWait: true`, so a gateway request never sits in a worker's queue and can
+  be granted by whichever worker frees first. Routing is a pure function over
+  the worker views behind `gateway.routing`; the v1 policy is a warm hit
+  first, then the most free running capacity for the platform.
+- **daemon:** `lease.renew`/`release`/reads forward to the owning worker
+  (the lease id names it), the one-lease-per-requester rule becomes
+  fleet-wide, and the requester a gateway forwards is namespaced
+  `gw:<gateway instance id>:<requester>` so local and fleet agents cannot
+  collide on a worker.
+- **config:** new keys. Worker side: `gateway.url`, `gateway.token` (a join
+  token), `gateway.label`, and `exec.timeoutMs` (10 minutes). Gateway side:
+  `gateway.routing` (`warm-then-free`), `gateway.disconnectedRetentionMs`
+  (24 hours), and `gateway.execTimeoutMs` (10 minutes). Plus `mode` itself.
+  Worker-only keys in a gateway's config are ignored with a warning, as
+  unknown keys already are; `mode: "gateway"` with `http.enabled: false` is
+  rejected at load and the daemon does not start, since a gateway with no
+  listener cannot be reached by anyone.
+- **http:** new routes. `GET /v1/uplink` (WebSocket upgrade, join-token
+  bearer, role `worker`) is the one inbound connection in a fleet;
+  `POST /v1/leases/{id}/exec` streams a command's output as Server-Sent
+  Events, the same shape `/events` already uses; `GET /v1/workers`,
+  `POST /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}/drain`, and
+  `DELETE /v1/workers/{id}` (all `operator`) are what the console (#88)
+  renders. "Multi-host brokering" leaves `docs/HTTP-API.md`'s "Not
+  implemented" list, since this is it.
+- **events:** `worker.connected`, `worker.disconnected`, `worker.removed`,
+  `worker.drain-started`, `worker.drain-ended`, and `request.dispatched` are
+  emitted by a gateway, and every worker's own business events are
+  republished on the gateway's bus with `workerId` added to the payload — an
+  additive change, so no exception to events rule 6 is needed this time. See
+  `docs/EVENTS.md`.
+- **contract:** four new error codes. `WORKER_UNREACHABLE` (`kind:
+"transport"`, CLI exit 1, HTTP 502) when a worker's uplink is down;
+  `WORKER_CONNECTED` (exit 2, HTTP 409) refusing `worker remove` on a
+  connected worker; `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2, HTTP 501) for
+  `nuke`/`cleanup`/`doctor`/`driver.passthrough` asked of a gateway; and
+  `EXEC_TIMEOUT` (exit 10) when a command outlives `exec.timeoutMs`.
+- **deps:** `ws` is added as a runtime dependency — Node ships a WebSocket
+  _client_ but no server, and the uplink needs both ends. It sits behind the
+  `UplinkListenerFactory`/`UplinkConnector` ports as their one real adapter,
+  so nothing above the port imports it and tests script a fleet in memory
+  without it.
+
 ### Documentation
 
 - record ADR 0004 as **Accepted — not yet implemented**
@@ -146,6 +232,29 @@ those changes add, alongside the breaking changes above.
   `docs/EVENTS.md`, `docs/ABOUT.md`, and `README.md`; record the SIGKILLed
   holder and re-frame the reparented-holder fix around renew timers in
   `docs/known-pitfalls.md`.
+- record ADR 0005 as **Accepted — not yet implemented**
+  (`docs/adr/0005-gateway-and-worker-modes.md` and `docs/adr/README.md`).
+- describe gateways and workers across the user manual: a "Gateway and worker
+  modes" section in `docs/ARCHITECTURE.md` (topology, uplink, worker views,
+  the fleet queue, routing, lease forwarding, `device.exec`, failure
+  behaviour, the safety argument, and `src/gateway/`'s boundaries), "Against
+  a gateway" and `simlock worker` in `docs/CLI.md`, the uplink/worker/exec
+  routes in `docs/HTTP-API.md`, `exec` and `mode` in `docs/CLIENT.md`,
+  the new keys and a "Modes" section in `docs/CONFIGURATION.md`, the fleet
+  events in `docs/EVENTS.md`, and a paragraph each in `docs/ABOUT.md` and
+  `README.md`.
+- `docs/IDEAS.md` drops "Cross-machine coordination" — ADR 0005 designs it —
+  and gains the items that record deferred: gateway-side file upload for
+  `device.exec`, reserved capacity slices, fan-out `doctor`/`cleanup`, richer
+  routing (label selectors, requester affinity), and a byte-heavy data plane.
+- `docs/known-pitfalls.md` records five accepted fleet gaps: no file transfer
+  for `device.exec`, no pseudo-terminal, a dispatched request whose uplink
+  drops, a lease that survives a gateway restart it cannot be renewed
+  through, and local agents sharing a worker's capacity with the fleet.
+- reserve "gateway" for ADR 0005's meaning: the `src/http` frontend is called
+  the **HTTP frontend** throughout `docs/ARCHITECTURE.md`,
+  `docs/HTTP-API.md`, and `docs/known-pitfalls.md`, where it used to be "the
+  HTTP gateway". No behaviour changes; one word now means one thing.
 
 ## [0.3.0](https://github.com/callstackincubator/simlock/compare/v0.2.0...v0.3.0) (2026-09-03)
 
