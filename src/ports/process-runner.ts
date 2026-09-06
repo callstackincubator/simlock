@@ -2,11 +2,13 @@ import { spawn as spawnChildProcess, type ChildProcess } from "node:child_proces
 import { constants } from "node:os";
 
 // `close` normally follows `exit` within the same tick, once the child's own stdio
-// pipes report EOF. But children are spawned `detached: true`, so a process that
-// forks a grandchild before it dies can leave that grandchild holding the inherited
-// write end of our pipe open -- `close` then never fires even though the process we
-// actually care about is long gone. After `exit`, `wait()` therefore stops waiting
-// for `close` once the pipes have gone quiet for this long.
+// pipes report EOF. But a child that forks a grandchild before it dies leaves that
+// grandchild holding the inherited write end of our pipe open -- it was handed the
+// same descriptors, and nothing takes them back -- so `close` never fires even
+// though the process we actually care about is long gone. (`detached: true` is not
+// the cause; it is why the grandchild is reachable to kill, since it puts the whole
+// tree in one process group.) After `exit`, `wait()` therefore stops waiting for
+// `close` once the pipes have gone quiet for this long.
 //
 // Quiet, not merely elapsed: settling on a bare timer would truncate the output of a
 // process that exited while its pipe was still draining (a large `simctl list --json`
@@ -76,7 +78,16 @@ export interface ProcessStreamOptions {
    * own timeout), matching `ProcessRunOptions.input`.
    */
   readonly input?: string;
-  readonly onChunk: (stream: "stdout" | "stderr", chunk: string) => void;
+  /**
+   * Called with each chunk as it arrives. **May return a promise**, and if it does, this
+   * runner stops reading that stream until it resolves -- which is how backpressure reaches
+   * the child: a consumer that cannot place a chunk yet (an SSE client that is not reading, a
+   * socket that has not drained) slows the command down instead of accumulating its output
+   * somewhere. ADR 0005 §19e says output is streamed and never buffered; that is only true
+   * end to end if the slow end can push back, so the callback's promise is the seam that
+   * makes it true rather than a claim about the fast path only.
+   */
+  readonly onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>;
 }
 
 /** How a streamed child ended. `code` is null when a signal killed it, in which case
@@ -258,9 +269,9 @@ export class NodeProcessRunner implements ProcessRunner {
  * arbitrarily large output through a daemon that never grows for it.
  *
  * Settling repeats `NodeProcessHandle`'s `exit`-then-quiet-window dance for the same reason
- * (see `EXIT_TO_CLOSE_GRACE_MS`): the child is detached, so a grandchild holding the inherited
- * pipe open (`adb start-server` is exactly this) means `close` may never fire even though the
- * process the caller asked about is gone.
+ * (see `EXIT_TO_CLOSE_GRACE_MS`): a grandchild holding the inherited pipe open (`adb
+ * start-server` is exactly this) means `close` may never fire even though the process the
+ * caller asked about is gone.
  */
 class NodeStreamingProcessHandle implements StreamingProcessHandle {
   readonly pid: number;
@@ -270,7 +281,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
   constructor(
     private readonly child: ChildProcess,
     pid: number,
-    onChunk: (stream: "stdout" | "stderr", chunk: string) => void,
+    onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
   ) {
     this.pid = pid;
     this.#forward(child.stdout, "stdout", onChunk);
@@ -320,13 +331,24 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
   #forward(
     stream: NodeJS.ReadableStream | null,
     name: "stdout" | "stderr",
-    onChunk: (stream: "stdout" | "stderr", chunk: string) => void,
+    onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
   ): void {
     if (stream === null) return;
     stream.setEncoding("utf8");
     stream.on("data", (chunk: string) => {
       this.#chunkCount += 1;
-      onChunk(name, chunk);
+      const delivered = onChunk(name, chunk);
+      if (delivered === undefined) return;
+      // The consumer is not ready for more yet. Pausing the readable stops this child at the
+      // pipe -- it fills the OS buffer and then blocks in its own `write` -- which is the only
+      // place backpressure can be applied without holding the bytes somewhere. Resumed on
+      // either outcome: a failed delivery (a dead socket) must not wedge the process, and the
+      // exec timeout still bounds a child nobody drains.
+      stream.pause();
+      void Promise.resolve(delivered).then(
+        () => stream.resume(),
+        () => stream.resume(),
+      );
     });
   }
 }
@@ -528,13 +550,29 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
   constructor(
     readonly pid: number,
     expectation: ScriptedProcessExpectation,
-    onChunk: (stream: "stdout" | "stderr", chunk: string) => void,
+    onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
   ) {
     this.#ignoresSigterm = expectation.ignoresSigterm ?? false;
     this.#result = new Promise<StreamingProcessResult>((resolve) => {
       this.#resolve = resolve;
     });
-    for (const { chunk, stream } of scriptedChunks(expectation)) onChunk(stream, chunk);
+    void this.#deliver(expectation, onChunk);
+  }
+
+  /**
+   * One chunk at a time, awaiting each delivery before the next -- the same discipline
+   * `NodeStreamingProcessHandle` gets by pausing a readable, so a test that stalls a delivery
+   * sees the scripted child stall too rather than racing ahead of it. The command settles only
+   * once its output is delivered, which keeps "output, then exit code" true here as well.
+   */
+  async #deliver(
+    expectation: ScriptedProcessExpectation,
+    onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
+  ): Promise<void> {
+    for (const { chunk, stream } of scriptedChunks(expectation)) {
+      if (this.#finished) return;
+      await onChunk(stream, chunk);
+    }
     if (!expectation.hangs) {
       this.#finish({ code: expectation.result?.code ?? 0, signal: null });
     }

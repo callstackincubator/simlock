@@ -68,8 +68,13 @@ export interface DispatchSession {
    * that has nowhere to put a chunk -- in which case the command still runs and still reports
    * its exit code, and the output is simply not relayed. The same shape as `onProgress`, for
    * the same reason: both are request-scoped pushes, and the dispatcher stays out of framing.
+   *
+   * **May return a promise**, and the command is stopped at its pipe until that resolves (see
+   * `ProcessStreamOptions.onChunk`). A transport returns one when placing a chunk is not
+   * instantaneous -- an SSE write, a socket frame -- so a client that reads slowly slows the
+   * command rather than filling this process with its output (§19e).
    */
-  readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
+  readonly onOutput?: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>;
   /**
    * Called once, for a `device.exec` call, the moment its process is running -- after every
    * failure that can happen *before* one exists (a refused verb, an unknown tool, an unowned
@@ -500,6 +505,8 @@ export class Dispatcher {
     });
     const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
       env: { ...this.options.execEnv, ...command.env },
+      // Returned, not fired and forgotten: whatever the transport hands back is what pauses
+      // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
       onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
       ...(input.stdin === undefined ? {} : { input: input.stdin }),
     });

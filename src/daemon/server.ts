@@ -1069,15 +1069,17 @@ export class DaemonServer {
     try {
       return await this.#dispatcher.dispatch("device.exec", value ?? {}, {
         ...this.#session(connection),
-        onOutput: (stream, chunk) => {
-          if (outputSocket !== undefined) {
-            // A write can still fail on a socket that died between this check and the write
-            // itself (EPIPE), and a rejected push must not become an unhandled rejection --
-            // which, under Node's default, would take the daemon down over a client that
-            // hung up mid-command. There is nothing to do about it: the chunk is lost with
-            // the connection, and the command carries on.
-            void this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
-          }
+        // Returned rather than fired and forgotten, which is what applies backpressure: the
+        // dispatcher hands this promise to the process runner, which stops reading the child
+        // until the frame has actually been written (ADR 0005 §19e -- "streamed, never
+        // buffered" is only true end to end if a client that does not read slows the command
+        // down instead of filling this process). A write that fails on a socket which died
+        // between the check and the write (EPIPE) resolves rather than rejecting: the chunk is
+        // lost with the connection, the command carries on, and a rejection here would both
+        // wedge the child and, unhandled, take the daemon down over a client that hung up.
+        onOutput: async (stream, chunk) => {
+          if (outputSocket === undefined) return;
+          await this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
         },
       });
     } finally {
@@ -1090,15 +1092,11 @@ export class DaemonServer {
    * ADR 0005 §19a: `output` carries the originating request's frame id, exactly as `progress`
    * does, so a connection running more than one command routes each chunk to its own call.
    *
-   * Known gap, inherited rather than introduced here: `writeFrame` does not observe socket
-   * backpressure -- it hands the frame to the socket and the returned promise is not awaited by
-   * the caller (see `#execDevice`'s `void this.#pushOutput(...)`, and `#pushProgress` and
-   * `#pushEvent` before it). A client that reads slower than a command writes therefore grows
-   * the *kernel's* send buffer and Node's own write queue rather than being slowed down. It
-   * matters more here than for `progress` -- a `logcat` can outrun a reader indefinitely where
-   * a progress push cannot -- but it is one property of one push helper for every family, so
-   * fixing it belongs with the framing rather than with this operation, and `exec.timeoutMs`
-   * bounds the exposure in the meantime.
+   * The returned promise is the backpressure signal, so it has to mean "this frame is out":
+   * `IpcConnection.write` resolves on the socket's own write callback, which Node fires once
+   * the chunk has been flushed rather than merely queued -- so awaiting it is waiting for the
+   * drain a `write()` returning `false` would otherwise announce. `#execDevice` returns it to
+   * the dispatcher, which stops reading the child until then.
    */
   async #pushOutput(
     socket: IpcConnection,

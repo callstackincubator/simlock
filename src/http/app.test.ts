@@ -879,6 +879,50 @@ describe("lease routes", () => {
       ]);
     });
 
+    it("stalls the command when the client stops reading, instead of buffering for it", async () => {
+      // ADR 0005 §19e end to end. The route hands each chunk's SSE write back through
+      // `onOutput`, the process runner awaits it, so a client that opened the stream and does
+      // not read stops the command at its own pipe -- the alternative being an unbounded
+      // in-process queue for exactly the client least able to consume it.
+      const { app, dispatcher } = buildHarness();
+
+      const responsePromise = postExec(app);
+      const call = await waitForDispatch(dispatcher, "device.exec");
+      call.session.onStarted?.();
+      const response = await responsePromise;
+      const reader = response.body?.getReader();
+      await Promise.resolve();
+
+      const settled: number[] = [];
+      let pending: number | undefined;
+      for (let index = 0; index < 64 && pending === undefined; index += 1) {
+        const delivery = Promise.resolve(call.session.onOutput?.("stdout", `chunk-${index}`)).then(
+          () => settled.push(index),
+        );
+        // A delivery that has not settled after the microtask queue drains is the stream
+        // refusing more, which is the state this test exists to reach.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (!settled.includes(index)) {
+          pending = index;
+          void delivery;
+        }
+      }
+      expect(pending, "the unread stream never applied backpressure").toBeDefined();
+
+      // Reading again lets the queued writes through, and the stalled delivery completes --
+      // the command resumes rather than having been dropped. Each read is bounded: once the
+      // queue is empty a further read would block on the very producer this test has stalled.
+      for (let attempt = 0; attempt < 8 && !settled.includes(pending as number); attempt += 1) {
+        await Promise.race([reader?.read(), new Promise((resolve) => setTimeout(resolve, 20))]);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      expect(settled).toContain(pending);
+
+      await reader?.cancel();
+      call.resolve({ exitCode: 0 });
+      await responsePromise;
+    });
+
     it("survives a client that disconnects while the command keeps writing", async () => {
       // The command runs on deliberately, so chunks keep arriving at a route with nowhere to
       // put them. They go nowhere and the request still settles normally -- what "nowhere"
@@ -896,6 +940,12 @@ describe("lease routes", () => {
 
       const chunk = "x".repeat(1_024);
       for (let index = 0; index < 1_000; index += 1) call.session.onOutput?.("stdout", chunk);
+
+      // The relay is dropped, not merely detached: a chunk after the disconnect is discarded
+      // outright, which is observable as the delivery no longer being something to wait for.
+      // (Without the `relay.drop()` in the route's unsubscribe, this returns the pending write
+      // of a stream nobody will ever read.)
+      expect(call.session.onOutput?.("stdout", chunk)).toBeUndefined();
 
       call.resolve({ exitCode: 0 });
       await expect(responsePromise).resolves.toBeDefined();

@@ -53,11 +53,9 @@ export {
   type ProcessResult,
   type ProcessRunner,
   type ProcessRunOptions,
-  // fallow-ignore-next-line unused-type -- public port contract for consumers implementing their own ProcessRunner.
   type ProcessStreamOptions,
   ScriptedProcessRunner,
   type ScriptedProcessExpectation,
   type StreamingProcessHandle,
-  // fallow-ignore-next-line unused-type -- public port contract; what `StreamingProcessHandle.wait()` resolves to.
   type StreamingProcessResult,
 } from "./process-runner.js";
