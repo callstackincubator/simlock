@@ -745,21 +745,31 @@ function hasValidLeaseCore(value: Record<string, unknown>): value is Record<stri
   );
 }
 
-/** ADR 0004's migration: a lease written before it has no stored width and no `lastRenewedAt`.
- * Neither can be recovered from what is on disk (`ttlDeadline - grantedAt` is the grant-time
- * width only until the first renewal moves the deadline), so each takes the documented default
- * -- `lease.defaultTtlMs` and `grantedAt` respectively -- rather than a guess dressed up as
- * arithmetic. A wrongly-typed value present on the record is treated the same as an absent
- * one. */
-function isValidTimestamp(value: unknown): value is number | undefined {
-  return value === undefined || typeof value === "number";
+/**
+ * ADR 0004's migration, for the two fields a lease written before it does not have. Neither
+ * can be recovered from what is on disk (`ttlDeadline - grantedAt` is the grant-time width
+ * only until the first renewal moves the deadline), so each takes its documented default
+ * rather than a guess dressed up as arithmetic. A value that is present but unusable takes the
+ * same default: it is one field of one record, and refusing to load the whole registry over it
+ * would cost an operator every device Simlock knows about (the same trade `featureProfile`
+ * already makes).
+ *
+ * They are validated separately because they are different kinds of number. A timestamp only
+ * has to be a finite number -- any point on the clock is a legitimate answer to "when was this
+ * last renewed", including zero. A duration additionally has to be positive: a `ttlMs` of `0`
+ * or a negative one would make every renewal of that lease resolve to a deadline in the past,
+ * which `LeaseExpiryScheduler` reads as "expire immediately".
+ */
+function finiteTimestampOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function positiveDurationOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
   if (!isObject(value) || !hasValidLeaseCore(value) || !isValidOwnerId(value.ownerId)) {
-    throw new RegistryLoadError("Invalid lease record in registry state");
-  }
-  if (!isValidTimestamp(value.ttlMs) || !isValidTimestamp(value.lastRenewedAt)) {
     throw new RegistryLoadError("Invalid lease record in registry state");
   }
 
@@ -769,11 +779,11 @@ function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
     deviceId,
     grantedAt,
     id,
-    lastRenewedAt: lastRenewedAt ?? grantedAt,
+    lastRenewedAt: finiteTimestampOr(lastRenewedAt, grantedAt),
     ownerId: ownerId ?? requesterId,
     requesterId,
     ttlDeadline,
-    ttlMs: ttlMs ?? defaultTtlMs,
+    ttlMs: positiveDurationOr(ttlMs, defaultTtlMs),
   };
 }
 

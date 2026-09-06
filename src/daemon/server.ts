@@ -139,7 +139,9 @@ export interface DaemonServerOptions {
    * Awaits lease work the subsystem is finishing off its callers' paths — today the
    * backgrounded device reclaims a release hands off (see `LeaseReleaseCoordinator`).
    * A graceful stop drains it so the pool is left settled; an ungraceful death leaves
-   * it for startup recovery. Runs after held leases are released and before `dispose`.
+   * it for startup recovery. The stop itself releases nothing (ADR 0004 §3), so what this
+   * drains is work somebody else's release already handed off; it runs before `dispose`, so a
+   * quarantine retry timer armed by a reclaim settling late is still cancelled.
    */
   readonly settle?: () => Promise<void>;
   /**
@@ -437,11 +439,10 @@ export class DaemonServer {
   }
 
   async #stop(reason: string): Promise<void> {
-    // Awaited first, before anything below: an auxiliary frontend calls the role
-    // interfaces directly rather than parking on `#awaitReady`/this method's own
-    // teardown order, so it must be shut off before lease/queue teardown begins --
-    // otherwise a request arriving through it mid-stop could run against an engine
-    // already being torn down.
+    // Awaited first, before anything below: an auxiliary frontend calls the role interfaces
+    // directly rather than parking on `#awaitReady`/this method's own teardown order, so it
+    // must be shut off before lease/queue teardown begins -- otherwise a request arriving
+    // through it mid-stop could run against an engine already being torn down.
     await this.options.stopAuxiliary?.();
     this.#logger.info("Daemon stopping", { reason });
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
@@ -795,6 +796,14 @@ export class DaemonServer {
         // Every lease this principal owns is about to end, and this connection asked for it,
         // so suppress the self-push for each. Read from the registry rather than from
         // per-connection state, which no longer exists (ADR 0004 §3).
+        //
+        // The snapshot can skew either way against what the dispatched call actually
+        // releases, and both ways are acceptable: a lease that expires inside the window is
+        // suppressed here even though its `lease-lost` was the daemon's own doing (the caller
+        // asked for that lease to end and is about to be told every lease of theirs is gone),
+        // and one granted inside the window is not suppressed, so its holder gets the push it
+        // would have got for any other force-release. Neither can suppress a push for a lease
+        // this principal does not own, which is the property that matters.
         const releasing = this.options.registry.snapshot.leases
           .filter((lease) => connection.role === "admin" || lease.ownerId === connection.principal)
           .map((lease) => lease.id);

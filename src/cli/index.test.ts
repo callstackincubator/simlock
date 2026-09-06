@@ -54,6 +54,13 @@ import {
 } from "./index.js";
 
 const gibibyte = 1024 ** 3;
+
+/**
+ * Yields to the macrotask queue, so `runLease` gets past `requestLease` and reaches its wait
+ * point -- its push listeners registered and its renew timer armed -- before a test fires a
+ * push or advances the clock.
+ */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 /** A minimal daemon lease response, for the tests that only care what the CLI prints. */
 const detachedGrant: LeaseGrant = {
   device: {
@@ -1140,7 +1147,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     );
     // Let requestLease resolve and runLease reach the `Promise.race` wait point before firing
     // the push -- otherwise the listener registered by `client.onLeaseLost` may not exist yet.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     leaseLostListener?.({ leaseId: "lse_1", deviceId: "dev_1", reason: "ttl-backstop" });
     const exitCode = await runPromise;
     expect(exitCode).toBe(14);
@@ -1172,11 +1179,11 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
         signals: signals as unknown as CliEnvironment["signals"],
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     // A push for another lease this same principal owns (e.g. an earlier `--detach`'d lease) --
     // must not be treated as this invocation's own lease being lost.
     leaseLostListener?.({ leaseId: "some-other-lease", deviceId: "dev_2", reason: "ttl-backstop" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     signals.emit("SIGINT");
     const exitCode = await runPromise;
     expect(exitCode).toBe(0);
@@ -1346,9 +1353,6 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
  * behaviour while it holds, and what it does when the connection under it dies.
  */
 describe("CLI: holder renew and release (ADR 0004 §2)", () => {
-  /** Lets `runLease` get past `requestLease` and arm its timer before the clock is advanced. */
-  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
   it("renews at a third of the TTL the daemon returned, re-deriving the cadence from each renewal", async () => {
     const clock = new FakeClock(0);
     const output = outputCapture();
@@ -1433,7 +1437,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       output.environmentWith({ connectAdmin: async () => client }),
     );
     // Let `requestLease` resolve and `runLease` reach its wait point, so the listener exists.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await settle();
     connectionLostListener?.(
       new SimlockError("DAEMON_CONNECTION_LOST", "transport", "socket closed", {}),
     );

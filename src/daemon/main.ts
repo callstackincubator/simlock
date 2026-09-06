@@ -224,11 +224,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // the way it did before the gateway moved to firing concurrently with convergence. `stopAuxiliary`
   // below *also* awaits this -- that is what closes review finding S5: without it, `stopAuxiliary`
   // could return having stopped nothing (because `stopHttpGateway` isn't assigned yet, the
-  // gateway still being mid-`start()`), and `#stop()` would go on to release leases, settle, and
-  // dispose while the gateway finishes binding and starts accepting requests against a daemon
-  // already being torn down -- see `server.ts`'s `stopAuxiliary` doc: it "must be shut off before
-  // held-lease release and lease/queue teardown begin". When HTTP is disabled there is nothing to
-  // wait for, so this resolves immediately.
+  // gateway still being mid-`start()`), and `#stop()` would go on to settle and dispose while
+  // the gateway finishes binding and starts accepting requests against a daemon already being
+  // torn down -- see `server.ts`'s `stopAuxiliary` doc: it must be shut off before lease/queue
+  // teardown begins. When HTTP is disabled there is nothing to wait for, so this resolves
+  // immediately.
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
   /** Whether `onSocketClaimed` ever fired, i.e. whether anything will ever settle
@@ -277,9 +277,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     // see doctor.ts) that already runs interleaved with live lease/reclaim activity
     // whenever a client issues `doctor.run` mid-session, so running it alongside
     // startup's own registry work is nothing this codebase doesn't already do.
-    // convergeRunningCapacity() no longer awaits an orphaned lease's device reclaim
-    // inline either (#43): that erase (~34s for one simulator) proceeds in the
-    // background, off this critical path, once its lease is released registry-only.
+    // convergeRunningCapacity() releases no leases at all any more (ADR 0004 removed the
+    // orphan sweep), so the only device work left on this path is interrupted-reclaim
+    // recovery and the capacity sweep's own shutdowns -- and a reclaim a previous daemon
+    // left in flight is finished off in the background, off this critical path (#43).
     converge: async () => {
       await Promise.all([doctor.reconcile(), leaseEngine.convergeRunningCapacity()]);
     },
