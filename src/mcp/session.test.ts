@@ -340,6 +340,44 @@ describe("McpSession", () => {
     await session.close();
   });
 
+  it("renews on the lease's own width, not on the time left to its deadline", async () => {
+    // The session passes `ttlMs` as well as `ttlDeadline` (see `startLeaseRenewal`): the width
+    // sets the cadence, the deadline only bounds it. A lease granted narrow against a distant
+    // deadline is where the two visibly differ -- 10_000 apart, not 100_000.
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    const grant = sampleGrant({ leaseId: "lease-1" });
+    client.requestLeaseImpl = () =>
+      Promise.resolve({
+        ...grant,
+        lease: { ...grant.lease, ttlDeadline: 300_000, ttlMs: 30_000 },
+      });
+    const renewedAt: number[] = [];
+    client.renewLeaseImpl = (input) => {
+      renewedAt.push(clock.now());
+      return Promise.resolve({
+        ...grant.lease,
+        id: input.leaseId,
+        lastRenewedAt: clock.now(),
+        ttlDeadline: clock.now() + 300_000,
+        ttlMs: 30_000,
+      });
+    };
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    clock.advance(10_000);
+    await flushMicrotasks();
+    expect(renewedAt).toEqual([10_000]);
+
+    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+    await session.close();
+  });
+
   it("releases the session's lease explicitly on close, before closing the connection", async () => {
     const clock = new FakeClock(0);
     const client = new FakeSimlockClient();
@@ -519,6 +557,46 @@ describe("McpSession", () => {
     expect(clock.pendingTimerCount).toBe(0);
   });
 
+  it("stops releasing when the shutdown budget runs out, rather than calling a closed client", async () => {
+    // `awaitWithin` stops *waiting*; it cannot stop the loop it was waiting on. Without a
+    // check the abandoned loop would carry on down the remaining leases against the client the
+    // `finally` has already closed -- one rejection per lease, after the session was over.
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    let granted = 0;
+    client.requestLeaseImpl = () => {
+      granted += 1;
+      return Promise.resolve(sampleGrant({ leaseId: `lease-${String(granted)}` }));
+    };
+    let answerFirstRelease!: (result: { leaseId: string }) => void;
+    client.releaseLeaseImpl = (input) =>
+      input.leaseId === "lease-1"
+        ? new Promise((resolve) => {
+            answerFirstRelease = resolve;
+          })
+        : Promise.resolve({ leaseId: input.leaseId });
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    const closing = session.close();
+    await flushMicrotasks();
+    clock.advance(RELEASE_TIMEOUT_MS);
+    await closing;
+    expect(client.closeCalls).toBe(1);
+
+    // The first release finally answers, long after the budget was spent. The loop is over.
+    answerFirstRelease({ leaseId: "lease-1" });
+    await flushMicrotasks();
+    expect(client.calls.filter((call) => call.method === "releaseLease")).toEqual([
+      { input: { leaseId: "lease-1" }, method: "releaseLease" },
+    ]);
+  });
+
   it("releases a grant that lands after the session closed, and arms no timer for it", async () => {
     const clock = new FakeClock(0);
     const client = new FakeSimlockClient();
@@ -594,6 +672,46 @@ describe("McpSession", () => {
     answerRelease({ leaseId: "lease-1" });
     await expect(releasing).resolves.toEqual({ leaseId: "lease-1", released: true });
     expect(notices, "the agent asked for this; it is not news of a lost device").toEqual([]);
+
+    await session.close();
+  });
+
+  it("does not put the timer back for a lease that was lost while the release was in flight", async () => {
+    // A failed release usually means the session still holds the device, so the timer goes
+    // back. Not here: the daemon ended this lease (an expiry, an operator) while the release
+    // was on the wire, so there is nothing left to renew and the retry would run a ladder
+    // against a record that no longer exists.
+    const clock = new FakeClock(0);
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
+    let failRelease!: (error: unknown) => void;
+    client.releaseLeaseImpl = () =>
+      new Promise((_resolve, reject) => {
+        failRelease = reject;
+      });
+    const session = new McpSession({
+      clock,
+      connect: async () => client,
+      connectForRenew: async () => client,
+    });
+    const notices: unknown[] = [];
+    session.onLeaseLost((notice) => notices.push(notice));
+    await session.lease({ model: "iPhone 17 Pro", platform: "ios" });
+
+    const releasing = session.release({ leaseId: "lease-1" });
+    await flushMicrotasks();
+    client.emitLeaseLost({ deviceId: "device-1", leaseId: "lease-1", reason: "expired" });
+
+    // Transient on its face -- the daemon may serve the next one -- but the lease it was about
+    // is gone regardless.
+    failRelease(new SimlockError("INTERNAL", "domain", "could not release", {}));
+    await expect(releasing).rejects.toMatchObject({ code: "INTERNAL" });
+
+    expect(clock.pendingTimerCount).toBe(0);
+    clock.advance(600_000);
+    await flushMicrotasks();
+    expect(client.calls.filter((call) => call.method === "renewLease")).toEqual([]);
+    expect(notices).toEqual([{ deviceId: "device-1", leaseId: "lease-1", reason: "expired" }]);
 
     await session.close();
   });
@@ -929,6 +1047,14 @@ describe("McpSession", () => {
     expect(renewConnects).toBe(0);
     expect(toolCallConnects).toBe(2);
     expect(second.calls.filter((call) => call.method === "renewLease")).toHaveLength(1);
+
+    // Both callers came back holding this client, and exactly one of them may wire it up: a
+    // second set of push relays would strand the first (only the latest can be unsubscribed),
+    // and every push would reach the agent twice for one thing that happened.
+    const deviceHealth: unknown[] = [];
+    session.onDeviceHealth((notice) => deviceHealth.push(notice));
+    second.emitDeviceUnhealthy({ deviceId: "device-1", leaseId: "lease-1" });
+    expect(deviceHealth).toHaveLength(1);
 
     await session.close();
   });

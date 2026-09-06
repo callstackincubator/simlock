@@ -228,13 +228,19 @@ export class McpSession {
       } catch (error: unknown) {
         // The daemon did not take the lease: this session is still holding the device, and a
         // holder that has stopped renewing loses it at the deadline. So the timer goes back --
-        // except for the answers where there is nothing left to renew (`UNKNOWN_LEASE`, or
-        // `FORBIDDEN` for a lease that was never ours) and for a dead connection, where the
-        // agent has asked to be rid of this lease and reconnecting a timer to keep it alive
-        // would be the opposite of what it asked; it ends at its deadline instead.
+        // unless the lease is not this session's any more. That is the answers where there is
+        // nothing left to renew (`UNKNOWN_LEASE`, or `FORBIDDEN` for a lease that was never
+        // ours) and a dead connection, where the agent has asked to be rid of this lease and
+        // reconnecting a timer to keep it alive would be the opposite of what it asked; and it
+        // is also a `lease-lost` push that arrived while the release was in flight, which drops
+        // the lease from `#renewals` -- restarting on that would renew towards a lease the
+        // daemon has already ended.
         if (held !== undefined) {
-          if (endsRenewal(error)) this.#forgetLease(input.leaseId);
-          else this.#startRenewal(held.lease);
+          if (endsRenewal(error) || !this.#renewals.has(input.leaseId)) {
+            this.#forgetLease(input.leaseId);
+          } else {
+            this.#startRenewal(held.lease);
+          }
         }
         throw error;
       }
@@ -537,6 +543,11 @@ export class McpSession {
       await this.#closeClient(client);
       this.#throwIfClosed();
     }
+    // Every caller that shared `#connecting` arrives here with the same client, and only the
+    // first of them may wire it: a second `#wireClient` would strand the first set of
+    // unsubscribers (`#unwireClient` only knows the latest), leaving two live relays for one
+    // connection and an agent reading every push twice.
+    if (this.#client === client) return client;
     this.#client = client;
     this.#wireClient(client);
     return client;
