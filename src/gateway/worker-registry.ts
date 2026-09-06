@@ -105,8 +105,14 @@ export class WorkerRegistry {
   /**
    * ADR 0005 §31: the uplink is open but `hello` found no overlapping protocol version. The
    * view records both ranges and nothing else -- the gateway asked the worker nothing, because
-   * it cannot -- and the fact is `worker.rejected`, not `worker.connected`: no session was
-   * established, so nothing connected in the sense the other event means.
+   * it cannot.
+   *
+   * No event either way, deliberately. Not `worker.connected`, because nothing usable
+   * connected; and not `worker.rejected`, because that one is about the door (§22) and this
+   * uplink authenticated fine. What an operator needs here is the *standing* fact "this
+   * machine is too old to drive", and that is the view -- which `simlock worker list` shows
+   * until the machine is upgraded, rather than a line that scrolls out of the ring buffer
+   * while the worker keeps redialling.
    */
   incompatible(
     workerId: string,
@@ -126,30 +132,28 @@ export class WorkerRegistry {
       ...(version === undefined ? {} : { version }),
     };
     this.#workers.set(workerId, view);
-    this.options.eventBus.emit(
-      "worker.rejected",
-      {
-        protocol,
-        reason: "incompatible",
-        workerId,
-        ...(label === undefined ? {} : { label }),
-      },
-      "gateway",
-    );
     return view;
   }
 
   /**
-   * An uplink the gateway turned away at the upgrade: no token, an unknown one, or a real token
-   * of the wrong role (ADR 0005 §25). There is no view to build -- the peer never became a
-   * worker -- so this is a fact and nothing else, and `workerId` is only what the connection
-   * claimed in its header.
+   * An uplink the gateway turned away at the upgrade (ADR 0005 §4/§22). The reason is the
+   * outcome the token check produced, kept apart here for the same reason it is kept apart on
+   * the wire: `unauthenticated` (`401`) is "no token, or one I do not know" and points at the
+   * join token, while `forbidden` (`403`) is "a real credential without this authority" and
+   * points at its role -- two different things for an operator to go and fix.
+   *
+   * There is no view to build: the peer never became a worker, so this is a fact and nothing
+   * else, and `workerId` is only ever what the connection claimed in its header.
    */
-  rejected(workerId: string | undefined, label: string | undefined): void {
+  rejected(
+    reason: "forbidden" | "unauthenticated",
+    workerId: string | undefined,
+    label: string | undefined,
+  ): void {
     this.options.eventBus.emit(
       "worker.rejected",
       {
-        reason: "unauthenticated",
+        reason,
         ...(workerId === undefined ? {} : { workerId }),
         ...(label === undefined ? {} : { label }),
       },

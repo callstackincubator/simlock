@@ -91,9 +91,10 @@ export class GatewayService {
         // ADR 0005 §22's fleet audit trail includes the joins that failed: a revoked token
         // retrying at its backoff cap is invisible on the gateway otherwise, and "why is that
         // machine not in the fleet" is exactly the question an operator brings to
-        // `simlock events`. The uplink carries no identity the gateway trusts at this point,
-        // so the fact names no worker.
-        if (outcome !== "accept") this.#registry.rejected(undefined, undefined);
+        // `simlock events`. Which of the two refusals it was travels with the fact -- the
+        // event carries the same 401/403 distinction the upgrade answered with. The uplink
+        // carries no identity the gateway trusts at this point, so the fact names no worker.
+        if (outcome !== "accept") this.#registry.rejected(outcome, undefined, undefined);
         return outcome;
       },
     });

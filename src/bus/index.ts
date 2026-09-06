@@ -177,24 +177,29 @@ export interface EventMap {
   // added to the payload, so `simlock events` against a gateway shows the fleet; these five are
   // the facts only the gateway can know.
   /** A worker's uplink opened and its `hello` completed: the gateway can now drive it. An
-   * uplink that never gets this far is `worker.rejected` instead. */
+   * uplink that authenticated but negotiated no protocol emits nothing at all (ADR 0005 §31):
+   * it is in the registry as `incompatible`, which is where an operator finds it. */
   "worker.connected": {
     readonly workerId: string;
     readonly label?: string;
     readonly version?: string;
   };
   /**
-   * An uplink reached the gateway and was turned away before any session existed. Two reasons,
-   * and they are worth telling apart: `unauthenticated` is a join token the gateway does not
-   * hold with role `worker` (revoked, mistyped, or the wrong kind of token), and
-   * `incompatible` is ADR 0005 §31's version skew -- the token was fine, `hello` found no
-   * overlapping protocol range, and `protocol` carries both.
+   * An uplink was turned away at the door, before any session existed (ADR 0005 §4/§22).
+   * Two reasons, and they are the same two the rest of the API tells apart:
+   * `unauthenticated` (`401`) is a missing or unrecognized join token -- a revoked or mistyped
+   * one lands here -- and `forbidden` (`403`) is a real token whose role is not `worker`.
    *
-   * `workerId` is optional because an unauthenticated peer is not a known worker: it is
-   * whatever the connection *claimed* in its header, and may be absent entirely.
+   * Version skew is deliberately *not* one of these: a worker whose `hello` finds no
+   * overlapping protocol range authenticated fine, so it enters the registry as
+   * `incompatible` and emits nothing (§31). This event is only ever about the door.
+   *
+   * Every field but `reason` is optional because a dial that fails authentication proves no
+   * identity: `workerId` and `label` are whatever the connection *claimed* in its headers, and
+   * may be absent entirely.
    */
   "worker.rejected": {
-    readonly reason: "incompatible" | "unauthenticated";
+    readonly reason: "forbidden" | "unauthenticated";
     readonly workerId?: string;
     readonly label?: string;
     readonly protocol?: {

@@ -105,11 +105,10 @@ describe("WorkerRegistry", () => {
       protocol: { gateway: { min: 5, max: 5 }, worker: { min: 4, max: 4 } },
       version: "0.2.0",
     });
-    // Not `worker.connected`: no session was established, so nothing connected in that sense.
-    expect(events[0]).toMatchObject({
-      event: "worker.rejected",
-      payload: { reason: "incompatible", workerId: "wrk_1" },
-    });
+    // ADR 0005 §31: no event at all. Not `worker.connected`, because nothing usable
+    // connected, and not `worker.rejected` either -- that uplink authenticated. The view is
+    // the fact.
+    expect(events).toEqual([]);
   });
 
   it("clears the protocol ranges when an upgraded worker reconnects", () => {
@@ -127,17 +126,17 @@ describe("WorkerRegistry", () => {
     expect(view.protocol).toBeUndefined();
   });
 
-  it("reports an unauthenticated uplink without inventing a view for it", () => {
-    const { events, workers } = registry();
+  it.each(["unauthenticated", "forbidden"] as const)(
+    "reports a %s uplink without inventing a view for it",
+    (reason) => {
+      const { events, workers } = registry();
 
-    workers.rejected(undefined, undefined);
+      workers.rejected(reason, undefined, undefined);
 
-    expect(workers.views()).toEqual([]);
-    expect(events[0]).toMatchObject({
-      event: "worker.rejected",
-      payload: { reason: "unauthenticated" },
-    });
-  });
+      expect(workers.views()).toEqual([]);
+      expect(events[0]).toMatchObject({ event: "worker.rejected", payload: { reason } });
+    },
+  );
 
   it("keeps a disconnected view with everything it last reported", () => {
     const { clock, events, workers } = registry();
