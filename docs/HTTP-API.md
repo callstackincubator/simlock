@@ -293,14 +293,16 @@ and an id outside that set simply isn't in the list. `404` covers "doesn't
 exist" and "not yours" identically, the same way `lease.list` itself does
 not distinguish them.
 
-`POST /v1/leases/{id}/renew` and `DELETE /v1/leases/{id}` are different:
-both dispatch `lease.renew`/`lease.release` directly, so another requester's
-own, still-live lease answers `403 FORBIDDEN` from those two routes — the
+`POST /v1/leases/{id}/renew`, `DELETE /v1/leases/{id}`, and `POST
+/v1/leases/{id}/exec` are different: all three dispatch their operation
+(`lease.renew`, `lease.release`, `device.exec`) directly, so another
+requester's own, still-live lease answers `403 FORBIDDEN` from them — the
 same answer the socket transport gives, via the same operation's `ownsLease`
-authorize hook. (0.3.0 briefly had all four routes answering `404` here;
+authorize hook. (0.3.0 briefly had every lease route answering `404` here;
 that overcorrected the lease-*request* routes' old `403` and is why renew
 and release were moved off the `lease.list`-filtered lookup — see
-`docs/known-pitfalls.md`.)
+`docs/known-pitfalls.md`. `exec` arrives on the dispatching side of that
+split, with renew and release.)
 
 This is different again from the lease-*request* routes below
 (`/v1/lease-requests/{id}` and friends), which are still HTTP's own resource
@@ -391,15 +393,17 @@ would only stall the stream until the timeout. A gateway in the path parses
 none of this: it proxies the call to the owning worker and relays the stream
 back unchanged.
 
-`requesterId` (optional) is the same field `lease.request` takes: an
-`operator` token may name another requester, an `agent` token may not, and it
-defaults to the token's own requester id (ADR 0003 §4). Ownership is checked
-on both hops and an admin session does not skip the second — the gateway
-checks its own lease index, and the worker compares the forwarded
-(namespaced) requester against the lease it actually holds. That second check
-is not a formality: the gateway's session on a worker *is* an admin session,
-so without it one fleet agent's ownership would rest on the gateway's index
-alone.
+`requesterId` (optional, defaulting to the caller's own) is what a proxying
+caller supplies. An `agent` token does not need it and may not use it: it is
+gated the ordinary way, its own requester against the lease's `ownerId`,
+exactly as on `renew` and `release`. Only an `operator` token may name
+another requester here. The field exists for the one session that would
+otherwise bypass the ownership check — the gateway's admin session on a
+worker — and on this operation, unlike renew and release, **admin does not
+bypass**: the worker compares the supplied `requesterId` to the lease's own
+`requesterId` and answers `FORBIDDEN` on a mismatch. Ownership is therefore
+checked on both hops, the gateway against its own lease index and the worker
+against the lease it actually holds.
 
 `stdin` (optional) is a **single string, sent with the request** and written
 to the process's stdin, which is then closed. There is no incremental stdin
@@ -437,8 +441,8 @@ a file on the device's own machine instead.
 Failures particular to this route:
 
 - `403 FORBIDDEN` — the lease belongs to another requester (same rule as
-  `renew`/`release`), or an `agent` token named a `requesterId` that is not
-  its own.
+  `renew`/`release`), an `agent` token supplied a `requesterId` at all, or an
+  `operator` token supplied one that does not match the lease's.
 - `404 UNKNOWN_LEASE` — no such lease, or it has expired or been released.
 - `422 PASSTHROUGH_REFUSED` — a refused verb, a caller-supplied `--set`/`-P`,
   or a bare `adb shell`. `422 UNKNOWN_PASSTHROUGH_TOOL` for a `tool` outside

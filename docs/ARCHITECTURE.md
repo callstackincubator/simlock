@@ -326,7 +326,13 @@ A worker with `gateway.url` and `gateway.token` set opens one outbound
 WebSocket to `<gateway.url>/v1/uplink` on start, and again after any
 disconnect on exponential backoff, presenting its join token (role `worker`)
 and its instance id. The gateway verifies the token against its own token
-store; anything else is `401`.
+store. A missing or unrecognized token is `401`; a **valid token of the wrong
+role is `403`**, not `401` — ADR 0005 §4 says "rejects anything else with
+`401`", but the two failures are different facts and the rest of the API
+already separates them (a good credential that does not permit this is
+`FORBIDDEN`), so the docs settle on the split rather than collapse it. Either
+way nothing enters the worker registry and the gateway emits
+`worker.rejected` (see [EVENTS.md](EVENTS.md)).
 
 Over that one socket **the gateway is the protocol client**. It sends `hello`
 and issues ordinary contract operations to the worker's own dispatcher,
@@ -485,7 +491,14 @@ stops renewing loses its lease on the worker's clock, gateway or no gateway.
   gateway-issued lease on any worker gets `REQUESTER_ALREADY_LEASED` from the
   gateway, naming the existing lease. The gateway enforces this from its own
   index of the leases *it* issued, rebuilt from each worker's `lease.list` on
-  uplink connect.
+  uplink connect. It picks its own out of that list by the requester prefix
+  it stamps on every lease it forwards — `gw:<its own instance id>:` — which
+  works precisely because the gateway's instance id is stable across
+  restarts: the index can be rebuilt from a worker's leases alone, with
+  nothing persisted on the gateway and no ambiguity about which of them are
+  its own, another gateway's, or the worker's local ones. `release --all` and
+  the disconnected-retention hold both use that same filter, which is what
+  keeps them from ever touching a lease this gateway did not issue.
 - **The requester id the gateway forwards is namespaced**:
   `gw:<gateway instance id>:<requester>`. A local agent on the worker machine
   and a remote agent behind the gateway therefore can never collide on the
@@ -520,19 +533,18 @@ does not: a bare `adb shell` with no command is refused
 session nobody can type into, which would otherwise sit there until the
 timeout killed it.
 
-**Ownership is proven on both hops, and admin does not skip the second one.**
-`requesterId` is the same optional field `lease.request` already takes: an
-admin session may name one, any other session may not, and it defaults to the
-principal (ADR 0003 §4). The worker compares it against the lease's own
-`requesterId` and refuses a mismatch — and unlike `lease.renew` or
-`lease.release`, an `admin` session does **not** bypass that comparison on
-this operation. The uplink is the reason: the gateway's session on a worker
-*is* an admin session, so an admin bypass would leave "the gateway checked
-its own lease index" as the only thing between one fleet agent and another
-agent's device. Two independent checks, one per hop, is what that ownership
-actually rests on — the gateway checks its lease index and forwards the
-namespaced requester, and the worker checks that requester against the lease
-in front of it.
+**Ownership is proven on both hops.** A non-admin session is gated the
+ordinary way — its principal against the lease's `ownerId` (ADR 0003 §4),
+exactly as `lease.renew` and `lease.release` are. `requesterId` (optional,
+defaulting to the principal) exists for the one session that would otherwise
+bypass that check: the gateway's admin session on a worker. Unlike renew and
+release, **admin does not bypass here** — the worker compares the supplied
+`requesterId` to the lease's own `requesterId` and answers `FORBIDDEN` on a
+mismatch. Without that, "the gateway checked its own lease index" would be
+the only thing standing between one fleet agent and another agent's device.
+Two independent checks, one per hop: the gateway checks its lease index and
+forwards the namespaced requester, and the worker checks that requester
+against the lease in front of it.
 
 The **gateway proxies** the call to the owning worker over the uplink and
 relays those pushes to the calling connection unchanged. It parses nothing
@@ -542,7 +554,11 @@ on the worker (ten minutes) is the authoritative one, because that is the
 side owning the process and able to kill it; `gateway.execTimeoutMs` (eleven
 minutes) is a backstop for the case where the worker never answers at all —
 deliberately the longer of the two, so an ordinary timeout surfaces as the
-worker's own `EXEC_TIMEOUT` instead of racing the gateway's.
+worker's own `EXEC_TIMEOUT` instead of racing the gateway's. (ADR 0005 §19e
+gives both defaults as ten minutes while also making the worker's
+authoritative; equal values make that authority a coin toss on every timeout,
+so the docs settle on eleven minutes for the gateway. The ADR's intent is
+kept, its number is not.)
 
 Two deliberate limits: `stdin` is a single string sent with the request, not
 an incremental channel, and there is no pseudo-terminal — line-oriented
@@ -574,8 +590,11 @@ Worker business events are republished on the gateway's bus with `workerId`
 added to the payload and land in the gateway's own ring buffer, so `simlock
 events --follow` against a gateway shows the whole fleet. The gateway also
 emits its own facts — `worker.connected`, `worker.disconnected`,
-`worker.removed`, `worker.drain-started`, `worker.drain-ended`, and
-`request.dispatched`; see [EVENTS.md](EVENTS.md).
+`worker.rejected`, `worker.removed`, `worker.drain-started`,
+`worker.drain-ended`, and `request.dispatched`; see [EVENTS.md](EVENTS.md).
+(`worker.rejected` is the one not in ADR 0005 §22's list: an uplink refused at
+the door leaves no other trace, and "the machine that never appeared" is
+exactly what an operator comes looking for.)
 
 ### Failure behaviour
 
@@ -595,9 +614,12 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
 - **Gateway restart.** In-flight requests are lost, exactly as a worker
   restart loses them today (durable requests arrive with #72, for both).
   Leases survive on their workers; workers reconnect on their backoff and the
-  gateway rebuilds every view and its lease index from them, while the worker
-  registry — which workers it knows, and which are drained — comes back off
-  disk rather than being re-derived. Clients keep their leases and resume
+  gateway rebuilds every view and its lease index from them — picking its own
+  leases out of each `lease.list` by the `gw:<its own instance id>:`
+  requester prefix, which is why an instance id stable across restarts is
+  what makes a stateless rebuild possible at all. The worker registry, which
+  workers it knows and which are drained, comes back off disk rather than
+  being re-derived. Clients keep their leases and resume
   renewing once the gateway answers again; a lease whose deadline passes
   while the gateway is down expires on the worker, like any other unrenewed
   lease.
