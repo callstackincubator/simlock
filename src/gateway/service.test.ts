@@ -224,10 +224,10 @@ describe("GatewayService", () => {
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);
-    expect(harness.events.at(-1)).toMatchObject({
-      event: "worker.rejected",
-      payload: { reason: "incompatible", workerId: "wrk_1" },
-    });
+    // ADR 0005 §31: that uplink authenticated, so it is not a `worker.rejected` -- and there
+    // is no `worker.connected` either, because nothing usable connected.
+    expect(eventNames(harness.events)).not.toContain("worker.rejected");
+    expect(eventNames(harness.events)).not.toContain("worker.connected");
 
     await harness.service.stop();
   });
@@ -269,22 +269,27 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("reports an uplink it turned away, without inventing a worker for it", async () => {
-    const harness = fleet({ authenticate: () => "unauthenticated" });
-    await harness.service.start();
+  // The two refusals reach the event stream apart, because they point at different fixes:
+  // the join token itself, or the role it was minted with (ADR 0005 §4).
+  it.each(["unauthenticated", "forbidden"] as const)(
+    "reports a %s uplink it turned away, without inventing a worker for it",
+    async (reason) => {
+      const harness = fleet({ authenticate: () => reason });
+      await harness.service.start();
 
-    await expect(harness.join("wrk_1", new ScriptedWorkerClient())).rejects.toMatchObject({
-      code: "rejected",
-    });
+      await expect(harness.join("wrk_1", new ScriptedWorkerClient())).rejects.toMatchObject({
+        code: "rejected",
+      });
 
-    expect(harness.service.workers.views()).toEqual([]);
-    expect(harness.events.at(-1)).toMatchObject({
-      event: "worker.rejected",
-      payload: { reason: "unauthenticated" },
-    });
+      expect(harness.service.workers.views()).toEqual([]);
+      expect(harness.events.at(-1)).toMatchObject({
+        event: "worker.rejected",
+        payload: { reason },
+      });
 
-    await harness.service.stop();
-  });
+      await harness.service.stop();
+    },
+  );
 
   it("closes the uplink when a worker does not grant the gateway admin", async () => {
     const harness = fleet();

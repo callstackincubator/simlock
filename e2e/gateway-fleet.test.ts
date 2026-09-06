@@ -195,7 +195,7 @@ describe("gateway fleet", () => {
         return events.some(
           (event) =>
             event.event === "worker.rejected" &&
-            (event.payload as { reason?: string }).reason === "unauthenticated",
+            (event.payload as { reason?: string }).reason === "forbidden",
         );
       },
       { label: "the gateway reported the refused uplink", timeout: 20_000 },
