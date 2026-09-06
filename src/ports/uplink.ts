@@ -28,7 +28,7 @@
  * `./uplink-websocket.ts`, which is the one file that imports `ws` -- kept out of the ports
  * barrel so the CLI and the MCP server, which never open an uplink, never load it.
  */
-import type { IpcConnection } from "./ipc.js";
+import { subscribeListener, type IpcConnection } from "./ipc.js";
 
 /** Header carrying the worker's instance identity (`instance.json`) at upgrade (ADR 0005 §3a,
  * §4). A header rather than a query parameter so the id stays out of proxy access logs. */
@@ -205,12 +205,12 @@ class PairedConnection implements IpcConnection {
   }
 
   onData(listener: (chunk: string) => void): () => void {
-    this.#dataListeners.add(listener);
+    const unsubscribe = subscribeListener(this.#dataListeners, listener);
     if (this.#pending.length > 0) {
       const buffered = this.#pending.splice(0);
       for (const chunk of buffered) listener(chunk);
     }
-    return () => this.#dataListeners.delete(listener);
+    return unsubscribe;
   }
 
   onClose(listener: () => void): () => void {
@@ -220,8 +220,7 @@ class PairedConnection implements IpcConnection {
       listener();
       return () => {};
     }
-    this.#closeListeners.add(listener);
-    return () => this.#closeListeners.delete(listener);
+    return subscribeListener(this.#closeListeners, listener);
   }
 
   onError(): () => void {

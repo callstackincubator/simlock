@@ -118,45 +118,69 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
  * would make `simlock lease` non-deterministic across an unchanged fleet.
  */
 export function aggregateCatalog(views: readonly WorkerView[], platform?: Platform): CatalogOutput {
-  const byPlatform = new Map<
-    Platform,
-    {
-      readonly models: Map<string, string[]>;
-      readonly runtimes: Map<string, string[]>;
-      readonly defaults: Set<string | undefined>;
-    }
-  >();
+  const byPlatform = indexCatalogs(views, platform);
+  const platforms: PlatformCatalog[] = [];
+  // Iterated over `PLATFORMS` rather than the map's own keys so the answer is ordered the same
+  // way a worker's own `catalog.get` orders it, whichever worker happened to connect first.
+  for (const candidate of PLATFORMS) {
+    const bucket = byPlatform.get(candidate);
+    if (bucket !== undefined) platforms.push(renderPlatform(candidate, bucket));
+  }
+  return { platforms };
+}
+
+/** One platform's models and runtimes, each mapped to the workers that reported it, plus every
+ * `defaultRuntime` seen for it -- which is what makes disagreement visible to `renderPlatform`
+ * rather than resolved silently at insertion. */
+interface CatalogBucket {
+  readonly models: Map<string, string[]>;
+  readonly runtimes: Map<string, string[]>;
+  readonly defaults: Set<string | undefined>;
+}
+
+function indexCatalogs(
+  views: readonly WorkerView[],
+  platform: Platform | undefined,
+): Map<Platform, CatalogBucket> {
+  const byPlatform = new Map<Platform, CatalogBucket>();
   for (const view of views) {
     if (view.connection !== "connected") continue;
     for (const entry of view.catalog) {
-      if (platform !== undefined && entry.platform !== platform) continue;
-      const bucket = byPlatform.get(entry.platform) ?? {
-        defaults: new Set<string | undefined>(),
-        models: new Map<string, string[]>(),
-        runtimes: new Map<string, string[]>(),
-      };
-      byPlatform.set(entry.platform, bucket);
-      for (const model of entry.models) annotate(bucket.models, model, view.id);
-      for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, view.id);
-      bucket.defaults.add(entry.defaultRuntime);
+      if (platform === undefined || entry.platform === platform) {
+        addCatalogEntry(byPlatform, entry, view.id);
+      }
     }
   }
+  return byPlatform;
+}
 
-  const platforms: PlatformCatalog[] = [];
-  for (const candidate of PLATFORMS) {
-    const bucket = byPlatform.get(candidate);
-    if (bucket === undefined) continue;
-    const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
-    platforms.push({
-      models: [...bucket.models.keys()].sort(),
-      modelWorkers: Object.fromEntries(bucket.models),
-      platform: candidate,
-      runtimes: [...bucket.runtimes.keys()].sort(),
-      runtimeWorkers: Object.fromEntries(bucket.runtimes),
-      ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
-    });
-  }
-  return { platforms };
+/** Folds one worker's catalog entry for one platform into that platform's bucket. */
+function addCatalogEntry(
+  byPlatform: Map<Platform, CatalogBucket>,
+  entry: PlatformCatalog,
+  workerId: string,
+): void {
+  const bucket = byPlatform.get(entry.platform) ?? {
+    defaults: new Set<string | undefined>(),
+    models: new Map<string, string[]>(),
+    runtimes: new Map<string, string[]>(),
+  };
+  byPlatform.set(entry.platform, bucket);
+  for (const model of entry.models) annotate(bucket.models, model, workerId);
+  for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
+  bucket.defaults.add(entry.defaultRuntime);
+}
+
+function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCatalog {
+  const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
+  return {
+    models: [...bucket.models.keys()].sort(),
+    modelWorkers: Object.fromEntries(bucket.models),
+    platform,
+    runtimes: [...bucket.runtimes.keys()].sort(),
+    runtimeWorkers: Object.fromEntries(bucket.runtimes),
+    ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
+  };
 }
 
 function annotate(index: Map<string, string[]>, key: string, workerId: string): void {

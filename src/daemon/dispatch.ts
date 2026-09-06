@@ -206,11 +206,11 @@ export async function runDispatch<Op extends OperationName>(
   ) as z.infer<(typeof OPERATIONS)[Op]["output"]>;
 }
 
-export function roleSatisfies(sessionRole: Role, required: Role): boolean {
+function roleSatisfies(sessionRole: Role, required: Role): boolean {
   return sessionRole === "admin" || required === "agent";
 }
 
-export function parseDispatchInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
+function parseDispatchInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
   const result = schema.safeParse(value);
   if (result.success) return result.data;
   throw new DispatchError("BAD_REQUEST", describeSchemaIssues(result.error.issues));
@@ -225,7 +225,7 @@ export function parseDispatchInput<Output>(schema: z.ZodType<Output>, value: unk
  * declares it is dropped, not a failure -- only a missing or mistyped *declared* field is a
  * bug worth failing loudly over.
  */
-export function parseDispatchOutput<Output>(
+function parseDispatchOutput<Output>(
   schema: z.ZodType<Output>,
   value: unknown,
   operationName: string,

@@ -335,8 +335,9 @@ export class DaemonServer {
     return this.options.host.endpoint;
   }
 
-  /** Public read of `#health`, kept for tests and any future auxiliary frontend that needs it without becoming a privileged internal itself. */
-  // fallow-ignore-next-line unused-class-member -- public surface exercised directly by server.test.ts; `status.get` itself reads `#health` through the dispatcher's own `health()` closure, not this getter.
+  /** Public read of `#health`. A gateway's dispatcher reads it through here (`main.ts` passes
+   * `() => daemon.health` as its `health` hook), which is what keeps `status.get` on a gateway
+   * reporting the same daemon health a worker does without the gateway holding a second copy. */
   get health(): DaemonHealth {
     return this.#health;
   }

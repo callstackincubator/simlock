@@ -169,24 +169,7 @@ export class WorkerLink {
     }
     this.#refreshing = true;
     try {
-      const [status, devices, catalog, config] = await Promise.all([
-        client.getStatus(),
-        client.list({ kind: "devices" }),
-        options.includeCatalog === true ? client.getCatalog() : undefined,
-        // Read on the same pass as the catalog: both are session-lifetime facts, and pairing
-        // them keeps the per-event refresh down to the two calls that actually go stale.
-        options.includeCatalog === true ? client.getConfig() : undefined,
-      ]);
-      this.options.registry.refresh(this.workerId, {
-        capacity: status.capacity,
-        devices: viewDevicesSchema.parse(devices),
-        health: status.health,
-        leases: status.leases,
-        queueDepth: status.queueDepth,
-        version: client.daemonVersion,
-        ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
-        ...(config === undefined ? {} : { downloads: { policy: config.downloads.policy } }),
-      });
+      await this.#rebuildView(client, options.includeCatalog === true);
     } catch (error: unknown) {
       // A refresh that fails because the uplink died needs no handling here: `onClose` has
       // already marked the view disconnected. Anything else is worth a line, and the next tick
@@ -202,6 +185,29 @@ export class WorkerLink {
         void this.refresh();
       }
     }
+  }
+
+  /** The round trips one refresh makes, and what they become in the view. Split out of
+   * `refresh` so that method is only the coalescing rule and this one is only the reads. */
+  async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
+    const [status, devices, catalog, config] = await Promise.all([
+      client.getStatus(),
+      client.list({ kind: "devices" }),
+      includeCatalog ? client.getCatalog() : undefined,
+      // Read on the same pass as the catalog: both are session-lifetime facts, and pairing
+      // them keeps the per-event refresh down to the two calls that actually go stale.
+      includeCatalog ? client.getConfig() : undefined,
+    ]);
+    this.options.registry.refresh(this.workerId, {
+      capacity: status.capacity,
+      devices: viewDevicesSchema.parse(devices),
+      health: status.health,
+      leases: status.leases,
+      queueDepth: status.queueDepth,
+      version: client.daemonVersion,
+      ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
+      ...(config === undefined ? {} : { downloads: { policy: config.downloads.policy } }),
+    });
   }
 
   async close(): Promise<void> {

@@ -531,6 +531,11 @@ function extractGlobalToken(argv: readonly string[]): {
   return { token, rest };
 }
 
+/**
+ * The command switch: one arm per published command, each one line handing off to that
+ * command's own function.
+ */
+// fallow-ignore-next-line complexity -- flat dispatch: the cyclomatic count is the number of commands Simlock publishes (cognitive complexity is 6, and every arm is a single delegation). `worker` is ADR 0005's addition to it; splitting the switch would hide the CLI's surface rather than simplify it.
 export async function runCli(
   argv: readonly string[],
   environment: CliEnvironment = defaultCliEnvironment(),
