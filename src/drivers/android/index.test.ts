@@ -1800,24 +1800,27 @@ describe("AndroidDriver.create", () => {
     );
   });
 
-  it("refuses a caller-supplied server flag in every spelling adb accepts", async () => {
+  it("refuses a caller-supplied server flag in the globals, in every spelling adb accepts", async () => {
     // `adb` takes the *last* `-P` on the line, so a caller-supplied one silently wins over the
     // one this driver inserts and the command lands on whatever server that names -- the
     // machine's default one included, which is outside Simlock's containment entirely (safety
     // rule 9). Same hole `--set`/`--profiles` closes on the iOS side, same answer.
+    //
+    // The attached spellings matter most: adb parses `-P` with `strncmp(argv[0], "-P", 2)`, so
+    // `-P5037` is a normal way to write it, and a whole-word check would have refused the
+    // separated form while passing the one that actually escapes.
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
     for (const args of [
       ["-P", "5037", "devices"],
+      ["-P5037", "devices"],
       ["-P=5037", "devices"],
       ["--server-port", "5037", "devices"],
-      ["--server-port=5037", "devices"],
-      ["-L", "tcp:127.0.0.1:5037", "devices"],
-      ["-L=tcp:127.0.0.1:5037", "devices"],
       ["-H", "other-host", "devices"],
-      ["-H=other-host", "devices"],
-      ["shell", "getprop"].concat(["-P", "5037"]),
+      ["-Hother-host", "devices"],
+      ["-L", "tcp:127.0.0.1:5037", "devices"],
+      ["-s", "emulator-5554", "-P5037", "shell", "getprop"],
     ]) {
       expect(() => driver.passthrough(args), args.join(" ")).toThrow(PassthroughRefusedError);
       expect(() => driver.passthrough(args, { hasTerminal: false }), args.join(" ")).toThrow(
@@ -1825,9 +1828,21 @@ describe("AndroidDriver.create", () => {
       );
     }
 
-    // An argument that merely starts with one of those letters is not one of those flags.
-    expect(driver.passthrough(["-s", "emulator-5554", "devices"]).args).toContain("devices");
-    expect(driver.passthrough(["shell", "echo", "-Please"]).args).toContain("-Please");
+    // Past the subcommand every argument is that subcommand's operand, so one that merely
+    // looks like a global travels through: refusing `echo -Please` would break a working
+    // command to prevent nothing.
+    for (const args of [
+      ["shell", "echo", "-Please"],
+      ["shell", "getprop", "-P5037"],
+      ["-s", "emulator-5554", "devices"],
+      ["--version"],
+    ]) {
+      expect(driver.passthrough(args).args, args.join(" ")).toEqual([
+        "-P",
+        String(adbServerPort),
+        ...args,
+      ]);
+    }
   });
 
   it("refuses a bare `adb shell` only where the caller has no terminal", async () => {
