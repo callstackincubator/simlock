@@ -34,8 +34,9 @@ own bump, since it is the same wire and the same upgrade.
 ADR 0005 is **Accepted — not yet implemented** as well: the entries under
 "ADR 0005" below describe the decided end state, and they land with the PRs
 that implement it (`device.exec` on the worker, then the gateway skeleton and
-worker views, the fleet queue and forwarding, drain and reconnect, and
-finally these docs).
+worker views, the fleet queue and forwarding, drain and reconnect). The
+documentation is the exception to that order: it lands first, as the
+specification those changes are written against.
 
 ### ⚠ BREAKING CHANGES
 

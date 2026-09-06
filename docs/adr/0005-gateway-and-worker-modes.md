@@ -591,7 +591,8 @@ drive the device it leased.
   once. Over the uplink it is ordinary negotiation (requirement 31).
 - New config: `mode`, `gateway.url`, `gateway.token`, `gateway.label`,
   `exec.timeoutMs` (worker side, ten minutes and authoritative);
-  `gateway.routing`, `gateway.disconnectedRetentionMs` (24 hours),
+  `gateway.routing` (`warm-then-free`, requirement 13),
+  `gateway.disconnectedRetentionMs` (24 hours),
   `gateway.execTimeoutMs` (gateway side, eleven minutes — a backstop
   deliberately longer than the worker's, requirement 19e). Two pairs are
   rejected at load rather than warned about, because neither has a safe
@@ -628,7 +629,11 @@ drive the device it leased.
      and progress pushes relayed;
   3. drain semantics, `WORKER_UNREACHABLE` paths, reconnect rebuild, e2e
      test;
-  4. docs, changelog, and the #88 endpoints.
+  4. the #88 endpoints. The documentation half of this sequence is the
+     exception to its ordering: it lands **first**, with this record's
+     acceptance, because "Accepted — not yet implemented" means the docs are
+     the specification the PRs above are written against rather than a
+     write-up of what they did.
 
 ## Alternatives considered
 
@@ -660,7 +665,12 @@ drive the device it leased.
   Rejected in favour of proxying `device.exec`.
 - **Fanning `doctor.run` / `cleanup.run` out to every worker.** Useful for
   the console later; a fleet-wide destructive command from one endpoint is
-  not something v1 should offer. Deferred; all four stay per-worker.
+  not something v1 should offer. Rejected for these operations, and the
+  gateway's `UNSUPPORTED_IN_GATEWAY_MODE` is therefore permanent rather than
+  a placeholder: a fleet-wide form, if it is ever wanted, is a **new
+  operation** with its own name, role, and blast radius — not `doctor.run`
+  or `cleanup.run` growing a second meaning on a gateway. All four stay
+  per-worker.
 - **Naming the modes `host` / `worker`.** Rejected: agent-device already
   has a Host process (#70) and the docs use "host" for the machine.
 - **A gateway that is also a worker (hybrid).** Every gateway code path
