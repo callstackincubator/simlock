@@ -288,6 +288,76 @@ there is nothing left to renew and nothing to drain the buffer on. A polling
 client learns it the other way round — the next `POST /v1/leases/{id}/renew`
 against an ended lease answers `404 UNKNOWN_LEASE`.
 
+### `POST /v1/leases/{id}/exec`
+
+Role: `agent` (own lease; `operator` any). Runs one `simctl`/`adb` command
+**on the machine that owns the device** and streams its output back. This is
+what makes a leased device drivable from here at all: every other way of
+reaching one assumes the caller shares that machine's filesystem.
+
+```json
+{ "tool": "simctl", "args": ["list", "devices"], "stdin": "y\n" }
+```
+
+`tool` is `simctl` or `adb`; `args` are passed through unchanged. The daemon
+resolves them through the same driver passthrough `simlock simctl` /
+`simlock adb` use — the same scoping flags, and the same refusal list, so a
+verb the driver will not proxy (`simctl delete`, `adb kill-server`, …) is
+`422 PASSTHROUGH_REFUSED` here too and nothing is spawned for it. Nothing else
+about the arguments is parsed, and the *device* is named by them, not by the
+lease: the lease id is the ownership proof.
+
+`stdin` (optional) is written to the command once and the pipe is then closed.
+There is no pseudo-terminal, so line-oriented commands work and full-screen or
+interactive ones do not.
+
+→ `200`, `Content-Type: text/event-stream`, the same SSE shape
+`/v1/lease-requests/{id}/events` uses. One event per chunk of output as it is
+written, then exactly one terminal event:
+
+```
+event: output
+data: {"stream":"stdout","chunk":"== Devices ==\n"}
+
+event: output
+data: {"stream":"stderr","chunk":"No devices found\n"}
+
+event: exit
+data: {"exitCode":0}
+```
+
+`chunk` is whatever the command wrote, decoded as UTF-8 and forwarded
+unsplit — not a line, not a frame. Output is streamed and never buffered by
+the daemon, so there is no size cap and the first chunk arrives while the
+command is still running; a client that wants lines assembles them itself. A
+`: keepalive` comment every ~15s keeps idle tunnels open, as elsewhere.
+
+A failure that lands **before any output** is answered as an ordinary JSON
+error with its own status instead of a stream: `403 FORBIDDEN` for another
+requester's lease (dispatched through the same `ownsLease` hook as renew and
+release), `404 UNKNOWN_LEASE` for an id that names none, `400 BAD_REQUEST` for
+a malformed body, `422 PASSTHROUGH_REFUSED` for a refused verb. Once a byte
+has been written the status is already `200`, so a later failure arrives as a
+terminal event instead:
+
+```
+event: error
+data: {"error":{"code":"EXEC_TIMEOUT","message":"..."}}
+```
+
+`EXEC_TIMEOUT` (`504`) is the daemon killing a command that outran
+`exec.timeoutMs` (ten minutes by default, see
+[CONFIGURATION.md](CONFIGURATION.md)). It is reported instead of the exit code
+the kill produced, because "we stopped it" and "it failed" are different
+answers. Disconnecting does **not** kill the command — the daemon simply stops
+writing its output, the same way closing a connection releases no lease; the
+timeout is what bounds it.
+
+Paths in `args` resolve on the daemon's filesystem
+(`{"tool":"simctl","args":["install","booted","/build/MyApp.app"]}` needs that
+path to exist *there*). Getting a file onto that machine is not part of this
+API in this version — see [Not implemented](#not-implemented).
+
 ### `DELETE /v1/leases/{id}`
 
 Role: `agent` (own lease); `operator` may release any lease.
@@ -325,8 +395,9 @@ Every failure is the same shape the daemon protocol uses:
 | 403 | `FORBIDDEN` (role doesn't permit the route; a `/v1/lease-requests/*` route whose request belongs to another requester; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}` naming another requester's still-live lease) |
 | 404 | `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted) |
-| 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER` |
+| 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a `device.exec` verb the driver will not proxy) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`) |
+| 504 | `EXEC_TIMEOUT` (a `POST /v1/leases/{id}/exec` command outran `exec.timeoutMs` and was killed; arrives as a terminal `error` event instead if output had already started) |
 
 ## Lifecycle semantics
 
@@ -364,9 +435,15 @@ Every failure is the same shape the daemon protocol uses:
 - `nuke` is absent from the HTTP surface entirely, deliberately: a
   remote fleet-wipe endpoint is a footgun even behind auth. It stays
   SSH/local-only (`simlock nuke`).
-- `dataPlane` on the lease object is reserved and always `null` — driving
-  the leased device remotely is tracked separately (the agent-device
-  integration work), not in this version.
+- `dataPlane` on the lease object is reserved and always `null`. Running
+  commands against a leased device is no longer what it was reserved for --
+  `POST /v1/leases/{id}/exec` does that, over this same API -- so what is left
+  behind it is the byte-heavy half: live screen streaming, port forwarding,
+  interactive TTYs. None of that is in this version.
+- **File transfer.** A command that names a path runs against the daemon's
+  filesystem, and there is no route that puts a file there. An `.app` or an
+  `.apk` arrives out of band (a shared volume, a CI checkout on that machine)
+  in this version.
 - MCP-over-HTTP, in-process TLS, and multi-host brokering are all out of
   scope for this version too (a per-lease `dataPlane.baseUrl` already leaves
   room for the last one, once it exists).

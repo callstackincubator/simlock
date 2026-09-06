@@ -265,6 +265,22 @@ by the migration, which `doctor` reports and `--fix` destroys through the old
 unscoped path — permitted because a registry record names it, which is what
 registry-only destruction asks for.
 
+Containment cuts both ways, so the scoping has to be handed back to a lease
+holder that needs to drive its device. That happens two ways, and both go
+through the same driver code (`Driver.passthrough()`, which owns the scoping
+flags *and* the list of verbs it will not proxy -- `simctl delete`,
+`adb kill-server`, anything that would change a device's lifecycle behind the
+registry's back). `driver.passthrough` *resolves* the scoped command and hands
+it back for the caller to run, which is what `simlock simctl` / `simlock adb`
+do locally: the daemon is the process that knows the root, the CLI is the one
+with a terminal, so an interactive `adb shell` keeps its tty and its exit code.
+`device.exec` (ADR 0005) *runs* the same resolved command on the daemon's own
+machine through the `ProcessRunner` port and streams stdout/stderr back as
+request-scoped pushes, resolving with the exit code -- for a caller who is not
+on that machine and for whom a command line naming a device set would be
+useless. One resolution, one refusal list, two ways to reach it; the split is
+who spawns the process, never what is allowed.
+
 Ownership is proven when the driver starts, and re-proven
 (`Driver.revalidateRoot()`) immediately before `doctor --purge-orphans`
 destroys anything in a root: reporting can live with a proof taken days ago,

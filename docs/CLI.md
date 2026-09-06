@@ -43,6 +43,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
+| 15 | `EXEC_TIMEOUT` | a command run on the daemon's machine (`simlock simctl`/`simlock adb` against a remote daemon) outran `exec.timeoutMs` and was killed |
 
 Every row but 14 matches the `cliExitCode` column of the contract's error
 table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
@@ -359,6 +360,54 @@ or not, the path has to reach the command line:
 ```bash
 xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices
 ```
+
+### When the device is on another machine
+
+Everything above assumes you are on the machine that owns the device — which
+is what talking to a daemon over its unix socket means. A remote agent (over
+the [HTTP API](HTTP-API.md), or through a gateway once
+[ADR 0005](adr/0005-gateway-and-worker-modes.md) lands the rest of it) has no
+such filesystem: a scoped command line would name a device set and an adb port
+that do not exist where the caller is standing.
+
+So the command runs where the device is, through the daemon operation
+`device.exec`: the arguments go to the daemon, it resolves them through the
+very same driver passthrough — same scoping flags, same refusal list below —
+runs the command on its own machine, and streams the output back to the
+caller's stdout and stderr as it arrives. The exit code is the command's own,
+exactly as on the local path. Which lease the command runs against comes from
+the caller's agent identity (`--agent-id`, or `SIMLOCK_AGENT_ID`; see [Agent
+identity](#agent-identity)) rather than from a flag of Simlock's, because
+every argument after the tool name belongs to the tool.
+
+Today that is reached over the [HTTP API](HTTP-API.md)
+(`POST /v1/leases/{id}/exec`) or with `simlock/client`'s `execDevice` (see
+[CLIENT.md](CLIENT.md)): the shipped `simlock` CLI only ever talks to a daemon
+over its own machine's unix socket, so it always takes the local path above.
+It switches to this one the moment it is pointed at a daemon it does not share
+a machine with, which is what the gateway work adds.
+
+Two differences worth knowing before you rely on it:
+
+- **There is no terminal.** Output is streamed, but the command runs without
+  a pseudo-terminal, so line-oriented commands (`adb shell getprop`, `simctl
+  spawn`) work and full-screen or interactive ones (a bare `adb shell`, a
+  curses UI) do not. On the local path, where the CLI hands the tool its own
+  terminal, `adb shell` stays fully interactive.
+- **`stdin` is one shot.** What a remote invocation sends on stdin is
+  collected, written to the command once, and the pipe is then closed — enough
+  for a command that reads a prompt or a payload, not a channel you can type
+  into over time.
+
+A command that runs longer than `exec.timeoutMs`
+([CONFIGURATION.md](CONFIGURATION.md)) is killed and the invocation fails with
+`EXEC_TIMEOUT` (exit `15`) rather than reporting the exit code the kill
+produced — "we stopped it" and "it failed" are different answers.
+
+Files are the other thing distance costs: a command naming a path
+(`simctl install ./MyApp.app`, `adb install ./app.apk`) resolves it on the
+daemon's filesystem, not yours. Getting the artifact there is out of scope for
+now — a shared volume, or a CI checkout on that machine.
 
 ## `simlock simctl <args...>`
 

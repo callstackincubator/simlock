@@ -133,6 +133,27 @@ those changes add, alongside the breaking changes above.
   `StartupConverger` orphan sweep that existed to clean up after it.
 - **config:** `lease.maxTtlMs` bounds what any caller may ask for, so one
   client cannot pin a device for a day by naming a large `ttlMs`.
+- **contract, daemon, http, cli:** `device.exec` runs `simctl`/`adb` **on the
+  machine that owns the device** and streams the output back, so an agent that
+  is not on that machine can drive the device it leased
+  ([ADR 0005](docs/adr/0005-gateway-and-worker-modes.md) §19a-§19e). The daemon
+  resolves the command through the same driver passthrough `simlock simctl` /
+  `simlock adb` already use — the same root scoping, the same refusal list —
+  and pushes each chunk as it arrives (a new request-scoped `output` push
+  family) rather than buffering any of it; the call resolves with the
+  command's exit code. Over HTTP it is `POST /v1/leases/{id}/exec`, answering
+  Server-Sent Events: an `output` event per chunk, then a terminal `exit` or
+  `error`. `simlock/client` gains `execDevice(input, { onOutput })`.
+  `simlock simctl` / `simlock adb` against a local daemon are unchanged — they
+  still spawn with inherited stdio, so an interactive `adb shell` keeps its
+  terminal — and take this path only against a daemon they do not share a
+  machine with. `stdin` is a one-shot string written to the command and then
+  closed: there is no pseudo-terminal, so line-oriented commands work and
+  full-screen ones do not.
+- **config:** `exec.timeoutMs` (default ten minutes) bounds one `device.exec`
+  command; past it the process is killed and the call fails with the new
+  `EXEC_TIMEOUT` error code (CLI exit `15`, HTTP `504`) rather than reporting
+  the exit code the kill produced.
 
 ### Documentation
 
