@@ -10,6 +10,7 @@ import type { DeviceRecord, DeviceSpec, LeaseRecord } from "./domain.js";
 const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 const config: Config = {
+  exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   drivers: {},
   eventBuffer: { capacity: 100 },

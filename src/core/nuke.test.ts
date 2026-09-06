@@ -145,6 +145,7 @@ function sequence() {
 
 function config(): Config {
   return {
+    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 1 },
     drivers: {},
     eventBuffer: { capacity: 10 },

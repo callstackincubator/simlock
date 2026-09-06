@@ -37,6 +37,10 @@ export type DoctorReport = OpOutput<"doctor.run">;
 export type DriverPassthroughInput = OpInput<"driver.passthrough">;
 /** The scoped command `simlock simctl` / `simlock adb` runs; see `passthroughCommandSchema`. */
 export type PassthroughCommand = OpOutput<"driver.passthrough">;
+export type DeviceExecInput = OpInput<"device.exec">;
+/** `{ exitCode }` -- the output itself arrived as `onOutput` chunks while the command ran
+ * (ADR 0005 §19a). */
+export type DeviceExecOutput = OpOutput<"device.exec">;
 
 // ---- admin-only operations ------------------------------------------------------------------
 
@@ -64,6 +68,16 @@ export type TokenRevokeOutput = OpOutput<"token.revoke">;
 export type LeaseProgress = z.infer<typeof leaseProgressSchema>;
 export type EventPush = z.infer<(typeof PUSH_SCHEMAS)["event"]>;
 
+/**
+ * One chunk of a running `device.exec` command's output. The `requestId` the push carries on
+ * the wire is deliberately absent here: it is the wire's own correlation key, already consumed
+ * by the time a chunk reaches the `onOutput` of the call it belongs to.
+ */
+export interface DeviceOutputChunk {
+  readonly stream: "stdout" | "stderr";
+  readonly chunk: string;
+}
+
 export interface LeaseLostPush {
   readonly leaseId: string;
   readonly deviceId: string;
@@ -89,6 +103,13 @@ export interface DeviceRecoveredPush {
 }
 
 // ---- connect options --------------------------------------------------------------------------
+
+/** ADR 0005 §19a: `onOutput` is to `execDevice` what `onProgress` is to `requestLease` -- the
+ * live half of one call, delivered while it is still in flight. A caller that omits it still
+ * gets the exit code; the output is simply not observed. */
+export interface ExecDeviceOptions {
+  readonly onOutput?: (chunk: DeviceOutputChunk) => void;
+}
 
 export interface RequestLeaseOptions {
   /** ADR §10's one stateful client behaviour -- see `client.ts`'s `#requestLeaseWithAbort` for

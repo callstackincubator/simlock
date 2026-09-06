@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
+import { describeSchemaIssues } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -70,6 +71,19 @@ const leaseRequestBodySchema = z.object({
   ttlMs: z.number().int().positive().optional(),
 });
 
+/**
+ * `POST /v1/leases/{id}/exec`'s body: `device.exec`'s input minus `leaseId`, which the path
+ * already names. Restated here rather than derived from the operation schema because that is
+ * how every other route in this file states its body -- and because omitting `leaseId` from a
+ * `.strict()` operation schema is not something `z.omit` can express without also dropping the
+ * strictness that makes a typo an error.
+ */
+const execBodySchema = z.object({
+  tool: z.enum(["simctl", "adb"]),
+  args: z.array(z.string()),
+  stdin: z.string().optional(),
+});
+
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
   return {
     device: body.device,
@@ -103,6 +117,13 @@ function requireTtlWithinCap(ttlMs: number | undefined, config: Config): void {
       `ttlMs ${String(ttlMs)} exceeds lease.maxTtlMs (${String(config.lease.maxTtlMs)})`,
     );
   }
+}
+
+/** One SSE `output` event's payload -- `device.exec`'s push shape minus the frame id, which
+ * an HTTP response does not need (the response *is* the correlation). */
+interface OutputChunk {
+  readonly stream: "stdout" | "stderr";
+  readonly chunk: string;
 }
 
 /** The gateway-owned subscriptions `createHttpApp` starts, attached to the returned app so a caller can dispose them on shutdown without this module exposing the tracker/notices instances themselves. */
@@ -194,7 +215,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     agentAuth,
     zValidator("json", leaseRequestBodySchema, (result, c) => {
       if (!result.success) {
-        return errorResponse(c, badRequest(formatZodIssues(result.error.issues)));
+        return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
       }
     }),
     async (c) => {
@@ -331,6 +352,90 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       notices: notices.drain(id),
     });
   });
+
+  app.post(
+    "/v1/leases/:id/exec",
+    agentAuth,
+    zValidator("json", execBodySchema, (result, c) => {
+      if (!result.success) {
+        return errorResponse(c, badRequest(describeSchemaIssues(result.error.issues)));
+      }
+    }),
+    async (c) => {
+      const identity = c.get("identity");
+      const leaseId = c.req.param("id");
+      const body = c.req.valid("json");
+
+      // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
+      // route mutates a device, so it answers `device.exec`'s own `ownsLease` hook -- 403 for
+      // another requester's lease, 404 for an id that names none -- rather than the 404-for-both
+      // a `lease.list` filter would produce (see `findOwnedLease`'s comment).
+      let deliver: ((chunk: OutputChunk) => void) | undefined;
+      // Holds only what the command wrote between its first byte and this route deciding it has
+      // a stream to write to -- one turn of the event loop, not the command's output. Once
+      // `deliver` is set every later chunk goes straight to the wire (ADR 0005 §19e).
+      const buffered: OutputChunk[] = [];
+      let onFirstChunk!: () => void;
+      const firstChunk = new Promise<void>((resolve) => {
+        onFirstChunk = resolve;
+      });
+
+      const settled = deps
+        .dispatch(
+          "device.exec",
+          { leaseId, ...body },
+          buildHttpSession(identity, {
+            onOutput: (stream, chunk) => {
+              if (deliver !== undefined) {
+                deliver({ chunk, stream });
+                return;
+              }
+              buffered.push({ chunk, stream });
+              onFirstChunk();
+            },
+          }),
+        )
+        .then(
+          (result) => ({ exitCode: result.exitCode, kind: "exited" }) as const,
+          (error: unknown) => ({ error, kind: "failed" }) as const,
+        );
+
+      // The one thing an SSE response cannot do is take back its status code, so the failures
+      // that land *before* any output -- an unowned lease, an unknown one, a refused verb, a
+      // daemon still starting -- are raced here and answered as ordinary JSON errors with their
+      // own status. Once a byte has been written the stream is committed, and a later failure
+      // (an `EXEC_TIMEOUT`, say) travels as a terminal `error` event instead.
+      const outcome = await Promise.race([settled, firstChunk.then(() => undefined)]);
+      if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
+
+      return pipeSse(c, deps.clock, {
+        subscribe(send, end) {
+          for (const chunk of buffered) send({ data: chunk, event: "output" });
+          buffered.length = 0;
+          deliver = (chunk) => send({ data: chunk, event: "output" });
+          void settled.then((result) => {
+            if (result.kind === "exited") {
+              send({ data: { exitCode: result.exitCode }, event: "exit" });
+            } else {
+              const mapped = mapError(result.error);
+              send({
+                data: { error: { code: mapped.code, message: mapped.message } },
+                event: "error",
+              });
+            }
+            end();
+          });
+          return () => {
+            // The command keeps running after a client disconnects (ADR 0004 §3's reasoning,
+            // applied to a process instead of a lease: a half-applied `simctl install` killed
+            // by a dropped tunnel is worse than one nobody watched finish). This only stops
+            // writing its output; `exec.timeoutMs` still bounds it.
+            deliver = undefined;
+          };
+        },
+      });
+    },
+  );
 
   app.get("/v1/leases/:id/events", agentAuth, async (c) => {
     const identity = c.get("identity");
@@ -535,16 +640,6 @@ function parseDuration(value: string): number {
   const milliseconds = amount * multiplier;
   if (!Number.isSafeInteger(milliseconds)) throw badRequest(`Invalid duration: ${value}`);
   return milliseconds;
-}
-
-function formatZodIssues(
-  issues: readonly { readonly path: readonly PropertyKey[]; readonly message: string }[],
-): string {
-  return issues
-    .map((issue) =>
-      issue.path.length === 0 ? issue.message : `${issue.path.join(".")}: ${issue.message}`,
-    )
-    .join("; ");
 }
 
 function errorMessage(error: unknown): string {

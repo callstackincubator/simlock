@@ -216,6 +216,56 @@ export const driverPassthrough = defineOperation({
   output: passthroughCommandSchema,
 });
 
+// ---- device.exec (ADR 0005 §19a) -------------------------------------------------------------
+
+/**
+ * Runs `simctl`/`adb` **on the machine that owns the device** and streams the output back
+ * (ADR 0005 §19a). The difference from `driver.passthrough` is where the process runs, not
+ * what it is: the same driver resolves the same scoped command with the same refusal list --
+ * the daemon then spawns it itself instead of handing the caller a command line it could only
+ * run if it happened to be on that machine. That is what makes a leased device reachable from
+ * a remote HTTP agent today, and through a gateway later, without a second network path.
+ *
+ * `role: "agent"` with `ownsLease`: driving a device is an agent's job, but -- unlike
+ * `driver.passthrough`, which only builds a string -- this one actually runs a command against
+ * a machine, so it is gated on the caller owning the lease it names. `leaseId` is that proof
+ * and nothing more: the command's own arguments still name the device (a udid, a serial), and
+ * the daemon parses none of them.
+ *
+ * `stdin` is a **one-shot string**, not a stream: it is written to the child's stdin and the
+ * pipe is then closed. ADR §19c is explicit that there is no pseudo-terminal here, so
+ * line-oriented commands (`adb shell getprop`, `simctl spawn`) work and full-screen or
+ * interactive ones (`adb shell` with no argument, a curses UI) do not -- and a client that
+ * could feed such a program keystrokes over time would only make that failure slower to
+ * discover. Locally, `simlock adb shell` still spawns with inherited stdio and stays fully
+ * interactive (ADR §19c).
+ *
+ * `tool` is the closed `simctl | adb` set rather than `driver.passthrough`'s open string:
+ * this operation spawns what it resolves, so a typo reaching a driver that answers to some
+ * third name should fail at the contract boundary rather than deeper in.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const deviceExec = defineOperation({
+  name: "device.exec",
+  role: "agent",
+  input: z
+    .object({
+      leaseId: z.string(),
+      tool: z.enum(["simctl", "adb"]),
+      args: z.array(z.string()),
+      stdin: z.string().optional(),
+    })
+    .strict(),
+  /**
+   * Only the exit code: every byte the command wrote already left as `output` pushes while it
+   * ran (see `pushes.ts`), so an answer that also carried the output would mean the daemon had
+   * buffered all of it -- which ADR §19e forbids, and which is why there is no size cap here
+   * to speak of either.
+   */
+  output: z.object({ exitCode: z.number() }),
+  authorize: ownsLease((input) => input.leaseId),
+});
+
 // ---- lease.list (new, ADR §9) -----------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -403,6 +453,7 @@ export const OPERATIONS = {
   "lease.release": leaseRelease,
   "lease.list": leaseList,
   "driver.passthrough": driverPassthrough,
+  "device.exec": deviceExec,
   "doctor.run": doctorRun,
   "lease.release-all": leaseReleaseAll,
   "list.get": listGet,

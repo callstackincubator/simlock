@@ -22,6 +22,7 @@ export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
+    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },

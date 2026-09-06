@@ -2504,6 +2504,7 @@ function testConfig(
   iosMaxDevices = 1,
 ): Config {
   return {
+    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},
     eventBuffer: { capacity: 100 },
