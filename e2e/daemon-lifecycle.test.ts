@@ -16,7 +16,7 @@ describe("daemon lifecycle & recovery", () => {
 
     const statusJson = await env.cli(["daemon", "status", "--json"]);
     expect(statusJson.code).toBe(0);
-    expect(statusJson.json).toMatchObject({ health: "running" });
+    expect(statusJson.json).toMatchObject({ daemon: { health: "running", mode: "worker" } });
 
     // "daemon start" while already running must not spawn a second daemon: the
     // request-scoped connection each `daemon start` opens transiently would make a
@@ -46,7 +46,7 @@ describe("daemon lifecycle & recovery", () => {
 
     const status = await env.cli(["daemon", "status", "--json"]);
     expect(status.code).toBe(0);
-    expect(status.json).toMatchObject({ health: "running" });
+    expect(status.json).toMatchObject({ daemon: { health: "running" } });
   });
 
   // Suspected bug: `simlock daemon status` always writes raw JSON via `writeResult`
