@@ -142,6 +142,34 @@ describe("MemoryUplinkTransport", () => {
     expect(harness.accepted).toEqual([]);
   });
 
+  // M3: `worker.rejected`'s `workerId`/`label` are "whatever the connection claimed in its
+  // headers" (ADR 0005 §22) -- a rejected dial still claims an identity, even though nothing
+  // verifies it, and the gateway needs that claim passed through to report it.
+  it("passes what the dial claimed to authenticate, even when it is refused", async () => {
+    const transport = new MemoryUplinkTransport();
+    const claims: Array<{ readonly workerId?: string; readonly label?: string }> = [];
+    await transport.listen({
+      accept: () => {
+        throw new Error("must not accept a rejected dial");
+      },
+      authenticate: async (_credential, claimed) => {
+        claims.push(claimed);
+        return "unauthenticated";
+      },
+    });
+
+    await expect(
+      transport.connect({
+        url: "ws://gateway/v1/uplink",
+        token: "bad",
+        workerId: "wrk_1",
+        label: "mac-mini-1",
+      }),
+    ).rejects.toMatchObject({ code: "rejected" });
+
+    expect(claims).toEqual([{ workerId: "wrk_1", label: "mac-mini-1" }]);
+  });
+
   it("stops accepting once the listener is closed", async () => {
     const harness = transportWithListener(() => "accept");
     const listener = await harness.listen();

@@ -188,9 +188,14 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       respondAndDestroy(socket, 400, "Bad Request");
       return;
     }
+    // Decoded before authentication, not after: a dial that fails the credential check still
+    // claimed this identity in its headers, and ADR 0005 §22's `worker.rejected` reports
+    // whatever a refused peer claimed rather than nothing at all.
+    const label = decodeLabel(headerValue(request, WORKER_LABEL_HEADER));
+    const claimed = { workerId, ...(label === undefined ? {} : { label }) };
     let outcome: Awaited<ReturnType<UplinkHandlers["authenticate"]>>;
     try {
-      outcome = await handlers.authenticate(bearerToken(request));
+      outcome = await handlers.authenticate(bearerToken(request), claimed);
     } catch {
       // A token store that cannot be read is not an authenticated peer.
       outcome = "unauthenticated";
@@ -203,7 +208,6 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       else respondAndDestroy(socket, 401, "Unauthorized");
       return;
     }
-    const label = decodeLabel(headerValue(request, WORKER_LABEL_HEADER));
     this.#server.handleUpgrade(request, socket, head, (client) => {
       handlers.accept({
         connection: new WebSocketUplinkConnection(client),

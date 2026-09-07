@@ -202,17 +202,21 @@ describe("gateway fleet", () => {
       configOverrides: { gateway: { token: secret, url: `ws://127.0.0.1:${port}` } },
     });
 
+    let rejected: { reason?: string; workerId?: string } | undefined;
     await waitFor(
       async () => {
         const events = await gateway.events();
-        return events.some(
-          (event) =>
-            event.event === "worker.rejected" &&
-            (event.payload as { reason?: string }).reason === "forbidden",
-        );
+        rejected = events.find((event) => event.event === "worker.rejected")?.payload as
+          | { reason?: string; workerId?: string }
+          | undefined;
+        return rejected?.reason === "forbidden";
       },
       { label: "the gateway reported the refused uplink", timeout: 20_000 },
     );
+    // M3: `workerId` is whatever the dial claimed in its headers over the real WebSocket
+    // adapter, not just the in-memory one the unit suite scripts -- an operator otherwise had
+    // no way to tell *which* machine's misconfigured worker keeps knocking.
+    expect(rejected?.workerId).toBeDefined();
 
     expect(await listWorkers(gateway)).toEqual([]);
   });

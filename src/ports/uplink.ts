@@ -82,13 +82,27 @@ export interface UplinkListener {
  */
 export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden";
 
+/** What the dial *claims* about itself before authentication has run -- the worker id and label
+ * headers, present or not, regardless of whether the credential checks out. Passed to
+ * `authenticate` so a rejection can still name the peer it turned away (ADR 0005 §22:
+ * `worker.rejected`'s `workerId`/`label` are "whatever the connection claimed in its headers"). */
+export interface ClaimedUplinkIdentity {
+  readonly workerId?: string;
+  readonly label?: string;
+}
+
 export interface UplinkHandlers {
   /**
    * Verifies the join token presented in the `Authorization: Bearer` header at upgrade time.
    * Anything but `accept` answers its HTTP status and destroys the socket without ever
    * completing the upgrade -- an unauthorized peer never reaches the daemon protocol at all.
+   * `claimed` is never itself trusted for anything but attribution on a refusal: a rejected
+   * dial proves no identity, so this is only what it *said*, not what it is.
    */
-  authenticate(credential: string | undefined): Promise<UplinkAuthOutcome>;
+  authenticate(
+    credential: string | undefined,
+    claimed: ClaimedUplinkIdentity,
+  ): Promise<UplinkAuthOutcome>;
   /** Called once per accepted uplink. */
   accept(uplink: AcceptedUplink): void;
 }
@@ -159,7 +173,10 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
     if (handlers === undefined) {
       throw new UplinkError("unreachable", `No gateway is listening at ${options.url}`);
     }
-    const outcome = await handlers.authenticate(options.token);
+    const outcome = await handlers.authenticate(options.token, {
+      workerId: options.workerId,
+      ...(options.label === undefined ? {} : { label: options.label }),
+    });
     if (outcome !== "accept") {
       throw new UplinkError("rejected", `The gateway rejected this join token: ${outcome}`);
     }
