@@ -540,6 +540,107 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(client.calls).toContain(`device.exec:${GATEWAY_PREFIX}agent-1`);
   });
 
+  // C3 (round 2 review): `session.onStarted` used to fire before `client.exec` even went out --
+  // committing an HTTP caller's `200` before this gateway had any idea whether the worker would
+  // accept the command at all, including a worker-side `FORBIDDEN` (§19a', the one place `admin`
+  // does not bypass ownership) and the driver's own `PASSTHROUGH_REFUSED` / a bad `tool`. These
+  // two tests exercise `FleetLeaseCoordinator#exec` itself, the actual chokepoint -- not just
+  // `http/app.ts`'s own route logic, which was already correct given whatever a dispatcher told
+  // it (see `http/app.test.ts`'s "answers a failure that lands before any output with its own
+  // status, not a stream").
+  it("calls onStarted only once the worker's first output chunk arrives, never before client.exec is even sent (C3, round 2 review)", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      grant: grantFixture({
+        lease: {
+          ...grantFixture().lease,
+          id: "lse_9",
+          ownerId: "agent-1",
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+        },
+      }),
+      kind: "grant",
+    });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    client.execQueue.push({
+      exitCode: 0,
+      kind: "ok",
+      output: [{ chunk: "hi", stream: "stdout" }],
+    });
+
+    let started = false;
+    const outputsSeenBeforeStarted: number[] = [];
+    let outputCount = 0;
+    await coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      {
+        manageEventSubscription: () => undefined,
+        onOutput: () => {
+          outputCount += 1;
+          if (!started) outputsSeenBeforeStarted.push(outputCount);
+        },
+        onStarted: () => {
+          started = true;
+        },
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+
+    expect(started).toBe(true);
+    // onStarted must not have fired for any output already delivered -- it is the *first*
+    // chunk's own arrival that triggers it, not something already true beforehand.
+    expect(outputsSeenBeforeStarted).toEqual([]);
+  });
+
+  it("never calls onStarted for a worker-side FORBIDDEN that produced no output at all -- the HTTP route must still be free to answer 403, not a committed 200 (C3, round 2 review)", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      grant: grantFixture({
+        lease: {
+          ...grantFixture().lease,
+          id: "lse_9",
+          ownerId: "agent-1",
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+        },
+      }),
+      kind: "grant",
+    });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    // §19a': the worker's own ownership check disagreeing with what this gateway forwarded --
+    // exactly the answer that must still reach an HTTP caller as its own status code, not as an
+    // already-committed 200 + SSE `error`.
+    client.execQueue.push({
+      error: new SimlockError("FORBIDDEN", "domain", "Lease belongs to a different requester", {}),
+      kind: "error",
+    });
+
+    let started = false;
+    const rejection = await coordinator
+      .exec(
+        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+        {
+          manageEventSubscription: () => undefined,
+          onStarted: () => {
+            started = true;
+          },
+          principal: "agent-1",
+          role: "agent",
+        },
+      )
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("FORBIDDEN");
+    expect(started).toBe(false);
+  });
+
   it("times out a forwarded device.exec after gateway.execTimeoutMs when the worker never answers at all (P5)", async () => {
     const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();

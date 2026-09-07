@@ -298,11 +298,32 @@ export class FleetLeaseCoordinator {
     // `authorize` hook (via `leaseRequesterId` above) has already resolved by the time this
     // handler runs.
     const namespacedRequesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;
-    return this.#forwardToWorker(entry.workerId, async (client) => {
-      // The uplink surfaces no distinct "the worker's process started" signal separate from its
-      // own settlement, so this is the earliest honest point to tell an HTTP caller "committed":
-      // the lease and the worker are both resolved, and the call is about to go out.
+    // C3 (round 2 review): `session.onStarted`'s own contract is "after every failure that can
+    // happen before a process exists" -- §19a''s `FORBIDDEN` (the worker's own ownership check
+    // disagreeing with this gateway's index) and the driver's own `PASSTHROUGH_REFUSED` /
+    // `UNKNOWN_PASSTHROUGH_TOOL` are exactly such failures, and this gateway cannot know which
+    // one a forwarded command will get before the worker answers -- it does not hold the
+    // driver's refusal list or duplicate the worker-side ownership check. Calling `onStarted`
+    // before `client.exec` even went out (as this used to) committed the HTTP route's `200`
+    // before any of that was known, so a `FORBIDDEN` between two fleet agents arrived as a `200`
+    // + SSE `error` instead of a `403` (Decision 3: every frontend must work against a gateway
+    // unchanged). The uplink carries no distinct "the process now exists" frame separate from
+    // `output` itself (`SimlockAdminClient#exec`'s only two signals are settlement and `output`
+    // pushes -- see `simlock-client/wire.ts`), so the first relayed `output` chunk is the
+    // earliest *honest* evidence available, exactly mirroring §11's "first progress push counts
+    // as dispatched" for the queue. A command that never writes anything before it exits calls
+    // `onStarted` not at all; that is still correct, not merely tolerated: `client.exec`'s own
+    // promise settling first (success or a worker-side refusal) is the answer, and the caller's
+    // own race between the two (`http/app.ts`'s `Promise.race([settled, started...])`) resolves
+    // to that settlement instead, with its own real status code -- never a wrongly-committed
+    // `200`.
+    let started = false;
+    const announceStarted = (): void => {
+      if (started) return;
+      started = true;
       session.onStarted?.();
+    };
+    return this.#forwardToWorker(entry.workerId, async (client) => {
       // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
       // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
       // ordinary timeout and is expected to answer first (the gateway's default is deliberately
@@ -318,6 +339,7 @@ export class FleetLeaseCoordinator {
           },
           {
             onOutput: (chunk) => {
+              announceStarted();
               void session.onOutput?.(chunk.stream, chunk.chunk);
             },
           },
