@@ -543,6 +543,49 @@ describe("GatewayDispatcher", () => {
         ),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
+
+    it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
+      const { dispatcher, workers } = harness();
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17", owner: "someone-else", platform: "ios" },
+          session({ principal: "agent-1", role: "agent" }),
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("lease.request: an admin session's owner is who the granted lease ends up owned by (ADR §27a, H7)", async () => {
+      const { directory, dispatcher, leaseIndex, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17", noWait: true, owner: "agent-7", platform: "ios" },
+        session({ principal: "gw:instance-1", role: "admin" }),
+      );
+
+      const gatewayLeaseId = (grant as { lease: { id: string } }).lease.id;
+      expect((grant as { lease: { ownerId: string } }).lease.ownerId).toBe("agent-7");
+      expect(leaseIndex.ownerId(gatewayLeaseId)).toBe("agent-7");
+    });
   });
 
   it("has an answer for every operation the contract declares", async () => {

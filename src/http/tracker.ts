@@ -14,6 +14,14 @@ export interface LeaseRequestInput {
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
   readonly full?: boolean;
+  /** ADR §27a. Threaded straight through to the shared dispatcher's own `lease.request` input --
+   * the same gate every other transport is held to (`FORBIDDEN` for a non-admin token) decides
+   * this, not this route (H7, round 2 review: before this, `leaseRequestBodySchema` had no
+   * `owner` field at all and quietly discarded one a caller sent, the anti-pattern this
+   * codebase's own `device.exec`'s `requesterId` precedent already rejected for the same reason
+   * -- an identity named and answered as though it had not been is the kind of silence that
+   * reads like authorization). */
+  readonly owner?: string;
 }
 
 /** Matches the issue's lease object exactly; `dataPlane` is reserved and always `null` in v1. */
@@ -215,6 +223,9 @@ export class LeaseRequestTracker {
             // old grant-then-immediately-renew hack. Under ADR 0004 the daemon then stores
             // that width on the lease, so nothing here has to remember it either.
             ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
+            // ADR §27a (H7, round 2 review): forwarded as-is -- the shared dispatcher's own
+            // `lease.request` handler is what rejects a non-admin token naming this.
+            ...(body.owner === undefined ? {} : { owner: body.owner }),
           },
           session,
         )

@@ -367,6 +367,45 @@ describe("Dispatcher: ownership", () => {
     return (grant as { lease: { id: string } }).lease.id;
   }
 
+  it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", owner: "someone-else", platform: "ios" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("lease.request: an admin session's owner is who the granted lease ends up owned by, not the admin's own principal (ADR §27a, H7)", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", owner: "agent-7", platform: "ios" },
+      session({ principal: "tok_gateway", role: "admin" }),
+    );
+
+    expect((grant as { lease: { ownerId: string } }).lease.ownerId).toBe("agent-7");
+    // The lease is now gated on the named owner, not the admin session that requested it.
+    await expect(
+      dispatcher.dispatch(
+        "lease.renew",
+        { leaseId: (grant as { lease: { id: string } }).lease.id },
+        session({ principal: "tok_gateway", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.renew",
+        { leaseId: (grant as { lease: { id: string } }).lease.id },
+        session({ principal: "agent-7", role: "agent" }),
+      ),
+    ).resolves.toMatchObject({ id: (grant as { lease: { id: string } }).lease.id });
+  });
+
   it("lease.renew: rejects a non-owner with FORBIDDEN, admits the owner, admin bypasses", async () => {
     const { dispatcher } = await buildDispatcher();
     const leaseId = await grantLease(dispatcher);
