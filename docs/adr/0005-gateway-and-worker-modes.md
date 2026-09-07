@@ -454,6 +454,21 @@ drive the device it leased.
     (`gw:<gateway instance id>:<requester>`) so a local agent on the worker
     machine and a remote one behind the gateway can never collide on the
     one-lease rule or on attribution.
+27a. The gateway also forwards the lease's **owner** — the principal it
+    authorized the request against — as an explicit field on
+    `lease.request`, and the worker stores that as the lease's `ownerId`
+    rather than deriving one from the calling connection. Without it the
+    owner is unrecoverable after a gateway restart: `requesterId`
+    round-trips through requirement 27's prefix, but every lease a gateway
+    issues is owned by its own uplink principal, so a rebuild
+    (requirement 30) could not tell one gateway client's lease from
+    another's and would have to either guess or fail open. **Only an
+    `admin` session may set the field**; from any other role the request is
+    rejected. `ownerId` is what `lease.renew`, `lease.release` and
+    `lease.list` authorize against, so a caller free to name someone else
+    as owner would be naming its way into their lease. Omitting the field
+    keeps today's behaviour — the owner is the calling connection — so this
+    is additive and no existing caller changes.
 
 ### Failure behaviour
 
@@ -477,7 +492,11 @@ drive the device it leased.
     on their backoff and the gateway rebuilds every view and its lease index
     from them — picking its own leases out of each `lease.list` by the
     `gw:<its own instance id>:` prefix (requirement 14), which is what makes
-    a rebuild possible with nothing about leases persisted. The worker
+    a rebuild possible with nothing about leases persisted. Ownership comes
+    back with them: the owner was forwarded on the way in (requirement 27a)
+    and is returned by `lease.list`, so a rebuilt lease is authorized to the
+    same principal it was before the restart, not to the gateway at large.
+    The worker
     registry (requirement 8a) comes back off disk instead of being
     re-derived, so drains survive. Gateway clients keep their leases and
     simply resume renewing once the gateway answers again.
