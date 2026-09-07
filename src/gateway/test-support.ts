@@ -119,8 +119,11 @@ export type RequestLeaseOutcome =
     }
   | { readonly kind: "error"; readonly error: unknown }
   /** Never settles -- for exercising a dispatch attempt still in flight (finding 1's test: "a
-   * dispatch tick firing while a previous attempt for the same waiter is in flight"). */
-  | { readonly kind: "hang" };
+   * dispatch tick firing while a previous attempt for the same waiter is in flight"), and (C4,
+   * round 2 review) a request that is genuinely dispatched (a `progress` push fired) but then
+   * never resolves at all -- the only way to prove `request.dispatched` fired *before*
+   * settlement rather than merely alongside a grant that would have emitted it anyway. */
+  | { readonly kind: "hang"; readonly progress?: readonly LeaseProgressLike[] };
 
 type LeaseProgressLike =
   | { readonly stage: "queued"; readonly queuePosition: number }
@@ -250,9 +253,11 @@ export class ScriptedWorkerClient {
     this.calls.push(`lease.request:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
     const outcome = this.requestLeaseQueue.shift() ?? this.requestLeaseDefault;
+    if (outcome.kind !== "error") {
+      for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
+    }
     if (outcome.kind === "hang") return new Promise<never>(() => {});
     if (outcome.kind === "error") throw outcome.error;
-    for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     return outcome.grant;
   }
 

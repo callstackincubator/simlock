@@ -395,6 +395,51 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ).toBe(true);
   });
 
+  // C4 (round 2 review): the test below titled around "the worker's first progress push"
+  // asserted nothing that a progress push specifically causes -- the grant path emits
+  // `request.dispatched` right after `client.requestLease` resolves regardless of whether
+  // `progress` fired first, so deleting `announceDispatched()` from `#attempt`'s `onProgress`
+  // callback entirely left every test in this file passing. This one scripts a request that is
+  // genuinely dispatched (a `progress` push fires) and then never settles at all, so the *only*
+  // way `request.dispatched` can appear is the progress-driven call -- proving it fires before,
+  // not merely alongside, settlement (there is none, ever, in this scenario).
+  it("emits request.dispatched on the worker's first progress push even when the request never settles at all (§11, C4 round 2 review)", async () => {
+    const { coordinator, eventBus, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      kind: "hang",
+      progress: [{ etaMs: 5_000, stage: "provisioning" }],
+    });
+    const dispatched: unknown[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    let settled = false;
+    void coordinator.request(REQUEST, requestOptions()).then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await tick();
+
+    expect(settled).toBe(false);
+    expect(dispatched).toEqual([
+      {
+        model: "iPhone 17",
+        platform: "ios",
+        queuedMs: expect.any(Number) as number,
+        reason: "free-capacity",
+        requestId: expect.any(String) as string,
+        requesterId: "agent-1",
+        workerId: "wrk_a",
+      },
+    ]);
+  });
+
   // H10 (round 2 review): `request.dispatched` had no test at all -- not its payload, not
   // emit-once, not §11's "first progress push counts as dispatched" rule. `progress` on
   // `RequestLeaseOutcome` (`test-support.ts`) was added for exactly this and was dead code until
