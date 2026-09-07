@@ -107,7 +107,15 @@ export class WorkerLink {
     const connect = this.options.connect ?? defaultConnect;
     let client: SimlockAdminClient;
     try {
-      client = await connect(this.options.uplink.connection, this.options.principal);
+      // C3: bounded like every other call this class makes (see `WORKER_CALL_TIMEOUT_MS`) --
+      // `hello` is a round trip too, and a peer that completes the WebSocket upgrade with a
+      // valid join token and then never answers it would otherwise hang `start()` forever,
+      // holding an open socket and a slot in `#links` with no view to show for it (D2's failure
+      // mode, one call earlier in this same method).
+      client = await this.#withTimeout(
+        connect(this.options.uplink.connection, this.options.principal),
+        "hello",
+      );
     } catch (error: unknown) {
       // A `hello` that failed for any reason other than version negotiation (see below): there
       // is no session to drive, so there is nothing to put in a view either.

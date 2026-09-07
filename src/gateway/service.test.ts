@@ -26,10 +26,17 @@ function fleet(options: { readonly authenticate?: () => UplinkAuthOutcome } = {}
   const transport = new MemoryUplinkTransport();
   /** The scripted worker each uplink resolves to, keyed by the principal-free order they join. */
   const clients: ScriptedWorkerClient[] = [];
+  // C3: set to make the *next* `connect()` -- the `hello` round trip itself -- never resolve,
+  // the way a peer that completes the WebSocket upgrade and then falls silent would.
+  const connectState = { hangNext: false };
   const service = new GatewayService({
     authenticate: async () => options.authenticate?.() ?? "accept",
     clock,
     connect: async () => {
+      if (connectState.hangNext) {
+        connectState.hangNext = false;
+        return new Promise<never>(() => {});
+      }
       const client = clients.at(-1);
       if (client === undefined) throw new Error("no scripted worker was queued for this uplink");
       return client.asClient();
@@ -50,6 +57,17 @@ function fleet(options: { readonly authenticate?: () => UplinkAuthOutcome } = {}
     /** Queues the worker the next uplink resolves to, then dials it. */
     join: async (workerId: string, client: ScriptedWorkerClient, label?: string) => {
       clients.push(client);
+      return transport.connect({
+        token: "join-secret",
+        url: "ws://gateway.test",
+        workerId,
+        ...(label === undefined ? {} : { label }),
+      });
+    },
+    /** Dials an uplink whose `hello` never answers -- no `ScriptedWorkerClient` is ever built,
+     * since C3's whole point is that the handshake itself must not be able to hang forever. */
+    joinSilent: async (workerId: string, label?: string) => {
+      connectState.hangNext = true;
       return transport.connect({
         token: "join-secret",
         url: "ws://gateway.test",
@@ -340,6 +358,44 @@ describe("GatewayService", () => {
       expect(harness.service.workers.view("wrk_1")?.leases).toEqual([
         expect.objectContaining({ id: "lease_9" }),
       ]),
+    );
+
+    await harness.service.stop();
+  });
+
+  // C3: `hello` -- inside `connect()`, the first round trip `start()` makes -- had no timeout
+  // at all, unlike every call after it. A peer that completes the WebSocket upgrade with a
+  // valid join token and then never answers `hello` (a half-open TCP right after upgrade, or a
+  // deliberately silent client) used to hang `start()` forever: the link stayed in `#links`
+  // (registered before `start()` even runs), holding an open socket and no view, invisible in
+  // `simlock worker list` while consuming a slot -- D2's exact failure mode, one call earlier.
+  it("does not hang the handshake forever when hello itself never answers (C3)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+
+    const workerEnd = await harness.joinSilent("wrk_1", "mac-mini-1");
+    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+
+    // The decisive check: a timed-out hello must make the link actually give up and close its
+    // end of the socket -- closing either end of an in-memory pair closes both, so this is only
+    // true once the gateway's side has been closed. Against the unbounded `connect()` this
+    // never happens: nothing ever times out, so nothing ever closes, and this assertion is what
+    // tells the two apart (a looser "no view was built" check passes either way, since a
+    // permanently-hung connect() also never builds one).
+    await vi.waitFor(() => expect(workerEnd.closed).toBe(true));
+
+    // Timing out must not fabricate a view for a worker the gateway never actually spoke to.
+    expect(eventNames(harness.events)).not.toContain("worker.connected");
+    expect(harness.service.workers.view("wrk_1")).toBeUndefined();
+
+    // And the slot must actually be freed: the same worker id reconnecting for real (a client
+    // that does answer) must build a normal view rather than being shut out by a link that
+    // leaked past its timeout.
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected"),
     );
 
     await harness.service.stop();
