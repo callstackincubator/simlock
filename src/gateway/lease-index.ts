@@ -1,3 +1,6 @@
+import type { Logger } from "../ports/index.js";
+import { NoopLogger } from "../ports/index.js";
+
 /**
  * `FleetLeaseIndex`: the gateway's own record of which leases *it* issued (ADR 0005 §14, §16,
  * §27a, §30). Nothing here is persisted -- like every worker view, it is rebuilt from what a
@@ -64,8 +67,24 @@ export class FleetLeaseIndex {
    * again by the *next* `rebuildFromWorker` call for that worker: still absent one full
    * generation later is what promotes "missing" to "gone" (see `rebuildFromWorker`'s own doc). */
   readonly #missingSince = new Map<string, number>();
+  /** C1 (round 2 review): gateway lease ids `removeByWorkerLease` just forgot -- an ordinary
+   * worker-relayed `lease.expired`/`lease.released` -- kept around only long enough to flag the
+   * one thing that should never legitimately happen next: the *same* id reappearing in a
+   * `rebuildFromWorker` snapshot moments later. That can only mean a snapshot that started
+   * gathering data before the relayed fact landed is completing after it, stale by the time it
+   * arrives; a worker never reissues a lease id, so this is not a real re-grant to admit
+   * quietly. Bounded (see `#noteRemovedByEvent`) so a long-running gateway's memory does not grow
+   * with every release it has ever relayed. */
+  readonly #removedByEvent = new Map<string, true>();
+  /** How many recently-event-removed ids `#removedByEvent` remembers before evicting the
+   * oldest -- generous relative to how many leases could plausibly be mid-flight across the
+   * fleet at once, small relative to a gateway's uptime. */
+  static readonly #removedByEventCapacity = 200;
 
-  constructor(private readonly gatewayRequesterPrefix: string) {}
+  constructor(
+    private readonly gatewayRequesterPrefix: string,
+    private readonly logger: Logger = new NoopLogger(),
+  ) {}
 
   /** `gw:<this gateway's instance id>:` -- what marks a requester id as this gateway's own
    * (§14/§27). Exposed so `FleetLeaseCoordinator` namespaces outgoing requester ids with the
@@ -136,7 +155,18 @@ export class FleetLeaseIndex {
     const entry = this.findByWorkerLease(workerId, workerLeaseId);
     if (entry === undefined) return undefined;
     this.#forget(entry);
+    this.#noteRemovedByEvent(entry.gatewayLeaseId);
     return entry;
+  }
+
+  /** Records `gatewayLeaseId` as just forgotten by a relayed worker event, for `#addReported`'s
+   * resurrection check -- see `#removedByEvent`'s own doc. Evicts the oldest entry once the
+   * bound is hit; `Map` iterates insertion order, so its first key is always the oldest. */
+  #noteRemovedByEvent(gatewayLeaseId: string): void {
+    this.#removedByEvent.set(gatewayLeaseId, true);
+    if (this.#removedByEvent.size <= FleetLeaseIndex.#removedByEventCapacity) return;
+    const oldest = this.#removedByEvent.keys().next().value;
+    if (oldest !== undefined) this.#removedByEvent.delete(oldest);
   }
 
   /**
@@ -184,6 +214,18 @@ export class FleetLeaseIndex {
       reported.add(gatewayLeaseId);
       this.#missingSince.delete(gatewayLeaseId);
       if (this.#byGatewayId.has(gatewayLeaseId)) continue;
+      // C1 (round 2 review): this id was forgotten moments ago by the worker's own relayed
+      // `lease.expired`/`lease.released` -- reappearing in a snapshot now means that snapshot
+      // was gathered before the relayed fact landed and is only completing late (see
+      // `#removedByEvent`'s own doc). Logged, not skipped: the worker is the source of truth for
+      // its own leases, so refusing to re-add would risk permanently hiding a lease the worker
+      // still genuinely holds on the rare chance this read is right instead of the fact.
+      if (this.#removedByEvent.delete(gatewayLeaseId)) {
+        this.logger.warn(
+          "A worker-reported lease reappeared right after its own relayed expiry/release -- likely a stale snapshot racing the event",
+          { gatewayLeaseId, workerId },
+        );
+      }
       this.add({
         gatewayLeaseId,
         grantedAt: lease.grantedAt,

@@ -683,6 +683,38 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await expect(coordinator.releaseAll()).resolves.toEqual([]);
   });
 
+  it("does not evict a lease on one worker when only a different worker's view changes repeatedly (C1, round 2 review)", async () => {
+    // Reproduces the round 2 finding exactly: a grant lands on wrk_a, but wrk_a's own cached
+    // view never gets refreshed with the new lease in this test (nothing here calls
+    // `workers.refresh("wrk_a", { leases: [...] })`, exactly the race where a real
+    // `WorkerLink`'s post-grant refresh is still in flight). Unrelated churn on wrk_b must never
+    // be able to evict wrk_a's lease -- before the fix, `#onViewsChanged` reconciled *every*
+    // view (including wrk_a's stale, lease-less one) on every notification, so two view changes
+    // on wrk_b alone were enough to walk wrk_a's entry through both halves of
+    // `rebuildFromWorker`'s two-consecutive-misses rule and forget it.
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b");
+    clientA.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    expect(grant.lease.worker?.id).toBe("wrk_a");
+    // wrk_a's own view still reports no leases at all -- the stale-cache race this finding
+    // describes, not a hypothetical.
+    expect(workers.view("wrk_a")?.leases).toEqual([]);
+
+    // Two unrelated view changes on wrk_b -- neither one is about wrk_a.
+    workers.refresh("wrk_b", {});
+    workers.refresh("wrk_b", {});
+
+    expect(leaseIndex.resolve(grant.lease.id)).toBeDefined();
+    expect(leaseIndex.existingLeaseId("agent-1")).toBe(grant.lease.id);
+  });
+
   it("release-all attaches the leases it already released to a later failure's own details (H8)", async () => {
     const { coordinator, directory, workers, leaseIndex } = harness();
     const clientA = new ScriptedWorkerClient();

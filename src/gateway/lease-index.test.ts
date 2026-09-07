@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 
+import type { Logger } from "../ports/index.js";
 import { FleetLeaseIndex, type WorkerReportedLease } from "./lease-index.js";
 
 const PREFIX = "gw:instance-1:";
+
+/** Records every `warn` call. */
+class RecordingLogger implements Logger {
+  readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+
+  debug(): void {}
+  info(): void {}
+  warn(message: string, fields?: Record<string, unknown>): void {
+    this.warnings.push(fields === undefined ? { message } : { fields, message });
+  }
+  error(): void {}
+  child(): Logger {
+    return this;
+  }
+}
 
 function reported(id: string, overrides: Partial<WorkerReportedLease> = {}): WorkerReportedLease {
   return {
@@ -181,6 +197,41 @@ describe("FleetLeaseIndex", () => {
 
       expect(index.resolve("wrk_1.lse_1")).toBeUndefined();
       expect(index.resolve("wrk_2.lse_1")).toBeDefined();
+    });
+  });
+
+  describe("removeByWorkerLease resurrection (C1, round 2 review)", () => {
+    it("logs when a snapshot re-reports a lease removeByWorkerLease just forgot, instead of silently resurrecting it unremarked", () => {
+      const logger = new RecordingLogger();
+      const index = new FleetLeaseIndex(PREFIX, logger);
+      index.add(entry());
+
+      // The worker's own relayed `lease.expired`/`lease.released` forgets it...
+      index.removeByWorkerLease("wrk_1", "lse_1");
+      expect(index.resolve("wrk_1.lse_1")).toBeUndefined();
+
+      // ...but a snapshot that started gathering data before that fact landed completes after
+      // it and still reports the same worker lease id. The worker is the source of truth, so
+      // the entry is still re-added (a caller must not lose a lease the worker still holds)...
+      index.rebuildFromWorker("wrk_1", [reported("lse_1")]);
+      expect(index.resolve("wrk_1.lse_1")).toBeDefined();
+
+      // ...but this is not an ordinary addition, and round 2 flagged silently swallowing it.
+      expect(
+        logger.warnings.some(
+          (warning) =>
+            warning.fields?.gatewayLeaseId === "wrk_1.lse_1" && warning.fields.workerId === "wrk_1",
+        ),
+      ).toBe(true);
+    });
+
+    it("does not warn for an ordinary addition that was never removed by a relayed event", () => {
+      const logger = new RecordingLogger();
+      const index = new FleetLeaseIndex(PREFIX, logger);
+
+      index.rebuildFromWorker("wrk_1", [reported("lse_1")]);
+
+      expect(logger.warnings).toEqual([]);
     });
   });
 

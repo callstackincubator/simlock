@@ -526,7 +526,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   // ADR 0005 §14/§27: stamped on every requester id this gateway forwards, and what
   // `FleetLeaseIndex` recognizes its own leases by when rebuilding from a worker's view.
   const gatewayRequesterPrefix = `gw:${instanceId}:`;
-  const leaseIndex = new FleetLeaseIndex(gatewayRequesterPrefix);
+  const leaseIndex = new FleetLeaseIndex(gatewayRequesterPrefix, logger.child("lease-index"));
   if (!isRoutingPolicyName(config.gateway.routing)) {
     // Unreachable in production: `loadConfig` already validates `gateway.routing` against this
     // same registry's names before a daemon ever starts. Guards the cast below rather than
