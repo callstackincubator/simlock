@@ -560,6 +560,10 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       awaitReady: () => Promise.resolve(),
       config,
       eventBus,
+      // P2: the same namespace `GatewayService` stamps as `gatewayRequesterPrefix`, so
+      // `lease.list`'s ownership filter compares a session's principal to the form a
+      // gateway-issued lease's `ownerId` would actually carry, not to a worker-local one.
+      gatewayRequesterPrefix: `gw:${instanceId}:`,
       health: () => daemon.health,
       logger: logger.child("gateway"),
       tokens,

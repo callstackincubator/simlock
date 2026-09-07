@@ -63,6 +63,10 @@ class FakeTokens implements GatewayTokenStore {
   }
 }
 
+/** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
+ * prefix is that principal plus a trailing `:`, the same shape `worker-registry.test.ts` uses. */
+const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
+
 function harness() {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -77,6 +81,7 @@ function harness() {
     awaitReady: async () => {},
     config: gatewayConfig,
     eventBus,
+    gatewayRequesterPrefix: GATEWAY_REQUESTER_PREFIX,
     health: () => "running",
     tokens,
     workers,
@@ -224,6 +229,42 @@ describe("GatewayDispatcher", () => {
     await expect(
       dispatcher.dispatch("lease.list", {}, session({ principal: "someone", role: "agent" })),
     ).resolves.toEqual({ leases: [] });
+  });
+
+  // P2: the round's title/body tell -- the test above only exercises a *non-matching* principal,
+  // which passes whether or not the comparison is namespaced at all. This is the case that
+  // actually distinguishes them: an agent-role session naming itself the same as the worker's
+  // own local lease owner. Comparing raw, unnamespaced principals (the pre-fix behavior) would
+  // let this session see that machine's local lease -- an ownership collision ADR 0005 §26/§27
+  // exist to rule out -- since `session.principal` is client-chosen and unverified (whatever
+  // `hello` sent).
+  it("does not let a gateway session's raw principal match a worker's own local lease owner of the same name", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", undefined, undefined);
+    // `leaseFixture`'s ownerId ("agent-1") is an un-namespaced *local* principal -- exactly what
+    // a worker's own agent looks like, never this gateway's own prefix.
+    workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
+
+    await expect(
+      dispatcher.dispatch("lease.list", {}, session({ principal: "agent-1", role: "agent" })),
+    ).resolves.toEqual({ leases: [] });
+  });
+
+  // The positive match this PR issues no leases through, but #118 will: a lease this gateway
+  // itself granted carries `ownerId` namespaced with its own `gatewayRequesterPrefix`, and the
+  // session that requested it must see it.
+  it("sees a gateway-issued lease whose ownerId carries this gateway's own namespace", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", undefined, undefined);
+    const lease = {
+      ...leaseFixture("lease_1", "dev_1"),
+      ownerId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+    };
+    workers.refresh("wrk_1", { leases: [lease] });
+
+    await expect(
+      dispatcher.dispatch("lease.list", {}, session({ principal: "agent-1", role: "agent" })),
+    ).resolves.toEqual({ leases: [expect.objectContaining({ id: "lease_1" })] });
   });
 
   it("replays and subscribes to its own bus, which carries the fleet's events", async () => {
