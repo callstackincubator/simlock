@@ -594,41 +594,42 @@ export class FleetLeaseCoordinator {
         this.#staleView(waiter, workerId);
         return;
       }
-      // A terminal failure past this point is the worker's own fact (it already emitted its own
-      // `lease.rejected`, relayed onto this bus with `workerId` added by `WorkerLink`) -- this
-      // class does not emit a second one for it (see the module doc, "two different fields" and
-      // events.md's post-commit rule apply equally to not inventing a duplicate fact). Only the
-      // error code is preserved so the caller sees what the worker actually said, unless this
-      // was a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29
-      // name `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens
-      // to be called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart).
-      // P2 (round 2 review): `#withLeaseRequestTimeout`'s own `DispatchError` (never a
-      // `SimlockError` -- it never reached the worker at all) is forwarded as-is rather than
-      // falling into the generic "not a SimlockError" branch below.
-      // H1 (round 2 review): a value that is neither a `DispatchError` this class raised nor a
-      // `SimlockError` the wire produced is not a fact about the worker at all -- every real
-      // transport failure is already a `kind: "transport"` `SimlockError` by the time it gets
-      // here (see the comment above), so anything else reaching this branch is a bug in this
-      // coordinator's own request-building code. `WORKER_UNREACHABLE` previously answered that
-      // too, misreporting a gateway-side crash as "the machine is unreachable"; `INTERNAL` is
-      // what `#forwardToWorker`'s matching branch now answers for the same shape of failure.
-      this.#queue.reject(
-        waiter,
-        error instanceof DispatchError
-          ? error
-          : isSimlockError(error)
-            ? this.#classifyRelayedError(error, workerId)
-            : new DispatchError(
-                "INTERNAL",
-                `Unexpected error forwarding lease.request to worker ${workerId}`,
-                { workerId },
-              ),
-      );
+      this.#queue.reject(waiter, this.#classifyLeaseRequestError(error, workerId));
       return;
     }
 
     announceDispatched();
     this.#settleGrant(waiter, workerId, grant);
+  }
+
+  /**
+   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check is the worker's own fact
+   * (it already emitted its own `lease.rejected`, relayed onto this bus with `workerId` added by
+   * `WorkerLink`) -- this class does not emit a second one for it (see the module doc, "two
+   * different fields", and events.md's post-commit rule apply equally to not inventing a
+   * duplicate fact). Only the error code is preserved so the caller sees what the worker actually
+   * said, with three exceptions:
+   *
+   * - a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29 name
+   *   `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens to be
+   *   called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart);
+   * - `#withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) -- never a
+   *   `SimlockError`, since it never reached the worker at all -- forwarded as-is;
+   * - anything else that is neither of those (H1, round 2 review): not a fact about the worker,
+   *   since every real transport failure already arrives as a `kind: "transport"` `SimlockError`,
+   *   so this is a bug in this coordinator's own request-building code. `WORKER_UNREACHABLE`
+   *   used to answer this case too, misreporting a gateway-side crash as "the machine is
+   *   unreachable"; `INTERNAL` is what `#forwardToWorker`'s matching branch answers for the same
+   *   shape of failure.
+   */
+  #classifyLeaseRequestError(error: unknown, workerId: string): DispatchError {
+    if (error instanceof DispatchError) return error;
+    if (isSimlockError(error)) return this.#classifyRelayedError(error, workerId);
+    return new DispatchError(
+      "INTERNAL",
+      `Unexpected error forwarding lease.request to worker ${workerId}`,
+      { workerId },
+    );
   }
 
   /** ADR §11: "an immediate `NO_CAPACITY` is the only answer that leaves it queued ... the
