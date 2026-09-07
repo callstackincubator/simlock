@@ -196,9 +196,9 @@ those changes add, alongside the breaking changes above.
   from reaching every lease on the machine.
 - **contract:** `status.get` gains a `daemon` block, `{ health, mode }`.
   `health` moves into it from the top level, and `mode` (`worker`/`gateway`,
-  from the new `mode` config key and always `worker` in this release) joins it
-  — the one field that tells a client which kind of daemon answered, and what
-  `simlock simctl` / `simlock adb` branch on. `simlock status` renders it as
+  read straight from the new `mode` config key) joins it — the one field that
+  tells a client which kind of daemon answered, and what `simlock simctl` /
+  `simlock adb` branch on. `simlock status` renders it as
   `Daemon: running (worker)`.
 - **android:** `simlock adb` now refuses a caller-supplied `-P`, `-H`, `-L`,
   or `--server-port` anywhere in adb's globals — the arguments before the

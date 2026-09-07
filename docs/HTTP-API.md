@@ -82,6 +82,19 @@ worker` on the **gateway**, and tokens never cross machines — a gateway's
 tokens are valid on that gateway and nowhere else ([ADR
 0005](adr/0005-gateway-and-worker-modes.md)).
 
+**An `agent` token on a worker is a host-level credential, not a
+device-level one.** `POST /v1/leases/{id}/exec` runs the command's *arguments*
+on the worker's own filesystem with the daemon's own uid and environment
+(`args` are never parsed beyond the driver's refusal list — see
+[`POST /v1/leases/{id}/exec`](#post-v1leasesidexec)), so any lease at all is
+enough to write or read files anywhere that uid can reach, not only the
+leased device: `adb pull <device-path> <worker-path>` is a host-side
+arbitrary file write, and there is no argument grammar this API parses that
+would stop it (see [known-pitfalls.md](known-pitfalls.md)). Size a worker's
+trust boundary around the daemon's own uid, not around "one device," before
+handing an `agent` token to something you would not otherwise let run on
+that machine.
+
 ## Endpoints
 
 All routes are under `/v1`, JSON bodies both ways, additive evolution only —
@@ -121,15 +134,13 @@ depth.
 
 The daemon block carries `health` (`starting`/`running`) and **`mode`**
 (`"worker" | "gateway"`), the one field that tells a client which kind of
-daemon answered — always `"worker"` in this version:
+daemon answered:
 
 ```json
 { "daemon": { "health": "running", "mode": "worker" } }
 ```
 
-The daemon block also carries **`mode`** (`"worker" | "gateway"`), which is
-the only field that tells a client which kind of daemon answered. On a
-**gateway** the numbers are the fleet's — capacity summed across connected
+On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers, every gateway-issued and local lease, every device, the gateway
 queue's depth — every lease and device carries the **`workerId`** it lives
 on, and an additive **`workers`** array carries one

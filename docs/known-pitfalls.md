@@ -492,6 +492,43 @@ that expires *while its holder is mid-install* is the same situation with the
 same answer. Revisit it with the gateway work (#115), where a proxied exec
 adds a second place a lease can end without the worker noticing at once.
 
+## An `agent` token on a worker is a host-level credential, not a device-level one
+
+`device.exec` runs a command's *arguments* on the worker's own filesystem,
+with the daemon's own uid and its own `process.env` (ADR 0005 §19a). The
+driver's refusal list stops a verb that would change a device's lifecycle
+behind the registry's back, but it parses no argument grammar beyond that —
+by design; see the next pitfall's own argument against trying.
+
+**The pitfall:** `adb pull <device-path> <worker-path>` passes every check
+`driver.passthrough`'s refusal list runs (`pull` is not a refused verb, it
+does not start with `-` so the caller-supplied-globals scan returns
+immediately, and it is not a bare `adb shell`). The device side of that path
+is whatever the lease holder controls on the device's filesystem; the worker
+side is an absolute path of the caller's choosing, written as the daemon's
+own uid — `~/.bashrc`, `${SIMLOCK_HOME}/tokens.json`, a device root's marker
+file. Before `device.exec` this required already being on the worker's
+machine; an `agent`-role bearer token reaching it over HTTP is what makes it
+remote. Sizing a worker's trust boundary around "one device per lease" reads
+this away; sizing it around "the daemon's own uid" does not.
+
+**Why this is not being fixed by parsing arguments:** the same reasoning the
+adb/simctl scans themselves rely on (safety rule 9, "fail closed") argues
+against it here too — `docs/adr/0005-gateway-and-worker-modes.md` §19a is
+explicit that arguments are accident-boundary scoping, not a security
+boundary, the same distinction ADR 0001 draws for the local passthrough
+wrappers this operation reuses. A grammar that tried to refuse "device paths
+that are secretly host paths" would be guessing at every tool's own argument
+syntax (`adb pull`, `simctl io ... screenshot`, whatever the next tool
+adds), and a guess that misses one is worse than no guess, since it reads as
+a promise this API does not keep.
+
+**Status:** accepted, and now said plainly rather than left to be discovered
+— see the [Authentication](HTTP-API.md#authentication) section of
+`HTTP-API.md`, which an operator sizing a worker's trust boundary should read
+before handing an `agent` token to anything they would not otherwise let run
+on that machine.
+
 ## `device.exec` carries no files (ADR 0005)
 
 A remote agent drives its leased device with `device.exec` — `simlock simctl`
@@ -839,6 +876,7 @@ dispatches without touching the leases anyone already holds.
 **Possible future fix:** a reserved capacity slice per worker, deferred in
 [ADR 0005](adr/0005-gateway-and-worker-modes.md) and recorded in
 [IDEAS.md](IDEAS.md#capacity-slices-reserved-for-the-gateway).
+
 ## `simlock simctl` / `simlock adb` can hang forever reading a piped stdin
 
 ADR 0005 §19c: a piped stdin is read to EOF first, then sent as `device.exec`'s
