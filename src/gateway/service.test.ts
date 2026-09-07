@@ -363,6 +363,48 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  // H2: the same asymmetry D1 fixed in `#handleClosed`, one write later -- `#rebuildView` wrote
+  // to `registry.refresh` after its own `await` with no re-check of `#closed` or
+  // `isCurrentLink`. A stale link's in-flight refresh, started before a reconnect replaced it,
+  // could land after its successor's fresher one and overwrite it with stale data for up to
+  // `WORKER_CALL_TIMEOUT_MS`.
+  it("does not let a stale link's late-arriving refresh overwrite its successor's fresher view (H2)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+
+    const clientA = new ScriptedWorkerClient("admin", "0.1.0");
+    await harness.join("wrk_1", clientA);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("0.1.0"));
+
+    // A's refresh, triggered by a worker event, is in flight but held open by hand -- long
+    // enough for a reconnect to fully replace this link before it ever answers.
+    let resolveStatus: ((status: ReturnType<typeof statusFixture>) => void) | undefined;
+    clientA.getStatus = () =>
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      });
+    clientA.pushEvent({ event: "lease.granted" });
+    await vi.waitFor(() => expect(resolveStatus).toBeDefined());
+
+    // The same worker id redials with a new connection -- service.ts replaces A's link with B's,
+    // which builds its own, current view.
+    const clientB = new ScriptedWorkerClient("admin", "9.9.9");
+    await harness.join("wrk_1", clientB);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+
+    // Only now does A's stale round trip finally answer -- exactly what a slow or half-open path
+    // answering late would do, well after B has already built the current view.
+    resolveStatus?.(statusFixture());
+    // A few real event-loop turns for A's now-resolved promise chain to run to completion (or,
+    // with the fix, to stop itself before writing) -- nothing here is clock-scheduled, so there
+    // is no fake-clock timer to advance instead.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9");
+
+    await harness.service.stop();
+  });
+
   // P1: a refresh timeout used to be swallowed into a debug log with nothing acting on it, so a
   // half-open uplink (NAT rebind, cable pull, kernel panic -- no FIN) had `connection` report
   // `connected` forever with a `lastSeenAt` that never moved again. One timeout recovering on

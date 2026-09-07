@@ -283,6 +283,12 @@ export class WorkerLink {
       ]),
       "view refresh",
     );
+    // H2: the same asymmetry D1 fixed in `#handleClosed`, one write later. This link's own
+    // `close()`/`#handleClosed` may have run while the round trips above were in flight -- a
+    // reconnect that replaced this link with a newer one, or an explicit `stop()` -- and without
+    // this re-check the write below would land after the successor's own, more recent refresh,
+    // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
+    if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
     this.options.registry.refresh(this.workerId, {
       capacity: status.capacity,
       devices: viewDevicesSchema.parse(devices),
