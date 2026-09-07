@@ -59,7 +59,7 @@ import {
   type FleetWaiter,
   type LeaseRequestOptions,
 } from "./queue.js";
-import type { RoutableRequest, RoutingPolicy } from "./routing.js";
+import type { RoutableRequest, RoutingDecision, RoutingPolicy } from "./routing.js";
 
 export interface FleetExecInput {
   readonly leaseId: string;
@@ -105,6 +105,12 @@ export class FleetLeaseCoordinator {
    * identity on the notification itself. */
   readonly #lastReconciledLeases = new Map<string, WorkerView["leases"]>();
   readonly #unsubscribeViews: () => void;
+  /** C2 (round 2 review): when each waiter was created (`#queue.create`, in `request` below),
+   * for `request.dispatched`'s `queuedMs` field -- a `WeakMap` rather than a `Map<string, number>`
+   * so a waiter that never gets there (rejected at admission, cancelled, timed out) needs no
+   * explicit clean-up call on every one of those exits to avoid an unbounded leak; the entry is
+   * reclaimable the moment nothing else still references the waiter. */
+  readonly #createdAt = new WeakMap<FleetWaiter, number>();
 
   constructor(private readonly options: FleetLeaseCoordinatorOptions) {
     this.#logger = options.logger ?? new NoopLogger();
@@ -155,6 +161,7 @@ export class FleetLeaseCoordinator {
         throw new RequesterAlreadyLeasedError(options.requesterId, existingLeaseId);
       }
       const created = this.#queue.create(deviceRequest, options);
+      this.#createdAt.set(created, this.options.clock.now());
       this.#emit("lease.requested", {
         requestSpec: deviceRequest,
         requester: options.requesterId,
@@ -386,7 +393,7 @@ export class FleetLeaseCoordinator {
   #admit(waiter: FleetWaiter): void {
     const decision = this.options.routing.select(routable(waiter), this.options.views.views());
     if (decision !== undefined) {
-      this.#beginAttempt(waiter, decision.workerId);
+      this.#beginAttempt(waiter, decision);
       return;
     }
     if (waiter.options.noWait === true) {
@@ -408,13 +415,13 @@ export class FleetLeaseCoordinator {
       if (waiter.state !== "queued") continue;
       const decision = this.options.routing.select(routable(waiter), this.options.views.views());
       if (decision === undefined) continue;
-      this.#beginAttempt(waiter, decision.workerId);
+      this.#beginAttempt(waiter, decision);
     }
   }
 
-  #beginAttempt(waiter: FleetWaiter, workerId: string): void {
+  #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision): void {
     this.#queue.markProcessing(waiter);
-    void this.#attempt(waiter, workerId);
+    void this.#attempt(waiter, decision);
   }
 
   /**
@@ -429,7 +436,8 @@ export class FleetLeaseCoordinator {
    * below already leaves it in one of exactly those states on its own -- there is no second
    * clear-up step left to forget.
    */
-  async #attempt(waiter: FleetWaiter, workerId: string): Promise<void> {
+  async #attempt(waiter: FleetWaiter, decision: RoutingDecision): Promise<void> {
+    const workerId = decision.workerId;
     const target = this.options.directory.target(workerId);
     const client = target?.reachable === true ? target.client() : undefined;
     if (client === undefined) {
@@ -444,7 +452,18 @@ export class FleetLeaseCoordinator {
     const announceDispatched = (): void => {
       if (announced) return;
       announced = true;
-      this.#emit("request.dispatched", { requestId: waiter.id, workerId });
+      // C2 (round 2 review): the full payload `docs/EVENTS.md` always specified for this row --
+      // see `bus/index.ts`'s own doc comment on why it was narrowed and then restored.
+      const createdAt = this.#createdAt.get(waiter);
+      this.#emit("request.dispatched", {
+        model: waiter.request.model,
+        platform: waiter.request.platform,
+        queuedMs: createdAt === undefined ? 0 : Math.max(0, this.options.clock.now() - createdAt),
+        reason: decision.reason,
+        requestId: waiter.id,
+        requesterId: waiter.options.requesterId,
+        workerId,
+      });
     };
 
     let grant: LeaseGrant;

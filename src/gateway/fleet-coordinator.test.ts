@@ -412,12 +412,24 @@ describe("FleetLeaseCoordinator dispatch", () => {
         { etaMs: 1_000, stage: "booting" },
       ],
     });
-    const dispatched: Array<{ requestId: string; workerId: string }> = [];
+    const dispatched: unknown[] = [];
     eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
 
     const grant = await coordinator.request(REQUEST, requestOptions());
 
-    expect(dispatched).toEqual([{ requestId: expect.any(String) as string, workerId: "wrk_a" }]);
+    // C2 (round 2 review): the full self-contained payload `docs/EVENTS.md` specifies -- not
+    // just the gateway-internal `requestId`/`workerId` pair.
+    expect(dispatched).toEqual([
+      {
+        model: "iPhone 17",
+        platform: "ios",
+        queuedMs: expect.any(Number) as number,
+        reason: "free-capacity",
+        requestId: expect.any(String) as string,
+        requesterId: "agent-1",
+        workerId: "wrk_a",
+      },
+    ]);
     // Sanity: the request really did land where the event says it did.
     expect(grant.lease.worker?.id).toBe("wrk_a");
   });
@@ -428,12 +440,61 @@ describe("FleetLeaseCoordinator dispatch", () => {
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    const dispatched: Array<{ requestId: string; workerId: string }> = [];
+    const dispatched: unknown[] = [];
     eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
 
     await coordinator.request(REQUEST, requestOptions());
 
-    expect(dispatched).toEqual([{ requestId: expect.any(String) as string, workerId: "wrk_a" }]);
+    expect(dispatched).toEqual([
+      {
+        model: "iPhone 17",
+        platform: "ios",
+        queuedMs: expect.any(Number) as number,
+        reason: "free-capacity",
+        requestId: expect.any(String) as string,
+        requesterId: "agent-1",
+        workerId: "wrk_a",
+      },
+    ]);
+  });
+
+  it("reports request.dispatched's reason as warm-hit when routing picked the worker for an unleased ready device, and queuedMs as the real wait (C2, round 2 review)", async () => {
+    const { clock, coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    // No free capacity yet -- the request genuinely queues instead of settling on the fast
+    // admission-time path, so `queuedMs` has something real to measure.
+    const noFree = { ...statusFixture().capacity.ios, maxRunning: 0, running: 0 };
+    connectWorker(workers, "wrk_a", { capacity: { ...statusFixture().capacity, ios: noFree } });
+    const dispatched: unknown[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    const grantPromise = coordinator.request(REQUEST, requestOptions());
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    clock.advance(2_500);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // The worker now reports the requested device itself sitting ready -- a warm hit, not a
+    // free-capacity pick, once capacity frees up too.
+    workers.refresh("wrk_a", {
+      capacity: { ...statusFixture().capacity, ios: { ...noFree, maxRunning: 5 } },
+      devices: [deviceFixture("dev_1", "ready")],
+    });
+
+    await grantPromise;
+
+    expect(dispatched).toEqual([
+      {
+        model: "iPhone 17",
+        platform: "ios",
+        queuedMs: 2_500,
+        reason: "warm-hit",
+        requestId: expect.any(String) as string,
+        requesterId: "agent-1",
+        workerId: "wrk_a",
+      },
+    ]);
   });
 
   it("does not emit request.dispatched for a stale-view NO_CAPACITY -- the request stayed queued, never actually dispatched", async () => {
