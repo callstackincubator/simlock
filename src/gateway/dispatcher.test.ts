@@ -6,7 +6,7 @@ import type { DispatchSession } from "../daemon/dispatch.js";
 import { FakeClock } from "../ports/index.js";
 import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
-import { FleetLeaseCoordinator, NoCapacityError } from "./fleet-coordinator.js";
+import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseIndex } from "./lease-index.js";
 import { createRoutingPolicy } from "./routing.js";
@@ -429,16 +429,16 @@ describe("GatewayDispatcher", () => {
       const { dispatcher } = harness();
 
       // No worker connected at all: a `noWait` request has nowhere to go and is refused
-      // immediately, rather than the pre-#118 permanent `UNSUPPORTED_IN_GATEWAY_MODE`.
-      // `NoCapacityError` itself, not a `{code}` shape: mapping it to `NO_CAPACITY` is
-      // `daemon/error-code.ts`'s job, one layer above this unit test.
+      // immediately, rather than the pre-#118 permanent `UNSUPPORTED_IN_GATEWAY_MODE`. A plain
+      // `DispatchError("NO_CAPACITY", ...)` (H9, round 2 review) -- no gateway-specific error
+      // class for `daemon/error-code.ts` to import and recognize.
       await expect(
         dispatcher.dispatch(
           "lease.request",
           { model: "iPhone 17", noWait: true, platform: "ios" },
           session({ role: "agent" }),
         ),
-      ).rejects.toBeInstanceOf(NoCapacityError);
+      ).rejects.toMatchObject({ code: "NO_CAPACITY" });
 
       for (const [operation, input] of [
         ["lease.renew", { leaseId: "wrk_ghost.lease_1" }],

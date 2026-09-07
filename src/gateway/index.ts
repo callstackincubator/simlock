@@ -26,8 +26,6 @@ export type { WorkerDirectory } from "./fleet-ports.js";
 // fallow-ignore-next-line unused-type -- see FleetViews above.
 export type { WorkerDispatchTarget } from "./fleet-ports.js";
 export { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-// fallow-ignore-next-line unused-export -- public error class; daemon/error-code.ts imports it directly from fleet-coordinator.js (a narrower dependency than this whole barrel), not through here.
-export { NoCapacityError } from "./fleet-coordinator.js";
 export { FleetLeaseIndex } from "./lease-index.js";
 // fallow-ignore-next-line unused-type -- public record shape for FleetLeaseIndex's own consumers; no current caller outside src/gateway needs the type by name.
 export type { FleetLeaseEntry } from "./lease-index.js";

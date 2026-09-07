@@ -60,18 +60,6 @@ import {
 } from "./queue.js";
 import type { RoutableRequest, RoutingPolicy } from "./routing.js";
 
-/** The one fleet-native refusal a worker never produces itself: no eligible worker exists for
- * this request right now. Named distinctly from the worker's own `NoCapacityError`
- * (`lease-acquisition-coordinator.ts`) because that module is off limits to `src/gateway`
- * (ADR §33) -- this is not the same class, but `daemon/error-code.ts` classifies both to the
- * same `NO_CAPACITY` code. */
-export class NoCapacityError extends Error {
-  constructor() {
-    super("No worker in the fleet can currently serve this request");
-    this.name = "NoCapacityError";
-  }
-}
-
 export interface FleetExecInput {
   readonly leaseId: string;
   readonly tool: string;
@@ -371,7 +359,16 @@ export class FleetLeaseCoordinator {
 
   /** A brand-new waiter's first look, taken synchronously against the current views right after
    * admission -- the common warm-hit case never has to wait for an external trigger. Mirrors
-   * `LeaseAcquisitionCoordinator#defer`'s noWait/wait split for the case routing finds nobody. */
+   * `LeaseAcquisitionCoordinator#defer`'s noWait/wait split for the case routing finds nobody.
+   *
+   * H9 (round 2 review): throws a plain `DispatchError("NO_CAPACITY", ...)` rather than a
+   * fleet-native error class -- `DispatchError`'s own code is used verbatim by
+   * `daemon/error-code.ts#classifyError`'s first branch, so no gateway-specific class or import
+   * is needed there to answer the same code the worker's own `NoCapacityError` answers. Before
+   * this, `src/daemon` (every worker-mode daemon, not just gateway mode) imported this class from
+   * `src/gateway/fleet-coordinator.js` just to recognize it, pulling the whole gateway module
+   * graph (and `src/admin`'s client) into ordinary worker startup with no boundary test covering
+   * that direction. */
   #admit(waiter: FleetWaiter): void {
     const decision = this.options.routing.select(routable(waiter), this.options.views.views());
     if (decision !== undefined) {
@@ -379,7 +376,11 @@ export class FleetLeaseCoordinator {
       return;
     }
     if (waiter.options.noWait === true) {
-      this.#reject(waiter, new NoCapacityError(), "no-wait");
+      this.#reject(
+        waiter,
+        new DispatchError("NO_CAPACITY", "No worker in the fleet can currently serve this request"),
+        "no-wait",
+      );
       return;
     }
     this.#enqueue(waiter);

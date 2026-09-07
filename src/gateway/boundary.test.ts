@@ -142,6 +142,47 @@ describe("gateway module boundary", () => {
   });
 });
 
+/**
+ * H9 (round 2 review): the reverse direction from the one this file otherwise checks. Before
+ * this, `src/daemon/error-code.ts` imported `NoCapacityError` from
+ * `src/gateway/fleet-coordinator.js` just to recognize it in an `instanceof` branch, so every
+ * worker-mode daemon -- not just gateway mode -- pulled the whole gateway module graph (and
+ * `src/admin`'s client) into ordinary startup, with nothing here to notice. `main.ts` is the one
+ * legitimate exception: it is the composition root that wires up whichever mode `config.mode`
+ * names, and gateway mode's own wiring (`GatewayService`, `FleetLeaseCoordinator`,
+ * `GatewayOwnerRoutedFacts`, ...) has to live somewhere that can see both.
+ */
+describe("daemon module boundary (reverse direction, H9)", () => {
+  const daemonSourceFiles = sourceFilesRecursive(daemonDir).filter(
+    (path) => path !== join(daemonDir, "main.ts"),
+  );
+
+  it("found the daemon's own source files (excluding main.ts, the composition root)", () => {
+    expect(daemonSourceFiles.length).toBeGreaterThan(0);
+  });
+
+  it.each(daemonSourceFiles.map((path) => [path.slice(daemonDir.length + 1), path] as const))(
+    "%s does not import src/gateway",
+    (relativePath, filePath) => {
+      const contents = stripComments(readFileSync(filePath, "utf8"));
+      const fileDir = dirname(filePath);
+
+      for (const specifier of importSpecifiers(contents)) {
+        const normalized = normalizeSpecifier(fileDir, specifier);
+        expect({
+          fileName: relativePath,
+          matchesGateway: isUnder(normalized, "gateway"),
+          normalized,
+        }).toEqual({
+          fileName: relativePath,
+          matchesGateway: false,
+          normalized,
+        });
+      }
+    },
+  );
+});
+
 describe("sourceFilesRecursive", () => {
   // M4: the other half of the gap -- a flat `readdirSync` never looked inside a subdirectory at
   // all, so a module placed under one skipped this whole suite silently rather than failing it.

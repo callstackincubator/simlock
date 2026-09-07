@@ -5,7 +5,7 @@ import { SimlockError } from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
-import { FleetLeaseCoordinator, NoCapacityError } from "./fleet-coordinator.js";
+import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
 import { RequesterAlreadyLeasedError } from "./queue.js";
 import { createRoutingPolicy } from "./routing.js";
@@ -456,12 +456,12 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
   });
 
-  it("rejects a no-wait request immediately with NoCapacityError when no worker is eligible at all", async () => {
+  it("rejects a no-wait request immediately with NO_CAPACITY when no worker is eligible at all", async () => {
     const { coordinator } = harness();
 
     await expect(
       coordinator.request(REQUEST, requestOptions({ noWait: true })),
-    ).rejects.toBeInstanceOf(NoCapacityError);
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
   });
 
   it("forwards a worker's own terminal refusal verbatim, as the worker's own error code", async () => {
