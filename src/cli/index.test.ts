@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -49,6 +50,7 @@ import {
   fallbackRequesterId,
   parseDuration,
   readLogFile,
+  readPipedStdin,
   runCli,
   type CliEnvironment,
   type CliEnvironmentPorts,
@@ -561,7 +563,11 @@ describe("CLI: exit codes", () => {
       ]);
     });
 
-    it("reads piped stdin to EOF and sends it as the command's one-shot stdin", async () => {
+    it("sends whatever readStdin resolves with as the command's one-shot stdin", async () => {
+      // `readStdin` is a `CliEnvironmentPorts` seam this test injects directly -- it exercises
+      // the wiring from that port's result to `device.exec`'s `stdin`, not the default
+      // `readPipedStdin` implementation that reads a real pipe to EOF; that one is tested on
+      // its own below, since a fake here would not exercise it at all.
       const output = outputCapture();
       const seen: unknown[] = [];
 
@@ -2611,6 +2617,51 @@ describe("CLI: pure helpers", () => {
     expect(parseDuration("3m")).toBe(180_000);
     expect(parseDuration("1h")).toBe(3_600_000);
     expect(() => parseDuration("banana")).toThrow();
+  });
+});
+
+// Round 4, test-title finding 3: the "remote passthrough" suite's own stdin test injects
+// `readStdin` directly and never exercises this function at all -- documented in
+// `docs/known-pitfalls.md` as an unbounded read, and until now entirely untested.
+describe("readPipedStdin", () => {
+  function fakeStdin(chunks: readonly string[], isTTY: boolean): typeof process.stdin {
+    const stream = Readable.from(chunks);
+    return Object.assign(stream, { isTTY }) as unknown as typeof process.stdin;
+  }
+
+  it("returns undefined without reading anything when stdin is a terminal", async () => {
+    const stdin = fakeStdin(["should never be read"], true);
+    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
+
+    try {
+      await expect(readPipedStdin()).resolves.toBeUndefined();
+    } finally {
+      stdinGetter.mockRestore();
+    }
+  });
+
+  it("reads a piped stdin to EOF, concatenating every chunk in order", async () => {
+    const stdin = fakeStdin(["piped ", "pay", "load\n"], false);
+    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
+
+    try {
+      await expect(readPipedStdin()).resolves.toBe("piped payload\n");
+    } finally {
+      stdinGetter.mockRestore();
+    }
+  });
+
+  it("returns an empty string, not undefined, for a piped stdin that carries nothing", async () => {
+    // `undefined` means "a terminal, do not read"; an empty pipe is a real EOF and a real
+    // (empty) answer -- the two must stay distinguishable to a caller.
+    const stdin = fakeStdin([], false);
+    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
+
+    try {
+      await expect(readPipedStdin()).resolves.toBe("");
+    } finally {
+      stdinGetter.mockRestore();
+    }
   });
 });
 

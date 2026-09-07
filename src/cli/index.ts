@@ -470,7 +470,7 @@ export function buildCliEnvironment(
  * "`simlock simctl` / `simlock adb` can hang forever reading a piped stdin" in
  * `docs/known-pitfalls.md`. Accepted deliberately, not an oversight.
  */
-async function readPipedStdin(): Promise<string | undefined> {
+export async function readPipedStdin(): Promise<string | undefined> {
   if (process.stdin.isTTY === true) return undefined;
   process.stdin.setEncoding("utf8");
   let contents = "";

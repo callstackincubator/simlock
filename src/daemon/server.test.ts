@@ -673,12 +673,17 @@ describe("DaemonServer", () => {
     await survivor.close();
   });
 
-  it("stops reading the command while a frame is still going out", async () => {
-    // ADR 0005 §19e end to end on this transport: `#pushOutput`'s promise is what
-    // `device.exec` hands the process runner, so a client whose socket has not drained stops
-    // the command at its pipe instead of growing this daemon's write queue. Driven through a
-    // connection whose `write` this test settles by hand -- a real socket would need megabytes
-    // to fill a kernel buffer, which is the same property tested by luck.
+  it("keeps #pushOutput's promise unresolved while a frame is still going out, resolving it once the write drains", async () => {
+    // ADR 0005 §19e on this transport: `#pushOutput`'s returned promise is what
+    // `device.exec` hands the process runner as a chunk's delivery, and it is that promise --
+    // not anything this test can observe about a real stream -- staying unresolved while a
+    // client's socket has not drained that would eventually stop the command at its pipe.
+    // `ControllableStreamingRunner` is a fake with no stream of its own to stop reading (its
+    // `emit` calls `onChunk` directly), so this proves only the promise half of the contract;
+    // `ports/process-runner.test.ts`'s `NodeProcessRunner` suite is where a real pipe is
+    // actually paused. Driven through a connection whose `write` this test settles by hand --
+    // a real socket would need megabytes to fill a kernel buffer, which is the same property
+    // tested by luck.
     const clock = new FakeClock(1_000);
     const driver = passthroughDriver(clock);
     const runner = new ControllableStreamingRunner();

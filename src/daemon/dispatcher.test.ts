@@ -1065,12 +1065,15 @@ describe("Dispatcher: device.exec", () => {
     await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
   });
 
-  it("does not call a command that finished a timeout, even when it exits in the timer's own turn", async () => {
-    // The sharp case: the child exits at the very instant the timeout fires. A flag set by
-    // whichever callback ran last would blame the limit for a command that met it, so the two
-    // are raced -- whichever actually settled first is the answer. Driven by a handle whose
-    // `wait()` is resolved from a timer scheduled for the same instant and registered first,
-    // so the exit genuinely lands inside the timeout's own turn of the loop.
+  it("resolves with the exit code, not EXEC_TIMEOUT, when the command finishes before the timeout timer's callback runs -- even scheduled in the same synchronous burst", async () => {
+    // `Promise.race([waited, expired])` -- not a flag either callback sets -- is what this
+    // proves the value of: `handle.finish(7)` and `clock.advance(1_000)` are both called here
+    // synchronously, one right after the other, with nothing in between observing either
+    // settle. A flag-based implementation (`let timedOut = false; timer sets it`) would be at
+    // the mercy of which of these two statements a maintainer wrote first, and get it wrong
+    // for whichever settles second; `Promise.race` instead answers from whichever promise
+    // *actually* settled first, in the order the two calls below run it -- unaffected by which
+    // of `waited`/`expired` the `Promise.race([...])` array happens to list first.
     const clock = new FakeClock(1_000);
     const handle = new SettleOnCueHandle();
     const { dispatcher, leaseId } = await withLease({
@@ -1086,8 +1089,8 @@ describe("Dispatcher: device.exec", () => {
     );
     await flush();
 
-    // The child exits and the timeout fires in the same synchronous turn, with nothing having
-    // observed the exit yet -- the ordering a flag would get wrong and a race gets right.
+    // The exit settles first, in program order; the timer's callback (which would otherwise
+    // report EXEC_TIMEOUT) runs only afterward, in the same synchronous burst.
     handle.finish(7);
     clock.advance(1_000);
 
