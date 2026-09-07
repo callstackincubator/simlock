@@ -108,7 +108,12 @@ describe("loadConfig", () => {
     const defaulted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
     expect(defaulted.mode).toBe("worker");
 
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "gateway" }));
+    // `http.enabled: true` here because a gateway with HTTP off is its own rejection --
+    // see the next test -- and this one is only about the two spellings `mode` accepts.
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: true }, mode: "gateway" }),
+    );
     const gateway = await loadConfig({ configPath, filesystem, systemStats: createStats() });
     expect(gateway.mode).toBe("gateway");
 
@@ -116,6 +121,38 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow("mode");
+  });
+
+  it("rejects mode: gateway with http.enabled: false at load", async () => {
+    // ADR 0005 §2: a gateway is the fleet's contact point over both HTTP and its unix socket,
+    // so one with HTTP off is unreachable by any worker or agent -- a config with no safe
+    // reading, rejected the same way a self-contradicting lease TTL pair is (naming the key,
+    // daemon does not start) rather than started and left silently useless.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    // The default is `http.enabled: false`, so naming only `mode` already triggers this.
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "gateway" }));
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.enabled");
+
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: false }, mode: "gateway" }),
+    );
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.enabled");
+
+    // A worker with HTTP off is unaffected: HTTP is genuinely optional for that mode.
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: false }, mode: "worker" }),
+    );
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).resolves.toMatchObject({ http: { enabled: false }, mode: "worker" });
   });
 
   it("defaults exec.timeoutMs to ten minutes and rejects a non-positive one", async () => {
