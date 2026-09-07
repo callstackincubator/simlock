@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/index.js";
+import type { Filesystem } from "../ports/index.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -35,6 +36,10 @@ import type { DaemonServer } from "./server.js";
 
 const GATEWAY_PORT = 48173;
 const GATEWAY_URL = `ws://127.0.0.1:${GATEWAY_PORT}`;
+/** Distinct from `GATEWAY_PORT` above so this file's second suite never races the first test's
+ * own listener through TIME_WAIT on the same port. */
+const RESTART_GATEWAY_PORT = 48174;
+const RESTART_GATEWAY_URL = `ws://127.0.0.1:${RESTART_GATEWAY_PORT}`;
 
 function adminSession(): DispatchSession {
   return { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" };
@@ -78,17 +83,53 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     return daemon;
   }
 
+  /**
+   * #119: a gateway that can be stopped and started again *as the same gateway* -- the same
+   * `SIMLOCK_HOME` directory and the same `Filesystem` instance backing it, which is what
+   * `instance.json`/`tokens.json`/`workers.json` actually persisting across the restart depends
+   * on (ADR §30, §8a). `startGateway` above deliberately hands each call a fresh
+   * `MemoryFilesystem`, which is right for a test that starts one gateway once; this one needs
+   * the state to survive the restart it is about to perform.
+   */
+  async function startRestartableGateway(): Promise<{
+    daemon: DaemonServer;
+    filesystem: Filesystem;
+    directory: string;
+  }> {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-restart-"));
+    directories.push(directory);
+    const filesystem = new MemoryFilesystem();
+    const daemon = await startDaemon({
+      configOverrides: {
+        mode: "gateway",
+        http: { enabled: true, host: "127.0.0.1", port: RESTART_GATEWAY_PORT },
+      },
+      dataDirectory: directory,
+      filesystem,
+      logger: new NoopLogger(),
+      statePath: join(directory, "state.json"),
+      version: "1.0.0-e2e",
+    });
+    daemons.push(daemon);
+    return { daemon, filesystem, directory };
+  }
+
   async function startWorker(options: {
     readonly label: string;
     readonly model: string;
     readonly token: string;
     readonly stdout: string;
+    readonly gatewayUrl?: string;
   }): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), `simlock-e2e-${options.label}-`));
     directories.push(directory);
     const daemon = await startDaemon({
       configOverrides: {
-        gateway: { url: GATEWAY_URL, token: options.token, label: options.label },
+        gateway: {
+          url: options.gatewayUrl ?? GATEWAY_URL,
+          token: options.token,
+          label: options.label,
+        },
       },
       dataDirectory: directory,
       drivers: [
@@ -183,4 +224,145 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
     await gateway.dispatch("lease.release", { leaseId: grant.lease.id }, agentSession());
   }, 30_000);
+
+  /**
+   * #119's own flagship: drain semantics, `WORKER_UNREACHABLE`-shaped exclusion, and reconnect
+   * rebuild, proved together over real processes and a real WebSocket restart -- not the
+   * scripted uplink `fleet-coordinator.test.ts` and `dispatcher.test.ts` already cover each
+   * piece of in isolation (including §27a's ownership round trip, pinned there too). What only
+   * this shape of test can catch: the gateway's own persisted state (`instance.json`,
+   * `tokens.json`, `workers.json`) actually surviving a real `stop()`/`startDaemon()` cycle, and
+   * a real worker's own `GatewayUplink` actually redialling and reconnecting on its own backoff
+   * once the new process is listening again.
+   */
+  it("drains one worker, kills it, restarts the gateway, and proves the surviving worker's lease outlives the restart with renewing resumed (ADR §9/§27a/§30, #119)", async () => {
+    const { daemon: firstGateway, filesystem, directory } = await startRestartableGateway();
+    const { secret: tokenA } = await firstGateway.dispatch(
+      "token.create",
+      { role: "worker", label: "worker-a" },
+      adminSession(),
+    );
+    const { secret: tokenB } = await firstGateway.dispatch(
+      "token.create",
+      { role: "worker", label: "worker-b" },
+      adminSession(),
+    );
+
+    await startWorker({
+      label: "worker-a",
+      model: "Pixel-A",
+      token: tokenA,
+      stdout: "hello-from-a",
+      gatewayUrl: RESTART_GATEWAY_URL,
+    });
+    const workerB = await startWorker({
+      label: "worker-b",
+      model: "Pixel-B",
+      token: tokenB,
+      stdout: "hello-from-b",
+      gatewayUrl: RESTART_GATEWAY_URL,
+    });
+
+    await vi.waitFor(async () => {
+      const { workers } = await firstGateway.dispatch("worker.list", {}, adminSession());
+      expect(workers.filter((worker) => worker.connection === "connected")).toHaveLength(2);
+    });
+    const beforeDrain = (await firstGateway.dispatch("worker.list", {}, adminSession())).workers;
+    const workerBId = beforeDrain.find((worker) => worker.label === "worker-b")?.id;
+    if (workerBId === undefined) throw new Error("worker-b never connected");
+
+    // Lease worker-a's own device -- the fleet client below must still be able to renew this
+    // exact lease after everything that follows.
+    const grant = await firstGateway.dispatch(
+      "lease.request",
+      { model: "Pixel-A", platform: "android", noWait: true },
+      agentSession({ principal: "fleet-owner" }),
+    );
+    expect(grant.lease.worker?.label).toBe("worker-a");
+
+    // Drain worker-b (ADR §9). It holds no lease of its own here; the point of draining it is
+    // that the drain has to survive everything below, not just this call.
+    await firstGateway.dispatch("worker.drain", { workerId: workerBId }, adminSession());
+    await vi.waitFor(async () => {
+      const { workers } = await firstGateway.dispatch("worker.list", {}, adminSession());
+      expect(workers.find((worker) => worker.id === workerBId)?.drained).toBe(true);
+    });
+    // No new dispatch reaches a drained worker: a request only worker-b could serve queues
+    // rather than landing on it -- proven over the real uplink, not a scripted directory.
+    await expect(
+      firstGateway.dispatch(
+        "lease.request",
+        { model: "Pixel-B", platform: "android", noWait: true },
+        agentSession({ principal: "someone-else" }),
+      ),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+
+    // Kill worker-b outright: an operator taking a drained machine down for maintenance.
+    await workerB.stop("test");
+    daemons.splice(daemons.indexOf(workerB), 1);
+
+    // Restart the gateway. Everything it held only in memory -- worker views, the lease index,
+    // the fleet queue -- is gone (ADR §30); only what it persisted survives, because this reuses
+    // the *same* directory and the *same* `Filesystem` instance rather than fabricating a fresh
+    // gateway that merely happens to listen on the same port.
+    await firstGateway.stop("test");
+    daemons.splice(daemons.indexOf(firstGateway), 1);
+    const restartedGateway = await startDaemon({
+      configOverrides: {
+        mode: "gateway",
+        http: { enabled: true, host: "127.0.0.1", port: RESTART_GATEWAY_PORT },
+      },
+      dataDirectory: directory,
+      filesystem,
+      logger: new NoopLogger(),
+      statePath: join(directory, "state.json"),
+      version: "1.0.0-e2e",
+    });
+    daemons.push(restartedGateway);
+
+    // worker-a's own uplink was never touched -- it keeps redialling on its own backoff and
+    // finds the restarted gateway listening again on the same port.
+    await vi.waitFor(
+      async () => {
+        const { workers } = await restartedGateway.dispatch("worker.list", {}, adminSession());
+        expect(
+          workers.some(
+            (worker) => worker.label === "worker-a" && worker.connection === "connected",
+          ),
+        ).toBe(true);
+      },
+      { timeout: 15_000 },
+    );
+
+    // The lease survives the restart (ADR §30) and renewing resumes for its original requester
+    // once the reconnect rebuild has run -- retried because the rebuild races the reconnect
+    // itself becoming visible above.
+    const renewed = await vi.waitFor(
+      () =>
+        restartedGateway.dispatch(
+          "lease.renew",
+          { leaseId: grant.lease.id },
+          agentSession({ principal: "fleet-owner" }),
+        ),
+      { timeout: 15_000 },
+    );
+    expect(renewed.ttlDeadline).toBeGreaterThan(grant.lease.ttlDeadline);
+
+    // ...and refused for anyone else (ADR §27a, pinned end to end across a real restart): the
+    // owner this gateway forwarded before it died is what the rebuilt lease authorizes against,
+    // not whichever principal happens to ask first.
+    await expect(
+      restartedGateway.dispatch(
+        "lease.renew",
+        { leaseId: grant.lease.id },
+        agentSession({ principal: "an-impostor" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    await restartedGateway.dispatch(
+      "lease.release",
+      { leaseId: grant.lease.id },
+      agentSession({ principal: "fleet-owner" }),
+    );
+  }, 40_000);
 });
