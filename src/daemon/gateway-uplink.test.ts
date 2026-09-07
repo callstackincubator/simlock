@@ -160,6 +160,51 @@ describe("GatewayUplink", () => {
     await link.stop();
   });
 
+  // H1's other half: every test above either never lets a connection survive `minStableMs` (the
+  // accept-then-close loop just above) or never grows `#attempt` past 1 before a stable success
+  // (every other passing case). Neither exercises the actual reset itself -- deleting
+  // `this.#attempt = 0` from the stable timer's callback fails none of them, since the very
+  // first reconnect after one success looks identical whether `#attempt` was reset to 0 or left
+  // at 1. This grows `#attempt` to 4 with real failures first, *then* lets a connection survive
+  // `minStableMs`, so the reset is the only thing that can explain the next delay being back at
+  // `initialMs` instead of the cap `#attempt` would otherwise still be sitting at.
+  it("resets the backoff once a connection has genuinely stayed up, not merely connected (H1)", async () => {
+    const connector = new ScriptedConnector();
+    const unreachable = () => new UplinkError("unreachable", "no gateway");
+    connector.script(unreachable(), unreachable(), unreachable());
+    const { accepted, clock, link } = uplink(connector, {
+      backoff: { initialMs: 1_000, maxMs: 8_000, multiplier: 2 },
+      minStableMs: 5_000,
+    });
+
+    link.start();
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(1));
+
+    // Three straight failures grow `#attempt` to 3 (delays 1s, 2s, 4s) before the 4th dial ever
+    // gets a chance to succeed.
+    for (const delayMs of [1_000, 2_000, 4_000]) {
+      const before = connector.dials.length;
+      clock.advance(delayMs);
+      await vi.waitFor(() => expect(connector.dials).toHaveLength(before + 1));
+    }
+    await vi.waitFor(() => expect(accepted).toHaveLength(1));
+
+    // Stays up past `minStableMs`: the stable timer fires and, if the reset is intact, `#attempt`
+    // goes back to 0 here -- well before anything closes.
+    clock.advance(5_000);
+
+    // Without the reset, `#attempt` is still 4 from the dial that succeeded, and the next delay
+    // would be the cap (`1000 * 2**3` = 8000, already at `maxMs`) rather than `initialMs`.
+    await connector.connections[0]?.close();
+    const before = connector.dials.length;
+    clock.advance(999);
+    expect(connector.dials).toHaveLength(before);
+    clock.advance(1);
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(before + 1));
+
+    await link.stop();
+  });
+
   it("keeps retrying at the cap when the gateway rejects the join token (ADR 0005 §8)", async () => {
     const connector = new ScriptedConnector();
     const rejected = () => new UplinkError("rejected", "revoked");

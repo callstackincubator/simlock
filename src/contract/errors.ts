@@ -121,6 +121,53 @@ export interface ErrorDetailsMap {
 
 export type SimlockErrorCode = keyof ErrorDetailsMap;
 
+/** The subset of `SimlockErrorCode` whose `ErrorDetailsMap` entry actually declares a field --
+ * i.e. every code above except the `Record<string, never>` ("no details") ones. Structural
+ * assignability to `Record<string, never>`, not `keyof`: an index-signature-only type's `keyof`
+ * is `string`, not `never`, so a `keyof ... extends never` test would (wrongly) call every code
+ * "declared" -- only a shape whose every property-value-type is itself assignable to `never`
+ * (i.e. `Record<string, never>` itself) is actually empty. */
+type CodeWithDeclaredDetails = {
+  [Code in SimlockErrorCode]: ErrorDetailsMap[Code] extends Record<string, never> ? never : Code;
+}[SimlockErrorCode];
+
+/**
+ * Hardening: which error codes are declared, in `ErrorDetailsMap` above, to carry a `details`
+ * payload onto the wire -- read by `src/http/errors.ts`'s `mapError` so it forwards a
+ * `DispatchError`'s `.details` only for a code the contract actually documents as carrying one,
+ * rather than for any `DispatchError` whose `.details` happens to be object-shaped. `.details`
+ * is `unknown` on `DispatchError` (`dispatch.ts`) -- nothing stops a handler from attaching an
+ * object to a code that declares none, and without this gate `mapError` would put it on the
+ * wire anyway.
+ *
+ * Deliberately a `Record<CodeWithDeclaredDetails, true>` rather than a plain array: TypeScript
+ * requires this object to have *exactly* `CodeWithDeclaredDetails`'s keys, no more and no
+ * fewer, so adding a details shape to `ErrorDetailsMap` without adding it here (or the reverse)
+ * is a compile error here -- the two cannot drift apart silently.
+ */
+const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true> = {
+  PROTOCOL_VERSION_UNSUPPORTED: true,
+  QUEUE_TIMEOUT: true,
+  REQUESTER_ALREADY_LEASED: true,
+  NO_DRIVER: true,
+  RUNTIME_MISSING: true,
+  UNKNOWN_MODEL: true,
+  INSUFFICIENT_DISK_SPACE: true,
+  LICENSE_NOT_ACCEPTED: true,
+  UNKNOWN_LEASE: true,
+  PASSTHROUGH_REFUSED: true,
+  UNKNOWN_PASSTHROUGH_TOOL: true,
+  UNSUPPORTED_IN_GATEWAY_MODE: true,
+  WORKER_CONNECTED: true,
+  UNKNOWN_WORKER: true,
+  WORKER_UNREACHABLE: true,
+  UNKNOWN_DAEMON_ERROR: true,
+};
+
+export const CODES_WITH_DECLARED_DETAILS: ReadonlySet<SimlockErrorCode> = new Set(
+  Object.keys(CODES_WITH_DECLARED_DETAILS_BY_CODE) as CodeWithDeclaredDetails[],
+);
+
 export interface ErrorTableEntry<Code extends SimlockErrorCode = SimlockErrorCode> {
   readonly code: Code;
   readonly kind: ErrorKind;

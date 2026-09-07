@@ -1181,8 +1181,8 @@ Three roles:
   worker's `gateway.token`. It authorizes exactly one thing, opening an uplink
   at `GET /v1/uplink`, and is `403` on every other `/v1` route; conversely an
   `agent` or `operator` token is `403` at `/v1/uplink`. Revoking one closes the
-  uplink at the worker's next reconnect, and the worker keeps retrying at its
-  backoff cap until an operator mints a replacement.
+  uplink, and the worker keeps retrying at its backoff cap until an operator
+  mints a replacement.
 
 `create` prints the minted secret **once**, alongside the token record:
 

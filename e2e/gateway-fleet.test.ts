@@ -174,15 +174,50 @@ describe("gateway fleet", () => {
     expect(removed.code).toBe(0);
     expect(await listWorkers(gateway)).toHaveLength(1);
 
-    // 8. A worker's own events reach the gateway's buffer with its workerId attached, which is
-    //    what makes `simlock events` against a gateway a fleet-wide view (ADR 0005 §22).
+    // 8. A worker's own *business* events -- not just the gateway's own connect/disconnect
+    //    facts, which carry `workerId` too and would pass this check even with republishing
+    //    (`WorkerLink#onWorkerEvent`) deleted outright -- reach the gateway's buffer with
+    //    `workerId` attached, which is what makes `simlock events` against a gateway a
+    //    fleet-wide view (ADR 0005 §22). Driven deterministically: a real `lease.granted` on
+    //    worker B's own daemon, requested directly against its socket (routing across the
+    //    fleet is #118's, not this PR's), well after its `events.subscribe` was established at
+    //    connect. `module` is asserted as `lease-lifecycle` -- the emitting engine's own name,
+    //    unchanged by republishing -- specifically because it is not one of the six subjects
+    //    `docs/EVENTS.md` calls "the gateway's own" (`worker.*`), so this cannot be satisfied by
+    //    a gateway-authored fact that merely happens to name worker B.
     const events = await gateway.events();
     const connectedFacts = events.filter((event) => event.event === "worker.connected");
     expect(connectedFacts).toHaveLength(2);
-    const workerFacts = events.filter(
-      (event) => (event.payload as { workerId?: string }).workerId === workerBId,
+
+    const held = workerB.cliBackground([
+      "lease",
+      "--platform",
+      "ios",
+      "--device",
+      "iPhone 17",
+      "--os",
+      "18.4",
+      "--agent-id",
+      "gw-fleet-c3",
+    ]);
+    const grant = JSON.parse(await held.firstStdoutLine()) as { lease: { id: string } };
+
+    await waitFor(
+      async () => {
+        const latest = await gateway.events();
+        return latest.some(
+          (event) =>
+            event.event === "lease.granted" &&
+            event.module === "lease-lifecycle" &&
+            (event.payload as { leaseId?: string; workerId?: string }).leaseId === grant.lease.id &&
+            (event.payload as { workerId?: string }).workerId === workerBId,
+        );
+      },
+      { label: "worker B's own lease.granted republished onto the gateway's bus", timeout: 20_000 },
     );
-    expect(workerFacts.length).toBeGreaterThan(0);
+
+    held.kill("SIGTERM");
+    await held.waitForExit(15_000);
 
     await workerB.cli(["daemon", "stop"]);
   });

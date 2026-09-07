@@ -3,7 +3,11 @@ import type { Context } from "hono";
 import { RequestCancelledError, RequesterAlreadyLeasedError } from "../core/index.js";
 import { classifyError } from "../daemon/error-code.js";
 import { DispatchError } from "../daemon/dispatcher.js";
-import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
+import {
+  CODES_WITH_DECLARED_DETAILS,
+  ERROR_TABLE,
+  type SimlockErrorCode,
+} from "../contract/index.js";
 
 /** Every status this frontend ever answers with; keeps `mapError` exhaustive by construction.
  * 501 is `UNSUPPORTED_IN_GATEWAY_MODE`'s (ADR 0005 §34): the request was well-formed and the
@@ -136,8 +140,11 @@ export function mapError(error: unknown): MappedError {
       : // ADR 0003 §7: `details` are contract, message text is not -- so a `DispatchError`
         // carrying them (`WORKER_CONNECTED`'s `workerId`,
         // `UNSUPPORTED_IN_GATEWAY_MODE`'s `operation`) puts them in the response body, where a
-        // client can branch on them instead of parsing prose.
-        isDetailsObject(error)
+        // client can branch on them instead of parsing prose. Hardening: gated on `code` being
+        // one `ErrorDetailsMap` actually declares a shape for, not merely on `.details` being
+        // object-shaped -- `DispatchError.details` is `unknown`, so nothing before this stopped
+        // a handler from attaching an object to a code the contract says carries none.
+        CODES_WITH_DECLARED_DETAILS.has(code) && isDetailsObject(error)
         ? error.details
         : undefined;
   return {

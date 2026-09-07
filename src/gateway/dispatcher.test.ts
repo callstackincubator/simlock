@@ -59,13 +59,11 @@ class FakeTokens implements GatewayTokenStore {
 
   async revoke(id: string) {
     this.revoked.push(id);
-    return true;
+    // Only "tok_1" is ever actually minted by this fake -- anything else is the "already gone,
+    // or never real" case C-2's test below needs a real `false` for.
+    return id === "tok_1";
   }
 }
-
-/** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
- * prefix is that principal plus a trailing `:`, the same shape `worker-registry.test.ts` uses. */
-const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
 
 function harness() {
   const clock = new FakeClock(1_000);
@@ -77,16 +75,20 @@ function harness() {
     retentionMs: 24 * 60 * 60_000,
   });
   const tokens = new FakeTokens();
+  /** C-2: every id `closeUplinksForToken` was actually called with, in call order. */
+  const closedUplinkTokens: string[] = [];
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
+    closeUplinksForToken: async (tokenId) => {
+      closedUplinkTokens.push(tokenId);
+    },
     config: gatewayConfig,
     eventBus,
-    gatewayRequesterPrefix: GATEWAY_REQUESTER_PREFIX,
     health: () => "running",
     tokens,
     workers,
   });
-  return { clock, dispatcher, eventBus, tokens, workers };
+  return { clock, closedUplinkTokens, dispatcher, eventBus, tokens, workers };
 }
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
@@ -219,30 +221,18 @@ describe("GatewayDispatcher", () => {
     );
   });
 
-  it("filters lease.list by owner for a non-admin session", async () => {
+  // P-1 (third review round): the previous version of `#leaseList` compared a namespaced form
+  // of the session's own principal to each lease's `ownerId` -- a comparison that was false by
+  // construction (see `#leaseList`'s own comment) and so, in practice, indistinguishable from
+  // simply returning `[]`. This asserts the actual, current contract: a non-admin session sees
+  // no fleet leases at all, whatever its principal, until #118's own `FleetLeaseIndex` replaces
+  // this handler.
+  it("shows a non-admin session no fleet leases at all, regardless of its principal", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
-    workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
-
-    // The worker's lease is owned by a principal on that machine, so an agent on the gateway
-    // holds none of it -- which is the honest answer until #118 issues fleet leases.
-    await expect(
-      dispatcher.dispatch("lease.list", {}, session({ principal: "someone", role: "agent" })),
-    ).resolves.toEqual({ leases: [] });
-  });
-
-  // P2: the round's title/body tell -- the test above only exercises a *non-matching* principal,
-  // which passes whether or not the comparison is namespaced at all. This is the case that
-  // actually distinguishes them: an agent-role session naming itself the same as the worker's
-  // own local lease owner. Comparing raw, unnamespaced principals (the pre-fix behavior) would
-  // let this session see that machine's local lease -- an ownership collision ADR 0005 §26/§27
-  // exist to rule out -- since `session.principal` is client-chosen and unverified (whatever
-  // `hello` sent).
-  it("does not let a gateway session's raw principal match a worker's own local lease owner of the same name", async () => {
-    const { dispatcher, workers } = harness();
-    workers.connected("wrk_1", undefined, undefined);
-    // `leaseFixture`'s ownerId ("agent-1") is an un-namespaced *local* principal -- exactly what
-    // a worker's own agent looks like, never this gateway's own prefix.
+    // `leaseFixture`'s ownerId ("agent-1") is a worker-local principal; this session's own
+    // principal is deliberately the exact same string, since a principal collision -- not just
+    // a mismatch -- is the case worth a session leaking a machine's own local lease.
     workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
 
     await expect(
@@ -250,21 +240,22 @@ describe("GatewayDispatcher", () => {
     ).resolves.toEqual({ leases: [] });
   });
 
-  // The positive match this PR issues no leases through, but #118 will: a lease this gateway
-  // itself granted carries `ownerId` namespaced with its own `gatewayRequesterPrefix`, and the
-  // session that requested it must see it.
-  it("sees a gateway-issued lease whose ownerId carries this gateway's own namespace", async () => {
+  // The behavior this round's fix actually changes: the deleted comparison, when fed the one
+  // input that made it succeed (a lease whose `ownerId` is that session's principal namespaced
+  // with the gateway's own `gw:<instanceId>:` prefix -- the shape a real gateway-issued lease
+  // would carry once #118 lands, but nothing in this PR ever produces), used to return that
+  // lease to a non-admin session. This asserts the deliberate regression: `#leaseList` no
+  // longer has any code path that returns a lease to a non-admin session, matching or not,
+  // until #118 replaces it with `FleetLeaseIndex`'s real filter.
+  it("does not resurrect visibility through a namespaced ownerId nothing in this PR can produce", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
-    const lease = {
-      ...leaseFixture("lease_1", "dev_1"),
-      ownerId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
-    };
+    const lease = { ...leaseFixture("lease_1", "dev_1"), ownerId: "gw:instance-1:agent-1" };
     workers.refresh("wrk_1", { leases: [lease] });
 
     await expect(
       dispatcher.dispatch("lease.list", {}, session({ principal: "agent-1", role: "agent" })),
-    ).resolves.toEqual({ leases: [expect.objectContaining({ id: "lease_1" })] });
+    ).resolves.toEqual({ leases: [] });
   });
 
   it("replays and subscribes to its own bus, which carries the fleet's events", async () => {
@@ -291,6 +282,33 @@ describe("GatewayDispatcher", () => {
     await expect(dispatcher.dispatch("token.revoke", { id: "tok_1" }, session())).resolves.toEqual({
       revoked: true,
     });
+  });
+
+  // C-2, ADR 0005 §8 ("revoking closes the uplink"): `#tokenRevoke` used to only write the
+  // store -- the join token was checked once, at upgrade, and nothing ever re-verified a live
+  // link, so revoking a worker's token had no observable effect until that worker happened to
+  // reconnect on its own, possibly never. This asserts the actual wiring `main.ts` depends on:
+  // a successful revoke calls `closeUplinksForToken` with exactly the revoked id.
+  it("closes the uplink a revoked token authorized, not merely the store entry (C-2)", async () => {
+    const { closedUplinkTokens, dispatcher } = harness();
+
+    await expect(dispatcher.dispatch("token.revoke", { id: "tok_1" }, session())).resolves.toEqual({
+      revoked: true,
+    });
+
+    expect(closedUplinkTokens).toEqual(["tok_1"]);
+  });
+
+  // The other half of the same wiring: revoking an id the store never had is not a live link to
+  // close either, and must not call the hook with a token id that authorized nothing.
+  it("does not try to close an uplink for a token id that was never real (C-2)", async () => {
+    const { closedUplinkTokens, dispatcher } = harness();
+
+    await expect(
+      dispatcher.dispatch("token.revoke", { id: "tok_unknown" }, session()),
+    ).resolves.toEqual({ revoked: false });
+
+    expect(closedUplinkTokens).toEqual([]);
   });
 
   describe("UNSUPPORTED_IN_GATEWAY_MODE", () => {

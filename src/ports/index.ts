@@ -29,9 +29,11 @@ export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js
 export {
   createConnectionPair,
   MemoryUplinkTransport,
+  uplinkOutcome,
   UplinkError,
   type AcceptedUplink,
   type UplinkAuthOutcome,
+  type UplinkAuthResult,
   type UplinkConnector,
   type UplinkDialOptions,
   type UplinkListener,

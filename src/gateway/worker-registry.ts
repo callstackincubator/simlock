@@ -196,11 +196,21 @@ export class WorkerRegistry {
    *
    * There is no view to build: the peer never became a worker, so this is a fact and nothing
    * else, and `workerId` is only ever what the connection claimed in its header.
+   *
+   * P-2: `count`, when given, is how many identical (reason, claimed id) refusals the *previous*
+   * coalescing window absorbed before it closed -- not a count of this event's own occurrence,
+   * which is always exactly one. `GatewayService` reports it on the next matching refusal after
+   * a window ages out, since every refusal here is unauthenticated by definition and the ring
+   * buffer this lands in is bounded by count, not bytes (P3): without coalescing, a loop of
+   * refused dials could otherwise emit one event per attempt and evict everything else in it.
+   * Omitted (not zero or one) outside a flood, so the payload is unchanged from before this fix
+   * in the overwhelmingly common case of an isolated refusal.
    */
   rejected(
     reason: "forbidden" | "unauthenticated",
     workerId: string | undefined,
     label: string | undefined,
+    count?: number,
   ): void {
     this.options.eventBus.emit(
       "worker.rejected",
@@ -208,6 +218,7 @@ export class WorkerRegistry {
         reason,
         ...(workerId === undefined ? {} : { workerId }),
         ...(label === undefined ? {} : { label }),
+        ...(count === undefined ? {} : { count }),
       },
       "gateway",
     );
@@ -286,13 +297,29 @@ export class WorkerRegistry {
    * very next frame, which is a confusing no-op rather than an operator action. An
    * `incompatible` worker counts as connected for this rule: its uplink is open, and removing
    * it would do just as little.
+   *
+   * Hardening: a drain flag can outlive its view -- `pruneExpired`'s retention sweep
+   * deliberately does not clear it (C1: only an explicit `undrain` should end a drain), so a
+   * worker that drops off and ages out of retention while still drained leaves `#drained`
+   * holding an id with nothing left to view. Neither `setDrained` nor `undrain` can reach it at
+   * that point (`#requireView` throws `UNKNOWN_WORKER`), which is exactly M1's "unbounded file"
+   * relocated rather than closed: nothing could ever clear that flag again, short of editing
+   * `workers.json` by hand. `remove` on that same id is the one command already documented as
+   * "no view to forget is fine" (`removed: false`) -- letting it also clear a leftover flag,
+   * still answering `removed: false`, is what actually closes the file rather than moving the
+   * leak.
    */
   async remove(workerId: string): Promise<boolean> {
     const existing = this.#workers.get(workerId);
-    // Unlike drain, an id with no view is not an error: "forget this worker" is already true of
-    // one the gateway has never heard of or has already retired, so it is an outcome to report
-    // (`removed: false`) rather than a failure to raise.
-    if (existing === undefined) return false;
+    if (existing === undefined) {
+      if (this.#drained.delete(workerId)) {
+        await this.options.drainStore?.save([...this.#drained]);
+      }
+      // Unlike drain, an id with no view is not an error: "forget this worker" is already true
+      // of one the gateway has never heard of or has already retired, so it is an outcome to
+      // report (`removed: false`) rather than a failure to raise.
+      return false;
+    }
     if (existing.connection !== "disconnected") {
       throw new DispatchError(
         "WORKER_CONNECTED",

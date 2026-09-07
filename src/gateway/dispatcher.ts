@@ -86,22 +86,19 @@ export interface GatewayDispatcherOptions {
   readonly eventBus: EventBus;
   readonly workers: WorkerRegistry;
   readonly tokens?: GatewayTokenStore;
+  /**
+   * C-2, ADR 0005 §8: "revoking closes the uplink". Called after a successful `token.revoke`
+   * with the revoked token's id, so any uplink that token authenticated is closed immediately
+   * rather than only at that worker's next reconnect (uplinks are long-lived, so without this a
+   * revoked worker token has no observable effect until the worker happens to redial). Optional
+   * so a test exercising `token.revoke` in isolation, with no `GatewayService` behind it, need
+   * not supply one -- revocation still writes the store either way.
+   */
+  readonly closeUplinksForToken?: (tokenId: string) => Promise<void>;
   readonly logger?: Logger;
   /** The gateway's own health, for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
   readonly awaitReady: () => Promise<void>;
-  /**
-   * `gw:<this gateway's instance id>:` (ADR 0005 §14/§27) -- the same prefix `WorkerRegistry`
-   * takes as `gatewayRequesterPrefix`. P2: `#leaseList` namespaces a non-admin session's
-   * `principal` with it before comparing to a lease's `ownerId`, which is what keeps a
-   * worker's own *local* lease -- whose `ownerId` is an un-namespaced local principal, never
-   * this prefix -- from ever comparing equal to a session's `principal`. Without it, an
-   * agent-role token on the gateway that names itself the same as some worker's local agent
-   * (`session.principal` is client-chosen and unverified -- whatever `hello` sent, per
-   * `daemon/server.ts`) would see that machine's local lease. Optional so a test exercising
-   * nothing ownership-shaped need not supply one; a real gateway always does.
-   */
-  readonly gatewayRequesterPrefix?: string;
 }
 
 export class GatewayDispatcher {
@@ -202,9 +199,14 @@ export class GatewayDispatcher {
 
   #tokenList: Handler<"token.list"> = async () => ({ tokens: await this.#requireTokens().list() });
 
-  #tokenRevoke: Handler<"token.revoke"> = async (input) => ({
-    revoked: await this.#requireTokens().revoke(input.id),
-  });
+  #tokenRevoke: Handler<"token.revoke"> = async (input) => {
+    const revoked = await this.#requireTokens().revoke(input.id);
+    // C-2: only a token that actually existed can have opened an uplink -- revoking an unknown
+    // id (already-gone, or never real) has nothing to close, same as it has nothing to forget
+    // in the store.
+    if (revoked) await this.options.closeUplinksForToken?.(input.id);
+    return { revoked };
+  };
 
   #workerList: Handler<"worker.list"> = () => ({ workers: this.options.workers.views() });
 
@@ -224,30 +226,25 @@ export class GatewayDispatcher {
   });
 
   /**
-   * Every lease the fleet's views report, each carrying its `workerId` (ADR 0005 §20). Filtered
-   * by owner for a non-admin session, exactly as a worker filters its own -- with the caveat
-   * that in this PR the leases are the *workers'* own, whose `ownerId` is an un-namespaced
-   * local principal on that machine. An agent token on the gateway is compared against the
-   * *namespaced* form of its own principal (P2: `gatewayRequesterPrefix` + `session.principal`,
-   * the same shape `WorkerRegistry` stamps on a gateway-issued lease), which a worker-local
-   * `ownerId` can never equal -- so today this always comes back empty for a non-admin session:
-   * this caller holds no fleet lease until #118 issues leases through the gateway. Comparing the
-   * *raw* principal instead would have let an agent token that happened to name itself the same
-   * as some worker's local agent see that machine's local lease, since `session.principal` is
-   * client-chosen and unverified. An operator token (admin) sees the fleet, which is what
-   * `GET /v1/leases` is for.
+   * Every lease the fleet's views report, each carrying its `workerId` (ADR 0005 §20), for an
+   * admin session. A non-admin session sees none of them.
+   *
+   * P-1 (third review round): P2's version of this handler compared a namespaced form of the
+   * session's own principal (`gatewayRequesterPrefix` + `session.principal`) against each
+   * lease's `ownerId` -- but on a worker, `ownerId` is the *raw*, un-namespaced local principal
+   * (`daemon/dispatcher.ts`'s own `lease.list`), and the gateway's own principal at `hello` is
+   * `gw:<instanceId>` with no `:<requester>` suffix (`GatewayService`). A string ending in
+   * `:<principal>` can therefore never equal `gw:<instanceId>`, so that comparison returned
+   * `[]` for every non-admin session *by construction* -- not "until #118", as its comment
+   * claimed -- and nothing exercised it except a test that hand-built an `ownerId` no code path
+   * actually produces. #118 replaces this handler outright with its own `FleetLeaseIndex`,
+   * filtered by `ownerId` for the real, routed case; this handler is deliberately left inert
+   * rather than growing a second, competing namespacing scheme #118 would then have to undo.
+   * Same observable behavior as before (`[]`), no comparison pretending to be live.
    */
   #leaseList: Handler<"lease.list"> = (_input, session) => ({
-    leases: this.#fleetLeases().filter(
-      (lease) => session.role === "admin" || lease.ownerId === this.#gatewayOwnerId(session),
-    ),
+    leases: session.role === "admin" ? this.#fleetLeases() : [],
   });
-
-  /** P2: the namespaced form a gateway-issued lease's `ownerId` would carry for this session's
-   * principal -- never a worker-local principal, however it happens to be spelled. */
-  #gatewayOwnerId(session: DispatchSession): string {
-    return `${this.options.gatewayRequesterPrefix ?? ""}${session.principal}`;
-  }
 
   /**
    * The admin inspection of the fleet. `devices` and `leases` are the aggregate with

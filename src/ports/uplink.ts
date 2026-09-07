@@ -62,6 +62,14 @@ export interface AcceptedUplink {
   /** `gateway.label`, when the worker sent one. Display only. */
   readonly label?: string;
   readonly connection: IpcConnection;
+  /**
+   * The join token record's own id, when `authenticate` reported one alongside `accept`
+   * (C-2, ADR 0005 §8: "revoking closes the uplink"). Recorded here so `GatewayService` can
+   * find every link opened with a given token and close it the moment `token.revoke` runs,
+   * rather than only at that worker's next reconnect. `undefined` for a caller that returns
+   * the bare `UplinkAuthOutcome` string -- every test that never exercises revocation.
+   */
+  readonly tokenId?: string;
 }
 
 export interface UplinkListener {
@@ -81,6 +89,29 @@ export interface UplinkListener {
  *   any other `/v1` route.
  */
 export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden";
+
+/**
+ * `authenticate`'s actual return type: the bare outcome, or -- only on acceptance -- an object
+ * naming the token record that authorized it. The object form exists solely to carry `tokenId`
+ * to `AcceptedUplink` (C-2); a discriminated *addition* to the bare string rather than a new
+ * required shape, so every `authenticate` that has no token store to consult (every uplink test
+ * in the tree) keeps returning the plain string it always has. Read with `uplinkOutcome` and
+ * `uplinkTokenId` rather than switching on `typeof` at each call site.
+ */
+export type UplinkAuthResult =
+  | UplinkAuthOutcome
+  | { readonly outcome: "accept"; readonly tokenId: string };
+
+/** The outcome out of an `UplinkAuthResult`, whichever form `authenticate` returned. */
+export function uplinkOutcome(result: UplinkAuthResult): UplinkAuthOutcome {
+  return typeof result === "string" ? result : result.outcome;
+}
+
+/** The token id out of an `UplinkAuthResult`, or `undefined` when `authenticate` returned the
+ * bare outcome string (including every refusal, which never carries one). */
+export function uplinkTokenId(result: UplinkAuthResult): string | undefined {
+  return typeof result === "string" ? undefined : result.tokenId;
+}
 
 /** What the dial *claims* about itself before authentication has run -- the worker id and label
  * headers, present or not, regardless of whether the credential checks out. Passed to
@@ -102,7 +133,7 @@ export interface UplinkHandlers {
   authenticate(
     credential: string | undefined,
     claimed: ClaimedUplinkIdentity,
-  ): Promise<UplinkAuthOutcome>;
+  ): Promise<UplinkAuthResult>;
   /** Called once per accepted uplink. */
   accept(uplink: AcceptedUplink): void;
 }
@@ -173,18 +204,21 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
     if (handlers === undefined) {
       throw new UplinkError("unreachable", `No gateway is listening at ${options.url}`);
     }
-    const outcome = await handlers.authenticate(options.token, {
+    const result = await handlers.authenticate(options.token, {
       workerId: options.workerId,
       ...(options.label === undefined ? {} : { label: options.label }),
     });
+    const outcome = uplinkOutcome(result);
     if (outcome !== "accept") {
       throw new UplinkError("rejected", `The gateway rejected this join token: ${outcome}`);
     }
+    const tokenId = uplinkTokenId(result);
     const [workerEnd, gatewayEnd] = createConnectionPair();
     handlers.accept({
       connection: gatewayEnd,
       workerId: options.workerId,
       ...(options.label === undefined ? {} : { label: options.label }),
+      ...(tokenId === undefined ? {} : { tokenId }),
     });
     return workerEnd;
   }

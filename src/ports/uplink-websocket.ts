@@ -22,6 +22,8 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { subscribeListener, type IpcConnection } from "./ipc.js";
 import {
   resolveUplinkUrl,
+  uplinkOutcome,
+  uplinkTokenId,
   UPLINK_PATH,
   UplinkError,
   WORKER_ID_HEADER,
@@ -188,28 +190,30 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       respondAndDestroy(socket, 400, "Bad Request");
       return;
     }
-    // P3: truncated before anything else touches it. Both fields below reach the gateway's
-    // event bus (`worker.rejected` on the refusal path below, and a real `worker.connected`
-    // past authentication) *before* any credential has been proven -- `GET /v1/uplink` needs no
-    // token to supply either. The bus does no payload validation of its own and its ring buffer
-    // is bounded by count, not bytes, so an unauthenticated caller who never intends to pass
-    // authentication could otherwise pin an unbounded amount of memory (a label up to Node's
-    // header budget, ~16 KB, times the buffer's capacity) and evict every real fact an operator
-    // comes to `simlock events` for -- including the very `worker.connected`/`worker.disconnected`
-    // lines explaining the outage they are debugging.
+    // P3: truncated before anything else touches it, which bounds the *size* of a flood -- one
+    // claimed id or label, up to Node's header budget (~16 KB), times the ring buffer's capacity
+    // -- not the flood itself. Both fields below reach the gateway's event bus (`worker.rejected`
+    // on the refusal path below, and a real `worker.connected` past authentication) *before* any
+    // credential has been proven -- `GET /v1/uplink` needs no token to supply either -- and the
+    // bus does no payload validation of its own. The other half of the harm this guards against
+    // -- a loop of refused dials evicting every real fact an operator comes to `simlock events`
+    // for, including the very `worker.connected`/`worker.disconnected` lines explaining the
+    // outage they are debugging, since the buffer is bounded by count, not bytes -- is P-2's:
+    // `GatewayService#recordRejection` coalesces repeated refusals into one event per window.
     const workerId = rawWorkerId.slice(0, MAX_CLAIMED_FIELD_LENGTH);
     // Decoded before authentication, not after: a dial that fails the credential check still
     // claimed this identity in its headers, and ADR 0005 §22's `worker.rejected` reports
     // whatever a refused peer claimed rather than nothing at all.
     const label = decodeLabel(headerValue(request, WORKER_LABEL_HEADER));
     const claimed = { workerId, ...(label === undefined ? {} : { label }) };
-    let outcome: Awaited<ReturnType<UplinkHandlers["authenticate"]>>;
+    let result: Awaited<ReturnType<UplinkHandlers["authenticate"]>>;
     try {
-      outcome = await handlers.authenticate(bearerToken(request), claimed);
+      result = await handlers.authenticate(bearerToken(request), claimed);
     } catch {
       // A token store that cannot be read is not an authenticated peer.
-      outcome = "unauthenticated";
+      result = "unauthenticated";
     }
+    const outcome = uplinkOutcome(result);
     if (outcome !== "accept") {
       // 403 for a real token of the wrong role, 401 for one the gateway does not know
       // (ADR 0005 §25) -- the same distinction the HTTP frontend draws for a `worker` token on
@@ -218,11 +222,15 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       else respondAndDestroy(socket, 401, "Unauthorized");
       return;
     }
+    // C-2: the token record id that authorized this uplink, carried onto `AcceptedUplink` so a
+    // later `token.revoke` of it can find and close this exact link (ADR 0005 §8).
+    const tokenId = uplinkTokenId(result);
     this.#server.handleUpgrade(request, socket, head, (client) => {
       handlers.accept({
         connection: new WebSocketUplinkConnection(client),
         workerId,
         ...(label === undefined ? {} : { label }),
+        ...(tokenId === undefined ? {} : { tokenId }),
       });
     });
   }

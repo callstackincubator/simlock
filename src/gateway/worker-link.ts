@@ -39,14 +39,28 @@ import type { WorkerRegistry } from "./worker-registry.js";
 export const WORKER_CALL_TIMEOUT_MS = 10_000;
 
 /**
- * P1: how many refresh round trips in a row are allowed to time out before the gateway gives up
- * on this link and closes it. One is not enough -- D3's single hung `status.get` recovering on
- * its very next attempt is a real, common case (a worker briefly slow, not a half-open socket)
- * and must not tear the link down for it. But nothing was acting on a *repeated* timeout either:
- * a half-open uplink (NAT rebind, a cable pull, a kernel panic -- no FIN) has every refresh time
- * out forever while `connection` keeps reporting `connected` with a `lastSeenAt` that never
- * moves again. Two in a row, roughly one minute at the default 30s tick, is long enough to
- * absorb one slow response but short enough that `simlock worker list` stops lying quickly.
+ * P1/C-1: how many consecutive *transport-liveness* failures are allowed before the gateway
+ * gives up on this link and closes it -- specifically, `status.get` itself timing out, not the
+ * batch of calls behind it. `runDispatch` (`dispatch.ts`) parks every operation except
+ * `status.get` behind the worker's startup-readiness gate, so on a worker mid-`converge` (a
+ * per-device shell-out plus capacity shutdowns, routinely tens of seconds) `list.get`,
+ * `catalog.get`, `config.get` and `events.subscribe` can all be genuinely, harmlessly slow while
+ * the transport itself is fine. `#rebuildView` awaits `status.get` on its own, ahead of the rest
+ * of the refresh, and resets `#consecutiveRefreshTimeouts` to zero the instant it answers -- so a
+ * worker that is merely busy converging never counts against this limit at all, no matter how
+ * long its startup gate stays shut. Only `status.get` itself failing to answer counts.
+ *
+ * One is not enough -- D3's single hung `status.get` recovering on its very next attempt is a
+ * real, common case (a worker briefly slow, not a half-open socket) and must not tear the link
+ * down for it. But nothing was acting on a *repeated* timeout either: a half-open uplink (NAT
+ * rebind, a cable pull, a kernel panic -- no FIN) has every `status.get` time out forever while
+ * `connection` keeps reporting `connected` with a `lastSeenAt` that never moves again. Two in a
+ * row means two consecutive refresh attempts each got no answer to `status.get` at all -- and
+ * since a refresh is triggered either by a worker event (immediately) or by the periodic tick
+ * backstop (`refreshIntervalMs`, 30s by default), the wall-clock gap between those two failures
+ * can be anywhere from milliseconds (events firing on an already-dead link) up to roughly two
+ * tick intervals, not a fixed "one minute" -- that figure assumed a single bundled timeout per
+ * tick, which is exactly the bundling this fix removes.
  */
 export const MAX_CONSECUTIVE_REFRESH_TIMEOUTS = 2;
 
@@ -103,8 +117,9 @@ export class WorkerLink {
   #closed = false;
   #refreshing = false;
   #refreshQueued = false;
-  /** P1: consecutive `WorkerCallTimeoutError`s from `#rebuildView`, reset to 0 by any refresh
-   * that actually completes. */
+  /** P1/C-1: consecutive `status.get` timeouts, reset to 0 the instant any `status.get` answers
+   * (inside `#rebuildView`) rather than only once a whole refresh completes -- see
+   * `MAX_CONSECUTIVE_REFRESH_TIMEOUTS`'s comment for why liveness is judged on that one call. */
   #consecutiveRefreshTimeouts = 0;
 
   constructor(private readonly options: WorkerLinkOptions) {
@@ -117,6 +132,13 @@ export class WorkerLink {
   // fallow-ignore-next-line unused-class-member -- #118's seam (WorkerDispatchTarget); nothing in this PR calls it yet.
   get reachable(): boolean {
     return !this.#closed;
+  }
+
+  /** C-2: the join token record id that authenticated this uplink at upgrade, or `undefined`
+   * when `authenticate` returned the bare outcome string rather than naming one. Read by
+   * `GatewayService#closeLinksForToken` so a revoked token can find every link it opened. */
+  get tokenId(): string | undefined {
+    return this.options.uplink.tokenId;
   }
 
   /** `./fleet-ports.ts`'s `WorkerDispatchTarget#client` -- the gateway's own admin session on
@@ -259,8 +281,12 @@ export class WorkerLink {
     }
     this.#refreshing = true;
     try {
+      // No reset here on success: `#rebuildView` already reset `#consecutiveRefreshTimeouts` to
+      // 0 the moment its `status.get` answered (C-1), which is a strictly earlier point than
+      // this `await` ever returning -- reaching here without throwing is only possible once
+      // that has already happened, which is what makes a second reset here dead code rather
+      // than defense in depth.
       await this.#rebuildView(client, options.includeCatalog === true);
-      this.#consecutiveRefreshTimeouts = 0;
     } catch (error: unknown) {
       // A refresh that fails because the uplink died needs no handling here: `onClose` has
       // already marked the view disconnected. Anything else is worth a line, and the next tick
@@ -299,12 +325,19 @@ export class WorkerLink {
 
   /** The round trips one refresh makes, and what they become in the view. Split out of
    * `refresh` so that method is only the coalescing rule and this one is only the reads.
-   * Bounded as one unit (D3): a worker that never answers one of these calls must not latch
-   * `#refreshing` forever and freeze the view mid-flight while it still reports `connected`. */
+   * Bounded as one unit per call (D3): a worker that never answers one of these calls must not
+   * latch `#refreshing` forever and freeze the view mid-flight while it still reports
+   * `connected`. `status.get` is awaited on its own, ahead of the rest, and its arrival resets
+   * `#consecutiveRefreshTimeouts` immediately (C-1): it is the one call `runDispatch` never
+   * parks behind the worker's startup-readiness gate, so it answering is proof the transport is
+   * alive even while the other three are genuinely, harmlessly queued behind a slow `converge`
+   * -- application latency, not transport death, and P1's counter must not confuse the two. */
   async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
-    const [status, devices, catalog, config] = await this.#withTimeout(
+    const status = await this.#withTimeout(client.getStatus(), "status.get");
+    this.#consecutiveRefreshTimeouts = 0;
+
+    const [devices, catalog, config] = await this.#withTimeout(
       Promise.all([
-        client.getStatus(),
         client.list({ kind: "devices" }),
         includeCatalog ? client.getCatalog() : undefined,
         // Read on the same pass as the catalog: both are session-lifetime facts, and pairing
@@ -399,12 +432,28 @@ export class WorkerLink {
    * gateway shows the fleet. The name and the emitting module travel unchanged -- the fact came
    * from that worker's reaper or lease engine, and rewriting either would make the audit trail
    * lie about where it happened; `workerId` is what says which machine.
+   *
+   * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends
+   * -- a client of this same admin protocol, on a machine this gateway does not otherwise
+   * control -- and `workerId` is merged in last, so it cannot be spoofed, but the *name* is
+   * taken on faith. Refusing the six subjects `docs/EVENTS.md` calls "the gateway's own"
+   * (`GATEWAY_OWN_EVENTS`) keeps a worker from forging `worker.drain-ended`, `worker.removed`,
+   * etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
+   * author of. Every other name still forwards unchanged, including ones this gateway's own
+   * `EventMap` has never heard of (a newer worker's own vocabulary).
    */
   #onWorkerEvent(envelope: {
     readonly event: string;
     readonly payload?: unknown;
     readonly module: string;
   }): void {
+    if (GATEWAY_OWN_EVENTS.has(envelope.event)) {
+      this.#logger.warn("Worker sent an event name reserved for the gateway itself; dropping it", {
+        workerId: this.workerId,
+        event: envelope.event,
+      });
+      return;
+    }
     const payload = isRecord(envelope.payload)
       ? { ...envelope.payload, workerId: this.workerId }
       : { workerId: this.workerId };
@@ -416,6 +465,21 @@ export class WorkerLink {
     if (changesCapacityOrLeases(envelope.event)) void this.refresh();
   }
 }
+
+/**
+ * ADR 0005 §22 / `docs/EVENTS.md`: the six facts only a gateway itself ever emits, about the
+ * workers connected to it. Never forwarded from a worker's own event stream (see
+ * `#onWorkerEvent`) -- a worker is a client of the same admin protocol, and nothing about
+ * `events.subscribe` proves the name it pushes is genuinely its own.
+ */
+const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
+  "worker.connected",
+  "worker.rejected",
+  "worker.disconnected",
+  "worker.removed",
+  "worker.drain-started",
+  "worker.drain-ended",
+]);
 
 /**
  * Which worker events make a view stale (ADR 0005 §7: "every worker event that changes capacity

@@ -174,7 +174,7 @@ export interface EventMap {
   //
   // Emitted only by a daemon in gateway mode, about the workers connected to it. A worker's own
   // events are *republished* on the gateway's bus under their original names with `workerId`
-  // added to the payload, so `simlock events` against a gateway shows the fleet; these five are
+  // added to the payload, so `simlock events` against a gateway shows the fleet; these six are
   // the facts only the gateway can know.
   /** A worker's uplink opened and its `hello` completed: the gateway can now drive it. An
    * uplink that authenticated but negotiated no protocol emits nothing at all (ADR 0005 §31):
@@ -197,15 +197,22 @@ export interface EventMap {
    * Every field but `reason` is optional because a dial that fails authentication proves no
    * identity: `workerId` and `label` are whatever the connection *claimed* in its headers, and
    * may be absent entirely.
+   *
+   * P-2: `count`, present only when greater than one, is how many identical (reason, claimed
+   * id) refusals the *previous* coalescing window absorbed before it closed, reported on the
+   * next matching refusal rather than this event's own (always singular) occurrence.
+   * `GatewayService` coalesces a flood of these into one emission per window rather than one per
+   * dial, since every refusal here is unauthenticated by definition and the ring buffer they
+   * land in is bounded by count, not bytes (P3): without coalescing, a loop of refused dials can
+   * evict every other fact an operator comes to `simlock events` for, including the very
+   * `worker.connected`/`worker.disconnected` lines explaining whatever outage they are
+   * debugging.
    */
   "worker.rejected": {
     readonly reason: "forbidden" | "unauthenticated";
     readonly workerId?: string;
     readonly label?: string;
-    readonly protocol?: {
-      readonly gateway: { readonly min: number; readonly max: number };
-      readonly worker: { readonly min: number; readonly max: number };
-    };
+    readonly count?: number;
   };
   /** A worker's uplink closed. `leaseCount` is what the view still shows it holding at that
    * moment -- the number an operator needs to know how much is stranded, and the reason the

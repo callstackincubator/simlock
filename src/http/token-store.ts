@@ -7,8 +7,10 @@ import type { Clock, Filesystem, IdGenerator, TokenSecrets } from "../ports/inde
  * a gateway with `simlock token create --role worker` and presented by a worker when it opens
  * its uplink. It authorizes exactly one thing -- opening an uplink -- and nothing else: the
  * HTTP bearer adapter answers `403` for a `worker` token on any `/v1` route (`auth.ts`), and
- * it resolves to no daemon session role at all. Revoking it closes the uplink, because the
- * gateway re-verifies on every reconnect and the worker is then refused.
+ * it resolves to no daemon session role at all. Revoking it closes the uplink (ADR 0005 §8):
+ * `GatewayDispatcher#tokenRevoke` closes every link the revoked token authenticated
+ * (`GatewayService#closeLinksForToken`), so the effect is immediate rather than waiting on that
+ * worker's next reconnect.
  */
 export type TokenRole = "agent" | "operator" | "worker";
 

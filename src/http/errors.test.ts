@@ -12,7 +12,11 @@ import {
   UnknownModelError,
 } from "../core/index.js";
 import { classifyError, StartupFailedError } from "../daemon/error-code.js";
-import { DoctorUnavailableError, NukeUnavailableError } from "../daemon/dispatcher.js";
+import {
+  DispatchError,
+  DoctorUnavailableError,
+  NukeUnavailableError,
+} from "../daemon/dispatcher.js";
 import { ERROR_TABLE } from "../contract/index.js";
 import { ExecOutputDeliveryStalledError } from "../ports/index.js";
 import {
@@ -111,6 +115,28 @@ describe("mapError", () => {
 
   it("collapses a non-Error thrown value the same way", () => {
     expect(mapError("boom")).toEqual({ code: "INTERNAL", message: "Internal error", status: 500 });
+  });
+
+  it("forwards a DispatchError's details for a code the contract declares one for", () => {
+    const mapped = mapError(
+      new DispatchError("WORKER_CONNECTED", "already connected", {
+        workerId: "wrk_1",
+      }),
+    );
+    expect(mapped).toMatchObject({ code: "WORKER_CONNECTED", extra: { workerId: "wrk_1" } });
+  });
+
+  // Hardening: `DispatchError.details` is `unknown` -- nothing at the type level stops a
+  // handler from attaching an object to a code `ErrorDetailsMap` declares as
+  // `Record<string, never>` (no details at all). Before this fix, `mapError`'s only gate was
+  // "is `.details` object-shaped", which this would have passed straight through onto the
+  // wire; `CODES_WITH_DECLARED_DETAILS` is what `BAD_REQUEST` is deliberately absent from.
+  it("does not forward a DispatchError's details for a code the contract declares none for", () => {
+    const mapped = mapError(
+      new DispatchError("BAD_REQUEST", "malformed", { internal: "should never reach the wire" }),
+    );
+    expect(mapped).toEqual({ code: "BAD_REQUEST", message: "malformed", status: 400 });
+    expect(mapped).not.toHaveProperty("extra");
   });
 });
 

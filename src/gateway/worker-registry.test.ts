@@ -303,6 +303,34 @@ describe("WorkerRegistry", () => {
       expect(workers.view("wrk_1")).toBeUndefined();
       expect(workers.connected("wrk_1", undefined, undefined).drained).toBe(true);
     });
+
+    // Hardening: the C1 test above is correct that retention must not clear a drain flag -- but
+    // once a view is gone, neither `setDrained` nor `undrain` can reach that flag either
+    // (`UNKNOWN_WORKER`, no view to require). Before this fix, nothing could ever clear it
+    // again: `remove` returned early on a missing view before touching `#drained`, leaving
+    // `workers.json` growing a permanent `true` for a worker that no longer exists -- M1's
+    // "unbounded file" relocated, not closed. `remove` on that same id is the one command
+    // already documented as a no-op-but-not-an-error for a forgotten worker; it must also be
+    // the one that can still clear a flag stranded behind it.
+    it("lets remove() clear a drain flag stranded by retention, with no view to answer removed: true", async () => {
+      const store = new MemoryDrainStore();
+      const { clock, workers } = registry({ drainStore: store });
+      workers.connected("wrk_1", undefined, undefined);
+      await workers.setDrained("wrk_1", true);
+      workers.disconnected("wrk_1");
+
+      clock.advance(RETENTION_MS + 1);
+      await workers.pruneExpired();
+      expect(workers.view("wrk_1")).toBeUndefined();
+
+      // No view left to remove, so this is still "already forgotten" -- but the flag itself
+      // must actually clear, and the store must actually persist that.
+      await expect(workers.remove("wrk_1")).resolves.toBe(false);
+      await expect(store.load()).resolves.not.toContain("wrk_1");
+
+      // The real proof: a later reconnect under the same id is no longer drained.
+      expect(workers.connected("wrk_1", undefined, undefined).drained).toBe(false);
+    });
   });
 
   describe("drain", () => {
@@ -496,7 +524,7 @@ describe("WorkerRegistry", () => {
       workers.disconnected("wrk_1");
       workers.disconnected("wrk_1");
 
-      expect(fired).toBe(1); // only the second `disconnected()` -- the first is the real change.
+      expect(fired).toBe(1); // only the first `disconnected()` -- the second is the no-op repeat.
     });
 
     it("stops firing once unsubscribed", () => {

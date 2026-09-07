@@ -7,9 +7,10 @@ import {
   MemoryUplinkTransport,
   type Logger,
   type UplinkAuthOutcome,
+  type UplinkAuthResult,
 } from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
-import { GatewayService } from "./service.js";
+import { GatewayService, REJECTION_COALESCE_WINDOW_MS } from "./service.js";
 import {
   catalogFixture,
   deviceFixture,
@@ -40,7 +41,13 @@ class RecordingLogger implements Logger {
 }
 
 function fleet(
-  options: { readonly authenticate?: () => UplinkAuthOutcome; readonly logger?: Logger } = {},
+  options: {
+    readonly authenticate?: (
+      credential: string | undefined,
+    ) => UplinkAuthOutcome | UplinkAuthResult;
+    readonly logger?: Logger;
+    readonly refreshIntervalMs?: number;
+  } = {},
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -53,7 +60,7 @@ function fleet(
   // the way a peer that completes the WebSocket upgrade and then falls silent would.
   const connectState = { hangNext: false };
   const service = new GatewayService({
-    authenticate: async () => options.authenticate?.() ?? "accept",
+    authenticate: async (credential) => options.authenticate?.(credential) ?? "accept",
     clock,
     connect: async () => {
       if (connectState.hangNext) {
@@ -68,7 +75,7 @@ function fleet(
     eventBus,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     principal: "gw:instance-1",
-    refreshIntervalMs: REFRESH_MS,
+    refreshIntervalMs: options.refreshIntervalMs ?? REFRESH_MS,
     retentionMs: RETENTION_MS,
     uplinks: transport,
   });
@@ -78,11 +85,18 @@ function fleet(
     events,
     service,
     transport,
-    /** Queues the worker the next uplink resolves to, then dials it. */
-    join: async (workerId: string, client: ScriptedWorkerClient, label?: string) => {
+    /** Queues the worker the next uplink resolves to, then dials it. `token` defaults to the
+     * fixed secret every other test relies on; C-2's test overrides it per worker so a custom
+     * `authenticate` can hand back a distinct `tokenId` for each. */
+    join: async (
+      workerId: string,
+      client: ScriptedWorkerClient,
+      label?: string,
+      token = "join-secret",
+    ) => {
       clients.push(client);
       return transport.connect({
-        token: "join-secret",
+        token,
         url: "ws://gateway.test",
         workerId,
         ...(label === undefined ? {} : { label }),
@@ -184,6 +198,42 @@ describe("GatewayService", () => {
       module: "lease-engine",
       payload: { deviceId: "dev_1", leaseId: "lease_1", workerId: "wrk_1" },
     });
+
+    await harness.service.stop();
+  });
+
+  // Hardening: a worker's event name is taken on faith from its own `events.subscribe` push --
+  // `workerId` is merged in last so it cannot be spoofed, but nothing about the protocol proves
+  // the *name* is genuinely the worker's own. Without a guard, a worker (or anything speaking
+  // its admin protocol) could forge one of the six subjects `docs/EVENTS.md` calls "the
+  // gateway's own" -- e.g. `worker.drain-ended` -- straight into the operator's audit trail.
+  it("refuses to republish a worker's event under a name reserved for the gateway itself", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "worker.drain-ended",
+      module: "gateway",
+      payload: { workerId: "wrk_forged", label: "not-this-worker" },
+    });
+    // A genuine event from the same worker still goes through -- the guard is on the six names,
+    // not on this link entirely.
+    worker.pushEvent({
+      event: "lease.granted",
+      module: "lease-engine",
+      payload: { deviceId: "dev_1", leaseId: "lease_1", requester: "agent-1" },
+    });
+    await vi.waitFor(() =>
+      expect(harness.events.some((event) => event.event === "lease.granted")).toBe(true),
+    );
+
+    const forged = harness.events.filter((event) => event.event === "worker.drain-ended");
+    // Never forwarded, and never with the forged `workerId` a real gateway-authored
+    // `worker.drain-ended` for a *different* worker would otherwise be indistinguishable from.
+    expect(forged).toEqual([]);
 
     await harness.service.stop();
   });
@@ -507,6 +557,104 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  // C-1: P1's counter used to be driven by the whole bundled refresh timing out, which conflated
+  // a dead transport with a merely busy dispatcher -- on a worker mid-`converge`, `runDispatch`
+  // parks every call except `status.get` behind the startup-readiness gate, so `list.get` can
+  // legitimately hang for tens of seconds while the socket is completely healthy. Reproduces the
+  // reviewer's repro: `status.get` keeps answering, `list.get` never does, for well more than
+  // `MAX_CONSECUTIVE_REFRESH_TIMEOUTS` refresh cycles in a row. A gateway that still infers
+  // transport death from this would flip the link to `disconnected` long before this loop ends.
+  it("does not close the link when status.get keeps answering but the dispatcher is busy (C-1)", async () => {
+    // A refreshIntervalMs far outside this test's clock advances: `#runTick` only reschedules
+    // its own timer once a refresh settles (`service.ts`'s `.finally(() => this.#scheduleTick())`),
+    // so on a link whose refresh keeps timing out the tick's real cadence drifts to roughly
+    // `refreshIntervalMs + WORKER_CALL_TIMEOUT_MS` per cycle -- exercising this via event-driven
+    // refreshes instead (as D3 and H2 above do) keeps the periodic tick out of the picture
+    // entirely, rather than fighting its drift with hand-tuned clock advances.
+    const harness = fleet({ refreshIntervalMs: 10_000_000 });
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.capacity).toBeDefined());
+
+    // Unlike P1's test (which hangs `status.get` itself), the worker answers `status.get` on
+    // every single call -- only the readiness-gated `list.get` never returns, exactly what a
+    // worker stuck in a long `converge` looks like from the gateway's side.
+    worker.hangingCalls.add("list.get:devices");
+
+    for (let attempt = 1; attempt <= MAX_CONSECUTIVE_REFRESH_TIMEOUTS + 2; attempt++) {
+      const listCallsBefore = worker.calls.filter((call) => call === "list.get:devices").length;
+      // A worker event, not the tick, triggers each refresh here -- `#onWorkerEvent` calls
+      // `refresh()` directly, with none of the tick's own scheduling drift.
+      worker.pushEvent({ event: "lease.granted" });
+      // Waits for `list.get` to have actually been called -- proof `status.get`'s real promise
+      // was given a genuine chance to settle and `#rebuildView` moved on to the hung batch.
+      // Waiting on `pendingTimerCount` instead would be a false positive: `status.get`'s own
+      // bounded wait registers a timer *synchronously*, before its real response has had any
+      // chance to arrive, so a bare "a timer exists" check can pass and race the fake clock's
+      // `advance` below against `status.get`'s still-pending real resolution -- timing out the
+      // liveness call itself instead of the batch behind it, which is exactly the distinction
+      // this fix exists to preserve.
+      await vi.waitFor(() =>
+        expect(worker.calls.filter((call) => call === "list.get:devices").length).toBeGreaterThan(
+          listCallsBefore,
+        ),
+      );
+      harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+      // Real microtask turns for the timeout rejection to propagate through `#rebuildView` and
+      // `refresh()`'s catch/finally -- nothing here is clock-scheduled once the timer fires.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // `status.get` answered this round, so liveness holds no matter how many cycles the
+      // dispatcher stays busy -- unlike P1's test, this must stay true past the threshold.
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
+    }
+    expect(eventNames(harness.events)).not.toContain("worker.disconnected");
+
+    await harness.service.stop();
+  });
+
+  // C-2, ADR 0005 §8 ("revoking closes the uplink"): a join token was checked once, at upgrade,
+  // and nothing ever re-verified a live link -- so revoking a worker's token used to have no
+  // observable effect on an already-open uplink at all. `closeLinksForToken` is what
+  // `GatewayDispatcher#tokenRevoke` calls after a successful revoke; this exercises it end to
+  // end against real `WorkerLink`s, matched by the exact token each authenticated with, so a
+  // shared or reused credential (however unlikely) cannot silently take out an unrelated worker.
+  it("closes exactly the link a token authorized, and leaves every other link alone (C-2)", async () => {
+    const harness = fleet({
+      // Mirrors `main.ts`'s real `authenticate`: `accept` names the token id that authorized
+      // it, which is the whole plumbing this fix adds.
+      authenticate: (credential) =>
+        credential === undefined
+          ? "unauthenticated"
+          : { outcome: "accept" as const, tokenId: credential },
+    });
+    await harness.service.start();
+
+    const workerA = new ScriptedWorkerClient();
+    await harness.join("wrk_a", workerA, undefined, "tok_a");
+    const workerB = new ScriptedWorkerClient();
+    await harness.join("wrk_b", workerB, undefined, "tok_b");
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_a")?.connection).toBe("connected"),
+    );
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_b")?.connection).toBe("connected"),
+    );
+
+    await harness.service.closeLinksForToken("tok_a");
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_a")?.connection).toBe("disconnected"),
+    );
+    // B authenticated with a different token entirely -- revoking A's must not touch it.
+    expect(harness.service.workers.view("wrk_b")?.connection).toBe("connected");
+    expect(eventNames(harness.events)).toEqual(
+      expect.arrayContaining(["worker.connected", "worker.connected", "worker.disconnected"]),
+    );
+
+    await harness.service.stop();
+  });
+
   // C3: `hello` -- inside `connect()`, the first round trip `start()` makes -- had no timeout
   // at all, unlike every call after it. A peer that completes the WebSocket upgrade with a
   // valid join token and then never answers `hello` (a half-open TCP right after upgrade, or a
@@ -590,6 +738,53 @@ describe("GatewayService", () => {
       await harness.service.stop();
     },
   );
+
+  // P-2: `GET /v1/uplink` needs no credential to reach `authenticate`, and before this fix every
+  // refusal emitted its own `worker.rejected` -- so a flood of refused dials (deliberate, or a
+  // misconfigured worker retrying fast) could fill the event bus's ring buffer, bounded by count
+  // and not bytes, with nothing but refusals, evicting everything else in it. No test dialed
+  // twice before this round. This asserts the coalescing itself: two dials with the same claimed
+  // id and reason inside one window produce exactly one event, and the first dial after the
+  // window closes reports the closed window's total as `count`.
+  it("coalesces a flood of identical refusals into one event per window, with a count (P-2)", async () => {
+    const harness = fleet({ authenticate: () => "unauthenticated" });
+    await harness.service.start();
+    const rejectedEvents = () =>
+      harness.events.filter((event) => event.event === "worker.rejected");
+
+    await expect(
+      harness.join("wrk_flood", new ScriptedWorkerClient(), "mac-mini-1"),
+    ).rejects.toMatchObject({ code: "rejected" });
+    await expect(
+      harness.join("wrk_flood", new ScriptedWorkerClient(), "mac-mini-1"),
+    ).rejects.toMatchObject({ code: "rejected" });
+
+    // Both refusals were real (each dial above genuinely rejected), but only the first became
+    // an event -- and it carries no `count` at all, the exact pre-P-2 payload shape.
+    expect(rejectedEvents()).toHaveLength(1);
+    expect(rejectedEvents()[0]?.payload).toMatchObject({ workerId: "wrk_flood" });
+    expect(rejectedEvents()[0]?.payload).not.toHaveProperty("count");
+
+    // Past the window: the next matching refusal is reported on its own, carrying the tally the
+    // just-closed window absorbed (both dials above).
+    harness.clock.advance(REJECTION_COALESCE_WINDOW_MS);
+    await expect(
+      harness.join("wrk_flood", new ScriptedWorkerClient(), "mac-mini-1"),
+    ).rejects.toMatchObject({ code: "rejected" });
+
+    expect(rejectedEvents()).toHaveLength(2);
+    expect(rejectedEvents()[1]?.payload).toMatchObject({ count: 2, workerId: "wrk_flood" });
+
+    // A different claimed id is its own window from the start -- coalescing must not blend
+    // unrelated identities together into one gate.
+    await expect(
+      harness.join("wrk_other", new ScriptedWorkerClient(), "mac-mini-2"),
+    ).rejects.toMatchObject({ code: "rejected" });
+    expect(rejectedEvents()).toHaveLength(3);
+    expect(rejectedEvents()[2]?.payload).not.toHaveProperty("count");
+
+    await harness.service.stop();
+  });
 
   it("closes the uplink when a worker does not grant the gateway admin", async () => {
     const harness = fleet();

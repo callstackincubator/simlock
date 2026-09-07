@@ -522,11 +522,14 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const gatewayService = new GatewayService({
     // ADR 0005 §4/§25: only a `worker`-role token opens an uplink. A token of another role is
     // real and simply has no authority here (403); anything else is unauthenticated (401).
+    // C-2: the accepted case names the token's own id, so `token.revoke` can later find and
+    // close every uplink it authorized (`GatewayService#closeLinksForToken`, wired below).
     authenticate: async (credential) => {
       if (credential === undefined) return "unauthenticated";
       const identity = await tokens.verify(credential);
       if (identity === undefined) return "unauthenticated";
-      return identity.role === "worker" ? "accept" : "forbidden";
+      if (identity.role !== "worker") return "forbidden";
+      return { outcome: "accept", tokenId: identity.requesterId };
     },
     clock,
     drainStore: new FileDrainStore({
@@ -558,12 +561,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
     dispatcher: new GatewayDispatcher({
       awaitReady: () => Promise.resolve(),
+      // C-2: makes `token.revoke` actually close the uplink it names (ADR 0005 §8), rather than
+      // only writing the store and waiting for that worker's next reconnect.
+      closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
       config,
       eventBus,
-      // P2: the same namespace `GatewayService` stamps as `gatewayRequesterPrefix`, so
-      // `lease.list`'s ownership filter compares a session's principal to the form a
-      // gateway-issued lease's `ownerId` would actually carry, not to a worker-local one.
-      gatewayRequesterPrefix: `gw:${instanceId}:`,
       health: () => daemon.health,
       logger: logger.child("gateway"),
       tokens,
