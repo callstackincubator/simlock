@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   exitCodeOf,
+  ExecOutputDeliveryStalledError,
   NodeProcessRunner,
   ProcessSpawnError,
   ScriptedProcessRunner,
@@ -225,6 +226,83 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     expect(seen.length).toBeGreaterThan(1);
     expect(seen.join("").length).toBe(64 * 16 * 1024);
   });
+
+  it("does not settle wait() while a chunk's delivery is still pending past the exit grace window, and still delivers what was queued behind it once the delivery resolves", async () => {
+    // The defect this guards: a paused readable never emits `close`, so the exit-to-close
+    // grace window used to treat "quiet because we paused it" the same as "quiet because the
+    // child is gone" and settled `wait()` while a chunk (and whatever the child wrote after
+    // it) still sat undelivered. The child here writes a second chunk and exits well before
+    // the stalled first delivery is released, so if `wait()` settles early, "before-exit-B"
+    // is silently dropped.
+    const runner = new NodeProcessRunner();
+    const seen: string[] = [];
+    let releaseFirst!: () => void;
+    const firstDelivery = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write('before-exit-A');" +
+          "setTimeout(() => { process.stdout.write('before-exit-B'); process.exit(0); }, 20);",
+      ],
+      {
+        onChunk: (_stream, chunk) => {
+          seen.push(chunk);
+          return seen.length === 1 ? firstDelivery : undefined;
+        },
+      },
+    );
+
+    // Comfortably past the child's own exit (20ms) and past the exit-to-close grace window
+    // (1s) the old code settled on, while the first chunk's delivery is deliberately still
+    // unresolved.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    let settledEarly = false;
+    void handle.wait().then(() => {
+      settledEarly = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      settledEarly,
+      "wait() settled while a chunk's delivery was still pending -- its output, and anything the child wrote after it, may have been dropped silently",
+    ).toBe(false);
+
+    releaseFirst();
+    const result = await handle.wait();
+
+    expect(result.code).toBe(0);
+    expect(seen.join("")).toBe("before-exit-Abefore-exit-B");
+  }, 10_000);
+
+  it("rejects wait() instead of silently truncating when a chunk's delivery never resolves after exit", async () => {
+    // The deferral this handle allows for an outstanding delivery is not unbounded -- but
+    // reaching that bound with a delivery still stuck must not look like a clean exit. A
+    // caller that got `{ exitCode: 0 }` here would have no way to know the command's output
+    // was incomplete; a rejection is the visible failure ADR 0005 §19e's "streamed, never
+    // buffered" requires instead.
+    const runner = new NodeProcessRunner();
+    const seen: string[] = [];
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      ["-e", "process.stdout.write('stuck'); process.exit(0);"],
+      {
+        onChunk: (_stream, chunk) => {
+          seen.push(chunk);
+          return new Promise<void>(() => {
+            // Never resolves: models a consumer (an SSE write, a socket write) whose
+            // backpressure never clears.
+          });
+        },
+      },
+    );
+
+    await expect(handle.wait()).rejects.toThrow(ExecOutputDeliveryStalledError);
+    expect(seen).toEqual(["stuck"]);
+  }, 10_000);
 
   it("forwards chunks as they arrive and reports the child's exit code", async () => {
     const runner = new NodeProcessRunner();

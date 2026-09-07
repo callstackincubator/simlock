@@ -11,12 +11,14 @@ import {
   Registry,
   type Config,
 } from "../core/index.js";
-import type { CatalogReader } from "../core/lease-ports.js";
+import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
+  ExecOutputDeliveryStalledError,
   FakeClock,
   FakeSystemStats,
   MemoryFilesystem,
+  NodeProcessRunner,
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
@@ -36,6 +38,19 @@ const gibibyte = 1024 ** 3;
  * "re-walking every operation through each transport would test nothing new") -- this suite is
  * where the actual role/ownership/parsing logic gets proven once, not per transport.
  */
+/** Picks `buildDispatcher`'s `passthrough` dependency -- a caller-supplied override, or the
+ * engine, exactly as every other `overrides.x ?? y` default in that function does. Pulled out
+ * on its own so adding this one override does not push `buildDispatcher` itself over fallow's
+ * complexity threshold: the branch is real either way, but it belongs to a one-line function
+ * that cannot get any more complicated, not to the 130-line one already carrying a dozen of
+ * these. */
+function resolvePassthroughOverride(
+  engine: LeaseEngine,
+  override: PassthroughResolver | undefined,
+): PassthroughResolver {
+  return override ?? engine;
+}
+
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
@@ -66,6 +81,11 @@ async function buildDispatcher(
     /** Shares one clock with the test, for a flow that has to schedule against the dispatcher's
      * own timers. */
     readonly clock?: FakeClock;
+    /** Replaces the fake driver's own `passthrough` (which unconditionally prepends
+     * `--set /root`) with a caller-supplied resolver -- for the one suite that needs a
+     * `device.exec` command a *real* `NodeProcessRunner` can actually spawn (`node -e ...`
+     * takes no `--set`), rather than `ScriptedProcessRunner`'s scripted chunks. */
+    readonly passthroughOverride?: PassthroughResolver;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -155,7 +175,7 @@ async function buildDispatcher(
     health: () => "running",
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
-    passthrough: engine,
+    passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
     ...(overrides.processRunner === undefined ? {} : { processRunner: overrides.processRunner }),
     execEnv: { PATH: "/usr/bin" },
     queue: engine,
@@ -1053,6 +1073,88 @@ describe("Dispatcher: device.exec", () => {
     await expect(pending).resolves.toEqual({ exitCode: 7 });
     // And nothing was signalled: a command that finished is not one to kill.
     expect(handle.signals).toEqual([]);
+  });
+
+  describe("output delivered across a real exit, against a real NodeProcessRunner", () => {
+    // `ScriptedProcessRunner` can't reproduce this class of defect: its scripted handle always
+    // awaits a chunk's delivery before it will settle at all, so it cannot model "the child has
+    // already exited and closed its pipe while a chunk's delivery to a slow consumer is still
+    // outstanding" -- exactly the state a real OS pipe can be in (verified against real Node:
+    // `close` can fire in the same tick as the `data` event for a chunk this process runner
+    // just paused on). `#deviceExec` (`server.ts`) and the HTTP exec route (`app.ts`) both just
+    // hand their transport's own backpressured `onOutput` straight to this same dispatcher
+    // call, so a real reproduction here against a real child process is the one place this
+    // defect -- and its fix, in `NodeStreamingProcessHandle` -- is actually exercised, for
+    // both transports at once.
+    function realCommand(script: string): PassthroughResolver {
+      return { passthrough: () => ({ args: ["-e", script], command: process.execPath, env: {} }) };
+    }
+
+    it("delivers every chunk in full, in order, even when one delivery stalls past the exit grace window", async () => {
+      const seen: string[] = [];
+      let releaseFirst!: () => void;
+      const firstDelivery = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const { dispatcher, leaseId } = await withLease({
+        passthroughOverride: realCommand(
+          "process.stdout.write('before-exit-A');" +
+            "setTimeout(() => { process.stdout.write('before-exit-B'); process.exit(0); }, 20);",
+        ),
+        processRunner: new NodeProcessRunner(),
+      });
+
+      const pending = dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "simctl" },
+        session({
+          onOutput: (_stream, chunk) => {
+            seen.push(chunk);
+            // Stall only the first chunk's delivery, well past the 1s exit-to-close grace
+            // window this handle used to settle on regardless.
+            return seen.length === 1 ? firstDelivery : undefined;
+          },
+          principal: "tok_agent",
+        }),
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      let settledEarly = false;
+      void pending.then(() => {
+        settledEarly = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        settledEarly,
+        "device.exec resolved while a chunk's delivery was still pending -- output after it may have been dropped",
+      ).toBe(false);
+
+      releaseFirst();
+      await expect(pending).resolves.toEqual({ exitCode: 0 });
+      expect(seen).toEqual(["before-exit-A", "before-exit-B"]);
+    }, 10_000);
+
+    it("fails device.exec loudly, rather than answering a truncated exit code, when a chunk's delivery never resolves", async () => {
+      const { dispatcher, leaseId } = await withLease({
+        passthroughOverride: realCommand("process.stdout.write('stuck'); process.exit(0);"),
+        processRunner: new NodeProcessRunner(),
+      });
+
+      const pending = dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "simctl" },
+        session({
+          onOutput: () =>
+            new Promise<void>(() => {
+              // A consumer whose backpressure never clears -- a dead SSE write, a socket that
+              // never drains.
+            }),
+          principal: "tok_agent",
+        }),
+      );
+
+      await expect(pending).rejects.toThrow(ExecOutputDeliveryStalledError);
+    }, 10_000);
   });
 });
 

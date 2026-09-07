@@ -4,8 +4,11 @@ import { OutputRelay } from "./output-relay.js";
 
 /**
  * ADR 0005 §19e: output is streamed, never buffered. The one window where a chunk waits is
- * between the process starting and the SSE stream opening -- one turn of the event loop -- and
- * the one thing that must never grow is what a disconnected client's command keeps writing.
+ * between the process starting and the SSE stream opening -- of unknown length, since
+ * `attach` runs inside hono's own callback -- and backpressure applies there exactly as it
+ * does once streaming, which is what keeps that window's memory bounded regardless of its
+ * duration. The other thing that must never grow is what a disconnected client's command
+ * keeps writing.
  */
 describe("OutputRelay", () => {
   it("holds what arrives before the stream opens, then flushes it in order", () => {
@@ -69,6 +72,56 @@ describe("OutputRelay", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(delivered).toBe(true);
+  });
+
+  it("backpressures a chunk pushed before the stream opens, not just after", async () => {
+    // `attach` runs inside hono's `streamSSE` callback, which is not guaranteed to be the very
+    // next turn of the event loop -- so a fast producer (`adb shell cat /dev/urandom`) that
+    // writes during the starting window must stall on the first chunk exactly as it would once
+    // streaming, or this window is an unbounded buffer with a different name.
+    const relay = new OutputRelay();
+    let delivered = false;
+
+    void Promise.resolve(relay.push({ chunk: "one", stream: "stdout" })).then(() => {
+      delivered = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // Still held, not yet delivered -- but held as exactly one chunk's promise, not an
+    // ever-growing array: a second push before `attach` still resolves only once flushed.
+    expect(delivered).toBe(false);
+    expect(relay.bufferedCount).toBe(1);
+
+    const written: string[] = [];
+    relay.attach(async (chunk) => {
+      written.push(chunk.chunk);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(written).toEqual(["one"]);
+    expect(delivered).toBe(true);
+  });
+
+  it("resolves a starting-window chunk's promise immediately if the client leaves before the stream ever opens", async () => {
+    // `drop()` must not leave a paused process runner waiting forever on a delivery that
+    // `attach` will now never make -- the chunk has nowhere to go, exactly like one arriving
+    // after the drop, so its caller is released rather than stalled.
+    const relay = new OutputRelay();
+    let delivered = false;
+
+    void Promise.resolve(relay.push({ chunk: "before", stream: "stdout" })).then(() => {
+      delivered = true;
+    });
+    await Promise.resolve();
+    expect(delivered).toBe(false);
+
+    relay.drop();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(delivered).toBe(true);
+    expect(relay.bufferedCount).toBe(0);
   });
 
   it("keeps nothing when the client leaves before the stream ever opened either", () => {

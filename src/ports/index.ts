@@ -47,6 +47,7 @@ export type { FakeSend } from "./tcp-probe.js";
 export type { TcpProbe } from "./tcp-probe.js";
 export {
   exitCodeOf,
+  ExecOutputDeliveryStalledError,
   NodeProcessRunner,
   type ProcessHandle,
   ProcessSpawnError,
