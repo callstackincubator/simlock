@@ -206,8 +206,8 @@ export class GatewayDispatcher {
     return { drained: false, workerId: input.workerId };
   };
 
-  #workerRemove: Handler<"worker.remove"> = (input) => ({
-    removed: this.options.workers.remove(input.workerId),
+  #workerRemove: Handler<"worker.remove"> = async (input) => ({
+    removed: await this.options.workers.remove(input.workerId),
     workerId: input.workerId,
   });
 

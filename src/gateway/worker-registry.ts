@@ -36,6 +36,16 @@ export interface WorkerRegistryOptions {
    * that does not care about persistence need not fabricate one; a gateway always has one.
    */
   readonly drainStore?: DrainStore;
+  /**
+   * `gw:<this gateway's instance id>:` (ADR 0005 §14/§27) -- what marks a lease as *this*
+   * gateway's own, rather than another gateway's or a worker's local one. Scopes the retention
+   * hold (§6) to leases this gateway issued: a worker's own local lease is none of this
+   * gateway's business to keep a view alive for, and holding one anyway would mean a machine
+   * with only local traffic never leaves an operator's `simlock worker remove` after it
+   * disconnects (M2). Optional so a test exercising nothing lease-shaped need not supply one;
+   * a real gateway always does.
+   */
+  readonly gatewayRequesterPrefix?: string;
 }
 
 export class WorkerRegistry {
@@ -232,7 +242,7 @@ export class WorkerRegistry {
    * `incompatible` worker counts as connected for this rule: its uplink is open, and removing
    * it would do just as little.
    */
-  remove(workerId: string): boolean {
+  async remove(workerId: string): Promise<boolean> {
     const existing = this.#workers.get(workerId);
     // Unlike drain, an id with no view is not an error: "forget this worker" is already true of
     // one the gateway has never heard of or has already retired, so it is an outcome to report
@@ -245,7 +255,7 @@ export class WorkerRegistry {
         { workerId },
       );
     }
-    this.#forget(existing, "operator");
+    await this.#forget(existing, "operator");
     return true;
   }
 
@@ -253,31 +263,49 @@ export class WorkerRegistry {
    * ADR 0005 §6's retention sweep, run from the gateway's periodic tick. Two conditions, both
    * required:
    *
-   * 1. every lease the view still shows has passed its deadline -- a lease with time left on it
-   *    is a device still held on a machine that went away, which is exactly what an operator
-   *    must be able to see, however long ago it went. Once the last deadline passes, the
-   *    worker's own TTL has reclaimed everything (or will the moment it comes back), so the
-   *    view is only history;
+   * 1. every *gateway-issued* lease the view still shows has passed its deadline -- a lease
+   *    this gateway granted with time left on it is a device still held on a machine that went
+   *    away, which is exactly what an operator must be able to see, however long ago it went.
+   *    Once the last deadline passes, the worker's own TTL has reclaimed everything (or will
+   *    the moment it comes back), so the view is only history. A worker's own *local* lease is
+   *    none of this gateway's business (§14): scoping by the `gw:<instance id>:` prefix it
+   *    stamps on everything it forwards is what keeps a machine serving only local agents from
+   *    being held here forever (M2) -- without it, `remove` on such a worker would still work
+   *    (it only checks `connection`), but this sweep would never volunteer to do the same;
    * 2. and the view has been disconnected for longer than
    *    `gateway.disconnectedRetentionMs`.
    *
    * Deadlines, not just "any lease": a worker that dropped off months ago with leases recorded
    * would otherwise be kept forever by leases that expired minutes after it left.
    */
-  pruneExpired(): void {
+  async pruneExpired(): Promise<void> {
     const now = this.options.clock.now();
     const cutoff = now - this.options.retentionMs;
+    const prefix = this.options.gatewayRequesterPrefix;
     const expired = this.views().filter(
       (view) =>
         view.connection === "disconnected" &&
         view.lastSeenAt <= cutoff &&
-        !view.leases.some((lease) => lease.ttlDeadline > now),
+        !view.leases.some(
+          (lease) =>
+            lease.ttlDeadline > now && prefix !== undefined && lease.requesterId.startsWith(prefix),
+        ),
     );
-    for (const view of expired) this.#forget(view, "retention");
+    for (const view of expired) await this.#forget(view, "retention");
   }
 
-  #forget(view: WorkerView, reason: "operator" | "retention"): void {
+  /**
+   * M1: also clears this worker's drain flag and re-saves the store, if it had one. Without
+   * this, a removed worker's `true` survives in `workers.json` forever -- an unbounded file
+   * that silently re-drains the machine if its id is ever seen again, with `undrain` unable to
+   * clear it in the meantime (`UNKNOWN_WORKER`, since there is no view to undrain). "Forgotten"
+   * has to mean forgotten, not "forgotten except the one flag that matters most."
+   */
+  async #forget(view: WorkerView, reason: "operator" | "retention"): Promise<void> {
     this.#workers.delete(view.id);
+    if (this.#drained.delete(view.id)) {
+      await this.options.drainStore?.save([...this.#drained]);
+    }
     this.options.eventBus.emit(
       "worker.removed",
       { reason, workerId: view.id, ...(view.label === undefined ? {} : { label: view.label }) },

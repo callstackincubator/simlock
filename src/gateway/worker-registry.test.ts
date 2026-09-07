@@ -8,8 +8,16 @@ import { leaseFixture } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
+/** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
+ * prefix is that principal plus a trailing `:`. */
+const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
 
-function registry(options: { readonly drainStore?: MemoryDrainStore } = {}) {
+function registry(
+  options: {
+    readonly drainStore?: MemoryDrainStore;
+    readonly gatewayRequesterPrefix?: string;
+  } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const events: EventEnvelope[] = [];
@@ -17,10 +25,18 @@ function registry(options: { readonly drainStore?: MemoryDrainStore } = {}) {
   const workers = new WorkerRegistry({
     clock,
     eventBus,
+    gatewayRequesterPrefix: options.gatewayRequesterPrefix ?? GATEWAY_REQUESTER_PREFIX,
     retentionMs: RETENTION_MS,
     ...(options.drainStore === undefined ? {} : { drainStore: options.drainStore }),
   });
   return { clock, events, workers };
+}
+
+/** A gateway-issued lease's `requesterId` (ADR 0005 §14/§27): the fixed prefix `pruneExpired`
+ * scopes its retention hold to, so a fixture built with it exercises the real branch rather than
+ * one that happens to pass because no scoping exists yet. */
+function gatewayLeaseFixture(id: string, deviceId: string) {
+  return { ...leaseFixture(id, deviceId), requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1` };
 }
 
 function names(events: readonly EventEnvelope[]): string[] {
@@ -80,11 +96,11 @@ describe("WorkerRegistry", () => {
     ]);
   });
 
-  it("drops a refresh for a view that has been removed", () => {
+  it("drops a refresh for a view that has been removed", async () => {
     const { workers } = registry();
     workers.connected("wrk_1", undefined, "0.3.0");
     workers.disconnected("wrk_1");
-    workers.remove("wrk_1");
+    await workers.remove("wrk_1");
 
     workers.refresh("wrk_1", { queueDepth: 9 });
 
@@ -170,17 +186,17 @@ describe("WorkerRegistry", () => {
   });
 
   describe("retention", () => {
-    it("forgets a disconnected view once the retention window passes", () => {
+    it("forgets a disconnected view once the retention window passes", async () => {
       const { clock, events, workers } = registry();
       workers.connected("wrk_1", undefined, undefined);
       workers.disconnected("wrk_1");
 
       clock.advance(RETENTION_MS - 1);
-      workers.pruneExpired();
+      await workers.pruneExpired();
       expect(workers.view("wrk_1")).toBeDefined();
 
       clock.advance(1);
-      workers.pruneExpired();
+      await workers.pruneExpired();
 
       expect(workers.view("wrk_1")).toBeUndefined();
       expect(events.at(-1)).toMatchObject({
@@ -189,41 +205,57 @@ describe("WorkerRegistry", () => {
       });
     });
 
-    it("never forgets a worker whose leases are still live, however long it has been gone", () => {
+    it("never forgets a worker whose gateway-issued leases are still live, however long it has been gone", async () => {
       const { clock, workers } = registry();
       workers.connected("wrk_1", undefined, undefined);
-      const lease = { ...leaseFixture("lease_1", "dev_1"), ttlDeadline: 10 * RETENTION_MS };
+      const lease = { ...gatewayLeaseFixture("lease_1", "dev_1"), ttlDeadline: 10 * RETENTION_MS };
       workers.refresh("wrk_1", { leases: [lease] });
       workers.disconnected("wrk_1");
 
       clock.advance(5 * RETENTION_MS);
-      workers.pruneExpired();
+      await workers.pruneExpired();
 
       // A device is still held on a machine nobody can reach: that is exactly what an operator
       // must be able to see.
       expect(workers.view("wrk_1")).toBeDefined();
     });
 
-    it("forgets it once the last lease deadline has passed and retention has elapsed", () => {
+    // ADR 0005 §6/§14 (M2): the retention hold is scoped to leases *this gateway* issued. A
+    // worker's own local lease -- an agent on that machine, never routed through the gateway --
+    // is none of the gateway's business to keep a view alive for.
+    it("forgets a worker whose only live lease is a local one, not the gateway's own", async () => {
       const { clock, workers } = registry();
       workers.connected("wrk_1", undefined, undefined);
-      workers.refresh("wrk_1", {
-        leases: [{ ...leaseFixture("lease_1", "dev_1"), ttlDeadline: 2_000 }],
-      });
+      const localLease = { ...leaseFixture("lease_1", "dev_1"), ttlDeadline: 10 * RETENTION_MS };
+      workers.refresh("wrk_1", { leases: [localLease] });
       workers.disconnected("wrk_1");
 
-      clock.advance(RETENTION_MS);
-      workers.pruneExpired();
+      clock.advance(RETENTION_MS + 1);
+      await workers.pruneExpired();
 
       expect(workers.view("wrk_1")).toBeUndefined();
     });
 
-    it("leaves a connected view alone no matter how long it has been connected", () => {
+    it("forgets it once the last lease deadline has passed and retention has elapsed", async () => {
+      const { clock, workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", {
+        leases: [{ ...gatewayLeaseFixture("lease_1", "dev_1"), ttlDeadline: 2_000 }],
+      });
+      workers.disconnected("wrk_1");
+
+      clock.advance(RETENTION_MS);
+      await workers.pruneExpired();
+
+      expect(workers.view("wrk_1")).toBeUndefined();
+    });
+
+    it("leaves a connected view alone no matter how long it has been connected", async () => {
       const { clock, workers } = registry();
       workers.connected("wrk_1", undefined, undefined);
 
       clock.advance(10 * RETENTION_MS);
-      workers.pruneExpired();
+      await workers.pruneExpired();
 
       expect(workers.view("wrk_1")).toBeDefined();
     });
@@ -304,12 +336,12 @@ describe("WorkerRegistry", () => {
   });
 
   describe("remove", () => {
-    it("forgets a disconnected view", () => {
+    it("forgets a disconnected view", async () => {
       const { events, workers } = registry();
       workers.connected("wrk_1", "mac-mini-1", undefined);
       workers.disconnected("wrk_1");
 
-      expect(workers.remove("wrk_1")).toBe(true);
+      await expect(workers.remove("wrk_1")).resolves.toBe(true);
 
       expect(workers.view("wrk_1")).toBeUndefined();
       expect(events.at(-1)).toMatchObject({
@@ -318,17 +350,15 @@ describe("WorkerRegistry", () => {
       });
     });
 
-    it("refuses a connected one", () => {
+    it("refuses a connected one", async () => {
       const { workers } = registry();
       workers.connected("wrk_1", undefined, undefined);
 
-      expect(() => workers.remove("wrk_1")).toThrowError(
-        expect.objectContaining({ code: "WORKER_CONNECTED" }),
-      );
+      await expect(workers.remove("wrk_1")).rejects.toMatchObject({ code: "WORKER_CONNECTED" });
       expect(workers.view("wrk_1")).toBeDefined();
     });
 
-    it("refuses an incompatible one too -- its uplink is open", () => {
+    it("refuses an incompatible one too -- its uplink is open", async () => {
       const { workers } = registry();
       workers.incompatible(
         "wrk_1",
@@ -337,16 +367,50 @@ describe("WorkerRegistry", () => {
         undefined,
       );
 
-      expect(() => workers.remove("wrk_1")).toThrowError(
-        expect.objectContaining({ code: "WORKER_CONNECTED" }),
-      );
+      await expect(workers.remove("wrk_1")).rejects.toMatchObject({ code: "WORKER_CONNECTED" });
     });
 
-    it("reports `false` for an id it has never heard of, rather than failing", () => {
+    it("reports `false` for an id it has never heard of, rather than failing", async () => {
       const { events, workers } = registry();
 
-      expect(workers.remove("wrk_missing")).toBe(false);
+      await expect(workers.remove("wrk_missing")).resolves.toBe(false);
       expect(names(events)).not.toContain("worker.removed");
+    });
+
+    // M1: `#forget` used to delete the view and leave the drain flag standing forever --
+    // `workers.json` grew without bound, and a worker whose id was ever seen again would come
+    // back silently drained with no way to `undrain` it (there is no view to undrain).
+    it("clears a removed worker's drain flag too, and persists that", async () => {
+      const store = new MemoryDrainStore();
+      const first = registry({ drainStore: store });
+      first.workers.connected("wrk_1", undefined, undefined);
+      await first.workers.setDrained("wrk_1", true);
+      first.workers.disconnected("wrk_1");
+
+      await expect(first.workers.remove("wrk_1")).resolves.toBe(true);
+
+      // Reconnecting the same id, on the same registry, must not come back drained: the flag
+      // was cleared in memory...
+      expect(first.workers.connected("wrk_1", undefined, undefined).drained).toBe(false);
+      first.workers.disconnected("wrk_1");
+      await first.workers.remove("wrk_1");
+
+      // ...and on disk, so a second gateway reading the same store does not resurrect it either.
+      const second = registry({ drainStore: store });
+      await second.workers.load();
+      expect(second.workers.connected("wrk_1", undefined, undefined).drained).toBe(false);
+    });
+
+    it("undrain fails UNKNOWN_WORKER for a worker removed while drained -- there is no view left", async () => {
+      const { workers } = registry();
+      workers.connected("wrk_1", undefined, undefined);
+      await workers.setDrained("wrk_1", true);
+      workers.disconnected("wrk_1");
+      await workers.remove("wrk_1");
+
+      await expect(workers.setDrained("wrk_1", false)).rejects.toMatchObject({
+        code: "UNKNOWN_WORKER",
+      });
     });
   });
 
