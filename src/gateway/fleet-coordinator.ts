@@ -11,13 +11,16 @@
  * settled attempt. A waiter whose forwarded `lease.request` is still in flight to worker A must
  * never be picked up by a second pass and sent to worker B too -- if both granted, one requester
  * would hold two devices on two machines, and the fleet-wide admission check cannot catch it
- * (it runs once, at admission, before either RPC). `#dispatchTargets` is this class's `#driving`
- * (the same WeakMap-shaped guard `LeaseAcquisitionCoordinator` keeps, keyed here by target
- * worker id rather than a boolean, since a log line naming *which* worker a waiter is in flight
- * to is worth the extra byte): a waiter is added to it before the RPC starts and removed only on
- * a definitive stale-view `NO_CAPACITY` or a terminal grant/failure. Combined with
- * `queue.markProcessing` (which takes the waiter out of `queued` state, so a dispatch pass's own
- * `queue.list()` scan skips it too), a waiter can never be the target of two concurrent attempts.
+ * (it runs once, at admission, before either RPC). `#beginAttempt` calls `queue.markProcessing`
+ * *before* issuing the RPC, taking the waiter out of `queued` state, so `#dispatch`'s own
+ * `queue.list()` scan skips it for the whole in-flight window; the waiter only becomes `queued`
+ * again (via `#enqueue`, from `#staleView`) once that attempt has fully settled. There used to be
+ * a second guard here too -- a `Map<FleetWaiter, string>` keyed by in-flight target -- but once
+ * every exit from `#attempt` clears its waiter's processing state in exactly one place (the
+ * `finally` below), the two checks can never disagree: nothing can observe a waiter that is both
+ * `queued` and mid-attempt. Keeping a guard with no state it can ever catch was worse than
+ * deleting it (round 2 review, C1/C2) -- if a future change reintroduces that race, the fix is a
+ * new guard proven by a new failing test, not resurrecting one that only ever watched itself.
  *
  * ## Two different fields, two different rules
  *
@@ -37,7 +40,7 @@
  */
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { LeaseGrant, SimlockAdminClient } from "../admin/index.js";
-import { isSimlockError, type Platform } from "../contract/index.js";
+import { isSimlockError, type AnySimlockError, type Platform } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import type { DeviceRequest } from "../core/driver.js";
 import { SerializedDecision } from "../core/serialized-decision.js";
@@ -93,9 +96,6 @@ export class FleetLeaseCoordinator {
   readonly #queue: FleetQueue;
   readonly #decisions = new SerializedDecision();
   readonly #logger: Logger;
-  /** `#driving`, mirrored from `LeaseAcquisitionCoordinator` -- see the module doc. Keyed by
-   * waiter, valued by the worker id it is currently in flight to. */
-  readonly #dispatchTargets = new Map<FleetWaiter, string>();
   #knownWorkerIds = new Set<string>();
   readonly #unsubscribeViews: () => void;
 
@@ -293,7 +293,7 @@ export class FleetLeaseCoordinator {
    * not blocked on -- there is no early exit from this loop. */
   #dispatch(): void {
     for (const waiter of this.#queue.list()) {
-      if (waiter.state !== "queued" || this.#dispatchTargets.has(waiter)) continue;
+      if (waiter.state !== "queued") continue;
       const decision = this.options.routing.select(routable(waiter), this.options.views.views());
       if (decision === undefined) continue;
       this.#beginAttempt(waiter, decision.workerId);
@@ -301,11 +301,22 @@ export class FleetLeaseCoordinator {
   }
 
   #beginAttempt(waiter: FleetWaiter, workerId: string): void {
-    this.#dispatchTargets.set(waiter, workerId);
     this.#queue.markProcessing(waiter);
     void this.#attempt(waiter, workerId);
   }
 
+  /**
+   * Every exit from this method leaves `waiter` either terminal (`resolve`/`reject`, inside
+   * `#settleGrant`/the catch below) or back in `queued` (`#staleView`'s `#enqueue`) -- never
+   * stuck `processing` with nothing left to drive it, and never in two places disagreeing about
+   * which. C1 (round 2 review): the first early return used to skip straight to `#staleView`
+   * without first clearing a separate `#dispatchTargets` mark this method used to set -- the mark
+   * survived the re-queue, and `#dispatch`'s guard on it then skipped this waiter forever. Since
+   * `queue.markProcessing`/`#enqueue` (`WaitQueue`'s own state, not a second map this class kept
+   * beside it) is now the *only* bookkeeping a waiter's in-flight-ness lives in, every branch
+   * below already leaves it in one of exactly those states on its own -- there is no second
+   * clear-up step left to forget.
+   */
   async #attempt(waiter: FleetWaiter, workerId: string): Promise<void> {
     const target = this.options.directory.target(workerId);
     const client = target?.reachable === true ? target.client() : undefined;
@@ -358,7 +369,6 @@ export class FleetLeaseCoordinator {
         },
       );
     } catch (error: unknown) {
-      this.#dispatchTargets.delete(waiter);
       if (isSimlockError(error) && error.code === "NO_CAPACITY") {
         this.#staleView(waiter, workerId);
         return;
@@ -367,11 +377,14 @@ export class FleetLeaseCoordinator {
       // `lease.rejected`, relayed onto this bus with `workerId` added by `WorkerLink`) -- this
       // class does not emit a second one for it (see the module doc, "two different fields" and
       // events.md's post-commit rule apply equally to not inventing a duplicate fact). Only the
-      // error code is preserved so the caller sees what the worker actually said.
+      // error code is preserved so the caller sees what the worker actually said, unless this
+      // was a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29
+      // name `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens
+      // to be called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart).
       this.#queue.reject(
         waiter,
         isSimlockError(error)
-          ? new DispatchError(error.code, error.message, error.details)
+          ? this.#classifyRelayedError(error, workerId)
           : new DispatchError(
               "WORKER_UNREACHABLE",
               `Worker ${workerId} did not answer lease.request`,
@@ -382,7 +395,6 @@ export class FleetLeaseCoordinator {
     }
 
     announceDispatched();
-    this.#dispatchTargets.delete(waiter);
     this.#settleGrant(waiter, workerId, grant);
   }
 
@@ -452,9 +464,27 @@ export class FleetLeaseCoordinator {
     try {
       return await fn(client);
     } catch (error: unknown) {
-      if (isSimlockError(error)) throw new DispatchError(error.code, error.message, error.details);
+      if (isSimlockError(error)) throw this.#classifyRelayedError(error, workerId);
       throw error;
     }
+  }
+
+  /**
+   * P4 (round 2 review): `error.code` was preserved verbatim for every `SimlockError`, which
+   * answered a fleet client its own `DAEMON_CONNECTION_LOST` whenever the uplink itself died
+   * mid-call -- naming *this coordinator's* session to the worker, not the worker's own fact.
+   * `kind: "transport"` is what the admin client's wire (`src/simlock-client/wire.ts`) stamps on
+   * every rejection caused by the connection dying under an in-flight call, so it is what
+   * distinguishes that case from an ordinary domain refusal (`RUNTIME_MISSING`,
+   * `REQUESTER_ALREADY_LEASED`, ...), which is forwarded byte for byte -- ADR §28/§29 name
+   * `WORKER_UNREACHABLE` for exactly the transport case, and `#forwardToWorker`'s "not reachable
+   * right now" branch above already answers that same code for the pre-flight version of it.
+   */
+  #classifyRelayedError(error: AnySimlockError, workerId: string): DispatchError {
+    if (error.kind === "transport") {
+      return new DispatchError("WORKER_UNREACHABLE", error.message, { workerId });
+    }
+    return new DispatchError(error.code, error.message, error.details);
   }
 
   #requireEntry(gatewayLeaseId: string): FleetLeaseEntry {

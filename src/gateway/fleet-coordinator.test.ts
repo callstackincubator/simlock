@@ -26,6 +26,13 @@ const GATEWAY_PREFIX = "gw:instance-1:";
 class FakeDirectory implements WorkerDirectory {
   readonly clients = new Map<string, ScriptedWorkerClient>();
   readonly unreachable = new Set<string>();
+  /** C1 (round 2 review): a worker id in here answers `reachable: true` but `client()`
+   * `undefined` -- the real window `WorkerLink#reachable`/`#client` can disagree in, between a
+   * reconnecting link's `#closed` clearing and its own handshake finishing (`#client` is not
+   * assigned until `start()` completes). Distinct from `unreachable` above, which models
+   * `reachable: false` instead -- a different code path in `#attempt`/`#forwardToWorker` that no
+   * test previously exercised the *first* of the two ways. */
+  readonly reachableButNoClient = new Set<string>();
   readonly refreshCalls: string[] = [];
 
   add(workerId: string, client: ScriptedWorkerClient): void {
@@ -36,8 +43,9 @@ class FakeDirectory implements WorkerDirectory {
     const client = this.clients.get(workerId);
     if (client === undefined) return undefined;
     const reachable = !this.unreachable.has(workerId);
+    const hasClient = reachable && !this.reachableButNoClient.has(workerId);
     return {
-      client: () => (reachable ? client.asClient() : undefined),
+      client: () => (hasClient ? client.asClient() : undefined),
       reachable,
       refresh: async () => {
         this.refreshCalls.push(workerId);
@@ -185,9 +193,13 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     // Worker B connects (also eligible for this request) *while A's attempt is still hanging* --
     // with strictly *more* free capacity than A, so routing would prefer B outright on a second
-    // look. A dispatch loop that only checks `waiter.state !== "queued"` (and not
-    // `#dispatchTargets`, or one that never left the waiter `processing` in the first place)
-    // would pick the same still-visible waiter up again here and send it to B.
+    // look. A dispatch loop that only checks `waiter.state !== "queued"` (and one that never
+    // left the waiter `processing` in the first place, i.e. `#beginAttempt` calling
+    // `queue.markProcessing` before the RPC starts) would pick the same still-visible waiter up
+    // again here and send it to B. Round 2 review (C2): this test alone proves the state check
+    // is what suppresses the second dispatch, not a second guard beside it -- reverting just
+    // `queue.markProcessing(waiter)` in `#beginAttempt` (leaving the state check in `#dispatch`
+    // untouched) makes this assertion fail.
     connectWorker(workers, "wrk_b", {
       capacity: {
         ...statusFixture().capacity,
@@ -197,6 +209,40 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
 
     expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+  });
+
+  it("re-dispatches a waiter whose attempt found a reachable-but-not-yet-connected target, instead of parking it forever", async () => {
+    // C1 (round 2 review): the routine trigger is a worker reconnect -- `GatewayService#accept`
+    // sets the new link in `#links` and calls `start()` before the handshake's `#client` is
+    // assigned, so `directory.target(id)` answers `reachable: true` with `client()` still
+    // `undefined` for a real window. `FakeDirectory#reachableButNoClient` reproduces exactly
+    // that window without a real `WorkerLink`.
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    directory.reachableButNoClient.add("wrk_a");
+
+    const grantPromise = coordinator.request(REQUEST, requestOptions());
+    await tick();
+
+    // The attempt found no client to call at all -- nothing was ever sent to the worker, and the
+    // waiter is back in the queue, not stuck `processing`.
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+    expect(coordinator.queueDepth).toBe(1);
+
+    // The handshake finishes and a later view change re-runs dispatch, exactly as a real
+    // `WorkerLink#start()` completing (or any subsequent refresh) would trigger. On the pre-fix
+    // code this waiter is invisible to `#dispatch` forever from here on: its own leaked
+    // dispatch-target mark keeps failing `#dispatch`'s guard even though its queue state is
+    // genuinely `queued` again.
+    directory.reachableButNoClient.delete("wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    workers.refresh("wrk_a", {}); // any refresh re-runs dispatch, exactly as a real one would
+
+    const grant = await grantPromise;
+    expect(grant.lease.worker?.id).toBe("wrk_a");
+    expect(coordinator.queueDepth).toBe(0);
   });
 
   it("leaves a request queued after a stale-view NO_CAPACITY even when the caller asked noWait: true, and refreshes that worker's view", async () => {
@@ -347,5 +393,62 @@ describe("FleetLeaseCoordinator dispatch", () => {
       .catch((error: unknown) => error);
     expect(rejection).toBeInstanceOf(DispatchError);
     expect((rejection as DispatchError).code).toBe("RUNTIME_MISSING");
+  });
+
+  it("maps a transport failure on lease.request to WORKER_UNREACHABLE, never the uplink client's own error code verbatim (P4)", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    // What the admin client's own wire rejects an in-flight call with when *its* connection to
+    // the worker dies mid-call (`src/simlock-client/wire.ts`) -- `kind: "transport"` names the
+    // uplink itself, not a worker fact, and forwarding it verbatim would tell the fleet client
+    // its own connection to *this gateway* was lost, which never happened.
+    client.requestLeaseQueue.push({
+      error: new SimlockError(
+        "DAEMON_CONNECTION_LOST",
+        "transport",
+        "Daemon connection is closed",
+        {},
+      ),
+      kind: "error",
+    });
+
+    const rejection = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
+    expect((rejection as DispatchError).details).toMatchObject({ workerId: "wrk_a" });
+  });
+
+  it("maps a transport failure on a forwarded lease.renew to WORKER_UNREACHABLE the same way (P4)", async () => {
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lse_1",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lse_1",
+    });
+    client.renewLeaseQueue.push({
+      error: new SimlockError(
+        "DAEMON_CONNECTION_LOST",
+        "transport",
+        "Daemon connection is closed",
+        {},
+      ),
+      kind: "error",
+    });
+
+    const rejection = await coordinator
+      .renew("wrk_a.lse_1", undefined)
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
   });
 });
