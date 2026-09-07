@@ -183,11 +183,21 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       respondAndDestroy(socket, 404, "Not Found");
       return;
     }
-    const workerId = headerValue(request, WORKER_ID_HEADER);
-    if (workerId === undefined) {
+    const rawWorkerId = headerValue(request, WORKER_ID_HEADER);
+    if (rawWorkerId === undefined) {
       respondAndDestroy(socket, 400, "Bad Request");
       return;
     }
+    // P3: truncated before anything else touches it. Both fields below reach the gateway's
+    // event bus (`worker.rejected` on the refusal path below, and a real `worker.connected`
+    // past authentication) *before* any credential has been proven -- `GET /v1/uplink` needs no
+    // token to supply either. The bus does no payload validation of its own and its ring buffer
+    // is bounded by count, not bytes, so an unauthenticated caller who never intends to pass
+    // authentication could otherwise pin an unbounded amount of memory (a label up to Node's
+    // header budget, ~16 KB, times the buffer's capacity) and evict every real fact an operator
+    // comes to `simlock events` for -- including the very `worker.connected`/`worker.disconnected`
+    // lines explaining the outage they are debugging.
+    const workerId = rawWorkerId.slice(0, MAX_CLAIMED_FIELD_LENGTH);
     // Decoded before authentication, not after: a dial that fails the credential check still
     // claimed this identity in its headers, and ADR 0005 §22's `worker.rejected` reports
     // whatever a refused peer claimed rather than nothing at all.
@@ -317,11 +327,28 @@ function bearerToken(request: IncomingMessage): string | undefined {
   return secret === "" ? undefined : secret;
 }
 
+/** P3: how long a claimed `workerId` or decoded label is allowed to be before either reaches
+ * anything -- the event bus (`worker.rejected`, `worker.connected`), a view, or `workers.json`.
+ * Comfortably longer than any real hostname or label an operator would set, far short of the
+ * ~16 KB a raw header can carry. */
+const MAX_CLAIMED_FIELD_LENGTH = 128;
+
+/** Control characters (C0 and DEL), the one thing worth rejecting a label outright for rather
+ * than just truncating -- a raw header value the gateway's own JSON logging already renders
+ * safely (`writeResult` JSON-encodes; terminal escapes are not the concern here), but a
+ * multi-line or unreadable "machine name" in `simlock worker list` and `simlock events` is not
+ * something worth keeping even truncated. */
+// oxlint-disable-next-line no-control-regex -- matching control characters is the whole point.
+const NON_PRINTABLE = /[\u0000-\u001f\u007f]/;
+
 function decodeLabel(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   try {
     const decoded = decodeURIComponent(value);
-    return decoded === "" ? undefined : decoded;
+    if (decoded === "" || NON_PRINTABLE.test(decoded)) return undefined;
+    // P3: truncated like `workerId` above, before it reaches the bus or a view -- see
+    // `MAX_CLAIMED_FIELD_LENGTH`'s comment for why.
+    return decoded.slice(0, MAX_CLAIMED_FIELD_LENGTH);
   } catch {
     // A label is cosmetic; a malformed encoding drops it rather than refusing the uplink.
     return undefined;
