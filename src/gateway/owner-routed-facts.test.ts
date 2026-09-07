@@ -7,10 +7,15 @@ import { GatewayOwnerRoutedFacts, type OwnerRoutedFact } from "./owner-routed-fa
 
 const PREFIX = "gw:instance-1:";
 
-/** `WorkerLink#onWorkerEvent`'s own relay shape: the worker's real event, with `workerId` added
- * and, crucially, the payload's own `ownerId` set to the *gateway's uplink principal* -- the
- * only thing a worker-local `hello` ever sees over the uplink, never a fleet client's. Anything
- * that routed a push off this value directly would misattribute it. */
+/** `WorkerLink#onWorkerEvent`'s own relay shape: the worker's real event, with `workerId` added.
+ * H11 (round 2 review): the payload's own `ownerId` is *not* generally "the gateway's own uplink
+ * principal, never a fleet client's" -- for a gateway-issued lease the worker stores the real
+ * fleet owner verbatim (ADR §27a) and echoes it back honestly in the ordinary case. The reason
+ * this class resolves `ownerId` from `FleetLeaseIndex` instead of the relayed field anyway is
+ * that the field is a value round-tripped through a machine this gateway does not control, not
+ * one it minted itself -- untrusted by construction, exactly like `FleetLeaseCoordinator`'s own
+ * H6 fix distrusts the same echo on the grant path. This test's own scenario below (the payload
+ * naming the gateway's uplink principal) is one way that echo can go wrong, not the only one. */
 function relay<Event extends "lease.expired" | "lease.released">(
   event: Event,
   payload: EventMap[Event] & { readonly workerId: string },
@@ -45,8 +50,10 @@ describe("GatewayOwnerRoutedFacts", () => {
     const [event, payload] = relay("lease.expired", {
       deviceId: "dev_1",
       leaseId: "lse_alice",
-      // The relayed payload's own `ownerId` -- the gateway's own uplink principal on the worker,
-      // never a fleet client's. A correct implementation never reads this field.
+      // The relayed payload's own `ownerId` -- one thing a worker could echo back that is
+      // definitely wrong for this lease (it names the gateway's own uplink principal, not
+      // Alice). A correct implementation never reads this field at all; it resolves `ownerId`
+      // from the index instead, regardless of what the payload happens to say.
       ownerId: "gw:instance-1",
       workerId: "wrk_1",
     });

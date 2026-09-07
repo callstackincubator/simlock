@@ -196,13 +196,18 @@ with an extra field: additive, and only ever on a gateway. The six events in
 this section are the gateway's own, and carry no `workerId` beyond the worker
 they are about.
 A relayed `lease.expired`/`lease.released`/`device.crash-detected`/
-`device.recovered` names the *worker's own* lease/requester ids in its
-payload, not the gateway's — `GatewayOwnerRoutedFacts` (the gateway's
-`OwnerRoutedFacts`) is what resolves the real fleet `ownerId` and gateway
-lease id from the fleet lease index before routing the corresponding
-`lease-lost`/`device-unhealthy`/`device-recovered` push to a client
-connection, precisely so a relayed payload's own `ownerId` (the gateway's own
-uplink principal, never a fleet client's) is never used to route a push.
+`device.recovered` names the *worker's own* lease id in its payload, not the
+gateway's — `GatewayOwnerRoutedFacts` (the gateway's `OwnerRoutedFacts`) is
+what resolves the gateway's own lease id, and the `ownerId` to route the
+corresponding `lease-lost`/`device-unhealthy`/`device-recovered` push by,
+from the fleet lease index rather than the relayed payload directly. The
+payload's own `ownerId` is correct for a worker's own local lease (the
+worker never had a reason to touch it), but for a gateway-issued one it is
+whatever that worker echoed back of what the gateway forwarded when it
+granted the lease (ADR §27a) — round-tripped through a machine this gateway
+does not control, not a value it minted itself, so it is resolved from the
+index (which recorded the real answer at grant time) rather than trusted
+verbatim off the wire.
 
 ## Conventions recap
 
