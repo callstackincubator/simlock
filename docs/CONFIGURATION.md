@@ -69,15 +69,14 @@ non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 absolute `ws`/`wss` URL — `http`/`https` are rejected — and `gateway.token`
 a non-empty string; **in `mode: "worker"`**, setting either without the other
 is rejected at load and the daemon does not start, because a half-configured
-uplink would
-otherwise come up looking like an ordinary standalone worker. That rule does
+uplink would otherwise come up looking like an ordinary standalone worker. That rule does
 not apply in `mode: "gateway"`, where both keys are worker-side and are
 warned about and ignored like every other worker key — a gateway is not
 misconfigured by leftovers from the config it was flipped out of.
 `gateway.label` is a non-empty string, `gateway.routing` one of the
 registered routing policies, and `exec.timeoutMs`, `gateway.execTimeoutMs`,
-and `gateway.disconnectedRetentionMs` positive numbers. **`mode: "gateway"` with
-`http.enabled: false` is rejected at load** (ADR 0005 §2), naming the key: a
+and `gateway.disconnectedRetentionMs` positive numbers.
+**`mode: "gateway"` with `http.enabled: false` is rejected at load** (ADR 0005 §2), naming the key: a
 gateway is the fleet's contact point over HTTP, so one nothing can reach has
 no safe reading.
 `lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
