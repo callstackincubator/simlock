@@ -557,9 +557,8 @@ deliberately: `device.upload` would stream chunks as request-scoped pushes
 over the same wire, into a per-lease scratch directory deleted on release.
 Nothing about `device.exec`'s shape has to change to add it.
 
-**Possible future fix:** `device.upload`, a post-v1 idea rather than planned
-work — it belongs with the byte-heavy concerns
-[ADR 0005](adr/0005-gateway-and-worker-modes.md) lists as non-goals.
+**Possible future fix:** `device.upload`, tracked in
+[IDEAS.md](IDEAS.md#gateway-side-file-upload-for-deviceexec).
 
 ## `device.exec` has no pseudo-terminal, so interactive commands break
 
@@ -600,8 +599,8 @@ path keeps its inherited stdio, so nobody loses an interactive shell they had
 before.
 
 **Possible future fix:** an interactive TTY is part of the reserved
-`dataPlane` ([ADR 0005](adr/0005-gateway-and-worker-modes.md) lists it among
-the non-goals), not a follow-up to `device.exec`.
+`dataPlane` (see [IDEAS.md](IDEAS.md#a-byte-heavy-data-plane)), not a
+follow-up to `device.exec`.
 
 ## iOS slim mode: accepted costs and feature loss (#87)
 
@@ -706,79 +705,6 @@ a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
 on the same timers as any other idle device, since neither rule cares what a
 device's spec matches. Until those timers fire, though, it occupies a pool
 slot doing nothing.
-
-## `device.exec` carries no files (ADR 0005)
-
-A remote agent drives its leased device with `device.exec` — `simlock simctl`
-/ `simlock adb` against a gateway, or `POST /v1/leases/{id}/exec` over HTTP.
-The command runs on the machine that owns the device, which is what makes it
-work at all across a fleet.
-
-**The pitfall:** the *arguments* travel, the *files* do not. `simctl install
-/tmp/MyApp.app` and `adb install ./app-debug.apk` resolve their path on the
-worker's filesystem, so a build sitting on the agent's own machine is simply
-not there — the command fails with the tool's own "no such file" rather than
-with anything simlock says, which reads like a broken lease until you notice
-which machine ran it. The same applies in reverse for output: `simctl io
-booted screenshot shot.png` writes `shot.png` on the worker.
-
-**Why it is accepted:** a file transfer is a second, byte-heavy concern with
-its own questions (size caps, resumability, where the bytes land, who deletes
-them), and answering them badly inside the lease path is worse than not
-answering them. v1's honest position is that artifacts arrive out of band — a
-shared volume, a checkout the CI job already did on that machine, an
-`scp` the operator's own tooling does.
-
-**Status:** accepted for v1 and designed around rather than designed out.
-[ADR 0005](adr/0005-gateway-and-worker-modes.md) leaves the seam open
-deliberately: `device.upload` would stream chunks as request-scoped pushes
-over the same wire, into a per-lease scratch directory deleted on release.
-Nothing about `device.exec`'s shape has to change to add it.
-
-**Possible future fix:** `device.upload`, tracked in
-[IDEAS.md](IDEAS.md#gateway-side-file-upload-for-deviceexec).
-
-## `device.exec` has no pseudo-terminal, so interactive commands break
-
-Locally — `simlock simctl` / `simlock adb` against a worker over its unix
-socket — the CLI spawns the tool with inherited stdio, so an interactive `adb
-shell` is a real interactive shell and always has been.
-
-**The pitfall:** through a gateway, or over HTTP, the same command goes
-through `device.exec` instead, and there is no PTY on the far end. `stdin` is
-one string sent with the request and then closed. Line-oriented commands are
-fine (`adb shell getprop`, `adb shell input tap 100 200`, `simctl install`);
-anything that wants a terminal is not — a full-screen program renders as
-escape sequences, and a tool that stops to ask a question waits for input
-that can never come until the timeout kills it. The failure is quiet in the
-worst case: the command hangs until `exec.timeoutMs` (ten minutes) and then
-fails `EXEC_TIMEOUT`.
-
-The one shape of this that is *not* quiet is the most likely one. A bare `adb
-shell` with no command — the thing a human types first — is refused up front
-by the worker with `PASSTHROUGH_REFUSED` (CLI exit 2, HTTP `422`) and a
-message saying it needs a terminal. It is the only refusal `device.exec` adds
-to the passthrough list, and it exists precisely because the honest failure
-for that command is immediate and legible, while the natural one is a
-ten-minute stall ending in a timeout that says nothing about terminals. It
-does not generalize: simlock cannot tell in advance which *other* commands
-will block for input, so everything past this one case is still bounded by
-the timeout rather than by a refusal.
-
-**Why it is accepted:** a PTY is not a bigger version of a pipe. It needs
-terminal allocation on the worker, window-size propagation, signal
-forwarding, and a bidirectional stream where v1 has request-scoped pushes —
-and it exists to serve a human at a keyboard, which is not who this control
-plane is for. Agents send commands and read output.
-
-**Status:** accepted by design, and the boundary is drawn where the docs say
-it is: same command, same refusals, same exit code, no terminal. The local
-path keeps its inherited stdio, so nobody loses an interactive shell they had
-before.
-
-**Possible future fix:** an interactive TTY is part of the reserved
-`dataPlane` (see [IDEAS.md](IDEAS.md#a-byte-heavy-data-plane)), not a
-follow-up to `device.exec`.
 
 ## A dispatched request whose uplink drops may have granted a lease anyway
 
