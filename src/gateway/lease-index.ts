@@ -53,6 +53,17 @@ export class FleetLeaseIndex {
   readonly #byGatewayId = new Map<string, FleetLeaseEntry>();
   readonly #byRequester = new Map<string, string>();
   readonly #byWorkerLease = new Map<string, string>();
+  /** C3 (round 2 review): one strictly-increasing counter per worker, bumped on every
+   * `rebuildFromWorker` call for that worker -- what lets reconciliation (below) tell "missing
+   * from this snapshot" apart from "missing for a whole extra snapshot in a row" without
+   * comparing clocks across two processes. */
+  readonly #generation = new Map<string, number>();
+  /** C3: the generation at which an entry attributed to a still-known worker was first found
+   * absent from a `rebuildFromWorker` snapshot. Cleared the moment the entry is reported again
+   * (the race this guards against is a one-snapshot fluke, not a real disappearance), and read
+   * again by the *next* `rebuildFromWorker` call for that worker: still absent one full
+   * generation later is what promotes "missing" to "gone" (see `rebuildFromWorker`'s own doc). */
+  readonly #missingSince = new Map<string, number>();
 
   constructor(private readonly gatewayRequesterPrefix: string) {}
 
@@ -121,7 +132,6 @@ export class FleetLeaseIndex {
    * "do not trust a relayed event's `ownerId`" only holds if the lookup and the forget are one
    * step, not two).
    */
-  // fallow-ignore-next-line unused-class-member -- called only through `GatewayOwnerRoutedFacts`'s `Pick<FleetLeaseIndex, "removeByWorkerLease" | "findByWorkerLease">`-typed constructor parameter; the audit cannot follow a call through a structural type.
   removeByWorkerLease(workerId: string, workerLeaseId: string): FleetLeaseEntry | undefined {
     const entry = this.findByWorkerLease(workerId, workerLeaseId);
     if (entry === undefined) return undefined;
@@ -137,18 +147,42 @@ export class FleetLeaseIndex {
    * it and is silently skipped, exactly as it must be for `hasLease`'s admission check to mean
    * anything.
    *
-   * Deliberately upsert-only: it never removes an entry this index already has, even one this
-   * particular `leases` snapshot does not mention. Removal has exactly one source of truth --
-   * `removeByWorkerLease`, driven by the worker's own `lease.released`/`lease.expired` facts --
-   * because treating "missing from this snapshot" as "gone" would race a lease this gateway
-   * granted a moment ago against a `WorkerLink` refresh that started before the grant landed:
-   * the refresh's answer is stale, not authoritative, and removing on it would evict a lease
-   * that is very much still held.
+   * Reconciling, not upsert-only (C3, round 2 review): an entry attributed to this worker that
+   * this snapshot does not mention is removed too, so a worker that lost a gateway-issued lease
+   * out of band -- restarted, or expired it while the uplink was down -- does not leave an
+   * immortal entry behind that no relayed `lease.released`/`lease.expired` will ever arrive to
+   * clear (removal used to have exactly one source of truth, that relayed fact; a worker that
+   * forgot the lease before reconnecting can never produce one). `removeByWorkerLease` is still
+   * what clears the ordinary case -- a relayed fact arriving for a lease this snapshot has
+   * already dropped is simply a no-op there.
+   *
+   * The race the old upsert-only comment warned about is real and still handled: a lease this
+   * gateway granted a moment ago could be missing from a `WorkerLink` refresh that started
+   * *before* the grant landed on the worker, and removing on that stale a snapshot would evict a
+   * lease that is very much still held. Protected by a watermark instead of never removing --
+   * `#generation`/`#missingSince` (see their own doc comments) require an entry to be missing
+   * from *two* consecutive snapshots for this worker before it is forgotten, so a single
+   * unlucky race is always caught by the very next rebuild (the next periodic refresh, or the one
+   * this class's own caller re-runs after every worker-view change) rather than evicting on the
+   * first miss.
    */
   rebuildFromWorker(workerId: string, leases: readonly WorkerReportedLease[]): void {
+    const generation = (this.#generation.get(workerId) ?? 0) + 1;
+    this.#generation.set(workerId, generation);
+    const reported = this.#addReported(workerId, leases);
+    this.#reconcileMissing(workerId, generation, reported);
+  }
+
+  /** `rebuildFromWorker`'s addition half: adds every gateway-issued lease this snapshot reports
+   * that the index does not already know, and returns the full set of gateway ids it saw (used
+   * to know which of this worker's *existing* entries this snapshot did not mention). */
+  #addReported(workerId: string, leases: readonly WorkerReportedLease[]): ReadonlySet<string> {
+    const reported = new Set<string>();
     for (const lease of leases) {
       if (!lease.requesterId.startsWith(this.gatewayRequesterPrefix)) continue;
       const gatewayLeaseId = `${workerId}.${lease.id}`;
+      reported.add(gatewayLeaseId);
+      this.#missingSince.delete(gatewayLeaseId);
       if (this.#byGatewayId.has(gatewayLeaseId)) continue;
       this.add({
         gatewayLeaseId,
@@ -159,20 +193,39 @@ export class FleetLeaseIndex {
         workerLeaseId: lease.id,
       });
     }
+    return reported;
+  }
+
+  /** `rebuildFromWorker`'s removal half: forgets an existing entry for `workerId` that this
+   * snapshot did not report, but only once it has failed to appear in *two* consecutive
+   * snapshots (see `#missingSince`'s own doc comment for why one miss is not enough). */
+  #reconcileMissing(workerId: string, generation: number, reported: ReadonlySet<string>): void {
+    for (const entry of this.all()) {
+      if (entry.workerId !== workerId || reported.has(entry.gatewayLeaseId)) continue;
+      const firstMissedAt = this.#missingSince.get(entry.gatewayLeaseId);
+      if (firstMissedAt === undefined) {
+        this.#missingSince.set(entry.gatewayLeaseId, generation);
+      } else if (firstMissedAt < generation) {
+        this.#forget(entry);
+      }
+    }
   }
 
   /** Drops every entry attributed to a worker the gateway has forgotten entirely (its view was
    * removed -- `worker.remove`, or retention). A worker's view carrying no leases is not this:
-   * that is the ordinary release/expiry path above. */
+   * that is the ordinary release/expiry path above. Also drops that worker's own `#generation`
+   * counter (`#forget`, above, already clears each entry's own `#missingSince`) -- a worker id
+   * that reconnects after this is a fresh start for reconciliation, not a continuation of one
+   * that was, at the time, about a worker this index no longer has any record of at all. */
   forgetWorker(workerId: string): void {
     for (const entry of this.all()) {
       if (entry.workerId === workerId) this.#forget(entry);
     }
+    this.#generation.delete(workerId);
   }
 
   /** Projects a worker-reported lease for a fleet client: rewritten when this index recognizes
    * it (by `(workerId, lease.id)`), passed through with only `workerId` added otherwise. */
-  // fallow-ignore-next-line unused-class-member -- called only through `GatewayDispatcher`'s `Pick<FleetLeaseIndex, "project" | "all">`-typed `leaseIndex` option, and `aggregate.ts`'s own optional `Pick<FleetLeaseIndex, "project">`; the audit cannot follow a call through a structural type.
   project<Lease extends { readonly id: string; readonly requesterId: string }>(
     lease: Lease,
     workerId: string,
@@ -199,6 +252,7 @@ export class FleetLeaseIndex {
       this.#byRequester.delete(entry.requesterId);
     }
     this.#byWorkerLease.delete(workerKey(entry.workerId, entry.workerLeaseId));
+    this.#missingSince.delete(entry.gatewayLeaseId);
   }
 }
 

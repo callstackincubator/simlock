@@ -39,7 +39,7 @@
  * `WORKER_UNREACHABLE` when a target is not reachable *right now*, and nothing more.
  */
 import type { EventBus, EventMap } from "../bus/index.js";
-import type { LeaseGrant, SimlockAdminClient } from "../admin/index.js";
+import type { LeaseGrant, LeaseRecord, SimlockAdminClient } from "../admin/index.js";
 import { isSimlockError, type AnySimlockError, type Platform } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import type { DeviceRequest } from "../core/driver.js";
@@ -172,24 +172,33 @@ export class FleetLeaseCoordinator {
     });
   }
 
-  // fallow-ignore-next-line unused-class-member -- see `cancelPending` above; reached via `#leaseRenew`.
   async renew(gatewayLeaseId: string, ttlMs: number | undefined): Promise<FleetLeaseRecord> {
     const entry = this.#requireEntry(gatewayLeaseId);
-    const record = await this.#forwardToWorker(entry.workerId, (client) =>
-      client.renewLease({
-        leaseId: entry.workerLeaseId,
-        ...(ttlMs === undefined ? {} : { ttlMs }),
-      }),
-    );
+    let record: LeaseRecord;
+    try {
+      record = await this.#forwardToWorker(entry.workerId, (client) =>
+        client.renewLease({
+          leaseId: entry.workerLeaseId,
+          ...(ttlMs === undefined ? {} : { ttlMs }),
+        }),
+      );
+    } catch (error: unknown) {
+      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
+      throw error;
+    }
     return this.#projectRecord(record, entry);
   }
 
-  // fallow-ignore-next-line unused-class-member -- see `cancelPending` above; reached via `#leaseRelease`.
   async release(gatewayLeaseId: string): Promise<void> {
     const entry = this.#requireEntry(gatewayLeaseId);
-    await this.#forwardToWorker(entry.workerId, (client) =>
-      client.releaseLease({ leaseId: entry.workerLeaseId }),
-    );
+    try {
+      await this.#forwardToWorker(entry.workerId, (client) =>
+        client.releaseLease({ leaseId: entry.workerLeaseId }),
+      );
+    } catch (error: unknown) {
+      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
+      throw error;
+    }
     // Removed immediately rather than waiting on the relayed `lease.released` fact to make the
     // round trip back over the uplink: the release just succeeded, on this same call, so there
     // is nothing left to learn from that event. `removeByWorkerLease` still runs when it arrives
@@ -202,14 +211,15 @@ export class FleetLeaseCoordinator {
    * ADR §34: releases only the leases this gateway issued, across every connected worker, and
    * never a worker's own local leases. A worker that cannot be reached is reported, naming it,
    * while every other worker's releases still complete -- what has already succeeded by the time
-   * one fails stays released; only the *answer* to this call surfaces the failure.
+   * one fails stays released.
    *
-   * `lease.release-all`'s output shape (`{ leaseIds }`) has no room to report a partial result
-   * alongside a per-worker failure; #119, which owns `WORKER_UNREACHABLE` semantics, may want to
-   * widen it. For now: attempt every worker, and if any failed, throw naming the first one that
-   * did.
+   * H8 (round 2 review): the thrown error's `details.releasedLeaseIds` names everything that did
+   * succeed before the failure, rather than leaving the operator to guess (§34's own "leaves the
+   * operator guessing" is exactly the thing this closes) -- `lease.release-all`'s output shape
+   * (`{ leaseIds }`) still has no room to carry a partial result on its *success* path, so this is
+   * the one channel available on the answer that does exist. #119, which owns `WORKER_UNREACHABLE`
+   * retry/backoff, may still want to widen the output shape itself.
    */
-  // fallow-ignore-next-line unused-class-member -- see `cancelPending` above; reached via `#leaseReleaseAll`.
   async releaseAll(): Promise<readonly string[]> {
     const released: string[] = [];
     let firstFailure: unknown;
@@ -221,11 +231,46 @@ export class FleetLeaseCoordinator {
         this.options.leaseIndex.remove(entry.gatewayLeaseId);
         released.push(entry.gatewayLeaseId);
       } catch (error: unknown) {
+        if (this.#forgetIfUnknownToWorker(entry.gatewayLeaseId, error)) {
+          // C3: the worker already agrees this lease does not exist -- that is not a failure to
+          // report, it is the release this call asked for, already true. Skip it (not a
+          // `firstFailure`) rather than making a single zombie entry fail every future
+          // `release-all` forever.
+          released.push(entry.gatewayLeaseId);
+          continue;
+        }
         firstFailure ??= error;
       }
     }
-    if (firstFailure !== undefined) throw firstFailure;
+    if (firstFailure !== undefined) {
+      throw this.#withReleasedDetails(firstFailure, released);
+    }
     return released;
+  }
+
+  /**
+   * C3 (round 2 review): a worker answering `UNKNOWN_LEASE` to a release or renew is telling this
+   * gateway its own index entry is wrong -- the one source of truth for removal
+   * (`lease.released`/`lease.expired`) never fires for a lease the worker has no record of at
+   * all, so without this the entry is immortal: every future request from the same requester is
+   * refused `REQUESTER_ALREADY_LEASED` naming a lease that exists nowhere, and (`releaseAll`)
+   * every future `lease.release-all` fails on it forever. Returns whether it acted, so a caller
+   * (`releaseAll`) can fold that lease into its own success accounting instead of its failure one.
+   */
+  #forgetIfUnknownToWorker(gatewayLeaseId: string, error: unknown): boolean {
+    if (!(error instanceof DispatchError) || error.code !== "UNKNOWN_LEASE") return false;
+    this.options.leaseIndex.remove(gatewayLeaseId);
+    return true;
+  }
+
+  #withReleasedDetails(error: unknown, released: readonly string[]): unknown {
+    if (!(error instanceof DispatchError)) return error;
+    const baseDetails =
+      typeof error.details === "object" && error.details !== null ? error.details : {};
+    return new DispatchError(error.code, error.message, {
+      ...baseDetails,
+      releasedLeaseIds: released,
+    });
   }
 
   async exec(
@@ -513,10 +558,12 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * §30's reconnect rebuild, and its own upkeep on every worker-view change: adds any
-   * gateway-issued lease a worker's current view reports that the index does not already know
-   * (upsert-only -- see `FleetLeaseIndex#rebuildFromWorker`), forgets a worker's entries entirely
-   * once its view has disappeared (`worker.remove`, or retention), then runs a dispatch pass.
+   * §30's reconnect rebuild, and its own upkeep on every worker-view change: reconciles each
+   * worker's entries against its current view -- adding any gateway-issued lease the index does
+   * not already know and, a generation later, forgetting one the view has stopped reporting at
+   * all (see `FleetLeaseIndex#rebuildFromWorker`'s own doc comment, C3 round 2 review) -- forgets
+   * a worker's entries entirely once its view has disappeared (`worker.remove`, or retention),
+   * then runs a dispatch pass.
    */
   #onViewsChanged(): void {
     const views = this.options.views.views();

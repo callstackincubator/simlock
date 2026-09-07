@@ -451,4 +451,127 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(rejection).toBeInstanceOf(DispatchError);
     expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
   });
+
+  it("drops its own index entry when the worker answers UNKNOWN_LEASE to a release, instead of leaving a zombie behind (C3)", async () => {
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lse_1",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lse_1",
+    });
+    client.releaseLeaseQueue.push({
+      error: new SimlockError("UNKNOWN_LEASE", "domain", "Unknown lease: lse_1", {
+        leaseId: "lse_1",
+      }),
+      kind: "error",
+    });
+
+    await expect(coordinator.release("wrk_a.lse_1")).rejects.toMatchObject({
+      code: "UNKNOWN_LEASE",
+    });
+
+    // The gateway's own record was provably wrong (the worker has no idea what this lease is) --
+    // it must not survive to block `agent-1`'s next request with REQUESTER_ALREADY_LEASED
+    // naming a lease that exists nowhere.
+    expect(leaseIndex.resolve("wrk_a.lse_1")).toBeUndefined();
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    await expect(coordinator.request(REQUEST, requestOptions())).resolves.toBeDefined();
+  });
+
+  it("drops its own index entry when the worker answers UNKNOWN_LEASE to a renew too (C3)", async () => {
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lse_1",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lse_1",
+    });
+    client.renewLeaseQueue.push({
+      error: new SimlockError("UNKNOWN_LEASE", "domain", "Unknown lease: lse_1", {
+        leaseId: "lse_1",
+      }),
+      kind: "error",
+    });
+
+    await expect(coordinator.renew("wrk_a.lse_1", undefined)).rejects.toMatchObject({
+      code: "UNKNOWN_LEASE",
+    });
+    expect(leaseIndex.resolve("wrk_a.lse_1")).toBeUndefined();
+  });
+
+  it("release-all treats a worker's UNKNOWN_LEASE as already-released rather than a failure that blocks every future call (C3)", async () => {
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lse_zombie",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lse_zombie",
+    });
+    client.releaseLeaseQueue.push({
+      error: new SimlockError("UNKNOWN_LEASE", "domain", "Unknown lease: lse_zombie", {
+        leaseId: "lse_zombie",
+      }),
+      kind: "error",
+    });
+
+    // Without C3's fix this single zombie entry throws on *every* future release-all -- proven
+    // by calling it twice.
+    await expect(coordinator.releaseAll()).resolves.toEqual(["wrk_a.lse_zombie"]);
+    expect(leaseIndex.resolve("wrk_a.lse_zombie")).toBeUndefined();
+    await expect(coordinator.releaseAll()).resolves.toEqual([]);
+  });
+
+  it("release-all attaches the leases it already released to a later failure's own details (H8)", async () => {
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a");
+    connectWorker(workers, "wrk_b");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lse_1",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lse_1",
+    });
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_b.lse_1",
+      grantedAt: 1,
+      ownerId: "agent-2",
+      requesterId: "agent-2",
+      workerId: "wrk_b",
+      workerLeaseId: "lse_1",
+    });
+    clientA.releaseLeaseQueue.push({ kind: "ok" });
+    directory.unreachable.add("wrk_b");
+
+    const rejection = await coordinator.releaseAll().catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
+    expect((rejection as DispatchError).details).toMatchObject({
+      releasedLeaseIds: ["wrk_a.lse_1"],
+    });
+    // What already succeeded stays released regardless of the answer's own shape.
+    expect(leaseIndex.resolve("wrk_a.lse_1")).toBeUndefined();
+    expect(leaseIndex.resolve("wrk_b.lse_1")).toBeDefined();
+  });
 });
