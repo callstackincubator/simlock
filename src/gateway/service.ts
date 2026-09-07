@@ -73,6 +73,7 @@ export class GatewayService {
       // exactly `gw:<this gateway's instance id>`, the same shape requirement 27 stamps on
       // every requester id this gateway forwards, just without the trailing `:<requester>`.
       gatewayRequesterPrefix: `${options.principal}:`,
+      logger: this.#logger,
       retentionMs: options.retentionMs,
       ...(options.drainStore === undefined ? {} : { drainStore: options.drainStore }),
     });
