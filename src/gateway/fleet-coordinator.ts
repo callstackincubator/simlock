@@ -87,6 +87,11 @@ export interface FleetLeaseCoordinatorOptions {
   readonly views: FleetViews;
   readonly routing: RoutingPolicy;
   readonly leaseIndex: FleetLeaseIndex;
+  /** ADR §19e (P5, round 2 review): `gateway.execTimeoutMs`, the backstop for a forwarded
+   * `device.exec` whose worker never answers at all -- the worker's own `exec.timeoutMs` is
+   * authoritative for an ordinary timeout (it owns the process and can kill it) and is expected
+   * to fire first, since the gateway's default is deliberately the longer of the two. */
+  readonly execTimeoutMs: number;
   readonly logger?: Logger;
 }
 
@@ -289,18 +294,65 @@ export class FleetLeaseCoordinator {
       // own settlement, so this is the earliest honest point to tell an HTTP caller "committed":
       // the lease and the worker are both resolved, and the call is about to go out.
       session.onStarted?.();
-      return client.exec(
-        {
-          leaseId: entry.workerLeaseId,
-          tool: input.tool,
-          args: [...input.args],
-          ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-          requesterId: namespacedRequesterId,
-        },
-        {
-          onOutput: (chunk) => {
-            void session.onOutput?.(chunk.stream, chunk.chunk);
+      // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
+      // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
+      // ordinary timeout and is expected to answer first (the gateway's default is deliberately
+      // the longer of the two), so this only ever fires when nothing else would have.
+      return this.#withExecTimeout(
+        client.exec(
+          {
+            leaseId: entry.workerLeaseId,
+            tool: input.tool,
+            args: [...input.args],
+            ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+            requesterId: namespacedRequesterId,
           },
+          {
+            onOutput: (chunk) => {
+              void session.onOutput?.(chunk.stream, chunk.chunk);
+            },
+          },
+        ),
+        entry.workerId,
+      );
+    });
+  }
+
+  /**
+   * Races a forwarded `device.exec` against `gateway.execTimeoutMs` (ADR §19e). Before this,
+   * `exec` awaited `client.exec` unbounded -- a worker that never answers at all (the case this
+   * config value exists for, not an ordinary command timeout the worker's own `exec.timeoutMs`
+   * already covers) hung the call and its SSE stream forever, and nothing here read the config
+   * value the schema, validator, and docs already described. Mirrors `WorkerLink#withTimeout`'s
+   * own race-and-cancel shape: whichever of the timer or `promise` settles first wins, and the
+   * other is inert from then on (the timer is cancelled on a real answer; a `client.exec` that
+   * eventually does answer after the timer already fired is simply ignored, not delivered late).
+   */
+  #withExecTimeout<Value>(promise: Promise<Value>, workerId: string): Promise<Value> {
+    return new Promise<Value>((resolve, reject) => {
+      let settled = false;
+      const timer = this.options.clock.setTimer(this.options.execTimeoutMs, () => {
+        if (settled) return;
+        settled = true;
+        reject(
+          new DispatchError(
+            "EXEC_TIMEOUT",
+            `Worker ${workerId} did not answer device.exec within gateway.execTimeoutMs (${String(this.options.execTimeoutMs)}ms)`,
+          ),
+        );
+      });
+      promise.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          this.options.clock.cancel(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          this.options.clock.cancel(timer);
+          reject(error);
         },
       );
     });

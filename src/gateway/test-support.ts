@@ -140,7 +140,10 @@ type ExecOutcome =
       readonly exitCode: number;
       readonly output?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
     }
-  | { readonly kind: "error"; readonly error: unknown };
+  | { readonly kind: "error"; readonly error: unknown }
+  /** Never settles -- for exercising `gateway.execTimeoutMs` (P5, round 2 review): the worker
+   * never answers `device.exec` at all. */
+  | { readonly kind: "hang" };
 
 /**
  * A `SimlockAdminClient` with only the methods a `WorkerLink` or a `FleetLeaseCoordinator`
@@ -285,6 +288,7 @@ export class ScriptedWorkerClient {
     this.calls.push(`device.exec:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
     const outcome = this.execQueue.shift();
+    if (outcome?.kind === "hang") return new Promise<never>(() => {});
     if (outcome?.kind === "error") throw outcome.error;
     for (const chunk of outcome?.output ?? []) options.onOutput?.(chunk);
     return { exitCode: outcome?.exitCode ?? 0 };

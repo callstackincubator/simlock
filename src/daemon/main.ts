@@ -573,6 +573,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     clock,
     directory: gatewayService,
     eventBus,
+    // ADR §19e (P5, round 2 review): the gateway-side backstop on a forwarded `device.exec`.
+    execTimeoutMs: config.gateway.execTimeoutMs,
     idGenerator,
     leaseIndex,
     logger: logger.child("gateway"),

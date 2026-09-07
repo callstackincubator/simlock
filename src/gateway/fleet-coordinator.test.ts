@@ -55,7 +55,7 @@ class FakeDirectory implements WorkerDirectory {
   }
 }
 
-function harness() {
+function harness(overrides: { readonly execTimeoutMs?: number } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const workers = new WorkerRegistry({
@@ -73,6 +73,10 @@ function harness() {
     clock,
     directory,
     eventBus,
+    // Deliberately large by default -- P5's own test overrides this to something the FakeClock
+    // can advance past inside the test, without every other test in this file needing to know
+    // gateway.execTimeoutMs exists.
+    execTimeoutMs: overrides.execTimeoutMs ?? 11 * 60_000,
     idGenerator: {
       generate: (() => {
         let next = 1;
@@ -364,6 +368,39 @@ describe("FleetLeaseCoordinator dispatch", () => {
     );
 
     expect(client.calls).toContain(`device.exec:${GATEWAY_PREFIX}agent-1`);
+  });
+
+  it("times out a forwarded device.exec after gateway.execTimeoutMs when the worker never answers at all (P5)", async () => {
+    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      grant: grantFixture({
+        lease: {
+          ...grantFixture().lease,
+          id: "lse_9",
+          ownerId: "agent-1",
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+        },
+      }),
+      kind: "grant",
+    });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    client.execQueue.push({ kind: "hang" });
+
+    const rejection = coordinator
+      .exec(
+        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+        { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
+      )
+      .catch((error: unknown) => error);
+    await tick();
+    clock.advance(5_000);
+
+    const error = await rejection;
+    expect(error).toBeInstanceOf(DispatchError);
+    expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
   });
 
   it("rejects a no-wait request immediately with NoCapacityError when no worker is eligible at all", async () => {

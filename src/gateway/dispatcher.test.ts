@@ -119,6 +119,7 @@ function harness() {
     clock,
     directory,
     eventBus,
+    execTimeoutMs: gatewayConfig.gateway.execTimeoutMs,
     idGenerator: {
       generate: (() => {
         let next = 1;
