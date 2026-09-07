@@ -6,10 +6,14 @@
  *   only runs inside hono's `streamSSE` callback, which is not guaranteed to be the very next
  *   turn of the event loop, so a chunk arriving here backpressures exactly like a streaming
  *   one: `push` returns a promise that does not resolve until the stream opens and this
- *   chunk is actually flushed (or the request is dropped first). That is what keeps the
- *   window's *memory* bounded even though its *duration* is not -- the process runner pauses
- *   the child at the first unresolved delivery, so at most one chunk per stream (stdout,
- *   stderr) is ever held here at once, never an unbounded backlog from a fast producer.
+ *   chunk is actually flushed (or the request is dropped first). That keeps this window from
+ *   growing without bound the way a fast producer racing an unbounded queue would -- but it is
+ *   *not* "at most one chunk per stream held here at once": a paused readable still drains
+ *   whatever the OS already handed it once the child hits EOF, so `onChunk` (and therefore
+ *   `push`) can fire more than once for the same stream before either delivery resolves (see
+ *   `NodeStreamingProcessHandle`'s own doc comment in `ports/process-runner.ts` for the
+ *   verified case: two chunks landing in the same tick). What actually bounds this window's
+ *   memory is the OS pipe buffer's own size, not a limit this class enforces.
  * - **Streaming.** Every chunk goes straight to the wire. Nothing is kept.
  * - **Dropped.** The client disconnected. The command deliberately keeps running (ADR 0004
  *   §3's reasoning applied to a process: a half-applied `simctl install` killed by a dropped
@@ -42,9 +46,9 @@ export class OutputRelay {
   #deliver: ((chunk: RelayedChunk) => Promise<void>) | undefined;
   #dropped = false;
 
-  /** How many chunks are held right now. Only the starting window can be non-zero, and (see
-   * the class doc) never more than one per stream; a test asserts on it, the route never
-   * reads it. */
+  /** How many chunks are held right now. Only the starting window can be non-zero -- see the
+   * class doc for why this is not "at most one per stream" (a paused readable can still
+   * deliver more than one at EOF); a test asserts on it, the route never reads it. */
   get bufferedCount(): number {
     return this.#buffered.length;
   }

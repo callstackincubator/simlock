@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   exitCodeOf,
@@ -227,13 +227,16 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     expect(seen.join("").length).toBe(64 * 16 * 1024);
   });
 
-  it("does not settle wait() while a chunk's delivery is still pending past the exit grace window, and still delivers what was queued behind it once the delivery resolves", async () => {
+  it("does not settle wait() while a chunk's delivery is still pending past the exit grace window, even though a real pipe already delivered what the child wrote after it", async () => {
     // The defect this guards: a paused readable never emits `close`, so the exit-to-close
     // grace window used to treat "quiet because we paused it" the same as "quiet because the
-    // child is gone" and settled `wait()` while a chunk (and whatever the child wrote after
-    // it) still sat undelivered. The child here writes a second chunk and exits well before
-    // the stalled first delivery is released, so if `wait()` settles early, "before-exit-B"
-    // is silently dropped.
+    // child is gone" and settled `wait()` while a chunk still sat undelivered. Round 4's test-
+    // title finding: the second chunk here ("before-exit-B") is *not* what proves the guard --
+    // a real OS pipe drains whatever it already held once the child exits, pause or not (see
+    // `NodeStreamingProcessHandle`'s own doc comment), so `seen` already holds both chunks well
+    // before `releaseFirst()` is ever called; the assertion below confirms exactly that. What
+    // the guard actually protects is `wait()` refusing to settle while the *first* chunk's
+    // delivery is still unresolved, regardless of what a chatty pipe delivered around it.
     const runner = new NodeProcessRunner();
     const seen: string[] = [];
     let releaseFirst!: () => void;
@@ -260,6 +263,9 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     // (1s) the old code settled on, while the first chunk's delivery is deliberately still
     // unresolved.
     await new Promise((resolve) => setTimeout(resolve, 1_500));
+    // Both chunks already arrived -- the paused stream drained at EOF -- and `wait()` still
+    // has not settled, since the first delivery is what it is actually waiting on.
+    expect(seen.join("")).toBe("before-exit-Abefore-exit-B");
     let settledEarly = false;
     void handle.wait().then(() => {
       settledEarly = true;
@@ -328,6 +334,42 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     ]);
   });
 
+  it("does not crash the process when onChunk throws synchronously -- treated as a failed delivery instead", async () => {
+    // `onChunk` is typed `void | Promise<void>`, but nothing stops a transport's own
+    // implementation from throwing synchronously. Called bare inside a `data` listener (round
+    // 4 hardening), that throw becomes an uncaughtException that takes the whole daemon down
+    // over one bad chunk -- latent today because both real callers (`daemon/server.ts`,
+    // `http/app.ts`) happen to be `async`, but nothing enforces that. A `process.on
+    // ("uncaughtException", ...)` listener is the only way to observe the pre-fix crash from
+    // inside a test without actually taking this process down, so this registers one, asserts
+    // it never fires, and removes it again in `finally` regardless of outcome.
+    const uncaught: unknown[] = [];
+    const onUncaughtException = (error: unknown): void => {
+      uncaught.push(error);
+    };
+    process.on("uncaughtException", onUncaughtException);
+
+    try {
+      const runner = new NodeProcessRunner();
+      const handle = runner.spawnStreaming(
+        process.execPath,
+        ["-e", "process.stdout.write('boom'); process.exit(0);"],
+        {
+          onChunk: () => {
+            throw new Error("onChunk threw synchronously");
+          },
+        },
+      );
+
+      const result = await handle.wait();
+      expect(result.code).toBe(0);
+    } finally {
+      process.off("uncaughtException", onUncaughtException);
+    }
+
+    expect(uncaught).toEqual([]);
+  }, 10_000);
+
   it("writes `input` to the child's stdin and then closes it", async () => {
     // ADR 0005 §19c's one-shot stdin: the child sees the string and then EOF, which is what
     // lets a line-oriented command that reads stdin finish at all.
@@ -360,6 +402,32 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     const result = await handle.wait();
     expect(result.code).toBeNull();
     expect(exitCodeOf(result)).toBeGreaterThan(128);
+  });
+
+  it("does not signal a process group once the child has already exited (round 4 hardening)", async () => {
+    // `killProcessTree` calls `process.kill(-pid, signal)` directly, bypassing
+    // `ChildProcess.kill`'s own "already exited" guard. `wait()` can be deferred up to
+    // `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` past the real `exit` event (a chatty grandchild, a
+    // stalled delivery), and Node frees a reaped pid for the kernel to recycle once it has
+    // been waited on -- so a timeout firing in that window used to risk signalling a process
+    // group the kernel had already handed to an unrelated process. Guarded on
+    // `child.exitCode`/`child.signalCode`, both still `null` only while genuinely running.
+    const runner = new NodeProcessRunner();
+    const killSpy = vi.spyOn(process, "kill");
+
+    try {
+      const handle = runner.spawnStreaming(process.execPath, ["-e", "process.exit(0)"], {
+        onChunk: () => {},
+      });
+      const result = await handle.wait();
+      expect(result.code).toBe(0);
+
+      handle.kill("SIGTERM");
+
+      expect(killSpy).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   it("kills the grandchildren too, because the signal goes to the process group", async () => {

@@ -30,6 +30,23 @@ describe("OutputRelay", () => {
     expect(relay.bufferedCount).toBe(0);
   });
 
+  it("can hold more than one chunk for the same stream at once -- this class enforces no per-stream limit", () => {
+    // Round 4 hardening note: the class doc used to claim "at most one chunk per stream ... is
+    // ever held here at once", on the theory that the process runner always pauses at the
+    // first unresolved delivery. That is not what a real OS pipe does at EOF -- a paused
+    // readable still drains whatever it already held as part of noticing the child exited
+    // (verified against real Node: two chunks landing in the same tick, see
+    // `NodeStreamingProcessHandle`'s own doc comment) -- so `push` can be, and here is, called
+    // twice for `stdout` before either delivery resolves. Nothing in `OutputRelay` itself
+    // limits this; what actually bounds it is the OS pipe buffer's own size.
+    const relay = new OutputRelay();
+
+    relay.push({ chunk: "first", stream: "stdout" });
+    relay.push({ chunk: "second", stream: "stdout" });
+
+    expect(relay.bufferedCount).toBe(2);
+  });
+
   it("keeps nothing at all once the client is gone, however much the command writes", () => {
     // The command deliberately keeps running after a disconnect, for up to `exec.timeoutMs`.
     // If its output were retained meanwhile, one request per agent token would be a

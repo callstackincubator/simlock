@@ -323,6 +323,14 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
   readonly #result: Promise<StreamingProcessResult>;
   #chunkCount = 0;
   #pendingDeliveries = 0;
+  /** Per-stream half of `#pendingDeliveries` -- the total is what the exit-settle path needs
+   * ("is anything at all still outstanding"), this is what `#forward`'s own `resume()` needs
+   * ("is *this* stream's own last outstanding delivery the one that just settled"). A stream
+   * can hold more than one outstanding delivery at once (a paused readable still drains
+   * whatever it already had at EOF -- see the class doc), so resuming on any settle rather
+   * than this stream's own count reaching zero would resume it while another delivery on the
+   * same stream is still unaccounted for. */
+  #pendingByStream: Record<"stdout" | "stderr", number> = { stderr: 0, stdout: 0 };
   #deliveryWaiters: Array<() => void> = [];
 
   constructor(
@@ -433,19 +441,35 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
     stream.setEncoding("utf8");
     stream.on("data", (chunk: string) => {
       this.#chunkCount += 1;
-      const delivered = onChunk(name, chunk);
+      // `onChunk` is typed `void | Promise<void>`, but nothing enforces that a transport's
+      // implementation never throws synchronously (a bug in a socket write, say). Called bare
+      // inside a `data` listener, that throw would become an uncaught exception and take the
+      // whole daemon down over one bad chunk delivery -- caught here and treated exactly like
+      // a delivery whose returned promise rejected: a failed delivery, not a crash.
+      let delivered: void | Promise<void>;
+      try {
+        delivered = onChunk(name, chunk);
+      } catch (error) {
+        delivered = Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      }
       if (delivered === undefined) return;
       // The consumer is not ready for more yet. Pausing the readable stops this child at the
       // pipe -- it fills the OS buffer and then blocks in its own `write` -- which is the only
       // place backpressure can be applied without holding the bytes somewhere. Resumed on
       // either outcome: a failed delivery (a dead socket) must not wedge the process, and the
       // exec timeout still bounds a child nobody drains. Tracked in `#pendingDeliveries` so the
-      // exit settle path can tell "paused waiting on the consumer" apart from "child is gone".
+      // exit settle path can tell "paused waiting on the consumer" apart from "child is gone",
+      // and separately in `#pendingByStream` so `resume()` fires only once *this* stream's own
+      // outstanding count reaches zero -- not on any delivery settling, which would resume a
+      // stream while one of its own other deliveries (two chunks landing before either
+      // resolves, e.g. at EOF) is still unaccounted for.
       this.#pendingDeliveries += 1;
+      this.#pendingByStream[name] += 1;
       stream.pause();
       const settleDelivery = (): void => {
         this.#pendingDeliveries -= 1;
-        stream.resume();
+        this.#pendingByStream[name] -= 1;
+        if (this.#pendingByStream[name] === 0) stream.resume();
         const waiters = this.#deliveryWaiters;
         this.#deliveryWaiters = [];
         for (const waiter of waiters) waiter();
@@ -461,8 +485,19 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
  * already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
  * kill identically -- a timeout that only reached the direct child would leave a tool's own
  * subprocesses running.
+ *
+ * Guarded on `child.exitCode`/`child.signalCode` -- both still `null` only while the child is
+ * actually running -- before ever calling `process.kill(-pid, signal)` directly: that call
+ * bypasses `ChildProcess.kill`'s own "already exited" guard, and `wait()` can defer settling
+ * up to `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` past the real `exit` event (a chatty grandchild holding
+ * stdio open, or a stalled delivery). Node frees a reaped pid for the kernel to recycle, so a
+ * timeout firing in that window without this guard could signal a process group the kernel has
+ * already handed to someone else -- latent before this PR, but `device.exec` is what makes the
+ * timing remotely triggerable.
  */
 function killProcessTree(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+
   if (process.platform === "win32") {
     child.kill(signal);
     return;
