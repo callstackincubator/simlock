@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,31 +31,46 @@ const FORBIDDEN_IMPORT_PREFIXES = ["../core", "../drivers", "../http", "../cli",
  */
 const ALLOWED_DAEMON_IMPORTS = ["../daemon/dispatch.js"];
 
+/**
+ * Recursive and by relative path (M4): a flat, non-recursive listing let a future subdirectory
+ * under `src/gateway/` skip this test's notice entirely, silently, the moment one was added --
+ * exactly the kind of gap that should fail loudly instead. `recursive: true` is Node 20+; the
+ * repo requires Node 22.
+ */
+function sourceFilesRecursive(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter(
+      (entry) => entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts"),
+    )
+    .map((entry) => join(entry.parentPath, entry.name));
+}
+
 describe("gateway module boundary", () => {
-  const sourceFiles = readdirSync(gatewayDir).filter(
-    (name) => name.endsWith(".ts") && !name.endsWith(".test.ts"),
-  );
+  const sourceFiles = sourceFilesRecursive(gatewayDir);
 
   it("found the gateway's own source files", () => {
     expect(sourceFiles.length).toBeGreaterThan(0);
   });
 
-  it.each(sourceFiles)("%s imports no engine module", (fileName) => {
-    const contents = readFileSync(join(gatewayDir, fileName), "utf8");
+  it.each(sourceFiles.map((path) => [path.slice(gatewayDir.length + 1), path] as const))(
+    "%s imports no engine module",
+    (relativePath, filePath) => {
+      const contents = readFileSync(filePath, "utf8");
 
-    for (const specifier of importSpecifiers(stripComments(contents))) {
-      for (const forbidden of FORBIDDEN_IMPORT_PREFIXES) {
-        expect({ fileName, specifier, startsWith: specifier.startsWith(forbidden) }).toEqual({
-          fileName,
-          specifier,
-          startsWith: false,
-        });
+      for (const specifier of importSpecifiers(stripComments(contents))) {
+        for (const forbidden of FORBIDDEN_IMPORT_PREFIXES) {
+          expect({
+            fileName: relativePath,
+            specifier,
+            startsWith: specifier.startsWith(forbidden),
+          }).toEqual({ fileName: relativePath, specifier, startsWith: false });
+        }
+        if (specifier.startsWith("../daemon")) {
+          expect(ALLOWED_DAEMON_IMPORTS).toContain(specifier);
+        }
       }
-      if (specifier.startsWith("../daemon")) {
-        expect(ALLOWED_DAEMON_IMPORTS).toContain(specifier);
-      }
-    }
-  });
+    },
+  );
 
   it("the one daemon module the gateway imports is itself free of core", () => {
     const contents = stripComments(readFileSync(join(daemonDir, "dispatch.ts"), "utf8"));
@@ -67,20 +83,70 @@ describe("gateway module boundary", () => {
   });
 });
 
+describe("sourceFilesRecursive", () => {
+  // M4: the other half of the gap -- a flat `readdirSync` never looked inside a subdirectory at
+  // all, so a module placed under one skipped this whole suite silently rather than failing it.
+  it("descends into a subdirectory, and still skips test files there", () => {
+    const dir = mkdtempSync(join(tmpdir(), "simlock-boundary-test-"));
+    try {
+      mkdirSync(join(dir, "nested"));
+      writeFileSync(join(dir, "top.ts"), "export {};");
+      writeFileSync(join(dir, "nested", "deep.ts"), "export {};");
+      writeFileSync(join(dir, "nested", "deep.test.ts"), "export {};");
+
+      const found = sourceFilesRecursive(dir)
+        .map((path) => path.slice(dir.length + 1))
+        .sort();
+
+      expect(found).toEqual(["nested/deep.ts", "top.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("importSpecifiers", () => {
+  // M4: the gap the first review round found -- a dynamic `await import(...)` routed around
+  // every check above without either of these.
+  it("catches a dynamic import, not just a static `from`", () => {
+    expect(importSpecifiers('const mod = await import("../core/registry.js");')).toContain(
+      "../core/registry.js",
+    );
+  });
+
+  it("catches a bare side-effect import with no `from` clause", () => {
+    expect(importSpecifiers('import "../core/registry.js";')).toContain("../core/registry.js");
+  });
+
+  it("still catches an ordinary static import exactly once", () => {
+    expect(importSpecifiers('import { x } from "../core/registry.js";')).toEqual([
+      "../core/registry.js",
+    ]);
+  });
+});
+
 /** Strips block and line comments so a specifier that appears only in prose (a doc comment
  * naming a forbidden import, as several in this module do) is never mistaken for a real one. */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
 
-/** Every `from "…"` specifier in the (comment-stripped) text -- catches formatter-wrapped
- * multi-line imports too, since the `from "…"` clause always lands on one line. */
+/**
+ * Every module specifier a static `import ... from "…"`, a bare side-effect `import "…"`, a
+ * re-export (`export ... from "…"`), or a dynamic `await import("…")` names, in the
+ * (comment-stripped) text. Formatter-wrapped multi-line static imports are still caught because
+ * the `from "…"` clause always lands on one line; the dynamic form is its own pattern (M4) --
+ * without it, a boundary this test enforces on every static import could be routed around with
+ * one `await import("../core/registry.js")` and this suite would stay green.
+ */
 function importSpecifiers(contents: string): string[] {
   const specifiers: string[] = [];
-  const pattern = /from\s*["']([^"']+)["']/g;
-  for (const match of contents.matchAll(pattern)) {
-    const specifier = match[1];
-    if (specifier !== undefined) specifiers.push(specifier);
+  const patterns = [/(?:from|import)\s*["']([^"']+)["']/g, /import\s*\(\s*["']([^"']+)["']/g];
+  for (const pattern of patterns) {
+    for (const match of contents.matchAll(pattern)) {
+      const specifier = match[1];
+      if (specifier !== undefined) specifiers.push(specifier);
+    }
   }
   return specifiers;
 }
