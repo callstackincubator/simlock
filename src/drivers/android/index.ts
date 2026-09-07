@@ -274,7 +274,13 @@ const STOPS_A_RUNNING_DEVICE =
  * `--version` and `--help` are also allowed through, but not as globals with an arity: adb
  * answers them on their own, before it ever looks for a subcommand (`-h` gets no such
  * treatment and is `unknown command` on real adb), so for this scan they *are* the
- * subcommand rather than something that precedes one.
+ * subcommand rather than something that precedes one -- and only when nothing follows them.
+ * adb answers `--version`/`--help` and exits without ever looking at the rest of the line, so
+ * this driver has no way to vouch for what comes after one: `["--version", "-P", "5037",
+ * "shell", "id"]` is verified against real adb to print the version and exit 0, never reaching
+ * the `-P`/`shell` that follow, but a scan that let them ride along on the strength of
+ * `--version` ending it would wave through exactly the kind of unvetted tail this allow list
+ * exists to refuse everywhere else.
  */
 const SELF_CONTAINED_ACTIONS: readonly string[] = ["--version", "--help"];
 
@@ -286,29 +292,58 @@ function allowedGlobalArity(argument: string): "none" | "value" | undefined {
   return undefined;
 }
 
+/** Where `walkGlobals`'s scan over adb's globals grammar landed. `"subcommand"` is the ordinary
+ * case -- `index` is the first non-global argument, the one `driver.passthrough` runs and
+ * `device.exec`'s `isBareShell` checks for being `shell` alone. `"refused"` is a caller-supplied
+ * argument in the globals region this driver does not vouch for -- `argument` is exactly what
+ * `callerSuppliedScopeFlag` used to compute inline, kept as its own case here so `isBareShell`
+ * does not have to guess a subcommand out of a line this driver is about to refuse anyway.
+ * `"none"` is a globals-only line with nothing to run -- no subcommand exists for either caller
+ * to reason about. */
+type GlobalsWalkResult =
+  | { readonly kind: "subcommand"; readonly index: number }
+  | { readonly kind: "refused"; readonly argument: string }
+  | { readonly kind: "none" };
+
 /**
- * The caller-supplied argument that ends this driver's tolerance of the *globals* region, if
- * any: adb's globals come before the subcommand, and everything from the subcommand onwards
- * is that subcommand's operand -- `adb shell echo -Please` is a word to echo, not an attempt
- * to move the server. Same scan the iOS driver runs for `--set`/`--profiles`, for the same
- * reason, except this one refuses by *not* recognizing a flag rather than by recognizing it:
- * see `allowedGlobalArity`.
+ * Walks adb's globals grammar (`allowedGlobalArity`) up to the subcommand, the one place both
+ * `callerSuppliedScopeFlag` and `isBareShell` need to agree on where the globals region ends
+ * and the subcommand's own operands begin -- `adb shell echo -Please` is a word to echo, not
+ * an attempt to move the server, and `adb shell input text shell` is a command with `shell` as
+ * an *operand*, not the bare interactive shell `isBareShell` refuses without a terminal. Same
+ * scan the iOS driver runs for `--set`/`--profiles`, for the same reason, except this one
+ * refuses by *not* recognizing a flag rather than by recognizing it: see `allowedGlobalArity`.
  */
-function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
+function walkGlobals(args: readonly string[]): GlobalsWalkResult {
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
     // The first argument that is not a flag is the subcommand, and everything from there on is
     // its own -- unless it is the *value* of a global that takes one (`-s <serial>`), which is
     // why this walks adb's small global grammar rather than stopping at the first bare word.
-    if (!argument.startsWith("-")) return undefined;
-    if (SELF_CONTAINED_ACTIONS.includes(argument)) return undefined;
+    if (!argument.startsWith("-")) return { index, kind: "subcommand" };
+    // Self-contained only when it is the *sole* argument: adb answers it and exits without
+    // looking at anything else on the line, so anything after it is a tail this driver never
+    // gets to vouch for and must refuse rather than wave through (the hardening note above).
+    if (SELF_CONTAINED_ACTIONS.includes(argument)) {
+      if (args.length === 1) return { index, kind: "subcommand" };
+      return { argument, kind: "refused" };
+    }
     const arity = allowedGlobalArity(argument);
     // Not one of the four we allow through: refuse rather than guess whether it takes a value
     // (and so whether the *next* argument is really the subcommand or this flag's operand).
-    if (arity === undefined) return argument;
+    if (arity === undefined) return { argument, kind: "refused" };
     if (arity === "value") index += 1;
   }
-  return undefined;
+  return { kind: "none" };
+}
+
+/**
+ * The caller-supplied argument that ends this driver's tolerance of the *globals* region, if
+ * any -- see `walkGlobals`.
+ */
+function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
+  const walked = walkGlobals(args);
+  return walked.kind === "refused" ? walked.argument : undefined;
 }
 
 const REFUSED_ADB_SEQUENCES: readonly {
@@ -329,14 +364,23 @@ const REFUSED_ADB_SEQUENCES: readonly {
 
 /**
  * Whether this is `adb shell` with nothing after it -- the interactive shell. Recognised by
- * `shell` being the last argument rather than by parsing adb's option grammar: everything
- * before it is a global (`-s <serial>`, `-P <port>`) and everything after it is the command
- * to run, so "nothing after it" is exactly the case with no command. `adb shell -t` and
- * friends still pass, deliberately: they name a flag rather than a command, and refusing on
- * a guess would cost a working invocation to catch a hang the timeout already bounds.
+ * walking `walkGlobals` to find the actual *subcommand* -- the first argument past any
+ * `-s <serial>` / `-P <port>` / other global -- and checking that it is `shell` **and** the
+ * last argument, rather than by checking whether the line's last word happens to spell
+ * `shell`. The naive check refused `adb shell echo shell`, `adb shell input text shell`, and
+ * even `adb push ./x shell` -- every one of them ends in the word `shell` as an *operand*, not
+ * as the bare subcommand, so none of them is the interactive shell this refusal exists for
+ * (round 4, F2). A line whose globals region this driver refuses (`walkGlobals` returning
+ * `"refused"`) or that names no subcommand at all is never the bare shell either -- it is
+ * refused by `callerSuppliedScopeFlag`, or has nothing to run in the first place.
  */
 function isBareShell(args: readonly string[]): boolean {
-  return args.at(-1) === "shell";
+  const walked = walkGlobals(args);
+  return (
+    walked.kind === "subcommand" &&
+    args[walked.index] === "shell" &&
+    walked.index === args.length - 1
+  );
 }
 
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();

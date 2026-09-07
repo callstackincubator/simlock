@@ -551,7 +551,13 @@ export class Dispatcher {
       killTimer = this.options.clock.setTimer(EXEC_SIGKILL_GRACE_MS, () => {
         killQuietly(handle, "SIGKILL");
       });
-      await waited;
+      // Once the kill is issued, the timeout is the authoritative fact (ADR 0005 §19e) --
+      // `waited` rejecting with `ExecOutputDeliveryStalledError` (a consumer that stopped
+      // reading is *why* the command outran its timeout in the first place: the pause that
+      // stops it finishing is the same pause that stalls delivery) is a consequence of the
+      // timeout, not a competing answer to it. Swallowed here rather than left to reject
+      // this `await` and skip the throw below.
+      await waited.catch(() => undefined);
       // `EXEC_TIMEOUT` rather than the exit code the kill produced: "we stopped it" and "it
       // failed" are different facts, and only the first tells a caller to raise the limit.
       throw new DispatchError(

@@ -14,6 +14,7 @@ import {
 import { classifyError, StartupFailedError } from "../daemon/error-code.js";
 import { DoctorUnavailableError, NukeUnavailableError } from "../daemon/dispatcher.js";
 import { ERROR_TABLE } from "../contract/index.js";
+import { ExecOutputDeliveryStalledError } from "../ports/index.js";
 import {
   errorResponse,
   HttpApiError,
@@ -97,6 +98,15 @@ describe("mapError", () => {
   it("collapses an unrecognized error to 500 INTERNAL without leaking its message", () => {
     const mapped = mapError(new Error("some internal implementation detail, e.g. a stack frame"));
     expect(mapped).toEqual({ code: "INTERNAL", message: "Internal error", status: 500 });
+  });
+
+  // Round 4, F1: this used to be unrecognized -- not "explicitly INTERNAL", just absent from
+  // `classifyError` entirely, which is what let it fall through the *other* branch this
+  // finding fixes (Dispatcher#awaitExec's timeout throw being pre-empted by this very
+  // rejection). Asserted directly against `classifyError`, not just `mapError`'s ??
+  // "INTERNAL" default, because that default would hide the branch's absence.
+  it("classifies ExecOutputDeliveryStalledError explicitly, rather than leaving it to fall through unrecognized", () => {
+    expect(classifyError(new ExecOutputDeliveryStalledError())).toBe("INTERNAL");
   });
 
   it("collapses a non-Error thrown value the same way", () => {

@@ -1155,6 +1155,40 @@ describe("Dispatcher: device.exec", () => {
 
       await expect(pending).rejects.toThrow(ExecOutputDeliveryStalledError);
     }, 10_000);
+
+    it("reports EXEC_TIMEOUT, not the stalled-delivery error it provokes, when a consumer that stopped reading is why the command outran its timeout", async () => {
+      // The common path, not an exotic one: a consumer that stops reading is *why* a
+      // streaming command outruns its timeout in the first place -- the backpressure pause
+      // that stops the child finishing is the same pause that stalls this chunk's delivery.
+      // `exec.timeoutMs` firing and killing the child must still be the answer the caller
+      // sees, not the stalled-delivery rejection that killing it provokes as a side effect.
+      const { clock, dispatcher, leaseId } = await withLease({
+        exec: { timeoutMs: 50 },
+        passthroughOverride: realCommand("process.stdout.write('x'); setInterval(() => {}, 1000);"),
+        processRunner: new NodeProcessRunner(),
+      });
+
+      const pending = dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "simctl" },
+        session({
+          onOutput: () =>
+            new Promise<void>(() => {
+              // Never resolves: the stream is paused on this chunk's delivery for the rest
+              // of the test, exactly as a client that opened the stream and stopped reading
+              // would leave it.
+            }),
+          principal: "tok_agent",
+        }),
+      );
+
+      // Let the real child actually spawn and write its one chunk before the timeout fires,
+      // so the pending delivery this test depends on genuinely exists.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      clock.advance(50);
+
+      await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+    }, 10_000);
   });
 });
 

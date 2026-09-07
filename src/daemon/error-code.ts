@@ -32,6 +32,7 @@ import {
   UnknownModelError,
   UnknownPassthroughToolError,
 } from "../core/index.js";
+import { ExecOutputDeliveryStalledError } from "../ports/index.js";
 import type { SimlockErrorCode } from "../contract/index.js";
 import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./dispatcher.js";
 import { AdminAuthenticationFailedError } from "./session.js";
@@ -115,6 +116,16 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof NukeUnavailableError) {
     return "NUKE_UNAVAILABLE";
+  }
+  // `device.exec`'s timeout path (`Dispatcher#awaitExec`) swallows this one before it can
+  // reach here -- once the kill is issued, `EXEC_TIMEOUT` is the authoritative answer, not a
+  // race with this rejection. What lands here is the other case: a command that exited on its
+  // own while a chunk's delivery to a stalled consumer was still outstanding. There is no more
+  // specific code for "something may have been dropped" than `INTERNAL`, but the branch is
+  // explicit rather than left to a transport's own `?? "INTERNAL"` default, so it reads as a
+  // deliberate classification instead of an unrecognized error that happened to fall through.
+  if (error instanceof ExecOutputDeliveryStalledError) {
+    return "INTERNAL";
   }
   return undefined;
 }

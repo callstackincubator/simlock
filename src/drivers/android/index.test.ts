@@ -1899,7 +1899,35 @@ describe("AndroidDriver.create", () => {
     }
   });
 
-  it("refuses a bare `adb shell` only where the caller has no terminal", async () => {
+  it("refuses `--version`/`--help` with a tail, rather than treating them as ending the globals scan unconditionally", async () => {
+    // adb answers `--version`/`--help` and exits without ever looking at the rest of the line
+    // (confirmed against real adb: it prints the version and exits 0), so this scan has no way
+    // to vouch for anything after one -- and must not wave it through on the strength of an
+    // action that is safe only alone. Hardening item from round 4: verified ALLOWED before this
+    // fix, letting a caller-supplied `-P`/`-H` ride past unchecked behind either flag.
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    for (const args of [
+      ["--version", "-P", "5037", "shell", "id"],
+      ["--help", "-H", "evil", "shell", "id"],
+    ]) {
+      expect(() => driver.passthrough(args), args.join(" ")).toThrow(PassthroughRefusedError);
+      expect(() => driver.passthrough(args), args.join(" ")).toThrow(
+        /supplies the adb server itself/,
+      );
+    }
+
+    // Alone, either is still the self-answering command it always was.
+    expect(driver.passthrough(["--version"]).args).toEqual([
+      "-P",
+      String(adbServerPort),
+      "--version",
+    ]);
+    expect(driver.passthrough(["--help"]).args).toEqual(["-P", String(adbServerPort), "--help"]);
+  });
+
+  it("refuses a bare `adb shell` only where the caller has no terminal, never merely because `shell` is the last word", async () => {
     // ADR 0005 §19c: `device.exec` runs the command on this machine with pipes and no pty, so
     // an interactive shell there is a process reading a pipe nothing will ever write to --
     // it would hang until `exec.timeoutMs` killed it. Locally, where the CLI hands the tool
@@ -1916,7 +1944,11 @@ describe("AndroidDriver.create", () => {
     ).toThrow(PassthroughRefusedError);
 
     // A shell with something to run is not the interactive shell, and neither is anything
-    // else -- the refusal is about the missing command, not about `shell`.
+    // else -- the refusal is about the missing command, not about `shell`. Round 4, F2: this
+    // is the case the naive "does the line end in the word `shell`" check got wrong -- every
+    // one of these genuinely ends in `shell`, but as an operand of an earlier subcommand
+    // (`shell`, `push`), never as the bare subcommand itself, so none of them is the
+    // interactive shell this refusal exists for.
     expect(driver.passthrough(["shell", "getprop"], { hasTerminal: false }).args).toEqual([
       "-P",
       String(adbServerPort),
@@ -1924,6 +1956,18 @@ describe("AndroidDriver.create", () => {
       "getprop",
     ]);
     expect(driver.passthrough(["devices"], { hasTerminal: false }).args).toContain("devices");
+    for (const args of [
+      ["shell", "echo", "shell"],
+      ["shell", "input", "text", "shell"],
+      ["shell", "shell"],
+      ["push", "./x", "shell"],
+    ]) {
+      expect(driver.passthrough(args, { hasTerminal: false }).args, args.join(" ")).toEqual([
+        "-P",
+        String(adbServerPort),
+        ...args,
+      ]);
+    }
 
     // And with a terminal (the local `simlock adb shell`, and the default when nothing says
     // otherwise) it is proxied like any other command.

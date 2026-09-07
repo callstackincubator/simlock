@@ -1423,6 +1423,21 @@ describe("IosSimctlDriver", () => {
     },
   );
 
+  it("refuses any unrecognized flag ahead of the subcommand, rather than skipping over it as presumed harmless", async () => {
+    // Round 4, F6: structurally the same escape round 3 closed on the Android side
+    // (`--reply-fd 9 -H attacker.example`). Before this fix, an unrecognized `-...` token was
+    // treated as a no-value flag and the scan continued to the next argument -- so a
+    // caller-supplied global's *value* was read as the subcommand, and the real
+    // `--set`/`--profiles` behind it was never seen by `#assertProxyable` at all: this exact
+    // line used to stop the scan at `/tmp` (mistaken for the subcommand), so the trailing
+    // `--set /evil` was never scanned for refusal and rode through to `xcrun simctl` unchecked.
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["-x", "/tmp", "--set", "/evil", "boot", "UDID"])).toThrow(
+      PassthroughRefusedError,
+    );
+  });
+
   it("refuses to shut down every device in the set at once", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
 

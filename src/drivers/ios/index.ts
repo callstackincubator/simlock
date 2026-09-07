@@ -1292,9 +1292,20 @@ export class IosSimctlDriver implements Driver {
 
   /**
    * The subcommand and its operands, refusing on the way anything that could be mistaken
-   * for a subcommand. A caller-supplied `--set`/`--profiles` (any spelling, `--set=<path>`
-   * included) is the only way a non-flag argument can precede the subcommand, so once
-   * those are gone the first non-flag argument *is* the subcommand.
+   * for a subcommand. simctl's usage is `simctl [--set <path>] [--profiles <path>]
+   * <subcommand>`, and this driver has no legitimate caller-supplied global to allow through
+   * at all -- unlike adb's `-s`/`-t`/`-d`/`-e`, which is why the Android driver's own version
+   * of this scan (`allowedGlobalArity`) is a real allow list rather than "refuse everything".
+   * Round 4, F6: this used to allow anything spelled `-...` other than `--set`/`--profiles`
+   * to pass by, on the theory that an unrecognized flag takes no value -- structurally the
+   * same bug round 3 fixed on the Android side (`--reply-fd 9 -H attacker.example`): an
+   * unrecognized flag with a value reads that value as the subcommand and lets the real
+   * `--set`/`--profiles` behind it slide past every refusal below unseen
+   * (`["-x", "/tmp", "--set", "/evil", "boot", "UDID"]` used to stop the scan at `/tmp`). Since
+   * nothing legitimate can precede the subcommand here, the fix does not need adb's value/no
+   * -value bookkeeping: **every** `-...` token in this position is refused, named or not,
+   * mirroring `allowedGlobalArity`'s "unrecognized is refused, not assumed harmless" rather
+   * than pattern-matching for the two names already known to be dangerous.
    */
   #subcommand(args: readonly string[]): readonly string[] {
     for (const [index, argument] of args.entries()) {
@@ -1306,6 +1317,14 @@ export class IosSimctlDriver implements Driver {
           `Refusing \`simlock simctl ${argument}\`: \`simlock simctl\` supplies the device set itself, and a caller-supplied \`--${flag}\` would point simctl somewhere Simlock does not manage. Drop the flag -- the command is already scoped -- or run \`xcrun simctl\` directly if you mean to leave Simlock's set.`,
         );
       }
+      // Not `--set`/`--profiles` by name, but simctl has no other legitimate global here --
+      // refused on sight rather than skipped over as presumed harmless, the same way an
+      // unrecognized adb global is (`allowedGlobalArity`). Skipping it is exactly what let a
+      // caller-supplied `--set`/`--profiles` hide behind an unrecognized flag's *value*.
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock simctl ${argument}\`: \`simlock simctl\` supplies the device set itself, and does not recognize any caller-supplied argument ahead of the subcommand. Drop the flag -- the command is already scoped -- or run \`xcrun simctl\` directly if you mean to leave Simlock's set.`,
+      );
     }
     return [];
   }
