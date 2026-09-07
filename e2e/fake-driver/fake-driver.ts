@@ -349,7 +349,7 @@ export class OutOfProcessFakeDriver implements Driver {
     // proves the fact travels: the daemon tells the driver there is no terminal, and the
     // driver -- not the daemon -- decides what that rules out. Like the refusal lists above,
     // this is a mirror and never evidence for the real driver's own rule.
-    if (context?.hasTerminal === false && this.platform === "android" && args.at(-1) === "shell") {
+    if (context?.hasTerminal === false && this.platform === "android" && isBareShell(args)) {
       throw new PassthroughRefusedError(
         this.passthroughTool,
         "Refusing `simlock adb shell` with no command: an interactive shell needs a terminal.",
@@ -490,6 +490,31 @@ function toError(platform: Platform, spec: FakeDriverErrorSpec): Error {
     platform: Platform,
   ) => Error;
   return factory(spec, platform);
+}
+
+/**
+ * Whether `args` is the bare interactive `adb shell` -- `shell` as the *subcommand*, with no
+ * command after it. `args.at(-1) === "shell"` is not that test: it also matches
+ * `adb shell input text shell` and `adb push ./x shell`, where `shell` is an operand, which is
+ * the defect round 4 fixed in the real Android driver (`walkGlobals`/`isBareShell`). A mirror
+ * that mirrors the bug is worse than no mirror, because the e2e's only refusal assertion runs
+ * through this driver.
+ *
+ * Deliberately smaller than the real grammar: it skips flags and the value of the few globals
+ * that take one, which is all the fleet e2e ever passes. It is still never evidence for the
+ * real driver's own rule -- see the note at the call site.
+ */
+const VALUE_TAKING_GLOBALS = ["-s", "-t", "-H", "-P", "-L", "--server-port"];
+
+function isBareShell(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (!argument.startsWith("-")) {
+      return argument === "shell" && index === args.length - 1;
+    }
+    if (VALUE_TAKING_GLOBALS.includes(argument)) index += 1;
+  }
+  return false;
 }
 
 function newestVersion(versions: readonly string[]): string | undefined {
