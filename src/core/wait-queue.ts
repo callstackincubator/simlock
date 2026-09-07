@@ -98,6 +98,12 @@ interface MutableWaiter extends Waiter {
   resolvePromise: (grant: LeaseGrant) => void;
   state: WaiterState;
   timer: TimerHandle | undefined;
+  /**
+   * The absolute clock reading `options.timeoutMs` counts down to, fixed the *first* time this
+   * waiter is ever armed and never moved afterward -- see `#armTimeout`'s own doc comment for why
+   * (pre-existing, now routinely triggered: round 2 review of ADR 0005's fleet queue).
+   */
+  deadlineAt: number | undefined;
 }
 
 export interface WaitQueueOptions {
@@ -171,6 +177,7 @@ export class WaitQueue {
       rejectPromise = reject;
     });
     const waiter: MutableWaiter = {
+      deadlineAt: undefined,
       id: `req_${this.options.idGenerator.generate()}`,
       onProgress: requestOptions.onProgress,
       options: requestOptions,
@@ -187,9 +194,29 @@ export class WaitQueue {
     return waiter;
   }
 
+  /**
+   * Pre-existing gap, now routinely triggered (round 2 review): a waiter that cycles
+   * `queued` -> `processing` -> `queued` again (a worker's own retry, or the gateway's stale-view
+   * re-queue) used to have its whole `timeoutMs` budget re-armed from zero on every return to
+   * `queued`, because `#armTimeout` only ever knew "start a fresh timer for the full duration."
+   * `deadlineAt` (fixed once, on the very first arm) is what makes the budget survive the cycle:
+   * a re-enqueue past that deadline is rejected on the spot instead of getting another full
+   * `timeoutMs`, and one still short of it gets only the time actually left.
+   */
   enqueue(waiter: Waiter): boolean {
     const mutable = this.#mutable(waiter);
     if (isTerminal(mutable.state)) return false;
+
+    if (mutable.deadlineAt !== undefined && this.options.clock.now() >= mutable.deadlineAt) {
+      if (this.reject(mutable, new QueueTimeoutError(mutable.id))) {
+        try {
+          this.options.onTimeout?.(mutable);
+        } catch {
+          // Queue wake-up is an observer of this committed timeout fact.
+        }
+      }
+      return false;
+    }
 
     if (!this.#waiters.includes(mutable)) {
       this.#waiters.push(mutable);
@@ -270,9 +297,24 @@ export class WaitQueue {
     return cancelled;
   }
 
+  /**
+   * Arms (or re-arms, after a cycle back through `queued`) this waiter's timeout. `deadlineAt` is
+   * computed once, the first time a waiter with a `timeoutMs` is ever armed, and never moved
+   * afterward -- every later call here (a re-enqueue `enqueue` already let through because the
+   * deadline had not yet passed) times the remaining budget against that same fixed deadline
+   * instead of starting a fresh `timeoutMs` window, which is what let the total wait exceed
+   * `timeoutMs` by a multiple across repeated `processing` <-> `queued` cycles before this fix.
+   *
+   * If the timer fires while `waiter.state !== "queued"` (mid-attempt), it does *not* reject --
+   * the request is actively being handled, and this class does not know whether that attempt is
+   * about to succeed. `enqueue`'s own deadline check is what catches this case at the next
+   * re-queue, since `waiter.timer` is already cleared by the time this branch returns.
+   */
   #armTimeout(waiter: MutableWaiter): void {
     if (waiter.timer !== undefined || waiter.options.timeoutMs === undefined) return;
-    waiter.timer = this.options.clock.setTimer(waiter.options.timeoutMs, () => {
+    waiter.deadlineAt ??= this.options.clock.now() + waiter.options.timeoutMs;
+    const remainingMs = Math.max(0, waiter.deadlineAt - this.options.clock.now());
+    waiter.timer = this.options.clock.setTimer(remainingMs, () => {
       waiter.timer = undefined;
       if (waiter.state !== "queued") return;
       if (this.reject(waiter, new QueueTimeoutError(waiter.id))) {

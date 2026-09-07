@@ -122,6 +122,56 @@ describe("WaitQueue", () => {
     expect(timedOut).toHaveBeenCalledWith(queued);
   });
 
+  // Pre-existing gap, now routinely triggered by the gateway's own stale-view re-queue (round 2
+  // review): a waiter cycling queued -> processing -> queued used to have `timeoutMs` re-armed
+  // from zero on every return to `queued`, so the total wait before `QUEUE_TIMEOUT` could exceed
+  // the caller's own budget by a multiple. These two tests pin the fixed behaviour: the budget is
+  // one fixed deadline from the *first* enqueue, survives any number of cycles, and a re-enqueue
+  // past that deadline settles immediately rather than granting another full window.
+  it("rejects immediately on a re-enqueue past the original deadline, instead of granting a fresh timeoutMs window", async () => {
+    const timedOut = vi.fn();
+    const { clock, queue } = createQueue(timedOut);
+    const waiter = createWaiter(queue, "agent", { timeoutMs: 100 });
+
+    queue.enqueue(waiter);
+    clock.advance(60); // still well inside the original 100ms budget
+    queue.markProcessing(waiter);
+    // The original timer (armed for the full 100ms at t=0) fires during this advance, at
+    // t=100 -- but the waiter is `processing`, not `queued`, so `#armTimeout`'s own timer
+    // callback does nothing here. Total elapsed is now 120ms, past the original deadline.
+    clock.advance(60);
+    expect(waiter.state).toBe("processing");
+
+    // A stale-view (or worker retry) re-queue lands after the deadline already passed.
+    expect(queue.enqueue(waiter)).toBe(false);
+
+    await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
+    expect(waiter.state).toBe("rejected");
+    expect(queue.depth).toBe(0);
+    expect(timedOut).toHaveBeenCalledWith(waiter);
+  });
+
+  it("re-arms only the time actually remaining on a re-enqueue before the deadline, so the total wait never exceeds the original timeoutMs", async () => {
+    const { clock, queue } = createQueue();
+    const waiter = createWaiter(queue, "agent", { timeoutMs: 100 });
+
+    queue.enqueue(waiter);
+    clock.advance(30);
+    queue.markProcessing(waiter);
+    clock.advance(20); // t=50: still well before the t=100 deadline
+    expect(queue.enqueue(waiter)).toBe(true); // re-queued, e.g. a stale-view NO_CAPACITY
+    expect(waiter.state).toBe("queued");
+
+    // If this cycle had re-armed a fresh 100ms window, the waiter would still be pending here
+    // (t=50 + 49ms = 99ms of its own window, or 149ms of total elapsed time either way). It
+    // does not: the original deadline was t=100, and only 50ms of elapsed time remain from it.
+    clock.advance(49);
+    expect(waiter.state).toBe("queued");
+    clock.advance(1); // t=100: the original deadline, reached exactly once, not once per cycle
+    await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
+    expect(queue.depth).toBe(0);
+  });
+
   it("attaches and detaches queued progress without changing the request outcome", () => {
     const received: LeaseProgress[] = [];
     const reattached: LeaseProgress[] = [];
