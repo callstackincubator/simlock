@@ -362,7 +362,8 @@ against an ended lease answers `404 UNKNOWN_LEASE`.
 
 ### `POST /v1/leases/{id}/exec`
 
-Role: `agent` (own lease; `operator` any). Runs one `simctl`/`adb` command
+Role: `agent` (own lease); `operator` must name the lease's requester — see
+below. Runs one `simctl`/`adb` command
 **on the machine that owns the device** and streams its output back. This is
 what makes a leased device drivable from here at all: every other way of
 reaching one assumes the caller shares that machine's filesystem.

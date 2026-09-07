@@ -377,12 +377,11 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
       const { requesterId, ...body } = c.req.valid("json");
       // Requester identity is the token's over HTTP, never the body's -- except for an
       // `operator` token, which is the proxying case `device.exec` reads it for. An agent
-      // token that supplies one at all is refused rather than quietly ignored: a request that
-      // names an identity and is answered as if it had not is the kind of silence that reads
-      // like authorization.
-      if (requesterId !== undefined && identity.role !== "operator") {
-        throw forbidden("requesterId may only be supplied by an operator token");
-      }
+      // token that supplies one at all is refused, but by `device.exec`'s own `authorize`
+      // hook (round 4, F4) rather than a route-level check: ADR 0003 §2 puts a contract
+      // operation's answer in the dispatcher, not a transport, so the same request over the
+      // unix socket or a future uplink gets the same `FORBIDDEN` this route now inherits
+      // rather than defining.
 
       // Dispatched directly, like `renew`/`release` and unlike the single-lease *reads*: this
       // route mutates a device, so it answers `device.exec`'s own ownership hook -- 403 for

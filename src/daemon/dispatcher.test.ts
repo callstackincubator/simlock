@@ -875,12 +875,12 @@ describe("Dispatcher: device.exec", () => {
    * `ownsLease` for an agent and something stricter for an admin. The lease under test was
    * granted to principal `tok_agent`, so its `ownerId` and its `requesterId` are both that.
    */
-  it("gates an agent session on the lease it owns, ignoring any requesterId it sends", async () => {
+  it("gates an agent session on the lease it owns, and refuses any requesterId it sends outright (round 4, F4)", async () => {
     const runner = new ScriptedProcessRunner([{ match: command }]);
     const { dispatcher, leaseId } = await withLease({ processRunner: runner });
 
-    // (1) Someone else's lease: refused -- and naming its requester does not help, because an
-    // agent's `requesterId` is not read for authorization at all.
+    // (1) Someone else's lease: refused -- and naming its requester does not help, because a
+    // non-admin session may not name a `requesterId` at all, regardless of whose it is.
     await expect(
       dispatcher.dispatch(
         "device.exec",
@@ -897,12 +897,33 @@ describe("Dispatcher: device.exec", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(runner.calls).toEqual([]);
 
-    // (2) Its own lease: allowed, and a `requesterId` naming somebody else changes nothing --
-    // ignored means ignored in both directions.
+    // (2) Its own lease, but naming a `requesterId` -- refused outright, whether or not the
+    // name it chose happens to be its own. Round 4, F4: this used to be read and silently
+    // ignored (a rule that lived only in the HTTP route, `src/http/app.ts`, and so answered
+    // differently over the unix socket); a non-admin session naming an identity at all is now
+    // `FORBIDDEN` here, uniformly, on every transport.
     await expect(
       dispatcher.dispatch(
         "device.exec",
         { args: ["list", "devices"], leaseId, requesterId: "someone-else", tool: "simctl" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "tok_agent", tool: "simctl" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(runner.calls).toEqual([]);
+
+    // (2') Its own lease, no requesterId at all: allowed -- this is the ordinary case an agent
+    // actually uses.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
         session({ principal: "tok_agent", role: "agent" }),
       ),
     ).resolves.toEqual({ exitCode: 0 });

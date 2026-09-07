@@ -776,12 +776,15 @@ describe("lease routes", () => {
       expect(frames.at(-1)?.data).toMatchObject({ error: { code: "EXEC_TIMEOUT" } });
     });
 
-    it("forwards requesterId for an operator token and 403s an agent that supplies one", async () => {
+    it("forwards requesterId unchanged for both an operator and an agent token, leaving the FORBIDDEN decision to device.exec's own authorize hook", async () => {
       // Requester identity is never client-declared over HTTP (docs/HTTP-API.md,
-      // "Authentication"): the token is the identity. The one exception is an operator token
-      // proxying for someone -- the case ADR 0005 §19b/§27 needs. An agent that names an
-      // identity is refused rather than answered as if it had not: silence there would read
-      // like the field had been honoured.
+      // "Authentication"): the token is the identity, except for an operator token proxying
+      // for someone (ADR 0005 §19b/§27). Round 4, F4: this route used to decide on its own
+      // that an agent token may not supply `requesterId` at all, which left that rule living
+      // only in the HTTP transport (ADR 0003 §2 puts a contract operation's answer in the
+      // dispatcher). The rule moved into `device.exec`'s own `authorize` hook -- exercised
+      // directly in `dispatcher.test.ts` -- so this route now forwards `requesterId` exactly
+      // the same way for either token and merely surfaces whatever the dispatcher answers.
       const { app, dispatcher } = buildHarness();
 
       const asOperator = app.request("/v1/leases/lse_1/exec", {
@@ -800,14 +803,29 @@ describe("lease routes", () => {
       operatorCall.resolve({ exitCode: 0 });
       await asOperator;
 
-      const asAgent = await app.request("/v1/leases/lse_1/exec", {
+      // Forwarded exactly the same way for an agent token -- the route makes no distinction
+      // any more. `FakeDispatcher` has no `authorize` hook of its own to reject this with, so
+      // the rejection is simulated here (`DispatchError("FORBIDDEN", ...)`, precisely what the
+      // real dispatcher's `authorize` hook now throws for this case) to prove this route still
+      // surfaces it as a 403 rather than requiring a route-level check to produce one.
+      const asAgent = app.request("/v1/leases/lse_1/exec", {
         body: JSON.stringify({ args: ["list"], requesterId: "agent-7", tool: "simctl" }),
         headers: { ...agentAuth, "content-type": "application/json" },
         method: "POST",
       });
-      expect(asAgent.status).toBe(403);
-      expect(((await asAgent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
-      expect(dispatcher.calls.filter((call) => call.operation === "device.exec")).toHaveLength(1);
+      const agentCall = await waitForDispatch(dispatcher, "device.exec", 1);
+      expect(agentCall.input).toEqual({
+        args: ["list"],
+        leaseId: "lse_1",
+        requesterId: "agent-7",
+        tool: "simctl",
+      });
+      agentCall.reject(new DispatchError("FORBIDDEN", "Not authorized for device.exec"));
+      const asAgentResponse = await asAgent;
+      expect(asAgentResponse.status).toBe(403);
+      expect(((await asAgentResponse.json()) as { error: { code: string } }).error.code).toBe(
+        "FORBIDDEN",
+      );
 
       // A `null` for either optional is the documented example's own spelling, and normalizes
       // to an omitted field rather than a 400 -- including for an agent, which is not
@@ -817,7 +835,7 @@ describe("lease routes", () => {
         headers: { ...agentAuth, "content-type": "application/json" },
         method: "POST",
       });
-      const nullCall = await waitForDispatch(dispatcher, "device.exec", 1);
+      const nullCall = await waitForDispatch(dispatcher, "device.exec", 2);
       expect(nullCall.input).toEqual({ args: ["list"], leaseId: "lse_1", tool: "simctl" });
       nullCall.session.onStarted?.();
       nullCall.resolve({ exitCode: 0 });

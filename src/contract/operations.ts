@@ -276,8 +276,11 @@ export const deviceExec = defineOperation({
        * 0003 §4), not the connection's principal. Read **only on an admin session**, where it
        * is the gateway case: a gateway holds one admin session over its uplink and proxies
        * many agents through it, each under its own namespaced requester id (ADR 0005
-       * §19b/§27). An agent session's own is ignored for authorization -- it is gated on the
-       * lease it actually owns -- so this can never be used to borrow another agent's device.
+       * §19b/§27). A non-admin session that supplies one at all is refused by `authorize`
+       * below rather than having it quietly ignored -- ADR 0003 §2 puts a contract
+       * operation's answer in the dispatcher, not a transport, and a request that names an
+       * identity and is answered as if it had not is the kind of silence that reads like
+       * authorization (round 4, F4).
        */
       requesterId: z.string().optional(),
     })
@@ -293,8 +296,13 @@ export const deviceExec = defineOperation({
    * `ownsLease` for an agent, and something stricter for an admin.
    *
    * An **agent** session is gated exactly like `lease.renew`: its principal against the
-   * lease's `ownerId`. Whatever `requesterId` it sent is ignored here, which is what makes
-   * that field unusable as a way to borrow somebody else's device.
+   * lease's `ownerId`. It may not supply `requesterId` at all -- round 4, F4: this used to be
+   * read and then silently ignored, which left the rule "an agent may not name a
+   * `requesterId`" living only in the HTTP route (`src/http/app.ts`) rather than here, so the
+   * unix socket (and the future uplink, and any `simlock/client` consumer) answered a request
+   * naming an identity as if it had named none. A non-admin session naming one at all is now
+   * `FORBIDDEN` on every transport, uniformly, whether or not the name it chose happens to
+   * match anything real.
    *
    * An **admin** session does not get `ownsLease`'s bypass on this operation. Every other
    * admin-bypasses hook is about an operator reaching past ownership on their own machine;
@@ -312,6 +320,7 @@ export const deviceExec = defineOperation({
    */
   authorize: (input, context) => {
     if (context.role !== "admin") {
+      if (input.requesterId !== undefined) return false;
       const ownerId = context.ownerId(input.leaseId);
       return ownerId === undefined || ownerId === context.principal;
     }
