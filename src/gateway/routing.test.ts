@@ -47,7 +47,7 @@ describe("routing registry", () => {
 describe("warm-then-free policy", () => {
   const policy = createRoutingPolicy("warm-then-free");
 
-  it("prefers a worker with an unleased ready device matching the request", () => {
+  it("prefers a worker with a matching device already in the ready state (a warm hit)", () => {
     const cold = view("wrk_cold");
     const warm = view("wrk_warm", { devices: [deviceFixture("dev_1", "ready")] });
 
@@ -57,7 +57,11 @@ describe("warm-then-free policy", () => {
     });
   });
 
-  it("does not treat a leased device as a warm hit", () => {
+  // H10 (round 2 review): `deviceStateSchema` makes `ready`/`leased` mutually exclusive, so this
+  // (and the title above) prove the state filter -- "warm-hit" requires `ready` specifically --
+  // not some separate "is this device free to hand out" check a device already in `leased`
+  // state could otherwise still pass.
+  it("does not treat a device already in the leased state as a warm hit", () => {
     const leased = view("wrk_1", { devices: [deviceFixture("dev_1", "leased")] });
 
     expect(policy.select(REQUEST, [leased])?.reason).toBe("free-capacity");

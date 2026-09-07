@@ -91,7 +91,7 @@ describe("GatewayOwnerRoutedFacts", () => {
     expect(received).toEqual([]);
   });
 
-  it("resolves device-unhealthy/device-recovered the same way, without removing the lease (it is still active)", () => {
+  it("resolves device-unhealthy the same way, without removing the lease (it is still active)", () => {
     const eventBus = new EventBus(new FakeClock(1_000));
     const leaseIndex = new FleetLeaseIndex(PREFIX);
     leaseIndex.add({
@@ -124,6 +124,49 @@ describe("GatewayOwnerRoutedFacts", () => {
         leaseId: "wrk_1.lse_alice",
         ownerId: "alice-principal",
         type: "device-unhealthy",
+      },
+    ]);
+    expect(leaseIndex.resolve("wrk_1.lse_alice")).toBeDefined();
+  });
+
+  // H10 (round 2 review): the suite's own title used to claim this branch too ("device-unhealthy/
+  // device-recovered the same way"), but only ever emitted device.crash-detected -- the
+  // device-recovered branch (own-routed-facts.ts's "device.recovered" subscription) was correct
+  // by inspection but never actually exercised.
+  it("resolves device-recovered the same way, without removing the lease (it is still active)", () => {
+    const eventBus = new EventBus(new FakeClock(1_000));
+    const leaseIndex = new FleetLeaseIndex(PREFIX);
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_1.lse_alice",
+      grantedAt: 1,
+      ownerId: "alice-principal",
+      requesterId: "alice",
+      workerId: "wrk_1",
+      workerLeaseId: "lse_alice",
+    });
+    const facts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
+    const received: OwnerRoutedFact[] = [];
+    facts.subscribe((fact) => received.push(fact));
+
+    eventBus.emit(
+      "device.recovered",
+      {
+        attempts: 2,
+        deviceId: "dev_1",
+        duration: 1_500,
+        leaseId: "lse_alice",
+        workerId: "wrk_1",
+      } as unknown as EventMap["device.recovered"],
+      "lease-health-monitor",
+    );
+
+    expect(received).toEqual([
+      {
+        attempts: 2,
+        deviceId: "dev_1",
+        leaseId: "wrk_1.lse_alice",
+        ownerId: "alice-principal",
+        type: "device-recovered",
       },
     ]);
     expect(leaseIndex.resolve("wrk_1.lse_alice")).toBeDefined();

@@ -60,8 +60,13 @@ export interface FleetWaiter {
 export interface FleetQueueOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
-  /** Called after a timed-out waiter has been removed and rejected -- `FleetLeaseCoordinator`
-   * uses this to wake the dispatch loop the same way a release or a worker-view change does. */
+  /** Called after a timed-out waiter has been removed and rejected -- the rejection itself
+   * already happened inside `WaitQueue#armTimeout` by the time this fires; `FleetLeaseCoordinator`
+   * uses it only to report the gateway's own `lease.rejected` fact for that already-committed
+   * timeout (H10, round 2 review: this comment used to say it wakes the dispatch loop the same
+   * way a release or worker-view change does -- it does not; the timed-out waiter is already
+   * terminal and gone from the queue, and nothing here re-runs `#dispatch` for the *other*
+   * waiters still behind it). */
   readonly onTimeout?: (waiter: FleetWaiter) => void;
 }
 

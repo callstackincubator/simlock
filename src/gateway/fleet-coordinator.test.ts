@@ -395,6 +395,62 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ).toBe(true);
   });
 
+  // H10 (round 2 review): `request.dispatched` had no test at all -- not its payload, not
+  // emit-once, not §11's "first progress push counts as dispatched" rule. `progress` on
+  // `RequestLeaseOutcome` (`test-support.ts`) was added for exactly this and was dead code until
+  // these three tests started using it.
+  it("emits request.dispatched exactly once, on the worker's first progress push, not again when the grant lands afterward (§11)", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      grant: grantFixture(),
+      kind: "grant",
+      progress: [
+        { etaMs: 5_000, stage: "provisioning" },
+        { etaMs: 1_000, stage: "booting" },
+      ],
+    });
+    const dispatched: Array<{ requestId: string; workerId: string }> = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    const grant = await coordinator.request(REQUEST, requestOptions());
+
+    expect(dispatched).toEqual([{ requestId: expect.any(String) as string, workerId: "wrk_a" }]);
+    // Sanity: the request really did land where the event says it did.
+    expect(grant.lease.worker?.id).toBe("wrk_a");
+  });
+
+  it("emits request.dispatched when a grant lands with no progress push at all -- the ADR §11 rule's other half", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const dispatched: Array<{ requestId: string; workerId: string }> = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    await coordinator.request(REQUEST, requestOptions());
+
+    expect(dispatched).toEqual([{ requestId: expect.any(String) as string, workerId: "wrk_a" }]);
+  });
+
+  it("does not emit request.dispatched for a stale-view NO_CAPACITY -- the request stayed queued, never actually dispatched", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
+    const dispatched: unknown[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    void coordinator.request(REQUEST, requestOptions({ noWait: true }));
+    await tick();
+
+    expect(dispatched).toEqual([]);
+  });
+
   it("forwards device.exec with the namespaced requesterId reaching the scripted worker client", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
