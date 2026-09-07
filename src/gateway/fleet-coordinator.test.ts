@@ -874,6 +874,46 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
   });
 
+  it("reports a non-SimlockError from a forwarded renew as INTERNAL, never as WORKER_UNREACHABLE (H1, round 2 review)", async () => {
+    // A raw TypeError here is this coordinator's own bug, not a fact about the worker -- every
+    // real transport failure already arrives as a `kind: "transport"` SimlockError (the test
+    // above). Answering WORKER_UNREACHABLE for a value like this would misreport a gateway-side
+    // crash as "the machine is unreachable".
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lse_1",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lse_1",
+    });
+    client.renewLeaseQueue.push({ error: new TypeError("boom"), kind: "error" });
+
+    const rejection = await coordinator
+      .renew("wrk_a.lse_1", undefined)
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("INTERNAL");
+  });
+
+  it("reports a non-SimlockError from a forwarded lease.request as INTERNAL too, the same shape of failure #attempt answers directly (H1, round 2 review)", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ error: new TypeError("boom"), kind: "error" });
+
+    const rejection = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("INTERNAL");
+  });
+
   it("drops its own index entry when the worker answers UNKNOWN_LEASE to a release, instead of leaving a zombie behind (C3)", async () => {
     const { coordinator, directory, workers, leaseIndex } = harness();
     const client = new ScriptedWorkerClient();

@@ -490,8 +490,16 @@ export class FleetLeaseCoordinator {
     }
   }
 
+  /**
+   * H2 (round 2 review): `markProcessing`'s own `false` return -- the waiter is already terminal
+   * -- used to be ignored, issuing the RPC anyway. Masked in practice by every caller
+   * (`#admit`/`#dispatch`) only ever reaching this with a live waiter today, but nothing enforced
+   * that: a grant landing for a waiter that settled a moment earlier would still be indexed by
+   * `#settleGrant` while `queue.resolve` quietly answers `false`, leaving an orphan lease no
+   * client holds a reference to release.
+   */
   #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision): void {
-    this.#queue.markProcessing(waiter);
+    if (!this.#queue.markProcessing(waiter)) return;
     void this.#attempt(waiter, decision);
   }
 
@@ -596,8 +604,14 @@ export class FleetLeaseCoordinator {
       // to be called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart).
       // P2 (round 2 review): `#withLeaseRequestTimeout`'s own `DispatchError` (never a
       // `SimlockError` -- it never reached the worker at all) is forwarded as-is rather than
-      // falling into the generic "not a SimlockError" branch below, which would still answer the
-      // same `WORKER_UNREACHABLE` code but with a message that no longer says why.
+      // falling into the generic "not a SimlockError" branch below.
+      // H1 (round 2 review): a value that is neither a `DispatchError` this class raised nor a
+      // `SimlockError` the wire produced is not a fact about the worker at all -- every real
+      // transport failure is already a `kind: "transport"` `SimlockError` by the time it gets
+      // here (see the comment above), so anything else reaching this branch is a bug in this
+      // coordinator's own request-building code. `WORKER_UNREACHABLE` previously answered that
+      // too, misreporting a gateway-side crash as "the machine is unreachable"; `INTERNAL` is
+      // what `#forwardToWorker`'s matching branch now answers for the same shape of failure.
       this.#queue.reject(
         waiter,
         error instanceof DispatchError
@@ -605,8 +619,8 @@ export class FleetLeaseCoordinator {
           : isSimlockError(error)
             ? this.#classifyRelayedError(error, workerId)
             : new DispatchError(
-                "WORKER_UNREACHABLE",
-                `Worker ${workerId} did not answer lease.request`,
+                "INTERNAL",
+                `Unexpected error forwarding lease.request to worker ${workerId}`,
                 { workerId },
               ),
       );
@@ -702,7 +716,20 @@ export class FleetLeaseCoordinator {
       return await fn(client);
     } catch (error: unknown) {
       if (isSimlockError(error)) throw this.#classifyRelayedError(error, workerId);
-      throw error;
+      // H1 (round 2 review): rethrown unchanged before this fix, which let a `TypeError` in this
+      // coordinator's own request-building code surface exactly as if the worker itself had
+      // produced it -- no code, no `kind`, nothing a caller could branch on the way it could on
+      // every other failure this class answers. Every real transport failure already arrives as
+      // a `kind: "transport"` `SimlockError` (handled above), so anything else here is this
+      // gateway's own bug, not a fact about the worker -- `INTERNAL` names that, consistent with
+      // `#attempt`'s matching branch for the one forward this chokepoint does not cover
+      // (`lease.request`, bound by `#withLeaseRequestTimeout` instead).
+      if (error instanceof DispatchError) throw error;
+      throw new DispatchError(
+        "INTERNAL",
+        `Unexpected error forwarding a call to worker ${workerId}`,
+        { workerId },
+      );
     }
   }
 
