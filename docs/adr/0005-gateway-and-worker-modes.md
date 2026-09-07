@@ -111,10 +111,14 @@ physical machine.
 3. A worker joins a fleet with two keys: `gateway.url` and `gateway.token`
    (a join token), plus an optional `gateway.label` shown in views and on
    the lease. Nothing else on the worker changes; `http.enabled` is not
-   required for a worker. `gateway.url` is the gateway's base URL, from
-   which the worker derives the uplink endpoint (requirement 4); it should
-   be `wss://`, or plain `ws://`/`http://` only over loopback or inside the
-   operator's own tunnel, since Simlock terminates no TLS in v1. The two
+   required for a worker. `gateway.url` is the gateway's WebSocket base
+   URL, from which the worker derives the uplink endpoint (requirement 4);
+   it must be `wss://`, or plain `ws://` only over loopback or inside the
+   operator's own tunnel, since Simlock terminates no TLS in v1.
+   **`http://` and `https://` are rejected at load.** The uplink is a
+   WebSocket and nothing else is ever fetched from this URL, so one scheme
+   spelling keeps the key unambiguous, and a worker that names the wrong
+   scheme learns at start rather than at its first dial. The two
    keys are a pair: **in `mode: "worker"`, one without the other is
    rejected at load** and the daemon does not start, because a
    half-configured uplink would otherwise come up looking like an ordinary

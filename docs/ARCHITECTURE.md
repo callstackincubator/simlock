@@ -223,9 +223,10 @@ checked in this order on any client connection:
    The join token is a **bearer credential**, presented in the
    `Authorization` header of the uplink's upgrade request, so anything that
    can read that request can replay it. `gateway.url` should therefore be
-   `wss://` — or plain `ws://`/`http://` only over loopback or inside the
-   operator's own tunnel, the same rule the HTTP API already states for
-   itself and for the same reason: Simlock terminates no TLS in v1.
+   `wss://` — or plain `ws://` only over loopback or inside the operator's
+   own tunnel, the same rule the HTTP API already states for itself and for
+   the same reason: Simlock terminates no TLS in v1. Only those two schemes
+   are accepted; `http://`/`https://` are rejected at load.
 
 A missing or wrong credential fails the handshake with
 `ADMIN_AUTHENTICATION_FAILED` before any other request on that connection
