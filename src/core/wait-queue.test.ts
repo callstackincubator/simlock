@@ -172,6 +172,34 @@ describe("WaitQueue", () => {
     expect(queue.depth).toBe(0);
   });
 
+  it("never delivers a progress push to a waiter that already settled, even the very same tick (P3, round 2 review)", async () => {
+    // `enqueue` can reject synchronously once a waiter's deadline has already passed (the
+    // re-arm-only-remaining-time fix above); a caller that unconditionally pushes progress right
+    // after its own `enqueue` call (`LeaseAcquisitionCoordinator#defer` always does, for its
+    // reclaim-wait notice) must not be able to deliver that push to a waiter `enqueue` just
+    // rejected out from under it.
+    const received: LeaseProgress[] = [];
+    const { clock, queue } = createQueue();
+    const waiter = queue.create(request satisfies DeviceRequest, {
+      onProgress: (progress) => received.push(progress),
+      ownerId: "agent",
+      requesterId: "agent",
+      timeoutMs: 100,
+    });
+    queue.enqueue(waiter);
+    queue.markProcessing(waiter);
+    clock.advance(150); // past the 100ms deadline while `processing`, same as the test above
+
+    expect(queue.enqueue(waiter)).toBe(false); // rejects synchronously with QueueTimeoutError
+    expect(waiter.state).toBe("rejected");
+    received.length = 0; // only care about anything delivered *after* settlement
+
+    queue.notifyProgress(waiter, { etaMs: 5_000, stage: "reclaiming" });
+
+    await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
+    expect(received).toEqual([]);
+  });
+
   it("attaches and detaches queued progress without changing the request outcome", () => {
     const received: LeaseProgress[] = [];
     const reattached: LeaseProgress[] = [];

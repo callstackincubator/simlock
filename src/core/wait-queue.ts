@@ -259,8 +259,17 @@ export class WaitQueue {
     return true;
   }
 
+  /**
+   * P3 (round 2 review): a terminal waiter never gets a push. Before this guard, `enqueue`
+   * rejecting synchronously (the deadline-check branch above) left a caller free to keep calling
+   * `notifyProgress` on the same waiter regardless -- `LeaseAcquisitionCoordinator#defer`
+   * unconditionally pushes a `reclaiming` progress right after its own `#enqueue` call, so a
+   * request that had just settled `QUEUE_TIMEOUT` could still receive a push after its error,
+   * with nothing here or at that call site distinguishing "still waiting" from "already told".
+   */
   notifyProgress(waiter: Waiter, progress: LeaseProgress): void {
     const mutable = this.#mutable(waiter);
+    if (isTerminal(mutable.state)) return;
     try {
       mutable.onProgress?.(progress);
     } catch {
