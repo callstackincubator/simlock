@@ -69,6 +69,10 @@ export class GatewayService {
     this.#registry = new WorkerRegistry({
       clock: options.clock,
       eventBus: options.eventBus,
+      // ADR 0005 §14's own-lease prefix, reused for §6's retention hold (M2): `principal` is
+      // exactly `gw:<this gateway's instance id>`, the same shape requirement 27 stamps on
+      // every requester id this gateway forwards, just without the trailing `:<requester>`.
+      gatewayRequesterPrefix: `${options.principal}:`,
       retentionMs: options.retentionMs,
       ...(options.drainStore === undefined ? {} : { drainStore: options.drainStore }),
     });
@@ -86,15 +90,16 @@ export class GatewayService {
     await this.#registry.load();
     this.#listener = await this.options.uplinks.listen({
       accept: (uplink) => this.#accept(uplink),
-      authenticate: async (credential) => {
+      authenticate: async (credential, claimed) => {
         const outcome = await this.options.authenticate(credential);
         // ADR 0005 §22's fleet audit trail includes the joins that failed: a revoked token
         // retrying at its backoff cap is invisible on the gateway otherwise, and "why is that
         // machine not in the fleet" is exactly the question an operator brings to
         // `simlock events`. Which of the two refusals it was travels with the fact -- the
-        // event carries the same 401/403 distinction the upgrade answered with. The uplink
-        // carries no identity the gateway trusts at this point, so the fact names no worker.
-        if (outcome !== "accept") this.#registry.rejected(outcome, undefined, undefined);
+        // event carries the same 401/403 distinction the upgrade answered with. `workerId` and
+        // `label` are only what the dial *claimed* in its headers, never verified -- a refused
+        // uplink proves no identity, but the claim is still worth an operator's while.
+        if (outcome !== "accept") this.#registry.rejected(outcome, claimed.workerId, claimed.label);
         return outcome;
       },
     });
@@ -132,7 +137,14 @@ export class GatewayService {
       void previous.close();
     }
     const link = new WorkerLink({
+      clock: this.options.clock,
       eventBus: this.options.eventBus,
+      // The same "is this still the current link" test as `onClosed` below, reused for D1: a
+      // stale link's late close (the OS finally reporting a half-open socket dead, well after a
+      // reconnect already replaced it) must not mark the registry's *current* entry
+      // disconnected. One predicate, read from the same map, keeps both guards from drifting
+      // apart.
+      isCurrentLink: () => this.#links.get(uplink.workerId) === link,
       logger: this.#logger,
       onClosed: (workerId) => {
         // Only forget the link if it is still the current one: a replaced link's late close
@@ -167,6 +179,6 @@ export class GatewayService {
     await Promise.all(
       [...this.#links.values()].map((link) => link.refresh({ includeCatalog: true })),
     );
-    this.#registry.pruneExpired();
+    await this.#registry.pruneExpired();
   }
 }

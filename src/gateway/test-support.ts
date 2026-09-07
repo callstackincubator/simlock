@@ -84,6 +84,18 @@ export class ScriptedWorkerClient {
   /** Set to reject every call with this error -- e.g. a protocol mismatch. */
   failWith: unknown;
   closed = false;
+  /**
+   * Names of calls (`"status.get"`, `"list.get:devices"`, `"catalog.get"`, `"config.get"`) that
+   * should hang forever instead of answering -- for exercising `WorkerLink`'s own per-call
+   * timeout (D2/D3) rather than a rejection, which `SimlockWire` already handles fine. A call
+   * still lands in `calls` before it hangs, so a test can tell it was attempted.
+   */
+  readonly hangingCalls = new Set<string>();
+  /** Makes the closure `subscribeEvents` returns hang forever instead of resolving -- the exact
+   * shape of D2's `events.unsubscribe` round trip that never answers. Read at call time, not
+   * captured when the closure is created, so a test can flip this after the worker is already
+   * connected and subscribed. */
+  hangUnsubscribe = false;
   #eventListener: ((push: { event: EventEnvelope }) => void) | undefined;
 
   constructor(
@@ -117,13 +129,16 @@ export class ScriptedWorkerClient {
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getStatus(): Promise<StatusGetOutput> {
     this.calls.push("status.get");
+    if (this.hangingCalls.has("status.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return this.status;
   }
 
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async list(input: { readonly kind?: string }): Promise<unknown> {
-    this.calls.push(`list.get:${input.kind ?? "devices"}`);
+    const name = `list.get:${input.kind ?? "devices"}`;
+    this.calls.push(name);
+    if (this.hangingCalls.has(name)) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return this.devices;
   }
@@ -131,6 +146,7 @@ export class ScriptedWorkerClient {
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getCatalog(): Promise<CatalogOutput> {
     this.calls.push("catalog.get");
+    if (this.hangingCalls.has("catalog.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return this.catalog;
   }
@@ -138,6 +154,7 @@ export class ScriptedWorkerClient {
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getConfig(): Promise<{ readonly downloads: { readonly policy: DownloadPolicy } }> {
     this.calls.push("config.get");
+    if (this.hangingCalls.has("config.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return { downloads: { policy: this.downloadPolicy } };
   }
@@ -150,6 +167,7 @@ export class ScriptedWorkerClient {
     this.#throwIfFailing();
     this.#eventListener = listener;
     return async () => {
+      if (this.hangUnsubscribe) return new Promise<never>(() => {});
       this.#eventListener = undefined;
     };
   }

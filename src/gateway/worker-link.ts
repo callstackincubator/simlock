@@ -21,9 +21,29 @@ import type { EventBus, EventName } from "../bus/index.js";
 import { isSimlockError, statusDeviceSchema } from "../contract/index.js";
 import type { SimlockAdminClient } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
-import type { AcceptedUplink, IpcConnection, Logger } from "../ports/index.js";
+import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
+
+/**
+ * How long the gateway waits for one round trip to a worker before giving up on it.
+ * `SimlockWire` keeps no per-call timeout of its own (ADR 0003 leaves that to the caller), so a
+ * call on a half-open socket the OS has not yet reported dead can otherwise hang forever. Two
+ * findings from #117's first review round share this one root cause: a hung `events.unsubscribe`
+ * stalls `close()` behind an RPC that will never answer, which is what widens a stale link's
+ * window from microseconds to minutes before its `onClose` ever fires (the D1 reconnect bug);
+ * and a hung refresh round trip latches `#refreshing` forever, freezing a view that still claims
+ * to be `connected`. Ten seconds is far above any real round trip and far below the kind of gap
+ * that turns "briefly stale" into "silently wrong".
+ */
+export const WORKER_CALL_TIMEOUT_MS = 10_000;
+
+class WorkerCallTimeoutError extends Error {
+  constructor(what: string) {
+    super(`Timed out waiting for the worker's ${what}`);
+    this.name = "WorkerCallTimeoutError";
+  }
+}
 
 /** How the gateway turns an accepted uplink into a driven session. Injected so a test can
  * script a worker without a `DaemonServer` behind it. */
@@ -36,6 +56,7 @@ export interface WorkerLinkOptions {
   readonly uplink: AcceptedUplink;
   readonly registry: WorkerRegistry;
   readonly eventBus: EventBus;
+  readonly clock: Clock;
   /** The principal the gateway announces at `hello`, namespaced by its own instance id, so a
    * worker's logs attribute what the gateway did to the gateway (ADR 0005 §27's shape). */
   readonly principal: string;
@@ -43,6 +64,17 @@ export interface WorkerLinkOptions {
   readonly connect?: WorkerClientFactory;
   /** Called once, when this uplink closes for any reason. */
   readonly onClosed?: (workerId: string) => void;
+  /**
+   * Whether the owning `GatewayService` still considers this link the current one for its
+   * worker id. A worker's uplink is keyed by worker id, not by link, so a reconnect that
+   * replaces this link with a newer one leaves this one to close on its own time -- a stale
+   * TCP path can take minutes to be reported dead (D1). Without this guard that late close
+   * would call `registry.disconnected` on a worker id a newer, live link now owns, and nothing
+   * would ever correct it: `refresh()` never touches `connection`. Defaults to "yes" so a
+   * caller that never replaces links (every test that does not exercise a reconnect) need not
+   * supply one.
+   */
+  readonly isCurrentLink?: () => boolean;
 }
 
 /** The device shape a view carries. Worker device records arrive through `list.get` as full
@@ -95,8 +127,10 @@ export class WorkerLink {
     try {
       // The result is deliberately discarded: this call exists to *fail* on a mismatched
       // protocol, and the view is built by the full refresh below rather than from half a
-      // snapshot taken before the event subscription exists.
-      await client.getStatus();
+      // snapshot taken before the event subscription exists. Bounded like every other call this
+      // class makes (see `WORKER_CALL_TIMEOUT_MS`): a worker that never answers `status.get` at
+      // all must not hang the handshake forever.
+      await this.#withTimeout(client.getStatus(), "status.get");
     } catch (error: unknown) {
       if (isSimlockError(error) && error.code === "PROTOCOL_VERSION_UNSUPPORTED") {
         // ADR 0005 §31: marked `incompatible`, with both ranges, and never asked anything else.
@@ -142,9 +176,12 @@ export class WorkerLink {
     // two calls. It costs one extra `status.get` per connect, which is the cheapest call the
     // worker has.
     try {
-      this.#unsubscribeEvents = await client.subscribeEvents((push) => {
-        this.#onWorkerEvent(push.event);
-      });
+      this.#unsubscribeEvents = await this.#withTimeout(
+        client.subscribeEvents((push) => {
+          this.#onWorkerEvent(push.event);
+        }),
+        "events.subscribe",
+      );
     } catch (error: unknown) {
       this.#logger.warn("Worker refused an event subscription; falling back to the tick", {
         workerId: this.workerId,
@@ -188,16 +225,21 @@ export class WorkerLink {
   }
 
   /** The round trips one refresh makes, and what they become in the view. Split out of
-   * `refresh` so that method is only the coalescing rule and this one is only the reads. */
+   * `refresh` so that method is only the coalescing rule and this one is only the reads.
+   * Bounded as one unit (D3): a worker that never answers one of these calls must not latch
+   * `#refreshing` forever and freeze the view mid-flight while it still reports `connected`. */
   async #rebuildView(client: SimlockAdminClient, includeCatalog: boolean): Promise<void> {
-    const [status, devices, catalog, config] = await Promise.all([
-      client.getStatus(),
-      client.list({ kind: "devices" }),
-      includeCatalog ? client.getCatalog() : undefined,
-      // Read on the same pass as the catalog: both are session-lifetime facts, and pairing
-      // them keeps the per-event refresh down to the two calls that actually go stale.
-      includeCatalog ? client.getConfig() : undefined,
-    ]);
+    const [status, devices, catalog, config] = await this.#withTimeout(
+      Promise.all([
+        client.getStatus(),
+        client.list({ kind: "devices" }),
+        includeCatalog ? client.getCatalog() : undefined,
+        // Read on the same pass as the catalog: both are session-lifetime facts, and pairing
+        // them keeps the per-event refresh down to the two calls that actually go stale.
+        includeCatalog ? client.getConfig() : undefined,
+      ]),
+      "view refresh",
+    );
     this.options.registry.refresh(this.workerId, {
       capacity: status.capacity,
       devices: viewDevicesSchema.parse(devices),
@@ -219,15 +261,57 @@ export class WorkerLink {
     // here. The client and the connection are both closed -- closing the client is what tears
     // down its own bookkeeping, and closing the connection is what guarantees the socket is
     // gone even if the client never opened one (or failed on its way out).
-    await unsubscribe?.().catch(() => undefined);
+    //
+    // `unsubscribe` is a real `events.unsubscribe` round trip (D2): on a half-open socket it can
+    // otherwise hang forever, since `.catch(() => undefined)` only swallows a *rejection* and
+    // never fires on a promise that just never settles -- which is exactly what widened D1's
+    // reconnect window from microseconds to minutes. Bounding it here is what lets `close()`
+    // always reach `connection.close()`.
+    await this.#withTimeout(unsubscribe?.() ?? Promise.resolve(), "events.unsubscribe").catch(
+      () => undefined,
+    );
     await this.#client?.close().catch(() => undefined);
     await this.options.uplink.connection.close().catch(() => undefined);
   }
 
   #handleClosed(): void {
     this.#closed = true;
-    this.options.registry.disconnected(this.workerId);
+    // ADR 0005 §6: the uplink is keyed by worker id, not by this link, so a worker that
+    // reconnects while this link's socket is still (half-)open replaces it in the gateway's
+    // bookkeeping well before the old socket is ever reported dead (D1). Marking the registry
+    // disconnected here regardless would flip the *live* successor's view -- permanently,
+    // since `refresh()` never touches `connection` -- so a late close only counts when this is
+    // still the link the service considers current for its worker id.
+    if (this.options.isCurrentLink?.() ?? true) this.options.registry.disconnected(this.workerId);
     this.options.onClosed?.(this.workerId);
+  }
+
+  /** Bounds one round trip to the worker (D2/D3): races `promise` against a timer and rejects
+   * with `WorkerCallTimeoutError` if the timer wins. The timer is always cancelled once
+   * `promise` settles, so a slow-but-eventually-successful call leaves nothing pending. */
+  #withTimeout<Value>(promise: Promise<Value>, what: string): Promise<Value> {
+    return new Promise<Value>((resolve, reject) => {
+      let settled = false;
+      const timer = this.options.clock.setTimer(WORKER_CALL_TIMEOUT_MS, () => {
+        if (settled) return;
+        settled = true;
+        reject(new WorkerCallTimeoutError(what));
+      });
+      promise.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          this.options.clock.cancel(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          this.options.clock.cancel(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
   }
 
   /**

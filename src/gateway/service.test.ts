@@ -13,6 +13,7 @@ import {
   ScriptedWorkerClient,
   statusFixture,
 } from "./test-support.js";
+import { WORKER_CALL_TIMEOUT_MS } from "./worker-link.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
 const REFRESH_MS = 30_000;
@@ -251,6 +252,99 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  // D1: `WorkerRegistry` is keyed by worker id, not by link, and a stale link's own close used
+  // to call `registry.disconnected` with no check at all -- so a socket the OS had not yet
+  // reported dead could mark the *live* successor's view disconnected, permanently (`refresh()`
+  // never touches `connection`). Against the code before this fix, no test joined the same
+  // worker id twice against a live service; this is that test.
+  it("does not let a stale link's late close mark a reconnected worker disconnected (D1)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+
+    const clientA = new ScriptedWorkerClient("admin", "0.1.0");
+    const workerEndA = await harness.join("wrk_1", clientA);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected"),
+    );
+
+    // A's own close, once the reconnect below triggers it, must never actually complete during
+    // this test: a hung `events.unsubscribe` (D2) is exactly what stretches a stale link's close
+    // from microseconds to minutes in the wild, and here it lets the test control precisely
+    // when A's connection actually goes away.
+    clientA.hangUnsubscribe = true;
+
+    // The same worker id redials with a new connection -- a restart, or a new TCP path after a
+    // NAT rebind. The service replaces the link; A's old one is asked to close but (per above)
+    // never gets there.
+    const clientB = new ScriptedWorkerClient("admin", "9.9.9");
+    await harness.join("wrk_1", clientB);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
+
+    // Only now does the OS finally report the stale socket dead. Closing the worker's own end
+    // fires the connection's real close event directly, bypassing A's still-stuck `close()`
+    // chain -- exactly what a genuinely half-open socket closing on its own would do.
+    await workerEndA.close();
+
+    expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
+    expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9");
+    expect(eventNames(harness.events)).not.toContain("worker.disconnected");
+
+    await harness.service.stop();
+  });
+
+  // D2: `close()` awaited `events.unsubscribe` -- a real round trip -- with nothing bounding it.
+  // On a half-open socket that promise never settled, so `close()` never reached
+  // `connection.close()` and the link (and its WebSocket) leaked for the life of the process.
+  it("does not hang close() forever behind an events.unsubscribe that never answers (D2)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    worker.hangUnsubscribe = true;
+
+    const stopped = harness.service.stop();
+    // `stop()` is now blocked inside `link.close()`, awaiting the bounded wrapper around the
+    // hung unsubscribe -- wait for that timer to actually be armed before advancing past it.
+    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+
+    await expect(stopped).resolves.toBeUndefined();
+    expect(worker.closed).toBe(true);
+  });
+
+  // D3: a hung round trip inside `#rebuildView` used to latch `#refreshing` forever, since it
+  // was cleared only in a `finally` on a promise that never settled -- freezing the view while
+  // it still reported `connected`.
+  it("does not latch refreshing forever when a round trip hangs, and recovers past the timeout (D3)", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.capacity).toBeDefined());
+
+    worker.hangingCalls.add("status.get");
+    worker.status = statusFixture({ leases: [leaseFixture("lease_9", "dev_9")] });
+    worker.pushEvent({ event: "lease.granted" });
+
+    // The refresh this event triggered is now stuck inside `#rebuildView`'s bounded wait.
+    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+
+    // Once the hung refresh times out and un-latches `#refreshing`, a later event must still be
+    // able to trigger a real one -- proving the latch did not stay stuck.
+    worker.hangingCalls.delete("status.get");
+    worker.pushEvent({ event: "lease.granted" });
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.leases).toEqual([
+        expect.objectContaining({ id: "lease_9" }),
+      ]),
+    );
+
+    await harness.service.stop();
+  });
+
   it("sweeps a retired view on the tick, once retention has passed", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -278,14 +372,19 @@ describe("GatewayService", () => {
       const harness = fleet({ authenticate: () => reason });
       await harness.service.start();
 
-      await expect(harness.join("wrk_1", new ScriptedWorkerClient())).rejects.toMatchObject({
+      await expect(
+        harness.join("wrk_1", new ScriptedWorkerClient(), "mac-mini-1"),
+      ).rejects.toMatchObject({
         code: "rejected",
       });
 
       expect(harness.service.workers.views()).toEqual([]);
+      // M3: `workerId`/`label` are whatever the dial *claimed* in its headers -- never verified
+      // (a refused peer proves no identity), but still worth an operator's while, and something
+      // this event used to always report as `undefined` regardless of what the dial sent.
       expect(harness.events.at(-1)).toMatchObject({
         event: "worker.rejected",
-        payload: { reason },
+        payload: { label: "mac-mini-1", reason, workerId: "wrk_1" },
       });
 
       await harness.service.stop();
