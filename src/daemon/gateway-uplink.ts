@@ -42,6 +42,11 @@ export interface GatewayUplinkOptions {
   readonly accept: (connection: IpcConnection) => void;
   readonly logger?: Logger;
   readonly backoff?: UplinkBackoff;
+  /** H1: how long a connection must stay up before `#attempt` resets to 0. Defaults to the
+   * backoff's own cap (`backoff.maxMs`) so a link that never survives that long never looks
+   * "recovered" -- an accept-then-immediately-close loop grows into, and stays at, the cap
+   * instead of redialling forever at `backoff.initialMs`. */
+  readonly minStableMs?: number;
   /**
    * Jitter source, injected so a test gets a deterministic schedule. Defaults to `Math.random`.
    * Jitter matters here for the same reason it does in any reconnect loop: a gateway restart
@@ -53,6 +58,7 @@ export interface GatewayUplinkOptions {
 export class GatewayUplink {
   readonly #logger: Logger;
   readonly #backoff: UplinkBackoff;
+  readonly #minStableMs: number;
   readonly #random: () => number;
   #attempt = 0;
   #timer: TimerHandle | undefined;
@@ -61,10 +67,23 @@ export class GatewayUplink {
   /** Guards against two dials in flight at once -- a `close` arriving while a dial is pending
    * would otherwise schedule a second one beside it. */
   #dialing = false;
+  /**
+   * H1: armed on a successful connect, cancelled on close. `#attempt` used to reset to 0 the
+   * moment `connect()` resolved, regardless of how long the link actually stayed up -- so a
+   * gateway that accepts the TCP/WebSocket upgrade and then immediately closes it (a proxy
+   * misconfiguration, a protocol-version mismatch the gateway itself does not retry past, a
+   * backend that flaps) never grew its delay past `backoff.initialMs`: every cycle looked like
+   * "back to full health" a moment before failing again, redialling at ~0.75s forever instead of
+   * backing off. `#attempt` now only resets once the link has stayed up long enough for this
+   * timer to fire -- if the close beats it, the timer is cancelled and `#attempt` carries over
+   * into the next delay calculation unchanged.
+   */
+  #stableTimer: TimerHandle | undefined;
 
   constructor(private readonly options: GatewayUplinkOptions) {
     this.#logger = options.logger ?? new NoopLogger();
     this.#backoff = options.backoff ?? DEFAULT_UPLINK_BACKOFF;
+    this.#minStableMs = options.minStableMs ?? this.#backoff.maxMs;
     this.#random = options.random ?? Math.random;
   }
 
@@ -85,6 +104,10 @@ export class GatewayUplink {
     if (this.#timer !== undefined) {
       this.options.clock.cancel(this.#timer);
       this.#timer = undefined;
+    }
+    if (this.#stableTimer !== undefined) {
+      this.options.clock.cancel(this.#stableTimer);
+      this.#stableTimer = undefined;
     }
     const connection = this.#connection;
     this.#connection = undefined;
@@ -108,7 +131,6 @@ export class GatewayUplink {
         await connection.close();
         return;
       }
-      this.#attempt = 0;
       this.#connection = connection;
       connection.onClose(() => this.#onClosed());
       this.#logger.info("Uplink to gateway established", {
@@ -116,6 +138,13 @@ export class GatewayUplink {
         workerId: this.options.workerId,
       });
       this.options.accept(connection);
+      // H1: `#attempt` resets only once this link has actually stayed up for `#minStableMs` --
+      // not the instant `connect()` resolves. Cancelled in `#onClosed`/`stop` if the close
+      // beats it, which is exactly the accept-then-immediately-close case this guards against.
+      this.#stableTimer = this.options.clock.setTimer(this.#minStableMs, () => {
+        this.#stableTimer = undefined;
+        this.#attempt = 0;
+      });
     } catch (error: unknown) {
       const delayMs = this.#nextDelayMs();
       // `warn`, not `error`: a gateway that is down is an expected state for a worker, which
@@ -136,6 +165,10 @@ export class GatewayUplink {
 
   #onClosed(): void {
     this.#connection = undefined;
+    if (this.#stableTimer !== undefined) {
+      this.options.clock.cancel(this.#stableTimer);
+      this.#stableTimer = undefined;
+    }
     if (this.#stopped) return;
     const delayMs = this.#nextDelayMs();
     this.#logger.info("Uplink to gateway closed; reconnecting", {

@@ -118,6 +118,48 @@ describe("GatewayUplink", () => {
     await link.stop();
   });
 
+  // H1: `#attempt` used to reset to 0 the instant `connect()` resolved, regardless of how long
+  // the link actually stayed up -- so a gateway that accepts the connection and then immediately
+  // closes it (an accept-then-immediately-close loop: a proxy misconfiguration, a mismatched
+  // protocol version the gateway does not retry past) redialled at `backoff.initialMs` forever,
+  // never backing off. Every prior test scripts either an outright dial *failure* (which always
+  // incremented `#attempt` correctly) or a single successful connect; none closes a
+  // *successful* connection immediately, repeatedly, which is exactly the case that used to
+  // reset the counter every cycle.
+  it("keeps backing off through an accept-then-immediately-close loop, instead of resetting every cycle (H1)", async () => {
+    const connector = new ScriptedConnector();
+    const { accepted, clock, link } = uplink(connector, {
+      backoff: { initialMs: 1_000, maxMs: 8_000, multiplier: 2 },
+      minStableMs: 8_000,
+    });
+
+    link.start();
+    await vi.waitFor(() => expect(accepted).toHaveLength(1));
+
+    // 1s, 2s, 4s, then the cap holds at 8s -- exactly the growing schedule a dial *failure*
+    // already gets, proving a connection that never survives `minStableMs` is treated the same
+    // way. Against the pre-fix code every one of these delays would instead be 1s: `#attempt`
+    // reset to 0 as soon as each connect resolved, before its immediate close ever ran.
+    for (const delayMs of [1_000, 2_000, 4_000, 8_000, 8_000]) {
+      const connectionsBefore = accepted.length;
+      await connector.connections[connectionsBefore - 1]?.close();
+      clock.advance(delayMs - 1);
+      // Flushes the microtask queue before asserting nothing redialled yet: closing a
+      // connection triggers `#onClosed`'s scheduling synchronously, but a redial itself runs
+      // through an `await`, so a check made with no yield at all would not observe one that
+      // fired too early against a shorter, buggy delay -- exactly the gap the pre-fix code hid
+      // behind, since the assertion below would otherwise pass whether the real delay was
+      // `delayMs` or a flat `initialMs`.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(accepted).toHaveLength(connectionsBefore);
+      clock.advance(1);
+      await vi.waitFor(() => expect(accepted).toHaveLength(connectionsBefore + 1));
+    }
+
+    await link.stop();
+  });
+
   it("keeps retrying at the cap when the gateway rejects the join token (ADR 0005 §8)", async () => {
     const connector = new ScriptedConnector();
     const rejected = () => new UplinkError("rejected", "revoked");
