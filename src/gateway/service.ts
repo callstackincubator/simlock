@@ -83,6 +83,12 @@ export class GatewayService {
     return this.#registry;
   }
 
+  /** `./fleet-ports.ts`'s `WorkerDirectory#target` -- #118's way to resolve a worker id to its
+   * live link without importing `WorkerLink` or reaching into `#links` itself. */
+  target(workerId: string): WorkerLink | undefined {
+    return this.#links.get(workerId);
+  }
+
   async start(): Promise<void> {
     // Before the listener, not after: a worker that reconnects in the first millisecond must
     // find its drain state already restored, or it would be dispatched to once (#118) before

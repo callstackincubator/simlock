@@ -621,4 +621,40 @@ describe("GatewayService", () => {
     harness.clock.advance(10 * REFRESH_MS);
     expect(worker.calls).toHaveLength(callsAfterStop);
   });
+
+  // `./fleet-ports.ts`'s WorkerDispatchTarget#client -- #118's seam. Both halves of the
+  // contract: undefined before start() has completed the handshake, and undefined again once
+  // the link has closed.
+  describe("target() / WorkerDispatchTarget (fleet-ports)", () => {
+    it("has no client before the handshake completes", async () => {
+      const harness = fleet();
+      await harness.service.start();
+
+      await harness.joinSilent("wrk_1");
+      const target = harness.service.target("wrk_1");
+
+      expect(target).toBeDefined();
+      expect(target?.reachable).toBe(true);
+      expect(target?.client()).toBeUndefined();
+
+      await harness.service.stop();
+    });
+
+    it("has no client once the link has closed", async () => {
+      const harness = fleet();
+      await harness.service.start();
+      const worker = new ScriptedWorkerClient();
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.capacity).toBeDefined());
+
+      const target = harness.service.target("wrk_1");
+      expect(target?.client()).toBeDefined();
+      expect(target?.reachable).toBe(true);
+
+      await harness.service.stop();
+
+      expect(target?.reachable).toBe(false);
+      expect(target?.client()).toBeUndefined();
+    });
+  });
 });

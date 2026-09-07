@@ -19,3 +19,9 @@ export { GatewayDispatcher } from "./dispatcher.js";
 // fallow-ignore-next-line unused-type -- public option shape for anyone composing a gateway; `main.ts` builds one inline.
 export type { GatewayTokenStore } from "./dispatcher.js";
 export { GatewayService, type GatewayServiceOptions } from "./service.js";
+// fallow-ignore-next-line unused-type -- #118's seam; declared before its consumer exists.
+export type { FleetViews } from "./fleet-ports.js";
+// fallow-ignore-next-line unused-type -- #118's seam; declared before its consumer exists.
+export type { WorkerDirectory } from "./fleet-ports.js";
+// fallow-ignore-next-line unused-type -- #118's seam; declared before its consumer exists.
+export type { WorkerDispatchTarget } from "./fleet-ports.js";

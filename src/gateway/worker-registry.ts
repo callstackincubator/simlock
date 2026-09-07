@@ -14,7 +14,8 @@ import type { z } from "zod";
 import type { EventBus } from "../bus/index.js";
 import { workerViewSchema, type ProtocolRange } from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
-import type { Clock } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
+import { NoopLogger } from "../ports/index.js";
 import type { DrainStore } from "./drain-store.js";
 
 export type WorkerView = z.infer<typeof workerViewSchema>;
@@ -46,6 +47,7 @@ export interface WorkerRegistryOptions {
    * a real gateway always does.
    */
   readonly gatewayRequesterPrefix?: string;
+  readonly logger?: Logger;
 }
 
 export class WorkerRegistry {
@@ -57,8 +59,13 @@ export class WorkerRegistry {
    * set is what `load()` restores and what `setDrained` writes back.
    */
   readonly #drained = new Set<string>();
+  /** `./fleet-ports.ts`'s `FleetViews#onViewsChanged` -- see that method's own doc comment. */
+  readonly #viewsChangedListeners = new Set<() => void>();
+  readonly #logger: Logger;
 
-  constructor(private readonly options: WorkerRegistryOptions) {}
+  constructor(private readonly options: WorkerRegistryOptions) {
+    this.#logger = options.logger ?? new NoopLogger();
+  }
 
   /** Restores the persisted drain set. Called once, before the uplink listener starts, so a
    * worker that reconnects in the first second is already drained when its view is built. */
@@ -75,6 +82,39 @@ export class WorkerRegistry {
 
   view(workerId: string): WorkerView | undefined {
     return this.#workers.get(workerId);
+  }
+
+  /**
+   * `./fleet-ports.ts`'s `FleetViews#onViewsChanged` -- #118's seam for running dispatch
+   * whenever the fleet's queue or any worker view changes (ADR 0005 §11), without reaching into
+   * this registry's internals or polling it. Called once per mutation this registry actually
+   * commits (`connected`, `incompatible`, `refresh`, `disconnected`, `setDrained`, `remove`,
+   * `pruneExpired`) -- never for a call that finds nothing to change (an unknown worker, a
+   * refresh dropped for a view already gone, draining an already-drained worker) -- and always
+   * *after* the commit and after the corresponding event, if any, is emitted (`events.md`'s
+   * post-commit rule). Returns the unsubscribe function.
+   *
+   * A listener that throws is logged at debug and does not stop the mutation that triggered it
+   * or any other listener: this registry's own correctness must never depend on what a
+   * subscriber does with the notification.
+   */
+  onViewsChanged(listener: () => void): () => void {
+    this.#viewsChangedListeners.add(listener);
+    return () => {
+      this.#viewsChangedListeners.delete(listener);
+    };
+  }
+
+  #notifyViewsChanged(): void {
+    for (const listener of this.#viewsChangedListeners) {
+      try {
+        listener();
+      } catch (error: unknown) {
+        this.#logger.debug("A worker-views-changed listener threw", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**
@@ -109,6 +149,7 @@ export class WorkerRegistry {
       },
       "gateway",
     );
+    this.#notifyViewsChanged();
     return withoutProtocol;
   }
 
@@ -142,6 +183,7 @@ export class WorkerRegistry {
       ...(version === undefined ? {} : { version }),
     };
     this.#workers.set(workerId, view);
+    this.#notifyViewsChanged();
     return view;
   }
 
@@ -185,6 +227,7 @@ export class WorkerRegistry {
       ...snapshot,
       lastSeenAt: this.options.clock.now(),
     });
+    this.#notifyViewsChanged();
   }
 
   /**
@@ -209,6 +252,7 @@ export class WorkerRegistry {
       },
       "gateway",
     );
+    this.#notifyViewsChanged();
   }
 
   /**
@@ -232,6 +276,7 @@ export class WorkerRegistry {
       { workerId, ...(existing.label === undefined ? {} : { label: existing.label }) },
       "gateway",
     );
+    this.#notifyViewsChanged();
     return view;
   }
 
@@ -328,6 +373,7 @@ export class WorkerRegistry {
       { reason, workerId: view.id, ...(view.label === undefined ? {} : { label: view.label }) },
       "gateway",
     );
+    this.#notifyViewsChanged();
   }
 
   #requireView(workerId: string): WorkerView {

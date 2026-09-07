@@ -112,6 +112,22 @@ export class WorkerLink {
     this.#logger = options.logger ?? new NoopLogger();
   }
 
+  /** `./fleet-ports.ts`'s `WorkerDispatchTarget#reachable` -- false once this link is closing or
+   * closed (`close()`/`#handleClosed` both set `#closed` before anything else). */
+  // fallow-ignore-next-line unused-class-member -- #118's seam (WorkerDispatchTarget); nothing in this PR calls it yet.
+  get reachable(): boolean {
+    return !this.#closed;
+  }
+
+  /** `./fleet-ports.ts`'s `WorkerDispatchTarget#client` -- the gateway's own admin session on
+   * this worker, the same one `#rebuildView`'s refresh round trips use. `undefined` before
+   * `start()` has assigned it or after `close()`/`#handleClosed` has run -- neither clears
+   * `#client` itself, so this mirrors `reachable` rather than checking it separately. */
+  // fallow-ignore-next-line unused-class-member -- #118's seam (WorkerDispatchTarget); nothing in this PR calls it yet.
+  client(): SimlockAdminClient | undefined {
+    return this.#closed ? undefined : this.#client;
+  }
+
   /**
    * Completes the handshake and builds the first view. Never throws: a worker that cannot be
    * driven is a fact about the fleet, reported in its view and its log line, not an error the
