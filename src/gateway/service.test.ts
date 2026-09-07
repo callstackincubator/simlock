@@ -13,7 +13,7 @@ import {
   ScriptedWorkerClient,
   statusFixture,
 } from "./test-support.js";
-import { WORKER_CALL_TIMEOUT_MS } from "./worker-link.js";
+import { MAX_CONSECUTIVE_REFRESH_TIMEOUTS, WORKER_CALL_TIMEOUT_MS } from "./worker-link.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
 const REFRESH_MS = 30_000;
@@ -359,6 +359,52 @@ describe("GatewayService", () => {
         expect.objectContaining({ id: "lease_9" }),
       ]),
     );
+
+    await harness.service.stop();
+  });
+
+  // P1: a refresh timeout used to be swallowed into a debug log with nothing acting on it, so a
+  // half-open uplink (NAT rebind, cable pull, kernel panic -- no FIN) had `connection` report
+  // `connected` forever with a `lastSeenAt` that never moved again. One timeout recovering on
+  // the very next attempt (D3, above) must still not disconnect a worker -- that is a real, slow
+  // response, not a dead link -- but the same failure MAX_CONSECUTIVE_REFRESH_TIMEOUTS times in a
+  // row, with nothing in between, must make the gateway give up and close the uplink.
+  it("closes the uplink once refreshes keep timing out, so a half-open worker stops reporting connected (P1)", async () => {
+    expect(MAX_CONSECUTIVE_REFRESH_TIMEOUTS).toBeGreaterThan(1);
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.capacity).toBeDefined());
+
+    // Never un-hung, unlike D3's test: this is the half-open case, not a briefly slow one.
+    worker.hangingCalls.add("status.get");
+
+    for (let attempt = 1; attempt < MAX_CONSECUTIVE_REFRESH_TIMEOUTS; attempt++) {
+      harness.clock.advance(REFRESH_MS);
+      await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+      harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+      // Wait for the *next* tick to actually be armed, not just for the (already, trivially
+      // true) `connected` check to pass -- that value never changes on a timeout, so checking
+      // it alone would resolve before the tick's own promise chain (refresh's catch, then
+      // `pruneExpired`, then rescheduling) has actually finished, and the next iteration's
+      // `advance(REFRESH_MS)` would fast-forward the clock past a timer that has not been
+      // registered yet -- silently skipping a whole tick instead of exercising it.
+      await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+      // Below the threshold, the view must still say `connected` -- exactly D3's guarantee,
+      // repeated for every attempt short of the last one.
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
+    }
+
+    // The attempt that crosses the threshold.
+    harness.clock.advance(REFRESH_MS);
+    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("disconnected"),
+    );
+    expect(eventNames(harness.events)).toContain("worker.disconnected");
 
     await harness.service.stop();
   });

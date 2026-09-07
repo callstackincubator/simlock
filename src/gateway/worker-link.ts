@@ -38,6 +38,18 @@ import type { WorkerRegistry } from "./worker-registry.js";
  */
 export const WORKER_CALL_TIMEOUT_MS = 10_000;
 
+/**
+ * P1: how many refresh round trips in a row are allowed to time out before the gateway gives up
+ * on this link and closes it. One is not enough -- D3's single hung `status.get` recovering on
+ * its very next attempt is a real, common case (a worker briefly slow, not a half-open socket)
+ * and must not tear the link down for it. But nothing was acting on a *repeated* timeout either:
+ * a half-open uplink (NAT rebind, a cable pull, a kernel panic -- no FIN) has every refresh time
+ * out forever while `connection` keeps reporting `connected` with a `lastSeenAt` that never
+ * moves again. Two in a row, roughly one minute at the default 30s tick, is long enough to
+ * absorb one slow response but short enough that `simlock worker list` stops lying quickly.
+ */
+export const MAX_CONSECUTIVE_REFRESH_TIMEOUTS = 2;
+
 class WorkerCallTimeoutError extends Error {
   constructor(what: string) {
     super(`Timed out waiting for the worker's ${what}`);
@@ -91,6 +103,9 @@ export class WorkerLink {
   #closed = false;
   #refreshing = false;
   #refreshQueued = false;
+  /** P1: consecutive `WorkerCallTimeoutError`s from `#rebuildView`, reset to 0 by any refresh
+   * that actually completes. */
+  #consecutiveRefreshTimeouts = 0;
 
   constructor(private readonly options: WorkerLinkOptions) {
     this.workerId = options.uplink.workerId;
@@ -215,6 +230,7 @@ export class WorkerLink {
     this.#refreshing = true;
     try {
       await this.#rebuildView(client, options.includeCatalog === true);
+      this.#consecutiveRefreshTimeouts = 0;
     } catch (error: unknown) {
       // A refresh that fails because the uplink died needs no handling here: `onClose` has
       // already marked the view disconnected. Anything else is worth a line, and the next tick
@@ -223,6 +239,25 @@ export class WorkerLink {
         workerId: this.workerId,
         message: errorMessage(error),
       });
+      // P1: a `WorkerCallTimeoutError` here is not "anything else" -- it is the one failure this
+      // class already knows means "the socket is not answering", and it used to mean nothing
+      // happened at all: `registry.refresh` was never reached, so `connection` stayed
+      // `connected` and `lastSeenAt` stayed stale, forever, on a half-open uplink. After
+      // `MAX_CONSECUTIVE_REFRESH_TIMEOUTS` in a row, close the link -- which routes through
+      // `#handleClosed` into `registry.disconnected` -- rather than let it keep confidently
+      // reporting a machine nothing can reach. `close()` is fire-and-forget here on purpose: it
+      // flips `#closed` synchronously before its own first `await`, which is what the `finally`
+      // block below needs to skip queuing another refresh behind a link that is on its way out.
+      if (error instanceof WorkerCallTimeoutError) {
+        this.#consecutiveRefreshTimeouts += 1;
+        if (this.#consecutiveRefreshTimeouts >= MAX_CONSECUTIVE_REFRESH_TIMEOUTS) {
+          this.#logger.warn("Worker stopped answering; closing its uplink", {
+            workerId: this.workerId,
+            consecutiveTimeouts: this.#consecutiveRefreshTimeouts,
+          });
+          void this.close();
+        }
+      }
     } finally {
       this.#refreshing = false;
       if (this.#refreshQueued && !this.#closed) {
