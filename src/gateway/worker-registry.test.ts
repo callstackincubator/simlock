@@ -15,18 +15,24 @@ const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
 function registry(
   options: {
     readonly drainStore?: MemoryDrainStore;
-    readonly gatewayRequesterPrefix?: string;
+    /** Omit to get the default fixture prefix; pass `null` explicitly (H3) to build a registry
+     * with no `gatewayRequesterPrefix` at all, the way `dispatcher.test.ts`'s harness does. */
+    readonly gatewayRequesterPrefix?: string | null;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const events: EventEnvelope[] = [];
   eventBus.subscribeAll((envelope) => events.push(envelope));
+  const gatewayRequesterPrefix =
+    options.gatewayRequesterPrefix === null
+      ? undefined
+      : (options.gatewayRequesterPrefix ?? GATEWAY_REQUESTER_PREFIX);
   const workers = new WorkerRegistry({
     clock,
     eventBus,
-    gatewayRequesterPrefix: options.gatewayRequesterPrefix ?? GATEWAY_REQUESTER_PREFIX,
     retentionMs: RETENTION_MS,
+    ...(gatewayRequesterPrefix === undefined ? {} : { gatewayRequesterPrefix }),
     ...(options.drainStore === undefined ? {} : { drainStore: options.drainStore }),
   });
   return { clock, events, workers };
@@ -223,6 +229,23 @@ describe("WorkerRegistry", () => {
     // ADR 0005 §6/§14 (M2): the retention hold is scoped to leases *this gateway* issued. A
     // worker's own local lease -- an agent on that machine, never routed through the gateway --
     // is none of the gateway's business to keep a view alive for.
+    // H3: a registry with no `gatewayRequesterPrefix` cannot tell a gateway-issued lease apart
+    // from a worker-local one, so per `safety.md`'s fails-closed instinct it must not guess "none
+    // of these are mine" and prune anyway. `GatewayService` always supplies the prefix, but the
+    // class is exported and `dispatcher.test.ts`'s harness constructs one without it.
+    it("holds a view with a live lease when built with no gatewayRequesterPrefix at all", async () => {
+      const { clock, workers } = registry({ gatewayRequesterPrefix: null });
+      workers.connected("wrk_1", undefined, undefined);
+      const lease = { ...leaseFixture("lease_1", "dev_1"), ttlDeadline: 10 * RETENTION_MS };
+      workers.refresh("wrk_1", { leases: [lease] });
+      workers.disconnected("wrk_1");
+
+      clock.advance(5 * RETENTION_MS);
+      await workers.pruneExpired();
+
+      expect(workers.view("wrk_1")).toBeDefined();
+    });
+
     it("forgets a worker whose only live lease is a local one, not the gateway's own", async () => {
       const { clock, workers } = registry();
       workers.connected("wrk_1", undefined, undefined);
@@ -258,6 +281,27 @@ describe("WorkerRegistry", () => {
       await workers.pruneExpired();
 
       expect(workers.view("wrk_1")).toBeDefined();
+    });
+
+    // C1: a regression in the M1 fix above -- `pruneExpired` reused `#forget`, which also
+    // cleared the drain flag. Retention is not an operator action (ADR 0005 §9: "only `undrain`
+    // ends it"; §8a: the drained set is the gateway's own record, kept separate from the
+    // observed view precisely so a drain outlives it). An operator who drains a machine for
+    // maintenance and leaves it off over a retention window must find it still drained when it
+    // reconnects, exactly like the reconnect and restart cases above -- this crosses drain with
+    // retention, which neither of those tests do.
+    it("keeps the drain flag when retention forgets the view, unlike an operator remove", async () => {
+      const store = new MemoryDrainStore();
+      const { clock, workers } = registry({ drainStore: store });
+      workers.connected("wrk_1", undefined, undefined);
+      await workers.setDrained("wrk_1", true);
+      workers.disconnected("wrk_1");
+
+      clock.advance(RETENTION_MS + 1);
+      await workers.pruneExpired();
+
+      expect(workers.view("wrk_1")).toBeUndefined();
+      expect(workers.connected("wrk_1", undefined, undefined).drained).toBe(true);
     });
   });
 

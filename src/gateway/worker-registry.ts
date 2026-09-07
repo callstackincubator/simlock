@@ -255,7 +255,7 @@ export class WorkerRegistry {
         { workerId },
       );
     }
-    await this.#forget(existing, "operator");
+    await this.#forget(existing, "operator", { clearDrain: true });
     return true;
   }
 
@@ -277,6 +277,12 @@ export class WorkerRegistry {
    *
    * Deadlines, not just "any lease": a worker that dropped off months ago with leases recorded
    * would otherwise be kept forever by leases that expired minutes after it left.
+   *
+   * H3, `safety.md`'s fails-closed instinct: a registry built with no `gatewayRequesterPrefix`
+   * cannot tell a gateway-issued lease from a worker-local one, so it must not guess "none of
+   * these are mine" -- that would prune a view out from under live gateway leases just because
+   * the option was left off. Treat a missing prefix as "every unexpired lease counts", i.e.
+   * hold the view, rather than as "no lease counts".
    */
   async pruneExpired(): Promise<void> {
     const now = this.options.clock.now();
@@ -288,22 +294,33 @@ export class WorkerRegistry {
         view.lastSeenAt <= cutoff &&
         !view.leases.some(
           (lease) =>
-            lease.ttlDeadline > now && prefix !== undefined && lease.requesterId.startsWith(prefix),
+            lease.ttlDeadline > now &&
+            (prefix === undefined || lease.requesterId.startsWith(prefix)),
         ),
     );
-    for (const view of expired) await this.#forget(view, "retention");
+    for (const view of expired) await this.#forget(view, "retention", { clearDrain: false });
   }
 
   /**
-   * M1: also clears this worker's drain flag and re-saves the store, if it had one. Without
-   * this, a removed worker's `true` survives in `workers.json` forever -- an unbounded file
-   * that silently re-drains the machine if its id is ever seen again, with `undrain` unable to
-   * clear it in the meantime (`UNKNOWN_WORKER`, since there is no view to undrain). "Forgotten"
-   * has to mean forgotten, not "forgotten except the one flag that matters most."
+   * M1: on an operator `remove`, also clears this worker's drain flag and re-saves the store, if
+   * it had one. Without this, a removed worker's `true` survives in `workers.json` forever -- an
+   * unbounded file that silently re-drains the machine if its id is ever seen again, with
+   * `undrain` unable to clear it in the meantime (`UNKNOWN_WORKER`, since there is no view to
+   * undrain). "Forgotten" has to mean forgotten, not "forgotten except the one flag that matters
+   * most."
+   *
+   * C1: the retention sweep must NOT clear the drain flag. Retention forgetting the *view* is
+   * not an operator action -- ADR 0005 §9 says only `undrain` ends a drain, and §8a keeps
+   * `#drained` a separate record from the observed view precisely so a drain outlives it. A
+   * drained worker that goes quiet past `disconnectedRetentionMs` must still rejoin drained.
    */
-  async #forget(view: WorkerView, reason: "operator" | "retention"): Promise<void> {
+  async #forget(
+    view: WorkerView,
+    reason: "operator" | "retention",
+    { clearDrain }: { clearDrain: boolean },
+  ): Promise<void> {
     this.#workers.delete(view.id);
-    if (this.#drained.delete(view.id)) {
+    if (clearDrain && this.#drained.delete(view.id)) {
       await this.options.drainStore?.save([...this.#drained]);
     }
     this.options.eventBus.emit(
