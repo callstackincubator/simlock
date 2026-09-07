@@ -24,6 +24,7 @@ a warning. Inspect the effective, merged configuration at any time with
 | `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1: warm hit first, then the most free running capacity for the platform. See [Routing](ARCHITECTURE.md#routing).                     | `warm-then-free`                                                 |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker is kept (greyed, never dispatched to) before the gateway forgets it. The clock is held while the gateway still knows of gateway-issued leases on that worker, and that hold ends when the last of those leases passes its deadline.  | `24 hours`                                                       |
 | `gateway.execTimeoutMs`           | **Gateway side.** How long the gateway waits on a proxied `device.exec` before giving up. A backstop for a worker that never answers at all — deliberately longer than the worker's own `exec.timeoutMs`, which is authoritative because that side owns the process and can kill it, so an ordinary timeout surfaces as the worker's `EXEC_TIMEOUT` rather than racing this one. See [ADR 0005](adr/0005-gateway-and-worker-modes.md) §19e. | `11 minutes`                                                     |
+| `gateway.leaseRequestTimeoutMs`   | **Gateway side.** How long the gateway waits on a forwarded `lease.request` before giving up on that worker for this request, answering `WORKER_UNREACHABLE`. Bounds the one uplink call that otherwise had no timeout of its own, so a wedged worker cannot park a request where neither a deadline nor `lease.cancel` could ever reach it again. Generous against a cold device provision-plus-boot; well below `gateway.execTimeoutMs`, since granting a lease should never take as long as a command run against the device afterward. | `5 minutes`                                                      |
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
@@ -33,6 +34,7 @@ a warning. Inspect the effective, merged configuration at any time with
 | `gateway.label`                   | **Worker side.** Display name for this worker in the gateway's views. Need not be unique, and is never used to route.                                                                                                         | unset (views show the worker's id)                              |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker's view is kept before the gateway forgets it. The clock only applies once every lease on that view has passed its deadline.                                                  | `24 hours`                                                       |
 | `gateway.execTimeoutMs`           | **Gateway side.** Backstop on a proxied `device.exec`, deliberately longer than the worker's own `exec.timeoutMs`, which is the authoritative one.                                                                            | `11 minutes`                                                     |
+| `gateway.leaseRequestTimeoutMs`   | **Gateway side.** Backstop on a forwarded `lease.request` -- expiry answers `WORKER_UNREACHABLE`, freeing the request for the queue's own deadline/cancel handling again.                                                    | `5 minutes`                                                      |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
 | `eventBuffer.capacity`            | Number of business events kept in the in-memory ring buffer (see `simlock events`).                                                                                                                                          | `1000`                                                           |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery.                                                                                                                                                                | `true`                                                           |
@@ -61,8 +63,9 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 `http.enabled` is a boolean, `http.host` a string, and `http.port` an
 integer in `1`-`65535`.
 `mode` is `worker` or `gateway`; `gateway.url`, `gateway.token` and
-`gateway.label` are strings, and `gateway.disconnectedRetentionMs` and
-`gateway.execTimeoutMs` positive numbers.
+`gateway.label` are strings, and `gateway.disconnectedRetentionMs`,
+`gateway.execTimeoutMs`, and `gateway.leaseRequestTimeoutMs` positive
+numbers.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 `mode` must be exactly `"worker"` or `"gateway"`. `gateway.url` must be an
@@ -75,7 +78,8 @@ warned about and ignored like every other worker key — a gateway is not
 misconfigured by leftovers from the config it was flipped out of.
 `gateway.label` is a non-empty string, `gateway.routing` one of the
 registered routing policies, and `exec.timeoutMs`, `gateway.execTimeoutMs`,
-and `gateway.disconnectedRetentionMs` positive numbers.
+`gateway.leaseRequestTimeoutMs`, and `gateway.disconnectedRetentionMs`
+positive numbers.
 **`mode: "gateway"` with `http.enabled: false` is rejected at load** (ADR 0005 §2), naming the key: a
 gateway is the fleet's contact point over HTTP, so one nothing can reach has
 no safe reading.
@@ -180,7 +184,7 @@ does not apply to it. It reads:
 | Key group | Why |
 |---|---|
 | `mode` | to be a gateway at all |
-| `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs` | how to run the fleet |
+| `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs`, `gateway.leaseRequestTimeoutMs` | how to run the fleet |
 | `http.*` | it is the fleet's contact point |
 | `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched — see below |
 | `log.*`, `eventBuffer.*` | logging and the event ring buffer, as anywhere |

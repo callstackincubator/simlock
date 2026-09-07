@@ -17,6 +17,7 @@ export function testConfig(
     gateway: {
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
+      leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
     },
     drivers: {},

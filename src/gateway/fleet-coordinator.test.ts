@@ -71,7 +71,13 @@ class RecordingLogger implements Logger {
   }
 }
 
-function harness(overrides: { readonly execTimeoutMs?: number; readonly logger?: Logger } = {}) {
+function harness(
+  overrides: {
+    readonly execTimeoutMs?: number;
+    readonly leaseRequestTimeoutMs?: number;
+    readonly logger?: Logger;
+  } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const workers = new WorkerRegistry({
@@ -100,6 +106,9 @@ function harness(overrides: { readonly execTimeoutMs?: number; readonly logger?:
       })(),
     },
     leaseIndex,
+    // Deliberately large by default -- P2's own test overrides this the same way P5 does for
+    // execTimeoutMs above.
+    leaseRequestTimeoutMs: overrides.leaseRequestTimeoutMs ?? 5 * 60_000,
     ...(overrides.logger === undefined ? {} : { logger: overrides.logger }),
     routing: createRoutingPolicy("warm-then-free"),
     views: workers,
@@ -327,6 +336,35 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((rejection as DispatchError).code).toBe("NO_CAPACITY");
     expect(coordinator.queueDepth).toBe(0);
     expect(directory.refreshCalls).toEqual([]);
+  });
+
+  it("bounds a forwarded lease.request against gateway.leaseRequestTimeoutMs when the worker never answers at all (P2, round 2 review)", async () => {
+    // ADR §10: timeoutMs/QUEUE_TIMEOUT and lease.cancel are enforced on the gateway's own queue
+    // -- which only holds while a waiter is `queued`, never while it is `processing` a forwarded
+    // RPC. Before this fix, a forwarded `lease.request` had no timeout of its own, so a worker
+    // whose handler wedged left the request `processing` forever: neither a deadline nor
+    // `lease.cancel` could ever reach it again.
+    const { clock, coordinator, directory, workers } = harness({ leaseRequestTimeoutMs: 5_000 });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ kind: "hang" });
+
+    const rejection = coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+    await tick();
+    // Not stuck forever, and not answerable by a stale-view refresh either -- the waiter must
+    // come back to a state the queue's own machinery can act on.
+    expect(coordinator.queueDepth).toBe(0);
+    expect(directory.refreshCalls).toEqual([]);
+
+    clock.advance(5_000);
+    const error = await rejection;
+
+    expect(error).toBeInstanceOf(DispatchError);
+    expect((error as DispatchError).code).toBe("WORKER_UNREACHABLE");
+    expect(coordinator.queueDepth).toBe(0);
   });
 
   it("answers REQUESTER_ALREADY_LEASED naming the existing lease id, for an index built purely via rebuildFromWorker", async () => {

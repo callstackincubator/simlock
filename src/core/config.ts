@@ -49,6 +49,11 @@ const DEFAULT_DISCONNECTED_RETENTION_MS = 24 * 60 * 60_000;
  * worker's authoritative ten, so the worker's timeout is the one that fires. */
 const DEFAULT_GATEWAY_EXEC_TIMEOUT_MS = 11 * 60_000;
 
+/** `gateway.leaseRequestTimeoutMs`'s default (P2, round 2 review): five minutes -- generous
+ * against a cold device provision-plus-boot, and well short of `execTimeoutMs`, since granting a
+ * lease should never take as long as a command a caller runs against the device afterward. */
+const DEFAULT_LEASE_REQUEST_TIMEOUT_MS = 5 * 60_000;
+
 /**
  * `gateway.routing`'s valid names (ADR 0005 §13/Decision 7) and its default. Declared here
  * rather than imported from `src/gateway/routing.ts`'s own registry: `core` stays
@@ -212,6 +217,18 @@ export interface Config {
      */
     readonly execTimeoutMs: number;
     /**
+     * P2 (round 2 review): bounds a forwarded `lease.request` -- the one uplink call that used
+     * to have no timeout of its own, parking a waiter `processing` where neither `timeoutMs`'s
+     * deadline check nor `lease.cancel` could reach it (`WaitQueue#armTimeout` declines to
+     * reject a `processing` waiter, and `cancelPending` answers `not-cancellable`) if the
+     * worker's own `lease.request` handler ever wedged. Generous relative to how long granting a
+     * lease can plausibly take -- provisioning plus a cold device boot -- and bounded well below
+     * `execTimeoutMs`, since granting a lease should never take as long as an arbitrary command
+     * a caller runs afterward might. Expiry maps to `WORKER_UNREACHABLE`, returning the waiter
+     * to a state `enqueue`'s deadline check and `cancelPending` can both act on again.
+     */
+    readonly leaseRequestTimeoutMs: number;
+    /**
      * ADR 0005 §13/Decision 7: which routing policy dispatch uses. Gateway-side, read once at
      * daemon start -- routing is "a pure function over worker views, a module with one entry
      * point selected by `gateway.routing`, the same shape as `CapacityStrategy`", never a
@@ -345,7 +362,8 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
- * `disconnectedRetentionMs` and `execTimeoutMs` are the ones the gateway itself reads. */
+ * `disconnectedRetentionMs`, `execTimeoutMs`, and `leaseRequestTimeoutMs` are the ones the
+ * gateway itself reads. */
 const WORKER_ONLY_GATEWAY_KEYS: readonly string[] = ["url", "token", "label"];
 
 /**
@@ -575,6 +593,7 @@ function defaultConfig(
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
+      leaseRequestTimeoutMs: DEFAULT_LEASE_REQUEST_TIMEOUT_MS,
       routing: DEFAULT_ROUTING_POLICY,
     },
     stalledTransition: {
@@ -641,6 +660,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       label: stringValue,
       disconnectedRetentionMs: positiveNumber,
       execTimeoutMs: positiveNumber,
+      leaseRequestTimeoutMs: positiveNumber,
       routing: stringUnion(ROUTING_POLICIES),
     }),
     capacity: objectValidator({

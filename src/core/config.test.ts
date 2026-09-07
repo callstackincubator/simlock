@@ -1011,6 +1011,7 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(config.gateway).toEqual({
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
+      leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free",
     });
   });
@@ -1136,6 +1137,20 @@ describe("loadConfig modes (ADR 0005)", () => {
     // running on the machine that owns the device. #118 is what reads it.
     const config = await load({ mode: "gateway" });
     expect(config.gateway.execTimeoutMs).toBe(11 * 60_000);
+  });
+
+  it("rejects a non-positive lease-request timeout", async () => {
+    // P2 (round 2 review): bounds the one forwarded uplink call that used to have none of its
+    // own -- see FleetLeaseCoordinator#withLeaseRequestTimeout.
+    await expect(load({ gateway: { leaseRequestTimeoutMs: 0 } })).rejects.toThrow(
+      "gateway.leaseRequestTimeoutMs",
+    );
+  });
+
+  it("defaults the gateway lease-request timeout to five minutes, well under the exec backstop", async () => {
+    const config = await load({ mode: "gateway" });
+    expect(config.gateway.leaseRequestTimeoutMs).toBe(5 * 60_000);
+    expect(config.gateway.leaseRequestTimeoutMs).toBeLessThan(config.gateway.execTimeoutMs);
   });
 
   it("lets an override name the mode, like every other key", async () => {

@@ -577,6 +577,9 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     execTimeoutMs: config.gateway.execTimeoutMs,
     idGenerator,
     leaseIndex,
+    // P2 (round 2 review): bounds a forwarded `lease.request`, the one uplink call that used to
+    // have no timeout of its own.
+    leaseRequestTimeoutMs: config.gateway.leaseRequestTimeoutMs,
     logger: logger.child("gateway"),
     routing,
     views: gatewayService.workers,

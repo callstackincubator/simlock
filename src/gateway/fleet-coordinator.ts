@@ -81,6 +81,10 @@ export interface FleetLeaseCoordinatorOptions {
    * authoritative for an ordinary timeout (it owns the process and can kill it) and is expected
    * to fire first, since the gateway's default is deliberately the longer of the two. */
   readonly execTimeoutMs: number;
+  /** P2 (round 2 review): `gateway.leaseRequestTimeoutMs` -- bounds a forwarded `lease.request`,
+   * the one uplink call that used to have no timeout of its own. See
+   * `#withLeaseRequestTimeout`'s own doc comment. */
+  readonly leaseRequestTimeoutMs: number;
   readonly logger?: Logger;
 }
 
@@ -354,23 +358,68 @@ export class FleetLeaseCoordinator {
    * `exec` awaited `client.exec` unbounded -- a worker that never answers at all (the case this
    * config value exists for, not an ordinary command timeout the worker's own `exec.timeoutMs`
    * already covers) hung the call and its SSE stream forever, and nothing here read the config
-   * value the schema, validator, and docs already described. Mirrors `WorkerLink#withTimeout`'s
-   * own race-and-cancel shape: whichever of the timer or `promise` settles first wins, and the
-   * other is inert from then on (the timer is cancelled on a real answer; a `client.exec` that
-   * eventually does answer after the timer already fired is simply ignored, not delivered late).
+   * value the schema, validator, and docs already described.
    */
   #withExecTimeout<Value>(promise: Promise<Value>, workerId: string): Promise<Value> {
+    return this.#raceTimeout(
+      promise,
+      this.options.execTimeoutMs,
+      () =>
+        new DispatchError(
+          "EXEC_TIMEOUT",
+          `Worker ${workerId} did not answer device.exec within gateway.execTimeoutMs (${String(this.options.execTimeoutMs)}ms)`,
+        ),
+    );
+  }
+
+  /**
+   * P2 (round 2 review): races a forwarded `lease.request` against
+   * `gateway.leaseRequestTimeoutMs`. Before this, the one uplink call this class makes with no
+   * bound of its own left a waiter `processing` -- a state neither `WaitQueue#armTimeout` (it
+   * declines to reject a `processing` waiter) nor `cancelPending` (`not-cancellable`) can reach
+   * -- for as long as a wedged worker cared to hold it, with `timeoutMs`/`lease.cancel`
+   * unenforceable the whole time (ADR §10). Expiry maps to `WORKER_UNREACHABLE`: not a fact
+   * about this worker's capacity (a real answer might still have been a grant), but the same
+   * "not reachable right now" story `#forwardToWorker`'s pre-flight check already answers that
+   * code for.
+   *
+   * If the worker does eventually answer after this already gave up, that answer is discarded
+   * here exactly as `#withExecTimeout`'s own doc describes -- a grant landing late becomes an
+   * orphan lease on the worker (this gateway rejected the waiter and issued nothing to release
+   * it by), the same class of gap H2/H8 already name for the RPCs this class does track state
+   * for. A genuinely wedged worker is rare enough, and `leaseRequestTimeoutMs` generous enough,
+   * that this is left as a known consequence rather than built out here.
+   */
+  #withLeaseRequestTimeout<Value>(promise: Promise<Value>, workerId: string): Promise<Value> {
+    return this.#raceTimeout(
+      promise,
+      this.options.leaseRequestTimeoutMs,
+      () =>
+        new DispatchError(
+          "WORKER_UNREACHABLE",
+          `Worker ${workerId} did not answer lease.request within gateway.leaseRequestTimeoutMs (${String(this.options.leaseRequestTimeoutMs)}ms)`,
+          { workerId },
+        ),
+    );
+  }
+
+  /**
+   * Mirrors `WorkerLink#withTimeout`'s race-and-cancel shape: whichever of the timer or
+   * `promise` settles first wins, and the other is inert from then on (the timer is cancelled on
+   * a real answer; a promise that eventually does settle after the timer already fired is
+   * simply ignored, not delivered late).
+   */
+  #raceTimeout<Value>(
+    promise: Promise<Value>,
+    timeoutMs: number,
+    buildTimeoutError: () => DispatchError,
+  ): Promise<Value> {
     return new Promise<Value>((resolve, reject) => {
       let settled = false;
-      const timer = this.options.clock.setTimer(this.options.execTimeoutMs, () => {
+      const timer = this.options.clock.setTimer(timeoutMs, () => {
         if (settled) return;
         settled = true;
-        reject(
-          new DispatchError(
-            "EXEC_TIMEOUT",
-            `Worker ${workerId} did not answer device.exec within gateway.execTimeoutMs (${String(this.options.execTimeoutMs)}ms)`,
-          ),
-        );
+        reject(buildTimeoutError());
       });
       promise.then(
         (value) => {
@@ -490,36 +539,39 @@ export class FleetLeaseCoordinator {
 
     let grant: LeaseGrant;
     try {
-      grant = await client.requestLease(
-        {
-          platform: waiter.request.platform,
-          model: waiter.request.model,
-          ...(waiter.request.osVersion === undefined
-            ? {}
-            : { osVersion: waiter.request.osVersion }),
-          ...(waiter.request.full === true ? { full: true } : {}),
-          requesterId: namespacedRequesterId,
-          // ADR §27a: only an admin session may set `owner`, and the gateway's uplink session
-          // always is one (§5). The worker stores this verbatim as the lease's `ownerId` instead
-          // of deriving it from the connection -- see `daemon/dispatcher.ts`'s worker-side change
-          // in this same PR.
-          owner: waiter.options.ownerId,
-          allowDownload: waiter.options.allowDownload ?? false,
-          // ADR §12: worker queues never hold gateway traffic. Every dispatch is `noWait`
-          // regardless of what the original caller asked the gateway for -- the *gateway's own*
-          // queue is where a "wait" request actually waits.
-          noWait: true,
-          ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
-        },
-        {
-          onProgress: (progress) => {
-            // ADR §11: "the first `progress` push" is one of the two signals a request is this
-            // worker's now -- device work having started means it is committed here even before
-            // the grant itself arrives.
-            announceDispatched();
-            this.#queue.notifyProgress(waiter, progress);
+      grant = await this.#withLeaseRequestTimeout(
+        client.requestLease(
+          {
+            platform: waiter.request.platform,
+            model: waiter.request.model,
+            ...(waiter.request.osVersion === undefined
+              ? {}
+              : { osVersion: waiter.request.osVersion }),
+            ...(waiter.request.full === true ? { full: true } : {}),
+            requesterId: namespacedRequesterId,
+            // ADR §27a: only an admin session may set `owner`, and the gateway's uplink session
+            // always is one (§5). The worker stores this verbatim as the lease's `ownerId`
+            // instead of deriving it from the connection -- see `daemon/dispatcher.ts`'s
+            // worker-side change in this same PR.
+            owner: waiter.options.ownerId,
+            allowDownload: waiter.options.allowDownload ?? false,
+            // ADR §12: worker queues never hold gateway traffic. Every dispatch is `noWait`
+            // regardless of what the original caller asked the gateway for -- the *gateway's
+            // own* queue is where a "wait" request actually waits.
+            noWait: true,
+            ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
           },
-        },
+          {
+            onProgress: (progress) => {
+              // ADR §11: "the first `progress` push" is one of the two signals a request is
+              // this worker's now -- device work having started means it is committed here even
+              // before the grant itself arrives.
+              announceDispatched();
+              this.#queue.notifyProgress(waiter, progress);
+            },
+          },
+        ),
+        workerId,
       );
     } catch (error: unknown) {
       // P1 (round 2 review): "an *immediate* NO_CAPACITY is the only answer that leaves it
@@ -542,15 +594,21 @@ export class FleetLeaseCoordinator {
       // was a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29
       // name `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens
       // to be called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart).
+      // P2 (round 2 review): `#withLeaseRequestTimeout`'s own `DispatchError` (never a
+      // `SimlockError` -- it never reached the worker at all) is forwarded as-is rather than
+      // falling into the generic "not a SimlockError" branch below, which would still answer the
+      // same `WORKER_UNREACHABLE` code but with a message that no longer says why.
       this.#queue.reject(
         waiter,
-        isSimlockError(error)
-          ? this.#classifyRelayedError(error, workerId)
-          : new DispatchError(
-              "WORKER_UNREACHABLE",
-              `Worker ${workerId} did not answer lease.request`,
-              { workerId },
-            ),
+        error instanceof DispatchError
+          ? error
+          : isSimlockError(error)
+            ? this.#classifyRelayedError(error, workerId)
+            : new DispatchError(
+                "WORKER_UNREACHABLE",
+                `Worker ${workerId} did not answer lease.request`,
+                { workerId },
+              ),
       );
       return;
     }
