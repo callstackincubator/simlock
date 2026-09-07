@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { SimlockError } from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, type Logger } from "../ports/index.js";
 import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator, NoCapacityError } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
@@ -55,7 +55,23 @@ class FakeDirectory implements WorkerDirectory {
   }
 }
 
-function harness(overrides: { readonly execTimeoutMs?: number } = {}) {
+/** Records every `warn` call -- for H6's own test, which asserts a mismatched ownerId echo is
+ * logged rather than silently swallowed. */
+class RecordingLogger implements Logger {
+  readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+
+  debug(): void {}
+  info(): void {}
+  warn(message: string, fields?: Record<string, unknown>): void {
+    this.warnings.push(fields === undefined ? { message } : { fields, message });
+  }
+  error(): void {}
+  child(): Logger {
+    return this;
+  }
+}
+
+function harness(overrides: { readonly execTimeoutMs?: number; readonly logger?: Logger } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const workers = new WorkerRegistry({
@@ -84,6 +100,7 @@ function harness(overrides: { readonly execTimeoutMs?: number } = {}) {
       })(),
     },
     leaseIndex,
+    ...(overrides.logger === undefined ? {} : { logger: overrides.logger }),
     routing: createRoutingPolicy("warm-then-free"),
     views: workers,
   });
@@ -340,6 +357,42 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(androidSettled).toBe(false);
     expect(coordinator.queueDepth).toBe(1);
+  });
+
+  it("indexes a fresh grant under the ownerId it forwarded, not the worker's own echo of it, and logs a mismatch (H6)", async () => {
+    const logger = new RecordingLogger();
+    const { coordinator, directory, leaseIndex, workers } = harness({ logger });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      grant: grantFixture({
+        lease: {
+          ...grantFixture().lease,
+          // A worker that ignores or rewrites the field it was asked to store verbatim --
+          // exactly the case this gateway must not trust for a fresh grant, even though
+          // `FleetLeaseIndex#rebuildFromWorker` (the reconnect path) has no better source and
+          // must trust it there.
+          ownerId: "worker-rewrote-this",
+        },
+      }),
+      kind: "grant",
+    });
+
+    const grant = await coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
+    );
+
+    expect(leaseIndex.ownerId(grant.lease.id)).toBe("agent-1");
+    expect(grant.lease.ownerId).toBe("agent-1");
+    expect(
+      logger.warnings.some(
+        (entry) =>
+          entry.fields?.echoedOwnerId === "worker-rewrote-this" &&
+          entry.fields.forwardedOwnerId === "agent-1",
+      ),
+    ).toBe(true);
   });
 
   it("forwards device.exec with the namespaced requesterId reaching the scripted worker client", async () => {

@@ -509,12 +509,30 @@ export class FleetLeaseCoordinator {
     });
   }
 
+  /**
+   * H6 (round 2 review): the entry's `ownerId` comes from `waiter.options.ownerId` -- what this
+   * gateway itself forwarded as `owner` in the `lease.request` a moment ago -- never from the
+   * worker's own echo of it (`grant.lease.ownerId`). Everything this gateway authorizes
+   * afterwards (`lease.renew`/`release`/`device.exec`) keys on the index's `ownerId`, so a worker
+   * that ignored or rewrote the field would otherwise redefine ownership at the gateway; the
+   * rebuild path (`FleetLeaseIndex#rebuildFromWorker`) has no better source and must trust the
+   * worker, but this path already knows the answer. A mismatched echo is logged -- it means
+   * either a worker bug or something worth knowing about, never silently swallowed.
+   */
   #settleGrant(waiter: FleetWaiter, workerId: string, grant: LeaseGrant): void {
     const gatewayLeaseId = `${workerId}.${grant.lease.id}`;
+    if (grant.lease.ownerId !== waiter.options.ownerId) {
+      this.#logger.warn("Worker echoed an ownerId different from the one the gateway forwarded", {
+        echoedOwnerId: grant.lease.ownerId,
+        forwardedOwnerId: waiter.options.ownerId,
+        gatewayLeaseId,
+        workerId,
+      });
+    }
     const entry: FleetLeaseEntry = {
       gatewayLeaseId,
       grantedAt: grant.lease.grantedAt,
-      ownerId: grant.lease.ownerId,
+      ownerId: waiter.options.ownerId,
       requesterId: waiter.options.requesterId,
       workerId,
       workerLeaseId: grant.lease.id,
@@ -594,7 +612,9 @@ export class FleetLeaseCoordinator {
     return entry;
   }
 
-  #projectRecord<Record extends { readonly id: string; readonly requesterId: string }>(
+  #projectRecord<
+    Record extends { readonly id: string; readonly requesterId: string; readonly ownerId: string },
+  >(
     record: Record,
     entry: FleetLeaseEntry,
   ): Record & { readonly worker?: { readonly id: string; readonly label?: string } } {
@@ -602,6 +622,9 @@ export class FleetLeaseCoordinator {
     return {
       ...record,
       id: entry.gatewayLeaseId,
+      // H6 (round 2 review): the index's own `ownerId` (trusted -- see `#settleGrant`), never
+      // this record's raw `ownerId` as a worker's own RPC answer echoed it back.
+      ownerId: entry.ownerId,
       requesterId: entry.requesterId,
       ...(workerLabel === undefined
         ? { worker: { id: entry.workerId } }
