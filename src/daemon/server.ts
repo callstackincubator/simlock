@@ -211,6 +211,25 @@ export interface DaemonServerCommonOptions {
    * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
    */
   readonly onSocketClaimed?: () => void;
+  /**
+   * #118: a gateway's own `OwnerRoutedFacts` (`src/gateway/owner-routed-facts.ts`'s
+   * `GatewayOwnerRoutedFacts`), replacing the inert one gateway mode has used since #117. Worker
+   * mode ignores this entirely -- it builds its own `OwnerRoutedFactBus` from the engine's
+   * registry, exactly as before. Structurally typed (not imported) so this module need not
+   * depend on `src/gateway`; see that class's own doc comment for why the shapes line up with
+   * no cast.
+   */
+  readonly ownerRoutedFacts?: OwnerRoutedFacts & { dispose(): void };
+  /**
+   * #118: every lease this daemon currently knows about, for `lease.release-all`'s self-push
+   * suppression (`#handleRequest`'s `lease.release-all` case below). Worker mode reads its own
+   * registry directly and never needs this (`this.#engine?.registry` already answers it); a
+   * gateway has no registry, so it supplies its fleet lease index's own entries here instead --
+   * without it, a fleet client's own `lease.release-all` would push every one of its own
+   * `lease-lost` facts back at itself, since nothing would ever mark them self-initiated.
+   * Optional so a test exercising neither engine nor gateway leases need not supply one.
+   */
+  readonly leaseSnapshot?: () => readonly { readonly id: string; readonly ownerId: string }[];
 }
 
 /**
@@ -326,7 +345,12 @@ export class DaemonServer {
       // than wrong.
       this.#engine = undefined;
       this.#dispatcher = options.dispatcher;
-      this.#ownerRoutedFacts = inertOwnerRoutedFacts();
+      // #118: a gateway now issues leases of its own, and `GatewayOwnerRoutedFacts` (built by
+      // `main.ts`, with the fleet's own lease index) is what routes their `lease-lost`/
+      // `device-unhealthy`/`device-recovered` facts to the right owner -- see that class's doc
+      // comment for why a worker's own republished `lease.expired` cannot be routed off its raw
+      // payload. Falls back to inert only for a gateway test harness that supplies neither.
+      this.#ownerRoutedFacts = options.ownerRoutedFacts ?? inertOwnerRoutedFacts();
     }
   }
 
@@ -947,7 +971,13 @@ export class DaemonServer {
         // and one granted inside the window is not suppressed, so its holder gets the push it
         // would have got for any other force-release. Neither can suppress a push for a lease
         // this principal does not own, which is the property that matters.
-        const releasing = (this.#engine?.registry.snapshot.leases ?? [])
+        // #118: a gateway has no `#engine`, so it falls back to `options.leaseSnapshot` (its
+        // fleet lease index) -- see that option's own doc comment.
+        const releasing = (
+          this.#engine?.registry.snapshot.leases ??
+          this.options.leaseSnapshot?.() ??
+          []
+        )
           .filter((lease) => connection.role === "admin" || lease.ownerId === connection.principal)
           .map((lease) => lease.id);
         for (const leaseId of releasing) connection.selfInitiatedReleases.add(leaseId);

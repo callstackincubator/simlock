@@ -21,13 +21,22 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseAcquisitionCoordinator | implemented |
-| `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator | implemented |
+| `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway, ADR 0005 §11 — its own fleet queue's admission, before any worker is chosen) | implemented |
+| `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway) | implemented |
 | `lease.granted` | lease id, device id, requester | a device was assigned and handed out | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
 | `lease.renewed` | lease id, new deadline | a `lease.renew` succeeded — whether it came from `simlock lease renew`, `POST /v1/leases/{id}/renew`, or the renew timer a running `simlock lease` / MCP session keeps over its own lease. There is one renew path and this is it | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
 | `lease.released` | lease id, device id, reason (explicit/killed/device-lost), owner id | an explicit `lease.release` (which is what a `simlock lease` holder does on its way out), (killed) an operator `release --all` or `nuke`, or (device-lost) a leased device could not be recovered after it stopped running outside simlock. Closing a connection is not a release and never emits this | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
 | `lease.expired` | lease id, device id, owner id | the lease's deadline passed with no `lease.renew` behind it — the grant-time TTL, or the TTL of the last renew, simply ran out. This is the one way a lease ends without somebody asking, and the only bound on a holder that was killed outright | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
-| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled) | a request ended without a grant; `cancelled` is an explicit single-request cancel (`LeaseEngine#cancelPending`, backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter -- one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue | implemented |
+| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled) | a request ended without a grant; `cancelled` is an explicit single-request cancel (`LeaseEngine#cancelPending`, backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter -- one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue (worker) / FleetLeaseCoordinator (gateway) | implemented |
+
+On a **gateway**, these three are its own fleet queue's facts (ADR 0005 §11/§14),
+emitted by `FleetLeaseCoordinator` and never by the worker whose device is
+eventually granted — `lease.granted`/`renewed`/`released`/`expired` for a fleet
+lease arrive already relayed from the owning worker (see "Fleet (gateway
+mode)" below), so a gateway never emits those four itself. `already-leased`
+on a gateway is the fleet-wide one-lease-per-requester check (§14, keyed on
+`requesterId`), answered from the gateway's own lease index before any
+worker is ever contacted.
 
 ## Device lifecycle
 
@@ -95,29 +104,32 @@ progress gap this leaves.
 
 ## Fleet (gateway mode)
 
-These are the facts a daemon running as a **gateway** emits about the workers
+These are the facts a daemon running as a **gateway** emits about the fleet
 connected to it ([ADR 0005](adr/0005-gateway-and-worker-modes.md)). A worker
-never emits them — it has no workers of its own — and a gateway emits none of
-the device- or lease-lifecycle facts above on its own behalf, because it owns
-no devices. All are **planned (ADR 0005)**.
+never emits them — it has no workers or fleet queue of its own — and a
+gateway emits none of the device-lifecycle facts above on its own behalf,
+because it owns no devices.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `worker.connected` | worker id, label, daemon version, negotiated protocol range, platforms, capacity per platform, download policy | a worker's uplink completed its `hello` and the gateway committed the resulting worker view — including a reconnect, which is a new connection and so a new fact | WorkerRegistry | planned (ADR 0005) |
-| `worker.rejected` | `{ reason, workerId?, label?, protocol? }` — reason is `unauthenticated` (the join token was missing or unrecognized, `401`) or `forbidden` (a valid token of the wrong role, `403`) | an uplink was refused at the door, before it could become a worker at all. Every field but `reason` is optional, because a dial that fails authentication proves no identity: there may be no worker id or label to report, and `protocol` is present only when the dial advertised a range before it was refused. Nothing enters the registry either way. A **version mismatch is not a rejection** — that uplink authenticated, so its worker enters the registry as `incompatible` (see the note under this table) | WorkerRegistry | planned (ADR 0005) |
-| `worker.disconnected` | worker id, label, reason (closed/token-revoked), connected duration, leases still held on it | the uplink closed and the view was marked `disconnected`. The worker's leases are *not* ended by this: the gateway never guesses a lease is gone before the worker says so | WorkerRegistry | planned (ADR 0005) |
-| `worker.removed` | worker id, label, initiator (operator/retention), time since disconnect | a disconnected worker's view was forgotten — by `worker.remove`, or because `gateway.disconnectedRetentionMs` elapsed. Never emitted for a connected worker (`WORKER_CONNECTED` refuses that), nor while gateway-issued leases on it are still known | WorkerRegistry | planned (ADR 0005) |
-| `worker.drain-started` | worker id, label, leases held at that moment | `worker.drain` committed: the worker takes no new dispatches and keeps the leases it has | WorkerRegistry | planned (ADR 0005) |
-| `worker.drain-ended` | worker id, label | `worker.undrain` committed and the worker became dispatchable again. Nothing else ends a drain: the flag lives in the gateway's persisted worker registry, so it survives both a worker reconnect and a gateway restart, and this fact only ever follows an explicit undrain | WorkerRegistry | planned (ADR 0005) |
-| `request.dispatched` | request id, worker id, requester id, platform, model, selection reason (warm-hit/free-capacity), time spent queued | the gateway's dispatch sent a queued request to a worker and the worker took it (a grant, or device work already under way). A `NO_CAPACITY` refusal is a stale view, not a dispatch, and emits nothing — the request stays queued | FleetDispatcher | planned (ADR 0005) |
+| `worker.connected` | worker id, label, worker's daemon version | a worker's uplink opened and its `hello` completed, so the gateway can drive it. A worker whose `hello` found no overlapping protocol range emits nothing: it is in the registry as `incompatible`, which is where an operator finds it | WorkerRegistry | implemented |
+| `worker.rejected` | `{ reason, workerId?, label?, protocol? }` — reason is `unauthenticated` (the join token was missing or unrecognized, `401`) or `forbidden` (a valid token of the wrong role, `403`) | an uplink was turned away at the door, before any session existed. Every field but `reason` is optional, because a dial that fails authentication proves no identity. Version skew is deliberately not one of these: that uplink authenticated, so the worker enters the registry as `incompatible` and emits nothing (see the note below the table) | WorkerRegistry | implemented |
+| `worker.disconnected` | worker id, label, lease count | a worker's uplink closed. `leaseCount` is what its view still shows it holding — how much is stranded, and why the view is kept rather than dropped, not ended: the gateway never guesses a lease is gone before the worker says so | WorkerRegistry | implemented |
+| `worker.removed` | worker id, label, reason (operator/retention) | a disconnected worker's view was forgotten: by `simlock worker remove`, or because every gateway-issued lease on it had expired and `gateway.disconnectedRetentionMs` elapsed. Never emitted for a connected worker (`WORKER_CONNECTED` refuses that) | WorkerRegistry | implemented |
+| `worker.drain-started` | worker id, label | `simlock worker drain` flagged a worker: it keeps its leases and receives no new dispatches | WorkerRegistry | implemented |
+| `worker.drain-ended` | worker id, label | `simlock worker undrain` cleared that flag. Nothing else ends a drain: the flag lives in the gateway's persisted worker registry, so it survives both a worker reconnect and a gateway restart | WorkerRegistry | implemented |
+| `request.dispatched` | `{ requestId, workerId }` | the gateway's fleet queue sent a queued request to a worker with `noWait: true`, and the worker took it — the grant itself, or its first `progress` push, whichever arrives first (ADR 0005 §11: device work having started means the request is that worker's now). An immediate `NO_CAPACITY` is a stale view, not a dispatch, and emits nothing — the request stays queued and is retried on the next pass | FleetLeaseCoordinator | implemented |
+
+Drain and undrain are idempotent, and an event is a fact about a *change*:
+draining an already-drained worker succeeds and emits nothing.
 
 `worker.rejected` exists because the alternative is silence (ADR 0005 §22): a
 worker whose credential is refused produces no `worker.connected`, and
 without this fact an operator staring at `simlock worker list` sees a machine
-that simply never appears, with nothing anywhere to say why. It is deliberately *not* a
-`worker.disconnected` with another reason — nothing connected, so nothing
-disconnected, and a fact whose subject never existed should not borrow the
-vocabulary of one that did.
+that simply never appears, with nothing anywhere to say why. It is
+deliberately *not* a `worker.disconnected` with another reason — nothing
+connected, so nothing disconnected, and a fact whose subject never existed
+should not borrow the vocabulary of one that did.
 
 **A protocol mismatch is neither of those.** That uplink presented a valid
 join token and authenticated; what failed was `hello`'s range negotiation. So
@@ -129,7 +141,7 @@ nothing usable connected. That is also why `incompatible` is not one of
 `worker.disconnected`'s reasons: an incompatible worker was never a connected
 worker to lose.
 
-**`device.exec` emits no event, and that is deliberate.** It is the one new
+**`device.exec` emits no event, and that is deliberate.** It is the one
 operation here with no fact of its own. Running a command against a device is
 not a state change simlock owns — the lease that authorizes it already
 emitted `lease.granted`, the device's own state is untouched, and a fleet
@@ -139,14 +151,16 @@ agents ran on their devices is a different feature with different retention
 needs, not a line in this catalogue.
 
 **Every worker's own business events are republished on the gateway's bus**
-with `workerId` added to their payload, and land in the gateway's ring
-buffer, so `simlock events --follow` against a gateway shows the fleet
-(`lease.granted`, `device.ready`, `cleanup.executed`, and the rest, each
-naming the machine it happened on). That addition is additive per events rule
-6, and it is the only change: payloads are otherwise relayed as the worker
-emitted them, with the worker's own emitting module intact — the gateway
-observed the fact, it did not commit it, so re-attributing it would be a
-lie.
+with `workerId` added to the payload, under their original names and with
+their original emitting module — the fact happened in that worker's lease
+engine or reaper, and rewriting either would make the audit trail lie about
+where. That is what makes `simlock events` and `simlock events --follow`
+against a gateway a fleet-wide view (`lease.granted`, `device.ready`,
+`cleanup.executed`, and the rest, each naming the machine it happened on),
+and it is the one place a payload documented above arrives with an extra
+field: additive, and only ever on a gateway. The seven events in this
+section's own table are the gateway's own, and carry no `workerId` beyond
+the worker they are about.
 
 Two consequences of relaying rather than owning: the gateway's ring buffer
 only holds what arrived while its uplinks were up (a worker's events from
@@ -181,6 +195,14 @@ fleet-wide view, and it is the one place a payload documented above arrives
 with an extra field: additive, and only ever on a gateway. The six events in
 this section are the gateway's own, and carry no `workerId` beyond the worker
 they are about.
+A relayed `lease.expired`/`lease.released`/`device.crash-detected`/
+`device.recovered` names the *worker's own* lease/requester ids in its
+payload, not the gateway's — `GatewayOwnerRoutedFacts` (the gateway's
+`OwnerRoutedFacts`) is what resolves the real fleet `ownerId` and gateway
+lease id from the fleet lease index before routing the corresponding
+`lease-lost`/`device-unhealthy`/`device-recovered` push to a client
+connection, precisely so a relayed payload's own `ownerId` (the gateway's own
+uplink principal, never a fleet client's) is never used to route a push.
 
 ## Conventions recap
 

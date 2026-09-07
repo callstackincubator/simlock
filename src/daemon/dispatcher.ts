@@ -286,13 +286,24 @@ export class Dispatcher {
     const requesterId = input.requesterId ?? session.principal;
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
+    // ADR 0005 §27a: `owner` is read only from an `admin` session -- the gateway's uplink
+    // session, forwarding the principal it authorized the request against on its own side. Any
+    // other role naming one is rejected outright rather than silently ignored: a caller free to
+    // name someone else as owner would be naming its way into their lease, and "ignore the
+    // field" would hide that a non-admin caller tried. Omitting it keeps today's behaviour --
+    // the owner is always the calling connection.
+    if (input.owner !== undefined && session.role !== "admin") {
+      throw new DispatchError(
+        "FORBIDDEN",
+        "Only an admin session may set lease.request's `owner` field",
+      );
+    }
+    const ownerId = input.owner ?? session.principal;
     try {
       return await this.options.leases.request(request, {
         allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
         noWait: input.noWait ?? false,
-        // ADR §4: the lease's owner is always the session principal -- never client-supplied,
-        // unlike `requesterId`.
-        ownerId: session.principal,
+        ownerId,
         requesterId,
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),

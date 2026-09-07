@@ -50,6 +50,25 @@ const DEFAULT_DISCONNECTED_RETENTION_MS = 24 * 60 * 60_000;
 const DEFAULT_GATEWAY_EXEC_TIMEOUT_MS = 11 * 60_000;
 
 /**
+ * `gateway.routing`'s valid names (ADR 0005 §13/Decision 7) and its default. Declared here
+ * rather than imported from `src/gateway/routing.ts`'s own registry: `core` stays
+ * platform-agnostic and gateway-unaware (`AGENTS.md`/`architecture.md`), so this list is
+ * re-declared the same way `src/contract/schemas.ts` re-declares it independently rather than
+ * importing across its own boundary -- three places name `"warm-then-free"`, the same
+ * redundancy `capacity.strategy`'s "fixed"/"resource" already carries between `core` and the
+ * contract. Adding a second policy means adding it here, in the gateway's own registry, and in
+ * the contract schema -- one line each, never a shared import.
+ */
+const ROUTING_POLICIES = ["warm-then-free"] as const;
+const DEFAULT_ROUTING_POLICY = "warm-then-free";
+
+/** The literal union `ROUTING_POLICIES` names -- `Config["gateway"]["routing"]`'s type, so it
+ * agrees with the contract's own `z.enum(["warm-then-free"])` (also re-declared, never
+ * imported) instead of widening to a bare `string` the boundary between the two would otherwise
+ * force. */
+type RoutingPolicyName = (typeof ROUTING_POLICIES)[number];
+
+/**
  * `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
  * on this worker before it is killed and the operation fails with `EXEC_TIMEOUT`. Ten minutes,
  * because the commands this wraps are installs and boots-worth of `adb wait-for-device`, not
@@ -192,6 +211,13 @@ export interface Config {
      * which is what proxies `device.exec`; declared now so the key does not appear mid-series.
      */
     readonly execTimeoutMs: number;
+    /**
+     * ADR 0005 §13/Decision 7: which routing policy dispatch uses. Gateway-side, read once at
+     * daemon start -- routing is "a pure function over worker views, a module with one entry
+     * point selected by `gateway.routing`, the same shape as `CapacityStrategy`", never a
+     * per-request choice. `"warm-then-free"` is the only value in v1 (`ROUTING_POLICIES` above).
+     */
+    readonly routing: RoutingPolicyName;
   };
   readonly stalledTransition: {
     /**
@@ -549,6 +575,7 @@ function defaultConfig(
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
+      routing: DEFAULT_ROUTING_POLICY,
     },
     stalledTransition: {
       thresholdMultiplier: 3,
@@ -614,6 +641,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       label: stringValue,
       disconnectedRetentionMs: positiveNumber,
       execTimeoutMs: positiveNumber,
+      routing: stringUnion(ROUTING_POLICIES),
     }),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),

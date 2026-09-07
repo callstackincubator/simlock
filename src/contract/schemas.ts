@@ -178,6 +178,16 @@ export const leaseRecordSchema = z.object({
   ttlMs: z.number(),
   ttlDeadline: z.number(),
   lastRenewedAt: z.number(),
+  /**
+   * ADR 0005 §18: "the lease object gains `worker: { id, label }` (additive) so a client and
+   * the console can tell where the device lives. A worker's network address is never exposed."
+   * Additive and gateway-only -- a worker granting its own local lease has no second machine to
+   * name and never sets this; a gateway stamps it on every lease it forwards a grant/renew for,
+   * using the same worker id `id` already encodes (§16: a gateway lease id is
+   * `<workerId>.<workerLeaseId>`) plus the worker's display `label`, when it has one, for a
+   * console to render without a second lookup.
+   */
+  worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
 });
 
 const leaseTimingSchema = z.object({
@@ -460,6 +470,14 @@ export const configSchema = z.object({
     label: z.string().optional(),
     disconnectedRetentionMs: z.number(),
     execTimeoutMs: z.number(),
+    /** ADR 0005 §13/Decision 7: which routing policy dispatch uses. Gateway-side, read once at
+     * construction like `capacity.strategy` -- never a per-request choice. The set of names is
+     * re-declared here rather than imported from `src/gateway/routing.ts`'s own registry, the
+     * same way `capacityConfigSchema` above re-declares "fixed"/"resource" instead of importing
+     * `src/core/capacity`'s: this module describes wire shapes and imports no engine (its own
+     * header comment), gateway or worker alike. `"warm-then-free"` is the only policy in v1;
+     * adding a second means adding it to both registries, exactly as a capacity strategy does. */
+    routing: z.enum(["warm-then-free"]),
   }),
   stalledTransition: z.object({
     thresholdMultiplier: z.number(),

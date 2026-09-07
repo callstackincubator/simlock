@@ -35,6 +35,14 @@ import {
 import { ExecOutputDeliveryStalledError } from "../ports/index.js";
 import type { SimlockErrorCode } from "../contract/index.js";
 import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./dispatcher.js";
+// #118: the gateway's own `NoCapacityError` (`src/gateway/fleet-coordinator.ts`) is a distinct
+// class from the worker's -- `src/gateway` cannot import `lease-acquisition-coordinator.ts`
+// (ADR §33) -- so it needs its own `instanceof` branch below rather than colliding with the
+// worker's import above. `QueueTimeoutError`/`RequestCancelledError`/`RequesterAlreadyLeasedError`
+// need no such branch: the gateway's `queue.ts` re-exports `core/wait-queue.ts`'s own classes
+// rather than redeclaring them, so a fleet-thrown one is already `instanceof` the same class the
+// branches below (and `RequestCancelledError`'s absence, mirroring the worker's own gap) check.
+import { NoCapacityError as FleetNoCapacityError } from "../gateway/fleet-coordinator.js";
 import { AdminAuthenticationFailedError } from "./session.js";
 
 /**
@@ -75,7 +83,7 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof AdminAuthenticationFailedError) {
     return "ADMIN_AUTHENTICATION_FAILED";
   }
-  if (error instanceof NoCapacityError) {
+  if (error instanceof NoCapacityError || error instanceof FleetNoCapacityError) {
     return "NO_CAPACITY";
   }
   if (error instanceof QueueTimeoutError) {

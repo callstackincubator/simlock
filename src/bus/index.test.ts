@@ -158,6 +158,7 @@ describe("EventBus", () => {
       | "worker.removed"
       | "worker.drain-started"
       | "worker.drain-ended"
+      | "request.dispatched"
     >();
     expectTypeOf<EventMap>().toMatchTypeOf<Record<EventName, object>>();
   });

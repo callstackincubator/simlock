@@ -6,7 +6,18 @@ import type { DispatchSession } from "../daemon/dispatch.js";
 import { FakeClock } from "../ports/index.js";
 import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
-import { deviceFixture, leaseFixture, statusFixture } from "./test-support.js";
+import { FleetLeaseCoordinator, NoCapacityError } from "./fleet-coordinator.js";
+import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
+import { FleetLeaseIndex } from "./lease-index.js";
+import { createRoutingPolicy } from "./routing.js";
+import {
+  catalogFixture,
+  deviceFixture,
+  grantFixture,
+  leaseFixture,
+  ScriptedWorkerClient,
+  statusFixture,
+} from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
 const gatewayConfig = {
@@ -15,7 +26,11 @@ const gatewayConfig = {
   downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },
   eventBuffer: { capacity: 100 },
   exec: { timeoutMs: 600_000 },
-  gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
+  gateway: {
+    disconnectedRetentionMs: 24 * 60 * 60_000,
+    execTimeoutMs: 11 * 60_000,
+    routing: "warm-then-free" as const,
+  },
   health: {
     enabled: false,
     maxConcurrentRecoveries: 1,
@@ -65,6 +80,26 @@ class FakeTokens implements GatewayTokenStore {
   }
 }
 
+/** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
+ * prefix is that principal plus a trailing `:`, the same shape `worker-registry.test.ts` uses. */
+const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
+
+/** A `WorkerDirectory` a test populates by hand -- see `fleet-coordinator.test.ts`'s own copy
+ * for the fuller doc comment; this file only ever needs one worker at a time. */
+class FakeDirectory implements WorkerDirectory {
+  readonly clients = new Map<string, ScriptedWorkerClient>();
+
+  add(workerId: string, client: ScriptedWorkerClient): void {
+    this.clients.set(workerId, client);
+  }
+
+  target(workerId: string): WorkerDispatchTarget | undefined {
+    const client = this.clients.get(workerId);
+    if (client === undefined) return undefined;
+    return { client: () => client.asClient(), reachable: true, refresh: async () => {}, workerId };
+  }
+}
+
 function harness() {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -78,18 +113,46 @@ function harness() {
   const tokens = new FakeTokens();
   /** C-2: every id `closeUplinksForToken` was actually called with, in call order. */
   const closedUplinkTokens: string[] = [];
+  const directory = new FakeDirectory();
+  const leaseIndex = new FleetLeaseIndex(GATEWAY_REQUESTER_PREFIX);
+  const coordinator = new FleetLeaseCoordinator({
+    clock,
+    directory,
+    eventBus,
+    idGenerator: {
+      generate: (() => {
+        let next = 1;
+        return () => `${next++}`;
+      })(),
+    },
+    leaseIndex,
+    routing: createRoutingPolicy("warm-then-free"),
+    views: workers,
+  });
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
     closeUplinksForToken: async (tokenId) => {
       closedUplinkTokens.push(tokenId);
     },
     config: gatewayConfig,
+    coordinator,
     eventBus,
     health: () => "running",
+    leaseIndex,
     tokens,
     workers,
   });
-  return { clock, closedUplinkTokens, dispatcher, eventBus, tokens, workers };
+  return {
+    clock,
+    closedUplinkTokens,
+    coordinator,
+    directory,
+    dispatcher,
+    eventBus,
+    leaseIndex,
+    tokens,
+    workers,
+  };
 }
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
@@ -231,9 +294,27 @@ describe("GatewayDispatcher", () => {
   it("shows a non-admin session no fleet leases at all, regardless of its principal", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
-    // `leaseFixture`'s ownerId ("agent-1") is a worker-local principal; this session's own
-    // principal is deliberately the exact same string, since a principal collision -- not just
-    // a mismatch -- is the case worth a session leaking a machine's own local lease.
+    workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
+
+    // The worker's lease is a worker-local one -- never indexed by this gateway (only
+    // `rebuildFromWorker`/an actual grant adds an entry) -- so a non-admin session holds none of
+    // it, exactly as an unrelated fleet client should.
+    await expect(
+      dispatcher.dispatch("lease.list", {}, session({ principal: "someone", role: "agent" })),
+    ).resolves.toEqual({ leases: [] });
+  });
+
+  // #118 replaced the P2 namespace-comparison this test used to pin with the lease index: a
+  // non-admin session's `lease.list` now iterates `leaseIndex.all()` rather than scanning every
+  // worker's raw leases, so a worker's own local lease is never even a candidate -- it cannot
+  // "match" a session by coincidence of principal spelling, because it is never looked up by
+  // principal at all. Still worth its own test: this is the case that would tell a correct
+  // implementation apart from a naive "compare raw principals" one.
+  it("does not let a gateway session's raw principal match a worker's own local lease owner of the same name", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", undefined, undefined);
+    // `leaseFixture`'s ownerId ("agent-1") is an un-namespaced *local* principal -- exactly what
+    // a worker's own agent looks like, and never added to this gateway's lease index.
     workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
 
     await expect(
@@ -241,22 +322,36 @@ describe("GatewayDispatcher", () => {
     ).resolves.toEqual({ leases: [] });
   });
 
-  // The behavior this round's fix actually changes: the deleted comparison, when fed the one
-  // input that made it succeed (a lease whose `ownerId` is that session's principal namespaced
-  // with the gateway's own `gw:<instanceId>:` prefix -- the shape a real gateway-issued lease
-  // would carry once #118 lands, but nothing in this PR ever produces), used to return that
-  // lease to a non-admin session. This asserts the deliberate regression: `#leaseList` no
-  // longer has any code path that returns a lease to a non-admin session, matching or not,
-  // until #118 replaces it with `FleetLeaseIndex`'s real filter.
-  it("does not resurrect visibility through a namespaced ownerId nothing in this PR can produce", async () => {
+  // The positive match: a lease this gateway issued, rebuilt purely from a worker's reported
+  // view (§30's reconnect path -- see `fleet-coordinator.test.ts` for the admission-path
+  // equivalent), is rewritten to its gateway id and fleet-level requester and is visible to the
+  // owner that requested it (ADR §27a: `ownerId` is the real principal, round-tripped -- not
+  // namespaced, unlike `requesterId`).
+  it("sees a gateway-issued lease rebuilt from a worker's view, rewritten to its gateway id", async () => {
     const { dispatcher, workers } = harness();
-    workers.connected("wrk_1", undefined, undefined);
-    const lease = { ...leaseFixture("lease_1", "dev_1"), ownerId: "gw:instance-1:agent-1" };
+    workers.connected("wrk_1", "mac-mini-1", undefined);
+    const lease = {
+      ...leaseFixture("lease_1", "dev_1"),
+      ownerId: "agent-1",
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
+    };
+    // `workers.refresh` alone is enough: `FleetLeaseCoordinator` is subscribed to this same
+    // registry's `onViewsChanged` and rebuilds its lease index from every view it sees, exactly
+    // as it would from a real `WorkerLink`'s refresh -- nothing in this test drives the index by
+    // hand.
     workers.refresh("wrk_1", { leases: [lease] });
 
     await expect(
       dispatcher.dispatch("lease.list", {}, session({ principal: "agent-1", role: "agent" })),
-    ).resolves.toEqual({ leases: [] });
+    ).resolves.toEqual({
+      leases: [
+        expect.objectContaining({
+          id: "wrk_1.lease_1",
+          requesterId: "agent-1",
+          worker: { id: "wrk_1", label: "mac-mini-1" },
+        }),
+      ],
+    });
   });
 
   it("replays and subscribes to its own bus, which carries the fleet's events", async () => {
@@ -326,20 +421,126 @@ describe("GatewayDispatcher", () => {
         });
       },
     );
+  });
 
-    it.each([
-      ["lease.request", { model: "iPhone 17", platform: "ios" }],
-      ["lease.renew", { leaseId: "lease_1" }],
-      ["lease.release", { leaseId: "lease_1" }],
-      ["lease.cancel", {}],
-      ["lease.release-all", {}],
-      ["device.exec", { leaseId: "lease_1", tool: "adb", args: ["devices"] }],
-    ] as const)("%s waits for fleet routing", async (operation, input) => {
+  describe("lease lifecycle and device.exec (#118)", () => {
+    it("forwards lease.request through the fleet coordinator and answers UNKNOWN_LEASE for renew/release/exec against an id it never issued", async () => {
+      const { dispatcher } = harness();
+
+      // No worker connected at all: a `noWait` request has nowhere to go and is refused
+      // immediately, rather than the pre-#118 permanent `UNSUPPORTED_IN_GATEWAY_MODE`.
+      // `NoCapacityError` itself, not a `{code}` shape: mapping it to `NO_CAPACITY` is
+      // `daemon/error-code.ts`'s job, one layer above this unit test.
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17", noWait: true, platform: "ios" },
+          session({ role: "agent" }),
+        ),
+      ).rejects.toBeInstanceOf(NoCapacityError);
+
+      for (const [operation, input] of [
+        ["lease.renew", { leaseId: "wrk_ghost.lease_1" }],
+        ["lease.release", { leaseId: "wrk_ghost.lease_1" }],
+        ["device.exec", { args: [], leaseId: "wrk_ghost.lease_1", tool: "adb" }],
+      ] as const) {
+        await expect(
+          dispatcher.dispatch(operation, input, session({ role: "agent" })),
+        ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
+      }
+    });
+
+    it("answers not-found for lease.cancel and an empty result for lease.release-all with nothing queued or leased", async () => {
       const { dispatcher } = harness();
 
       await expect(
-        dispatcher.dispatch(operation as OperationName, input, session()),
-      ).rejects.toMatchObject({ code: "UNSUPPORTED_IN_GATEWAY_MODE", details: { operation } });
+        dispatcher.dispatch("lease.cancel", {}, session({ role: "agent" })),
+      ).resolves.toEqual({ result: "not-found" });
+      await expect(dispatcher.dispatch("lease.release-all", {}, session())).resolves.toEqual({
+        leaseIds: [],
+      });
+    });
+
+    // ADR §27a's whole point: the owner a rebuilt lease authorizes against has to be the real
+    // principal the worker round-tripped back, not this gateway's own uplink principal -- and it
+    // has to work on an index built purely by `rebuildFromWorker` (a reconnect), never through
+    // `coordinator.request` in this process. This is the one place a naive "derive ownerId from
+    // the connection" implementation and a correct one visibly disagree.
+    it("authorizes lease.renew for the original requester and forbids everyone else, on a lease rebuilt after reconnect", async () => {
+      const { dispatcher, directory, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, undefined);
+      workers.refresh("wrk_1", {
+        leases: [
+          {
+            ...leaseFixture("lease_1", "dev_1"),
+            ownerId: "alice-principal",
+            requesterId: `${GATEWAY_REQUESTER_PREFIX}alice`,
+          },
+        ],
+      });
+      const gatewayLeaseId = "wrk_1.lease_1";
+      client.renewLeaseQueue.push({
+        kind: "ok",
+        record: {
+          ...leaseFixture("lease_1", "dev_1"),
+          ownerId: "alice-principal",
+          ttlMs: 1_800_000,
+        },
+      });
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.renew",
+          { leaseId: gatewayLeaseId },
+          session({ principal: "alice-principal", role: "agent" }),
+        ),
+      ).resolves.toMatchObject({ id: gatewayLeaseId, requesterId: "alice" });
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.renew",
+          { leaseId: gatewayLeaseId },
+          session({ principal: "mallory-principal", role: "agent" }),
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("forwards device.exec to the worker that holds the lease, gated on the caller owning it", async () => {
+      const { coordinator, directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const grant = await coordinator.request(
+        { model: "iPhone 17", platform: "ios" },
+        { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
+      );
+      client.execQueue.push({ exitCode: 3, kind: "ok" });
+
+      await expect(
+        dispatcher.dispatch(
+          "device.exec",
+          { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+          session({ principal: "agent-1", role: "agent" }),
+        ),
+      ).resolves.toEqual({ exitCode: 3 });
+
+      await expect(
+        dispatcher.dispatch(
+          "device.exec",
+          { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+          session({ principal: "someone-else", role: "agent" }),
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 
@@ -352,7 +553,9 @@ describe("GatewayDispatcher", () => {
       "driver.passthrough": { args: [], tool: "adb" },
       "lease.release": { leaseId: "lease_1" },
       "lease.renew": { leaseId: "lease_1" },
-      "lease.request": { model: "iPhone 17", platform: "ios" },
+      // `noWait: true` matters here: with no worker connected, an ordinary "wait" request would
+      // sit in the fleet queue forever and hang this test rather than answer promptly.
+      "lease.request": { model: "iPhone 17", noWait: true, platform: "ios" },
       "token.create": { role: "agent" },
       "token.revoke": { id: "tok_1" },
       "worker.drain": { workerId: "wrk_1" },

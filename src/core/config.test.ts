@@ -1011,6 +1011,7 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect(config.gateway).toEqual({
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
+      routing: "warm-then-free",
     });
   });
 

@@ -232,6 +232,13 @@ export interface EventMap {
   /** ADR 0005 §9: the worker keeps its leases and receives no new dispatches from here on. */
   "worker.drain-started": { readonly workerId: string; readonly label?: string };
   "worker.drain-ended": { readonly workerId: string; readonly label?: string };
+  /**
+   * ADR 0005 §11/§22 (#118): the gateway's own dispatch sent a queued request to a worker and
+   * the worker took it (a grant, or the first `progress` push, whichever came first -- device
+   * work having started means the request is that worker's now). A `NO_CAPACITY` refusal is a
+   * stale view, not a dispatch, and emits nothing -- the request stays queued.
+   */
+  "request.dispatched": { readonly requestId: string; readonly workerId: string };
   /** Payloads owned by the driver module that refused the root; see `DriverRejection`. */
   "driver.root-rejected": {
     readonly platform: string;

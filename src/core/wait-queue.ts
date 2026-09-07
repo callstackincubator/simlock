@@ -130,6 +130,18 @@ export class WaitQueue {
     return this.#waiters[0];
   }
 
+  /**
+   * Every waiter currently holding a queue slot (`queued` or `processing`), oldest first. The
+   * single-lease acquisition path never needs this -- it only ever advances `head` -- but a
+   * caller that places requests across more than one resource (the gateway's fleet queue,
+   * ADR 0005 §11: "for each queued request, oldest first, the routing policy picks an eligible
+   * worker ... a request no worker can serve right now is passed over") has to walk the whole
+   * FIFO in order rather than block on its front. Returns a snapshot copy, not a live view.
+   */
+  list(): readonly Waiter[] {
+    return [...this.#waiters];
+  }
+
   hasPendingRequester(requesterId: string): boolean {
     return this.#pendingRequesters.has(requesterId);
   }

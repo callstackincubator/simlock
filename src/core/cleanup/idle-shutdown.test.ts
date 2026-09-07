@@ -7,7 +7,11 @@ const config: Config = {
   mode: "worker",
   exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 0 },
-  gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
+  gateway: {
+    disconnectedRetentionMs: 24 * 60 * 60_000,
+    execTimeoutMs: 11 * 60_000,
+    routing: "warm-then-free" as const,
+  },
   drivers: {},
   eventBuffer: { capacity: 1 },
   health: {
