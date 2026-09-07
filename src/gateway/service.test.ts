@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
-import { FakeClock, MemoryUplinkTransport, type UplinkAuthOutcome } from "../ports/index.js";
+import {
+  FakeClock,
+  MemoryUplinkTransport,
+  type Logger,
+  type UplinkAuthOutcome,
+} from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { GatewayService } from "./service.js";
 import {
@@ -18,7 +23,25 @@ import { MAX_CONSECUTIVE_REFRESH_TIMEOUTS, WORKER_CALL_TIMEOUT_MS } from "./work
 const RETENTION_MS = 24 * 60 * 60_000;
 const REFRESH_MS = 30_000;
 
-function fleet(options: { readonly authenticate?: () => UplinkAuthOutcome } = {}) {
+/** H4: records every line at `warn` and `error` (the levels a link's own failure paths use), so
+ * a test can assert what a failure was actually logged *as* -- not just that something failed. */
+class RecordingLogger implements Logger {
+  readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+
+  debug(): void {}
+  info(): void {}
+  warn(message: string, fields?: Record<string, unknown>): void {
+    this.warnings.push(fields === undefined ? { message } : { fields, message });
+  }
+  error(): void {}
+  child(): Logger {
+    return this;
+  }
+}
+
+function fleet(
+  options: { readonly authenticate?: () => UplinkAuthOutcome; readonly logger?: Logger } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const events: EventEnvelope[] = [];
@@ -43,6 +66,7 @@ function fleet(options: { readonly authenticate?: () => UplinkAuthOutcome } = {}
     },
     drainStore: new MemoryDrainStore(),
     eventBus,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     principal: "gw:instance-1",
     refreshIntervalMs: REFRESH_MS,
     retentionMs: RETENTION_MS,
@@ -401,6 +425,38 @@ describe("GatewayService", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9");
+
+    await harness.service.stop();
+  });
+
+  // H4: a timed-out `events.subscribe` used to be logged exactly like a rejection ("Worker
+  // refused an event subscription"), asserting something this code cannot know -- the worker may
+  // never have answered at all, or may have subscribed successfully with the reply just arriving
+  // too late to matter. The two are worth telling apart in a log an operator reads.
+  it("logs a timed-out event subscription as a timeout, not a refusal (H4)", async () => {
+    const logger = new RecordingLogger();
+    const harness = fleet({ logger });
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    // Never resolves, unlike a real rejection -- the exact shape of a subscribe call that just
+    // never gets an answer within `WORKER_CALL_TIMEOUT_MS`. Tracked by hand rather than via
+    // `pendingTimerCount` alone: the service's own periodic tick timer is already pending from
+    // `service.start()`, so that check alone cannot tell "the subscribe call's own timeout timer
+    // is now armed" apart from "some timer, possibly the unrelated tick, exists".
+    let subscribeCalled = false;
+    worker.subscribeEvents = (): Promise<never> => {
+      subscribeCalled = true;
+      return new Promise<never>(() => {});
+    };
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(subscribeCalled).toBe(true));
+    harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
+
+    await vi.waitFor(() =>
+      expect(logger.warnings.some((entry) => entry.message.includes("did not answer"))).toBe(true),
+    );
+    expect(logger.warnings.some((entry) => entry.message.includes("refused"))).toBe(false);
 
     await harness.service.stop();
   });

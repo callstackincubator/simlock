@@ -206,10 +206,24 @@ export class WorkerLink {
         "events.subscribe",
       );
     } catch (error: unknown) {
-      this.#logger.warn("Worker refused an event subscription; falling back to the tick", {
-        workerId: this.workerId,
-        message: errorMessage(error),
-      });
+      // H4: a `WorkerCallTimeoutError` here is not a refusal -- the worker was never asked and
+      // said no, its answer just did not arrive within `WORKER_CALL_TIMEOUT_MS`. Logging it as
+      // "refused" asserts something this code cannot know: the RPC may yet land, or may already
+      // have subscribed the worker on its end with no unsubscribe handle this link ever
+      // receives -- there is no way to unsubscribe that short of closing the whole link.
+      // Distinguishing the two in the log is this method's job even though neither path can (or
+      // needs to, for `refresh` below) retry the subscription itself; the tick still covers it.
+      if (error instanceof WorkerCallTimeoutError) {
+        this.#logger.warn(
+          "Worker did not answer an event subscription in time; falling back to the tick",
+          { workerId: this.workerId },
+        );
+      } else {
+        this.#logger.warn("Worker refused an event subscription; falling back to the tick", {
+          workerId: this.workerId,
+          message: errorMessage(error),
+        });
+      }
     }
     await this.refresh({ includeCatalog: true });
   }
