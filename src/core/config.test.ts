@@ -123,7 +123,7 @@ describe("loadConfig", () => {
     ).rejects.toThrow("mode");
   });
 
-  it("rejects mode: gateway with http.enabled: false at load", async () => {
+  it("defaults a gateway to http.enabled and rejects one that turns it off at load", async () => {
     // ADR 0005 §2: a gateway is the fleet's contact point over both HTTP and its unix socket,
     // so one with HTTP off is unreachable by any worker or agent -- a config with no safe
     // reading, rejected the same way a self-contradicting lease TTL pair is (naming the key,
@@ -131,11 +131,14 @@ describe("loadConfig", () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
 
-    // The default is `http.enabled: false`, so naming only `mode` already triggers this.
+    // A gateway defaults `http.enabled` to true (it is the fleet's contact point), so naming
+    // only `mode` is a complete, valid gateway config rather than a rejected one. Only a
+    // config that says `false` out loud is refused -- a value the operator wrote and the
+    // daemon quietly inverted would be worse than a start that says why.
     await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "gateway" }));
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("http.enabled");
+    ).resolves.toMatchObject({ http: { enabled: true }, mode: "gateway" });
 
     await filesystem.writeFileAtomic(
       configPath,
