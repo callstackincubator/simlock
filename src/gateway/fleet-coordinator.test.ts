@@ -298,6 +298,37 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(grant.lease.worker?.id).toBe("wrk_a");
   });
 
+  it("terminally rejects, rather than re-queuing, a NO_CAPACITY that arrives after progress already fired (P1, round 2 review)", async () => {
+    // ADR §11: "an *immediate* NO_CAPACITY is the only answer that leaves it queued" -- one
+    // reached *after* a progress push means device work had already begun (the worker's own
+    // `#evictManaged` failure path can answer this way, after `provisioning`/`reclaiming`), so
+    // this request was already dispatched and a NO_CAPACITY past that point is its own terminal
+    // failure, not a stale view to retry.
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      error: noCapacityError(),
+      kind: "error",
+      progress: [{ etaMs: 5_000, stage: "reclaiming" }],
+    });
+    const dispatched: unknown[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    const rejection = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+
+    // It really was announced -- proving this is the "already dispatched" branch, not the
+    // ordinary immediate-refusal one.
+    expect(dispatched).toHaveLength(1);
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("NO_CAPACITY");
+    expect(coordinator.queueDepth).toBe(0);
+    expect(directory.refreshCalls).toEqual([]);
+  });
+
   it("answers REQUESTER_ALREADY_LEASED naming the existing lease id, for an index built purely via rebuildFromWorker", async () => {
     const { coordinator, leaseIndex } = harness();
     // Simulates a gateway restart's reconnect rebuild (§30): this lease was never granted

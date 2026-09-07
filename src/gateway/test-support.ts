@@ -117,7 +117,15 @@ export type RequestLeaseOutcome =
       readonly grant: LeaseGrant;
       readonly progress?: readonly LeaseProgressLike[];
     }
-  | { readonly kind: "error"; readonly error: unknown }
+  | {
+      readonly kind: "error";
+      readonly error: unknown;
+      /** P1 (round 2 review): a `NO_CAPACITY` reached *after* progress fired -- the worker's own
+       * `#evictManaged` failure path can answer this to a `noWait` waiter after already pushing
+       * `provisioning`/`reclaiming`, which is a terminal failure (device work had begun), never
+       * a re-queue, unlike an *immediate* `NO_CAPACITY` (no progress) that means a stale view. */
+      readonly progress?: readonly LeaseProgressLike[];
+    }
   /** Never settles -- for exercising a dispatch attempt still in flight (finding 1's test: "a
    * dispatch tick firing while a previous attempt for the same waiter is in flight"), and (C4,
    * round 2 review) a request that is genuinely dispatched (a `progress` push fired) but then
@@ -253,9 +261,7 @@ export class ScriptedWorkerClient {
     this.calls.push(`lease.request:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
     const outcome = this.requestLeaseQueue.shift() ?? this.requestLeaseDefault;
-    if (outcome.kind !== "error") {
-      for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
-    }
+    for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});
     if (outcome.kind === "error") throw outcome.error;
     return outcome.grant;

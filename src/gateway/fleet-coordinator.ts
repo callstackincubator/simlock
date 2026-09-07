@@ -522,7 +522,15 @@ export class FleetLeaseCoordinator {
         },
       );
     } catch (error: unknown) {
-      if (isSimlockError(error) && error.code === "NO_CAPACITY") {
+      // P1 (round 2 review): "an *immediate* NO_CAPACITY is the only answer that leaves it
+      // queued ... the request waits" (§11) -- `announced` is exactly the "work has begun"
+      // distinction the ADR draws, already maintained above for `request.dispatched`. A worker
+      // can answer `NO_CAPACITY` *after* pushing progress (its own `#evictManaged` failure path,
+      // reached from a `noWait` waiter's `#defer`, runs after `provisioning`/`reclaiming`), and
+      // that is this request's own terminal failure -- not a stale view to retry, because device
+      // work already started means the request was this worker's (§11's own wording). Re-queuing
+      // it anyway silently reversed a dispatch the caller had already been told about.
+      if (isSimlockError(error) && error.code === "NO_CAPACITY" && !announced) {
         this.#staleView(waiter, workerId);
         return;
       }
