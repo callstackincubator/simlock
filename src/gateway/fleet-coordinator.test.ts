@@ -241,6 +241,56 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
   });
 
+  it("dispatches at most one queued waiter per worker per pass, rather than sending every queued waiter at a single over-reporting worker at once (H6, round 3 review)", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    // Exactly one grant scripted -- every other forwarded lease.request answers
+    // `requestLeaseDefault`'s own NO_CAPACITY, modelling a worker whose reported free capacity
+    // (two full slots below) does not match what it can actually grant right now.
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    // Three requests queue up before any worker is connected -- all genuinely `queued`, not
+    // settled at admission.
+    const p1 = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }),
+    );
+    const p2 = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    const p3 = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-3", requesterId: "agent-3" }),
+    );
+    await tick();
+    expect(coordinator.queueDepth).toBe(3);
+
+    // `connectWorker`'s default capacity reports two free iOS slots -- on paper, room for two of
+    // the three queued waiters above. Without the cap, `#dispatch`'s single pass would run
+    // `routing.select` against this same unchanged view for every one of the three, pick worker
+    // A for every one of them, and fire three concurrent `lease.request`s in this one pass.
+    connectWorker(workers, "wrk_a");
+    await tick();
+
+    // Capped at one dispatch per worker per pass: only the first waiter's RPC actually went out
+    // this pass, not three.
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+
+    await expect(p1).resolves.toBeDefined();
+    // The other two are still genuinely queued -- neither granted nor rejected -- left for a
+    // later, real view change (out of this unit's scope: a worker's own event-driven refresh) to
+    // give them their own look, rather than having each fired a doomed RPC this same pass already
+    // knew the worker could not serve.
+    const outcome = await Promise.race([
+      Promise.allSettled([p2, p3]).then(() => "settled" as const),
+      tick(6).then(() => "still-pending" as const),
+    ]);
+    expect(outcome).toBe("still-pending");
+    expect(coordinator.queueDepth).toBe(2);
+  });
+
   it("re-dispatches a waiter whose attempt found a reachable-but-not-yet-connected target, instead of parking it forever", async () => {
     // C1 (round 2 review): the routine trigger is a worker reconnect -- `GatewayService#accept`
     // sets the new link in `#links` and calls `start()` before the handshake's `#client` is

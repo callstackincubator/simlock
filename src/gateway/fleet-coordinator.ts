@@ -516,14 +516,34 @@ export class FleetLeaseCoordinator {
     this.#enqueue(waiter);
   }
 
-  /** ADR §11: re-run on every worker-view change. Every already-queued waiter not currently in
+  /**
+   * ADR §11: re-run on every worker-view change. Every already-queued waiter not currently in
    * flight gets one more look, oldest first; one no eligible worker can serve is passed over,
-   * not blocked on -- there is no early exit from this loop. */
+   * not blocked on -- there is no early exit from this loop.
+   *
+   * H6 (round 3 review): `routing.select` reads the same unchanged `views()` snapshot for every
+   * waiter in this loop, so a worker whose view over-reports free capacity relative to what it
+   * can actually grant right now used to look equally eligible to every one of them -- N queued
+   * waiters could all pick that one worker in a single pass, and every one past the first came
+   * back `NO_CAPACITY`, each triggering its own `#staleView` refresh. Self-limiting once the
+   * refresh lands (the module doc's "the dispatch race"), but an over-reporting view that never
+   * corrects itself between passes turns this into an RPC storm scaling with queue depth. Once a
+   * worker is claimed by a waiter this pass, it drops out of the pool the rest of the pass sees:
+   * at most one dispatch per worker per pass. A waiter left without a worker this way is not
+   * rejected -- it stays `queued` for the next pass (a real view change, driven by the worker's
+   * own event stream once the claimed attempt's outcome is known), the same "passed over, not
+   * blocked on" contract this method already promises for a request no worker can serve at all.
+   */
   #dispatch(): void {
+    const claimedThisPass = new Set<string>();
     for (const waiter of this.#queue.list()) {
       if (waiter.state !== "queued") continue;
-      const decision = this.options.routing.select(routable(waiter), this.options.views.views());
+      const eligibleWorkers = this.options.views
+        .views()
+        .filter((worker) => !claimedThisPass.has(worker.id));
+      const decision = this.options.routing.select(routable(waiter), eligibleWorkers);
       if (decision === undefined) continue;
+      claimedThisPass.add(decision.workerId);
       this.#beginAttempt(waiter, decision);
     }
   }
