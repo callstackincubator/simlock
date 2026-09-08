@@ -308,6 +308,49 @@ describe("pushes", () => {
     expect(onOutput).toHaveBeenCalledTimes(2);
   });
 
+  it("routes a device.exec started push to that call's onStarted, once, before output, and not to another call in flight", async () => {
+    // ADR 0005 §19a: `started` is request-scoped like `output` -- the fact a transport chooses
+    // its response shape on. Round 5 review: the send site and this route could both be deleted
+    // with the whole suite green, because every test of this frame stopped at the coordinator's
+    // own callback. This one exercises the wire.
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const first = { onOutput: vi.fn(), onStarted: vi.fn() };
+    const second = { onOutput: vi.fn(), onStarted: vi.fn() };
+    const firstPromise = client.exec({ args: ["list"], leaseId: "lease_1", tool: "simctl" }, first);
+    const secondPromise = client.exec(
+      { args: ["devices"], leaseId: "lease_2", tool: "adb" },
+      second,
+    );
+    await flushMicrotasks();
+    const calls = connection.sent.filter((frame) => frame.type === "device.exec");
+    expect(calls).toHaveLength(2);
+    const [firstCall, secondCall] = calls as [(typeof calls)[0], (typeof calls)[0]];
+
+    connection.push("started", { requestId: firstCall.id });
+    connection.push("output", { chunk: "one", requestId: firstCall.id, stream: "stdout" });
+
+    // Only the call it names, and before that call's own output.
+    expect(first.onStarted).toHaveBeenCalledTimes(1);
+    expect(second.onStarted).not.toHaveBeenCalled();
+    expect(first.onStarted.mock.invocationCallOrder[0]).toBeLessThan(
+      first.onOutput.mock.invocationCallOrder[0] as number,
+    );
+
+    connection.reply(firstCall.id, { exitCode: 0 });
+    connection.reply(secondCall.id, { exitCode: 0 });
+    await expect(firstPromise).resolves.toEqual({ exitCode: 0 });
+    await expect(secondPromise).resolves.toEqual({ exitCode: 0 });
+
+    // Settled calls are no longer tracked, so a late frame is dropped rather than delivered.
+    connection.push("started", { requestId: firstCall.id });
+    expect(first.onStarted).toHaveBeenCalledTimes(1);
+  });
+
   it("de-duplicates a repeated device-unhealthy push for the same lease (same state twice in a row)", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });

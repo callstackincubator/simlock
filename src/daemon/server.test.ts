@@ -65,7 +65,8 @@ interface ServerFrame {
     | "lease-lost"
     | "lease.heartbeat"
     | "output"
-    | "progress";
+    | "progress"
+    | "started";
 }
 
 const runningDaemons: DaemonServer[] = [];
@@ -568,6 +569,20 @@ describe("DaemonServer", () => {
         payload: { chunk: "a warning", requestId: "exec-frame", stream: "stderr" },
         push: "output",
       },
+    ]);
+
+    // ADR 0005 §19a: `started` reaches the socket exactly once, keyed by the same frame id.
+    // Round 5 review: this send site could be deleted with the entire suite green, because
+    // nothing asserted the frame ever reached a socket at all.
+    //
+    // Deliberately not asserted here: that it precedes the first `output`. It does in
+    // production -- the dispatcher calls `onStarted` synchronously after the spawn returns, and
+    // a real child's chunks arrive later from `data` events -- but `ScriptedProcessRunner`
+    // delivers its scripted chunks synchronously *inside* `runCommand`, so this harness sees
+    // them first and cannot distinguish the two orderings. Claiming the ordering here would be a
+    // title outrunning its body; `client.test.ts`'s wire test pins it where it is observable.
+    expect(client.frames().filter((frame) => frame.push === "started")).toEqual([
+      { payload: { requestId: "exec-frame" }, push: "started" },
     ]);
   });
 

@@ -846,52 +846,42 @@ describe("FleetLeaseCoordinator dispatch", () => {
   // `http/app.ts`'s own route logic, which was already correct given whatever a dispatcher told
   // it (see `http/app.test.ts`'s "answers a failure that lands before any output with its own
   // status, not a stream").
-  it("calls onStarted only once the worker's first output chunk arrives, never before client.exec is even sent (C3, round 2 review)", async () => {
+  it("announces started from the worker's own push, before any output, and never before client.exec is sent (ADR §19a)", async () => {
+    // The signal is the worker's `started` frame and nothing else -- not the first output chunk
+    // (which cannot fire for a silent command) and not a timer (which cannot tell a slow worker
+    // from a refusing one). This asserts the ordering that matters to a transport: `started`
+    // lands before the first chunk, and never before the forward actually goes out.
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
-    client.requestLeaseQueue.push({
-      grant: grantFixture({
-        lease: {
-          ...grantFixture().lease,
-          id: "lse_9",
-          ownerId: "agent-1",
-          requesterId: `${GATEWAY_PREFIX}agent-1`,
-        },
-      }),
-      kind: "grant",
-    });
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     const grant = await coordinator.request(REQUEST, requestOptions());
     client.execQueue.push({
       exitCode: 0,
       kind: "ok",
       output: [{ chunk: "hi", stream: "stdout" }],
+      started: true,
     });
 
-    let started = false;
-    const outputsSeenBeforeStarted: number[] = [];
-    let outputCount = 0;
+    const order: string[] = [];
     await coordinator.exec(
       { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
       {
         manageEventSubscription: () => undefined,
         onOutput: () => {
-          outputCount += 1;
-          if (!started) outputsSeenBeforeStarted.push(outputCount);
+          order.push("output");
         },
         onStarted: () => {
-          started = true;
+          order.push("started");
         },
         principal: "agent-1",
         role: "agent",
       },
     );
 
-    expect(started).toBe(true);
-    // onStarted must not have fired for any output already delivered -- it is the *first*
-    // chunk's own arrival that triggers it, not something already true beforehand.
-    expect(outputsSeenBeforeStarted).toEqual([]);
+    expect(order).toEqual(["started", "output"]);
+    expect(client.calls).toContain(`device.exec:${GATEWAY_PREFIX}agent-1`);
   });
 
   it("never calls onStarted for a worker-side FORBIDDEN that produced no output at all -- the HTTP route must still be free to answer 403, not a committed 200 (C3, round 2 review)", async () => {
@@ -1057,37 +1047,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(started).toBe(true);
   });
 
-  it("does not announce started for a worker that never sends the push and never writes output -- an older worker keeps this gateway's previous behaviour", async () => {
-    // The `started` frame is additive (ADR 0003 §6: the protocol range does not move for it), so
-    // a peer that predates it simply never sends one. This gateway must then behave exactly as it
-    // did before -- no invented signal, no timer, no guess -- which is what makes the change safe
-    // to land without a version bump.
-    const { coordinator, directory, workers } = harness();
-    const client = new ScriptedWorkerClient();
-    directory.add("wrk_a", client);
-    connectWorker(workers, "wrk_a");
-    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    const grant = await coordinator.request(REQUEST, requestOptions());
-    client.execQueue.push({ kind: "hang" });
-
-    let started = false;
-    void coordinator.exec(
-      { args: ["install", "/path/to.app"], leaseId: grant.lease.id, tool: "simctl" },
-      {
-        manageEventSubscription: () => undefined,
-        onStarted: () => {
-          started = true;
-        },
-        principal: "agent-1",
-        role: "agent",
-      },
-    );
-    await tick();
-
-    expect(started).toBe(false);
-  });
-
-  it("does not announce onStarted from the exec start grace window once the worker has already answered -- a fast pre-process refusal keeps its own real status (C3, round 3 review)", async () => {
+  it("does not announce started for a command the worker refuses before any process exists -- a pre-process refusal keeps its own real status (ADR §19a′)", async () => {
     const { clock, coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -1118,7 +1078,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((rejection as DispatchError).code).toBe("FORBIDDEN");
     expect(started).toBe(false);
 
-    // The grace timer was cancelled when the call settled -- advancing the clock well past it
+    // There is no timer to fire any more -- advancing the clock well past where one used to be
     // must not fire a stray `onStarted` for a call that is already over.
     clock.advance(10_000);
     expect(started).toBe(false);

@@ -10,9 +10,9 @@
  * Dispatch re-runs on every worker-view change (`FleetViews#onViewsChanged`) and once more per
  * settled attempt. (C1/C2, round 3 review: `#attempt` now calls `#dispatch()` itself, right after
  * `#settleGrant` and right after its own terminal `reject` -- see `#attempt`'s own doc for why
- * this was previously false. `#admit`, a brand-new waiter's own synchronous first look, defers to
- * that same walk whenever the queue is already non-empty, rather than taking an out-of-order peek
- * of its own -- see `#admit`'s own doc.) A waiter whose forwarded `lease.request` is still in
+ * this was previously false. `#admit` has no look of its own at all: it hands the
+ * brand-new waiter to that same walk as its `candidate` -- see `#admit`'s own doc, and
+ * architecture rule 10.) A waiter whose forwarded `lease.request` is still in
  * flight to worker A must never be picked up by a second pass and sent to worker B too -- if both granted, one requester
  * would hold two devices on two machines, and the fleet-wide admission check cannot catch it
  * (it runs once, at admission, before either RPC). `#beginAttempt` calls `queue.markProcessing`
@@ -327,10 +327,17 @@ export class FleetLeaseCoordinator {
     //
     // So the worker sends the fact instead of the gateway guessing it. Its dispatcher already
     // computes this exact moment -- it spawns the child and then calls `onStarted` -- and ADR
-    // §19a's request-scoped push family now carries it (`started`, see `contract/pushes.ts`).
-    // Relaying it is all this needs. The first-chunk signal below stays as the fallback for a
-    // peer that never sends the frame, which is what keeps the change additive: an older worker
-    // leaves this gateway on exactly its previous behaviour and the protocol range does not move.
+    // §19a's request-scoped push family carries it (`started`, see `contract/pushes.ts`).
+    // Relaying it is all this needs.
+    //
+    // `started` is part of protocol 5, not an addition on top of it: 5 has never shipped (`main`
+    // advertises 3; 4 and 5 both land with this stack), so it releases as one version carrying
+    // `device.exec`, its `output` family, `status.get`'s `mode`, the gateway surface and this
+    // frame together. Nothing will ever advertise 5 without it, which is exactly why the grace
+    // timer could be deleted outright rather than kept as a fallback -- there is no peer to fall
+    // back for, and a second path to this signal would be the duplication architecture rule 10
+    // forbids. A worker older than protocol 5 negotiates nothing and is `incompatible` by range
+    // (§31), so it is never dispatched to at all.
     let started = false;
     const announceStarted = (): void => {
       if (started) return;
@@ -366,10 +373,10 @@ export class FleetLeaseCoordinator {
           {
             onOutput: (chunk) => {
               if (detached) return;
-              announceStarted();
               void session.onOutput?.(chunk.stream, chunk.chunk);
             },
-            // The worker's own "the process exists" fact, relayed verbatim.
+            // The worker's own "the process exists" fact, relayed verbatim -- the only thing
+            // that announces `started` here, so there is exactly one path to it.
             onStarted: () => {
               if (detached) return;
               announceStarted();
@@ -510,31 +517,6 @@ export class FleetLeaseCoordinator {
 
   // ---- admission and dispatch ----------------------------------------------------------------
 
-  /** A brand-new waiter's first look, taken synchronously against the current views right after
-   * admission -- the common warm-hit case never has to wait for an external trigger. Mirrors
-   * `LeaseAcquisitionCoordinator#defer`'s noWait/wait split for the case routing finds nobody.
-   *
-   * C2 (round 3 review): that synchronous look is only ever safe to take when nothing else is
-   * already queued. `routing.select` is a pure function of the current views, so a brand-new
-   * waiter admitted while an older one is still queued would see the *exact same* views that
-   * already left that older waiter without a worker -- and, unaware of it, could claim a worker
-   * the older waiter was equally eligible for, out of ADR §10/§11's oldest-first order. Once the
-   * queue is non-empty this defers entirely to `#dispatch`'s own ordered walk: the new waiter is
-   * enqueued at the back like any other, and one pass runs immediately so the still-common case of
-   * "nobody is really contending for capacity right now" settles just as fast as the direct look
-   * used to. A `noWait` waiter that comes out of that pass still `queued` (nobody -- including
-   * itself -- got a worker) is rejected immediately, exactly as the direct-look branch below
-   * already does; `#dispatch` itself never rejects a waiter, only passes it over, so this is the
-   * one place a `noWait` semantics has to be layered back on afterward.
-   *
-   * H9 (round 2 review): throws a plain `DispatchError("NO_CAPACITY", ...)` rather than a
-   * fleet-native error class -- `DispatchError`'s own code is used verbatim by
-   * `daemon/error-code.ts#classifyError`'s first branch, so no gateway-specific class or import
-   * is needed there to answer the same code the worker's own `NoCapacityError` answers. Before
-   * this, `src/daemon` (every worker-mode daemon, not just gateway mode) imported this class from
-   * `src/gateway/fleet-coordinator.js` just to recognize it, pulling the whole gateway module
-   * graph (and `src/admin`'s client) into ordinary worker startup with no boundary test covering
-   * that direction. */
   /**
    * A brand-new waiter's admission. **Architecture rule 10: `noWait` is enforced in exactly one
    * place.** Every admission goes through `#dispatch`'s one ordered walk, carrying this waiter
@@ -551,6 +533,14 @@ export class FleetLeaseCoordinator {
    * the caller and `#enqueue` emits `lease.queued`, and a `noWait` request that is about to be
    * refused must produce neither. ADR §10 requires "the same codes and progress states a worker
    * uses", and the worker's own `#defer` rejects a `noWait` waiter *before* it enqueues.
+   *
+   * H9 (round 2 review): throws a plain `DispatchError("NO_CAPACITY", ...)` rather than a
+   * fleet-native error class -- `DispatchError`'s own code is used verbatim by
+   * `daemon/error-code.ts#classifyError`'s first branch, so no gateway-specific class or import
+   * is needed there to answer the same code the worker's own `NoCapacityError` answers. Before
+   * this, `src/daemon` (every worker-mode daemon, not just gateway mode) imported that class
+   * from `src/gateway/fleet-coordinator.js` just to recognize it, pulling the whole gateway
+   * module graph into ordinary worker startup with no boundary test covering that direction.
    */
   #admit(waiter: FleetWaiter): void {
     // Attempted -- including attempted and bounced straight back by a stale view, which §11
@@ -596,10 +586,22 @@ export class FleetLeaseCoordinator {
    * `#dispatchDepth` guards against this method ever running re-entrantly on the same call stack
    * (defensive: `#beginAttempt`'s own `#attempt` is `void`-async and every await point in it is
    * genuinely asynchronous -- see `#raceTimeout` -- so a nested synchronous call back into this
-   * method should not be reachable today, but nothing about that is enforced by a type). A second
-   * call arriving while one is already running is a no-op: the in-progress pass has not finished
-   * walking every currently-queued waiter yet, so there is nothing a nested pass would see that
-   * the outer one will not already reach itself.
+   * method should not be reachable today, but nothing about that is enforced by a type). A nested
+   * call is *deferred*, not dropped: it sets `#passRequested` and the running call walks again
+   * once it unwinds. Dropping it was C1's own stall reintroduced by the guard meant to prevent
+   * recursion -- the outer walk iterates a snapshot and has already claimed workers, so a waiter
+   * freed mid-pass would never be reconsidered (round 4 review, finding 6).
+   *
+   * `candidate` is a brand-new waiter with no queue membership yet; it walks last and the return
+   * value says whether it was attempted. See `#dispatchPass`.
+   *
+   * The deferred passes above deliberately carry **no** candidate, and that is not a dropped
+   * one (round 5 review): a nested `#dispatch` can only be raised from inside a `#beginAttempt`,
+   * `#dispatchPass` re-reads `views.views()` per waiter rather than once per pass, and the
+   * candidate walks last. So every view change a deferred pass exists to react to was already
+   * raised *before* the candidate's own iteration read the views, and was already visible to it.
+   * There is no state a second pass could show the candidate that its first look did not have,
+   * which is why re-offering it there would add a branch no test can fail for the right reason.
    */
   #dispatch(candidate?: FleetWaiter): boolean {
     if (this.#dispatchDepth > 0) {

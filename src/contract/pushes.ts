@@ -2,7 +2,8 @@
  * Server pushes (ADR 0003 §8). Three families, each with its correlation key required by
  * schema:
  *
- * - Request-scoped (`progress`, `output`): carries the originating request's frame id.
+ * - Request-scoped (`progress`, `started`, `output`): carries the originating request's
+ *   frame id.
  * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
  *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
  *   these; they are facts about the device, not a liveness channel).

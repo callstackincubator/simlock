@@ -919,8 +919,8 @@ describe("lease routes", () => {
       // calls it, and cannot notice a dispatcher that stops calling it for a genuinely silent,
       // long-running command. That is `FleetLeaseCoordinator`'s own job for a gateway
       // (`src/gateway/fleet-coordinator.ts#exec`); the invariant this comment describes is
-      // guarded end to end there, not here -- see `fleet-coordinator.test.ts`'s "announces
-      // onStarted once the worker's answer has not arrived within the exec start grace window".
+      // guarded end to end there, not here -- see `fleet-coordinator.test.ts`'s "relays the
+      // worker's own started push for a silent, long-running command".
       const { app, clock, dispatcher } = buildHarness();
 
       const responsePromise = postExec(app);
