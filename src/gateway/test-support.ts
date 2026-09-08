@@ -206,6 +206,13 @@ export class ScriptedWorkerClient {
   readonly renewLeaseQueue: RenewLeaseOutcome[] = [];
   readonly releaseLeaseQueue: ReleaseLeaseOutcome[] = [];
   readonly execQueue: ExecOutcome[] = [];
+  /**
+   * H4 (round 3 review): the `options` most recently passed to `exec` -- captured before
+   * `execQueue`'s own outcome is even read, so a `"hang"` outcome (whose returned promise never
+   * settles) still leaves a test a way to invoke `onOutput` later by hand, simulating a worker
+   * that keeps streaming output on a call the gateway has already given up awaiting.
+   */
+  lastExecOptions: ExecOptions | undefined;
 
   constructor(
     readonly role: "admin" | "agent" = "admin",
@@ -298,6 +305,7 @@ export class ScriptedWorkerClient {
   async exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
     this.calls.push(`device.exec:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
+    this.lastExecOptions = options;
     const outcome = this.execQueue.shift();
     if (outcome?.kind === "hang") return new Promise<never>(() => {});
     if (outcome?.kind === "error") throw outcome.error;

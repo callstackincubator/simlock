@@ -327,6 +327,18 @@ export class FleetLeaseCoordinator {
       started = true;
       session.onStarted?.();
     };
+    // H4 (round 3 review): `#withExecTimeout` settling `EXEC_TIMEOUT` only stops *this* call's
+    // returned promise from being awaited any further -- the worker's own `client.exec` RPC is
+    // never cancelled, and its `onOutput` closure below stays live for as long as the worker
+    // keeps sending chunks, relaying every one of them into `session.onOutput` long after the
+    // caller has already been told this command timed out. Nothing here made that safe; it was
+    // HTTP's own `OutputRelay.drop()` that happened to swallow a push arriving after an SSE
+    // response had already ended, which is the transport saving this class, not this class
+    // cancelling anything -- a future non-HTTP frontend has no such backstop. `detached` is
+    // flipped by `#withExecTimeout`'s own `onTimeout` hook, right as it decides to reject, so no
+    // late chunk reaches `session.onOutput` (or spuriously fires `onStarted`) once that has
+    // happened.
+    let detached = false;
     return this.#forwardToWorker(entry.workerId, async (client) => {
       // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
       // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
@@ -343,12 +355,16 @@ export class FleetLeaseCoordinator {
           },
           {
             onOutput: (chunk) => {
+              if (detached) return;
               announceStarted();
               void session.onOutput?.(chunk.stream, chunk.chunk);
             },
           },
         ),
         entry.workerId,
+        () => {
+          detached = true;
+        },
       );
     });
   }
@@ -359,8 +375,17 @@ export class FleetLeaseCoordinator {
    * config value exists for, not an ordinary command timeout the worker's own `exec.timeoutMs`
    * already covers) hung the call and its SSE stream forever, and nothing here read the config
    * value the schema, validator, and docs already described.
+   *
+   * `onTimeout` (H4, round 3 review) is `#raceTimeout`'s own detach hook -- see `exec`'s own
+   * `detached` flag for why: a client that only stops *awaiting* the worker's answer, without
+   * also telling `exec`'s `onOutput` closure to stop relaying, would keep forwarding late chunks
+   * to `session.onOutput` for as long as the worker cared to keep sending them.
    */
-  #withExecTimeout<Value>(promise: Promise<Value>, workerId: string): Promise<Value> {
+  #withExecTimeout<Value>(
+    promise: Promise<Value>,
+    workerId: string,
+    onTimeout: () => void,
+  ): Promise<Value> {
     return this.#raceTimeout(
       promise,
       this.options.execTimeoutMs,
@@ -369,6 +394,7 @@ export class FleetLeaseCoordinator {
           "EXEC_TIMEOUT",
           `Worker ${workerId} did not answer device.exec within gateway.execTimeoutMs (${String(this.options.execTimeoutMs)}ms)`,
         ),
+      onTimeout,
     );
   }
 
@@ -406,19 +432,31 @@ export class FleetLeaseCoordinator {
   /**
    * Mirrors `WorkerLink#withTimeout`'s race-and-cancel shape: whichever of the timer or
    * `promise` settles first wins, and the other is inert from then on (the timer is cancelled on
-   * a real answer; a promise that eventually does settle after the timer already fired is
-   * simply ignored, not delivered late).
+   * a real answer; a promise that eventually does settle after the timer already fired is simply
+   * ignored, not delivered late).
+   *
+   * That "ignored, not delivered late" is true of `promise`'s own eventual resolution -- it is
+   * *not* true, on its own, of anything a callback reachable from `promise` keeps doing after the
+   * timer wins (H4, round 3 review): `client.exec`'s `onOutput` closure is exactly such a
+   * callback, invoked directly by the worker's own RPC handling, entirely outside this promise's
+   * settlement. `onTimeout`, when given, runs synchronously the moment the timer decides to
+   * reject -- before `buildTimeoutError` is even called -- so a caller with such a callback can
+   * flip its own "stop relaying" flag in the same tick its timeout error is built, rather than
+   * relying on a downstream transport (HTTP's `OutputRelay.drop()`) to swallow what this class
+   * itself never stopped producing.
    */
   #raceTimeout<Value>(
     promise: Promise<Value>,
     timeoutMs: number,
     buildTimeoutError: () => DispatchError,
+    onTimeout?: () => void,
   ): Promise<Value> {
     return new Promise<Value>((resolve, reject) => {
       let settled = false;
       const timer = this.options.clock.setTimer(timeoutMs, () => {
         if (settled) return;
         settled = true;
+        onTimeout?.();
         reject(buildTimeoutError());
       });
       promise.then(

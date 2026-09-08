@@ -788,6 +788,56 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
   });
 
+  it("stops relaying a worker's device.exec output once gateway.execTimeoutMs has already rejected the call (H4, round 3 review)", async () => {
+    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      grant: grantFixture({
+        lease: {
+          ...grantFixture().lease,
+          id: "lse_9",
+          ownerId: "agent-1",
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+        },
+      }),
+      kind: "grant",
+    });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    // Never settles -- exactly the "worker never answers at all" case `EXEC_TIMEOUT` exists for
+    // -- but the underlying RPC is never cancelled, so a real worker's own `onOutput` pushes can
+    // still arrive on it after this gateway has already given up.
+    client.execQueue.push({ kind: "hang" });
+
+    const relayed: Array<{ stream: string; chunk: string }> = [];
+    const rejection = coordinator
+      .exec(
+        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+        {
+          manageEventSubscription: () => undefined,
+          onOutput: (stream, chunk) => {
+            relayed.push({ chunk, stream });
+          },
+          principal: "agent-1",
+          role: "agent",
+        },
+      )
+      .catch((error: unknown) => error);
+    await tick();
+    clock.advance(5_000);
+    const error = await rejection;
+    expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
+
+    // The worker, unaware this gateway already timed the call out, keeps streaming -- this is
+    // exactly the closure `client.exec` was given, invoked exactly as the worker's own RPC
+    // handling would invoke it in production, well after `EXEC_TIMEOUT` already settled.
+    client.lastExecOptions?.onOutput?.({ chunk: "late output", stream: "stdout" });
+    await tick();
+
+    expect(relayed).toEqual([]);
+  });
+
   it("rejects a no-wait request immediately with NO_CAPACITY when no worker is eligible at all", async () => {
     const { coordinator } = harness();
 
