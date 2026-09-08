@@ -374,10 +374,13 @@ against an ended lease answers `404 UNKNOWN_LEASE`.
 ### `POST /v1/leases/{id}/exec`
 
 Role: `agent` (own lease); `operator` must name the lease's requester — see
-below. Runs one `simctl`/`adb` command
-**on the machine that owns the device** and streams its output back. This is
-what makes a leased device drivable from here at all: every other way of
-reaching one assumes the caller shares that machine's filesystem.
+below. Runs one `simctl`/`adb` command **on the machine that owns the
+device** and streams its output back. This is what makes a leased device
+drivable from here at all — over HTTP against a lone worker, and through a
+gateway to whichever worker holds the lease, with the same request and the
+same response either way ([ADR 0005](adr/0005-gateway-and-worker-modes.md)).
+Every other way of reaching a device assumes the caller shares that
+machine's filesystem.
 
 ```json
 { "tool": "simctl", "args": ["list", "devices"], "stdin": "y\n" }
@@ -386,29 +389,44 @@ reaching one assumes the caller shares that machine's filesystem.
 `tool` names a driver passthrough — `simctl` or `adb` on the machines this
 version runs on. The contract does not close that set; the drivers installed
 there do, and one they do not claim is `422 UNKNOWN_PASSTHROUGH_TOOL`. `args`
-are passed through unchanged. The daemon
-resolves them through the same driver passthrough `simlock simctl` /
-`simlock adb` use — the same scoping flags, and the same refusal list, so a
-verb the driver will not proxy (`simctl delete`, `adb kill-server`, …) is
-`422 PASSTHROUGH_REFUSED` here too and nothing is spawned for it. Nothing else
+is the argument vector, passed through unchanged. The daemon that owns the
+device resolves it through the same driver passthrough logic `simlock
+simctl` / `simlock adb` use locally — the same root scoping (`--set` for
+iOS, `-P` for Android, supplied by simlock and refused from the caller), and
+the same refusal list for verbs that would change a device's lifecycle
+behind the registry's back (`create`/`erase`/`delete`, `shutdown all`,
+`runtime delete`, `kill-server`, `emu kill`, …). A refused verb is `422
+PASSTHROUGH_REFUSED` here too and nothing is spawned for it. Nothing else
 about the arguments is parsed, and the *device* is named by them, not by the
-lease: the lease id is the ownership proof.
+lease: the lease id is the ownership proof. A gateway in the path parses
+none of this either — it proxies the call to the owning worker and relays
+the stream back unchanged.
 
-`stdin` (optional) is written to the command once and the pipe is then closed.
-There is no pseudo-terminal, so line-oriented commands work and full-screen or
-interactive ones do not — a bare `adb shell`, which *is* the interactive shell,
-is refused (`422 PASSTHROUGH_REFUSED`) rather than left to hang on a pipe until
-the timeout.
+`stdin` (optional) is a single string, sent with the request, written to the
+command once, and the pipe is then closed — there is no incremental stdin
+channel and no pseudo-terminal, so line-oriented commands work and
+full-screen or interactive ones do not: a bare `adb shell`, which *is* the
+interactive shell, is refused (`422 PASSTHROUGH_REFUSED`, "needs a
+terminal") rather than left to hang on a pipe until the timeout.
 
-`requesterId` (optional) names the agent this command is being run *for*, and
-is honoured **only for an `operator` token**. Identity is otherwise never
-client-declared here (see [Authentication](#authentication)): an `agent`
-token's own `requesterId` is dropped, and that token is authorized against the
-lease it holds, exactly as it is for renew and release. An operator token is
-held to this field instead of getting the usual operator bypass — it must name
-the requester the lease was granted to, or the call is `403 FORBIDDEN`. That is
-what lets a future gateway proxy many agents over one operator credential
-without any of them reaching another's device.
+`requesterId` (optional) names the agent this command is being run *for*,
+and is read **only from an `operator` token** — the proxying case a
+gateway's own admin session needs, fronting many agents over one uplink
+credential. Identity is otherwise never client-declared here (see
+[Authentication](#authentication)): an `agent` token is authorized against
+the lease it holds, exactly as it is for renew and release, and if it
+supplies a `requesterId` at all — even its own — the call is `403 FORBIDDEN`.
+That rejection lives in `device.exec`'s own `authorize` hook, not this
+route, so the unix socket and any future transport answer it the same way;
+answering a request that named an identity as if it had named none would
+read like authorization. An `operator` token is held to this field instead
+of getting the usual operator bypass, and does not default past it: omitted,
+it falls back to the operator's own principal, and either way it must name
+the requester the lease was actually granted to, or the call is the same
+`403 FORBIDDEN`. That is what lets a gateway proxy many agents over one
+operator credential without any of them reaching another's device —
+ownership ends up checked on both hops, the gateway against its own lease
+index and the worker against the lease it actually holds.
 
 → `200`, `Content-Type: text/event-stream`, the same SSE shape
 `/v1/lease-requests/{id}/events` uses. One event per chunk of output as it is
@@ -426,44 +444,63 @@ data: {"exitCode":0}
 ```
 
 `chunk` is whatever the command wrote, decoded as UTF-8 and forwarded
-unsplit — not a line, not a frame. Output is streamed and never buffered by
-the daemon, so there is no size cap and the first chunk arrives while the
-command is still running; a client that wants lines assembles them itself. A
-`: keepalive` comment every ~15s keeps idle tunnels open, as elsewhere.
+unsplit — not a line, not a frame — so a command whose output is genuinely
+binary (`simctl io booted screenshot -` to stdout) is not supported over
+this route; have it write to a file on the device's own machine instead.
+Output is streamed and never buffered by the daemon, so there is no size cap
+and the first chunk arrives while the command is still running; a client
+that wants lines assembles them itself. A `: keepalive` comment every ~15s
+keeps idle tunnels open, as elsewhere.
 
 A failure that lands **before the command is spawned** is answered as an
-ordinary JSON error with its own status instead of a stream: `403 FORBIDDEN`
-for another requester's lease (dispatched through the operation's own
-ownership hook, like renew and release) and for an `agent` token that sent a
-`requesterId` at all, `404 UNKNOWN_LEASE` for an id that names none,
-`400 BAD_REQUEST` for a malformed body, `422 PASSTHROUGH_REFUSED` for a refused
-verb, `422 UNKNOWN_PASSTHROUGH_TOOL` for a tool no driver on that machine
-claims.
+ordinary JSON error with its own status instead of a stream:
+
+- `403 FORBIDDEN` — another requester's lease (dispatched through the
+  operation's own ownership hook, like renew and release), an `agent` token
+  that supplied a `requesterId` at all, or an `operator` token whose
+  `requesterId` doesn't match the lease's.
+- `404 UNKNOWN_LEASE` — no such lease, or it has expired or been released.
+- `400 BAD_REQUEST` — a malformed body, nothing more.
+- `422 PASSTHROUGH_REFUSED` — a refused verb, a caller-supplied `--set`/`-P`,
+  or a bare `adb shell`.
+- `422 UNKNOWN_PASSTHROUGH_TOOL` — a `tool` no driver on that machine claims.
+- `503 WORKER_UNREACHABLE` — a gateway could not reach the worker holding
+  the lease.
 
 The status commits at the **spawn**, not at the first byte: the moment the
-child process exists the response is `200` and the stream is open, even if the
-command has not written anything yet (`simctl install` on a large bundle says
-nothing for a while, and a client should not have to guess whether that
-silence means the request was accepted). Everything after that point arrives
-as a terminal event instead:
+child process exists the response is `200` and the stream is open, even if
+the command has not written anything yet (`simctl install` on a large
+bundle says nothing for a while, and a client should not have to guess
+whether that silence means the request was accepted). Everything after that
+point arrives as a terminal event instead:
 
 ```
 event: error
 data: {"error":{"code":"EXEC_TIMEOUT","message":"..."}}
 ```
 
-`EXEC_TIMEOUT` (`504`) is the daemon killing a command that outran
-`exec.timeoutMs` (ten minutes by default, see
-[CONFIGURATION.md](CONFIGURATION.md)). It is reported instead of the exit code
+`EXEC_TIMEOUT` is the daemon killing a command that outran `exec.timeoutMs`
+(ten minutes by default on the worker, see
+[CONFIGURATION.md](CONFIGURATION.md)) — reported instead of the exit code
 the kill produced, because "we stopped it" and "it failed" are different
-answers. Disconnecting does **not** kill the command — the daemon simply stops
-writing its output, the same way closing a connection releases no lease; the
-timeout is what bounds it.
+answers. The worker's own `exec.timeoutMs` is authoritative, since that side
+owns the process and is the only one that can kill it; a gateway in the path
+adds `gateway.execTimeoutMs` (eleven minutes) only as a backstop for a
+worker that never answers at all — deliberately the longer of the two, so an
+ordinary timeout surfaces as the worker's own `EXEC_TIMEOUT` rather than
+racing the gateway's. `EXEC_TIMEOUT` is `504` in the contract's error table,
+though on this route the status never reaches the client: the response is
+already `200` and streaming by the time a command can time out, so it
+arrives as the stream's terminal `error` event instead; the code is
+documented anyway for a client mapping it without a route in front of it.
+Disconnecting does **not** kill the command — the daemon simply stops
+writing its output, the same way closing a connection releases no lease;
+the timeout is what bounds it.
 
 Paths in `args` resolve on the daemon's filesystem
-(`{"tool":"simctl","args":["install","booted","/build/MyApp.app"]}` needs that
-path to exist *there*). Getting a file onto that machine is not part of this
-API in this version — see [Not implemented](#not-implemented).
+(`{"tool":"simctl","args":["install","booted","/build/MyApp.app"]}` needs
+that path to exist *there*). Getting a file onto that machine is not part of
+this API in this version — see [Not implemented](#not-implemented).
 
 ### `DELETE /v1/leases/{id}`
 
@@ -474,109 +511,6 @@ Role: `agent` (own lease); `operator` may release any lease.
 The lease is gone the moment this responds; the driver-side purge continues
 in the background (existing release semantics — see "Release hands the
 purge off" in [ARCHITECTURE.md](ARCHITECTURE.md)), hence `202`, not `200`.
-
-### `POST /v1/leases/{id}/exec`
-
-Role: `agent` (own lease). Runs one `simctl` / `adb` command against the
-leased device on the machine that owns it, and streams its output back. This
-is what lets a remote agent actually *drive* the device it leased — over
-HTTP against a lone worker, and through a gateway to whichever worker holds
-the lease, with the same request and the same response either way ([ADR
-0005](adr/0005-gateway-and-worker-modes.md)).
-
-```json
-{ "tool": "simctl", "args": ["install", "booted", "/tmp/MyApp.app"],
-  "stdin": null, "requesterId": null }
-```
-
-`tool` is `"simctl"` or `"adb"`; `args` is the argument vector, passed
-through unchanged. The daemon that owns the device resolves the command the
-same way `simlock simctl` / `simlock adb` do locally — same root scoping
-(`--set` for iOS, `-P` for Android, supplied by simlock and refused from the
-caller), and the same refusal list for verbs that would change a device's
-lifecycle behind the registry's back (`create`/`erase`/`delete`, `shutdown
-all`, `runtime delete`, `kill-server`, `emu kill`, …). A refused verb is
-`422 PASSTHROUGH_REFUSED` and an unwrapped `tool` is `422
-UNKNOWN_PASSTHROUGH_TOOL` — the codes `driver.passthrough` already answers
-with, at the status they already carry; `400 BAD_REQUEST` here means a
-malformed body, nothing more. One refusal is particular to this route: a bare
-`adb shell` with no command is `422 PASSTHROUGH_REFUSED` ("needs a
-terminal"), because there is no pseudo-terminal to give it and accepting it
-would only stall the stream until the timeout. A gateway in the path parses
-none of this: it proxies the call to the owning worker and relays the stream
-back unchanged.
-
-`requesterId` (optional, defaulting to the caller's own) is what a proxying
-caller supplies. An `agent` token does not need it and may not use it: it is
-gated the ordinary way, its own requester against the lease's `ownerId`,
-exactly as on `renew` and `release`. Only an `operator` token may name
-another requester here. The field exists for the one session that would
-otherwise bypass the ownership check — the gateway's admin session on a
-worker — and on this operation, unlike renew and release, **admin does not
-bypass**: the worker compares the supplied `requesterId` to the lease's own
-`requesterId` and answers `FORBIDDEN` on a mismatch. Ownership is therefore
-checked on both hops, the gateway against its own lease index and the worker
-against the lease it actually holds.
-
-`stdin` (optional) is a **single string, sent with the request** and written
-to the process's stdin, which is then closed. There is no incremental stdin
-channel and no pseudo-terminal, so line-oriented commands work and
-full-screen ones (`adb shell` as an interactive session) do not.
-
-→ `200`, `Content-Type: text/event-stream` — the same SSE shape
-`/v1/lease-requests/{id}/events` already uses. Output is streamed, never
-buffered, so there is no size cap on it:
-
-```
-event: output
-data: {"stream":"stdout","chunk":"Installing...\n"}
-
-event: output
-data: {"stream":"stderr","chunk":"warning: ...\n"}
-
-: keepalive
-
-event: exit
-data: {"exitCode":0}
-```
-
-`output` events carry `stream` (`"stdout"` or `"stderr"`) and a `chunk`, in
-the order the process produced them. The stream ends with exactly one
-terminal event: `exit` carrying the tool's own `exitCode` (a non-zero one is
-the command's answer, not an API failure), or `error` carrying the usual
-`{ code, message }` envelope. A `: keepalive` comment every ~15s keeps idle
-tunnels from closing a long-running command's stream.
-
-Chunks are UTF-8 text. A command whose output is binary (`simctl io booted
-screenshot -` to stdout) is not supported over this route — have it write to
-a file on the device's own machine instead.
-
-Failures particular to this route:
-
-- `403 FORBIDDEN` — the lease belongs to another requester (same rule as
-  `renew`/`release`), an `agent` token supplied a `requesterId` at all, or an
-  `operator` token supplied one that does not match the lease's.
-- `404 UNKNOWN_LEASE` — no such lease, or it has expired or been released.
-- `422 PASSTHROUGH_REFUSED` — a refused verb, a caller-supplied `--set`/`-P`,
-  or a bare `adb shell`. `422 UNKNOWN_PASSTHROUGH_TOOL` for a `tool` outside
-  `simctl`/`adb`.
-- `400 BAD_REQUEST` — a malformed body.
-- `503 WORKER_UNREACHABLE` — a gateway could not reach the worker holding
-  the lease.
-- `EXEC_TIMEOUT` (`504` in the contract's error table) — the command outlived
-  `exec.timeoutMs`, ten minutes by default and worker-side, which is the
-  authoritative one because the worker owns the process;
-  `gateway.execTimeoutMs` (eleven minutes) is the gateway's backstop for a
-  worker that never answers at all, deliberately the longer of the two. On
-  *this* route the status never reaches the client — the response is already
-  `200` and streaming by the time a command can time out — so it arrives as
-  the stream's terminal `error` event. The status is documented anyway, for a
-  client mapping the code without a route in front of it.
-
-The artifact a command names has to exist **on the device's own machine**:
-`simctl install <path>` and `adb install <apk>` resolve their path there, and
-there is no file upload in this version. See
-[known-pitfalls.md](known-pitfalls.md).
 
 ### `GET /v1/uplink` (WebSocket upgrade)
 
