@@ -71,3 +71,14 @@ never enforce them only inside an individual rule or driver.
    root Simlock did not create empty itself. The same applies to Simlock's adb
    server port: if it is occupied, the Android driver fails rather than
    attaching to whatever server is already listening there.
+10. **Anything that arrives over the wire is a claim, not a fact.** A peer's
+    stated identity, an echoed owner, a lease id, a tool name, a command's
+    arguments: validate shape and bounds *before* authenticating on them,
+    and never store one unbounded or unsanitized. Match structured input by
+    structure — parse it, compare by position or field — never by substring
+    or prefix, which accepts everything the author forgot to think of.
+    Input that does not match something known is refused, not passed
+    through: unknown fails closed. This is rule 8 ("ownership is proven,
+    never inferred") applied to the network rather than to devices, and it
+    binds a gateway relaying a worker's answer exactly as much as it binds a
+    daemon reading a client's request.

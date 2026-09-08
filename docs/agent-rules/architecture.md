@@ -69,3 +69,26 @@ grounds for rejecting a change even if it works.
     So when a review finding says "and the same check in the other path
     needs updating too", treat that sentence as the finding. Fix the
     duplication, not the symptom.
+11. **Every wait that crosses a process boundary is bounded, and the budget
+    does not reset.** An RPC to a worker, a handshake, a subscription, a
+    forwarded command: each needs an explicit deadline, and a caller that
+    times out must leave the far side no worse off. A budget that restarts
+    on an internal state change (a waiter cycling `processing` -> `queued`,
+    a link reconnecting) is not a bound at all — the caller can wait forever
+    while every individual wait looks bounded. Say what the budget is
+    measured from, and make it monotonic from there.
+12. **Every exit from a method leaves its subject in exactly one named
+    state.** A waiter, lease, timer, subscription or callback is, at every
+    return and every throw, either terminal or in a state something else is
+    driving — never both, never neither, and never live after the thing it
+    belongs to has settled. Two pieces of bookkeeping that must agree about
+    one subject will eventually disagree; keep the state in one place and
+    let the other read it. The tell is a resource that "usually" gets
+    cleaned up on the happy path: enumerate the exits instead, including
+    the ones that throw.
+13. **A claim in a comment or doc is part of the change.** If your change
+    makes a nearby comment, doc paragraph or test name false, fix it or
+    delete it in the same commit — a stale claim is worse than no claim,
+    because it is trusted. Do not trust the comments you are reading either:
+    verify a strong claim about an invariant against the code before relying
+    on it, and treat one that is no longer true as a defect you found.

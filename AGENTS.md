@@ -10,13 +10,17 @@ changes in this repo:
 
 - [architecture.md](docs/agent-rules/architecture.md) — loosely coupled
   modules; platform-agnostic core; iOS and Android encapsulated in their own
-  driver modules; event bus for observers only.
+  driver modules; event bus for observers only; one place enforces a rule;
+  bounded cross-process waits; every exit leaves one named state.
 - [events.md](docs/agent-rules/events.md) — event naming
   (`subject.past-tense-fact`), post-commit emission, payload contracts,
   keeping EVENTS.md in sync.
 - [safety.md](docs/agent-rules/safety.md) — registry-only destruction, never
   touch leased devices, no implicit downloads, ownership proven not inferred,
-  root validation fails closed.
+  root validation fails closed, wire input is a claim not a fact.
+- [testing.md](docs/agent-rules/testing.md) — a test's title is a claim its
+  body must prove; every test must be able to fail for the right reason;
+  untested code is code you can delete with a green suite.
 
 So are the accepted records in [docs/adr/](docs/adr/). An ADR marked
 _Accepted — not yet implemented_ means the documentation already describes the
