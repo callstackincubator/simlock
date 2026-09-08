@@ -36,8 +36,9 @@ import type { DaemonServer } from "./server.js";
 
 const GATEWAY_PORT = 48173;
 const GATEWAY_URL = `ws://127.0.0.1:${GATEWAY_PORT}`;
-/** Distinct from `GATEWAY_PORT` above so this file's second suite never races the first test's
- * own listener through TIME_WAIT on the same port. */
+/** Distinct from `GATEWAY_PORT` above so this file's second `it` never races the first one's
+ * own listener through TIME_WAIT on the same port (H3, round 1 review: both are `it`s in this
+ * one `describe`, not two separate suites). */
 const RESTART_GATEWAY_PORT = 48174;
 const RESTART_GATEWAY_URL = `ws://127.0.0.1:${RESTART_GATEWAY_PORT}`;
 
@@ -52,6 +53,33 @@ function agentSession(overrides: Partial<DispatchSession> = {}): DispatchSession
     role: "agent",
     ...overrides,
   };
+}
+
+/**
+ * C3 (round 1 review, #119): `connection === "connected"` alone does not mean a worker's view is
+ * usable. `WorkerLink#start` (`worker-link.ts`) calls `registry.connected(...)` *before*
+ * `events.subscribe` and before the first `refresh({ includeCatalog: true })` lands, so there is
+ * a real window in which a worker reports `connected` while its view still carries an empty
+ * `catalog` and an `undefined` `capacity` -- both of which make `routing.ts#isEligible` drop it.
+ * Reproduced 7/10 under load (8 `yes` processes on a 4-core box). Gate on the view actually
+ * being able to serve `model`, not merely on the connection flag, so a `lease.request` right
+ * after this wait never races that window into a spurious `No worker in the fleet can currently
+ * serve this request`.
+ */
+function workerServes(
+  workers: readonly {
+    readonly connection: string;
+    readonly capacity?: unknown;
+    readonly catalog: readonly { readonly models: readonly string[] }[];
+  }[],
+  model: string,
+): boolean {
+  return workers.some(
+    (worker) =>
+      worker.connection === "connected" &&
+      worker.capacity !== undefined &&
+      worker.catalog.some((entry) => entry.models.includes(model)),
+  );
 }
 
 describe("gateway fleet smoke (ADR 0005 §35)", () => {
@@ -120,9 +148,20 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     readonly token: string;
     readonly stdout: string;
     readonly gatewayUrl?: string;
-  }): Promise<DaemonServer> {
-    const directory = await mkdtemp(join(tmpdir(), `simlock-e2e-${options.label}-`));
-    directories.push(directory);
+    /**
+     * C1 (round 1 review, #119): reuse an already-`mkdtemp`'d directory and its `Filesystem`
+     * instead of minting fresh ones -- what restarting *this same worker machine* after an
+     * outage needs, so its `instance.json` (and therefore the `workerId` the gateway already
+     * knows) survives the restart, exactly as `startRestartableGateway` reuses the gateway's own
+     * directory and filesystem below. Omit for a worker that starts once and is never restarted.
+     */
+    readonly existing?: { readonly filesystem: Filesystem; readonly directory: string };
+  }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
+    const directory =
+      options.existing?.directory ??
+      (await mkdtemp(join(tmpdir(), `simlock-e2e-${options.label}-`)));
+    if (options.existing === undefined) directories.push(directory);
+    const filesystem = options.existing?.filesystem ?? new MemoryFilesystem();
     const daemon = await startDaemon({
       configOverrides: {
         gateway: {
@@ -152,13 +191,13 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
           platform: "android",
         }),
       ],
-      filesystem: new MemoryFilesystem(),
+      filesystem,
       logger: new NoopLogger(),
       statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(daemon);
-    return daemon;
+    return { daemon, directory, filesystem };
   }
 
   it("leases a device on the right worker and execs a real command against it through the gateway", async () => {
@@ -189,10 +228,11 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
     // Both uplinks dial on their own schedule outside `startDaemon`'s own returned promise
     // (`main.ts` fires `gatewayUplink.start()` without awaiting it) -- wait for the gateway to
-    // actually see both before leasing.
+    // actually see both usably (C3, round 1 review) before leasing, not merely `connected`.
     await vi.waitFor(async () => {
       const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
-      expect(workers.filter((worker) => worker.connection === "connected")).toHaveLength(2);
+      expect(workerServes(workers, "Pixel-A")).toBe(true);
+      expect(workerServes(workers, "Pixel-B")).toBe(true);
     });
 
     const grant = await gateway.dispatch(
@@ -263,9 +303,15 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       gatewayUrl: RESTART_GATEWAY_URL,
     });
 
+    // C3 (round 1 review, #119): gate on both views actually being usable, not merely
+    // `connected` -- see `workerServes`'s own doc comment. This also doubles as the second-order
+    // fix the review calls for: it is a positive assertion, *before* draining, that worker-b's
+    // view already carries "Pixel-B" -- so the later `NO_CAPACITY` below can only mean the drain
+    // excluded it, never that its catalog just had not landed yet.
     await vi.waitFor(async () => {
       const { workers } = await firstGateway.dispatch("worker.list", {}, adminSession());
-      expect(workers.filter((worker) => worker.connection === "connected")).toHaveLength(2);
+      expect(workerServes(workers, "Pixel-A")).toBe(true);
+      expect(workerServes(workers, "Pixel-B")).toBe(true);
     });
     const beforeDrain = (await firstGateway.dispatch("worker.list", {}, adminSession())).workers;
     const workerBId = beforeDrain.find((worker) => worker.label === "worker-b")?.id;
@@ -273,9 +319,21 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
 
     // Lease worker-a's own device -- the fleet client below must still be able to renew this
     // exact lease after everything that follows.
+    // P2 (round 1 review, #119): `requesterId` set explicitly, distinct from the session
+    // principal -- `agentSession({ principal: "fleet-owner" })` alone makes `ownerId` and
+    // `requesterId` the same string (`dispatcher.ts` defaults both to `session.principal`), so
+    // the §27a assertion below (owner authorizes, requester does not) could not tell the two
+    // fields apart: mutating `lease-index.ts` to re-derive `ownerId` from `requesterId` on
+    // rebuild would still pass. With a distinct `requesterId`, only a genuinely separate
+    // `ownerId` on the rebuilt entry can authorize the renew below.
     const grant = await firstGateway.dispatch(
       "lease.request",
-      { model: "Pixel-A", platform: "android", noWait: true },
+      {
+        model: "Pixel-A",
+        platform: "android",
+        noWait: true,
+        requesterId: "fleet-owner-session-1",
+      },
       agentSession({ principal: "fleet-owner" }),
     );
     expect(grant.lease.worker?.label).toBe("worker-a");
@@ -287,8 +345,10 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       const { workers } = await firstGateway.dispatch("worker.list", {}, adminSession());
       expect(workers.find((worker) => worker.id === workerBId)?.drained).toBe(true);
     });
-    // No new dispatch reaches a drained worker: a request only worker-b could serve queues
-    // rather than landing on it -- proven over the real uplink, not a scripted directory.
+    // No new dispatch reaches a drained worker: a `noWait: true` request only worker-b could
+    // serve is rejected outright (H3, round 1 review: it does not queue -- with worker-b the
+    // only worker for "Pixel-B" now excluded, there is no eligible worker at all) rather than
+    // landing on worker-b -- proven over the real uplink, not a scripted directory.
     await expect(
       firstGateway.dispatch(
         "lease.request",
@@ -298,8 +358,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     ).rejects.toMatchObject({ code: "NO_CAPACITY" });
 
     // Kill worker-b outright: an operator taking a drained machine down for maintenance.
-    await workerB.stop("test");
-    daemons.splice(daemons.indexOf(workerB), 1);
+    await workerB.daemon.stop("test");
+    daemons.splice(daemons.indexOf(workerB.daemon), 1);
 
     // Restart the gateway. Everything it held only in memory -- worker views, the lease index,
     // the fleet queue -- is gone (ADR §30); only what it persisted survives, because this reuses
@@ -334,6 +394,37 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       { timeout: 15_000 },
     );
 
+    // C1 (round 1 review, #119): this is the assertion this test's own header comment promises
+    // and never made -- that `workers.json` actually survived the restart. A drained-but-absent
+    // worker has no `WorkerView` at all (a view is only ever built by `connected()`/`refresh()`,
+    // never synthesized from the persisted drain set on its own), so the only way to observe the
+    // restarted gateway's own on-disk state through the same `worker.list` the rest of this test
+    // uses is a worker bearing `workerBId` actually reconnecting to it -- "worker-b's machine
+    // comes back up after maintenance" reusing the *same* directory and `Filesystem` worker-b
+    // had before (so its `instance.json`, and therefore its `workerId`, survives too), exactly as
+    // `restartedGateway` reuses the gateway's own. Its view is built from nothing but this fresh
+    // process's own `connected()` call plus whatever `restartedGateway` loaded from
+    // `workers.json` at startup -- there is no other way `drained` could come back `true` here.
+    const restartedWorkerB = await startWorker({
+      label: "worker-b",
+      model: "Pixel-B",
+      token: tokenB,
+      stdout: "hello-from-b",
+      gatewayUrl: RESTART_GATEWAY_URL,
+      existing: { directory: workerB.directory, filesystem: workerB.filesystem },
+    });
+    await vi.waitFor(
+      async () => {
+        const { workers } = await restartedGateway.dispatch("worker.list", {}, adminSession());
+        const view = workers.find((worker) => worker.id === workerBId);
+        expect(view?.connection).toBe("connected");
+        expect(view?.drained).toBe(true);
+      },
+      { timeout: 15_000 },
+    );
+    await restartedWorkerB.daemon.stop("test");
+    daemons.splice(daemons.indexOf(restartedWorkerB.daemon), 1);
+
     // The lease survives the restart (ADR §30) and renewing resumes for its original requester
     // once the reconnect rebuild has run -- retried because the rebuild races the reconnect
     // itself becoming visible above.
@@ -364,5 +455,5 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       { leaseId: grant.lease.id },
       agentSession({ principal: "fleet-owner" }),
     );
-  }, 40_000);
+  }, 55_000);
 });
