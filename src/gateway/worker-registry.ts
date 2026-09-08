@@ -24,7 +24,15 @@ export type WorkerView = z.infer<typeof workerViewSchema>;
  * state, connection state -- is this registry's own bookkeeping, never a worker's to report. */
 export type WorkerViewSnapshot = Pick<
   WorkerView,
-  "capacity" | "catalog" | "devices" | "downloads" | "health" | "leases" | "queueDepth" | "version"
+  | "capacity"
+  | "catalog"
+  | "devices"
+  | "downloads"
+  | "health"
+  | "lease"
+  | "leases"
+  | "queueDepth"
+  | "version"
 >;
 
 export interface WorkerRegistryOptions {
@@ -47,6 +55,14 @@ export interface WorkerRegistryOptions {
    * a real gateway always does.
    */
   readonly gatewayRequesterPrefix?: string;
+  /**
+   * This gateway's own `lease.maxTtlMs` (ADR 0005 §15) -- what every view's reported
+   * `lease.maxTtlMs` is compared against on `refresh()` to warn when a worker's own cap is
+   * lower. Not optional: a real gateway always has this value (it is `config.lease.maxTtlMs`,
+   * which always defaults to something), and there is no safe placeholder to compare against
+   * in its absence.
+   */
+  readonly leaseMaxTtlMs: number;
   readonly logger?: Logger;
 }
 
@@ -233,12 +249,50 @@ export class WorkerRegistry {
   refresh(workerId: string, snapshot: Partial<WorkerViewSnapshot>): void {
     const existing = this.#workers.get(workerId);
     if (existing === undefined) return;
-    this.#workers.set(workerId, {
+    const next: WorkerView = {
       ...existing,
       ...snapshot,
       lastSeenAt: this.options.clock.now(),
-    });
+    };
+    this.#workers.set(workerId, next);
+    this.#warnOnLowerMaxTtl(existing, next);
     this.#notifyViewsChanged();
+  }
+
+  /**
+   * ADR 0005 §15: the gateway's own `lease.maxTtlMs` decides a fleet lease's width at
+   * admission, before any worker is chosen -- but what the gateway dispatches is an ordinary
+   * `lease.request`, so a worker whose own cap is lower still refuses a request the gateway
+   * already accepted. That mismatch becomes visible the moment this worker's `config.get`
+   * answer lands in its view (`WorkerLink#rebuildView`), which is exactly where it is reported
+   * here -- as a log line, not a bus event: an operator configuration warning is not a business
+   * fact about the fleet (`docs/agent-rules/events.md`), the same reasoning `core/config.ts`
+   * already applies to a worker-only key left in a gateway's config.
+   *
+   * Warned on the transition into the mismatched state (or a change while inside it), never on
+   * an unchanged refresh: `config.get` is re-read on every periodic backstop tick alongside the
+   * catalog, and a worker whose reported cap has not moved must not repeat this warning every
+   * `refreshIntervalMs`. Comparing the incoming cap against the *previous* view's own gives that
+   * for free, with no extra state to track: a worker's first refresh after connecting has no
+   * previous `lease.maxTtlMs` to match, so it warns the moment a low cap is first reported; a
+   * later refresh reporting the identical cap finds `previous.lease?.maxTtlMs` already equal to
+   * it and says nothing new.
+   */
+  #warnOnLowerMaxTtl(previous: WorkerView, next: WorkerView): void {
+    const workerMaxTtlMs = next.lease?.maxTtlMs;
+    // No cap reported (an incompatible worker, a failed config.get, or one older than this
+    // field) is not a fact to warn about -- there is nothing to compare.
+    if (workerMaxTtlMs === undefined || workerMaxTtlMs >= this.options.leaseMaxTtlMs) return;
+    if (previous.lease?.maxTtlMs === workerMaxTtlMs) return;
+    this.#logger.warn(
+      "Worker's lease.maxTtlMs is below this gateway's own cap; requests the gateway accepts up to its own cap will be refused by this worker",
+      {
+        gatewayMaxTtlMs: this.options.leaseMaxTtlMs,
+        workerId: next.id,
+        workerMaxTtlMs,
+        ...(next.label === undefined ? {} : { label: next.label }),
+      },
+    );
   }
 
   /**

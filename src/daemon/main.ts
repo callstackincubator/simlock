@@ -538,6 +538,9 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       path: join(dataDirectory, "workers.json"),
     }),
     eventBus,
+    // ADR 0005 §15: this gateway's own cap, compared against every connected worker's own
+    // reported one so the registry can warn when a worker's is lower.
+    leaseMaxTtlMs: config.lease.maxTtlMs,
     logger: logger.child("gateway"),
     principal: `gw:${instanceId}`,
     retentionMs: config.gateway.disconnectedRetentionMs,

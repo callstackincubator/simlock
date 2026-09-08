@@ -72,6 +72,7 @@ function harness() {
     clock,
     drainStore: new MemoryDrainStore(),
     eventBus,
+    leaseMaxTtlMs: gatewayConfig.lease.maxTtlMs,
     retentionMs: 24 * 60 * 60_000,
   });
   const tokens = new FakeTokens();

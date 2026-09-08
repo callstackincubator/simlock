@@ -198,6 +198,15 @@ worker's**, or requests that the gateway happily accepts will fail on
 whichever machine they land on, which is the least debuggable version of this
 mistake.
 
+The gateway does not enforce this for you — clamping its own cap to the
+minimum of its workers' would make fleet policy shift as machines come and
+go, and the gateway's cap is meant to be explicit policy, not a computed
+minimum. What it does instead: when a worker's own reported `lease.maxTtlMs`
+is below the gateway's, the gateway logs a warning naming the worker and
+both values the moment that worker's view is built (at join, and again if
+the mismatch changes on a later refresh) — loud enough to catch the
+misconfiguration without silently overriding it.
+
 Everything else — `capacity.*`, `idle.*`, `warmPool.*`, `health.*`,
 `stalledTransition.*`, `drivers.*`, `ios.slim.*`, `diskPressure.*`,
 `downloads.*`, and the worker-side `gateway.url`/`gateway.token`/

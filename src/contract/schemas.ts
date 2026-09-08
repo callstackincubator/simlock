@@ -557,6 +557,18 @@ export const workerViewSchema = z.object({
    * that failed).
    */
   downloads: z.object({ policy: z.enum(["never", "on-request", "always"]) }).optional(),
+  /**
+   * The worker's own `lease.maxTtlMs`, read once with `config.get` when the uplink connects
+   * (and again on the periodic backstop tick, alongside the catalog and `downloads.policy`
+   * above -- see `WorkerLink#rebuildView`). ADR 0005 §15: a fleet lease's width is decided at
+   * the gateway's own `lease.maxTtlMs`, but what the gateway dispatches is an ordinary
+   * `lease.request`, so a worker whose own cap is lower still refuses a request the gateway
+   * already accepted -- this field is what lets the gateway notice that at the worker, rather
+   * than only in the operator's documentation. Absent for a worker whose `config.get` the
+   * gateway could not read (an incompatible worker, a call that failed, or one older than this
+   * field).
+   */
+  lease: z.object({ maxTtlMs: z.number() }).optional(),
   /** The worker's *own* queue depth -- local agents on that machine. The gateway's fleet queue
    * is reported separately by `status.get` and arrives with #118. */
   queueDepth: z.number().optional(),

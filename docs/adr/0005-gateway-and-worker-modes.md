@@ -178,11 +178,13 @@ physical machine.
    slow periodic tick as a backstop. `config.get` is read **once per
    connect** and not on the refresh path — config is daemon input, read at
    start, so a worker whose configuration changed has restarted and
-   reconnected anyway — and the gateway keeps exactly one field out of it:
-   the worker's effective `downloads.policy`, which the view carries and
-   routing (requirement 13) needs in order to know whether a worker may
-   install a missing runtime at all. It is a routing input, never an
-   override: the worker still clamps `allowDownload` through its own policy.
+   reconnected anyway — and the gateway keeps two fields out of it: the
+   worker's effective `downloads.policy`, which the view carries and routing
+   (requirement 13) needs in order to know whether a worker may install a
+   missing runtime at all (a routing input, never an override: the worker
+   still clamps `allowDownload` through its own policy); and the worker's own
+   `lease.maxTtlMs`, which the view also carries so the gateway can warn when
+   it is lower than the gateway's own (requirement 15).
 
 ### Worker registry (gateway side)
 
@@ -283,7 +285,17 @@ physical machine.
     lease's width is decided at the gateway — but what it dispatches is an
     ordinary `lease.request`, so a worker with a lower cap still refuses it.
     Keep a gateway's `lease.maxTtlMs` at or below every worker's, or
-    requests the gateway accepts fail on whichever machine they land on.
+    requests the gateway accepts fail on whichever machine they land on. The
+    gateway warns rather than clamps: when a worker's view is built and its
+    own reported `lease.maxTtlMs` is below the gateway's, the gateway logs a
+    warning naming the worker and both values, at join and again if the
+    mismatch changes on a later refresh. It does not lower its own cap to
+    match — that would make a fleet's policy drift with whichever machines
+    happen to be connected, contradicting "a fleet lease's width is decided
+    at the gateway" two sentences up — so the requests already described
+    above still fail on the low-capped worker; the warning only makes the
+    cause visible where it was decided, rather than leaving an operator to
+    find it from the failures downstream.
 16. A gateway lease id names its worker, so renew, release, and reads route
     without consulting any state of its own: it is the owning worker's id,
     then a `.`, then the worker's own lease id, and routing **splits on the

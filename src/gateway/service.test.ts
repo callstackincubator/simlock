@@ -23,6 +23,8 @@ import { MAX_CONSECUTIVE_REFRESH_TIMEOUTS, WORKER_CALL_TIMEOUT_MS } from "./work
 
 const RETENTION_MS = 24 * 60 * 60_000;
 const REFRESH_MS = 30_000;
+/** Matches `core/config.ts`'s own default (ADR 0005 §15's own cap). */
+const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
 /** H4: records every line at `warn` and `error` (the levels a link's own failure paths use), so
  * a test can assert what a failure was actually logged *as* -- not just that something failed. */
@@ -45,6 +47,7 @@ function fleet(
     readonly authenticate?: (
       credential: string | undefined,
     ) => UplinkAuthOutcome | UplinkAuthResult;
+    readonly leaseMaxTtlMs?: number;
     readonly logger?: Logger;
     readonly refreshIntervalMs?: number;
   } = {},
@@ -73,6 +76,7 @@ function fleet(
     },
     drainStore: new MemoryDrainStore(),
     eventBus,
+    leaseMaxTtlMs: options.leaseMaxTtlMs ?? DEFAULT_LEASE_MAX_TTL_MS,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     principal: "gw:instance-1",
     refreshIntervalMs: options.refreshIntervalMs ?? REFRESH_MS,
@@ -298,6 +302,75 @@ describe("GatewayService", () => {
     );
 
     await harness.service.stop();
+  });
+
+  describe("warning on a worker's lower lease.maxTtlMs (ADR 0005 §15)", () => {
+    it("warns once the joining worker's own config.get reports a lower cap", async () => {
+      const logger = new RecordingLogger();
+      const harness = fleet({ leaseMaxTtlMs: 3_600_000, logger });
+      await harness.service.start();
+      const worker = new ScriptedWorkerClient();
+      worker.leaseMaxTtlMs = 1_800_000;
+
+      await harness.join("wrk_1", worker, "mac-mini-1");
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.lease).toBeDefined());
+
+      const warning = logger.warnings.find((entry) => entry.fields?.workerId === "wrk_1");
+      expect(warning?.fields).toMatchObject({
+        gatewayMaxTtlMs: 3_600_000,
+        label: "mac-mini-1",
+        workerMaxTtlMs: 1_800_000,
+      });
+
+      await harness.service.stop();
+    });
+
+    it("does not warn when the joining worker's own cap is at or above the gateway's", async () => {
+      const logger = new RecordingLogger();
+      const harness = fleet({ leaseMaxTtlMs: 3_600_000, logger });
+      await harness.service.start();
+      const worker = new ScriptedWorkerClient();
+      worker.leaseMaxTtlMs = 3_600_000;
+
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.lease).toBeDefined());
+
+      expect(logger.warnings.some((entry) => entry.fields?.workerId === "wrk_1")).toBe(false);
+
+      await harness.service.stop();
+    });
+
+    it("does not repeat the warning on the periodic tick's re-read of an unchanged cap", async () => {
+      const logger = new RecordingLogger();
+      const harness = fleet({ leaseMaxTtlMs: 3_600_000, logger });
+      await harness.service.start();
+      const worker = new ScriptedWorkerClient();
+      worker.leaseMaxTtlMs = 1_800_000;
+
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.lease).toBeDefined());
+      const warningsAfterJoin = logger.warnings.filter(
+        (entry) => entry.fields?.workerId === "wrk_1",
+      ).length;
+      expect(warningsAfterJoin).toBe(1);
+
+      // The periodic backstop tick re-reads config.get alongside the catalog
+      // (`#runTick` -> `link.refresh({ includeCatalog: true })`) -- the worker's cap has not
+      // moved, so this must not warn again.
+      const callsBefore = worker.calls.filter((call) => call === "config.get").length;
+      harness.clock.advance(REFRESH_MS);
+      await vi.waitFor(() =>
+        expect(worker.calls.filter((call) => call === "config.get").length).toBeGreaterThan(
+          callsBefore,
+        ),
+      );
+
+      expect(logger.warnings.filter((entry) => entry.fields?.workerId === "wrk_1").length).toBe(
+        warningsAfterJoin,
+      );
+
+      await harness.service.stop();
+    });
   });
 
   it("marks a worker incompatible when hello finds no overlapping range, and asks it nothing else", async () => {

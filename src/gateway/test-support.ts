@@ -80,6 +80,15 @@ export class ScriptedWorkerClient {
   catalog: CatalogOutput = catalogFixture([]);
   /** What `config.get` reports; the view carries it as a routing input (ADR 0005 §13). */
   downloadPolicy: DownloadPolicy = "on-request";
+  /** What `config.get` reports for `lease.maxTtlMs` (ADR 0005 §15) -- the routing-adjacent
+   * counterpart to `downloadPolicy` above. Defaults comfortably above every gateway cap this
+   * suite's fixtures use, so a test that never sets it cannot accidentally trip the new warning;
+   * a test exercising §15 sets it explicitly. `config.get` always answers with a real
+   * `lease.maxTtlMs` when it answers at all (the field predates this change and is not
+   * optional on `Config`), so unlike `downloadPolicy` there is no "unset" state to script here
+   * -- the workerViewSchema field's own optionality is `config === undefined`, exercised at
+   * `WorkerRegistry`'s own level in `worker-registry.test.ts`, not through this fake. */
+  leaseMaxTtlMs = 24 * 60 * 60_000;
   readonly calls: string[] = [];
   /** Set to reject every call with this error -- e.g. a protocol mismatch. */
   failWith: unknown;
@@ -152,11 +161,14 @@ export class ScriptedWorkerClient {
   }
 
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
-  async getConfig(): Promise<{ readonly downloads: { readonly policy: DownloadPolicy } }> {
+  async getConfig(): Promise<{
+    readonly downloads: { readonly policy: DownloadPolicy };
+    readonly lease: { readonly maxTtlMs: number };
+  }> {
     this.calls.push("config.get");
     if (this.hangingCalls.has("config.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
-    return { downloads: { policy: this.downloadPolicy } };
+    return { downloads: { policy: this.downloadPolicy }, lease: { maxTtlMs: this.leaseMaxTtlMs } };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.

@@ -2,15 +2,34 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, type Logger } from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { leaseFixture } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
+/** Matches `core/config.ts`'s own default, so a test that does not care about ADR 0005 §15's
+ * warning gets a cap no fixture's `ttlMs` ever comes near. */
+const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 /** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
  * prefix is that principal plus a trailing `:`. */
 const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
+
+/** Records every `warn` call, the same shape `service.test.ts`'s own `RecordingLogger` uses --
+ * §15's warning is asserted on directly rather than only on the view it leaves behind. */
+class RecordingLogger implements Logger {
+  readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
+
+  debug(): void {}
+  info(): void {}
+  warn(message: string, fields?: Record<string, unknown>): void {
+    this.warnings.push(fields === undefined ? { message } : { fields, message });
+  }
+  error(): void {}
+  child(): Logger {
+    return this;
+  }
+}
 
 function registry(
   options: {
@@ -18,6 +37,10 @@ function registry(
     /** Omit to get the default fixture prefix; pass `null` explicitly (H3) to build a registry
      * with no `gatewayRequesterPrefix` at all, the way `dispatcher.test.ts`'s harness does. */
     readonly gatewayRequesterPrefix?: string | null;
+    /** ADR 0005 §15's own cap. Defaults to `core/config.ts`'s own default so a test that never
+     * reports a worker `lease.maxTtlMs` cannot accidentally trip the new warning. */
+    readonly leaseMaxTtlMs?: number;
+    readonly logger?: Logger;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -31,9 +54,11 @@ function registry(
   const workers = new WorkerRegistry({
     clock,
     eventBus,
+    leaseMaxTtlMs: options.leaseMaxTtlMs ?? DEFAULT_LEASE_MAX_TTL_MS,
     retentionMs: RETENTION_MS,
     ...(gatewayRequesterPrefix === undefined ? {} : { gatewayRequesterPrefix }),
     ...(options.drainStore === undefined ? {} : { drainStore: options.drainStore }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
   return { clock, events, workers };
 }
@@ -111,6 +136,79 @@ describe("WorkerRegistry", () => {
     workers.refresh("wrk_1", { queueDepth: 9 });
 
     expect(workers.view("wrk_1")).toBeUndefined();
+  });
+
+  describe("warning on a worker's lower lease.maxTtlMs (ADR 0005 §15)", () => {
+    it("warns once a worker's own cap is refreshed in below the gateway's", () => {
+      const logger = new RecordingLogger();
+      const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
+      workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
+
+      expect(logger.warnings).toHaveLength(1);
+      expect(logger.warnings[0]).toMatchObject({
+        fields: {
+          gatewayMaxTtlMs: 3_600_000,
+          label: "mac-mini-1",
+          workerId: "wrk_1",
+          workerMaxTtlMs: 1_800_000,
+        },
+      });
+    });
+
+    it("does not warn when a worker's own cap is at or above the gateway's", () => {
+      const logger = new RecordingLogger();
+      const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
+      workers.connected("wrk_1", undefined, "0.3.0");
+
+      // Exactly equal, and then strictly above -- neither is "below".
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 3_600_000 } });
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 7_200_000 } });
+
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("does not warn, and does not crash, when a worker reports no cap at all", () => {
+      const logger = new RecordingLogger();
+      const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
+      workers.connected("wrk_1", undefined, "0.3.0");
+
+      // No `lease` key on the snapshot: exactly what an event-driven refresh sends today
+      // (`config.get` is only read alongside the catalog), and what an incompatible or
+      // config.get-failed worker's view carries forever.
+      expect(() => workers.refresh("wrk_1", { queueDepth: 1 })).not.toThrow();
+
+      expect(workers.view("wrk_1")?.lease).toBeUndefined();
+      expect(logger.warnings).toEqual([]);
+    });
+
+    it("does not repeat the warning on a later refresh reporting the same lower cap", () => {
+      const logger = new RecordingLogger();
+      const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
+      workers.connected("wrk_1", undefined, "0.3.0");
+
+      // The periodic backstop tick re-reads config.get (and so `lease.maxTtlMs`) on every
+      // refresh alongside the catalog (`WorkerLink#rebuildView`) -- an unchanged report must
+      // not turn into a warning every `refreshIntervalMs`.
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
+
+      expect(logger.warnings).toHaveLength(1);
+    });
+
+    it("warns again if the cap drops further while already below the gateway's", () => {
+      const logger = new RecordingLogger();
+      const { workers } = registry({ leaseMaxTtlMs: 3_600_000, logger });
+      workers.connected("wrk_1", undefined, "0.3.0");
+
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 1_800_000 } });
+      workers.refresh("wrk_1", { lease: { maxTtlMs: 900_000 } });
+
+      expect(logger.warnings).toHaveLength(2);
+      expect(logger.warnings[1]?.fields).toMatchObject({ workerMaxTtlMs: 900_000 });
+    });
   });
 
   it("marks a version-mismatched worker incompatible with both ranges, and rejects it", () => {

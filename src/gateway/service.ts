@@ -68,6 +68,9 @@ export interface GatewayServiceOptions {
   readonly authenticate: (credential: string | undefined) => Promise<UplinkAuthResult>;
   /** `gateway.disconnectedRetentionMs` (§6). */
   readonly retentionMs: number;
+  /** This gateway's own `lease.maxTtlMs` (§15) -- threaded straight into the registry, which
+   * warns when a connected worker's own reported cap is lower. */
+  readonly leaseMaxTtlMs: number;
   /** Where drained worker ids survive a restart (Decision 3). */
   readonly drainStore?: DrainStore;
   /** The principal the gateway announces to each worker at `hello`. */
@@ -101,6 +104,7 @@ export class GatewayService {
       // exactly `gw:<this gateway's instance id>`, the same shape requirement 27 stamps on
       // every requester id this gateway forwards, just without the trailing `:<requester>`.
       gatewayRequesterPrefix: `${options.principal}:`,
+      leaseMaxTtlMs: options.leaseMaxTtlMs,
       logger: this.#logger,
       retentionMs: options.retentionMs,
       ...(options.drainStore === undefined ? {} : { drainStore: options.drainStore }),

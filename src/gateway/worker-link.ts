@@ -360,7 +360,15 @@ export class WorkerLink {
       queueDepth: status.queueDepth,
       version: client.daemonVersion,
       ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
-      ...(config === undefined ? {} : { downloads: { policy: config.downloads.policy } }),
+      ...(config === undefined
+        ? {}
+        : {
+            downloads: { policy: config.downloads.policy },
+            // ADR 0005 §15: the one other field this gateway keeps out of a worker's config,
+            // alongside `downloads.policy` above -- `WorkerRegistry#refresh` is where it is
+            // compared against the gateway's own `lease.maxTtlMs` and warned about.
+            lease: { maxTtlMs: config.lease.maxTtlMs },
+          }),
     });
   }
 
