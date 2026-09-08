@@ -43,3 +43,29 @@ grounds for rejecting a change even if it works.
    application code. Tests use the in-memory/fake implementations; if a new
    external dependency appears, define its port first. See "External APIs
    behind interfaces" in [../ARCHITECTURE.md](../ARCHITECTURE.md).
+10. **A rule is enforced in exactly one place.** Never implement the same
+    decision twice — not in two modules, not on two code paths through one
+    module, not "once for the fast path and once for the general path". If
+    two call sites both have to answer the same question, one of them calls
+    the other or they both call a third; whichever shape you pick, deleting
+    the duplicate must be part of the change, not a follow-up.
+
+    This is not a style preference. Duplicated enforcement does not stay
+    duplicated — it *diverges*, and it diverges silently, because each copy
+    keeps passing its own tests. The two copies then answer differently
+    depending on which path a caller happened to take, which reads to
+    everyone downstream as non-determinism rather than as a bug with an
+    address.
+
+    Worked example, from this repo: the gateway's `noWait` rejection was
+    enforced both in `FleetLeaseCoordinator#admit`'s direct look and in
+    `#dispatch`'s ordered walk. Four consecutive review rounds each found a
+    real defect in that loop, and each fix to one path opened a gap in the
+    other — a request that answered `NO_CAPACITY` immediately or waited in
+    the queue depending on whether *unrelated* requests happened to be
+    queued at the time. No single patch closed it; the duplication was the
+    defect, and it was only fixed by making one path call the other.
+
+    So when a review finding says "and the same check in the other path
+    needs updating too", treat that sentence as the finding. Fix the
+    duplication, not the symptom.
