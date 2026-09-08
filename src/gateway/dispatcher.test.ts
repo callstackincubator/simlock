@@ -546,6 +546,51 @@ describe("GatewayDispatcher", () => {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    // C3 (round 3 review): exercises the gateway's *real* dispatcher end to end
+    // (`GatewayDispatcher` -> `FleetLeaseCoordinator#exec` -> a scripted worker), unlike
+    // `http/app.test.ts`'s own "opens the stream when the process starts" test, which drives
+    // `call.session.onStarted?.()` by hand and so cannot notice a dispatcher that stops calling
+    // it for a genuinely silent, long-running command.
+    it("calls onStarted for a silent device.exec once the exec start grace window passes, with no worker answer at all (ADR §19b/§19e, C3, round 3 review)", async () => {
+      const { clock, coordinator, directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const grant = await coordinator.request(
+        { model: "iPhone 17", platform: "ios" },
+        { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
+      );
+      // §19b's own worked example: `simctl install <path>` never writes anything while it runs,
+      // and the worker here never answers at all.
+      client.execQueue.push({ kind: "hang" });
+
+      let started = false;
+      void dispatcher.dispatch(
+        "device.exec",
+        { args: ["install", "/path/to.app"], leaseId: grant.lease.id, tool: "simctl" },
+        session({
+          onStarted: () => {
+            started = true;
+          },
+          principal: "agent-1",
+          role: "agent",
+        }),
+      );
+      await Promise.resolve();
+      expect(started).toBe(false);
+
+      clock.advance(500);
+      await Promise.resolve();
+      expect(started).toBe(true);
+    });
+
     it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
       const { dispatcher, workers } = harness();
       workers.connected("wrk_1", undefined, "0.3.0");

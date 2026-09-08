@@ -8,8 +8,12 @@
  * ## The dispatch race (see the module's own tests for the one that catches a naive fix)
  *
  * Dispatch re-runs on every worker-view change (`FleetViews#onViewsChanged`) and once more per
- * settled attempt. A waiter whose forwarded `lease.request` is still in flight to worker A must
- * never be picked up by a second pass and sent to worker B too -- if both granted, one requester
+ * settled attempt. (C1/C2, round 3 review: `#attempt` now calls `#dispatch()` itself, right after
+ * `#settleGrant` and right after its own terminal `reject` -- see `#attempt`'s own doc for why
+ * this was previously false. `#admit`, a brand-new waiter's own synchronous first look, defers to
+ * that same walk whenever the queue is already non-empty, rather than taking an out-of-order peek
+ * of its own -- see `#admit`'s own doc.) A waiter whose forwarded `lease.request` is still in
+ * flight to worker A must never be picked up by a second pass and sent to worker B too -- if both granted, one requester
  * would hold two devices on two machines, and the fleet-wide admission check cannot catch it
  * (it runs once, at admission, before either RPC). `#beginAttempt` calls `queue.markProcessing`
  * *before* issuing the RPC, taking the waiter out of `queued` state, so `#dispatch`'s own
@@ -60,6 +64,18 @@ import {
   type LeaseRequestOptions,
 } from "./queue.js";
 import type { RoutableRequest, RoutingDecision, RoutingPolicy } from "./routing.js";
+
+/**
+ * C3 (round 3 review): how long `#exec` waits for the worker's own answer to a forwarded
+ * `device.exec` -- settlement, a refusal, or the first `output` chunk -- before announcing
+ * `started` anyway. Not user-configurable, deliberately: like `http/sse.ts`'s own `KEEPALIVE_MS`,
+ * this is an internal bound on gateway behavior, not a policy knob an operator has a reason to
+ * retune. A worker's pre-process ownership/refusal-list check is synchronous (no I/O on its own
+ * side), so any real refusal answers within ordinary uplink latency; this is generous well past
+ * that without meaningfully delaying the `200` a genuinely silent, long-running command needs
+ * (ADR §19e, §19b's own `simctl install <path>` example).
+ */
+const EXEC_START_GRACE_MS = 500;
 
 export interface FleetExecInput {
   readonly leaseId: string;
@@ -115,6 +131,8 @@ export class FleetLeaseCoordinator {
    * explicit clean-up call on every one of those exits to avoid an unbounded leak; the entry is
    * reclaimable the moment nothing else still references the waiter. */
   readonly #createdAt = new WeakMap<FleetWaiter, number>();
+  /** C1 (round 3 review): re-entrancy guard for `#dispatch` -- see its own doc comment. */
+  #dispatchDepth = 0;
 
   constructor(private readonly options: FleetLeaseCoordinatorOptions) {
     this.#logger = options.logger ?? new NoopLogger();
@@ -302,25 +320,36 @@ export class FleetLeaseCoordinator {
     // `authorize` hook (via `leaseRequesterId` above) has already resolved by the time this
     // handler runs.
     const namespacedRequesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;
-    // C3 (round 2 review): `session.onStarted`'s own contract is "after every failure that can
-    // happen before a process exists" -- §19a''s `FORBIDDEN` (the worker's own ownership check
-    // disagreeing with this gateway's index) and the driver's own `PASSTHROUGH_REFUSED` /
-    // `UNKNOWN_PASSTHROUGH_TOOL` are exactly such failures, and this gateway cannot know which
-    // one a forwarded command will get before the worker answers -- it does not hold the
-    // driver's refusal list or duplicate the worker-side ownership check. Calling `onStarted`
-    // before `client.exec` even went out (as this used to) committed the HTTP route's `200`
-    // before any of that was known, so a `FORBIDDEN` between two fleet agents arrived as a `200`
-    // + SSE `error` instead of a `403` (Decision 3: every frontend must work against a gateway
-    // unchanged). The uplink carries no distinct "the process now exists" frame separate from
-    // `output` itself (`SimlockAdminClient#exec`'s only two signals are settlement and `output`
-    // pushes -- see `simlock-client/wire.ts`), so the first relayed `output` chunk is the
-    // earliest *honest* evidence available, exactly mirroring §11's "first progress push counts
-    // as dispatched" for the queue. A command that never writes anything before it exits calls
-    // `onStarted` not at all; that is still correct, not merely tolerated: `client.exec`'s own
-    // promise settling first (success or a worker-side refusal) is the answer, and the caller's
-    // own race between the two (`http/app.ts`'s `Promise.race([settled, started...])`) resolves
-    // to that settlement instead, with its own real status code -- never a wrongly-committed
-    // `200`.
+    // C3 (round 2 review, narrowed round 3 review): `session.onStarted`'s own contract is "after
+    // every failure that can happen before a process exists" -- §19a''s `FORBIDDEN` (the worker's
+    // own ownership check disagreeing with this gateway's index) and the driver's own
+    // `PASSTHROUGH_REFUSED` / `UNKNOWN_PASSTHROUGH_TOOL` are exactly such failures, and this
+    // gateway cannot know which one a forwarded command will get before the worker answers -- it
+    // does not hold the driver's refusal list or duplicate the worker-side ownership check.
+    // Calling `onStarted` before `client.exec` even went out (as this used to) committed the HTTP
+    // route's `200` before any of that was known, so a `FORBIDDEN` between two fleet agents
+    // arrived as a `200` + SSE `error` instead of a `403` (Decision 3: every frontend must work
+    // against a gateway unchanged).
+    //
+    // Round 2's fix moved the signal to the first relayed `output` chunk, on the reasoning that
+    // it is the earliest *honest* evidence available -- true, but only half of §19e: a *silent*
+    // long-running command (§19b's own worked example, `simctl install <path>`) never produces
+    // one, so `onStarted` never fires and a gateway-fronted caller gets no `200`, no keepalives,
+    // and (round 3 review, C3) a `504` instead of the stream's own terminal `EXEC_TIMEOUT` --
+    // Decision 3 broken in the direction round 2 did not touch. The uplink carries no distinct
+    // "the process now exists" frame separate from `output` itself (`SimlockAdminClient#exec`'s
+    // only two signals are settlement and `output` pushes -- see `simlock-client/wire.ts`), so
+    // fixing this without a new wire frame means bounding the deferral instead: `#execStartGrace`
+    // below announces `started` once `EXEC_START_GRACE_MS` has passed with no answer at all from
+    // the worker, on top of the first-chunk signal this already had. A pre-process refusal is a
+    // synchronous, no-I/O check on the worker's own side, so it answers well inside that window on
+    // any real uplink and still reaches the caller as its own real status, unaffected; a command
+    // silent for longer than that gets its `200` committed anyway, exactly as §19e requires. A
+    // command that both writes nothing *and* settles (success or refusal) before the grace window
+    // elapses still calls `onStarted` not at all -- still correct, not merely tolerated:
+    // `client.exec`'s own promise settling first is the answer, and the caller's own race between
+    // the two (`http/app.ts`'s `Promise.race([settled, started...])`) resolves to that settlement
+    // instead, with its own real status code.
     let started = false;
     const announceStarted = (): void => {
       if (started) return;
@@ -339,34 +368,43 @@ export class FleetLeaseCoordinator {
     // late chunk reaches `session.onOutput` (or spuriously fires `onStarted`) once that has
     // happened.
     let detached = false;
-    return this.#forwardToWorker(entry.workerId, async (client) => {
-      // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
-      // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
-      // ordinary timeout and is expected to answer first (the gateway's default is deliberately
-      // the longer of the two), so this only ever fires when nothing else would have.
-      return this.#withExecTimeout(
-        client.exec(
-          {
-            leaseId: entry.workerLeaseId,
-            tool: input.tool,
-            args: [...input.args],
-            ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-            requesterId: namespacedRequesterId,
-          },
-          {
-            onOutput: (chunk) => {
-              if (detached) return;
-              announceStarted();
-              void session.onOutput?.(chunk.stream, chunk.chunk);
-            },
-          },
-        ),
-        entry.workerId,
-        () => {
-          detached = true;
-        },
-      );
+    // C3 (round 3 review): armed the moment the forward begins, cancelled the moment this call
+    // settles either way -- see the doc above for what this is bounding and why.
+    const execStartGrace = this.options.clock.setTimer(EXEC_START_GRACE_MS, () => {
+      announceStarted();
     });
+    try {
+      return await this.#forwardToWorker(entry.workerId, async (client) => {
+        // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
+        // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
+        // ordinary timeout and is expected to answer first (the gateway's default is deliberately
+        // the longer of the two), so this only ever fires when nothing else would have.
+        return this.#withExecTimeout(
+          client.exec(
+            {
+              leaseId: entry.workerLeaseId,
+              tool: input.tool,
+              args: [...input.args],
+              ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+              requesterId: namespacedRequesterId,
+            },
+            {
+              onOutput: (chunk) => {
+                if (detached) return;
+                announceStarted();
+                void session.onOutput?.(chunk.stream, chunk.chunk);
+              },
+            },
+          ),
+          entry.workerId,
+          () => {
+            detached = true;
+          },
+        );
+      });
+    } finally {
+      this.options.clock.cancel(execStartGrace);
+    }
   }
 
   /**
@@ -415,8 +453,15 @@ export class FleetLeaseCoordinator {
    * it by), the same class of gap H2/H8 already name for the RPCs this class does track state
    * for. A genuinely wedged worker is rare enough, and `leaseRequestTimeoutMs` generous enough,
    * that this is left as a known consequence rather than built out here.
+   *
+   * `onTimeout` (P4, round 3 review): the same detach hook `#withExecTimeout` already takes, for
+   * the same reason -- see `#attempt`'s own `detached` flag.
    */
-  #withLeaseRequestTimeout<Value>(promise: Promise<Value>, workerId: string): Promise<Value> {
+  #withLeaseRequestTimeout<Value>(
+    promise: Promise<Value>,
+    workerId: string,
+    onTimeout: () => void,
+  ): Promise<Value> {
     return this.#raceTimeout(
       promise,
       this.options.leaseRequestTimeoutMs,
@@ -426,6 +471,7 @@ export class FleetLeaseCoordinator {
           `Worker ${workerId} did not answer lease.request within gateway.leaseRequestTimeoutMs (${String(this.options.leaseRequestTimeoutMs)}ms)`,
           { workerId },
         ),
+      onTimeout,
     );
   }
 
@@ -491,6 +537,19 @@ export class FleetLeaseCoordinator {
    * admission -- the common warm-hit case never has to wait for an external trigger. Mirrors
    * `LeaseAcquisitionCoordinator#defer`'s noWait/wait split for the case routing finds nobody.
    *
+   * C2 (round 3 review): that synchronous look is only ever safe to take when nothing else is
+   * already queued. `routing.select` is a pure function of the current views, so a brand-new
+   * waiter admitted while an older one is still queued would see the *exact same* views that
+   * already left that older waiter without a worker -- and, unaware of it, could claim a worker
+   * the older waiter was equally eligible for, out of ADR §10/§11's oldest-first order. Once the
+   * queue is non-empty this defers entirely to `#dispatch`'s own ordered walk: the new waiter is
+   * enqueued at the back like any other, and one pass runs immediately so the still-common case of
+   * "nobody is really contending for capacity right now" settles just as fast as the direct look
+   * used to. A `noWait` waiter that comes out of that pass still `queued` (nobody -- including
+   * itself -- got a worker) is rejected immediately, exactly as the direct-look branch below
+   * already does; `#dispatch` itself never rejects a waiter, only passes it over, so this is the
+   * one place a `noWait` semantics has to be layered back on afterward.
+   *
    * H9 (round 2 review): throws a plain `DispatchError("NO_CAPACITY", ...)` rather than a
    * fleet-native error class -- `DispatchError`'s own code is used verbatim by
    * `daemon/error-code.ts#classifyError`'s first branch, so no gateway-specific class or import
@@ -500,6 +559,21 @@ export class FleetLeaseCoordinator {
    * graph (and `src/admin`'s client) into ordinary worker startup with no boundary test covering
    * that direction. */
   #admit(waiter: FleetWaiter): void {
+    if (this.#queue.depth > 0) {
+      this.#enqueue(waiter);
+      this.#dispatch();
+      if (waiter.options.noWait === true && waiter.state === "queued") {
+        this.#reject(
+          waiter,
+          new DispatchError(
+            "NO_CAPACITY",
+            "No worker in the fleet can currently serve this request",
+          ),
+          "no-wait",
+        );
+      }
+      return;
+    }
     const decision = this.options.routing.select(routable(waiter), this.options.views.views());
     if (decision !== undefined) {
       this.#beginAttempt(waiter, decision);
@@ -530,21 +604,43 @@ export class FleetLeaseCoordinator {
    * corrects itself between passes turns this into an RPC storm scaling with queue depth. Once a
    * worker is claimed by a waiter this pass, it drops out of the pool the rest of the pass sees:
    * at most one dispatch per worker per pass. A waiter left without a worker this way is not
-   * rejected -- it stays `queued` for the next pass (a real view change, driven by the worker's
-   * own event stream once the claimed attempt's outcome is known), the same "passed over, not
-   * blocked on" contract this method already promises for a request no worker can serve at all.
+   * rejected -- it stays `queued` for the next pass. C1 (round 3 review): that next pass is
+   * guaranteed now, not merely hoped for -- `#attempt` runs one itself the moment *any* attempt
+   * settles (a grant via `#settleGrant`, or a terminal rejection), on top of the existing
+   * worker-view trigger, so a waiter passed over here always gets looked at again once whatever
+   * claimed its worker this pass is done with it, the same "passed over, not blocked on" contract
+   * this method already promises for a request no worker can serve at all. Before this, only a
+   * worker's own event stream (a `lease.rejected`/`lease.expired` push, or the 30s refresh tick)
+   * ever re-ran this method -- several of `#attempt`'s own terminal branches
+   * (`WORKER_UNREACHABLE`, `INTERNAL`, a target that disappeared between routing and dispatch)
+   * produce no such push at all, so a waiter passed over in the same pass as one of those had
+   * nothing left to schedule another look.
+   *
+   * `#dispatchDepth` guards against this method ever running re-entrantly on the same call stack
+   * (defensive: `#beginAttempt`'s own `#attempt` is `void`-async and every await point in it is
+   * genuinely asynchronous -- see `#raceTimeout` -- so a nested synchronous call back into this
+   * method should not be reachable today, but nothing about that is enforced by a type). A second
+   * call arriving while one is already running is a no-op: the in-progress pass has not finished
+   * walking every currently-queued waiter yet, so there is nothing a nested pass would see that
+   * the outer one will not already reach itself.
    */
   #dispatch(): void {
-    const claimedThisPass = new Set<string>();
-    for (const waiter of this.#queue.list()) {
-      if (waiter.state !== "queued") continue;
-      const eligibleWorkers = this.options.views
-        .views()
-        .filter((worker) => !claimedThisPass.has(worker.id));
-      const decision = this.options.routing.select(routable(waiter), eligibleWorkers);
-      if (decision === undefined) continue;
-      claimedThisPass.add(decision.workerId);
-      this.#beginAttempt(waiter, decision);
+    if (this.#dispatchDepth > 0) return;
+    this.#dispatchDepth += 1;
+    try {
+      const claimedThisPass = new Set<string>();
+      for (const waiter of this.#queue.list()) {
+        if (waiter.state !== "queued") continue;
+        const eligibleWorkers = this.options.views
+          .views()
+          .filter((worker) => !claimedThisPass.has(worker.id));
+        const decision = this.options.routing.select(routable(waiter), eligibleWorkers);
+        if (decision === undefined) continue;
+        claimedThisPass.add(decision.workerId);
+        this.#beginAttempt(waiter, decision);
+      }
+    } finally {
+      this.#dispatchDepth -= 1;
     }
   }
 
@@ -572,6 +668,16 @@ export class FleetLeaseCoordinator {
    * beside it) is now the *only* bookkeeping a waiter's in-flight-ness lives in, every branch
    * below already leaves it in one of exactly those states on its own -- there is no second
    * clear-up step left to forget.
+   *
+   * C1 (round 3 review): the two branches that leave `waiter` *terminal* -- `#settleGrant`, and
+   * the catch block's own `queue.reject` -- also each call `#dispatch()` themselves, right after.
+   * `#staleView`'s own branches (the unreachable-target check above, and the catch's immediate
+   * `NO_CAPACITY`) do not need to: both already call a worker's `refresh()`, and a real snapshot
+   * landing for it fires `#onViewsChanged` -> `#dispatch()` regardless of whether the numbers
+   * actually changed. The terminal branches have no such follow-up of their own -- a worker this
+   * class gave up on (`WORKER_UNREACHABLE`, `INTERNAL`) or was refused for a reason genuinely
+   * unrelated to capacity (any other worker-side code) may still be exactly the worker a different
+   * queued waiter needs, and nothing else would ever schedule that second look.
    */
   async #attempt(waiter: FleetWaiter, decision: RoutingDecision): Promise<void> {
     const workerId = decision.workerId;
@@ -603,6 +709,17 @@ export class FleetLeaseCoordinator {
       });
     };
 
+    // P4 (round 3 review): H4's own reasoning applies verbatim here -- `#withLeaseRequestTimeout`
+    // settling `WORKER_UNREACHABLE` only stops *this* call's returned promise from being awaited
+    // any further, not the worker's own still-pending `lease.request` RPC, whose `onProgress`
+    // closure below stays live for as long as the worker keeps pushing progress. Before this,
+    // a late `progress` push after the timeout had already rejected the waiter still called
+    // `announceDispatched()` and emitted `request.dispatched` for a request this gateway had
+    // already told its caller was `WORKER_UNREACHABLE` -- a false past-tense fact against
+    // `docs/EVENTS.md`'s own "and the worker took it". Same mechanism as `exec`'s `detached`, not
+    // a second bespoke one: flipped by `#withLeaseRequestTimeout`'s own `onTimeout` hook, checked
+    // here before either `announceDispatched()` or `notifyProgress` run.
+    let detached = false;
     let grant: LeaseGrant;
     try {
       grant = await this.#withLeaseRequestTimeout(
@@ -631,6 +748,7 @@ export class FleetLeaseCoordinator {
           },
           {
             onProgress: (progress) => {
+              if (detached) return;
               // ADR §11: "the first `progress` push" is one of the two signals a request is
               // this worker's now -- device work having started means it is committed here even
               // before the grant itself arrives.
@@ -640,6 +758,9 @@ export class FleetLeaseCoordinator {
           },
         ),
         workerId,
+        () => {
+          detached = true;
+        },
       );
     } catch (error: unknown) {
       // P1 (round 2 review): "an *immediate* NO_CAPACITY is the only answer that leaves it
@@ -654,12 +775,22 @@ export class FleetLeaseCoordinator {
         this.#staleView(waiter, workerId);
         return;
       }
+      // C1 (round 3 review): this waiter's own outcome is terminal, but the worker it just gave
+      // up (or never actually reached) may still be free for whoever else is queued behind it --
+      // and unlike `#staleView`'s branch above, nothing else here schedules another look at them.
+      // `WORKER_UNREACHABLE`/`INTERNAL` in particular produce no worker-side event at all, so
+      // without this a waiter passed over in this same pass had nothing left to wake it until the
+      // next real worker-view change (the 30s refresh tick, at best).
       this.#queue.reject(waiter, this.#classifyLeaseRequestError(error, workerId));
+      this.#dispatch();
       return;
     }
 
     announceDispatched();
     this.#settleGrant(waiter, workerId, grant);
+    // C1 (round 3 review): see the catch branch above -- a grant settling this waiter is just as
+    // much a reason for whoever else is queued to get another look, not only a terminal failure.
+    this.#dispatch();
   }
 
   /**

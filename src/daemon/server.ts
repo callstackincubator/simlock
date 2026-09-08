@@ -82,6 +82,18 @@ interface Connection {
    */
   readonly forcedRole: Role | undefined;
   /**
+   * H3 (round 3 review, narrowed further): set only by `acceptUplink`, and only there -- a
+   * dedicated fact about *how this connection was accepted*, not derived from `forcedRole`.
+   * Before this, `#session` read `forcedRole !== undefined` as the proxy for "this is the
+   * worker's own uplink to its configured gateway", which happened to be true only because
+   * `acceptUplink` is `#accept`'s one caller that ever sets `forcedRole` at all -- a future
+   * `#accept(socket, "agent")` (or any other forced role added for an unrelated reason) would
+   * silently satisfy that same check and reopen ADR §27a's `owner` gate to whatever forced that
+   * connection, with no test failing to say so. This field is set directly, once, at the one call
+   * site that is actually the uplink, so a future forced role elsewhere cannot be mistaken for it.
+   */
+  readonly isGatewayUplink: boolean;
+  /**
    * Lease ids this connection is *currently* explicitly releasing (`lease.release`/
    * `lease.release-all`), added right before the dispatched call and consumed by
    * `#notifyLeaseLost`. ADR 0003 §8 says a client "never fires `onLeaseLost` for a release the
@@ -619,10 +631,10 @@ export class DaemonServer {
    * mismatched range still refuses every operation but `daemon.stop`.
    */
   acceptUplink(connection: IpcConnection): void {
-    this.#accept(connection, "admin");
+    this.#accept(connection, "admin", true);
   }
 
-  #accept(socket: IpcConnection, forcedRole?: Role): void {
+  #accept(socket: IpcConnection, forcedRole?: Role, isGatewayUplink = false): void {
     if (this.#stopping) {
       void socket.close();
       return;
@@ -632,6 +644,7 @@ export class DaemonServer {
       closed: false,
       forcedRole,
       helloReceived: false,
+      isGatewayUplink,
       // Overwritten by `#handleHello` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
       // construction (`#dispatchLine` routes to `#handleHello` until then).
@@ -1124,15 +1137,14 @@ export class DaemonServer {
    * needs one, and builds its own session inline so the closure can see that specific call's
    * `requestId`.
    *
-   * `isGatewayUplink` (ADR §27a, H3, round 3 review) reads `connection.forcedRole`, not
-   * `connection.role`: `forcedRole` is set exactly and only by `acceptUplink` (this daemon
-   * dialled its own configured `gateway.url`), never by anything a `hello` payload can claim --
-   * `role` itself is always `"admin"` for such a connection too, but so is an ordinary HTTP
-   * `operator` token's, which is the very confusion this field exists to stop propagating into
-   * `lease.request`'s `owner` gate. */
+   * `isGatewayUplink` (ADR §27a, H3, round 3 review; narrowed further, see the `Connection`
+   * field's own doc) reads `connection.isGatewayUplink` directly, not `connection.role` and not
+   * `connection.forcedRole`: `role` itself is always `"admin"` for such a connection, but so is
+   * an ordinary HTTP `operator` token's, which is the very confusion this field exists to stop
+   * propagating into `lease.request`'s `owner` gate. */
   #session(connection: Connection): DispatchSession {
     return {
-      isGatewayUplink: connection.forcedRole !== undefined,
+      isGatewayUplink: connection.isGatewayUplink,
       manageEventSubscription: (subscribe) => this.#manageEventSubscription(connection, subscribe),
       principal: connection.principal,
       role: connection.role,

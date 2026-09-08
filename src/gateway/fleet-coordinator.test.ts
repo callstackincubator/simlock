@@ -268,27 +268,88 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(3);
 
     // `connectWorker`'s default capacity reports two free iOS slots -- on paper, room for two of
-    // the three queued waiters above. Without the cap, `#dispatch`'s single pass would run
-    // `routing.select` against this same unchanged view for every one of the three, pick worker
-    // A for every one of them, and fire three concurrent `lease.request`s in this one pass.
+    // the three queued waiters above. Without the per-pass cap, `#dispatch`'s single pass would
+    // run `routing.select` against this same unchanged view for every one of the three, pick
+    // worker A for every one of them, and fire three concurrent `lease.request`s in this one pass.
     connectWorker(workers, "wrk_a");
     await tick();
 
-    // Capped at one dispatch per worker per pass: only the first waiter's RPC actually went out
-    // this pass, not three.
-    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    // Capped at one dispatch *per pass* -- but C1 (round 3 review) guarantees a fresh pass the
+    // moment p1's own attempt settles, so p2 gets its own look right behind it (in this same
+    // tick), rather than being stranded until "the next real view change" this test used to have
+    // to wait forever for. p2's attempt still reads the same stale view (routing has no way to
+    // know p1 already used the worker's one real slot) and is refused NO_CAPACITY in turn --
+    // exactly the self-limiting RPC storm the module doc describes, not a second bug.
+    const leaseRequests = client.calls.filter((call) => call.startsWith("lease.request"));
+    expect(leaseRequests).toHaveLength(2);
+    expect(leaseRequests[1]).toContain("agent-2");
 
     await expect(p1).resolves.toBeDefined();
-    // The other two are still genuinely queued -- neither granted nor rejected -- left for a
-    // later, real view change (out of this unit's scope: a worker's own event-driven refresh) to
-    // give them their own look, rather than having each fired a doomed RPC this same pass already
-    // knew the worker could not serve.
+    // p2's own attempt above already failed and re-queued it -- it is genuinely `queued` again,
+    // not stuck `processing`. p3 was passed over by that *same* pass (only one worker, already
+    // claimed for it once p2 claimed it) and is waiting for its own turn next -- neither granted
+    // nor rejected, and never even attempted yet.
     const outcome = await Promise.race([
       Promise.allSettled([p2, p3]).then(() => "settled" as const),
       tick(6).then(() => "still-pending" as const),
     ]);
     expect(outcome).toBe("still-pending");
     expect(coordinator.queueDepth).toBe(2);
+    // p2's own stale-view retry really ran the ordinary NO_CAPACITY path (refreshing the
+    // worker's view), not merely stayed queued from before.
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
+  });
+
+  it("gives a waiter passed over by the per-pass cap a guaranteed next look once the claiming attempt settles terminally, even when that failure produces no worker-side event at all (C1, round 3 review)", async () => {
+    // The finding's own reproduction: a terminal failure other than an immediate NO_CAPACITY
+    // (WORKER_UNREACHABLE here, via `leaseRequestTimeoutMs`) hits `#attempt`'s `queue.reject`
+    // branch directly -- no `refresh()`, no worker event, nothing that `#staleView`'s own
+    // self-heal depends on. Before this fix, nothing else ever scheduled another `#dispatch`
+    // pass, so a waiter passed over in the same pass (H6's per-worker-per-pass cap) stalled
+    // forever, reachable only by the unrelated 30s worker-refresh tick.
+    const { clock, coordinator, directory, workers } = harness({ leaseRequestTimeoutMs: 5_000 });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    // w1's own forwarded RPC never answers at all.
+    client.requestLeaseQueue.push({ kind: "hang" });
+    // w2's own eventual attempt, once it gets its turn.
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const w1 = coordinator
+      .request(REQUEST, requestOptions({ ownerId: "agent-1", requesterId: "agent-1" }))
+      .catch((error: unknown) => error);
+    const w2 = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    await tick();
+    expect(coordinator.queueDepth).toBe(2);
+
+    connectWorker(workers, "wrk_a");
+    await tick();
+    // H6's own per-pass cap: only w1 was attempted this pass, w2 passed over.
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+
+    // w1's RPC settles terminally with WORKER_UNREACHABLE, never an immediate NO_CAPACITY -- so
+    // `#staleView`'s own refresh-triggered self-heal never runs for it, and this test never
+    // triggers any worker-view change of its own either.
+    clock.advance(5_000);
+    const w1Error = await w1;
+    expect(w1Error).toBeInstanceOf(DispatchError);
+    expect((w1Error as DispatchError).code).toBe("WORKER_UNREACHABLE");
+
+    const outcome = await Promise.race([
+      w2.then(
+        () => "resolved" as const,
+        () => "resolved" as const,
+      ),
+      tick(6).then(() => "still-pending" as const),
+    ]);
+    expect(outcome).toBe("resolved");
+    const w2Grant = await w2;
+    expect(w2Grant.lease.worker?.id).toBe("wrk_a");
+    // The self-heal here is `#attempt`'s own guaranteed next pass, not a worker-view refresh.
+    expect(directory.refreshCalls).toEqual([]);
   });
 
   it("re-dispatches a waiter whose attempt found a reachable-but-not-yet-connected target, instead of parking it forever", async () => {
@@ -417,6 +478,43 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(0);
   });
 
+  it("does not emit request.dispatched for a progress push that arrives after gateway.leaseRequestTimeoutMs already rejected the waiter (P4, round 3 review)", async () => {
+    // H4's own reasoning, applied to the sibling timeout P2 added in the same round and left
+    // undetached: `#withLeaseRequestTimeout` settling `WORKER_UNREACHABLE` only stops the
+    // returned promise from being awaited -- the worker's own still-pending `lease.request` RPC
+    // is never cancelled, and its `onProgress` closure stays live for as long as the worker cares
+    // to keep pushing. `docs/EVENTS.md` defines `request.dispatched` as "the gateway's fleet queue
+    // sent a queued request to a worker ... and the worker took it" -- a false past-tense fact for
+    // a request the caller has already been told is `WORKER_UNREACHABLE`.
+    const { clock, coordinator, directory, eventBus, workers } = harness({
+      leaseRequestTimeoutMs: 5_000,
+    });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ kind: "hang" });
+    const events: string[] = [];
+    eventBus.subscribe("request.dispatched", () => events.push("request.dispatched"));
+    eventBus.subscribe("lease.rejected", () => events.push("lease.rejected"));
+
+    const rejection = coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+    await tick();
+
+    clock.advance(5_000);
+    const error = await rejection;
+    expect((error as DispatchError).code).toBe("WORKER_UNREACHABLE");
+    expect(events).toEqual([]);
+
+    // The worker, unaware this gateway already gave up, pushes progress on the RPC it still
+    // thinks is live -- exactly as `client.exec`'s own late `onOutput` chunk does in H4's test.
+    client.lastRequestLeaseOptions?.onProgress?.({ etaMs: 5_000, stage: "provisioning" });
+    await tick();
+
+    expect(events).toEqual([]);
+  });
+
   it("answers REQUESTER_ALREADY_LEASED naming the existing lease id, for an index built purely via rebuildFromWorker", async () => {
     const { coordinator, leaseIndex } = harness();
     // Simulates a gateway restart's reconnect rebuild (§30): this lease was never granted
@@ -438,31 +536,43 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((rejection as RequesterAlreadyLeasedError).existingLeaseId).toBe("wrk_a.lse_1");
   });
 
-  it("passes over a request no worker can serve instead of blocking behind it, preserving queue order", async () => {
+  it("passes over a request no worker can serve instead of blocking behind it, and never lets a brand-new admission jump an older, equally-eligible waiter still queued behind it (C2, round 3 review)", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_ios", client);
-    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // `oldFirst`'s own attempt claims the worker for the whole test and never settles -- what
+    // matters here is which *other* waiter gets a look at the worker's nominal second slot next,
+    // not what `oldFirst` itself resolves to.
+    client.requestLeaseQueue.push({ kind: "hang" });
 
-    // Both requests are admitted with *no* worker connected yet, so both genuinely enter the
-    // queue (oldest first: android, then iOS) rather than settling on the fast admission-time
-    // path -- the single dispatch pass triggered below has to walk both in one go, which is
-    // what actually exercises "passed over, not blocked on" (ADR §11).
+    // Admitted oldest first: an unserviceable android request, then two genuinely iOS-eligible
+    // waiters -- all enter the queue before any worker connects. The round 3 review's own
+    // title-vs-body finding (C2): the previous version of this test had only one iOS-eligible
+    // waiter, so its title's ordering claim asserted nothing a reader could not already get from
+    // the "passed over" half alone -- `oldSecond` and `newPromise` below are what actually exercise it.
     const androidPromise = coordinator.request(
       { model: "Pixel 9", platform: "android" },
       requestOptions({ ownerId: "agent-android", requesterId: "agent-android" }),
     );
-    const iosPromise = coordinator.request(REQUEST, requestOptions());
+    const oldFirstPromise = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-old-1", requesterId: "agent-old-1" }),
+    );
+    const oldSecondPromise = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-old-2", requesterId: "agent-old-2" }),
+    );
     await tick();
-    expect(coordinator.queueDepth).toBe(2);
+    expect(coordinator.queueDepth).toBe(3);
 
-    // The one worker that connects can only ever serve the iOS request -- an android-then-iOS
-    // dispatch loop that gives up (or blocks) on the android waiter's own "no worker" answer
-    // would never reach the iOS one behind it in this same pass.
+    // The one worker that connects can only ever serve iOS -- an android-then-iOS dispatch loop
+    // that gives up (or blocks) on android's own "no worker" answer would never reach either iOS
+    // waiter behind it in this same pass. Its reported capacity (two free slots) is on paper room
+    // for both `oldFirst` and `oldSecond`, but H6's own per-worker-per-pass cap intentionally
+    // leaves `oldSecond` passed over here -- genuinely `queued`, not the bug this test targets.
     connectWorker(workers, "wrk_ios", { platform: "ios", models: ["iPhone 17"] });
-
-    const iosGrant = await iosPromise;
-    expect(iosGrant.lease.worker?.id).toBe("wrk_ios");
+    await tick();
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
 
     let androidSettled = false;
     void androidPromise.then(
@@ -475,7 +585,31 @@ describe("FleetLeaseCoordinator dispatch", () => {
     );
     await tick();
     expect(androidSettled).toBe(false);
-    expect(coordinator.queueDepth).toBe(1);
+
+    // A brand-new iOS waiter arrives after `oldSecond`, with no worker-view change since --
+    // `routing.select` is a pure function of the current views, so the very same stale view that
+    // already left `oldSecond` queued still nominally reports the same free capacity. ADR
+    // §10/§11's FIFO is oldest-first: that capacity belongs to `oldSecond`, which has been queued
+    // and eligible the whole time, never to a brand-new admission that only got a look because
+    // `#admit` took its own out-of-order peek instead of deferring to `#dispatch`.
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const newPromise = coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-new", requesterId: "agent-new" }),
+    );
+    await tick();
+
+    // The second `lease.request` this test ever sends must be `oldSecond`'s own, not the
+    // brand-new admission's -- regardless of what either eventually settles to.
+    const leaseRequests = client.calls.filter((call) => call.startsWith("lease.request"));
+    expect(leaseRequests.length).toBeGreaterThanOrEqual(2);
+    expect(leaseRequests[1]).toContain("agent-old-2");
+
+    const oldSecondGrant = await oldSecondPromise;
+    expect(oldSecondGrant.lease.worker?.id).toBe("wrk_ios");
+    expect(androidSettled).toBe(false);
+    void oldFirstPromise;
+    void newPromise;
   });
 
   it("indexes a fresh grant under the ownerId it forwarded, not the worker's own echo of it, and logs a mismatch (H6)", async () => {
@@ -802,6 +936,80 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     expect(rejection).toBeInstanceOf(DispatchError);
     expect((rejection as DispatchError).code).toBe("FORBIDDEN");
+    expect(started).toBe(false);
+  });
+
+  it("announces onStarted once the worker's answer has not arrived within the exec start grace window, even with no output at all -- a silent, long-running command still gets its 200 through a gateway (C3, round 3 review)", async () => {
+    // ADR §19e/§19b: "a command that prints nothing for nine minutes still gets its 200 and its
+    // keepalives" -- `simctl install <path>` (§19b's own worked example) is exactly such a
+    // command. Round 2's fix (deferring `onStarted` to the first output chunk) never fires for
+    // one, so without this a gateway-fronted caller gets no `200`, no keepalives, and eventually a
+    // `504` instead of the stream's own terminal `EXEC_TIMEOUT` -- Decision 3 broken the other way.
+    const { clock, coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    // The worker never answers `device.exec` at all, and never streams a single chunk.
+    client.execQueue.push({ kind: "hang" });
+
+    let started = false;
+    void coordinator.exec(
+      { args: ["install", "/path/to.app"], leaseId: grant.lease.id, tool: "simctl" },
+      {
+        manageEventSubscription: () => undefined,
+        onStarted: () => {
+          started = true;
+        },
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    await tick();
+    // Not yet -- still inside the grace window, exactly like the FORBIDDEN case above at this
+    // same point, so a fast pre-process refusal still has room to land as its own real status.
+    expect(started).toBe(false);
+
+    clock.advance(500);
+    await tick();
+    expect(started).toBe(true);
+  });
+
+  it("does not announce onStarted from the exec start grace window once the worker has already answered -- a fast pre-process refusal keeps its own real status (C3, round 3 review)", async () => {
+    const { clock, coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    client.execQueue.push({
+      error: new SimlockError("FORBIDDEN", "domain", "Lease belongs to a different requester", {}),
+      kind: "error",
+    });
+
+    let started = false;
+    const rejection = await coordinator
+      .exec(
+        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+        {
+          manageEventSubscription: () => undefined,
+          onStarted: () => {
+            started = true;
+          },
+          principal: "agent-1",
+          role: "agent",
+        },
+      )
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("FORBIDDEN");
+    expect(started).toBe(false);
+
+    // The grace timer was cancelled when the call settled -- advancing the clock well past it
+    // must not fire a stray `onStarted` for a call that is already over.
+    clock.advance(10_000);
     expect(started).toBe(false);
   });
 

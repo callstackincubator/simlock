@@ -912,6 +912,15 @@ describe("lease routes", () => {
       // ADR 0005 §19e: a command that prints nothing for nine minutes still gets its `200` and
       // its keepalives, and an `EXEC_TIMEOUT` therefore always arrives as the stream's terminal
       // event rather than as a status the client can no longer be given.
+      //
+      // C3 (round 3 review): this only proves that half of the route's *own* logic given a
+      // dispatcher that calls `onStarted` when told to (`call.session.onStarted?.()` below is
+      // this test driving that by hand) -- it says nothing about when a real dispatcher actually
+      // calls it, and cannot notice a dispatcher that stops calling it for a genuinely silent,
+      // long-running command. That is `FleetLeaseCoordinator`'s own job for a gateway
+      // (`src/gateway/fleet-coordinator.ts#exec`); the invariant this comment describes is
+      // guarded end to end there, not here -- see `fleet-coordinator.test.ts`'s "announces
+      // onStarted once the worker's answer has not arrived within the exec start grace window".
       const { app, clock, dispatcher } = buildHarness();
 
       const responsePromise = postExec(app);

@@ -320,23 +320,31 @@ export class WaitQueue {
    * re-queue, since `waiter.timer` is already cleared by the time this branch returns.
    *
    * H5 (round 3 review): the `waiter.timer !== undefined` guard above means `remainingMs` is
-   * only ever actually computed with a genuinely partial value in theory, never in practice --
-   * every real call into this method lands in one of exactly two cases. A fresh arm (`waiter.
-   * timer` was never set) always computes the *full* `timeoutMs`, since `deadlineAt` is being
-   * fixed in the same line. Every later call finds one of two things: the original timer is
-   * still counting down (`waiter.timer !== undefined`), so the guard above returns immediately
-   * and the still-live timer -- already targeting the correct fixed `deadlineAt` -- is left
-   * untouched, no second `setTimer` call, no recompute, no re-arm; or that timer already fired
-   * exactly at `deadlineAt` (clearing itself, above), in which case `enqueue`'s own upfront
-   * `clock.now() >= deadlineAt` check rejects the waiter before this method is even called
-   * again. Nothing in this class's public API cancels an armed timer without settling its
-   * waiter, so there is no third case where `waiter.timer === undefined`, a `deadlineAt` is
-   * already set, and `clock.now()` is still short of it -- the one shape that would make this
-   * arithmetic produce something other than the full budget or an already-expired one. The
-   * "remaining budget" behaviour this method's own name promises is real (a re-enqueue can never
-   * push the total wait past the original `timeoutMs`), it is just delivered by leaving the
-   * first timer alone rather than by this line ever recomputing a partial value -- see this
-   * method's own test for what that means for what a test here can and cannot prove.
+   * only ever actually computed with a genuinely partial value in theory, essentially never in
+   * practice under a real `Clock` -- every real call into this method lands in one of exactly two
+   * cases. A fresh arm (`waiter.timer` was never set) always computes the *full* `timeoutMs`,
+   * since `deadlineAt` is being fixed in the same line. Every later call finds one of two things:
+   * the original timer is still counting down (`waiter.timer !== undefined`), so the guard above
+   * returns immediately and the still-live timer -- already targeting the correct fixed
+   * `deadlineAt` -- is left untouched, no second `setTimer` call, no recompute, no re-arm; or that
+   * timer already fired at (or acceptably near) `deadlineAt` (clearing itself, above), in which
+   * case `enqueue`'s own upfront `clock.now() >= deadlineAt` check rejects the waiter before this
+   * method is even called again. That "acceptably near" is not exact under a real `Clock`: Node's
+   * own timers can fire a little early (sub-millisecond to a few ms, platform- and load-
+   * dependent), so a re-`enqueue` landing in that narrow window between the timer's early fire and
+   * the deadline it was targeting can reach here with `waiter.timer === undefined`, `deadlineAt`
+   * already set, and `clock.now()` still (fractionally) short of it -- the one shape this
+   * arithmetic then computes a genuinely partial `remainingMs` for, rather than the full budget or
+   * an already-expired one. Harmless (the re-armed timer still targets the same fixed
+   * `deadlineAt`, just via a few-millisecond-shorter final `setTimer` call instead of one that
+   * would have fired at the identical moment anyway), but real, not merely theoretical --
+   * `FakeClock` (every test here) never fires early, so no test under it can ever land in this
+   * window, which is why the difference is a doc claim to get right rather than a behavior to
+   * cover with one. Separately: `markNew` (below) is a public path back to `queued` that arms no
+   * timer at all -- a waiter it returns to `queued` sits with no deadline until some *other*
+   * `enqueue` call re-arms it, which is a real gap in `timeoutMs` enforcement for whichever
+   * caller uses that path (`LeaseAcquisitionCoordinator`'s own eviction and provision-retry
+   * callers, not this module's problem to close on its own).
    */
   #armTimeout(waiter: MutableWaiter): void {
     if (waiter.timer !== undefined || waiter.options.timeoutMs === undefined) return;

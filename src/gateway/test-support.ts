@@ -213,6 +213,14 @@ export class ScriptedWorkerClient {
    * that keeps streaming output on a call the gateway has already given up awaiting.
    */
   lastExecOptions: ExecOptions | undefined;
+  /**
+   * P4 (round 3 review): the mirror of `lastExecOptions` above, for `requestLease` -- captured
+   * before `requestLeaseQueue`'s own outcome is even read, so a `"hang"` outcome leaves a test a
+   * way to invoke `onProgress` later by hand, simulating a worker whose still-pending
+   * `lease.request` RPC pushes progress after the gateway's own `leaseRequestTimeoutMs` already
+   * gave up on it.
+   */
+  lastRequestLeaseOptions: RequestLeaseOptions | undefined;
 
   constructor(
     readonly role: "admin" | "agent" = "admin",
@@ -267,6 +275,7 @@ export class ScriptedWorkerClient {
   ): Promise<LeaseGrant> {
     this.calls.push(`lease.request:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
+    this.lastRequestLeaseOptions = options;
     const outcome = this.requestLeaseQueue.shift() ?? this.requestLeaseDefault;
     for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});
