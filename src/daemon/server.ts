@@ -1122,9 +1122,17 @@ export class DaemonServer {
    * principal and role -- all that is left of it, since ADR 0004 removed the per-connection
    * lease state that used to travel alongside. `onProgress` is unset here: only `#requestLease`
    * needs one, and builds its own session inline so the closure can see that specific call's
-   * `requestId`. */
+   * `requestId`.
+   *
+   * `isGatewayUplink` (ADR §27a, H3, round 3 review) reads `connection.forcedRole`, not
+   * `connection.role`: `forcedRole` is set exactly and only by `acceptUplink` (this daemon
+   * dialled its own configured `gateway.url`), never by anything a `hello` payload can claim --
+   * `role` itself is always `"admin"` for such a connection too, but so is an ordinary HTTP
+   * `operator` token's, which is the very confusion this field exists to stop propagating into
+   * `lease.request`'s `owner` gate. */
   #session(connection: Connection): DispatchSession {
     return {
+      isGatewayUplink: connection.forcedRole !== undefined,
       manageEventSubscription: (subscribe) => this.#manageEventSubscription(connection, subscribe),
       principal: connection.principal,
       role: connection.role,

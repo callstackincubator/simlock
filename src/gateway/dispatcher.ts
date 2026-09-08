@@ -321,18 +321,27 @@ export class GatewayDispatcher {
   /**
    * ADR 0005 §15: "the gateway's `lease.defaultTtlMs` fills in a request that names no `ttlMs`
    * and its `lease.maxTtlMs` caps what its own clients may ask for, both before anything is
-   * dispatched". `owner` (§27a) is read only from an `admin` session -- rejected outright from
-   * any other role, the same gate the worker's own `#leaseRequest` applies, so a fleet client
-   * cannot name someone else's principal even though a gateway's own admin uplink session must
-   * be able to.
+   * dispatched". `owner` (§27a, narrowed round 3 review H3) is read only from `session.
+   * isGatewayUplink` -- never merely `role === "admin"`, which HTTP's `operator` token also maps
+   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher.ts`'s own
+   * `#leaseRequest` used to share with this one.
+   *
+   * Unlike the worker, nothing ever forwards *into* a gateway's own front door the way this
+   * gateway forwards into a worker -- there is no "gateway of gateways" in ADR 0005, so no
+   * session reaching this handler is ever the uplink `isGatewayUplink` identifies (that flag is
+   * stamped only on a worker's own `DaemonServer#acceptUplink` connection, never on a gateway's).
+   * The practical effect is what the user's decision asked for stated plainly: `owner` is
+   * unconditionally `FORBIDDEN` here, admin included -- a fleet client's own principal
+   * (`session.principal`, the default below) is already the correct, un-spoofable owner for
+   * anything this gateway itself issues.
    */
   // fallow-ignore-next-line complexity -- one transaction, moved verbatim from the worker's own #leaseRequest shape.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     this.#requireTtlWithinCap(input.ttlMs);
-    if (input.owner !== undefined && session.role !== "admin") {
+    if (input.owner !== undefined && session.isGatewayUplink !== true) {
       throw new DispatchError(
         "FORBIDDEN",
-        "Only an admin session may set lease.request's `owner` field",
+        "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
     return this.options.coordinator.request(

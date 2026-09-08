@@ -557,10 +557,12 @@ export class FleetLeaseCoordinator {
               : { osVersion: waiter.request.osVersion }),
             ...(waiter.request.full === true ? { full: true } : {}),
             requesterId: namespacedRequesterId,
-            // ADR §27a: only an admin session may set `owner`, and the gateway's uplink session
-            // always is one (§5). The worker stores this verbatim as the lease's `ownerId`
-            // instead of deriving it from the connection -- see `daemon/dispatcher.ts`'s
-            // worker-side change in this same PR.
+            // ADR §27a (narrowed, round 3 review, H3): only the worker's own gateway-uplink
+            // session may set `owner` -- and this RPC always travels over exactly that
+            // connection (`WorkerLink#connect`, via `acceptUplink` on the worker's own end, see
+            // `session.isGatewayUplink`'s doc). The worker stores this verbatim as the lease's
+            // `ownerId` instead of deriving it from the connection -- see
+            // `daemon/dispatcher.ts`'s `#leaseRequest`.
             owner: waiter.options.ownerId,
             allowDownload: waiter.options.allowDownload ?? false,
             // ADR §12: worker queues never hold gateway traffic. Every dispatch is `noWait`

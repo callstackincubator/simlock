@@ -292,6 +292,25 @@ describe("POST /v1/lease-requests", () => {
     expect((call.input as { owner?: string }).owner).toBe("someone-else");
   });
 
+  it("builds an operator token's session as admin but never as the gateway's uplink, so §27a's owner gate still refuses it at the shared dispatcher (ADR §27a, H3)", async () => {
+    // §27a's `owner` field is narrowed to `session.isGatewayUplink` (round 3 review, H3): an
+    // HTTP `operator` bearer token maps onto `role: "admin"` (`dispatcher-session.ts`'s
+    // `toRole`), same as before, but `buildHttpSession` never sets `isGatewayUplink` -- no HTTP
+    // request is ever the worker's own uplink connection to its configured gateway, which is the
+    // only session that connection-acceptance signal is stamped on (`DaemonServer#acceptUplink`,
+    // via `connection.forcedRole`). This is what makes the real gate in
+    // `daemon/dispatcher.test.ts`/`gateway/dispatcher.test.ts` (FORBIDDEN for `isGatewayUplink !==
+    // true`, exercised there against the real dispatcher) actually bite an operator token too,
+    // not just an agent one -- this test only proves the session HTTP hands that dispatcher never
+    // carries the one flag that would let it through.
+    const { app, dispatcher } = buildHarness();
+    void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" }, operatorAuth);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+
+    expect(call.session.role).toBe("admin");
+    expect(call.session.isGatewayUplink).not.toBe(true);
+  });
+
   it("maps a fast RequesterAlreadyLeasedError to 409, naming the existing lease", async () => {
     const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, defaultBody);
