@@ -318,6 +318,25 @@ export class WaitQueue {
    * the request is actively being handled, and this class does not know whether that attempt is
    * about to succeed. `enqueue`'s own deadline check is what catches this case at the next
    * re-queue, since `waiter.timer` is already cleared by the time this branch returns.
+   *
+   * H5 (round 3 review): the `waiter.timer !== undefined` guard above means `remainingMs` is
+   * only ever actually computed with a genuinely partial value in theory, never in practice --
+   * every real call into this method lands in one of exactly two cases. A fresh arm (`waiter.
+   * timer` was never set) always computes the *full* `timeoutMs`, since `deadlineAt` is being
+   * fixed in the same line. Every later call finds one of two things: the original timer is
+   * still counting down (`waiter.timer !== undefined`), so the guard above returns immediately
+   * and the still-live timer -- already targeting the correct fixed `deadlineAt` -- is left
+   * untouched, no second `setTimer` call, no recompute, no re-arm; or that timer already fired
+   * exactly at `deadlineAt` (clearing itself, above), in which case `enqueue`'s own upfront
+   * `clock.now() >= deadlineAt` check rejects the waiter before this method is even called
+   * again. Nothing in this class's public API cancels an armed timer without settling its
+   * waiter, so there is no third case where `waiter.timer === undefined`, a `deadlineAt` is
+   * already set, and `clock.now()` is still short of it -- the one shape that would make this
+   * arithmetic produce something other than the full budget or an already-expired one. The
+   * "remaining budget" behaviour this method's own name promises is real (a re-enqueue can never
+   * push the total wait past the original `timeoutMs`), it is just delivered by leaving the
+   * first timer alone rather than by this line ever recomputing a partial value -- see this
+   * method's own test for what that means for what a test here can and cannot prove.
    */
   #armTimeout(waiter: MutableWaiter): void {
     if (waiter.timer !== undefined || waiter.options.timeoutMs === undefined) return;

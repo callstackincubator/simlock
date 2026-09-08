@@ -151,16 +151,38 @@ describe("WaitQueue", () => {
     expect(timedOut).toHaveBeenCalledWith(waiter);
   });
 
-  it("re-arms only the time actually remaining on a re-enqueue before the deadline, so the total wait never exceeds the original timeoutMs", async () => {
+  // H5 (round 3 review): this test used to claim it proved a re-enqueue "re-arms only the time
+  // actually remaining" -- but every assertion in it (the waiter's `state` at various clock
+  // ticks, and when its promise finally rejects) would come out identical whether `#armTimeout`
+  // actually cancelled the original timer and started a fresh one for the recomputed remainder,
+  // or simply left that still-live timer alone. Both mechanisms hit the same fixed `deadlineAt`.
+  // The `setTimer` spy below is what tells them apart: it asserts directly on the *mechanism* --
+  // exactly one timer is ever armed across the whole `queued -> processing -> queued` cycle, not
+  // two -- which is what `#armTimeout`'s own doc comment now documents as the only thing that
+  // can happen (its `waiter.timer !== undefined` guard makes a genuine recompute-and-re-arm
+  // unreachable through this class's public API). The externally observed timing this test also
+  // pins is real and worth keeping; it just is not, on its own, evidence of which mechanism
+  // produced it.
+  it("leaves a still-live timer alone across a queued -> processing -> queued cycle, rather than cancelling and re-arming it, so the total wait never exceeds the original timeoutMs (H5, round 3 review)", async () => {
     const { clock, queue } = createQueue();
     const waiter = createWaiter(queue, "agent", { timeoutMs: 100 });
+    const setTimerSpy = vi.spyOn(clock, "setTimer");
+    const cancelSpy = vi.spyOn(clock, "cancel");
 
     queue.enqueue(waiter);
+    expect(setTimerSpy).toHaveBeenCalledTimes(1); // the first (and, this test proves, only) arm
     clock.advance(30);
     queue.markProcessing(waiter);
     clock.advance(20); // t=50: still well before the t=100 deadline
     expect(queue.enqueue(waiter)).toBe(true); // re-queued, e.g. a stale-view NO_CAPACITY
     expect(waiter.state).toBe("queued");
+
+    // The proof this test exists for: re-enqueuing well before the deadline armed nothing new
+    // and cancelled nothing -- `#armTimeout`'s guard found the original timer still live and
+    // returned immediately. A recompute-and-re-arm implementation would have cancelled that
+    // timer and called `setTimer` a second time here, for the ~50ms actually remaining.
+    expect(setTimerSpy).toHaveBeenCalledTimes(1);
+    expect(cancelSpy).not.toHaveBeenCalled();
 
     // If this cycle had re-armed a fresh 100ms window, the waiter would still be pending here
     // (t=50 + 49ms = 99ms of its own window, or 149ms of total elapsed time either way). It
@@ -170,6 +192,9 @@ describe("WaitQueue", () => {
     clock.advance(1); // t=100: the original deadline, reached exactly once, not once per cycle
     await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
     expect(queue.depth).toBe(0);
+    // Still just the one timer, start to finish -- the fixed deadline was honoured by leaving it
+    // running, not by any second arm.
+    expect(setTimerSpy).toHaveBeenCalledTimes(1);
   });
 
   it("never delivers a progress push to a waiter that already settled, even the very same tick (P3, round 2 review)", async () => {
