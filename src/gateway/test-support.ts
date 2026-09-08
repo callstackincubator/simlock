@@ -150,11 +150,15 @@ type ExecOutcome =
       readonly kind: "ok";
       readonly exitCode: number;
       readonly output?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
+      /** ADR 0005 §19a: the worker's own "the process now exists" push, sent before any output.
+       * A worker older than that frame simply never sends it. */
+      readonly started?: boolean;
     }
   | { readonly kind: "error"; readonly error: unknown }
   /** Never settles -- for exercising `gateway.execTimeoutMs` (P5, round 2 review): the worker
-   * never answers `device.exec` at all. */
-  | { readonly kind: "hang" };
+   * never answers `device.exec` at all. With `started: true` this is the silent, long-running
+   * command of §19b/§19e -- a process that exists and has written nothing yet. */
+  | { readonly kind: "hang"; readonly started?: boolean };
 
 /**
  * A `SimlockAdminClient` with only the methods a `WorkerLink` or a `FleetLeaseCoordinator`
@@ -316,8 +320,12 @@ export class ScriptedWorkerClient {
     this.#throwIfFailing();
     this.lastExecOptions = options;
     const outcome = this.execQueue.shift();
-    if (outcome?.kind === "hang") return new Promise<never>(() => {});
+    if (outcome?.kind === "hang") {
+      if (outcome.started === true) options.onStarted?.();
+      return new Promise<never>(() => {});
+    }
     if (outcome?.kind === "error") throw outcome.error;
+    if (outcome?.started === true) options.onStarted?.();
     for (const chunk of outcome?.output ?? []) options.onOutput?.(chunk);
     return { exitCode: outcome?.exitCode ?? 0 };
   }

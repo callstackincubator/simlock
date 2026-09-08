@@ -124,6 +124,11 @@ export interface DeviceRecoveredPush {
  * the exit code; the output is simply not observed. */
 export interface ExecOptions {
   readonly onOutput?: (chunk: DeviceOutputChunk) => void;
+  /** ADR 0005 §19a: the command's process now exists on the machine that owns the device --
+   * fired once, after every failure that can happen before a process exists and before any
+   * output. A transport chooses its response shape on this, which is why a gateway forwarding
+   * the command relays it rather than inferring one. */
+  readonly onStarted?: () => void;
 }
 
 export interface RequestLeaseOptions {

@@ -939,19 +939,135 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(started).toBe(false);
   });
 
-  it("announces onStarted once the worker's answer has not arrived within the exec start grace window, even with no output at all -- a silent, long-running command still gets its 200 through a gateway (C3, round 3 review)", async () => {
+  it("a noWait request refused while other requests are queued emits no lease.queued and no queued progress -- it never entered the queue (ADR §10, architecture rule 10)", async () => {
+    // `noWait` used to be enforced twice: once in `#admit`'s own direct look and once after an
+    // enqueue-then-dispatch. The second path committed queue membership *before* it knew the
+    // answer, and `WaitQueue#enqueue` pushes a `queued` progress frame and `#enqueue` emits
+    // `lease.queued` -- so the same request produced different observable facts depending on
+    // whether *unrelated* requests happened to be queued at the time. ADR §10 requires "the same
+    // codes and progress states a worker uses", and a worker's own `#defer` rejects a `noWait`
+    // waiter before it enqueues.
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+
+    // Occupy the worker and leave a waiter in the queue, so the queue is non-empty.
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    await coordinator.request(REQUEST, requestOptions());
+    void coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    const events: string[] = [];
+    eventBus.subscribe("lease.queued", () => events.push("lease.queued"));
+    eventBus.subscribe("lease.rejected", () => events.push("lease.rejected"));
+    const progress: string[] = [];
+
+    await expect(
+      coordinator.request(
+        REQUEST,
+        requestOptions({
+          noWait: true,
+          onProgress: (update) => progress.push(update.stage),
+          ownerId: "agent-3",
+          requesterId: "agent-3",
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+
+    expect(events).toEqual(["lease.rejected"]);
+    expect(progress).toEqual([]);
+    expect(coordinator.queueDepth).toBe(1);
+  });
+
+  it("a noWait request bounced back by a stale view stays queued even with other requests queued -- §11's exception does not depend on queue depth", async () => {
+    // §11: "an immediate NO_CAPACITY is the only answer that leaves it queued", and `#staleView`
+    // applies that unconditionally, "even for a caller that asked noWait: true". Deciding on
+    // `waiter.state === "queued"` could not tell "never attempted" from "attempted and bounced
+    // back inside the same pass", so the answer flipped with unrelated queue depth.
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    await coordinator.request(REQUEST, requestOptions());
+    void coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    // A second worker the views advertise but the directory cannot resolve: routing picks it,
+    // `#attempt` finds no client, and `#staleView` bounces the waiter straight back -- all
+    // synchronously, inside the admission's own pass.
+    connectWorker(workers, "wrk_b");
+
+    let settled = "pending";
+    void coordinator
+      .request(
+        REQUEST,
+        requestOptions({ noWait: true, ownerId: "agent-3", requesterId: "agent-3" }),
+      )
+      .then(
+        () => (settled = "granted"),
+        () => (settled = "rejected"),
+      );
+    await tick();
+
+    expect(settled).toBe("pending");
+    expect(coordinator.queueDepth).toBe(2);
+  });
+
+  it("relays the worker's own started push for a silent, long-running command -- no output, no answer, still a 200 through a gateway (ADR §19a/§19b/§19e)", async () => {
     // ADR §19e/§19b: "a command that prints nothing for nine minutes still gets its 200 and its
     // keepalives" -- `simctl install <path>` (§19b's own worked example) is exactly such a
-    // command. Round 2's fix (deferring `onStarted` to the first output chunk) never fires for
-    // one, so without this a gateway-fronted caller gets no `200`, no keepalives, and eventually a
-    // `504` instead of the stream's own terminal `EXEC_TIMEOUT` -- Decision 3 broken the other way.
-    const { clock, coordinator, directory, workers } = harness();
+    // command. Deferring `onStarted` to the first output chunk never fires for one, so a
+    // gateway-fronted caller got no `200`, no keepalives, and eventually a `504` instead of the
+    // stream's own terminal `EXEC_TIMEOUT`. The worker knows the moment and now sends it, so
+    // this asserts the relay and nothing about timing: no clock is advanced anywhere below.
+    const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     const grant = await coordinator.request(REQUEST, requestOptions());
-    // The worker never answers `device.exec` at all, and never streams a single chunk.
+    // The process exists on the worker -- it says so -- and then writes nothing and never
+    // settles, which is the whole shape of a silent long-running command.
+    client.execQueue.push({ kind: "hang", started: true });
+
+    let started = false;
+    void coordinator.exec(
+      { args: ["install", "/path/to.app"], leaseId: grant.lease.id, tool: "simctl" },
+      {
+        manageEventSubscription: () => undefined,
+        onStarted: () => {
+          started = true;
+        },
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    await tick();
+
+    expect(started).toBe(true);
+  });
+
+  it("does not announce started for a worker that never sends the push and never writes output -- an older worker keeps this gateway's previous behaviour", async () => {
+    // The `started` frame is additive (ADR 0003 §6: the protocol range does not move for it), so
+    // a peer that predates it simply never sends one. This gateway must then behave exactly as it
+    // did before -- no invented signal, no timer, no guess -- which is what makes the change safe
+    // to land without a version bump.
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const grant = await coordinator.request(REQUEST, requestOptions());
     client.execQueue.push({ kind: "hang" });
 
     let started = false;
@@ -967,13 +1083,8 @@ describe("FleetLeaseCoordinator dispatch", () => {
       },
     );
     await tick();
-    // Not yet -- still inside the grace window, exactly like the FORBIDDEN case above at this
-    // same point, so a fast pre-process refusal still has room to land as its own real status.
-    expect(started).toBe(false);
 
-    clock.advance(500);
-    await tick();
-    expect(started).toBe(true);
+    expect(started).toBe(false);
   });
 
   it("does not announce onStarted from the exec start grace window once the worker has already answered -- a fast pre-process refusal keeps its own real status (C3, round 3 review)", async () => {

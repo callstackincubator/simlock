@@ -48,6 +48,26 @@ const outputPushSchema = z.object({
   chunk: z.string(),
 });
 
+/**
+ * ADR 0005 §19a: a forwarded `device.exec`'s process now exists on the worker, keyed by the
+ * originating request's frame id exactly as `output` is.
+ *
+ * This is the fact a transport needs to choose its response shape on, and it is the one fact a
+ * gateway cannot infer. The worker already knows the moment -- its dispatcher spawns the child
+ * and then calls `DispatchSession.onStarted`, after every failure that can happen before a
+ * process exists (a refused verb, an unknown tool, an unowned lease, a daemon still starting)
+ * and before any output. Directly against a worker that signal reaches the transport; across an
+ * uplink it used to stop at the worker's edge, so the gateway guessed with a timer -- and a
+ * refusal that arrived after the timer got a `200` with the error buried in the stream, where
+ * §19a requires a `422`. Sending the fact removes the guess.
+ *
+ * Additive: a peer that never sends it leaves a gateway on its previous behaviour, so the
+ * protocol range does not move (ADR 0003 §6).
+ */
+const startedPushSchema = z.object({
+  requestId: requestIdSchema,
+});
+
 const leaseLostPushSchema = z.object({
   leaseId: z.string(),
   deviceId: z.string(),
@@ -74,6 +94,7 @@ const eventPushSchema = z.object({
 export const PUSH_SCHEMAS = {
   progress: progressPushSchema,
   output: outputPushSchema,
+  started: startedPushSchema,
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
   "device-recovered": deviceRecoveredPushSchema,

@@ -1259,6 +1259,14 @@ export class DaemonServer {
           if (outputSocket === undefined) return;
           await this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
         },
+        // ADR 0005 §19a: the process now exists. Fired and forgotten rather than awaited --
+        // unlike `onOutput` this carries no backpressure meaning, and the dispatcher calls it
+        // synchronously between the spawn and the first chunk. A peer that ignores the frame is
+        // unaffected, which is what keeps this additive.
+        onStarted: () => {
+          if (outputSocket === undefined) return;
+          void this.#pushStarted(outputSocket, requestId).catch(() => undefined);
+        },
       });
     } finally {
       connection.progressDisposers.delete(disposeOutput);
@@ -1285,6 +1293,18 @@ export class DaemonServer {
     return writeFrame(socket, {
       push: "output",
       payload: this.#parseOutput(PUSH_SCHEMAS.output, { chunk, requestId, stream }, "push:output"),
+    });
+  }
+
+  /**
+   * ADR 0005 §19a: `started` carries the originating request's frame id, exactly as `output`
+   * does. It is the one fact a gateway forwarding this command cannot infer for itself -- see
+   * `startedPushSchema`'s own doc -- so the worker that knows it sends it.
+   */
+  async #pushStarted(socket: IpcConnection, requestId: RequestId): Promise<void> {
+    return writeFrame(socket, {
+      push: "started",
+      payload: this.#parseOutput(PUSH_SCHEMAS.started, { requestId }, "push:started"),
     });
   }
 

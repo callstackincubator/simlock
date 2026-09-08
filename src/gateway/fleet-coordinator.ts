@@ -65,18 +65,6 @@ import {
 } from "./queue.js";
 import type { RoutableRequest, RoutingDecision, RoutingPolicy } from "./routing.js";
 
-/**
- * C3 (round 3 review): how long `#exec` waits for the worker's own answer to a forwarded
- * `device.exec` -- settlement, a refusal, or the first `output` chunk -- before announcing
- * `started` anyway. Not user-configurable, deliberately: like `http/sse.ts`'s own `KEEPALIVE_MS`,
- * this is an internal bound on gateway behavior, not a policy knob an operator has a reason to
- * retune. A worker's pre-process ownership/refusal-list check is synchronous (no I/O on its own
- * side), so any real refusal answers within ordinary uplink latency; this is generous well past
- * that without meaningfully delaying the `200` a genuinely silent, long-running command needs
- * (ADR §19e, §19b's own `simctl install <path>` example).
- */
-const EXEC_START_GRACE_MS = 500;
-
 export interface FleetExecInput {
   readonly leaseId: string;
   readonly tool: string;
@@ -133,6 +121,9 @@ export class FleetLeaseCoordinator {
   readonly #createdAt = new WeakMap<FleetWaiter, number>();
   /** C1 (round 3 review): re-entrancy guard for `#dispatch` -- see its own doc comment. */
   #dispatchDepth = 0;
+  /** Set when a pass is requested while one is already running; the running pass then repeats
+   * rather than dropping it (round 4 review, finding 6). */
+  #passRequested = false;
 
   constructor(private readonly options: FleetLeaseCoordinatorOptions) {
     this.#logger = options.logger ?? new NoopLogger();
@@ -320,36 +311,26 @@ export class FleetLeaseCoordinator {
     // `authorize` hook (via `leaseRequesterId` above) has already resolved by the time this
     // handler runs.
     const namespacedRequesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;
-    // C3 (round 2 review, narrowed round 3 review): `session.onStarted`'s own contract is "after
-    // every failure that can happen before a process exists" -- §19a''s `FORBIDDEN` (the worker's
-    // own ownership check disagreeing with this gateway's index) and the driver's own
-    // `PASSTHROUGH_REFUSED` / `UNKNOWN_PASSTHROUGH_TOOL` are exactly such failures, and this
-    // gateway cannot know which one a forwarded command will get before the worker answers -- it
-    // does not hold the driver's refusal list or duplicate the worker-side ownership check.
-    // Calling `onStarted` before `client.exec` even went out (as this used to) committed the HTTP
-    // route's `200` before any of that was known, so a `FORBIDDEN` between two fleet agents
-    // arrived as a `200` + SSE `error` instead of a `403` (Decision 3: every frontend must work
-    // against a gateway unchanged).
+    // ADR §19a/§19e: `session.onStarted` means "the process now exists", and a transport chooses
+    // its response shape on it -- HTTP commits its `200` and starts an SSE stream, so every
+    // failure that can happen *before* a process exists (§19a''s `FORBIDDEN` when the worker's own
+    // ownership check disagrees with this gateway's index, the driver's `PASSTHROUGH_REFUSED` /
+    // `UNKNOWN_PASSTHROUGH_TOOL`) has to reach the caller as its own status code instead.
     //
-    // Round 2's fix moved the signal to the first relayed `output` chunk, on the reasoning that
-    // it is the earliest *honest* evidence available -- true, but only half of §19e: a *silent*
-    // long-running command (§19b's own worked example, `simctl install <path>`) never produces
-    // one, so `onStarted` never fires and a gateway-fronted caller gets no `200`, no keepalives,
-    // and (round 3 review, C3) a `504` instead of the stream's own terminal `EXEC_TIMEOUT` --
-    // Decision 3 broken in the direction round 2 did not touch. The uplink carries no distinct
-    // "the process now exists" frame separate from `output` itself (`SimlockAdminClient#exec`'s
-    // only two signals are settlement and `output` pushes -- see `simlock-client/wire.ts`), so
-    // fixing this without a new wire frame means bounding the deferral instead: `#execStartGrace`
-    // below announces `started` once `EXEC_START_GRACE_MS` has passed with no answer at all from
-    // the worker, on top of the first-chunk signal this already had. A pre-process refusal is a
-    // synchronous, no-I/O check on the worker's own side, so it answers well inside that window on
-    // any real uplink and still reaches the caller as its own real status, unaffected; a command
-    // silent for longer than that gets its `200` committed anyway, exactly as §19e requires. A
-    // command that both writes nothing *and* settles (success or refusal) before the grace window
-    // elapses still calls `onStarted` not at all -- still correct, not merely tolerated:
-    // `client.exec`'s own promise settling first is the answer, and the caller's own race between
-    // the two (`http/app.ts`'s `Promise.race([settled, started...])`) resolves to that settlement
-    // instead, with its own real status code.
+    // This gateway cannot infer that moment: it holds no driver refusal list and does not
+    // duplicate the worker-side ownership check. Two earlier attempts to infer it each broke one
+    // half of the contract -- announcing before the forward went out turned a `FORBIDDEN` between
+    // two fleet agents into a `200` + SSE `error` (round 2), and deferring to the first relayed
+    // `output` chunk left a *silent* long-running command (§19b's own worked example,
+    // `simctl install <path>`) with no `200` and no keepalives at all (round 3), then a timed
+    // grace window put the first failure back for any refusal slower than the guess (round 4).
+    //
+    // So the worker sends the fact instead of the gateway guessing it. Its dispatcher already
+    // computes this exact moment -- it spawns the child and then calls `onStarted` -- and ADR
+    // §19a's request-scoped push family now carries it (`started`, see `contract/pushes.ts`).
+    // Relaying it is all this needs. The first-chunk signal below stays as the fallback for a
+    // peer that never sends the frame, which is what keeps the change additive: an older worker
+    // leaves this gateway on exactly its previous behaviour and the protocol range does not move.
     let started = false;
     const announceStarted = (): void => {
       if (started) return;
@@ -368,43 +349,39 @@ export class FleetLeaseCoordinator {
     // late chunk reaches `session.onOutput` (or spuriously fires `onStarted`) once that has
     // happened.
     let detached = false;
-    // C3 (round 3 review): armed the moment the forward begins, cancelled the moment this call
-    // settles either way -- see the doc above for what this is bounding and why.
-    const execStartGrace = this.options.clock.setTimer(EXEC_START_GRACE_MS, () => {
-      announceStarted();
-    });
-    try {
-      return await this.#forwardToWorker(entry.workerId, async (client) => {
-        // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
-        // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
-        // ordinary timeout and is expected to answer first (the gateway's default is deliberately
-        // the longer of the two), so this only ever fires when nothing else would have.
-        return this.#withExecTimeout(
-          client.exec(
-            {
-              leaseId: entry.workerLeaseId,
-              tool: input.tool,
-              args: [...input.args],
-              ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-              requesterId: namespacedRequesterId,
-            },
-            {
-              onOutput: (chunk) => {
-                if (detached) return;
-                announceStarted();
-                void session.onOutput?.(chunk.stream, chunk.chunk);
-              },
-            },
-          ),
-          entry.workerId,
-          () => {
-            detached = true;
+    return this.#forwardToWorker(entry.workerId, async (client) => {
+      // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
+      // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
+      // ordinary timeout and is expected to answer first (the gateway's default is deliberately
+      // the longer of the two), so this only ever fires when nothing else would have.
+      return this.#withExecTimeout(
+        client.exec(
+          {
+            leaseId: entry.workerLeaseId,
+            tool: input.tool,
+            args: [...input.args],
+            ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+            requesterId: namespacedRequesterId,
           },
-        );
-      });
-    } finally {
-      this.options.clock.cancel(execStartGrace);
-    }
+          {
+            onOutput: (chunk) => {
+              if (detached) return;
+              announceStarted();
+              void session.onOutput?.(chunk.stream, chunk.chunk);
+            },
+            // The worker's own "the process exists" fact, relayed verbatim.
+            onStarted: () => {
+              if (detached) return;
+              announceStarted();
+            },
+          },
+        ),
+        entry.workerId,
+        () => {
+          detached = true;
+        },
+      );
+    });
   }
 
   /**
@@ -558,27 +535,27 @@ export class FleetLeaseCoordinator {
    * `src/gateway/fleet-coordinator.js` just to recognize it, pulling the whole gateway module
    * graph (and `src/admin`'s client) into ordinary worker startup with no boundary test covering
    * that direction. */
+  /**
+   * A brand-new waiter's admission. **Architecture rule 10: `noWait` is enforced in exactly one
+   * place.** Every admission goes through `#dispatch`'s one ordered walk, carrying this waiter
+   * as its `candidate` -- there is no second, out-of-order look of its own.
+   *
+   * There used to be two paths here: a direct `routing.select` when the queue was empty, and an
+   * enqueue-then-dispatch when it was not. They answered the same question and drifted, exactly
+   * as rule 10 describes. Four consecutive review rounds each found a fresh defect in that
+   * disagreement, ending with a request that answered `NO_CAPACITY` immediately or waited in the
+   * queue depending on whether *unrelated* requests happened to be queued at the time.
+   *
+   * Queue membership is committed only once the waiter is actually going to wait. That ordering
+   * is load-bearing rather than tidy: `WaitQueue#enqueue` pushes a `queued` progress frame to
+   * the caller and `#enqueue` emits `lease.queued`, and a `noWait` request that is about to be
+   * refused must produce neither. ADR §10 requires "the same codes and progress states a worker
+   * uses", and the worker's own `#defer` rejects a `noWait` waiter *before* it enqueues.
+   */
   #admit(waiter: FleetWaiter): void {
-    if (this.#queue.depth > 0) {
-      this.#enqueue(waiter);
-      this.#dispatch();
-      if (waiter.options.noWait === true && waiter.state === "queued") {
-        this.#reject(
-          waiter,
-          new DispatchError(
-            "NO_CAPACITY",
-            "No worker in the fleet can currently serve this request",
-          ),
-          "no-wait",
-        );
-      }
-      return;
-    }
-    const decision = this.options.routing.select(routable(waiter), this.options.views.views());
-    if (decision !== undefined) {
-      this.#beginAttempt(waiter, decision);
-      return;
-    }
+    // Attempted -- including attempted and bounced straight back by a stale view, which §11
+    // keeps queued even for a `noWait` caller (`#staleView` has already re-enqueued it).
+    if (this.#dispatch(waiter)) return;
     if (waiter.options.noWait === true) {
       this.#reject(
         waiter,
@@ -624,24 +601,59 @@ export class FleetLeaseCoordinator {
    * walking every currently-queued waiter yet, so there is nothing a nested pass would see that
    * the outer one will not already reach itself.
    */
-  #dispatch(): void {
-    if (this.#dispatchDepth > 0) return;
+  #dispatch(candidate?: FleetWaiter): boolean {
+    if (this.#dispatchDepth > 0) {
+      // Round 4 review: a nested pass used to be *dropped*. The outer walk iterates a snapshot
+      // and has already claimed workers, so a waiter freed mid-pass would never be reconsidered
+      // -- C1's stall, reintroduced silently by the guard meant to prevent recursion. Defer
+      // instead of dropping: the outer call runs another pass once this one unwinds.
+      this.#passRequested = true;
+      return false;
+    }
     this.#dispatchDepth += 1;
+    let candidateAttempted = false;
     try {
-      const claimedThisPass = new Set<string>();
-      for (const waiter of this.#queue.list()) {
-        if (waiter.state !== "queued") continue;
-        const eligibleWorkers = this.options.views
-          .views()
-          .filter((worker) => !claimedThisPass.has(worker.id));
-        const decision = this.options.routing.select(routable(waiter), eligibleWorkers);
-        if (decision === undefined) continue;
-        claimedThisPass.add(decision.workerId);
-        this.#beginAttempt(waiter, decision);
+      candidateAttempted = this.#dispatchPass(candidate);
+      while (this.#passRequested) {
+        this.#passRequested = false;
+        this.#dispatchPass();
       }
     } finally {
       this.#dispatchDepth -= 1;
+      this.#passRequested = false;
     }
+    return candidateAttempted;
+  }
+
+  /**
+   * One ordered, oldest-first walk -- the single place a waiter is matched to a worker.
+   *
+   * `candidate` is a brand-new waiter that has no queue membership yet (`#admit`'s). It walks
+   * **last**, because it is the newest: that is what keeps ADR §10's single fleet FIFO honest,
+   * since an admission can never take a slot an already-queued waiter would have had. Returns
+   * whether the candidate was attempted, which is what lets `#admit` tell "nothing could serve
+   * it" from "it was attempted and bounced straight back by a stale view" -- §11 keeps the
+   * second one queued even for a `noWait` caller, and `waiter.state` alone cannot distinguish
+   * them (round 4 review, finding 2).
+   */
+  #dispatchPass(candidate?: FleetWaiter): boolean {
+    let candidateAttempted = false;
+    const claimedThisPass = new Set<string>();
+    const waiters =
+      candidate === undefined ? this.#queue.list() : [...this.#queue.list(), candidate];
+    for (const waiter of waiters) {
+      // The candidate is not in the queue yet, so it has no `queued` state to check.
+      if (waiter !== candidate && waiter.state !== "queued") continue;
+      const eligibleWorkers = this.options.views
+        .views()
+        .filter((worker) => !claimedThisPass.has(worker.id));
+      const decision = this.options.routing.select(routable(waiter), eligibleWorkers);
+      if (decision === undefined) continue;
+      claimedThisPass.add(decision.workerId);
+      if (waiter === candidate) candidateAttempted = true;
+      this.#beginAttempt(waiter, decision);
+    }
+    return candidateAttempted;
   }
 
   /**

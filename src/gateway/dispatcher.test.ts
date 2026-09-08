@@ -551,8 +551,8 @@ describe("GatewayDispatcher", () => {
     // `http/app.test.ts`'s own "opens the stream when the process starts" test, which drives
     // `call.session.onStarted?.()` by hand and so cannot notice a dispatcher that stops calling
     // it for a genuinely silent, long-running command.
-    it("calls onStarted for a silent device.exec once the exec start grace window passes, with no worker answer at all (ADR §19b/§19e, C3, round 3 review)", async () => {
-      const { clock, coordinator, directory, dispatcher, workers } = harness();
+    it("calls onStarted for a silent device.exec from the worker's own started push, with no output and no answer (ADR §19a/§19b/§19e)", async () => {
+      const { coordinator, directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_1", client);
       workers.connected("wrk_1", undefined, "0.3.0");
@@ -568,8 +568,10 @@ describe("GatewayDispatcher", () => {
         { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
       );
       // §19b's own worked example: `simctl install <path>` never writes anything while it runs,
-      // and the worker here never answers at all.
-      client.execQueue.push({ kind: "hang" });
+      // and the worker here never answers at all -- but it does say the process exists, which is
+      // the fact a transport needs to commit its 200. No clock is advanced below: this asserts
+      // the relay, not a timer.
+      client.execQueue.push({ kind: "hang", started: true });
 
       let started = false;
       void dispatcher.dispatch(
@@ -584,10 +586,7 @@ describe("GatewayDispatcher", () => {
         }),
       );
       await Promise.resolve();
-      expect(started).toBe(false);
 
-      clock.advance(500);
-      await Promise.resolve();
       expect(started).toBe(true);
     });
 
