@@ -13,6 +13,7 @@ import {
   catalogFixture,
   deviceFixture,
   grantFixture,
+  leaseFixture,
   noCapacityError,
   ScriptedWorkerClient,
   statusFixture,
@@ -1593,5 +1594,176 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // What already succeeded stays released regardless of the answer's own shape.
     expect(leaseIndex.resolve("wrk_a.lse_1")).toBeUndefined();
     expect(leaseIndex.resolve("wrk_b.lse_1")).toBeDefined();
+  });
+});
+
+/**
+ * #119: drain and disconnect lifecycle, and the `WORKER_UNREACHABLE` paths §28/§29 name.
+ * `routing.test.ts` already proves eligibility is a pure function that drops a drained or
+ * disconnected worker; what these tests add is the coordinator-level proof that the exclusion
+ * actually starves that worker's own client of calls while an eligible sibling keeps serving --
+ * a call-count assertion, not just "the grant landed on the other one".
+ */
+describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
+  /**
+   * H2 (round 1 review, #119): the drain and disconnect tests below were ~40-line near-clones
+   * differing in three lines -- the exclusion action, and which ADR section it cites. Shared
+   * here so the one real difference between them is what each `it` block shows, not buried in
+   * two copies of the setup and assertions around it.
+   *
+   * wrk_a starts saturated so the first request is forced onto wrk_b -- which one ends up
+   * excluded is deliberate, not incidental to routing's own tie-break. After `exclude` runs,
+   * wrk_a is given *less* free capacity than wrk_b's own (unchanged) view still reports: if
+   * exclusion did not drop wrk_b outright, warm-then-free's free-capacity tie-break would still
+   * prefer B (more free capacity wins). The second request landing on A anyway, despite being
+   * the worse capacity pick, is what proves the exclusion -- not the capacity numbers -- is what
+   * kept B out. wrk_b's client is scripted with a spare grant too (C2, round 1 review): without
+   * it, a routing regression that let the excluded worker back into eligibility would route
+   * there, its empty queue would answer `NO_CAPACITY`, the coordinator would read that as a
+   * stale view (§11) and re-enqueue forever, and this test would time out instead of failing the
+   * wrong-worker assertion below.
+   */
+  async function excludedWorkerKeepsLeaseButGetsNoNewDispatch(
+    exclude: (workers: WorkerRegistry) => unknown,
+  ): Promise<void> {
+    const { coordinator, directory, leaseIndex, workers } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    const saturated = { ...statusFixture().capacity.ios, maxRunning: 0, running: 0 };
+    connectWorker(workers, "wrk_a", { capacity: { ...statusFixture().capacity, ios: saturated } });
+    connectWorker(workers, "wrk_b");
+    clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const firstGrant = await coordinator.request(REQUEST, requestOptions());
+    expect(firstGrant.lease.worker?.id).toBe("wrk_b");
+    expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+
+    // Excluded mid-service: its existing lease must stay exactly where it is (§9's "keeps its
+    // existing leases" / §6).
+    await exclude(workers);
+    expect(leaseIndex.resolve(firstGrant.lease.id)).toBeDefined();
+
+    workers.refresh("wrk_a", {
+      capacity: {
+        ...statusFixture().capacity,
+        ios: { ...statusFixture().capacity.ios, maxRunning: 1 },
+      },
+    });
+    clientA.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const secondGrant = await coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+
+    expect(secondGrant.lease.worker?.id).toBe("wrk_a");
+    expect(clientA.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    // The real assertion: the excluded worker's own call count never grew past the one lease it
+    // already held before its exclusion -- not merely "the second grant's worker id is wrk_a".
+    expect(clientB.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+  }
+
+  it("keeps a drained worker's existing lease and sends it no new dispatch, while an undrained sibling serves the next request (§9)", async () => {
+    await excludedWorkerKeepsLeaseButGetsNoNewDispatch((workers) =>
+      workers.setDrained("wrk_b", true),
+    );
+  });
+
+  it("keeps a disconnected worker's existing lease and sends it no new dispatch, while a connected sibling serves the next request (§6/§28)", async () => {
+    await excludedWorkerKeepsLeaseButGetsNoNewDispatch((workers) => workers.disconnected("wrk_b"));
+  });
+
+  it("answers WORKER_UNREACHABLE for a forwarded device.exec on a worker the directory reports unreachable, never a success (§28)", async () => {
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lse_1",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lse_1",
+    });
+    directory.unreachable.add("wrk_a");
+
+    const rejection = await coordinator
+      .exec(
+        { args: ["devices"], leaseId: "wrk_a.lse_1", tool: "adb" },
+        { manageEventSubscription: () => undefined, principal: "agent-1", role: "agent" },
+      )
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
+    // Never reached the worker at all -- a call that then failed would still show up here.
+    // P1 (round 1 review, #119): this does *not* pin the pre-flight `target?.reachable === true
+    // ?` conjunct in `#forwardToWorker` specifically -- deleting it leaves this test (and all
+    // 1776 others) green, because `FakeDirectory.target()` already makes `client()` return
+    // `undefined` whenever `reachable` is false, so the conjunct is redundant here. It is
+    // redundant in production too: `WorkerLink#reachable` and `#client()` both mirror the same
+    // `#closed` flag (`worker-link.ts`), so the conjunct can never change the outcome there
+    // either. Left in place rather than dropped, since this PR makes no production changes.
+    expect(client.calls.filter((call) => call.startsWith("device.exec"))).toEqual([]);
+  });
+
+  it("a request dispatched to a worker whose uplink then drops: the client sees WORKER_UNREACHABLE, and the lease is not silently double-granted once the worker's view catches up (§29)", async () => {
+    // H4 (round 1 review, #119): everything through `rebuiltLeaseId`'s own assertion below
+    // re-asserts what "maps a transport failure on lease.request to WORKER_UNREACHABLE" (P4,
+    // above) already pins -- not new load-bearing coverage, just the setup this test's own
+    // genuinely new part (the retry below) needs. That retry -- proving the fleet-wide rule the
+    // rebuild just populated is what a same-requester retry finds, never a second grant -- is
+    // what §29 adds here.
+    const { coordinator, directory, workers, leaseIndex } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    // The worker's own answer to this dispatch never makes it back -- the uplink itself died
+    // mid-call, exactly the `kind: "transport"` shape a real connection loss arrives as.
+    client.requestLeaseQueue.push({
+      error: new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Connection lost", {}),
+      kind: "error",
+    });
+
+    const rejection = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(DispatchError);
+    expect((rejection as DispatchError).code).toBe("WORKER_UNREACHABLE");
+    // The client's own request is over -- nothing is left queued to double-settle later.
+    expect(coordinator.queueDepth).toBe(0);
+
+    // The worker actually granted it before the uplink dropped: the next real snapshot the
+    // gateway sees once the uplink returns reports the lease, exactly as §29 describes ("if the
+    // worker actually granted it, the lease exists on the worker"). This is the ordinary
+    // reconcile path (`#onViewsChanged`/`rebuildFromWorker`), not a special case.
+    workers.refresh("wrk_a", {
+      leases: [
+        {
+          ...leaseFixture("lse_ghost", "dev_ghost"),
+          ownerId: "agent-1",
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+        },
+      ],
+    });
+
+    const rebuiltLeaseId = "wrk_a.lse_ghost";
+    expect(leaseIndex.resolve(rebuiltLeaseId)).toBeDefined();
+
+    // The requester's retry -- "the same `409 → GET` recovery loop ... applied across the
+    // uplink gap" -- must find the lease the fleet-wide rule now knows about, never a second
+    // grant for the same requester.
+    const retry = await coordinator
+      .request(REQUEST, requestOptions())
+      .catch((error: unknown) => error);
+    expect(retry).toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect((retry as RequesterAlreadyLeasedError).existingLeaseId).toBe(rebuiltLeaseId);
+    // Only ever the one `lease.request` call this worker actually answered -- the retry above
+    // was refused at admission, before ever reaching a worker again.
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 });
