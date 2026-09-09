@@ -159,6 +159,43 @@ containment makes rare but cannot make impossible. Do not remove them on the
 grounds that the root already proves ownership — the root proves *whose device
 it is*, the marks prove *what happened to it*.
 
+**`device.exec` sits inside the same boundary, not outside it.** The check it
+makes is that the caller owns the lease it names ([ADR
+0005](adr/0005-gateway-and-worker-modes.md) §19a); what the *command* then
+points at is the tool's business. So an agent token holding any one lease can
+run `adb -s <someone-else's-serial> shell …` or `simctl --udid <someone
+else's udid> …`, and the daemon will run it: the target device is in the same
+root, reachable from the same scoped `simctl`/`adb`, and the arguments are
+passed through unread. Ownership is proven for the *lease*, not re-derived
+for every device id inside the argv.
+
+That is deliberate. Refusing `-s` / `-t` / `--udid` outright would break the
+ordinary case — a lease holder naming its own device explicitly, which every
+`adb` invocation in a script does — and refusing only *other people's* ids
+means parsing each tool's argument grammar well enough to decide which token
+is a device id, on a surface that changes with the platform tools rather than
+with simlock. A parser that is wrong in the permissive direction refuses
+nothing extra; one that is wrong in the strict direction refuses commands
+that were always fine. The verbs simlock *does* refuse
+([CLI.md](CLI.md)) are the ones that move a device's lifecycle behind the
+registry's back or escape containment altogether — `adb kill-server`,
+`simctl delete` — which is a judgement about what an action does, not about
+identity. adb's server-scope globals are handled differently, and more
+strictly, because a caller-supplied one there does not merely name a device —
+it can silently repoint the whole command at a server Simlock does not own
+(safety rule 9): `simlock adb` allow-lists `-s` / `-t` / `-d` / `-e`, the
+globals that select a device *within* the containment simlock already
+established, and refuses everything else positioned before the subcommand —
+`-P` / `-L` / `-H` / `--server-port` by name, and any other global (including
+one this driver has never heard of) on the general principle that an argument
+it cannot vouch for is refused rather than assumed harmless.
+
+The consequence follows the same rule as the rest of this section: mutually
+untrusted agents on one machine need OS-level isolation. Agents that trust
+each other not to be malicious — the fleet this tool is for — get exactly
+what the roots buy them, which is that nobody reaches another agent's device
+*by accident*.
+
 **Status:** accepted by design. Anything that needs a real trust boundary
 (multi-tenant machines, untrusted agents) needs OS-level isolation, which is
 out of scope for a device control plane.
@@ -424,6 +461,147 @@ these four and instead go through the same `ERROR_TABLE`-driven path `mapError` 
 for every contract-declared code, the same way `UNKNOWN_LEASE`/`FORBIDDEN`/`BAD_REQUEST` do
 today.
 
+## A `device.exec` command is authorized once, at its start
+
+`device.exec` ([ADR 0005](adr/0005-gateway-and-worker-modes.md) §19a) checks
+that the caller owns the lease it names, then spawns the command and streams
+its output. The check happens once. A command that is still running when its
+lease ends -- expired on its TTL, released by its holder, force-released by an
+operator -- keeps running, and the device it is pointed at may by then have
+been reclaimed and granted to somebody else.
+
+**The pitfall:** it is tempting to read the ownership check as covering the
+command's whole lifetime. It covers its *start*. Nothing kills a running child
+when a lease ends, and nothing re-checks the lease while it runs.
+
+Three things bound the exposure, none of which closes it:
+
+- `exec.timeoutMs` (ten minutes by default) is a hard ceiling on how long any
+  one command can outlive anything.
+- Reclaim is not instant, and a device goes through `reclaiming` before it can
+  be granted again -- so the window is a straggler's, not a routine one.
+- The refusal list still applies: a command that outlives its lease cannot be
+  one that changes a device's lifecycle behind the registry's back.
+
+**Status:** accepted for now. Killing the child on `lease.expired` /
+`lease.released` is the obvious fix and is cheap to add, but it makes the
+worse trade in the common case: the reason a disconnect does not kill a
+running command is that a half-applied `simctl install` interrupted by a
+tunnel blip is worse than one that finishes with nobody watching, and a lease
+that expires *while its holder is mid-install* is the same situation with the
+same answer. Revisit it with the gateway work (#115), where a proxied exec
+adds a second place a lease can end without the worker noticing at once.
+
+## An `agent` token on a worker is a host-level credential, not a device-level one
+
+`device.exec` runs a command's *arguments* on the worker's own filesystem,
+with the daemon's own uid and its own `process.env` (ADR 0005 §19a). The
+driver's refusal list stops a verb that would change a device's lifecycle
+behind the registry's back, but it parses no argument grammar beyond that —
+by design; see the next pitfall's own argument against trying.
+
+**The pitfall:** `adb pull <device-path> <worker-path>` passes every check
+`driver.passthrough`'s refusal list runs (`pull` is not a refused verb, it
+does not start with `-` so the caller-supplied-globals scan returns
+immediately, and it is not a bare `adb shell`). The device side of that path
+is whatever the lease holder controls on the device's filesystem; the worker
+side is an absolute path of the caller's choosing, written as the daemon's
+own uid — `~/.bashrc`, `${SIMLOCK_HOME}/tokens.json`, a device root's marker
+file. Before `device.exec` this required already being on the worker's
+machine; an `agent`-role bearer token reaching it over HTTP is what makes it
+remote. Sizing a worker's trust boundary around "one device per lease" reads
+this away; sizing it around "the daemon's own uid" does not.
+
+**Why this is not being fixed by parsing arguments:** the same reasoning the
+adb/simctl scans themselves rely on (safety rule 9, "fail closed") argues
+against it here too — `docs/adr/0005-gateway-and-worker-modes.md` §19a is
+explicit that arguments are accident-boundary scoping, not a security
+boundary, the same distinction ADR 0001 draws for the local passthrough
+wrappers this operation reuses. A grammar that tried to refuse "device paths
+that are secretly host paths" would be guessing at every tool's own argument
+syntax (`adb pull`, `simctl io ... screenshot`, whatever the next tool
+adds), and a guess that misses one is worse than no guess, since it reads as
+a promise this API does not keep.
+
+**Status:** accepted, and now said plainly rather than left to be discovered
+— see the [Authentication](HTTP-API.md#authentication) section of
+`HTTP-API.md`, which an operator sizing a worker's trust boundary should read
+before handing an `agent` token to anything they would not otherwise let run
+on that machine.
+
+## `device.exec` carries no files (ADR 0005)
+
+A remote agent drives its leased device with `device.exec` — `simlock simctl`
+/ `simlock adb` against a gateway, or `POST /v1/leases/{id}/exec` over HTTP.
+The command runs on the machine that owns the device, which is what makes it
+work at all across a fleet.
+
+**The pitfall:** the *arguments* travel, the *files* do not. `simctl install
+/tmp/MyApp.app` and `adb install ./app-debug.apk` resolve their path on the
+worker's filesystem, so a build sitting on the agent's own machine is simply
+not there — the command fails with the tool's own "no such file" rather than
+with anything simlock says, which reads like a broken lease until you notice
+which machine ran it. The same applies in reverse for output: `simctl io
+booted screenshot shot.png` writes `shot.png` on the worker.
+
+**Why it is accepted:** a file transfer is a second, byte-heavy concern with
+its own questions (size caps, resumability, where the bytes land, who deletes
+them), and answering them badly inside the lease path is worse than not
+answering them. v1's honest position is that artifacts arrive out of band — a
+shared volume, a checkout the CI job already did on that machine, an
+`scp` the operator's own tooling does.
+
+**Status:** accepted for v1 and designed around rather than designed out.
+[ADR 0005](adr/0005-gateway-and-worker-modes.md) leaves the seam open
+deliberately: `device.upload` would stream chunks as request-scoped pushes
+over the same wire, into a per-lease scratch directory deleted on release.
+Nothing about `device.exec`'s shape has to change to add it.
+
+**Possible future fix:** `device.upload`, tracked in
+[IDEAS.md](IDEAS.md#gateway-side-file-upload-for-deviceexec).
+
+## `device.exec` has no pseudo-terminal, so interactive commands break
+
+Locally — `simlock simctl` / `simlock adb` against a worker over its unix
+socket — the CLI spawns the tool with inherited stdio, so an interactive `adb
+shell` is a real interactive shell and always has been.
+
+**The pitfall:** through a gateway, or over HTTP, the same command goes
+through `device.exec` instead, and there is no PTY on the far end. `stdin` is
+one string sent with the request and then closed. Line-oriented commands are
+fine (`adb shell getprop`, `adb shell input tap 100 200`, `simctl install`);
+anything that wants a terminal is not — a full-screen program renders as
+escape sequences, and a tool that stops to ask a question waits for input
+that can never come until the timeout kills it. The failure is quiet in the
+worst case: the command hangs until `exec.timeoutMs` (ten minutes) and then
+fails `EXEC_TIMEOUT`.
+
+The one shape of this that is *not* quiet is the most likely one. A bare `adb
+shell` with no command — the thing a human types first — is refused up front
+by the worker with `PASSTHROUGH_REFUSED` (CLI exit 2, HTTP `422`) and a
+message saying it needs a terminal. It is the only refusal `device.exec` adds
+to the passthrough list, and it exists precisely because the honest failure
+for that command is immediate and legible, while the natural one is a
+ten-minute stall ending in a timeout that says nothing about terminals. It
+does not generalize: simlock cannot tell in advance which *other* commands
+will block for input, so everything past this one case is still bounded by
+the timeout rather than by a refusal.
+
+**Why it is accepted:** a PTY is not a bigger version of a pipe. It needs
+terminal allocation on the worker, window-size propagation, signal
+forwarding, and a bidirectional stream where v1 has request-scoped pushes —
+and it exists to serve a human at a keyboard, which is not who this control
+plane is for. Agents send commands and read output.
+
+**Status:** accepted by design, and the boundary is drawn where the docs say
+it is: same command, same refusals, same exit code, no terminal. The local
+path keeps its inherited stdio, so nobody loses an interactive shell they had
+before.
+
+**Possible future fix:** an interactive TTY is part of the reserved
+`dataPlane` (see [IDEAS.md](IDEAS.md#a-byte-heavy-data-plane)), not a
+follow-up to `device.exec`.
+
 ## iOS slim mode: accepted costs and feature loss (#87)
 
 `ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
@@ -528,79 +706,6 @@ on the same timers as any other idle device, since neither rule cares what a
 device's spec matches. Until those timers fire, though, it occupies a pool
 slot doing nothing.
 
-## `device.exec` carries no files (ADR 0005)
-
-A remote agent drives its leased device with `device.exec` — `simlock simctl`
-/ `simlock adb` against a gateway, or `POST /v1/leases/{id}/exec` over HTTP.
-The command runs on the machine that owns the device, which is what makes it
-work at all across a fleet.
-
-**The pitfall:** the *arguments* travel, the *files* do not. `simctl install
-/tmp/MyApp.app` and `adb install ./app-debug.apk` resolve their path on the
-worker's filesystem, so a build sitting on the agent's own machine is simply
-not there — the command fails with the tool's own "no such file" rather than
-with anything simlock says, which reads like a broken lease until you notice
-which machine ran it. The same applies in reverse for output: `simctl io
-booted screenshot shot.png` writes `shot.png` on the worker.
-
-**Why it is accepted:** a file transfer is a second, byte-heavy concern with
-its own questions (size caps, resumability, where the bytes land, who deletes
-them), and answering them badly inside the lease path is worse than not
-answering them. v1's honest position is that artifacts arrive out of band — a
-shared volume, a checkout the CI job already did on that machine, an
-`scp` the operator's own tooling does.
-
-**Status:** accepted for v1 and designed around rather than designed out.
-[ADR 0005](adr/0005-gateway-and-worker-modes.md) leaves the seam open
-deliberately: `device.upload` would stream chunks as request-scoped pushes
-over the same wire, into a per-lease scratch directory deleted on release.
-Nothing about `device.exec`'s shape has to change to add it.
-
-**Possible future fix:** `device.upload`, tracked in
-[IDEAS.md](IDEAS.md#gateway-side-file-upload-for-deviceexec).
-
-## `device.exec` has no pseudo-terminal, so interactive commands break
-
-Locally — `simlock simctl` / `simlock adb` against a worker over its unix
-socket — the CLI spawns the tool with inherited stdio, so an interactive `adb
-shell` is a real interactive shell and always has been.
-
-**The pitfall:** through a gateway, or over HTTP, the same command goes
-through `device.exec` instead, and there is no PTY on the far end. `stdin` is
-one string sent with the request and then closed. Line-oriented commands are
-fine (`adb shell getprop`, `adb shell input tap 100 200`, `simctl install`);
-anything that wants a terminal is not — a full-screen program renders as
-escape sequences, and a tool that stops to ask a question waits for input
-that can never come until the timeout kills it. The failure is quiet in the
-worst case: the command hangs until `exec.timeoutMs` (ten minutes) and then
-fails `EXEC_TIMEOUT`.
-
-The one shape of this that is *not* quiet is the most likely one. A bare `adb
-shell` with no command — the thing a human types first — is refused up front
-by the worker with `PASSTHROUGH_REFUSED` (CLI exit 2, HTTP `422`) and a
-message saying it needs a terminal. It is the only refusal `device.exec` adds
-to the passthrough list, and it exists precisely because the honest failure
-for that command is immediate and legible, while the natural one is a
-ten-minute stall ending in a timeout that says nothing about terminals. It
-does not generalize: simlock cannot tell in advance which *other* commands
-will block for input, so everything past this one case is still bounded by
-the timeout rather than by a refusal.
-
-**Why it is accepted:** a PTY is not a bigger version of a pipe. It needs
-terminal allocation on the worker, window-size propagation, signal
-forwarding, and a bidirectional stream where v1 has request-scoped pushes —
-and it exists to serve a human at a keyboard, which is not who this control
-plane is for. Agents send commands and read output.
-
-**Status:** accepted by design, and the boundary is drawn where the docs say
-it is: same command, same refusals, same exit code, no terminal. The local
-path keeps its inherited stdio, so nobody loses an interactive shell they had
-before.
-
-**Possible future fix:** an interactive TTY is part of the reserved
-`dataPlane` (see [IDEAS.md](IDEAS.md#a-byte-heavy-data-plane)), not a
-follow-up to `device.exec`.
-
 ## A dispatched request whose uplink drops may have granted a lease anyway
 
 The gateway dispatches a queued request to a worker with `noWait: true` and
@@ -697,3 +802,42 @@ dispatches without touching the leases anyone already holds.
 **Possible future fix:** a reserved capacity slice per worker, deferred in
 [ADR 0005](adr/0005-gateway-and-worker-modes.md) and recorded in
 [IDEAS.md](IDEAS.md#capacity-slices-reserved-for-the-gateway).
+
+## `simlock simctl` / `simlock adb` can hang forever reading a piped stdin
+
+ADR 0005 §19c: a piped stdin is read to EOF first, then sent as `device.exec`'s
+one-shot string (§19a) — there is no incremental stdin channel, so the whole
+thing has to exist before the request can be sent at all. `readPipedStdin` in
+`src/cli/index.ts` does exactly that: `process.stdin.isTTY === true` means
+nothing was piped and it returns `undefined` immediately, and otherwise it
+reads the stream to completion with no bound.
+
+**The pitfall:** "not a TTY" and "has a well-behaved sender" are different
+facts. `simlock adb shell getprop` run from a CI job whose stdin is an
+inherited pipe that nothing ever closes (a common shape for a step that
+redirects a long-lived process's output, or simply forgets to redirect stdin
+from `/dev/null`) blocks on this read before the command is even sent — not
+inside the command, not bounded by `exec.timeoutMs`, which only starts once
+`device.exec`'s request goes out. There is no timeout here at all, and no way
+to tell from the caller's side, short of the process just never finishing,
+that this is what happened.
+
+**Why this is not being fixed by adding a bound:** §19c is explicit that the
+whole piped input is read before the request is sent, because `device.exec`'s
+`stdin` is a single string handed over once, not a channel — there is nowhere
+to send a partial read to. A read that gave up after some fixed time would
+either send a truncated `stdin` (silently changing the command's input, which
+is worse than hanging) or refuse the command outright on a caller whose input
+was simply slow rather than infinite, and simlock has no way to distinguish
+the two from here. Every other tool with the same read-to-EOF contract for a
+piped stdin (`cat`, `jq`, `xargs` without `-n`) has the identical hazard for
+the identical reason; it is not a defect specific to this CLI, and a caller
+that pipes in CI is already expected to close or redirect stdin the way any
+other pipe-reading command line requires.
+
+**Status:** accepted, deliberately not worked around. If this bites in
+practice the fix belongs at the call site — redirect stdin from `/dev/null`
+in the job that does not mean to pipe anything (`simlock adb shell getprop
+</dev/null`), or pass `stdin` some other way once a future need justifies
+one — not in `readPipedStdin` guessing at a timeout ADR 0005 does not ask
+for.

@@ -98,6 +98,82 @@ describe("loadConfig", () => {
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
   });
 
+  it("defaults mode to worker and accepts only the two it knows", async () => {
+    // ADR 0005 §1: one daemon, one mode, and it decides what the process *is* -- so it is
+    // config rather than a flag, and a typo has to fail at load rather than leave a daemon
+    // running as something nobody asked for.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    const defaulted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(defaulted.mode).toBe("worker");
+
+    // `http.enabled: true` here because a gateway with HTTP off is its own rejection --
+    // see the next test -- and this one is only about the two spellings `mode` accepts.
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: true }, mode: "gateway" }),
+    );
+    const gateway = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(gateway.mode).toBe("gateway");
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "broker" }));
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("mode");
+  });
+
+  it("rejects mode: gateway with http.enabled: false at load", async () => {
+    // ADR 0005 §2: a gateway is the fleet's contact point over both HTTP and its unix socket,
+    // so one with HTTP off is unreachable by any worker or agent -- a config with no safe
+    // reading, rejected the same way a self-contradicting lease TTL pair is (naming the key,
+    // daemon does not start) rather than started and left silently useless.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    // The default is `http.enabled: false`, so naming only `mode` already triggers this.
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ mode: "gateway" }));
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.enabled");
+
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: false }, mode: "gateway" }),
+    );
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("http.enabled");
+
+    // A worker with HTTP off is unaffected: HTTP is genuinely optional for that mode.
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ http: { enabled: false }, mode: "worker" }),
+    );
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).resolves.toMatchObject({ http: { enabled: false }, mode: "worker" });
+  });
+
+  it("defaults exec.timeoutMs to ten minutes and rejects a non-positive one", async () => {
+    // ADR 0005 §19e's per-command bound. Rejected rather than clamped, like every other
+    // duration here: a caller given a limit it did not write cannot tell which one applied.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    const defaulted = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(defaulted.exec).toEqual({ timeoutMs: 600_000 });
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ exec: { timeoutMs: 30_000 } }));
+    const overridden = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(overridden.exec.timeoutMs).toBe(30_000);
+
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ exec: { timeoutMs: 0 } }));
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow("exec.timeoutMs");
+  });
+
   it("applies a file-level log override", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");

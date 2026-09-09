@@ -16,6 +16,7 @@ import {
   type ObservedMark,
   type PassthroughCommand,
   PassthroughRefusedError,
+  type PassthroughContext,
   type ReclaimResult,
   RuntimeMissingError,
 } from "../../core/driver.js";
@@ -239,6 +240,112 @@ const REFUSED_ADB_VERB = "kill-server";
 const STOPS_A_RUNNING_DEVICE =
   "it stops a device Simlock still believes is running, which reports as drift on the next reconcile.";
 
+/**
+ * adb globals `simlock adb` passes a caller's command through unchanged. This is an
+ * **allow list**, not a blocklist of the flags known to point `adb` at a different server
+ * than the one Simlock owns (`-P`/`-H`/`-L`/`--server-port`, which adb takes the **last** of
+ * on the line, so a caller-supplied one would silently win over the one this driver inserts
+ * and land the command on the machine's default server, outside containment entirely --
+ * safety rule 9, the same hole the iOS driver closes by refusing a caller-supplied
+ * `--set`/`--profiles`).
+ *
+ * A blocklist only refuses what someone already thought to name, and adb has globals this
+ * list never needed to: `--reply-fd` takes a value, is absent from `adb --help`, and is real
+ * -- confirmed against the adb binary on this machine (1.0.41 / 37.0.1), which errors
+ * `--reply-fd requires an argument` rather than `unknown command`. A scanner that assumes an
+ * unrecognized flag takes no value treats `--reply-fd 9` as ending the globals region at `9`,
+ * and never sees the `-H`/`-P` that follow it -- exactly the bypass this allow list closes.
+ * Root validation fails closed (safety rule 9): an argument here whose arity this driver does
+ * not know is refused, not assumed harmless.
+ *
+ * Only `-s`, `-t`, `-d`, `-e` are allowed through: they select which device on Simlock's own
+ * server a command talks to, which is what arguments before the subcommand are *for*, and
+ * refusing them would break every multi-device invocation to prevent nothing, since every
+ * device they can name is one Simlock already manages. What that does mean -- any lease
+ * holder can name any Simlock device on this machine -- is the accident boundary ADR 0001
+ * draws, not a hole in this list; see `docs/known-pitfalls.md`. Everything else -- the known
+ * scope flags, `-a`, `--exit-on-write-error`, `--one-device`, `--reply-fd`, and any global a
+ * future adb adds -- is refused in this position, whether or not it turns out to be benign.
+ *
+ * Arity, verified against real adb on this machine: `-d` and `-e` take no value. `-s` is
+ * **separate-only** -- adb rejects the fused `-sSERIAL` outright (`-s requires an argument`).
+ * `-t` accepts both `-t 123` and the fused `-t123` (`strncmp(argv[0], "-t", 2)`).
+ *
+ * `--version` and `--help` are also allowed through, but not as globals with an arity: adb
+ * answers them on their own, before it ever looks for a subcommand (`-h` gets no such
+ * treatment and is `unknown command` on real adb), so for this scan they *are* the
+ * subcommand rather than something that precedes one -- and only when nothing follows them.
+ * adb answers `--version`/`--help` and exits without ever looking at the rest of the line, so
+ * this driver has no way to vouch for what comes after one: `["--version", "-P", "5037",
+ * "shell", "id"]` is verified against real adb to print the version and exit 0, never reaching
+ * the `-P`/`shell` that follow, but a scan that let them ride along on the strength of
+ * `--version` ending it would wave through exactly the kind of unvetted tail this allow list
+ * exists to refuse everywhere else.
+ */
+const SELF_CONTAINED_ACTIONS: readonly string[] = ["--version", "--help"];
+
+function allowedGlobalArity(argument: string): "none" | "value" | undefined {
+  if (argument === "-d" || argument === "-e") return "none";
+  if (argument === "-s") return "value";
+  if (argument === "-t") return "value";
+  if (argument.startsWith("-t") && argument.length > 2) return "none"; // fused, e.g. `-t123`
+  return undefined;
+}
+
+/** Where `walkGlobals`'s scan over adb's globals grammar landed. `"subcommand"` is the ordinary
+ * case -- `index` is the first non-global argument, the one `driver.passthrough` runs and
+ * `device.exec`'s `isBareShell` checks for being `shell` alone. `"refused"` is a caller-supplied
+ * argument in the globals region this driver does not vouch for -- `argument` is exactly what
+ * `callerSuppliedScopeFlag` used to compute inline, kept as its own case here so `isBareShell`
+ * does not have to guess a subcommand out of a line this driver is about to refuse anyway.
+ * `"none"` is a globals-only line with nothing to run -- no subcommand exists for either caller
+ * to reason about. */
+type GlobalsWalkResult =
+  | { readonly kind: "subcommand"; readonly index: number }
+  | { readonly kind: "refused"; readonly argument: string }
+  | { readonly kind: "none" };
+
+/**
+ * Walks adb's globals grammar (`allowedGlobalArity`) up to the subcommand, the one place both
+ * `callerSuppliedScopeFlag` and `isBareShell` need to agree on where the globals region ends
+ * and the subcommand's own operands begin -- `adb shell echo -Please` is a word to echo, not
+ * an attempt to move the server, and `adb shell input text shell` is a command with `shell` as
+ * an *operand*, not the bare interactive shell `isBareShell` refuses without a terminal. Same
+ * scan the iOS driver runs for `--set`/`--profiles`, for the same reason, except this one
+ * refuses by *not* recognizing a flag rather than by recognizing it: see `allowedGlobalArity`.
+ */
+function walkGlobals(args: readonly string[]): GlobalsWalkResult {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    // The first argument that is not a flag is the subcommand, and everything from there on is
+    // its own -- unless it is the *value* of a global that takes one (`-s <serial>`), which is
+    // why this walks adb's small global grammar rather than stopping at the first bare word.
+    if (!argument.startsWith("-")) return { index, kind: "subcommand" };
+    // Self-contained only when it is the *sole* argument: adb answers it and exits without
+    // looking at anything else on the line, so anything after it is a tail this driver never
+    // gets to vouch for and must refuse rather than wave through (the hardening note above).
+    if (SELF_CONTAINED_ACTIONS.includes(argument)) {
+      if (args.length === 1) return { index, kind: "subcommand" };
+      return { argument, kind: "refused" };
+    }
+    const arity = allowedGlobalArity(argument);
+    // Not one of the four we allow through: refuse rather than guess whether it takes a value
+    // (and so whether the *next* argument is really the subcommand or this flag's operand).
+    if (arity === undefined) return { argument, kind: "refused" };
+    if (arity === "value") index += 1;
+  }
+  return { kind: "none" };
+}
+
+/**
+ * The caller-supplied argument that ends this driver's tolerance of the *globals* region, if
+ * any -- see `walkGlobals`.
+ */
+function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
+  const walked = walkGlobals(args);
+  return walked.kind === "refused" ? walked.argument : undefined;
+}
+
 const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
   readonly reason: string;
@@ -254,6 +361,27 @@ const REFUSED_ADB_SEQUENCES: readonly {
     sequence: ["emu", "avd", "snapshot", "delete"],
   },
 ];
+
+/**
+ * Whether this is `adb shell` with nothing after it -- the interactive shell. Recognised by
+ * walking `walkGlobals` to find the actual *subcommand* -- the first argument past any
+ * `-s <serial>` / `-P <port>` / other global -- and checking that it is `shell` **and** the
+ * last argument, rather than by checking whether the line's last word happens to spell
+ * `shell`. The naive check refused `adb shell echo shell`, `adb shell input text shell`, and
+ * even `adb push ./x shell` -- every one of them ends in the word `shell` as an *operand*, not
+ * as the bare subcommand, so none of them is the interactive shell this refusal exists for
+ * (round 4, F2). A line whose globals region this driver refuses (`walkGlobals` returning
+ * `"refused"`) or that names no subcommand at all is never the bare shell either -- it is
+ * refused by `callerSuppliedScopeFlag`, or has nothing to run in the first place.
+ */
+function isBareShell(args: readonly string[]): boolean {
+  const walked = walkGlobals(args);
+  return (
+    walked.kind === "subcommand" &&
+    args[walked.index] === "shell" &&
+    walked.index === args.length - 1
+  );
+}
 
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
@@ -457,8 +585,8 @@ export class AndroidDriver implements Driver {
    * that re-execs itself stays on the same server; it says the same thing `-P` does, and
    * saying it twice costs nothing.
    */
-  passthrough(args: readonly string[]): PassthroughCommand {
-    this.#assertProxyable(args);
+  passthrough(args: readonly string[], context?: PassthroughContext): PassthroughCommand {
+    this.#assertProxyable(args, context);
     return {
       args: ["-P", String(this.#adbServerPort), ...args],
       command: this.#sdk.adb,
@@ -466,7 +594,18 @@ export class AndroidDriver implements Driver {
     };
   }
 
-  #assertProxyable(args: readonly string[]): void {
+  #assertProxyable(args: readonly string[], context?: PassthroughContext): void {
+    // A shell with nothing to run *is* the interactive shell, and an interactive shell
+    // without a terminal is a process that reads a pipe that will never carry anything --
+    // it hangs until whatever timeout its caller has. Refused only where there is no
+    // terminal (`device.exec`, ADR 0005 §19c); the local `simlock adb shell`, which inherits
+    // the CLI's own tty, is untouched and still the way to get one.
+    if (context?.hasTerminal === false && isBareShell(args)) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        "Refusing `simlock adb shell` with no command: an interactive shell needs a terminal, and this one runs on the device's own machine with none. Pass the command to run (`simlock adb shell getprop`), or run `simlock adb shell` on that machine.",
+      );
+    }
     if (args.includes(REFUSED_ADB_VERB)) {
       throw new PassthroughRefusedError(
         this.passthroughTool,
@@ -480,6 +619,14 @@ export class AndroidDriver implements Driver {
       throw new PassthroughRefusedError(
         this.passthroughTool,
         `Refusing \`simlock adb ${refused.sequence.join(" ")}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
+      );
+    }
+
+    const scopeFlag = callerSuppliedScopeFlag(args);
+    if (scopeFlag !== undefined) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        `Refusing \`simlock adb ${scopeFlag}\`: \`simlock adb\` supplies the adb server itself, and only allows \`-s\`/\`-t\`/\`-d\`/\`-e\` ahead of the subcommand -- anything else there, whether it is a known way to move the server or one this driver does not recognize, might point the command at a server that cannot see Simlock's devices, or at one it must not touch. Drop the flag -- the command is already scoped -- or run \`adb\` directly if you mean to leave Simlock's server.`,
       );
     }
   }

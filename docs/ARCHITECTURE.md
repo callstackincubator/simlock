@@ -138,8 +138,9 @@ applies to HTTP automatically because there is only one code path to fix.
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
 Two changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
-protocol 4; ADR 0005 adds `device.exec` and its `output` push family, again
-with no compatibility path kept, taking it to 5. So the range both sides
+protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
+`mode` field `status.get` now always carries, again with no compatibility
+path kept, taking it to 5. So the range both sides
 advertise is `{min: 5, max: 5}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
@@ -692,6 +693,30 @@ There is one deliberate exception: a device stranded in the pre-root location
 by the migration, which `doctor` reports and `--fix` destroys through the old
 unscoped path — permitted because a registry record names it, which is what
 registry-only destruction asks for.
+
+Containment cuts both ways, so the scoping has to be handed back to a lease
+holder that needs to drive its device. That happens two ways, and both go
+through the same driver code (`Driver.passthrough()`, which owns the scoping
+flags *and* the list of verbs it will not proxy -- `simctl delete`,
+`adb kill-server`, anything that would change a device's lifecycle behind the
+registry's back). `driver.passthrough` *resolves* the scoped command and hands
+it back for the caller to run, which is what `simlock simctl` / `simlock adb`
+do locally: the daemon is the process that knows the root, the CLI is the one
+with a terminal, so an interactive `adb shell` keeps its tty and its exit code.
+`device.exec` (ADR 0005) *runs* the same resolved command on the daemon's own
+machine through the `ProcessRunner` port and streams stdout/stderr back as
+request-scoped pushes, resolving with the exit code -- for a caller who is not
+on that machine and for whom a command line naming a device set would be
+useless. One resolution, one refusal list, two ways to reach it; the split is
+who spawns the process, never what is allowed.
+
+The one thing the resolution is told about its caller is whether there is a
+terminal behind it, because that is the one thing that genuinely differs: an
+exec'd command runs on pipes, so a driver may refuse there what it allows a
+local invocation with a tty (a bare `adb shell`). The fact travels to the
+driver rather than being decided in the daemon, for the same reason the rest of
+the list lives there -- knowing which of adb's commands needs a terminal is
+Android's business, not the core's.
 
 Ownership is proven when the driver starts, and re-proven
 (`Driver.revalidateRoot()`) immediately before `doctor --purge-orphans`

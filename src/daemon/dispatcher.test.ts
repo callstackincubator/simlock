@@ -7,15 +7,20 @@ import {
   FakeDriver,
   LeaseEngine,
   Nuke,
+  PassthroughRefusedError,
   Registry,
   type Config,
 } from "../core/index.js";
-import type { CatalogReader } from "../core/lease-ports.js";
+import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
+  ExecOutputDeliveryStalledError,
   FakeClock,
   FakeSystemStats,
   MemoryFilesystem,
+  NodeProcessRunner,
+  ScriptedProcessRunner,
+  type ProcessRunner,
 } from "../ports/index.js";
 import { TokenStore } from "../http/token-store.js";
 import type { DispatchSession } from "./dispatcher.js";
@@ -33,6 +38,19 @@ const gibibyte = 1024 ** 3;
  * "re-walking every operation through each transport would test nothing new") -- this suite is
  * where the actual role/ownership/parsing logic gets proven once, not per transport.
  */
+/** Picks `buildDispatcher`'s `passthrough` dependency -- a caller-supplied override, or the
+ * engine, exactly as every other `overrides.x ?? y` default in that function does. Pulled out
+ * on its own so adding this one override does not push `buildDispatcher` itself over fallow's
+ * complexity threshold: the branch is real either way, but it belongs to a one-line function
+ * that cannot get any more complicated, not to the 130-line one already carrying a dozen of
+ * these. */
+function resolvePassthroughOverride(
+  engine: LeaseEngine,
+  override: PassthroughResolver | undefined,
+): PassthroughResolver {
+  return override ?? engine;
+}
+
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
@@ -51,9 +69,26 @@ async function buildDispatcher(
     readonly passthroughTool?: string;
     /** Narrows the lease TTL knobs (ADR 0004), for the cap and default-width rules. */
     readonly lease?: Partial<Config["lease"]>;
+    /** Wires `device.exec`'s runner (ADR 0005 §19a); absent by default, like the option it
+     * feeds, so no other test pays for a scripted process. */
+    readonly processRunner?: ProcessRunner;
+    /** Narrows `exec.timeoutMs` so the timeout path can be driven with a short clock advance
+     * rather than ten minutes of one. */
+    readonly exec?: Partial<Config["exec"]>;
+    /** Collects the `PassthroughContext` each resolution was given, so a test can assert what
+     * the driver was told about its caller (ADR 0005 §19c's "no terminal"). */
+    readonly passthroughContextSink?: unknown[];
+    /** Shares one clock with the test, for a flow that has to schedule against the dispatcher's
+     * own timers. */
+    readonly clock?: FakeClock;
+    /** Replaces the fake driver's own `passthrough` (which unconditionally prepends
+     * `--set /root`) with a caller-supplied resolver -- for the one suite that needs a
+     * `device.exec` command a *real* `NodeProcessRunner` can actually spawn (`node -e ...`
+     * takes no `--set`), rather than `ScriptedProcessRunner`'s scripted chunks. */
+    readonly passthroughOverride?: PassthroughResolver;
   } = {},
 ) {
-  const clock = new FakeClock(1_000);
+  const clock = overrides.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const filesystem = new MemoryFilesystem();
   const registry = await Registry.load({
@@ -70,15 +105,27 @@ async function buildDispatcher(
     ...(overrides.passthroughTool === undefined
       ? {}
       : {
-          passthrough: (args: readonly string[]) => ({
-            args: ["--set", "/root", ...args],
-            command: overrides.passthroughTool as string,
-            env: { SIMLOCK_SCOPED: "1" },
-          }),
+          passthrough: (args: readonly string[], context?: unknown) => {
+            overrides.passthroughContextSink?.push(context);
+            // The refusal half of a real driver's passthrough, in the smallest form that
+            // proves `device.exec` inherits it: `driver.passthrough` and `device.exec` call
+            // this same function, so a verb refused for one is refused for the other.
+            if (args.includes("delete")) {
+              throw new PassthroughRefusedError(
+                overrides.passthroughTool as string,
+                "Refusing `simlock simctl delete`: use `simlock release` instead.",
+              );
+            }
+            return {
+              args: ["--set", "/root", ...args],
+              command: overrides.passthroughTool as string,
+              env: { SIMLOCK_SCOPED: "1" },
+            };
+          },
           passthroughTool: overrides.passthroughTool,
         }),
   });
-  const config = testConfig(overrides.downloadsPolicy, overrides.lease ?? {});
+  const config = testConfig(overrides.downloadsPolicy, overrides.lease ?? {}, overrides.exec ?? {});
   const engine = new LeaseEngine({
     clock,
     config,
@@ -128,7 +175,9 @@ async function buildDispatcher(
     health: () => "running",
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
-    passthrough: engine,
+    passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
+    ...(overrides.processRunner === undefined ? {} : { processRunner: overrides.processRunner }),
+    execEnv: { PATH: "/usr/bin" },
     queue: engine,
     reaper,
     registry,
@@ -691,6 +740,507 @@ async function flush(): Promise<void> {
   }
 }
 
+/**
+ * ADR 0005 §19a-§19e. The operation's whole job is to run, on this machine, exactly what
+ * `driver.passthrough` would have handed a caller who was already on it -- so these check the
+ * two things that are genuinely new (the process and its output) and the three the operation
+ * inherits and must not lose (root scoping, the refusal list, ownership).
+ */
+describe("Dispatcher: device.exec", () => {
+  const command = { args: ["--set", "/root", "list", "devices"], command: "simctl" };
+
+  async function withLease(overrides: Parameters<typeof buildDispatcher>[0] = {}): Promise<{
+    readonly dispatcher: Awaited<ReturnType<typeof buildDispatcher>>["dispatcher"];
+    readonly clock: FakeClock;
+    readonly leaseId: string;
+  }> {
+    const built = await buildDispatcher({ passthroughTool: "simctl", ...overrides });
+    const grant = await built.dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session({ principal: "tok_agent" }),
+    );
+    return {
+      clock: built.clock,
+      dispatcher: built.dispatcher,
+      leaseId: (grant as { lease: { id: string } }).lease.id,
+    };
+  }
+
+  it("runs the driver-resolved command and answers its exit code", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: command, result: { code: 3, stderr: "", stdout: "" } },
+    ]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).resolves.toEqual({ exitCode: 3 });
+
+    // The scoping the driver injected is on the command, and its environment is layered over
+    // the daemon's own rather than replacing it -- a child given only `SIMLOCK_SCOPED` would
+    // have no PATH to find `simctl` with.
+    expect(runner.calls[0]).toMatchObject({
+      args: ["--set", "/root", "list", "devices"],
+      command: "simctl",
+      options: { env: { PATH: "/usr/bin", SIMLOCK_SCOPED: "1" } },
+    });
+  });
+
+  it("streams stdout and stderr chunks to the session in arrival order, unjoined", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        chunks: [
+          { chunk: "first", stream: "stdout" },
+          { chunk: "warning\n", stream: "stderr" },
+          { chunk: " and second\n", stream: "stdout" },
+        ],
+        match: command,
+      },
+    ]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+    const seen: string[] = [];
+
+    await dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({
+        onOutput: (stream, chunk) => {
+          seen.push(`${stream}:${chunk}`);
+        },
+        principal: "tok_agent",
+      }),
+    );
+
+    // Order across both streams, and each chunk exactly as written: a handler that buffered or
+    // line-joined would show two stdout chunks merged, or stderr after both of them.
+    expect(seen).toEqual(["stdout:first", "stderr:warning\n", "stdout: and second\n"]);
+  });
+
+  it("writes stdin to the child once and closes it", async () => {
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, stdin: "yes\n", tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+
+    expect(runner.calls[0]?.options.input).toBe("yes\n");
+  });
+
+  it("kills a command that outruns exec.timeoutMs and fails with EXEC_TIMEOUT", async () => {
+    const runner = new ScriptedProcessRunner([{ hangs: true, match: command }]);
+    const { clock, dispatcher, leaseId } = await withLease({
+      exec: { timeoutMs: 1_000 },
+      processRunner: runner,
+    });
+
+    const pending = dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    await flush();
+    clock.advance(1_000);
+
+    // EXEC_TIMEOUT, not the exit code the kill produced: "we stopped it" and "it failed" are
+    // different facts, and only the first tells a caller to raise the limit (ADR §19e).
+    await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+  });
+
+  it("refuses a verb the driver refuses, exactly as driver.passthrough does", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["delete", "ABCD"], leaseId, tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toThrow(/Refusing/);
+    // Refused before anything was spawned -- the point of the refusal list is that the command
+    // never runs, not that its output is discarded.
+    expect(runner.calls).toEqual([]);
+  });
+
+  /**
+   * The four combinations of the operation's own hook (ADR 0005 §19b/§27), which is
+   * `ownsLease` for an agent and something stricter for an admin. The lease under test was
+   * granted to principal `tok_agent`, so its `ownerId` and its `requesterId` are both that.
+   */
+  it("gates an agent session on the lease it owns, and refuses any requesterId it sends outright (round 4, F4)", async () => {
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    // (1) Someone else's lease: refused -- and naming its requester does not help, because a
+    // non-admin session may not name a `requesterId` at all, regardless of whose it is.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "tok_agent", tool: "simctl" },
+        session({ principal: "tok_other", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(runner.calls).toEqual([]);
+
+    // (2) Its own lease, but naming a `requesterId` -- refused outright, whether or not the
+    // name it chose happens to be its own. Round 4, F4: this used to be read and silently
+    // ignored (a rule that lived only in the HTTP route, `src/http/app.ts`, and so answered
+    // differently over the unix socket); a non-admin session naming an identity at all is now
+    // `FORBIDDEN` here, uniformly, on every transport.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "someone-else", tool: "simctl" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "tok_agent", tool: "simctl" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(runner.calls).toEqual([]);
+
+    // (2') Its own lease, no requesterId at all: allowed -- this is the ordinary case an agent
+    // actually uses.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).resolves.toEqual({ exitCode: 0 });
+  });
+
+  it("holds an admin session to the lease's requester instead of letting it bypass", async () => {
+    // This is the check a gateway's own uplink session runs against: it holds one admin
+    // session and proxies many agents through it, so "admin bypasses" would let any
+    // admin-role connection drive every lease on the worker (ADR 0005 §19b).
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+    const admin = session({ principal: "gw:instance-1", role: "admin" });
+
+    // (3) No `requesterId`, so it defaults to the admin's own principal -- which is not who
+    // the lease was granted to.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl" },
+        admin,
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "someone-else", tool: "simctl" },
+        admin,
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(runner.calls).toEqual([]);
+
+    // (4) Naming the agent it is proxying for: allowed.
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, requesterId: "tok_agent", tool: "simctl" },
+        admin,
+      ),
+    ).resolves.toEqual({ exitCode: 0 });
+  });
+
+  it("refuses a tool no driver claims with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST", async () => {
+    // A well-formed request for a wrapper this daemon has no driver for is not a malformed
+    // one -- same distinction `driver.passthrough` draws, and the same error code.
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["devices"], leaseId, tool: "adb" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toThrow(/No driver provides a adb passthrough/);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("tells the driver there is no terminal, so it can refuse what needs one", async () => {
+    // ADR 0005 §19c: the command runs here, on pipes. The driver is the only thing that knows
+    // which of its own commands that rules out (a bare `adb shell`), so the fact travels to
+    // it rather than being decided here.
+    const seen: unknown[] = [];
+    const { dispatcher, leaseId } = await withLease({
+      passthroughContextSink: seen,
+      processRunner: new ScriptedProcessRunner([{ match: command }]),
+    });
+
+    await dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    await dispatcher.dispatch(
+      "driver.passthrough",
+      { args: ["list", "devices"], tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+
+    expect(seen).toEqual([{ hasTerminal: false }, undefined]);
+  });
+
+  it("answers UNKNOWN_LEASE for an id that names no lease, rather than running the command", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId: "lse_gone", tool: "simctl" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toThrow(/Unknown lease: lse_gone/);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("answers a tool no driver wraps with UNKNOWN_PASSTHROUGH_TOOL, not BAD_REQUEST", async () => {
+    // Which wrappers exist is the drivers' answer, so `bash` is a well-formed request this
+    // host cannot serve -- the same distinction, and the same code, `driver.passthrough` draws.
+    const runner = new ScriptedProcessRunner([]);
+    const { dispatcher, leaseId } = await withLease({ processRunner: runner });
+
+    await expect(
+      dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "bash" },
+        session({ principal: "tok_agent" }),
+      ),
+    ).rejects.toThrow(/No driver provides a bash passthrough/);
+    expect(runner.calls).toEqual([]);
+  });
+
+  it("escalates to SIGKILL when a timed-out command ignores SIGTERM", async () => {
+    // SIGTERM is a request. A tool that ignores it (or is itself stuck) must not be able to
+    // hold the operation -- and the caller's connection -- open past the grace window.
+    const runner = new ScriptedProcessRunner([
+      { hangs: true, ignoresSigterm: true, match: command },
+    ]);
+    const { clock, dispatcher, leaseId } = await withLease({
+      exec: { timeoutMs: 1_000 },
+      processRunner: runner,
+    });
+
+    const pending = dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    await flush();
+    let settled = false;
+    void pending.catch(() => (settled = true));
+
+    // The timeout fires and SIGTERM lands; the command ignores it and the operation is still
+    // in flight, which is the state the escalation exists for.
+    clock.advance(1_000);
+    await flush();
+    expect(settled).toBe(false);
+
+    clock.advance(10_000);
+    await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+  });
+
+  it("resolves with the exit code, not EXEC_TIMEOUT, when the command finishes before the timeout timer's callback runs -- even scheduled in the same synchronous burst", async () => {
+    // `Promise.race([waited, expired])` -- not a flag either callback sets -- is what this
+    // proves the value of: `handle.finish(7)` and `clock.advance(1_000)` are both called here
+    // synchronously, one right after the other, with nothing in between observing either
+    // settle. A flag-based implementation (`let timedOut = false; timer sets it`) would be at
+    // the mercy of which of these two statements a maintainer wrote first, and get it wrong
+    // for whichever settles second; `Promise.race` instead answers from whichever promise
+    // *actually* settled first, in the order the two calls below run it -- unaffected by which
+    // of `waited`/`expired` the `Promise.race([...])` array happens to list first.
+    const clock = new FakeClock(1_000);
+    const handle = new SettleOnCueHandle();
+    const { dispatcher, leaseId } = await withLease({
+      clock,
+      exec: { timeoutMs: 1_000 },
+      processRunner: { spawnStreaming: () => handle } as unknown as ProcessRunner,
+    });
+
+    const pending = dispatcher.dispatch(
+      "device.exec",
+      { args: ["list", "devices"], leaseId, tool: "simctl" },
+      session({ principal: "tok_agent" }),
+    );
+    await flush();
+
+    // The exit settles first, in program order; the timer's callback (which would otherwise
+    // report EXEC_TIMEOUT) runs only afterward, in the same synchronous burst.
+    handle.finish(7);
+    clock.advance(1_000);
+
+    await expect(pending).resolves.toEqual({ exitCode: 7 });
+    // And nothing was signalled: a command that finished is not one to kill.
+    expect(handle.signals).toEqual([]);
+  });
+
+  describe("output delivered across a real exit, against a real NodeProcessRunner", () => {
+    // `ScriptedProcessRunner` can't reproduce this class of defect: its scripted handle always
+    // awaits a chunk's delivery before it will settle at all, so it cannot model "the child has
+    // already exited and closed its pipe while a chunk's delivery to a slow consumer is still
+    // outstanding" -- exactly the state a real OS pipe can be in (verified against real Node:
+    // `close` can fire in the same tick as the `data` event for a chunk this process runner
+    // just paused on). `#deviceExec` (`server.ts`) and the HTTP exec route (`app.ts`) both just
+    // hand their transport's own backpressured `onOutput` straight to this same dispatcher
+    // call, so a real reproduction here against a real child process is the one place this
+    // defect -- and its fix, in `NodeStreamingProcessHandle` -- is actually exercised, for
+    // both transports at once.
+    function realCommand(script: string): PassthroughResolver {
+      return { passthrough: () => ({ args: ["-e", script], command: process.execPath, env: {} }) };
+    }
+
+    it("delivers every chunk in full, in order, even when one delivery stalls past the exit grace window", async () => {
+      const seen: string[] = [];
+      let releaseFirst!: () => void;
+      const firstDelivery = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const { dispatcher, leaseId } = await withLease({
+        passthroughOverride: realCommand(
+          "process.stdout.write('before-exit-A');" +
+            "setTimeout(() => { process.stdout.write('before-exit-B'); process.exit(0); }, 20);",
+        ),
+        processRunner: new NodeProcessRunner(),
+      });
+
+      const pending = dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "simctl" },
+        session({
+          onOutput: (_stream, chunk) => {
+            seen.push(chunk);
+            // Stall only the first chunk's delivery, well past the 1s exit-to-close grace
+            // window this handle used to settle on regardless.
+            return seen.length === 1 ? firstDelivery : undefined;
+          },
+          principal: "tok_agent",
+        }),
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      let settledEarly = false;
+      void pending.then(() => {
+        settledEarly = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        settledEarly,
+        "device.exec resolved while a chunk's delivery was still pending -- output after it may have been dropped",
+      ).toBe(false);
+
+      releaseFirst();
+      await expect(pending).resolves.toEqual({ exitCode: 0 });
+      expect(seen).toEqual(["before-exit-A", "before-exit-B"]);
+    }, 10_000);
+
+    it("fails device.exec loudly, rather than answering a truncated exit code, when a chunk's delivery never resolves", async () => {
+      const { dispatcher, leaseId } = await withLease({
+        passthroughOverride: realCommand("process.stdout.write('stuck'); process.exit(0);"),
+        processRunner: new NodeProcessRunner(),
+      });
+
+      const pending = dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "simctl" },
+        session({
+          onOutput: () =>
+            new Promise<void>(() => {
+              // A consumer whose backpressure never clears -- a dead SSE write, a socket that
+              // never drains.
+            }),
+          principal: "tok_agent",
+        }),
+      );
+
+      await expect(pending).rejects.toThrow(ExecOutputDeliveryStalledError);
+    }, 10_000);
+
+    it("reports EXEC_TIMEOUT, not the stalled-delivery error it provokes, when a consumer that stopped reading is why the command outran its timeout", async () => {
+      // The common path, not an exotic one: a consumer that stops reading is *why* a
+      // streaming command outruns its timeout in the first place -- the backpressure pause
+      // that stops the child finishing is the same pause that stalls this chunk's delivery.
+      // `exec.timeoutMs` firing and killing the child must still be the answer the caller
+      // sees, not the stalled-delivery rejection that killing it provokes as a side effect.
+      const { clock, dispatcher, leaseId } = await withLease({
+        exec: { timeoutMs: 50 },
+        passthroughOverride: realCommand("process.stdout.write('x'); setInterval(() => {}, 1000);"),
+        processRunner: new NodeProcessRunner(),
+      });
+
+      const pending = dispatcher.dispatch(
+        "device.exec",
+        { args: [], leaseId, tool: "simctl" },
+        session({
+          onOutput: () =>
+            new Promise<void>(() => {
+              // Never resolves: the stream is paused on this chunk's delivery for the rest
+              // of the test, exactly as a client that opened the stream and stopped reading
+              // would leave it.
+            }),
+          principal: "tok_agent",
+        }),
+      );
+
+      // Let the real child actually spawn and write its one chunk before the timeout fires,
+      // so the pending delivery this test depends on genuinely exists.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      clock.advance(50);
+
+      await expect(pending).rejects.toMatchObject({ code: "EXEC_TIMEOUT" });
+    }, 10_000);
+  });
+});
+
+/** A streamed child that settles only when a test says so, and records what it was signalled
+ * with -- enough to tell "we killed it" from "it finished" without a real process. */
+class SettleOnCueHandle {
+  readonly pid = 99;
+  readonly signals: string[] = [];
+  #resolve!: (result: { code: number | null; signal: NodeJS.Signals | null }) => void;
+  readonly #result = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => {
+      this.#resolve = resolve;
+    },
+  );
+
+  finish(code: number): void {
+    this.#resolve({ code, signal: null });
+  }
+
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    this.signals.push(signal);
+  }
+
+  wait(): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+    return this.#result;
+  }
+}
+
 function sequence() {
   let next = 1;
   return { generate: () => `${next++}` };
@@ -699,9 +1249,12 @@ function sequence() {
 function testConfig(
   downloadsPolicy: Config["downloads"]["policy"] = "on-request",
   leaseOverrides: Partial<Config["lease"]> = {},
+  execOverrides: Partial<Config["exec"]> = {},
 ): Config {
   return {
+    mode: "worker",
     drivers: {},
+    exec: { timeoutMs: 600_000, ...execOverrides },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     eventBuffer: { capacity: 100 },
     health: {

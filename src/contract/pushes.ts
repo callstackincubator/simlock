@@ -2,7 +2,7 @@
  * Server pushes (ADR 0003 §8). Three families, each with its correlation key required by
  * schema:
  *
- * - Request-scoped (`progress`): carries the originating request's frame id.
+ * - Request-scoped (`progress`, `output`): carries the originating request's frame id.
  * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
  *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
  *   these; they are facts about the device, not a liveness channel).
@@ -26,6 +26,26 @@ const requestIdSchema = z.union([z.string(), z.number()]);
 const progressPushSchema = z.object({
   requestId: requestIdSchema,
   progress: leaseProgressSchema,
+});
+
+/**
+ * ADR 0005 §19a: one chunk of a running `device.exec` command's output, keyed by the
+ * originating request's frame id exactly as `progress` is, so a connection with more than one
+ * command in flight routes each chunk to its own call.
+ *
+ * `chunk` is text, not a line and not a frame: it is whatever the child wrote, decoded as
+ * UTF-8, forwarded the moment it arrives. Nothing joins, splits, or buffers it -- ADR §19e
+ * says output is streamed and never buffered, so there is no size cap and no last-line
+ * flush to wait for. A consumer that wants lines splits them itself; a consumer that wants
+ * bytes should know this is a lossy edge for binary output (a `simctl io ... screenshot`
+ * writes its PNG to a path on the worker, not to stdout), which is why the field is a string
+ * rather than base64 with an `encoding` discriminator: the common case stays free of a
+ * decode step, and the uncommon one is not what this operation is for.
+ */
+const outputPushSchema = z.object({
+  requestId: requestIdSchema,
+  stream: z.enum(["stdout", "stderr"]),
+  chunk: z.string(),
 });
 
 const leaseLostPushSchema = z.object({
@@ -53,6 +73,7 @@ const eventPushSchema = z.object({
 
 export const PUSH_SCHEMAS = {
   progress: progressPushSchema,
+  output: outputPushSchema,
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
   "device-recovered": deviceRecoveredPushSchema,

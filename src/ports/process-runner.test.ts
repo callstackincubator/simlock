@@ -1,6 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { NodeProcessRunner, ProcessSpawnError, ScriptedProcessRunner } from "./index.js";
+import {
+  exitCodeOf,
+  ExecOutputDeliveryStalledError,
+  NodeProcessRunner,
+  ProcessSpawnError,
+  ScriptedProcessRunner,
+} from "./index.js";
+
+/** Signal-0 liveness probe: asks the kernel whether the pid exists without signalling it. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function waitUntil(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for a process condition");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 describe("ScriptedProcessRunner", () => {
   it("returns the scripted result for a matching invocation", async () => {
@@ -68,6 +92,389 @@ describe("ScriptedProcessRunner", () => {
     }
 
     expect(lines).toEqual(["booting", "ready"]);
+  });
+});
+
+describe("ScriptedProcessRunner: spawnStreaming", () => {
+  it("replays scripted chunks in order across both streams", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        chunks: [
+          { chunk: "out-1", stream: "stdout" },
+          { chunk: "err-1", stream: "stderr" },
+          { chunk: "out-2", stream: "stdout" },
+        ],
+        match: { args: ["logcat"], command: "adb" },
+        result: { code: 4, stderr: "", stdout: "" },
+      },
+    ]);
+    const seen: string[] = [];
+
+    const handle = runner.spawnStreaming("adb", ["logcat"], {
+      onChunk: (stream, chunk) => {
+        seen.push(`${stream}:${chunk}`);
+      },
+    });
+
+    // The chunks are delivered one at a time, each awaited before the next -- so they land by
+    // the time the command reports its exit, which is the ordering every consumer relies on.
+    await expect(handle.wait()).resolves.toEqual({ code: 4, signal: null });
+    expect(seen).toEqual(["stdout:out-1", "stderr:err-1", "stdout:out-2"]);
+  });
+
+  it("waits for a slow consumer before delivering the next chunk", async () => {
+    // The scripted counterpart of pausing a real child's readable: a delivery that has not
+    // resolved is a consumer that cannot take more yet, and nothing may run ahead of it.
+    const runner = new ScriptedProcessRunner([
+      {
+        chunks: [
+          { chunk: "one", stream: "stdout" },
+          { chunk: "two", stream: "stdout" },
+        ],
+        match: { args: ["logcat"], command: "adb" },
+      },
+    ]);
+    const seen: string[] = [];
+    let releaseFirst!: () => void;
+    const firstDelivered = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const handle = runner.spawnStreaming("adb", ["logcat"], {
+      onChunk: (_stream, chunk) => {
+        seen.push(chunk);
+        return seen.length === 1 ? firstDelivered : undefined;
+      },
+    });
+    await Promise.resolve();
+    expect(seen).toEqual(["one"]);
+
+    releaseFirst();
+    await handle.wait();
+    expect(seen).toEqual(["one", "two"]);
+  });
+
+  it("models a child that ignores SIGTERM, so only SIGKILL settles it", async () => {
+    const runner = new ScriptedProcessRunner([
+      { hangs: true, ignoresSigterm: true, match: { args: ["logcat"], command: "adb" } },
+    ]);
+    const handle = runner.spawnStreaming("adb", ["logcat"], { onChunk: () => {} });
+    let settled = false;
+    void handle.wait().then(() => (settled = true));
+
+    handle.kill("SIGTERM");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    handle.kill("SIGKILL");
+    await expect(handle.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  });
+
+  it("records the invocation and settles a hanging command only when it is killed", async () => {
+    const runner = new ScriptedProcessRunner([
+      { hangs: true, match: { args: ["logcat"], command: "adb" } },
+    ]);
+
+    const handle = runner.spawnStreaming("adb", ["logcat"], {
+      env: { PATH: "/usr/bin" },
+      input: "y\n",
+      onChunk: () => {},
+    });
+    expect(runner.calls).toEqual([
+      { args: ["logcat"], command: "adb", options: { env: { PATH: "/usr/bin" }, input: "y\n" } },
+    ]);
+
+    const result = handle.wait();
+    handle.kill("SIGKILL");
+    await expect(result).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  });
+});
+
+describe("NodeProcessRunner: spawnStreaming", () => {
+  it("stops reading the child while a delivery is pending, and resumes once it resolves", async () => {
+    // ADR 0005 §19e end to end: "never buffered" only holds if the slow end can push back, so
+    // a delivery that has not resolved pauses the child's stream. The child below writes far
+    // more than a pipe buffer holds, so if this leaked the whole thing would arrive anyway.
+    const runner = new NodeProcessRunner();
+    const seen: string[] = [];
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      [
+        "-e",
+        "const line = 'x'.repeat(16 * 1024);" +
+          "for (let index = 0; index < 64; index += 1) process.stdout.write(line);",
+      ],
+      {
+        onChunk: (_stream, chunk) => {
+          seen.push(chunk);
+          return seen.length === 1 ? blocked : undefined;
+        },
+      },
+    );
+
+    // Long enough for an unpaused stream to have delivered the rest several times over.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(seen).toHaveLength(1);
+
+    release();
+    await handle.wait();
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.join("").length).toBe(64 * 16 * 1024);
+  });
+
+  it("does not settle wait() while a chunk's delivery is still pending past the exit grace window, even though a real pipe already delivered what the child wrote after it", async () => {
+    // The defect this guards: a paused readable never emits `close`, so the exit-to-close
+    // grace window used to treat "quiet because we paused it" the same as "quiet because the
+    // child is gone" and settled `wait()` while a chunk still sat undelivered. Round 4's test-
+    // title finding: the second chunk here ("before-exit-B") is *not* what proves the guard --
+    // a real OS pipe drains whatever it already held once the child exits, pause or not (see
+    // `NodeStreamingProcessHandle`'s own doc comment), so `seen` already holds both chunks well
+    // before `releaseFirst()` is ever called; the assertion below confirms exactly that. What
+    // the guard actually protects is `wait()` refusing to settle while the *first* chunk's
+    // delivery is still unresolved, regardless of what a chatty pipe delivered around it.
+    const runner = new NodeProcessRunner();
+    const seen: string[] = [];
+    let releaseFirst!: () => void;
+    const firstDelivery = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write('before-exit-A');" +
+          "setTimeout(() => { process.stdout.write('before-exit-B'); process.exit(0); }, 20);",
+      ],
+      {
+        onChunk: (_stream, chunk) => {
+          seen.push(chunk);
+          return seen.length === 1 ? firstDelivery : undefined;
+        },
+      },
+    );
+
+    // Comfortably past the child's own exit (20ms) and past the exit-to-close grace window
+    // (1s) the old code settled on, while the first chunk's delivery is deliberately still
+    // unresolved.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    // Both chunks already arrived -- the paused stream drained at EOF -- and `wait()` still
+    // has not settled, since the first delivery is what it is actually waiting on.
+    expect(seen.join("")).toBe("before-exit-Abefore-exit-B");
+    let settledEarly = false;
+    void handle.wait().then(() => {
+      settledEarly = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      settledEarly,
+      "wait() settled while a chunk's delivery was still pending -- its output, and anything the child wrote after it, may have been dropped silently",
+    ).toBe(false);
+
+    releaseFirst();
+    const result = await handle.wait();
+
+    expect(result.code).toBe(0);
+    expect(seen.join("")).toBe("before-exit-Abefore-exit-B");
+  }, 10_000);
+
+  it("rejects wait() instead of silently truncating when a chunk's delivery never resolves after exit", async () => {
+    // The deferral this handle allows for an outstanding delivery is not unbounded -- but
+    // reaching that bound with a delivery still stuck must not look like a clean exit. A
+    // caller that got `{ exitCode: 0 }` here would have no way to know the command's output
+    // was incomplete; a rejection is the visible failure ADR 0005 §19e's "streamed, never
+    // buffered" requires instead.
+    const runner = new NodeProcessRunner();
+    const seen: string[] = [];
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      ["-e", "process.stdout.write('stuck'); process.exit(0);"],
+      {
+        onChunk: (_stream, chunk) => {
+          seen.push(chunk);
+          return new Promise<void>(() => {
+            // Never resolves: models a consumer (an SSE write, a socket write) whose
+            // backpressure never clears.
+          });
+        },
+      },
+    );
+
+    await expect(handle.wait()).rejects.toThrow(ExecOutputDeliveryStalledError);
+    expect(seen).toEqual(["stuck"]);
+  }, 10_000);
+
+  it("forwards chunks as they arrive and reports the child's exit code", async () => {
+    const runner = new NodeProcessRunner();
+    const seen: Array<{ stream: string; chunk: string }> = [];
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      ["-e", "process.stdout.write('out'); process.stderr.write('err'); process.exitCode = 5;"],
+      {
+        onChunk: (stream, chunk) => {
+          seen.push({ chunk, stream });
+        },
+      },
+    );
+    const result = await handle.wait();
+
+    expect(result.code).toBe(5);
+    expect(seen.filter((entry) => entry.stream === "stdout").map((entry) => entry.chunk)).toEqual([
+      "out",
+    ]);
+    expect(seen.filter((entry) => entry.stream === "stderr").map((entry) => entry.chunk)).toEqual([
+      "err",
+    ]);
+  });
+
+  it("does not crash the process when onChunk throws synchronously -- treated as a failed delivery instead", async () => {
+    // `onChunk` is typed `void | Promise<void>`, but nothing stops a transport's own
+    // implementation from throwing synchronously. Called bare inside a `data` listener (round
+    // 4 hardening), that throw becomes an uncaughtException that takes the whole daemon down
+    // over one bad chunk -- latent today because both real callers (`daemon/server.ts`,
+    // `http/app.ts`) happen to be `async`, but nothing enforces that. A `process.on
+    // ("uncaughtException", ...)` listener is the only way to observe the pre-fix crash from
+    // inside a test without actually taking this process down, so this registers one, asserts
+    // it never fires, and removes it again in `finally` regardless of outcome.
+    const uncaught: unknown[] = [];
+    const onUncaughtException = (error: unknown): void => {
+      uncaught.push(error);
+    };
+    process.on("uncaughtException", onUncaughtException);
+
+    try {
+      const runner = new NodeProcessRunner();
+      const handle = runner.spawnStreaming(
+        process.execPath,
+        ["-e", "process.stdout.write('boom'); process.exit(0);"],
+        {
+          onChunk: () => {
+            throw new Error("onChunk threw synchronously");
+          },
+        },
+      );
+
+      const result = await handle.wait();
+      expect(result.code).toBe(0);
+    } finally {
+      process.off("uncaughtException", onUncaughtException);
+    }
+
+    expect(uncaught).toEqual([]);
+  }, 10_000);
+
+  it("writes `input` to the child's stdin and then closes it", async () => {
+    // ADR 0005 §19c's one-shot stdin: the child sees the string and then EOF, which is what
+    // lets a line-oriented command that reads stdin finish at all.
+    const runner = new NodeProcessRunner();
+    let stdout = "";
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      ["-e", "process.stdin.on('data', (d) => process.stdout.write(`saw:${d}`));"],
+      {
+        input: "hello",
+        onChunk: (_stream, chunk) => {
+          stdout += chunk;
+        },
+      },
+    );
+    await handle.wait();
+
+    expect(stdout).toBe("saw:hello");
+  });
+
+  it("kills the child's whole process group, so a signalled command reports one", async () => {
+    const runner = new NodeProcessRunner();
+
+    const handle = runner.spawnStreaming(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+      onChunk: () => {},
+    });
+    handle.kill("SIGKILL");
+
+    const result = await handle.wait();
+    expect(result.code).toBeNull();
+    expect(exitCodeOf(result)).toBeGreaterThan(128);
+  });
+
+  it("does not signal a process group once the child has already exited (round 4 hardening)", async () => {
+    // `killProcessTree` calls `process.kill(-pid, signal)` directly, bypassing
+    // `ChildProcess.kill`'s own "already exited" guard. `wait()` can be deferred up to
+    // `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` past the real `exit` event (a chatty grandchild, a
+    // stalled delivery), and Node frees a reaped pid for the kernel to recycle once it has
+    // been waited on -- so a timeout firing in that window used to risk signalling a process
+    // group the kernel had already handed to an unrelated process. Guarded on
+    // `child.exitCode`/`child.signalCode`, both still `null` only while genuinely running.
+    const runner = new NodeProcessRunner();
+    const killSpy = vi.spyOn(process, "kill");
+
+    try {
+      const handle = runner.spawnStreaming(process.execPath, ["-e", "process.exit(0)"], {
+        onChunk: () => {},
+      });
+      const result = await handle.wait();
+      expect(result.code).toBe(0);
+
+      handle.kill("SIGTERM");
+
+      expect(killSpy).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("kills the grandchildren too, because the signal goes to the process group", async () => {
+    // The reason `kill` signals `-pid` rather than the child: a tool that forks (an
+    // `adb`/`emulator` wrapper script, `simctl spawn`) leaves the work in a *grandchild*, and a
+    // timeout that reaped only the direct child would leave that running with nothing left to
+    // reap it. Verified against a real grandchild rather than asserted from the code: with the
+    // group kill removed, the grandchild below survives and this fails.
+    const runner = new NodeProcessRunner();
+    let stdout = "";
+
+    const handle = runner.spawnStreaming(
+      process.execPath,
+      [
+        "-e",
+        // The parent prints the grandchild's pid, then both sit still. `detached` on the
+        // grandchild puts it in this group but out of the parent's own reach, which is the
+        // case that matters.
+        "const { spawn } = require('node:child_process');" +
+          "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });" +
+          "process.stdout.write(String(child.pid));" +
+          "setInterval(() => {}, 1000);",
+      ],
+      {
+        onChunk: (_stream, chunk) => {
+          stdout += chunk;
+        },
+      },
+    );
+
+    await waitUntil(() => stdout !== "");
+    const grandchildPid = Number(stdout.trim());
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+
+    handle.kill("SIGKILL");
+    await handle.wait();
+    await waitUntil(() => !isAlive(grandchildPid));
+    expect(isAlive(grandchildPid)).toBe(false);
+  });
+
+  it("reports a spawn that never produced a process, like `spawn` does", async () => {
+    const runner = new NodeProcessRunner();
+
+    expect(() =>
+      runner.spawnStreaming("/nonexistent/simlock-adb", [], { onChunk: () => {} }),
+    ).toThrow(ProcessSpawnError);
+    await new Promise((resolve) => setImmediate(resolve));
   });
 });
 

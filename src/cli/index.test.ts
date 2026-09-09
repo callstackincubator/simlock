@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -49,6 +50,7 @@ import {
   fallbackRequesterId,
   parseDuration,
   readLogFile,
+  readPipedStdin,
   runCli,
   type CliEnvironment,
   type CliEnvironmentPorts,
@@ -366,6 +368,497 @@ describe("CLI: exit codes", () => {
       ),
     ).resolves.toBe(0);
     expect(seen).toEqual([{ args: ["--help"], tool: "adb" }]);
+  });
+
+  /**
+   * ADR 0005 §19c's other half. Same command, same refusals, same exit code -- the only thing
+   * that changes is where the process runs and how its output gets here. `runPassthrough` is
+   * deliberately wired in each of these: a remote invocation that quietly spawned locally
+   * would pass every assertion about output and exit code while doing the wrong thing.
+   *
+   * The switch is the daemon's own `mode` (§19c): a `gateway` owns no devices, so a command
+   * it resolved could not run here anyway. Nothing about the CLI's transport decides it.
+   */
+  describe("remote passthrough (ADR 0005 device.exec)", () => {
+    const gatewayStatus = {
+      ...EMPTY_STATUS,
+      daemon: { health: "running" as const, mode: "gateway" as const },
+    };
+    const ownLease = {
+      deviceId: "dev_1",
+      grantedAt: 0,
+      id: "lse_mine",
+      lastRenewedAt: 0,
+      ownerId: "some-other-principal",
+      requesterId: "test-requester",
+      ttlDeadline: 60_000,
+      ttlMs: 60_000,
+    };
+
+    it("runs the command on the daemon, prints the streamed output, and exits with its code", async () => {
+      const output = outputCapture();
+      const seen: unknown[] = [];
+      let ranLocally = false;
+
+      await expect(
+        runCli(
+          ["adb", "shell", "getprop"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: (input, options) => {
+                  seen.push(input);
+                  options?.onOutput?.({ chunk: "ro.build", stream: "stdout" });
+                  options?.onOutput?.({ chunk: "a warning\n", stream: "stderr" });
+                  options?.onOutput?.({ chunk: ".version=15\n", stream: "stdout" });
+                  return Promise.resolve({ exitCode: 9 });
+                },
+              }),
+            runPassthrough: async () => {
+              ranLocally = true;
+              return 0;
+            },
+          }),
+        ),
+      ).resolves.toBe(9);
+
+      expect(ranLocally).toBe(false);
+      // `requesterId` rides along because this connection resolved to the admin role, where
+      // the operation reads it (and requires it to match the lease). See the agent-role case
+      // below for the other half.
+      expect(seen).toEqual([
+        {
+          args: ["shell", "getprop"],
+          leaseId: "lse_mine",
+          requesterId: "test-requester",
+          tool: "adb",
+        },
+      ]);
+      // Chunks land on the stream they were written to, unjoined and in order -- a caller
+      // piping this sees what it would have seen locally.
+      expect(output.stdout).toBe("ro.build.version=15\n");
+      // The agent-fallback notice this fixture's credential-less connection writes is the only
+      // other thing on stderr; the command's own chunk lands there verbatim.
+      expect(output.stderr).toContain("a warning\n");
+    });
+
+    it("names the lease from the requester id rather than from a flag of its own", async () => {
+      // Every argument after the tool name belongs to the tool (docs/CLI.md), so identity is
+      // the only thing left to select a lease with -- and `--agent-id`/`SIMLOCK_AGENT_ID`
+      // already is that identity. A requester holding no lease is a usage error naming it.
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () =>
+                  Promise.resolve({
+                    leases: [{ ...ownLease, id: "lse_theirs", requesterId: "someone-else" }],
+                  }),
+              }),
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("test-requester") },
+      });
+    });
+
+    it("renders a refusal from the remote command as a USAGE error too", async () => {
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["simctl", "delete", "ABCD"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "PASSTHROUGH_REFUSED",
+                      "domain",
+                      "Refusing `simlock simctl delete`: use `simlock release` instead.",
+                      { tool: "simctl" },
+                    ),
+                  ),
+              }),
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("simlock release") },
+      });
+    });
+
+    it("exits 10 when the daemon killed the command for outrunning exec.timeoutMs", async () => {
+      // The exit code comes from `ERROR_TABLE`'s own column (ADR 0003 §7): 10, the same code
+      // the other "you ran out of time" outcome (`QUEUE_TIMEOUT`) uses, rather than the
+      // generic 1 a command that merely failed would get.
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "logcat"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "EXEC_TIMEOUT",
+                      "domain",
+                      "`adb logcat` exceeded exec.timeoutMs (600000ms) and was killed",
+                      {},
+                    ),
+                  ),
+              }),
+          }),
+        ),
+      ).resolves.toBe(10);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "EXEC_TIMEOUT", message: expect.stringContaining("exec.timeoutMs") },
+      });
+    });
+
+    it("takes `--lease <id>` out of the arguments and runs against that lease", async () => {
+      // The flag exists only on this path, so it is stripped here rather than parsed with the
+      // CLI's own flags: locally every argument after the tool name belongs to the tool.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "lse_named", "shell", "getprop"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.reject(new Error("must not need the lease list")),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        {
+          args: ["shell", "getprop"],
+          leaseId: "lse_named",
+          requesterId: "test-requester",
+          tool: "adb",
+        },
+      ]);
+    });
+
+    it("sends whatever readStdin resolves with as the command's one-shot stdin", async () => {
+      // `readStdin` is a `CliEnvironmentPorts` seam this test injects directly -- it exercises
+      // the wiring from that port's result to `device.exec`'s `stdin`, not the default
+      // `readPipedStdin` implementation that reads a real pipe to EOF; that one is tested on
+      // its own below, since a fake here would not exercise it at all.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "shell", "cat"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+            readStdin: async () => "piped payload\n",
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        {
+          args: ["shell", "cat"],
+          leaseId: "lse_mine",
+          requesterId: "test-requester",
+          stdin: "piped payload\n",
+          tool: "adb",
+        },
+      ]);
+    });
+
+    it("sends no requesterId when the connection fell back to the agent role", async () => {
+      // An agent session is gated on the lease it owns and its `requesterId` is ignored
+      // entirely, so sending one would be noise that reads like authorization.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                role: "agent",
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", tool: "adb" }]);
+    });
+
+    it("spawns locally against a worker, accepting and ignoring --lease", async () => {
+      // The other half of the same switch, and the reason `--lease` is accepted on both: one
+      // command line has to work against either kind of daemon (docs/CLI.md). A worker takes
+      // the flag, drops it, and passes the rest to the tool untouched.
+      const output = outputCapture();
+      const ran: unknown[] = [];
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "lse_ignored", "shell", "getprop"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                exec: () => Promise.reject(new Error("must not exec remotely")),
+                resolvePassthrough: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ args: ["-P", "5038"], command: "adb", env: {} });
+                },
+              }),
+            runPassthrough: async (command) => {
+              ran.push(command);
+              return 0;
+            },
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([{ args: ["shell", "getprop"], tool: "adb" }]);
+      expect(ran).toHaveLength(1);
+    });
+
+    it("relabels an unknown passthrough tool as USAGE, like a refusal", async () => {
+      // ADR 0005 §19c: the CLI keeps no copy of the refusal list and relabels whatever the
+      // daemon answers. `UNKNOWN_PASSTHROUGH_TOOL` is the other half of that answer, and it
+      // has to read the same as a refused verb does -- exit 2, one `USAGE` line.
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "UNKNOWN_PASSTHROUGH_TOOL",
+                      "domain",
+                      "No driver provides a adb passthrough",
+                      { tool: "adb" },
+                    ),
+                  ),
+              }),
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("No driver provides") },
+      });
+    });
+
+    it("relabels the local path's unknown tool the same way", async () => {
+      const output = outputCapture();
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                resolvePassthrough: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "UNKNOWN_PASSTHROUGH_TOOL",
+                      "domain",
+                      "No driver provides a adb passthrough",
+                      { tool: "adb" },
+                    ),
+                  ),
+              }),
+            runPassthrough: async () => 0,
+          }),
+        ),
+      ).resolves.toBe(2);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("No driver provides") },
+      });
+    });
+
+    it("takes --lease as the last argument, and refuses an empty one", async () => {
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "lse_only"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { args: [], leaseId: "lse_only", requesterId: "test-requester", tool: "adb" },
+      ]);
+
+      const missingValue = outputCapture();
+      await expect(
+        runCli(
+          ["adb", "--lease"],
+          missingValue.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(gatewayStatus) }),
+          }),
+        ),
+      ).resolves.toBe(2);
+
+      const emptyValue = outputCapture();
+      await expect(
+        runCli(
+          ["adb", "--lease=", "devices"],
+          emptyValue.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({ getStatus: () => Promise.resolve(gatewayStatus) }),
+          }),
+        ),
+      ).resolves.toBe(2);
+    });
+
+    it("fails a local passthrough with the status.get error when the daemon cannot answer", async () => {
+      // The switch reads `mode` off `status.get`, so an unreachable daemon fails there rather
+      // than at the passthrough -- and the CLI reports that call's own error rather than
+      // dressing it up as a passthrough failure.
+      const output = outputCapture();
+      let ranLocally = false;
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () =>
+                  Promise.reject(
+                    new SimlockError(
+                      "DAEMON_CONNECTION_LOST",
+                      "transport",
+                      "Daemon connection closed",
+                      {},
+                    ),
+                  ),
+              }),
+            runPassthrough: async () => {
+              ranLocally = true;
+              return 0;
+            },
+          }),
+        ),
+      ).resolves.toBe(1);
+      expect(ranLocally).toBe(false);
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "DAEMON_CONNECTION_LOST", message: "Daemon connection closed" },
+      });
+    });
+
+    it("uses an agent connection's own lease list without filtering it by requester", async () => {
+      // `lease.list` already answers per role: an agent sees only what it owns. Filtering that
+      // by `requesterId` as well would drop a lease it demonstrably owns whenever the two
+      // differ -- an `--agent-id` used on the lease but not on this invocation.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "devices"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                role: "agent",
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () =>
+                  Promise.resolve({
+                    leases: [{ ...ownLease, id: "lse_owned", requesterId: "another-agent-id" }],
+                  }),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", tool: "adb" }]);
+    });
+
+    it("stops scanning for --lease at the tool's own first argument", async () => {
+      // Everything from the tool's subcommand onwards is the tool's, so a `--lease` there is
+      // an argument to *it* -- typed text, a filter, an operand -- and travels through.
+      const output = outputCapture();
+      const seen: unknown[] = [];
+
+      await expect(
+        runCli(
+          ["adb", "--lease", "lse_mine", "shell", "input", "text", "--lease"],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.reject(new Error("must not need the lease list")),
+                exec: (input) => {
+                  seen.push(input);
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        {
+          args: ["shell", "input", "text", "--lease"],
+          leaseId: "lse_mine",
+          requesterId: "test-requester",
+          tool: "adb",
+        },
+      ]);
+    });
   });
 
   it("lists both tool passthroughs in root help", async () => {
@@ -2127,6 +2620,51 @@ describe("CLI: pure helpers", () => {
   });
 });
 
+// Round 4, test-title finding 3: the "remote passthrough" suite's own stdin test injects
+// `readStdin` directly and never exercises this function at all -- documented in
+// `docs/known-pitfalls.md` as an unbounded read, and until now entirely untested.
+describe("readPipedStdin", () => {
+  function fakeStdin(chunks: readonly string[], isTTY: boolean): typeof process.stdin {
+    const stream = Readable.from(chunks);
+    return Object.assign(stream, { isTTY }) as unknown as typeof process.stdin;
+  }
+
+  it("returns undefined without reading anything when stdin is a terminal", async () => {
+    const stdin = fakeStdin(["should never be read"], true);
+    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
+
+    try {
+      await expect(readPipedStdin()).resolves.toBeUndefined();
+    } finally {
+      stdinGetter.mockRestore();
+    }
+  });
+
+  it("reads a piped stdin to EOF, concatenating every chunk in order", async () => {
+    const stdin = fakeStdin(["piped ", "pay", "load\n"], false);
+    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
+
+    try {
+      await expect(readPipedStdin()).resolves.toBe("piped payload\n");
+    } finally {
+      stdinGetter.mockRestore();
+    }
+  });
+
+  it("returns an empty string, not undefined, for a piped stdin that carries nothing", async () => {
+    // `undefined` means "a terminal, do not read"; an empty pipe is a real EOF and a real
+    // (empty) answer -- the two must stay distinguishable to a caller.
+    const stdin = fakeStdin([], false);
+    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
+
+    try {
+      await expect(readPipedStdin()).resolves.toBe("");
+    } finally {
+      stdinGetter.mockRestore();
+    }
+  });
+});
+
 // ---- test doubles -----------------------------------------------------------------------------
 
 function simlockError(code: AnySimlockError["code"]): AnySimlockError {
@@ -2160,26 +2698,29 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
   ) as unknown as AnySimlockError;
 }
 
-function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
-  const emptyStatus: StatusGetOutput = {
-    devices: [],
-    leases: [],
-    capacity: {
-      ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
-      android: {
-        limit: 1,
-        running: 0,
-        maxRunning: 1,
-        reserved: 0,
-        overLimit: false,
-        warm: 0,
-        used: 0,
-      },
-      global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
+/** Hoisted out of `fakeClient` so a test can hand back the same status with a different
+ * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
+const EMPTY_STATUS: StatusGetOutput = {
+  devices: [],
+  leases: [],
+  capacity: {
+    ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
+    android: {
+      limit: 1,
+      running: 0,
+      maxRunning: 1,
+      reserved: 0,
+      overLimit: false,
+      warm: 0,
+      used: 0,
     },
-    health: "running",
-    queueDepth: 0,
-  };
+    global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
+  },
+  daemon: { health: "running", mode: "worker" },
+  queueDepth: 0,
+};
+
+function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
   const emptyDoctor: DoctorReport = { findings: [] };
   const emptyLeaseList: LeaseListOutput = { leases: [] };
@@ -2214,9 +2755,10 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     role: "admin",
     daemonVersion: "test",
     getCatalog: () => Promise.resolve(emptyCatalog),
-    getStatus: () => Promise.resolve(emptyStatus),
+    getStatus: () => Promise.resolve(EMPTY_STATUS),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
+    exec: () => Promise.resolve({ exitCode: 0 }),
     cancelLease: () => Promise.resolve({ result: "not-found" }),
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
@@ -2497,6 +3039,8 @@ async function startInMemoryDaemon(options: {
 
 function testConfig(): Config {
   return {
+    mode: "worker",
+    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     drivers: {},
     eventBuffer: { capacity: 100 },

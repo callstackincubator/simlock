@@ -434,11 +434,14 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
   ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
 - `runtime delete` — it deletes a runtime shared with Xcode, and Simlock will
   not download one back. Delete it through Xcode if that is what you mean.
-- `--set` and `--profiles`, in any spelling — `simlock simctl` supplies the
-  device set itself. A caller-supplied one would point simctl outside what
-  Simlock manages, and (because their value is a separate argument) would let
-  a refused verb read as an ordinary operand. Run `xcrun simctl` directly if
-  you mean to leave Simlock's set.
+- `--set` and `--profiles`, wherever they appear *before* the subcommand and
+  however they are spelled (`-set`, `--set <path>`, `--set=<path>`) —
+  `simlock simctl` supplies the device set itself. A caller-supplied one would
+  point simctl outside what Simlock manages, and (because their value is a
+  separate argument) would let a refused verb read as an ordinary operand. Run
+  `xcrun simctl` directly if you mean to leave Simlock's set. Past the
+  subcommand they are that subcommand's own operands and are left alone —
+  `simlock simctl spawn booted foo --set x` is passing `--set x` to `foo`.
 
 Against a **gateway**, the device is on another machine, so the command runs
 there instead — see [Against a gateway](#against-a-gateway). The refusals
@@ -465,8 +468,8 @@ simlock adb logcat -d
 ```
 
 Refused, all exit 2 with `USAGE` and a message naming what to run instead.
-Each is matched anywhere in the arguments, so `-s <serial> emu kill` and
-`-P 1 kill-server` are caught too:
+The refused *verbs* are matched anywhere in the arguments, so
+`-s <serial> emu kill` is caught too:
 
 - `kill-server` — it would detach every leased emulator at once. (Simlock's
   server rejects `kill-server` outright in any case.)
@@ -480,6 +483,32 @@ Use `simlock release` (which reclaims the device for you) or `simlock cleanup`
 instead. As with `simlock simctl`, against a gateway the command runs on the
 worker that owns the device (see [Against a gateway](#against-a-gateway)) and
 the refusals above hold on both ends.
+Globals — the arguments before the subcommand — are refused by *position*
+and by an **allow list**, rather than anywhere on the line or by naming the
+ones known to be dangerous:
+
+- Only `-s`, `-t`, `-d`, and `-e` (in every spelling adb accepts, including
+  the attached forms `-t123`, and including one that follows another
+  global's value, e.g. `-s emulator-5554 -t 1 shell …`) are let through —
+  they select a device inside the containment Simlock already established
+  rather than escaping it (see [known-pitfalls.md](known-pitfalls.md)).
+  `--version` and `--help` are also let through, since adb answers those on
+  its own before it ever looks for a subcommand.
+- Everything else positioned there is refused, whether or not it is a flag
+  this driver has a name for: `-P`, `-H`, `-L`, `--server-port` (including
+  the attached forms `-P5037` and `-Hhost`) are refused because `simlock adb`
+  supplies the server itself and `adb` takes the *last* one on the line, so a
+  caller-supplied one would silently win and point the command at a server
+  that cannot see Simlock's devices (or at one Simlock must not touch); any
+  other global — known adb globals this driver has no reason to allow
+  (`-a`, `--exit-on-write-error`, `--one-device`, the undocumented
+  `--reply-fd`) as well as any global a future adb release adds — is refused
+  the same way, on the principle that an argument whose effect on the command
+  this driver cannot vouch for is refused rather than assumed harmless.
+
+From the subcommand onwards those spellings are operands and pass through:
+`simlock adb shell echo -Please` echoes a word. Run `adb` directly if you
+mean to leave Simlock's server.
 
 ## `simlock release <lease-id> | --all`
 

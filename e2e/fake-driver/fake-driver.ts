@@ -15,6 +15,7 @@ import {
   type ObservedMark,
   type ObservedRunState,
   type PassthroughCommand,
+  type PassthroughContext,
   PassthroughRefusedError,
 } from "../../dist/core/driver.js";
 import type { DeviceSpec, Platform } from "../../dist/core/domain.js";
@@ -116,17 +117,45 @@ const PASSTHROUGH_REFUSALS: Readonly<
  * was handed and exits with `SIMLOCK_FAKE_PASSTHROUGH_EXIT`. Deliberately reads that from
  * its own environment rather than from the script file, so a test controls the exit code
  * through the CLI invocation it is already making and this stays synchronous.
+ *
+ * It also answers two flags of its own -- `--fake-exec-stderr=<text>` and
+ * `--fake-exec-exit=<n>` -- because `device.exec` (ADR 0005 §19a) runs this program in the
+ * *daemon's* process, where a per-invocation environment variable cannot reach it: an HTTP
+ * caller has only the argument list. They are the minimum needed to observe the two things a
+ * streamed exec must get right and a local passthrough never showed: output on the second
+ * stream, and an exit code that is not zero.
  */
 const PASSTHROUGH_PROGRAM =
-  "process.stdout.write(JSON.stringify({" +
-  "argv: process.argv.slice(1)," +
-  // Echoed back so a flow can prove the driver-built environment reached the tool's own
-  // process, not merely that the daemon returned it in the resolved command. That is the
-  // half of ADR 0001 decision 7 the wrapper exists for: handing back the scoping that
-  // containment removed.
+  "const argv = process.argv.slice(1);" +
+  "const flag = (name) => {" +
+  "const found = argv.find((value) => value.startsWith(name + '='));" +
+  "return found === undefined ? undefined : found.slice(name.length + 1);" +
+  "};" +
+  "const stderrText = flag('--fake-exec-stderr');" +
+  "if (stderrText !== undefined) process.stderr.write(stderrText);" +
+  // `device.exec`'s `stdin` is a one-shot string written to the process and then closed, which
+  // is only observable from the far end if the tool reads it back out. Opt-in, so every other
+  // flow's command still exits without waiting on a stdin nobody wrote to.
+  "const echoStdin = argv.includes('--fake-exec-echo-stdin');" +
+  "const report = (stdin) => process.stdout.write(JSON.stringify({" +
+  "argv," +
   "platform: process.env.SIMLOCK_FAKE_PASSTHROUGH_PLATFORM ?? null," +
+  "...(stdin === undefined ? {} : { stdin })," +
   "}));" +
-  "process.exit(Number(process.env.SIMLOCK_FAKE_PASSTHROUGH_EXIT ?? 0));";
+  "if (echoStdin) {" +
+  "let buffered = '';" +
+  "process.stdin.setEncoding('utf8');" +
+  "process.stdin.on('data', (chunk) => { buffered += chunk; });" +
+  "process.stdin.on('end', () => report(buffered));" +
+  // `report` echoes `platform` back so a flow can prove the driver-built environment reached
+  // the tool's own process, not merely that the daemon returned it in the resolved command --
+  // the half of ADR 0001 decision 7 the wrapper exists for: handing back the scoping that
+  // containment removed.
+  "} else report(undefined);" +
+  // `exitCode` rather than `exit()`: over a pipe (which is how `device.exec` reads it, unlike
+  // the CLI's inherited stdio) an immediate `exit()` can truncate a write that has not
+  // flushed. Setting the code lets the process end once its streams have drained.
+  "process.exitCode = Number(flag('--fake-exec-exit') ?? process.env.SIMLOCK_FAKE_PASSTHROUGH_EXIT ?? 0);";
 
 /**
  * Driver implementation for the daemon-spawned process the e2e suite drives out of
@@ -315,7 +344,17 @@ export class OutOfProcessFakeDriver implements Driver {
    * behaviour under test, and a rule that depended on a prior script read would not be
    * exercised by the very first command a test runs.
    */
-  passthrough(args: readonly string[]): PassthroughCommand {
+  passthrough(args: readonly string[], context?: PassthroughContext): PassthroughCommand {
+    // Mirrors the Android driver's no-terminal rule (ADR 0005 §19c) in the smallest form that
+    // proves the fact travels: the daemon tells the driver there is no terminal, and the
+    // driver -- not the daemon -- decides what that rules out. Like the refusal lists above,
+    // this is a mirror and never evidence for the real driver's own rule.
+    if (context?.hasTerminal === false && this.platform === "android" && isBareShell(args)) {
+      throw new PassthroughRefusedError(
+        this.passthroughTool,
+        "Refusing `simlock adb shell` with no command: an interactive shell needs a terminal.",
+      );
+    }
     const refused = PASSTHROUGH_REFUSALS[this.platform](args);
     if (refused !== undefined) {
       throw new PassthroughRefusedError(
@@ -451,6 +490,31 @@ function toError(platform: Platform, spec: FakeDriverErrorSpec): Error {
     platform: Platform,
   ) => Error;
   return factory(spec, platform);
+}
+
+/**
+ * Whether `args` is the bare interactive `adb shell` -- `shell` as the *subcommand*, with no
+ * command after it. `args.at(-1) === "shell"` is not that test: it also matches
+ * `adb shell input text shell` and `adb push ./x shell`, where `shell` is an operand, which is
+ * the defect round 4 fixed in the real Android driver (`walkGlobals`/`isBareShell`). A mirror
+ * that mirrors the bug is worse than no mirror, because the e2e's only refusal assertion runs
+ * through this driver.
+ *
+ * Deliberately smaller than the real grammar: it skips flags and the value of the few globals
+ * that take one, which is all the fleet e2e ever passes. It is still never evidence for the
+ * real driver's own rule -- see the note at the call site.
+ */
+const VALUE_TAKING_GLOBALS = ["-s", "-t", "-H", "-P", "-L", "--server-port"];
+
+function isBareShell(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index] as string;
+    if (!argument.startsWith("-")) {
+      return argument === "shell" && index === args.length - 1;
+    }
+    if (VALUE_TAKING_GLOBALS.includes(argument)) index += 1;
+  }
+  return false;
 }
 
 function newestVersion(versions: readonly string[]): string | undefined {

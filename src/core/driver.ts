@@ -252,8 +252,14 @@ export interface Driver {
    * this driver will not proxy. Both halves are the driver's business: only it knows
    * which flag points its tool at the root it owns, and only it knows which verbs would
    * change a device's lifecycle behind the registry's back (ADR 0001, decision 7).
+   *
+   * `context` says what the caller can offer the command, which is the one thing about the
+   * *caller* a driver's refusal list legitimately depends on: `device.exec` runs the command
+   * on the daemon's machine with no pseudo-terminal (ADR 0005 §19c), so a driver may refuse
+   * something there that it allows for a local `simlock <tool>` invocation with a terminal
+   * behind it. Omitted means a terminal is available -- today's local path, unchanged.
    */
-  passthrough?(args: readonly string[]): PassthroughCommand;
+  passthrough?(args: readonly string[], context?: PassthroughContext): PassthroughCommand;
   /**
    * Looks for a registry device in the location this platform used before Simlock owned a
    * root, and reports it without touching it. Optional: a driver with no pre-root history
@@ -298,6 +304,15 @@ export interface PassthroughCommand {
   readonly command: string;
   readonly args: readonly string[];
   readonly env: Readonly<Record<string, string>>;
+}
+
+/**
+ * What the caller can give the command it is asking for. One field today: whether the process
+ * that runs it has a terminal. A driver reads it to refuse what cannot work without one (a
+ * bare `adb shell`), and nothing else -- it is not a general-purpose "who is asking".
+ */
+export interface PassthroughContext {
+  readonly hasTerminal: boolean;
 }
 
 /**

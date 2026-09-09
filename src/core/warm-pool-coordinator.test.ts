@@ -15,6 +15,8 @@ import { WarmPoolCoordinator, type WarmPoolQuarantine } from "./warm-pool-coordi
 const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 const config: Config = {
+  mode: "worker",
+  exec: { timeoutMs: 600_000 },
   diskPressure: { freeBytesThreshold: 10 * gibibyte },
   drivers: {},
   eventBuffer: { capacity: 100 },

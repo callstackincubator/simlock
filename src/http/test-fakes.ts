@@ -10,6 +10,7 @@ const gibibyte = 1024 * 1024 * 1024;
 /** Shared config fixture; every field `Config` currently declares (see `src/core/config.ts`). */
 export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
   return {
+    mode: "worker",
     drivers: {},
     capacity: {
       strategy: "resource",
@@ -22,6 +23,7 @@ export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
+    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
