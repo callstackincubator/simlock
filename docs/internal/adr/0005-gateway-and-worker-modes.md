@@ -29,7 +29,7 @@ to. To a client, a gateway looks like a single, larger simlock.
 Simlock coordinates agents on **one** machine. A team that owns several Macs
 (each with its own simlock daemon) has to hand each agent a specific host,
 watch each host separately, and rebalance by hand when one fills up while
-another sits idle. `docs/IDEAS.md` records "cross-machine coordination" as
+another sits idle. `docs/internal/IDEAS.md` records "cross-machine coordination" as
 deliberately out of scope for v1; the HTTP API (`docs/HTTP-API.md`, "Not
 implemented") reserved room for "multi-host brokering" without designing it.
 The web console (#88) is explicitly one console per daemon for the same
@@ -595,7 +595,7 @@ drive the device it leased.
    workers it knows and which are drained — because drain is an operator's
    intent and not an observation; nothing about a *lease* is written there.
 6. **Capacity and safety stay on the worker.** The gateway never touches a
-   device, so every rule in `docs/agent-rules/safety.md` keeps holding by
+   device, so every rule in `docs/internal/agent-rules/safety.md` keeps holding by
    construction: registry-only destruction, never touching a leased device,
    no implicit downloads (the gateway forwards `allowDownload` and the worker
    clamps it through its own policy).
@@ -659,7 +659,7 @@ drive the device it leased.
   to configure — so unlike two *workers* on one machine there is no
   `drivers.android.adbServerPort` to split.
 - `docs/HTTP-API.md` gains the `/v1/workers` routes and the uplink endpoint,
-  and drops "multi-host brokering" from "Not implemented"; `docs/IDEAS.md`
+  and drops "multi-host brokering" from "Not implemented"; `docs/internal/IDEAS.md`
   drops "Cross-machine coordination"; #88 drops its "one console per daemon"
   non-goal.
 - Sequencing, one PR each, each leaving the tree working, after ADR 0004

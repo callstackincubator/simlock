@@ -62,9 +62,9 @@ surfaced by `lease renew`) falls back to exit 1; the structured stderr line
 still reports the specific code — a renew by a running `simlock lease` is the
 exception, and exits `14`.
 
-The five ADR 0005 codes are placed on existing numbers rather than new ones,
-and the numbers are fixed by the contract's error table in the PRs that
-implement them ([ADR 0005](adr/0005-gateway-and-worker-modes.md)):
+The five gateway-mode codes are placed on existing numbers rather than new
+ones, and the numbers are fixed by the contract's error table in the PRs that
+implement them:
 
 - `WORKER_UNREACHABLE` is `kind: "transport"`, the fleet's version of
   `DAEMON_CONNECTION_LOST`: the thing you were talking to went away. Both
@@ -75,8 +75,7 @@ implement them ([ADR 0005](adr/0005-gateway-and-worker-modes.md)):
   fix is a different command, or the same command against a different daemon.
   `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
   `nuke`, `cleanup`, `doctor`, and `driver.passthrough` stay per-worker
-  operations rather than waiting on some later fleet-wide version (ADR 0005
-  §34).
+  operations rather than waiting on some later fleet-wide version.
 - `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
   thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
   that is what it is: a worker id the gateway has no record of.
@@ -127,8 +126,7 @@ simlock lease --platform <ios|android> --device <model> [--os <version>]
               [--bind-pid <pid>]
 ```
 
-There is only one kind of lease ([ADR
-0004](adr/0004-ttl-first-leases-on-every-transport.md)): every lease has a
+There is only one kind of lease: every lease has a
 TTL and lives until it expires, is renewed, or is released. `--detach`
 changes what *this process* does after the grant, not what the daemon
 granted.
@@ -170,8 +168,7 @@ granted.
   `component.install-started` / `component.installed` /
   `component.install-failed` on the event bus (`simlock events --follow`);
   see [EVENTS.md](EVENTS.md#components). The requester's own progress stream
-  (below) does not yet reflect an in-flight download — see
-  [known-pitfalls.md](known-pitfalls.md).
+  (below) does not yet reflect an in-flight download.
 - `--full` — opt this lease out of iOS slim mode (see
   [CONFIGURATION.md](CONFIGURATION.md) for what slim mode disables). Only
   meaningful when `ios.slim.enabled` is on; ignored otherwise, and ignored
@@ -200,7 +197,7 @@ error message names the existing lease id to release first.
 agent. As soon as the device is ready, one JSON line is printed on stdout — the
 contract's `lease.request` output (`LeaseGrant`: `device`, `lease`, `timing`)
 serialized as-is, plus the one field the CLI adds on top, the connection's
-resolved `role` (ADR 0003 §5):
+resolved `role`:
 
 The fields you usually care about, from that same line:
 
@@ -245,11 +242,10 @@ run it: that lease is not released, and its device stays leased until
 `ttlDeadline` — at most the lease's own TTL after its last renew:
 `lease.defaultTtlMs` unless the request asked for more, never more than
 `lease.maxTtlMs`. If that matters, lower `lease.defaultTtlMs` or pass a
-shorter `--ttl`; see
-[known-pitfalls.md](known-pitfalls.md#a-sigkilled-lease-holder-keeps-its-device-until-the-ttl-expires).
+shorter `--ttl`.
 
 **If the connection dies, the lease outlives it but this process does not.**
-The CLI never reconnects (ADR 0003 §10), so a daemon that stops, crashes, or
+The CLI never reconnects, so a daemon that stops, crashes, or
 has its socket killed leaves the holder unable to renew or release. It writes
 one error line naming the lease and its deadline, and exits `1`:
 
@@ -294,7 +290,7 @@ reclaiming work is reported separately:
 ```
 
 `push` is the one field the CLI adds to identify the line's kind; everything
-else is the contract's `LeaseProgress` push, serialized as-is (ADR 0003 §11).
+else is the contract's `LeaseProgress` push, serialized as-is.
 
 `reclaiming` follows `queued` when the device the request is waiting on is
 being purged for its previous holder: the position alone would not say that
@@ -333,8 +329,8 @@ a signal, and it does not try to release a lease the daemon has already taken
 back. `lease-lost` is a push from a live daemon connection — a connection
 that simply died is exit `1` and a `DAEMON_CONNECTION_LOST` line instead, and
 leaves the lease standing. The `reason` is whatever ended it — `device-lost`
-here, but equally `expired` or `killed`. See [known-pitfalls.md](known-pitfalls.md)
-for what a reboot cannot bring back — anything the agent had running inside
+here, but equally `expired` or `killed`. A reboot cannot bring back
+anything the agent had running inside
 the device (a launched app, `log stream`, an Appium/XCUITest session, a port
 forward) is gone whether or not recovery succeeds.
 
@@ -448,7 +444,7 @@ there instead — see [Against a gateway](#against-a-gateway). The refusals
 above are unchanged, and where they are enforced does not change either:
 **the daemon refuses, the CLI reports.** The CLI holds no copy of the refusal
 list in either direction — frontends render the contract, and the list lives
-with the driver that owns the device (ADR 0003 §11). Locally that means
+with the driver that owns the device. Locally that means
 `driver.passthrough` refuses and the CLI relabels the answer as `USAGE`
 (exit 2); through a gateway it sends `device.exec` and the worker refuses
 with `PASSTHROUGH_REFUSED`, or `UNKNOWN_PASSTHROUGH_TOOL` for a tool it does
@@ -491,7 +487,7 @@ ones known to be dangerous:
   the attached forms `-t123`, and including one that follows another
   global's value, e.g. `-s emulator-5554 -t 1 shell …`) are let through —
   they select a device inside the containment Simlock already established
-  rather than escaping it (see [known-pitfalls.md](known-pitfalls.md)).
+  rather than escaping it.
   `--version` and `--help` are also let through, since adb answers those on
   its own before it ever looks for a subcommand.
 - Everything else positioned there is refused, whether or not it is a flag
@@ -536,7 +532,7 @@ startup to recover.
 ## Against a gateway
 
 A **gateway** is a simlock daemon that owns no devices and fronts the workers
-that joined it ([ADR 0005](adr/0005-gateway-and-worker-modes.md); see
+that joined it (see
 [CONFIGURATION.md](CONFIGURATION.md#modes-gateway-and-worker) for `mode` and
 the keys each side reads). Point the CLI at one the way you point it at any
 daemon: `SIMLOCK_HOME` selects the data directory, and the daemon socket in
@@ -574,7 +570,7 @@ with no gateway-side state to lose), but it is **opaque** — do not parse it.
 
 **`lease renew`, `release`, and lease reads are forwarded** to the worker
 that owns the lease, and the `ttlDeadline` you see is that worker's own.
-Leases are TTL-first on every transport (ADR 0004), so a gateway emulates
+Leases are TTL-first on every transport, so a gateway emulates
 nothing: a `simlock lease` left running renews on its timer as always, and a
 client that stops renewing loses the lease on the worker's clock whether or
 not a gateway is in the path.
@@ -667,7 +663,7 @@ reaches the same operation as `POST /v1/leases/{id}/exec`; see
 Files do not travel with the command: `simctl install <path>` and `adb
 install <apk>` resolve their path on the **worker's** filesystem, so the
 artifact has to be there already (a shared volume, a CI checkout on that
-machine). See [known-pitfalls.md](known-pitfalls.md).
+machine).
 
 **Three commands refuse outright**, with `UNSUPPORTED_IN_GATEWAY_MODE` (exit
 2): `simlock nuke`, `simlock cleanup`, and `simlock doctor`. Each acts on one
@@ -726,7 +722,7 @@ simlock worker remove <worker-id>
 `downloads.policy` is that worker's own effective policy, read once with
 `config.get` when its uplink connects — routing needs it to know whether a
 machine may install a missing runtime before sending it a request that needs
-one. `protocol` is the range that worker negotiated; ADR 0005 moves the wire
+one. `protocol` is the range that worker negotiated; the wire moves
 to `{min: 5, max: 5}` with no shim, so a worker older than it does not
 overlap and shows as `incompatible`. Worker ids are UUIDs — the examples here
 abbreviate them to their first segment.
@@ -874,7 +870,7 @@ renewed), and queue depth. `--json` for the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
 
-Against a **gateway** (`config.mode: "gateway"`, ADR 0005) the same command
+Against a **gateway** (`config.mode: "gateway"`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads
 `running (gateway)`, capacity is summed across the connected workers, one line
 per worker precedes the devices, and every device and lease names the worker it
@@ -958,7 +954,7 @@ after an upgrade.
 Before the first device of a purge is destroyed, each root the purge is about
 to reach into is re-validated — ownership is proven at startup and then trusted
 for the life of the daemon, which is fine for reporting and not fine for
-destroying (see [known-pitfalls.md](known-pitfalls.md)). A root that no longer
+destroying. A root that no longer
 proves ownership abandons the whole purge and leaves every finding standing. So
 does a device that could not be destroyed: it stays reported, and the rest of
 the run continues.
@@ -1031,7 +1027,7 @@ connected are not backfilled.
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
-`config.mode` selects — a worker (the default) or a gateway (ADR 0005) — and
+`config.mode` selects — a worker (the default) or a gateway — and
 `status` reports it, both in the human line (`Daemon: running (gateway)`) and
 as `daemon.mode` under `--json`. `stop` does not touch leases: they persist,
 and the next daemon restores each one's TTL timer from its deadline. What a
@@ -1070,7 +1066,7 @@ shows the current file with the immediately preceding one prepended.
 
 ## `simlock worker <list|drain|undrain|remove>`
 
-The operator's view of a fleet (ADR 0005). Every subcommand is an admin
+The operator's view of a fleet. Every subcommand is an admin
 operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
 (exit 2), because a worker has no worker registry to answer from.
 
@@ -1177,7 +1173,7 @@ Three roles:
 - `operator` — everything an agent can do, plus the admin-only routes; also
   accepted as the admin credential at `hello` (see
   [admin credential resolution](#admin-credential-resolution)).
-- `worker` — a **join token** (ADR 0005): minted on a *gateway* and put in a
+- `worker` — a **join token**: minted on a *gateway* and put in a
   worker's `gateway.token`. It authorizes exactly one thing, opening an uplink
   at `GET /v1/uplink`, and is `403` on every other `/v1` route; conversely an
   `agent` or `operator` token is `403` at `/v1/uplink`. Revoking one closes the
@@ -1203,8 +1199,7 @@ the secret and its hash. `revoke <token-id>` prints `{"revoked":true}` or
 ### The `worker` role: join tokens
 
 `--role worker` mints a **join token**: the credential a worker presents when
-it opens its uplink to a gateway ([ADR
-0005](adr/0005-gateway-and-worker-modes.md)). Mint it **on the gateway**,
+it opens its uplink to a gateway. Mint it **on the gateway**,
 then put the secret in that worker's `gateway.token` beside its
 `gateway.url`. It is the narrowest role there is — a `worker` token can open
 an uplink and nothing else, and presenting one on any `/v1` route other than

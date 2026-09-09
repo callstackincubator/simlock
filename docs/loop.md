@@ -5,7 +5,7 @@ specifications have been removed from `docs/stages/`.
 
 ## Phase 0 — Orient
 
-1. Read `AGENTS.md`, all of `docs/agent-rules/`, and `docs/ARCHITECTURE.md`.
+1. Read `AGENTS.md`, all of `docs/internal/agent-rules/`, and `docs/internal/ARCHITECTURE.md`.
    The agent rules are binding; architecture violations are defects even if
    tests pass.
 2. Read the relevant stage specification and confirm every stage it depends on
@@ -31,7 +31,7 @@ specifications have been removed from `docs/stages/`.
 7. Scope discipline: implement ONLY your stage. No future-stage work, no
    speculative abstractions. If you find a genuine gap that a later stage
    needs, leave a `TODO(stage-NN):` marker and mention it in your report.
-8. New events → update `docs/EVENTS.md` in the same change (events rule 8).
+8. New events → update `docs/internal/EVENTS.md` in the same change (events rule 8).
    New external dependency → its port first (architecture rule 9). New
    runtime npm dependency → forbidden unless your stage file explicitly
    allows it.
@@ -41,10 +41,10 @@ specifications have been removed from `docs/stages/`.
 9. Run `pnpm check` (typecheck + lint + all tests, not just yours).
 10. Read your full diff (`git diff`) as a reviewer, checking:
     - every acceptance criterion in the stage file, one by one;
-    - every rule in `docs/agent-rules/architecture.md`, `events.md`,
+    - every rule in `docs/internal/agent-rules/architecture.md`, `events.md`,
       `safety.md` against the new code;
     - the stage's "Watch out" list;
-    - test quality, against `docs/agent-rules/testing.md` — which is the
+    - test quality, against `docs/internal/agent-rules/testing.md` — which is the
       binding statement of it; this file is historical and does not restate
       it.
 11. Fix every issue found, then re-run `pnpm check`. Repeat until a review

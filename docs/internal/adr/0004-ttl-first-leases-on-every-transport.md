@@ -96,7 +96,7 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
   release-on-close, ADR 0003 §8) is deleted.
 - `lease.granted` loses `mode` and `lease.released` loses the `closed` and
   `orphaned` reasons, since neither concept exists any more. This is a
-  deliberate exception to `docs/agent-rules/events.md` rule 6 (additive
+  deliberate exception to `docs/internal/agent-rules/events.md` rule 6 (additive
   payloads only), taken once while the package is 0.x; `EVENTS.md` notes
   it.
 - The HTTP API's "additive evolution only" promise takes the same kind of
@@ -119,7 +119,7 @@ for a `ttlMs` on the wrong mode are all costs of that one coupling.
 - Breaking for 0.x: `lease.heartbeat` and `mode` leave the contract;
   three config keys are renamed or removed (`simlock config` warns on the
   old names). `docs/CLI.md`, `docs/CLIENT.md`, `docs/HTTP-API.md`,
-  `docs/CONFIGURATION.md`, and `docs/ARCHITECTURE.md` ("Leases") are
+  `docs/CONFIGURATION.md`, and `docs/internal/ARCHITECTURE.md` ("Leases") are
   rewritten in the same change.
 - `StartupConverger`'s orphan sweep goes away: there are no held leases to
   release at start. Startup restores every lease's TTL timer from its

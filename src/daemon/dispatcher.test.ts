@@ -583,7 +583,7 @@ describe("Dispatcher: ownership", () => {
 
 // Review finding S9: `Dispatcher#leaseReleaseAll` and `#nukeRun` were exercised by no test
 // anywhere (`nuke.run` appeared in `server.test.ts` only inside a comment) -- both are
-// admin-only and destructive, which is exactly what `docs/agent-rules/safety.md` rules 1
+// admin-only and destructive, which is exactly what `docs/internal/agent-rules/safety.md` rules 1
 // ("registry-only destruction") and 5 ("destructive CLI commands confirm or require --yes") are
 // about. `--yes`/confirmation is a CLI-layer concern (not this dispatcher's), but role
 // enforcement and "it actually destroys only what it should" are, and neither had coverage.
@@ -626,7 +626,7 @@ describe("Dispatcher: lease.release-all", () => {
 
     expect(new Set(result.leaseIds)).toEqual(new Set([first.lease.id, second.lease.id]));
     expect(registry.snapshot.leases).toHaveLength(0);
-    // `killed`, not `explicit`: nobody's holder asked for this (docs/EVENTS.md), and that is
+    // `killed`, not `explicit`: nobody's holder asked for this (docs/internal/EVENTS.md), and that is
     // the distinction a `lease-lost` reader acts on.
     expect(
       eventBus

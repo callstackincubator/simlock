@@ -572,7 +572,7 @@ describe("discoverDrivers", () => {
     expect(rejections.map((rejection) => rejection.platform)).toEqual(["ios"]);
   });
 
-  it("publishes the refusal as the payload docs/EVENTS.md documents for driver.root-rejected", async () => {
+  it("publishes the refusal as the payload docs/internal/EVENTS.md documents for driver.root-rejected", async () => {
     const filesystem = await foreignOwnedRoot();
     const refusal = await refusedRoot(filesystem);
 

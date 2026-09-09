@@ -58,7 +58,7 @@ Commands:
 Run 'simlock <command> --help' for command usage.
 
 Pass --token <secret> anywhere on the command line to connect as admin
-explicitly; see docs/CLI.md#admin-credential-resolution for the default
+explicitly; see https://github.com/callstackincubator/simlock for the default
 resolution order.`;
 
 /**
@@ -471,7 +471,7 @@ export function buildCliEnvironment(
  * so there is nowhere to send a partial one, and a caller whose stdin is a pipe nothing ever
  * closes (an inherited, never-redirected pipe in CI) hangs here with no timeout -- see
  * "`simlock simctl` / `simlock adb` can hang forever reading a piped stdin" in
- * `docs/known-pitfalls.md`. Accepted deliberately, not an oversight.
+ * `docs/internal/KNOWN-PITFALLS.md`. Accepted deliberately, not an oversight.
  */
 export async function readPipedStdin(): Promise<string | undefined> {
   if (process.stdin.isTTY === true) return undefined;
@@ -936,7 +936,7 @@ async function runLease(
   // `BAD_REQUEST` rather than being clamped here to a value the caller did not write.
   const ttlMs = typeof values.ttl === "string" ? parseDuration(values.ttl) : undefined;
   // A holder watches its parent so a crashed agent's backgrounded `simlock lease`
-  // self-terminates instead of surviving reparenting (docs/known-pitfalls.md) -- the one
+  // self-terminates instead of surviving reparenting (docs/internal/KNOWN-PITFALLS.md) -- the one
   // failure a TTL cannot bound, because a reparented holder keeps renewing. `--bind-pid`
   // overrides which pid that is, for a holder spawned from a short-lived subshell whose
   // immediate parent dies before the agent does.

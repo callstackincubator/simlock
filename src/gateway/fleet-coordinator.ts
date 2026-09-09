@@ -709,7 +709,7 @@ export class FleetLeaseCoordinator {
     const announceDispatched = (): void => {
       if (announced) return;
       announced = true;
-      // C2 (round 2 review): the full payload `docs/EVENTS.md` always specified for this row --
+      // C2 (round 2 review): the full payload `docs/internal/EVENTS.md` always specified for this row --
       // see `bus/index.ts`'s own doc comment on why it was narrowed and then restored.
       const createdAt = this.#createdAt.get(waiter);
       this.#emit("request.dispatched", {
@@ -730,7 +730,7 @@ export class FleetLeaseCoordinator {
     // a late `progress` push after the timeout had already rejected the waiter still called
     // `announceDispatched()` and emitted `request.dispatched` for a request this gateway had
     // already told its caller was `WORKER_UNREACHABLE` -- a false past-tense fact against
-    // `docs/EVENTS.md`'s own "and the worker took it". Same mechanism as `exec`'s `detached`, not
+    // `docs/internal/EVENTS.md`'s own "and the worker took it". Same mechanism as `exec`'s `detached`, not
     // a second bespoke one: flipped by `#withLeaseRequestTimeout`'s own `onTimeout` hook, checked
     // here before either `announceDispatched()` or `notifyProgress` run.
     let detached = false;

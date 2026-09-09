@@ -371,7 +371,7 @@ export class Dispatcher {
   };
 
   /**
-   * `killed`, not `explicit`: `docs/EVENTS.md` splits the two by who ended the lease and
+   * `killed`, not `explicit`: `docs/internal/EVENTS.md` splits the two by who ended the lease and
    * whether its holder asked. An operator's `simlock release --all` (and `nuke`, which already
    * reports `killed` through `NukeService`) takes leases away from holders that never asked --
    * which is exactly what a `lease-lost` reader needs to tell apart from the holder's own

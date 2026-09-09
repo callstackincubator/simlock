@@ -34,8 +34,7 @@ vanish.
 **One machine is a starting point, not a limit.** A simlock daemon runs
 either as a **worker** — what every daemon is today, owning the devices on
 its own machine — or as a **gateway**, which owns no devices and fronts the
-workers that have joined it ([ADR
-0005](docs/adr/0005-gateway-and-worker-modes.md)). Workers dial _out_ to the
+workers that have joined it. Workers dial _out_ to the
 gateway over a single WebSocket uplink, so a Mac behind NAT joins a fleet
 with a URL and a join token and never needs an inbound port; the gateway
 keeps one fleet-wide queue and sends each request to the worker best placed
@@ -204,12 +203,11 @@ lease-loss notifications are documented in
 ## Documentation
 
 - [docs/ABOUT.md](docs/ABOUT.md) — what the tool is and the problem it solves, in short form
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the daemon, drivers, and frontends fit together
 - [docs/CLI.md](docs/CLI.md) — the full command reference
+- [docs/CLIENT.md](docs/CLIENT.md) — the programmatic client (`simlock/client`, `simlock/admin`)
 - [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — every config key, its default, and how limits interact
+- [docs/HTTP-API.md](docs/HTTP-API.md) — the network-facing HTTP API
 - [docs/EVENTS.md](docs/EVENTS.md) — catalog of business events on `simlock events`
-- [docs/known-pitfalls.md](docs/known-pitfalls.md) — accepted gaps and their planned fixes
-- [docs/IDEAS.md](docs/IDEAS.md) — post-v1 ideas, not yet built
 
 ## Made with ❤️ at Callstack
 

@@ -19,7 +19,7 @@ agent-role method plus the admin-role ones (`list`, `runCleanup`, `runNuke`,
 `createToken`/`listTokens`/`revokeToken`). The split exists so
 `simlock/client` doesn't even show admin methods in a caller's editor; the
 daemon's own role check is what actually stops an agent-role session from
-calling one (ADR 0003 §3) — this is a discoverability choice, not the
+calling one — this is a discoverability choice, not the
 enforcement mechanism.
 
 Both are async factories that open one connection and complete the `hello`
@@ -38,8 +38,7 @@ await client.releaseLease({ leaseId: grant.lease.id });
 await client.close();
 ```
 
-**Keeping the lease alive is yours to do.** Every lease is TTL-bound ([ADR
-0004](adr/0004-ttl-first-leases-on-every-transport.md)): it expires at
+**Keeping the lease alive is yours to do.** Every lease is TTL-bound: it expires at
 `grant.lease.ttlDeadline` unless a `renewLease` call lands first, and the
 daemon does nothing on its own to keep it. `requestLease` takes an optional
 `ttlMs` (`lease.defaultTtlMs` when omitted, `BAD_REQUEST` above
@@ -54,8 +53,7 @@ before the deadline is the whole mechanism.
 
 `connectSimlockAdmin` additionally accepts `credential` — an operator token
 or the daemon's per-start `admin.token` secret (see
-[ARCHITECTURE.md](ARCHITECTURE.md#security-model-cooperative-identity-not-a-hostile-process-boundary)
-for what those are and how the CLI resolves one). A missing or wrong
+[CLI.md](CLI.md#admin-credential-resolution) for how the CLI resolves one). A missing or wrong
 credential fails the handshake with `ADMIN_AUTHENTICATION_FAILED` before any
 other request is sent on that connection:
 
@@ -158,8 +156,8 @@ touches a mutation, so this module simply does not have one at all, for
 anything.
 
 **A dead connection is not a dead lease.** The daemon keeps no
-per-connection lease state and releases nothing when a connection closes
-(ADR 0004 §3), so the leases this client held are still granted, still
+per-connection lease state and releases nothing when a connection closes,
+so the leases this client held are still granted, still
 yours, and still counting down their TTL. What you have lost is the ability
 to renew them and to receive their pushes — nothing more. Connect again and
 call `renewLease` with the lease id and you have picked the lease straight
@@ -179,8 +177,8 @@ this client can make a universal decision about:
   comes — but that trigger only ever connects to a daemon that is already
   listening, never launches one, so an operator's `daemon stop` is not undone
   by an idle session.
-- **The CLI** needs none, and deliberately still does not have one under
-  ADR 0004. A `simlock lease` holder's lease outlives its connection, but the
+- **The CLI** needs none, and deliberately still does not have one.
+  A `simlock lease` holder's lease outlives its connection, but the
   holder itself does not: it writes a `DAEMON_CONNECTION_LOST` line naming
   the lease and its deadline, exits `1`, and leaves the lease standing for
   another invocation to renew or for the TTL to end.
@@ -208,7 +206,7 @@ client.onConnectionLost((error) => {
 
 `requestLease` takes an `AbortSignal` as part of its options. Aborting does
 not simply drop the caller's interest client-side — it drives the daemon's
-own `lease.cancel` operation (ADR 0003 §9) and waits for a real outcome, so
+own `lease.cancel` operation and waits for a real outcome, so
 the caller is never left guessing whether a device is or isn't leased to it:
 
 ```ts
@@ -242,14 +240,13 @@ Four cases, by when the signal fires:
 The "device work already in flight" case above releases the grant
 immediately once it lands rather than actually interrupting the in-flight
 provision/boot/reclaim — the daemon keeps doing the work, the caller just
-doesn't end up holding the result. This is recorded as a known gap in
-[known-pitfalls.md](known-pitfalls.md).
+doesn't end up holding the result. This is a known gap.
 
 ## Running a command on the leased device: `exec`
 
 `exec` runs one `simctl` / `adb` command against a device you hold a lease
 on, wherever that device actually is, and streams its output back as it
-arrives ([ADR 0005](adr/0005-gateway-and-worker-modes.md)):
+arrives:
 
 ```ts
 const { exitCode } = await client.exec(
@@ -271,7 +268,7 @@ Omit `onOutput` and the output is simply dropped.
 
 `exec` takes an optional `requesterId`, defaulting to the principal. An
 agent-role connection does not need it: it is gated the ordinary way, its
-principal against the lease's `ownerId` (ADR 0003 §4), exactly as
+principal against the lease's `ownerId`, exactly as
 `renewLease` and `releaseLease` are. The field exists for the one session
 that would otherwise bypass that check — the gateway's admin session on a
 worker — and on this operation, unlike renew and release, **admin does not
@@ -299,7 +296,7 @@ Five things to know before building on it:
 - **The command runs on the machine that owns the device**, against that
   machine's filesystem. A path in `args` (`simctl install <path>`, `adb
   install <apk>`) resolves *there*, so getting an artifact to a remote worker
-  is out of band in v1 — see [known-pitfalls.md](known-pitfalls.md).
+  is out of band in v1.
 - **`stdin` is one string, sent with the request** and then closed, and there
   is no pseudo-terminal. Line-oriented commands work; full-screen ones do
   not.
@@ -320,8 +317,7 @@ Five things to know before building on it:
 `connectSimlock`/`connectSimlockAdmin` connect to a **gateway** — a daemon
 that owns no devices and fronts a fleet of workers — exactly as they connect
 to an ordinary worker daemon, over its unix socket, with the same methods,
-the same types, and the same error codes ([ADR
-0005](adr/0005-gateway-and-worker-modes.md)). That is the point of the
+the same types, and the same error codes. That is the point of the
 gateway implementing the same contract: nothing in this module knows the
 difference, and neither does code written against it.
 
@@ -355,11 +351,8 @@ neither of which changes a call's shape:
   on anything but "nothing is listening" (a version mismatch or a refused
   handshake means something answered, and launching there risks a second
   daemon instance or masking a real incompatibility).
-- It does not restart the daemon on a protocol version mismatch — see
-  [ARCHITECTURE.md](ARCHITECTURE.md) and [ADR
-  0003](adr/0003-one-typed-daemon-contract-behind-every-frontend.md) §6 for
-  the decision. ADR 0004 changed what a stop costs without changing the
-  answer: leases now survive a restart, but stopping a daemon out from under
+- It does not restart the daemon on a protocol version mismatch. Leases
+  survive a restart, but stopping a daemon out from under
   its users still kills every queued lease request on the machine and leaves
   every lease it was serving burning TTL with nothing to renew against.
   `PROTOCOL_VERSION_UNSUPPORTED` names the running daemon's version; the fix

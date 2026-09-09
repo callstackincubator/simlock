@@ -348,7 +348,7 @@ export const nukeReportSchema = z.object({
 /**
  * Mirrors `EventEnvelope` (src/bus/index.ts) at the envelope level only. `event` stays a plain
  * string and `payload` stays `z.unknown()` rather than redeclaring all ~30 `EventMap` payload
- * shapes here -- see docs/EVENTS.md for the authoritative catalog. This is a deliberate,
+ * shapes here -- see docs/internal/EVENTS.md for the authoritative catalog. This is a deliberate,
  * documented simplification: re-declaring every business event's payload shape a second time,
  * next to `events.md`'s existing documentation requirement, is a lot of near-duplicate surface
  * for a channel this PR does not change the routing of. Tightening this (e.g. a discriminated

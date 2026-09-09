@@ -2881,7 +2881,7 @@ describe("CLI: pure helpers", () => {
 
 // Round 4, test-title finding 3: the "remote passthrough" suite's own stdin test injects
 // `readStdin` directly and never exercises this function at all -- documented in
-// `docs/known-pitfalls.md` as an unbounded read, and until now entirely untested.
+// `docs/internal/KNOWN-PITFALLS.md` as an unbounded read, and until now entirely untested.
 describe("readPipedStdin", () => {
   function fakeStdin(chunks: readonly string[], isTTY: boolean): typeof process.stdin {
     const stream = Readable.from(chunks);

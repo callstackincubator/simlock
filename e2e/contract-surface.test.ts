@@ -11,7 +11,7 @@ import type { TestEnv } from "./helpers/env.js";
  *
  * Every other flow in this suite drives one feature through the CLI. This one asks a
  * different question: is each operation the contract *declares* reachable at all? Nothing
- * else answers it. `docs/adr/0003` §2 splits an operation across three places -- the
+ * else answers it. `docs/internal/adr/0003` §2 splits an operation across three places -- the
  * `OPERATIONS` registry, a `case` in `DaemonServer`'s hand-written socket switch, and a
  * handler in the `Dispatcher` -- and only the last of those is checked by the compiler.
  * A declaration whose switch case was never written falls through to `default:` and

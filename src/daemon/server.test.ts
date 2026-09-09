@@ -1168,7 +1168,7 @@ describe("DaemonServer startup readiness", () => {
     // completion before convergence resolves. `start()` must then bail rather than
     // subscribe to a disposed bus, schedule a heartbeat tick on a dead daemon, and emit
     // `daemon.started` after `daemon.stopping` (a fact untrue when emitted, which
-    // `docs/agent-rules/events.md` rule 3 forbids).
+    // `docs/internal/agent-rules/events.md` rule 3 forbids).
     const converge = deferred<void>();
     const harness = await createHarness({ converge: () => converge.promise, start: false });
     const emitted: string[] = [];
@@ -1392,7 +1392,7 @@ describe("DaemonServer driver rejections", () => {
   it("refuses at compile time to pair an event with another event's payload", () => {
     const rejection: DriverRejection = {
       event: "driver.adb-server-rejected",
-      // @ts-expect-error -- `port` is a number on the wire (docs/EVENTS.md). The check has
+      // @ts-expect-error -- `port` is a number on the wire (docs/internal/EVENTS.md). The check has
       // to happen where a refusal is written, because the daemon forwards `payload` to the
       // ring buffer -- and to `simlock events --json` -- without ever reading it.
       payload: { port: "5038", reason: "occupied" },

@@ -65,13 +65,13 @@ Store internally) would let the driver resolve the exact newest compatible
 patch release instead of gambling on the major matching a real build. Not
 pursued in v1: parsing an undocumented, Apple-controlled catalog format is a
 maintenance burden disproportionate to the edge case it closes (see
-`docs/known-pitfalls.md`, "Component downloads").
+`docs/internal/KNOWN-PITFALLS.md`, "Component downloads").
 
 ## Requester-visible download progress
 
 Neither driver's install (`xcodebuild -downloadPlatform`, `sdkmanager
 --install`) currently reaches the requesting connection's progress stream —
-see `docs/known-pitfalls.md` ("no progress push"). Closing this needs a
+see `docs/internal/KNOWN-PITFALLS.md` ("no progress push"). Closing this needs a
 `downloading` stage on `LeaseProgress` (`src/core/wait-queue.ts`) and a
 `Driver.resolveSpec` progress callback both drivers implement, threaded
 through `LeaseAcquisitionCoordinator#resolveAndDrive` the same way

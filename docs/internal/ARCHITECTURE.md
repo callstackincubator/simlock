@@ -37,7 +37,7 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   typed contract (ADR 0003; see "Contract, dispatcher, and roles" below). The
   core never knows which frontend made a request. The CLI and MCP server sit
   over `simlock/client`/`simlock/admin` (the typed daemon client, see
-  [CLIENT.md](CLIENT.md)) and the unix socket; the CLI is the full operator
+  [CLIENT.md](../CLIENT.md)) and the unix socket; the CLI is the full operator
   interface, and the MCP server intentionally limits its tool surface to
   leasing and releasing for an agent session. The HTTP frontend is different in
   kind, not just transport: it is the one frontend meant to be reached over a
@@ -54,7 +54,7 @@ modes](#gateway-and-worker-modes-adr-0005) below for that topology.
   already finished and so never needed to park anything. A request that arrives
   before convergence completes now waits on the shared dispatcher's readiness
   gate exactly like a socket request, instead of being refused. See
-  [HTTP-API.md](HTTP-API.md) for the full route reference.
+  [HTTP-API.md](../HTTP-API.md) for the full route reference.
 - **CLI**: by default it acquires a lease, prints one JSON result line on
   stdout, then stays alive — renewing the lease at one third of the lease's TTL
   and releasing it on exit, parent death, or `SIGINT`/`SIGTERM`. That is the
@@ -343,10 +343,10 @@ driver reality — worth knowing before calling it from a tight loop or a
 context where that per-device process-spawn cost is unwelcome. `fix: true`
 requires the admin role because it can quarantine or destroy devices.
 
-See [CLIENT.md](CLIENT.md) for how `simlock/client`/`simlock/admin` expose
-`credential` and role at connect time, [CLI.md](CLI.md#admin-credential-resolution)
+See [CLIENT.md](../CLIENT.md) for how `simlock/client`/`simlock/admin` expose
+`credential` and role at connect time, [CLI.md](../CLI.md#admin-credential-resolution)
 for the CLI's own walkthrough of the same resolution order, and
-[HTTP-API.md](HTTP-API.md#authentication) for how HTTP's bearer-token roles
+[HTTP-API.md](../HTTP-API.md#authentication) for how HTTP's bearer-token roles
 map onto `agent`/`admin`.
 
 ## Gateway and worker modes (ADR 0005)

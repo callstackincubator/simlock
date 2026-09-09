@@ -447,7 +447,7 @@ export class WorkerLink {
    * Hardening: `envelope.event` is whatever string a worker's own `events.subscribe` push sends
    * -- a client of this same admin protocol, on a machine this gateway does not otherwise
    * control -- and `workerId` is merged in last, so it cannot be spoofed, but the *name* is
-   * taken on faith. Refusing the six subjects `docs/EVENTS.md` calls "the gateway's own"
+   * taken on faith. Refusing the six subjects `docs/internal/EVENTS.md` calls "the gateway's own"
    * (`GATEWAY_OWN_EVENTS`) keeps a worker from forging `worker.drain-ended`, `worker.removed`,
    * etc. into the operator's audit trail -- facts this gateway itself is supposed to be the only
    * author of. Every other name still forwards unchanged, including ones this gateway's own
@@ -478,7 +478,7 @@ export class WorkerLink {
 }
 
 /**
- * ADR 0005 §22 / `docs/EVENTS.md`: the six facts only a gateway itself ever emits, about the
+ * ADR 0005 §22 / `docs/internal/EVENTS.md`: the six facts only a gateway itself ever emits, about the
  * workers connected to it. Never forwarded from a worker's own event stream (see
  * `#onWorkerEvent`) -- a worker is a client of the same admin protocol, and nothing about
  * `events.subscribe` proves the name it pushes is genuinely its own.
