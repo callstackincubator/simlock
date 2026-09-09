@@ -37,8 +37,7 @@ programmatic client the CLI and MCP frontends are themselves built on (see
 
 One machine's worth of devices runs out eventually, and a team with several
 Macs should not have to hand each agent a specific one. So a simlock daemon
-runs in one of two modes ([ADR
-0005](adr/0005-gateway-and-worker-modes.md)). A **worker** is what every
+runs in one of two modes. A **worker** is what every
 daemon is today — it owns the devices on its machine — and joining a fleet
 costs it two config keys pointing at a gateway; it keeps serving its own
 local agents exactly as before. A **gateway** owns no devices at all: workers
@@ -73,9 +72,6 @@ registry, and every safety invariant stay on the worker.
   progress (e.g. provisioning ETAs) streams as JSON lines on stderr. The
   optional MCP server reserves stdout for MCP JSON-RPC.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's built (and
-[its gateway section](ARCHITECTURE.md#gateway-and-worker-modes-adr-0005) for
-how a fleet fits together), [CLI.md](CLI.md) for the command surface,
-[CLIENT.md](CLIENT.md) for the programmatic client,
-[HTTP-API.md](HTTP-API.md) for the network API, and
-[known-pitfalls.md](known-pitfalls.md) for accepted gaps.
+See [CLI.md](CLI.md) for the command surface,
+[CLIENT.md](CLIENT.md) for the programmatic client, and
+[HTTP-API.md](HTTP-API.md) for the network API.

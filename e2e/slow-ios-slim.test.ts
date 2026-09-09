@@ -279,7 +279,7 @@ describe.skipIf(process.platform !== "darwin")(
               "machine (26.4.1, 27.0) are >= 18.5",
           ).toEqual([]);
 
-          // --- scenario 3: release, then re-lease the same spec. Per docs/known-pitfalls.md
+          // --- scenario 3: release, then re-lease the same spec. Per docs/internal/KNOWN-PITFALLS.md
           // ("Every reclaim pays two boots, indefinitely"), IosSimctlDriver.reclaim always runs
           // `simctl erase`, wiping the launchctl overrides -- so the documented behaviour is
           // that the warm-pooled device comes back stock and pays a SECOND device.slimmed, not
@@ -301,7 +301,7 @@ describe.skipIf(process.platform !== "darwin")(
           expect(
             slimmedAfterRelease.length,
             "expected a SECOND device.slimmed for this udid after release+re-lease, per the " +
-              "documented erase-on-reclaim cost (docs/known-pitfalls.md)",
+              "documented erase-on-reclaim cost (docs/internal/KNOWN-PITFALLS.md)",
           ).toBe(slimmedBefore + 2);
 
           await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
@@ -447,7 +447,7 @@ describe.skipIf(process.platform !== "darwin")(
           // The SDK's default request timeout is 60s; a cold slim lease takes ~160s on this
           // machine (two real boots). Simlock relays boot progress as MCP progress
           // notifications, so a client that resets its timeout on progress survives it --
-          // which is what a real agent's client must do too (see docs/known-pitfalls.md).
+          // which is what a real agent's client must do too (see docs/internal/KNOWN-PITFALLS.md).
           const leaseCallOptions = { resetTimeoutOnProgress: true, timeout: 600_000 };
           const fullResult = await mcp.client.callTool(
             {

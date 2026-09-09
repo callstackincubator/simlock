@@ -58,7 +58,7 @@ running test body silently never fires — see the comment in `helpers/env.ts`.
   every attempt so far: a daemon occasionally outlives `daemon stop` and trips
   teardown's stray-process assertion, and the no-implicit-download flow has hit
   its 300s timeout. Not yet root-caused, and not yet distinguished from the
-  reclaim stall recorded in [../docs/known-pitfalls.md](../docs/known-pitfalls.md).
+  reclaim stall recorded in [../docs/internal/KNOWN-PITFALLS.md](../docs/internal/KNOWN-PITFALLS.md).
   Treat the slow lane as a manual, one-flow-at-a-time tool until that is fixed.
 - `daemon status` ignores `--json` and always prints raw JSON; documented by an
   `it.fails` in `daemon-lifecycle.test.ts`.

@@ -1,7 +1,7 @@
 /**
  * Watches a specific process and notifies once when it exits, so a
  * process-held CLI lease self-terminates instead of surviving reparenting
- * after the agent that launched it dies. See docs/known-pitfalls.md.
+ * after the agent that launched it dies. See docs/internal/KNOWN-PITFALLS.md.
  */
 export interface ParentWatch {
   /**

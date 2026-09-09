@@ -183,7 +183,7 @@ describe("gateway fleet", () => {
     //    fleet is #118's, not this PR's), well after its `events.subscribe` was established at
     //    connect. `module` is asserted as `lease-lifecycle` -- the emitting engine's own name,
     //    unchanged by republishing -- specifically because it is not one of the six subjects
-    //    `docs/EVENTS.md` calls "the gateway's own" (`worker.*`), so this cannot be satisfied by
+    //    `docs/internal/EVENTS.md` calls "the gateway's own" (`worker.*`), so this cannot be satisfied by
     //    a gateway-authored fact that merely happens to name worker B.
     const events = await gateway.events();
     const connectedFacts = events.filter((event) => event.event === "worker.connected");

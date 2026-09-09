@@ -218,7 +218,7 @@ proceeds. Only a genuine inability to bring the device back up propagates.
   `--full` request match nothing until the idle cleanup rules reap them.
 
 **Safety review.** Compatible with every invariant in
-`docs/agent-rules/safety.md`: registry-only targets, never a leased device,
+`docs/internal/agent-rules/safety.md`: registry-only targets, never a leased device,
 no downloads, destruction only through the existing `erase` path, every pass
 attributable through `device.slimmed`.
 

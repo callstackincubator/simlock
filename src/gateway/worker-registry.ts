@@ -266,7 +266,7 @@ export class WorkerRegistry {
    * already accepted. That mismatch becomes visible the moment this worker's `config.get`
    * answer lands in its view (`WorkerLink#rebuildView`), which is exactly where it is reported
    * here -- as a log line, not a bus event: an operator configuration warning is not a business
-   * fact about the fleet (`docs/agent-rules/events.md`), the same reasoning `core/config.ts`
+   * fact about the fleet (`docs/internal/agent-rules/events.md`), the same reasoning `core/config.ts`
    * already applies to a worker-only key left in a gateway's config.
    *
    * Warned on the transition into the mismatched state (or a change while inside it), never on

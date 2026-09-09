@@ -190,7 +190,7 @@ export interface Driver {
        * The requester on whose behalf this resolution runs, when known. Optional: a caller that
        * resolves outside of a lease request (e.g. a driver revalidating its own cached spec) has
        * no requester to attribute. Threaded through to a driver's component-install diagnostics
-       * so the resulting `component.install-*` events carry it -- see `docs/EVENTS.md`.
+       * so the resulting `component.install-*` events carry it -- see `docs/internal/EVENTS.md`.
        */
       readonly requesterId?: string;
     },
@@ -236,7 +236,7 @@ export interface Driver {
   leaseEnvironment(): Readonly<Record<string, string>>;
   /**
    * Releases whatever this driver holds outside its own process -- Android supervises an
-   * adb server it must reap by pid, since nothing else can (`docs/known-pitfalls.md`).
+   * adb server it must reap by pid, since nothing else can (`docs/internal/KNOWN-PITFALLS.md`).
    * Optional because most drivers hold nothing; the daemon calls it on every shutdown
    * path and never lets a failure here abort the rest of one.
    */
@@ -337,7 +337,7 @@ type DriverRejectionEvent = "driver.root-rejected" | "driver.adb-server-rejected
 /**
  * Why Simlock's own adb server could not be established. Wire-visible, like the root
  * reasons: these travel in the `driver.adb-server-rejected` payload and are listed in
- * `docs/EVENTS.md`, so the vocabulary is fixed and closed.
+ * `docs/internal/EVENTS.md`, so the vocabulary is fixed and closed.
  *
  * It sits beside the event names rather than in `drivers/android` because the two are one
  * contract: the core publishes neither without the other, and a driver module cannot be
@@ -356,7 +356,7 @@ export type DriverRejectionReason = RootRejectionReason | AdbServerRejectionReas
  * One refusal, with the payload the event it names is published with.
  *
  * The pairing is the point. The core forwards `payload` to the bus without reading it, so
- * this is the only place the wire contract in `docs/EVENTS.md` can still be checked -- a
+ * this is the only place the wire contract in `docs/internal/EVENTS.md` can still be checked -- a
  * wider `Record<string, string | number>` would type-check an adb rejection carrying a
  * string port, or a root rejection with no root at all, and it would reach
  * `simlock events --json` unexamined.

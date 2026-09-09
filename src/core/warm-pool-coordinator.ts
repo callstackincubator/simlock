@@ -142,7 +142,7 @@ export class WarmPoolCoordinator {
   /**
    * Hands the release-time purge failure to the quarantine coordinator instead
    * of readiness-checking the device back into circulation: the first warm-pool
-   * version did that (see docs/known-pitfalls.md) so a dirty device could still
+   * version did that (see docs/internal/KNOWN-PITFALLS.md) so a dirty device could still
    * be leased, which is exactly the confusing failure mode quarantine replaces.
    */
   async #recoverPurgeFailure(

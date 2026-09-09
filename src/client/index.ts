@@ -65,7 +65,7 @@ export interface ConnectSimlockOptions {
  * session. Rejects with a `SimlockError` (`PROTOCOL_VERSION_UNSUPPORTED`,
  * `ADMIN_AUTHENTICATION_FAILED` never applies here since no credential is sent,
  * `DAEMON_CONNECTION_LOST` if the socket cannot be reached) without ever restarting the
- * daemon -- see `docs/adr/0003-...md` §6. */
+ * daemon -- see `docs/internal/adr/0003-...md` §6. */
 export async function connectSimlock(options: ConnectSimlockOptions): Promise<SimlockClient> {
   const resolved: ConnectOptions = {
     ...(options.connection === undefined ? {} : { connection: options.connection }),

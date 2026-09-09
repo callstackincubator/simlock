@@ -263,7 +263,7 @@ const STOPS_A_RUNNING_DEVICE =
  * refusing them would break every multi-device invocation to prevent nothing, since every
  * device they can name is one Simlock already manages. What that does mean -- any lease
  * holder can name any Simlock device on this machine -- is the accident boundary ADR 0001
- * draws, not a hole in this list; see `docs/known-pitfalls.md`. Everything else -- the known
+ * draws, not a hole in this list; see `docs/internal/KNOWN-PITFALLS.md`. Everything else -- the known
  * scope flags, `-a`, `--exit-on-write-error`, `--one-device`, `--reply-fd`, and any global a
  * future adb adds -- is refused in this position, whether or not it turns out to be benign.
  *

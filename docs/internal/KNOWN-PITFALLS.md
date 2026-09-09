@@ -30,7 +30,7 @@ or a socket hiccup no longer costs a live holder its device.
 `ttlMs` on a request) bounds it for one lease. Both are worth lowering in a
 CI-shaped fleet where holders are killed routinely; both cost more renew
 traffic and a tighter deadline for a holder that stalls. See
-[CONFIGURATION.md](CONFIGURATION.md).
+[CONFIGURATION.md](../CONFIGURATION.md).
 
 ## Orphaned lease holders (resolved)
 
@@ -124,7 +124,7 @@ misbehaving.
 **Fix (#21):** a failed purge now commits the device to `quarantined` instead
 of readiness-checking it back into circulation. `quarantined` is a shared
 "present in the registry, counts against running capacity, not grantable"
-disposition (see `docs/ARCHITECTURE.md`, "Quarantine: present but not
+disposition (see `docs/internal/ARCHITECTURE.md`, "Quarantine: present but not
 grantable") — `AcquisitionPlanner` and the warm-pool eviction helpers select
 targets by exact state, so a quarantined device is simply invisible to every
 grant path with no special-casing required. `QuarantineCoordinator` retries
@@ -135,7 +135,7 @@ destroys it (registry-only, as always). The device stays visible as
 `quarantined` in `simlock status` and `simlock list --devices` throughout.
 `device.purge-failed` still fires as before; `device.quarantined`,
 `device.quarantine-recovered`, and `device.quarantine-abandoned` are the new
-follow-up facts (see `docs/EVENTS.md`).
+follow-up facts (see `docs/internal/EVENTS.md`).
 
 ## Device roots are an accident boundary, not a security boundary
 
@@ -177,7 +177,7 @@ is a device id, on a surface that changes with the platform tools rather than
 with simlock. A parser that is wrong in the permissive direction refuses
 nothing extra; one that is wrong in the strict direction refuses commands
 that were always fine. The verbs simlock *does* refuse
-([CLI.md](CLI.md)) are the ones that move a device's lifecycle behind the
+([CLI.md](../CLI.md)) are the ones that move a device's lifecycle behind the
 registry's back or escape containment altogether — `adb kill-server`,
 `simctl delete` — which is a judgement about what an action does, not about
 identity. adb's server-scope globals are handled differently, and more
@@ -289,7 +289,7 @@ download: unbounded models (no `maxRuntimeVersion` cap) get a plain
 older device type whose newest compatible runtime is a specific release)
 gets `-buildVersion <major from maxRuntimeVersion>` — just the major
 version number, since the exact patch release isn't known offline (Apple's
-downloadables index isn't parsed in v1; see `docs/IDEAS.md`). If Xcode
+downloadables index isn't parsed in v1; see `docs/internal/IDEAS.md`). If Xcode
 doesn't have a build matching that bare major version, the download fails
 and the caller is told to pass `--os <version>` explicitly rather than
 retrying blind.
@@ -374,7 +374,7 @@ client is absent between calls by construction, so something has to hold the
 fact until it comes back, and today that something lives in the frontend. A
 daemon restart loses in-flight lease-request tracking state and buffered
 notices the same way it always did pre-ADR 0003 — see [Lifecycle
-semantics](HTTP-API.md#lifecycle-semantics) for the documented recovery loop
+semantics](../HTTP-API.md#lifecycle-semantics) for the documented recovery loop
 (`404` → re-request → maybe `409` → `GET`), which exists specifically because
 the tracker does not survive a restart.
 
@@ -514,7 +514,7 @@ this away; sizing it around "the daemon's own uid" does not.
 
 **Why this is not being fixed by parsing arguments:** the same reasoning the
 adb/simctl scans themselves rely on (safety rule 9, "fail closed") argues
-against it here too — `docs/adr/0005-gateway-and-worker-modes.md` §19a is
+against it here too — `docs/internal/adr/0005-gateway-and-worker-modes.md` §19a is
 explicit that arguments are accident-boundary scoping, not a security
 boundary, the same distinction ADR 0001 draws for the local passthrough
 wrappers this operation reuses. A grammar that tried to refuse "device paths
@@ -524,7 +524,7 @@ adds), and a guess that misses one is worse than no guess, since it reads as
 a promise this API does not keep.
 
 **Status:** accepted, and now said plainly rather than left to be discovered
-— see the [Authentication](HTTP-API.md#authentication) section of
+— see the [Authentication](../HTTP-API.md#authentication) section of
 `HTTP-API.md`, which an operator sizing a worker's trust boundary should read
 before handing an `agent` token to anything they would not otherwise let run
 on that machine.
@@ -606,7 +606,7 @@ follow-up to `device.exec`.
 
 `ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
 daemons across simulator daemon categories to cut RAM/CPU footprint (see
-[CONFIGURATION.md](CONFIGURATION.md)). It carries four trade-offs worth
+[CONFIGURATION.md](../CONFIGURATION.md)). It carries four trade-offs worth
 knowing before turning it on.
 
 **Every reclaim pays two boots, indefinitely.** `IosSimctlDriver.reclaim`

@@ -1040,7 +1040,7 @@ export function emitComponentInstallDiagnostic(
  * (architecture rule 5) -- this is the one place, at driver construction, that bridges the
  * driver's `onSlimmed` callback to a post-commit fact for observers (`simlock events`, and the
  * durable-log subscription in `startDaemon`). A *skipped* slim is deliberately not bridged here
- * -- see `onSlimSkipped` in `discoverDrivers`, which logs it instead (see `docs/EVENTS.md`).
+ * -- see `onSlimSkipped` in `discoverDrivers`, which logs it instead (see `docs/internal/EVENTS.md`).
  */
 export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: SlimmedFact) => void {
   return (fact) => {

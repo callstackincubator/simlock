@@ -615,7 +615,7 @@ function requireOwnRequest(identity: TokenIdentity, requesterId: string): void {
  * the list, and `unknownLease` covers both "doesn't exist" and "not yours" the same way
  * `lease.list` itself does not distinguish them, at 404. This is a deliberate, narrower
  * divergence than the one S6 fixed for the mutating routes below -- see
- * `docs/known-pitfalls.md` ("HTTP single-lease reads answer 404, not 403, for an unowned
+ * `docs/internal/KNOWN-PITFALLS.md` ("HTTP single-lease reads answer 404, not 403, for an unowned
  * lease"). */
 async function findOwnedLease(
   deps: HttpGatewayDeps,

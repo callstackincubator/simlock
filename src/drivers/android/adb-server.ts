@@ -49,7 +49,7 @@ const SCOPED_ENVIRONMENT = {
 } as const;
 
 /** What `${SIMLOCK_HOME}/adb-server.json` holds: the only handle on a server that outlives us. */
-// fallow-ignore-next-line unused-type -- on-disk contract; documented in docs/known-pitfalls.md and read back by a later daemon.
+// fallow-ignore-next-line unused-type -- on-disk contract; documented in docs/internal/KNOWN-PITFALLS.md and read back by a later daemon.
 export interface AdbServerRecord {
   readonly pid: number;
   readonly port: number;

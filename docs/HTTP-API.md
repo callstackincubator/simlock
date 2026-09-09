@@ -9,21 +9,19 @@ reverse proxy) — Simlock does no TLS termination in v1, and `Authorization`
 is required on every route regardless of how it's reached, loopback included.
 
 This frontend calls the exact same in-process `Dispatcher` the unix socket
-calls (ADR 0003 §2) — not a second copy of role/ownership logic, and not a
+calls — not a second copy of role/ownership logic, and not a
 loopback hop through the socket either. Every route that maps onto a daemon
 operation gets the same input parsing, role check, `authorize`/ownership
 hook, and startup-readiness parking a socket request gets, from that one
 shared instance. This is also why a fix on the socket side (the download
 policy, startup-readiness parking, error mapping) lands on HTTP for free —
-see [ARCHITECTURE.md](ARCHITECTURE.md#contract-dispatcher-and-roles-adr-0003)
-for how it fits together, and the two bug fixes called out below for what
+see the two bug fixes called out below for what
 this actually changed.
 
 ## Leases are TTL-bound, the same as everywhere else
 
 A lease granted through this API is the same kind of lease `simlock lease`
-gets on the unix socket ([ADR
-0004](adr/0004-ttl-first-leases-on-every-transport.md)): it carries a TTL, it
+gets on the unix socket: it carries a TTL, it
 is kept alive by `POST /v1/leases/:id/renew` arriving before `expiresAt`, and
 nothing else keeps it alive. There is no connection-liveness mode to be the
 odd one out from — HTTP is stateless, and so is the lease model now, on every
@@ -51,7 +49,7 @@ Every route requires `Authorization: Bearer slk_<secret>` except `GET
 Tokens are minted and managed with `simlock token` (see [CLI.md](CLI.md)).
 Since 0.3.0 `token.create|list|revoke` are daemon operations (admin role) and
 the daemon is the only process that reads or writes `tokens.json`, so unlike
-`config set` these do go through the daemon (ADR 0003 §11). Each token record
+`config set` these do go through the daemon. Each token record
 is
 `{ id, role, label?, createdAt }`, hashed at rest in `~/.simlock/tokens.json`
 (SHA-256; the plaintext secret is shown exactly once, at `create`, and never
@@ -79,8 +77,7 @@ opens and the only route it opens: presented on any other `/v1` route it is
 `403`, and an `agent` or `operator` token presented at `/v1/uplink` is `403`
 just the same. Join tokens are minted with `simlock token create --role
 worker` on the **gateway**, and tokens never cross machines — a gateway's
-tokens are valid on that gateway and nowhere else ([ADR
-0005](adr/0005-gateway-and-worker-modes.md)).
+tokens are valid on that gateway and nowhere else.
 
 **An `agent` token on a worker is a host-level credential, not a
 device-level one.** `POST /v1/leases/{id}/exec` runs the command's *arguments*
@@ -90,7 +87,7 @@ on the worker's own filesystem with the daemon's own uid and environment
 enough to write or read files anywhere that uid can reach, not only the
 leased device: `adb pull <device-path> <worker-path>` is a host-side
 arbitrary file write, and there is no argument grammar this API parses that
-would stop it (see [known-pitfalls.md](known-pitfalls.md)). Size a worker's
+would stop it. Size a worker's
 trust boundary around the daemon's own uid, not around "one device," before
 handing an `agent` token to something you would not otherwise let run on
 that machine.
@@ -98,9 +95,8 @@ that machine.
 ## Endpoints
 
 All routes are under `/v1`, JSON bodies both ways, additive evolution only —
-new fields, never removed or repurposed ones. [ADR
-0004](adr/0004-ttl-first-leases-on-every-transport.md) breaks that rule once,
-under its "Breaking for 0.x" consequence, and each break is called out where
+new fields, never removed or repurposed ones. That rule was broken once,
+as a deliberate 0.x-only exception, and each break is called out where
 it applies below:
 
 - **`mode` is gone** from the lease record the operator routes serialize
@@ -114,7 +110,7 @@ it applies below:
 
 Routes, status codes, and every other field are unchanged.
 
-[ADR 0005](adr/0005-gateway-and-worker-modes.md) is purely additive on top of
+Gateway/worker fleet mode is purely additive on top of
 that: the same routes answer identically whether the daemon behind them is a
 worker or a **gateway** fronting a fleet of workers, and what it adds are new
 routes (`/v1/uplink`, `/v1/workers*`, `POST /v1/leases/{id}/exec`), new
@@ -320,7 +316,7 @@ same answer the socket transport gives, via the same operation's `ownsLease`
 authorize hook. (0.3.0 briefly had every lease route answering `404` here;
 that overcorrected the lease-*request* routes' old `403` and is why renew
 and release were moved off the `lease.list`-filtered lookup — see
-`docs/known-pitfalls.md`. `exec` arrives on the dispatching side of that
+`docs/internal/KNOWN-PITFALLS.md`. `exec` arrives on the dispatching side of that
 split, with renew and release.)
 
 This is different again from the lease-*request* routes below
@@ -378,7 +374,7 @@ below. Runs one `simctl`/`adb` command **on the machine that owns the
 device** and streams its output back. This is what makes a leased device
 drivable from here at all — over HTTP against a lone worker, and through a
 gateway to whichever worker holds the lease, with the same request and the
-same response either way ([ADR 0005](adr/0005-gateway-and-worker-modes.md)).
+same response either way.
 Every other way of reaching a device assumes the caller shares that
 machine's filesystem.
 
@@ -509,8 +505,8 @@ Role: `agent` (own lease); `operator` may release any lease.
 → `202 { "released": true, "device": { "id": "dev_1a2b", "state": "reclaiming" } }`
 
 The lease is gone the moment this responds; the driver-side purge continues
-in the background (existing release semantics — see "Release hands the
-purge off" in [ARCHITECTURE.md](ARCHITECTURE.md)), hence `202`, not `200`.
+in the background (existing release semantics: release hands the
+purge off), hence `202`, not `200`.
 
 ### `GET /v1/uplink` (WebSocket upgrade)
 
@@ -528,7 +524,7 @@ token and needs no inbound port of its own, and no client ever learns a
 worker's address.
 
 What travels over the socket is not a new API: it is the same typed daemon
-contract (ADR 0003), with **the gateway as the protocol client**. It sends
+contract, with **the gateway as the protocol client**. It sends
 `hello`, negotiates the protocol range exactly as over the unix socket, and
 then issues ordinary operations (`status.get`, `list.get`, `catalog.get`,
 `events.subscribe`, `lease.request`, `device.exec`, …) to the worker's own
@@ -569,7 +565,7 @@ worker may install a missing runtime at all before sending it a request that
 depends on one; it is never an override, since the worker clamps
 `allowDownload` through the same policy regardless.
 
-`protocol` is the range that worker negotiated. ADR 0005 moves the wire to
+`protocol` is the range that worker negotiated. The wire moves to
 `{min: 5, max: 5}` with no compatibility shim, so a worker from before it
 does not overlap and shows as `incompatible` — the ordinary upgrade path, not
 a fault.
@@ -657,7 +653,7 @@ Every failure is the same shape the daemon protocol uses:
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`) |
 
-Three notes on the ADR 0005 codes.
+Three notes on these codes.
 
 `WORKER_UNREACHABLE` sits on `503` with `NO_CAPACITY` rather than on `502`,
 because its `kind` is `transport` and every other `transport`-kind code in
@@ -740,9 +736,8 @@ and `message` — details are contract, message text is not.
   against a lone worker and through a gateway alike.
 - **File transfer for `exec`.** A command that names a path resolves it on
   the machine that owns the device; there is no upload route in this version,
-  and the seam for a later `device.upload` is left open by design (ADR 0005).
+  and the seam for a later `device.upload` is left open by design.
 - MCP-over-HTTP and in-process TLS are out of scope for this version too.
-  Multi-host brokering is no longer on this list: [ADR
-  0005](adr/0005-gateway-and-worker-modes.md) designs it as gateway and
+  Multi-host brokering is no longer on this list: it is designed as gateway and
   worker modes, and its routes (`/v1/uplink`, `/v1/workers*`) are documented
   above.

@@ -27,7 +27,7 @@ export type HttpStatus = 400 | 401 | 403 | 404 | 409 | 422 | 500 | 501 | 503 | 5
  * `SimlockErrorCode` union (`src/contract/errors.ts`) -- ADR §7's "a code the client does not
  * know wraps as `UNKNOWN_DAEMON_ERROR`" applies here: a typed client built against the contract
  * cannot narrow on any of these four today, only on the raw string inside
- * `UNKNOWN_DAEMON_ERROR`'s `details`. See `docs/known-pitfalls.md` ("HTTP error codes outside
+ * `UNKNOWN_DAEMON_ERROR`'s `details`. See `docs/internal/KNOWN-PITFALLS.md` ("HTTP error codes outside
  * the closed contract union") for the exact rows this needs.
  */
 export class HttpApiError extends Error {
@@ -62,7 +62,7 @@ export function badRequest(message: string): HttpApiError {
  * meant a client branching on `error.code` alone could not tell "no such request id" from "no
  * such operation" -- ADR §7 makes codes contract, not message text (S8). `UNKNOWN_LEASE_REQUEST`
  * is outside the contract's closed union like `UNAUTHENTICATED`/`REQUEST_NOT_CANCELLABLE`/
- * `REQUEST_CANCELLED` below; see `docs/known-pitfalls.md` for what a closed-union fix would
+ * `REQUEST_CANCELLED` below; see `docs/internal/KNOWN-PITFALLS.md` for what a closed-union fix would
  * need. */
 export function unknownRequest(id: string): HttpApiError {
   return new HttpApiError(404, "UNKNOWN_LEASE_REQUEST", `Unknown lease request: ${id}`);

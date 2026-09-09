@@ -487,7 +487,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     // undetached: `#withLeaseRequestTimeout` settling `WORKER_UNREACHABLE` only stops the
     // returned promise from being awaited -- the worker's own still-pending `lease.request` RPC
     // is never cancelled, and its `onProgress` closure stays live for as long as the worker cares
-    // to keep pushing. `docs/EVENTS.md` defines `request.dispatched` as "the gateway's fleet queue
+    // to keep pushing. `docs/internal/EVENTS.md` defines `request.dispatched` as "the gateway's fleet queue
     // sent a queued request to a worker ... and the worker took it" -- a false past-tense fact for
     // a request the caller has already been told is `WORKER_UNREACHABLE`.
     const { clock, coordinator, directory, eventBus, workers } = harness({
@@ -719,7 +719,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
 
     const grant = await coordinator.request(REQUEST, requestOptions());
 
-    // C2 (round 2 review): the full self-contained payload `docs/EVENTS.md` specifies -- not
+    // C2 (round 2 review): the full self-contained payload `docs/internal/EVENTS.md` specifies -- not
     // just the gateway-internal `requestId`/`workerId` pair.
     expect(dispatched).toEqual([
       {

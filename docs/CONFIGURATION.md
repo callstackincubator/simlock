@@ -21,9 +21,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `gateway.token`                   | **Worker side.** The join token (`simlock token create --role worker`, minted on the gateway) this worker presents when it opens its uplink. Required whenever `gateway.url` is set.                                          | unset                                                            |
 | `gateway.label`                   | **Worker side.** Display name for this worker in `simlock worker list`, `status`, the console, and on the lease's `worker` block. Display-only: nothing routes on it and it need not be unique.                              | the worker's own id                                              |
 | `exec.timeoutMs`                  | **Worker side.** How long one `device.exec` command (`simlock simctl` / `simlock adb` against a gateway or over HTTP) may run before the worker kills it and the operation fails with `EXEC_TIMEOUT`. Authoritative: it bounds the process that actually runs. | `10 minutes`                                                     |
-| `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1: warm hit first, then the most free running capacity for the platform. See [Routing](ARCHITECTURE.md#routing).                     | `warm-then-free`                                                 |
+| `gateway.routing`                 | **Gateway side.** Which routing policy places a queued request on a worker. `warm-then-free` is the only policy in v1: warm hit first, then the most free running capacity for the platform.                     | `warm-then-free`                                                 |
 | `gateway.disconnectedRetentionMs` | **Gateway side.** How long a disconnected worker is kept (greyed, never dispatched to) before the gateway forgets it. The clock is held while the gateway still knows of gateway-issued leases on that worker, and that hold ends when the last of those leases passes its deadline.  | `24 hours`                                                       |
-| `gateway.execTimeoutMs`           | **Gateway side.** How long the gateway waits on a proxied `device.exec` before giving up. A backstop for a worker that never answers at all — deliberately longer than the worker's own `exec.timeoutMs`, which is authoritative because that side owns the process and can kill it, so an ordinary timeout surfaces as the worker's `EXEC_TIMEOUT` rather than racing this one. See [ADR 0005](adr/0005-gateway-and-worker-modes.md) §19e. | `11 minutes`                                                     |
+| `gateway.execTimeoutMs`           | **Gateway side.** How long the gateway waits on a proxied `device.exec` before giving up. A backstop for a worker that never answers at all — deliberately longer than the worker's own `exec.timeoutMs`, which is authoritative because that side owns the process and can kill it, so an ordinary timeout surfaces as the worker's `EXEC_TIMEOUT` rather than racing this one. | `11 minutes`                                                     |
 | `gateway.leaseRequestTimeoutMs`   | **Gateway side.** How long the gateway waits on a forwarded `lease.request` before giving up on that worker for this request, answering `WORKER_UNREACHABLE`. Bounds the one uplink call that otherwise had no timeout of its own, so a wedged worker cannot park a request where neither a deadline nor `lease.cancel` could ever reach it again. Generous against a cold device provision-plus-boot; well below `gateway.execTimeoutMs`, since granting a lease should never take as long as a command run against the device afterward. | `5 minutes`                                                      |
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`. A gateway is the fleet's contact point, so it must be `true` there — see [Modes](#modes-gateway-and-worker). | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
@@ -80,7 +80,7 @@ misconfigured by leftovers from the config it was flipped out of.
 registered routing policies, and `exec.timeoutMs`, `gateway.execTimeoutMs`,
 `gateway.leaseRequestTimeoutMs`, and `gateway.disconnectedRetentionMs`
 positive numbers.
-**`mode: "gateway"` with `http.enabled: false` is rejected at load** (ADR 0005 §2), naming the key: a
+**`mode: "gateway"` with `http.enabled: false` is rejected at load**, naming the key: a
 gateway is the fleet's contact point over HTTP, so one nothing can reach has
 no safe reading.
 `lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
@@ -102,11 +102,9 @@ See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 
 ## Gateway and worker modes
 
-`mode` selects what `simlock daemon start` starts ([ADR
-0005](adr/0005-gateway-and-worker-modes.md)). The default, `worker`, is what
+`mode` selects what `simlock daemon start` starts. The default, `worker`, is what
 every simlock daemon has always been. `gateway` is a daemon that owns no
-devices and fronts the workers connected to it — see
-[ARCHITECTURE.md](ARCHITECTURE.md#gateway-and-worker-modes-adr-0005).
+devices and fronts the workers connected to it.
 
 **Joining a fleet takes two keys on the worker**, and they are required
 together: `gateway.url` (the gateway's base URL) and `gateway.token` (a join
@@ -145,8 +143,8 @@ restart; every other part of a worker view is rebuilt from the worker itself.
 
 ### Retired `lease.*` keys
 
-[ADR 0004](adr/0004-ttl-first-leases-on-every-transport.md) collapsed the
-held/detached lease split into one TTL-bound lease, which retired three keys.
+A collapse of the
+held/detached lease split into one TTL-bound lease retired three keys.
 **All three are simply unrecognized now** — `simlock config` warns about each
 one and ignores it, exactly as it does for any other unknown key. None of
 them is aliased onto a new key, so a config file that still sets one gets the
@@ -165,8 +163,7 @@ this setting, and it is the one in the table above.
 ## Modes: gateway and worker
 
 `mode` decides what the daemon this config belongs to *is*, so it also
-decides which of the keys above mean anything ([ADR
-0005](adr/0005-gateway-and-worker-modes.md)). One daemon runs exactly one
+decides which of the keys above mean anything. One daemon runs exactly one
 mode; `simlock daemon start` starts whichever is configured, and switching is
 `simlock config set mode gateway` followed by a restart.
 
@@ -256,7 +253,7 @@ Simlock keeps every device it creates inside a root it owns, one per platform,
 and scopes every platform command to that root. A simulator or emulator in a
 Simlock root does not appear in Xcode, in Android Studio, or in a plain
 `simctl list` / `adb devices`, and Simlock in turn cannot reach anything
-outside it. See [ADR 0001](adr/0001-simlock-owned-device-roots.md) for why.
+outside it.
 
 ```
 ~/.simlock/devices/

@@ -10,7 +10,7 @@ const ROOT_MODE = 0o700;
 
 /**
  * Why a root was refused. These strings are wire-visible: they travel in the
- * `driver.root-rejected` event payload and are listed in `docs/EVENTS.md`, so the
+ * `driver.root-rejected` event payload and are listed in `docs/internal/EVENTS.md`, so the
  * vocabulary is fixed and a new one cannot be invented here alone.
  */
 export type RootRejectionReason =

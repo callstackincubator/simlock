@@ -209,7 +209,7 @@ describe("GatewayService", () => {
   // Hardening: a worker's event name is taken on faith from its own `events.subscribe` push --
   // `workerId` is merged in last so it cannot be spoofed, but nothing about the protocol proves
   // the *name* is genuinely the worker's own. Without a guard, a worker (or anything speaking
-  // its admin protocol) could forge one of the six subjects `docs/EVENTS.md` calls "the
+  // its admin protocol) could forge one of the six subjects `docs/internal/EVENTS.md` calls "the
   // gateway's own" -- e.g. `worker.drain-ended` -- straight into the operator's audit trail.
   it("refuses to republish a worker's event under a name reserved for the gateway itself", async () => {
     const harness = fleet();

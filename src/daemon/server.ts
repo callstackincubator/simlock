@@ -465,7 +465,7 @@ export class DaemonServer {
     // and starts the health monitor. Running any of that
     // against an already-disposed engine would leave timers armed on a dead daemon and would
     // emit `daemon.started` after `daemon.stopping` -- a fact that is not true when emitted,
-    // which `docs/agent-rules/events.md` rule 3 forbids. Bail out instead; the stop that
+    // which `docs/internal/agent-rules/events.md` rule 3 forbids. Bail out instead; the stop that
     // already ran owns the teardown, so there is nothing left for this call to undo.
     if (this.#stopping) {
       this.#logger.info("Daemon converged after a stop was requested; not arming", {

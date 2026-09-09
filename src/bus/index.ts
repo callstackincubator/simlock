@@ -238,7 +238,7 @@ export interface EventMap {
    * work having started means the request is that worker's now). A `NO_CAPACITY` refusal is a
    * stale view, not a dispatch, and emits nothing -- the request stays queued.
    *
-   * C2 (round 2 review): widened back to what `docs/EVENTS.md` always specified for this row --
+   * C2 (round 2 review): widened back to what `docs/internal/EVENTS.md` always specified for this row --
    * `requesterId`/`platform`/`model` so the fact is self-contained (events rule 6) rather than
    * naming only the gateway-internal `requestId`, `reason` (the routing policy's own warm-hit /
    * free-capacity distinction, already computed by `RoutingPolicy#select` and previously

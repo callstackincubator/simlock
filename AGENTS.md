@@ -5,36 +5,51 @@ parallel coding agents lease devices without fighting over them.
 
 ## Rules — read before writing code
 
-The rules in [docs/agent-rules/](docs/agent-rules/) are binding for all
+The rules in [docs/internal/agent-rules/](docs/internal/agent-rules/) are binding for all
 changes in this repo:
 
-- [architecture.md](docs/agent-rules/architecture.md) — loosely coupled
+- [architecture.md](docs/internal/agent-rules/architecture.md) — loosely coupled
   modules; platform-agnostic core; iOS and Android encapsulated in their own
   driver modules; event bus for observers only; one place enforces a rule;
   bounded cross-process waits; every exit leaves one named state.
-- [events.md](docs/agent-rules/events.md) — event naming
+- [events.md](docs/internal/agent-rules/events.md) — event naming
   (`subject.past-tense-fact`), post-commit emission, payload contracts,
   keeping EVENTS.md in sync.
-- [safety.md](docs/agent-rules/safety.md) — registry-only destruction, never
+- [safety.md](docs/internal/agent-rules/safety.md) — registry-only destruction, never
   touch leased devices, no implicit downloads, ownership proven not inferred,
   root validation fails closed, wire input is a claim not a fact.
-- [testing.md](docs/agent-rules/testing.md) — a test's title is a claim its
+- [testing.md](docs/internal/agent-rules/testing.md) — a test's title is a claim its
   body must prove; every test must be able to fail for the right reason;
   untested code is code you can delete with a green suite.
+- [documentation.md](docs/internal/agent-rules/documentation.md) — end-user
+  docs (`docs/`) vs. maintainer/agent docs (`docs/internal/`); no ADR links
+  or internal-doc links from end-user docs; nothing the tool prints names a
+  file path in this repo.
 
-So are the accepted records in [docs/adr/](docs/adr/). An ADR marked
+So are the accepted records in [docs/internal/adr/](docs/internal/adr/). An ADR marked
 _Accepted — not yet implemented_ means the documentation already describes the
 decided end state while the code has not caught up: treat the docs as the
 specification, and do not "fix" them back to match current behaviour.
 
 ## Documentation
 
-Useful documentation lives in [docs/](docs/):
+[docs/internal/agent-rules/documentation.md](docs/internal/agent-rules/documentation.md)
+governs the split below — read it before adding or editing any doc.
+
+End-user docs live directly under [docs/](docs/) and must stay self-contained
+(no ADR links, no links into `docs/internal/`):
 
 - [ABOUT.md](docs/ABOUT.md) — what the tool is and the problem it solves
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — high-level architecture overview
-- [CLI.md](docs/CLI.md) — the expected CLI command surface (user manual)
-- [EVENTS.md](docs/EVENTS.md) — catalog of business events
-- [IDEAS.md](docs/IDEAS.md) — post-v1 ideas; don't implement these unless asked
-- [known-pitfalls.md](docs/known-pitfalls.md) — accepted gaps and their planned fixes
-- [adr/](docs/adr/) — architecture decision records and their status
+- [CLI.md](docs/CLI.md) — the CLI command surface (user manual)
+- [CLIENT.md](docs/CLIENT.md) — the programmatic client (`simlock/client`, `simlock/admin`)
+- [CONFIGURATION.md](docs/CONFIGURATION.md) — every config key, its default, and how limits interact
+- [HTTP-API.md](docs/HTTP-API.md) — the network-facing HTTP API
+- [EVENTS.md](docs/EVENTS.md) — catalog of business events, end-user cut
+
+Maintainer/agent docs live under [docs/internal/](docs/internal/):
+
+- [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — high-level architecture overview
+- [EVENTS.md](docs/internal/EVENTS.md) — the same catalog with rationale and ADR references
+- [IDEAS.md](docs/internal/IDEAS.md) — post-v1 ideas; don't implement these unless asked
+- [KNOWN-PITFALLS.md](docs/internal/KNOWN-PITFALLS.md) — accepted gaps and their planned fixes
+- [adr/](docs/internal/adr/) — architecture decision records and their status
