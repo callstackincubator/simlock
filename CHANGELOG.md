@@ -16,6 +16,28 @@ describe the decided end state, and they land with the PRs that implement it
 (the client's renew timers, and the daemon's heartbeat removal, config
 rename, and protocol bump).
 
+ADR 0005 (`docs/adr/0005-gateway-and-worker-modes.md`): a simlock daemon now
+runs in one of two modes. A **worker** is what every daemon is today — it
+owns the devices on one machine — and a **gateway** owns none, fronting the
+workers that dial out to it over a single WebSocket **uplink**. A gateway
+keeps one fleet-wide queue, dispatches each request to the worker best placed
+to serve it, proxies device commands to the worker that owns the device, and
+implements the same typed contract towards its own clients, so every existing
+frontend works against it unchanged. Nothing here is removed or repurposed
+and a daemon left in the default `mode: "worker"` behaves exactly as it does
+today, so every one of the entries below is additive **except the protocol
+bump** — `device.exec` and its `output` pushes take the socket wire to
+protocol 5, which means a client and a daemon still have to be upgraded
+together. That one is listed under BREAKING CHANGES above, with ADR 0004's
+own bump, since it is the same wire and the same upgrade.
+
+ADR 0005 is **Accepted — not yet implemented** as well: the entries under
+"ADR 0005" below describe the decided end state, and they land with the PRs
+that implement it (`device.exec` on the worker, then the gateway skeleton and
+worker views, the fleet queue and forwarding, drain and reconnect). The
+documentation is the exception to that order: it lands first, as the
+specification those changes are written against.
+
 ### ⚠ BREAKING CHANGES
 
 - **Contract:** `lease.heartbeat` is removed as an operation, and `heartbeat`
@@ -43,8 +65,12 @@ rename, and protocol bump).
   so the daemon now writes `lastRenewedAt` onto the lease record at grant and
   on every renew, and `simlock status` renders it as "last renewed". A consumer
   reading `lastHeartbeatAt` gets `undefined`.
-- **Socket protocol:** moves to protocol 4 with no compatibility shim; the
-  range a daemon and client advertise is `{min: 4, max: 4}`. A
+- **Socket protocol:** moves twice in this release, once per ADR, each time
+  with no compatibility shim. ADR 0004 removes `lease.heartbeat` and `mode`,
+  taking the wire to protocol 4; ADR 0005 adds `device.exec` and its `output`
+  push family, taking it to 5. **What ships advertises `{min: 5, max: 5}`** —
+  4 is a step along the way, not a range anything releases with, since a
+  range widens only where a compatibility path is kept (ADR 0003 §6). A
   version-mismatched client fails `hello` with `PROTOCOL_VERSION_UNSUPPORTED`
   and never restarts the daemon — run `simlock daemon stop` once it's idle.
   `daemon.stop` remains a frozen exception, accepted at any protocol version
@@ -67,7 +93,7 @@ rename, and protocol bump).
   persisted in held mode survives the upgrade with its persisted deadline
   intact — up to the old one-hour `lease.heldTtlBackstopMs`. Nothing can
   renew it: its holder speaks protocol 3 and the new daemon speaks
-  `{min: 4, max: 4}`, so its `hello` fails. The lease simply expires on that
+  `{min: 5, max: 5}`, so its `hello` fails. The lease simply expires on that
   deadline and its device is reclaimed, or `simlock release <lease-id>` ends
   it sooner. Stopping the old daemon while it is idle, as the protocol-
   mismatch error already advises, avoids the situation entirely.
@@ -134,6 +160,120 @@ those changes add, alongside the breaking changes above.
 - **config:** `lease.maxTtlMs` bounds what any caller may ask for, so one
   client cannot pin a device for a day by naming a large `ttlMs`.
 
+### ADR 0005: gateway and worker modes
+
+These ship with the PRs that implement ADR 0005, and every one of them is
+additive: `mode` defaults to `worker`, so a daemon that ignores all of this
+is the daemon that exists today.
+
+- **contract:** `device.exec` (role `agent`) runs one `simctl`/`adb` command
+  against a leased device on the machine that owns it —
+  `{ leaseId, tool, args, stdin?, requesterId? }` in, `{ exitCode }` out,
+  with output streamed as request-scoped `output` pushes
+  (`stream: "stdout" | "stderr"` plus a chunk, keyed by frame id like
+  `progress`). It works on the unix socket, over HTTP, and over the uplink,
+  so a remote HTTP agent can drive its device against a lone worker with no
+  gateway involved at all. `stdin` is one string sent with the request and
+  then closed; there is no pseudo-terminal, and a bare `adb shell` with no
+  command is refused (`PASSTHROUGH_REFUSED`) rather than left to stall until
+  the timeout. A non-admin caller is gated the ordinary way, its principal
+  against the lease's `ownerId`; `requesterId` exists for the one session
+  that would otherwise bypass that check, the gateway's admin session on a
+  worker, and **`admin` does not bypass on this one operation** — the worker
+  compares the supplied `requesterId` to the lease's own.
+- **contract:** `worker.list|drain|undrain|remove` (admin) manage the workers
+  connected to a gateway; `mode` joins `status.get`'s daemon block; `workers`
+  joins its output; `workerId` joins every device and lease in a gateway's
+  aggregate; `worker: { id, label }` joins the lease object; and `worker`
+  joins the token roles. All additive.
+- **daemon:** `config.mode` selects `worker` (default) or `gateway`. A
+  gateway starts no drivers, validates no device roots, and runs no reaper,
+  health monitor, or capacity strategy; `src/gateway/` implements the
+  contract's handlers over worker views and uplinks, importing nothing from
+  `drivers` and, from `core`, only the platform-agnostic queue and bus. A
+  gateway's one piece of persisted state is its **worker registry** — which
+  workers it knows and which an operator has drained — kept under its
+  `SIMLOCK_HOME` with owner-only permissions, so a drain survives both a
+  worker reconnect and a gateway restart. Worker _views_ are rebuilt on every
+  connect and never persisted.
+- **Socket protocol:** the wire's second move this release, to protocol 5,
+  with no compatibility shim — see BREAKING CHANGES above, where it is
+  listed with ADR 0004's. `device.exec` and its `output` push family are new
+  frames and no compatibility path is kept for them, so under ADR 0003 §6's
+  honesty rule the range does not widen. Over the uplink this is ordinary
+  version negotiation: a worker older than ADR 0005 does not overlap a
+  gateway's range, is marked `incompatible` with both ranges shown, is never
+  dispatched to, and keeps serving its own local clients until it is
+  upgraded.
+- **daemon:** one fleet queue on the gateway, dispatched to workers with
+  `noWait: true`, so a gateway request never sits in a worker's queue and can
+  be granted by whichever worker frees first. A request becomes `dispatched`
+  on a grant or on the first `progress` push from that worker; only an
+  immediate `NO_CAPACITY` (a stale view) leaves it queued. Routing is a pure
+  function over the worker views behind `gateway.routing`; the v1 policy is a
+  warm hit first, then the most free running capacity for the platform. Each
+  view carries the worker's effective `downloads.policy`, read once with
+  `config.get` on connect, so routing can tell whether a machine may install
+  a missing runtime at all — the worker still clamps `allowDownload` through
+  that same policy, as always.
+- **daemon:** `lease.renew`/`release`/reads forward to the owning worker
+  (the lease id names it), the one-lease-per-requester rule becomes
+  fleet-wide, and the requester a gateway forwards is namespaced
+  `gw:<gateway instance id>:<requester>` so local and fleet agents cannot
+  collide on a worker. `lease.release-all` on a gateway releases only the
+  leases that gateway issued, across every connected worker, and never a
+  worker's own local leases; a worker it cannot reach is reported as
+  `WORKER_UNREACHABLE` naming that worker while the rest still complete.
+- **config:** new keys. Worker side: `gateway.url`, `gateway.token` (a join
+  token), `gateway.label`, and `exec.timeoutMs` (10 minutes, and the
+  authoritative one — that side owns the process). Gateway side:
+  `gateway.routing` (`warm-then-free`), `gateway.disconnectedRetentionMs`
+  (24 hours) and `gateway.execTimeoutMs` (11 minutes, a backstop for a worker
+  that never answers, deliberately longer than the worker's own). Plus `mode`
+  itself.
+  Worker-only keys in a gateway's config are ignored with a warning, as
+  unknown keys already are. Two pairs are rejected at load instead, and the
+  daemon does not start: `mode: "gateway"` with `http.enabled: false`, since
+  a gateway with no listener cannot be reached by anyone; and, in
+  `mode: "worker"`, `gateway.url` without `gateway.token` or the reverse,
+  since a half-configured uplink would otherwise come up looking like an
+  ordinary standalone worker.
+- **http:** new routes. `GET /v1/uplink` (WebSocket upgrade, join-token
+  bearer, role `worker`) is the one inbound connection in a fleet;
+  `POST /v1/leases/{id}/exec` streams a command's output as Server-Sent
+  Events, the same shape `/events` already uses; `GET /v1/workers`,
+  `POST /v1/workers/{id}/drain`, `DELETE /v1/workers/{id}/drain`, and
+  `DELETE /v1/workers/{id}` (all `operator`) are what the console (#88)
+  renders. "Multi-host brokering" leaves `docs/HTTP-API.md`'s "Not
+  implemented" list, since this is it.
+- **events:** `worker.connected`, `worker.disconnected`, `worker.rejected`,
+  `worker.removed`, `worker.drain-started`, `worker.drain-ended`, and
+  `request.dispatched` are emitted by a gateway, and every worker's own
+  business events are republished on the gateway's bus with `workerId` added
+  to the payload — an additive change, so no exception to events rule 6 is
+  needed this time. `worker.rejected` reports an uplink refused at the door,
+  which nothing else records — it is what answers "why did that machine never
+  appear". See `docs/EVENTS.md`.
+- **contract:** five new error codes. `WORKER_UNREACHABLE` (`kind:
+"transport"`, CLI exit 1, HTTP 503 — where every other `transport`-kind
+  code already sits) when a worker's uplink is down; `WORKER_CONNECTED`
+  (exit 2, HTTP 409) refusing `worker remove` on a connected worker;
+  `UNKNOWN_WORKER` (exit 12, HTTP 404) for `worker drain`/`undrain` naming a
+  worker the gateway does not know — `remove` instead answers
+  `{"removed": false}`, since forgetting an already-forgotten worker is not a
+  failure; `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2, HTTP 501, permanently
+  rather than pending some later fan-out) for
+  `nuke`/`cleanup`/`doctor`/`driver.passthrough` asked of a gateway; and
+  `EXEC_TIMEOUT` (exit 10, HTTP 504) when a command outlives
+  `exec.timeoutMs`. `device.exec`'s refusals are **not** new codes: a refused
+  verb is the existing `PASSTHROUGH_REFUSED` and an unwrapped tool the
+  existing `UNKNOWN_PASSTHROUGH_TOOL`, both already exit 2 / HTTP 422.
+- **deps:** `ws` is added as a runtime dependency — Node ships a WebSocket
+  _client_ but no server, and the uplink needs both ends. It sits behind the
+  `UplinkListenerFactory`/`UplinkConnector` ports as their one real adapter,
+  so nothing above the port imports it and tests script a fleet in memory
+  without it.
+
 ### Documentation
 
 - record ADR 0004 as **Accepted — not yet implemented**
@@ -146,6 +286,32 @@ those changes add, alongside the breaking changes above.
   `docs/EVENTS.md`, `docs/ABOUT.md`, and `README.md`; record the SIGKILLed
   holder and re-frame the reparented-holder fix around renew timers in
   `docs/known-pitfalls.md`.
+- record ADR 0005 as **Accepted — not yet implemented**
+  (`docs/adr/0005-gateway-and-worker-modes.md` and `docs/adr/README.md`).
+- describe gateways and workers across the user manual: a "Gateway and worker
+  modes" section in `docs/ARCHITECTURE.md` (topology, uplink, worker views,
+  the fleet queue, routing, lease forwarding, `device.exec`, failure
+  behaviour, the safety argument, and `src/gateway/`'s boundaries), "Against
+  a gateway" and `simlock worker` in `docs/CLI.md`, the uplink/worker/exec
+  routes in `docs/HTTP-API.md`, `exec` and `mode` in `docs/CLIENT.md`,
+  the new keys and a "Modes" section in `docs/CONFIGURATION.md`, the fleet
+  events in `docs/EVENTS.md`, and a paragraph each in `docs/ABOUT.md` and
+  `README.md`.
+- `docs/IDEAS.md` drops "Cross-machine coordination" — ADR 0005 designs it —
+  and gains the items that record deferred: gateway-side file upload for
+  `device.exec`, reserved capacity slices, fan-out `doctor`/`cleanup`, richer
+  routing (label selectors, requester affinity), and a byte-heavy data plane.
+- `docs/known-pitfalls.md` records five accepted fleet gaps: no file transfer
+  for `device.exec`, no pseudo-terminal, a dispatched request whose uplink
+  drops, a lease that survives a gateway restart it cannot be renewed
+  through, and local agents sharing a worker's capacity with the fleet.
+- reserve "gateway" for ADR 0005's meaning: the `src/http` frontend is called
+  the **HTTP frontend** throughout `docs/ARCHITECTURE.md`,
+  `docs/HTTP-API.md`, and `docs/known-pitfalls.md`, where it used to be "the
+  HTTP gateway". No behaviour changes; one word now means one thing. ADRs
+  0003 and 0004 keep the old wording deliberately — an accepted record says
+  what it said when it was accepted, and is never edited to match a later
+  vocabulary.
 
 ## [0.3.0](https://github.com/callstackincubator/simlock/compare/v0.2.0...v0.3.0) (2026-09-03)
 

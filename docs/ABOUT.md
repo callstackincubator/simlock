@@ -1,7 +1,8 @@
 # Simlock
 
 Simlock is a control plane for iOS simulators and Android emulators, built for
-environments where multiple coding agents run in parallel on one machine.
+environments where multiple coding agents run in parallel — on one machine,
+or across a fleet of them behind a single address.
 
 ## The problem
 
@@ -32,6 +33,26 @@ programmatic client the CLI and MCP frontends are themselves built on (see
 - Devices that sit unused are **cleaned up in tiers**: shut down after a short
   idle period (reclaim RAM), deleted after a longer one (reclaim disk).
 
+## More than one machine: fleets
+
+One machine's worth of devices runs out eventually, and a team with several
+Macs should not have to hand each agent a specific one. So a simlock daemon
+runs in one of two modes ([ADR
+0005](adr/0005-gateway-and-worker-modes.md)). A **worker** is what every
+daemon is today — it owns the devices on its machine — and joining a fleet
+costs it two config keys pointing at a gateway; it keeps serving its own
+local agents exactly as before. A **gateway** owns no devices at all: workers
+dial *out* to it over a single WebSocket **uplink** (so a machine behind NAT
+needs no inbound port), and it fronts them with one fleet-wide queue,
+dispatching each request to the worker best placed to serve it — a warm
+device if one is free, otherwise the machine with the most free capacity.
+Agents and the web console point at **one URL** and stop caring which machine
+a device lives on: a gateway speaks the same contract a worker does, so
+`lease`, `renew`, `release`, `status`, and even `simlock simctl` / `simlock
+adb` (proxied to the owning worker) are the same commands they always were.
+The gateway never touches a device itself — the capacity accounting, the
+registry, and every safety invariant stay on the worker.
+
 ## Key properties
 
 - **Advisory coordination.** Simlock does not sandbox anything. It works
@@ -44,7 +65,7 @@ programmatic client the CLI and MCP frontends are themselves built on (see
   frees the device at once; `--detach` skips the staying alive and leaves the
   renewing to you. A holder that dies without releasing costs its device only
   until the TTL runs out.
-- **One lease per agent** (v1).
+- **One lease per agent** (v1) — fleet-wide when a gateway issued it.
 - **Managed-device registry.** Simlock only ever shuts down, erases, or
   deletes devices it created itself. Everything else on the machine is
   read-only to it.
@@ -52,7 +73,9 @@ programmatic client the CLI and MCP frontends are themselves built on (see
   progress (e.g. provisioning ETAs) streams as JSON lines on stderr. The
   optional MCP server reserves stdout for MCP JSON-RPC.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's built, [CLI.md](CLI.md)
-for the command surface, [CLIENT.md](CLIENT.md) for the programmatic client,
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how it's built (and
+[its gateway section](ARCHITECTURE.md#gateway-and-worker-modes-adr-0005) for
+how a fleet fits together), [CLI.md](CLI.md) for the command surface,
+[CLIENT.md](CLIENT.md) for the programmatic client,
 [HTTP-API.md](HTTP-API.md) for the network API, and
 [known-pitfalls.md](known-pitfalls.md) for accepted gaps.
