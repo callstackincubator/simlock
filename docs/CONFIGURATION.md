@@ -14,9 +14,8 @@ a warning. Inspect the effective, merged configuration at any time with
 | `warmPool.quarantine.retryBackoffMs` | Delay before the first quarantine purge retry.                                                                                                                                                                            | `30 seconds`                                                     |
 | `warmPool.quarantine.retryBackoffMultiplier` | Growth factor applied to the backoff after each failed retry.                                                                                                                                                     | `2`                                                               |
 | `warmPool.quarantine.maxRetryBackoffMs` | Cap on the quarantine retry backoff.                                                                                                                                                                                   | `5 minutes`                                                      |
-| `lease.heldTtlBackstopMs`         | Backstop TTL for held-mode leases, in case the holding process dies without releasing.                                                                                                                                       | `1 hour`                                                        |
-| `lease.detachedTtlMs`             | TTL for detached-mode leases before they must be renewed with `simlock lease renew`.                                                                                                                                         | `15 minutes`                                                    |
-| `lease.heartbeatIntervalMs`       | How often the daemon pings a held-mode connection that declared the `heartbeat` capability; each pong slides that connection's leases' TTL back out to a full `heldTtlBackstopMs`. Must be `<= lease.heldTtlBackstopMs / 4`. | `5 minutes`                                                     |
+| `lease.defaultTtlMs`              | TTL applied to a lease whose `lease.request` carried no `ttlMs` — **that request only**. It is *not* the renew fallback: a renew given no explicit TTL re-applies the lease's own stored width, so a lease granted for longer keeps it. A lease not renewed before its deadline expires and its device is reclaimed. | `15 minutes`                                                    |
+| `lease.maxTtlMs`                  | Largest TTL a request or a renew may ask for. A larger `ttlMs` is rejected with `BAD_REQUEST` rather than silently clamped, so a caller is never left believing it has more time than it does.                               | `4 hours`                                                       |
 | `http.enabled`                    | Master switch for the network-facing HTTP API (see [HTTP-API.md](HTTP-API.md)). Off by default; the daemon binds nothing until this is `true`.                                                                              | `false`                                                          |
 | `http.host`                       | Address the HTTP listener binds. `127.0.0.1` keeps it loopback-only; reaching it remotely is the operator's own tunnel (Tailscale, cloudflared, reverse proxy) — Simlock does no TLS termination in v1.                     | `127.0.0.1`                                                      |
 | `http.port`                       | Port the HTTP listener binds. Must be an integer `1`-`65535`.                                                                                                                                                                 | `4700`                                                           |
@@ -49,8 +48,41 @@ must be non-negative numbers (milliseconds and bytes, respectively).
 integer in `1`-`65535`.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
+`lease.defaultTtlMs` and `lease.maxTtlMs` must be positive numbers, and
+`lease.defaultTtlMs` must be `<=` `lease.maxTtlMs`. A config that violates
+either rule is **rejected at load and the daemon does not start**, naming the
+offending key — it is not clamped to something the operator did not write.
+That is the opposite treatment from the retired keys below, which are only
+warned about and ignored: an unrecognized key is a leftover, while a TTL pair
+that contradicts itself has no safe interpretation to fall back on.
+
+`lease.maxTtlMs` bounds what a request or a renew may **ask for**; it is not
+re-applied to leases that already exist. A lease holding a larger stored
+`ttlMs` — granted before an operator lowered the cap, or carried over from an
+older record — keeps re-applying that width on every body-less renew, so
+lowering the cap does not shorten it. Release it, or renew it once with an
+explicit smaller `--ttl`, and the new width sticks from then on.
 See [CLI.md](CLI.md#simlock-config-get-keyset-key-value) for the
 `simlock config` command itself.
+
+### Retired `lease.*` keys
+
+[ADR 0004](adr/0004-ttl-first-leases-on-every-transport.md) collapsed the
+held/detached lease split into one TTL-bound lease, which retired three keys.
+**All three are simply unrecognized now** — `simlock config` warns about each
+one and ignores it, exactly as it does for any other unknown key. None of
+them is aliased onto a new key, so a config file that still sets one gets the
+new key's default, not the value it wrote:
+
+| Old key | What it did | What to write instead |
+| --- | --- | --- |
+| `lease.detachedTtlMs` | TTL for detached-mode leases. | `lease.defaultTtlMs`, which means the same thing for the one lease kind that is left. Copy the value across; it is not carried over for you. |
+| `lease.heldTtlBackstopMs` | Backstop TTL behind a held lease. | Nothing. There is no separate backstop any more: a lease's TTL *is* its deadline. |
+| `lease.heartbeatIntervalMs` | Daemon ping interval for held connections. | Nothing. The daemon-initiated heartbeat is gone; clients renew on their own timer. |
+
+A warning rather than a hard failure keeps an old config bootable, and a
+warning rather than an alias keeps the key set honest — there is one name for
+this setting, and it is the one in the table above.
 
 ## Device roots
 
