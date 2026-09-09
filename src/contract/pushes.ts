@@ -2,7 +2,8 @@
  * Server pushes (ADR 0003 §8). Three families, each with its correlation key required by
  * schema:
  *
- * - Request-scoped (`progress`, `output`): carries the originating request's frame id.
+ * - Request-scoped (`progress`, `started`, `output`): carries the originating request's
+ *   frame id.
  * - Lease-scoped (`lease-lost`, `device-unhealthy`, `device-recovered`): carries the lease id,
  *   and goes to every live connection whose principal owns that lease (ADR 0004 §5 keeps
  *   these; they are facts about the device, not a liveness channel).
@@ -48,6 +49,28 @@ const outputPushSchema = z.object({
   chunk: z.string(),
 });
 
+/**
+ * ADR 0005 §19a: a forwarded `device.exec`'s process now exists on the worker, keyed by the
+ * originating request's frame id exactly as `output` is.
+ *
+ * This is the fact a transport needs to choose its response shape on, and it is the one fact a
+ * gateway cannot infer. The worker already knows the moment -- its dispatcher spawns the child
+ * and then calls `DispatchSession.onStarted`, after every failure that can happen before a
+ * process exists (a refused verb, an unknown tool, an unowned lease, a daemon still starting)
+ * and before any output. Directly against a worker that signal reaches the transport; across an
+ * uplink it used to stop at the worker's edge, so the gateway guessed with a timer -- and a
+ * refusal that arrived after the timer got a `200` with the error buried in the stream, where
+ * §19a requires a `422`. Sending the fact removes the guess.
+ *
+ * Part of protocol 5, not an addition on top of it: 5 has never shipped, so nothing will ever
+ * advertise 5 without this frame, and a peer older than 5 is `incompatible` by range (ADR 0005
+ * §31) rather than a peer that merely stays quiet. There is no "never sends it" case to keep a
+ * fallback for, which is why the gateway has exactly one path to this signal.
+ */
+const startedPushSchema = z.object({
+  requestId: requestIdSchema,
+});
+
 const leaseLostPushSchema = z.object({
   leaseId: z.string(),
   deviceId: z.string(),
@@ -74,6 +97,7 @@ const eventPushSchema = z.object({
 export const PUSH_SCHEMAS = {
   progress: progressPushSchema,
   output: outputPushSchema,
+  started: startedPushSchema,
   "lease-lost": leaseLostPushSchema,
   "device-unhealthy": deviceUnhealthyPushSchema,
   "device-recovered": deviceRecoveredPushSchema,

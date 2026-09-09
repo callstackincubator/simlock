@@ -130,6 +130,18 @@ const leaseRequestInputSchema = z
      * through to `LeaseRequestOptions.ttlMs` (src/core/wait-queue.ts) by that same handler.
      */
     ttlMs: z.number().finite().positive().optional(),
+    /**
+     * ADR 0005 §27a: the gateway's own forward of the lease's *owner* -- the principal it
+     * authorized the request against on its own side -- so the worker stores that verbatim as
+     * `ownerId` instead of deriving one from the connection that reached it (which, over the
+     * uplink, is always the gateway's own admin session, never the fleet client). Read **only
+     * on an admin session**; the dispatcher's `#leaseRequest` rejects the request outright if
+     * any other role's session sends it (see that handler's own comment) rather than silently
+     * ignoring it, because silently ignoring it is exactly the "guess or fail open" the ADR
+     * calls out as the alternative to rejecting. Omitting it keeps today's behaviour -- the
+     * owner is the calling connection -- so this is additive and no existing caller changes.
+     */
+    owner: z.string().optional(),
   })
   .strict();
 
@@ -143,10 +155,14 @@ export const leaseRequest = defineOperation({
    * §4 is explicit that any agent session may request a lease under an arbitrary
    * `requesterId` -- that is the whole mechanism behind "one connection (the host, acting as
    * a proxy for many agents) holds many leases by passing one requester id per session". The
-   * lease's actual `ownerId` is never client-supplied (always `session.principal`, see the
-   * dispatcher's `#leaseRequest`), so this does not let one session take over another's
-   * lease -- only choose the attribution label on a lease it will itself own. `lease.cancel`
-   * used to look inconsistent next to this (forbidding a `requesterId` that did not equal the
+   * lease's actual `ownerId` is never client-supplied by an ordinary agent session (always
+   * `session.principal`, see the dispatcher's `#leaseRequest`) -- only an admin session's
+   * explicit `owner` above overrides that, and that gate is a role check on one field, not an
+   * ownership question about an existing resource, so it lives in the handler rather than as an
+   * `authorize` hook here (which runs against a resource this request has not created yet).
+   * Neither lets one session take over another's lease -- only choose the attribution label, or
+   * (admin only) the owner, on a lease it will itself cause to be granted. `lease.cancel` used
+   * to look inconsistent next to this (forbidding a `requesterId` that did not equal the
    * principal, on an operation that has none of `lease.request`'s ownership protection to
    * begin with) -- fixed by gating `lease.cancel` on the pending request's recorded owner
    * (`pendingRequestOwner`, see its own `authorize` hook below) instead, which is consistent

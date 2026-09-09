@@ -9,25 +9,23 @@
  * 1. **Answered from the fleet**: `status.get` and `catalog.get` (aggregated, §20/§21),
  *    `worker.*` (§8/§23), `events.*` (the gateway's own bus, which carries every worker's
  *    republished events, §22), `config.get` (the gateway's own config, §34), `token.*` (a
- *    gateway mints its own credentials, §24).
+ *    gateway mints its own credentials, §24), and -- as of #118 -- the lease *lifecycle*
+ *    (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`, all forwarded
+ *    through `FleetLeaseCoordinator`.
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`
  *    and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole.
- * 3. **Refused until #118** (`unsupportedUntilRouting`): the lease *lifecycle* --
- *    `lease.request`, `renew`, `release`, `cancel`, `release-all` -- and `device.exec`, which
- *    a gateway proxies to the worker that owns the device (§19b). The fleet queue, routing and
- *    forwarding are that PR's; this one deliberately makes the fleet visible before it is
- *    routable.
+ * 3. *(Formerly "refused until #118" -- the fleet queue, routing, and lease/exec forwarding this
+ *    module now implements. Nothing is left in this population; the type below still enforces
+ *    that every operation but `daemon.stop` is accounted for.)*
  *
- * The read-only members of the lease family -- `lease.list` and `list.get` -- are in the first
- * population, not the third: they are the fleet made *visible*, which is this PR's whole point,
- * and answering them needs nothing but the views. They read what workers report rather than
- * forwarding anything, so #118 replaces their implementation (with its own lease index) without
- * changing what a caller sees.
+ * `lease.list` and `list.get` read what the fleet's views and lease index report rather than
+ * forwarding anything -- they are the fleet made *visible*, and #118's only change to them is
+ * rewriting a gateway-issued lease's id/requester to its fleet-facing form (`FleetLeaseIndex#project`)
+ * so a caller can round-trip it into `lease.renew`; a worker's own local lease is untouched.
  *
- * The last two answer `UNSUPPORTED_IN_GATEWAY_MODE`; `details.operation` and the message say
- * which population an answer came from. The table is typed total over the contract minus
- * `daemon.stop`, so a newly declared operation is a compile error here until someone decides
- * which of the three it belongs to.
+ * The one population that remains answers `UNSUPPORTED_IN_GATEWAY_MODE`; `details.operation` and
+ * the message say why. The table is typed total over the contract minus `daemon.stop`, so a
+ * newly declared operation is a compile error here until someone decides where it belongs.
  */
 import type { z } from "zod";
 
@@ -42,6 +40,8 @@ import {
 import type { Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus } from "./aggregate.js";
+import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
+import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
 
 type Handler<Op extends OperationName> = (
@@ -99,6 +99,30 @@ export interface GatewayDispatcherOptions {
   /** The gateway's own health, for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
   readonly awaitReady: () => Promise<void>;
+  /**
+   * #118: admission, dispatch, and lease/exec forwarding. Every lease-lifecycle handler and
+   * `device.exec` below is a thin translation from contract input to a `coordinator` call; the
+   * two ownership lookups (`ownerId`, `leaseRequesterId`) and the pending-request lookup
+   * (`pendingRequestOwner`) it also exposes feed `dispatch()`'s `authorizeLookups` directly, the
+   * same shape a worker's own `Dispatcher` supplies from its registry and queue.
+   */
+  readonly coordinator: Pick<
+    FleetLeaseCoordinator,
+    | "request"
+    | "cancelPending"
+    | "renew"
+    | "release"
+    | "releaseAll"
+    | "exec"
+    | "queueDepth"
+    | "ownerId"
+    | "leaseRequesterId"
+    | "pendingRequestOwner"
+  >;
+  /** #118: read-only access for `lease.list`/`list.get`/`status.get`'s lease projection
+   * (`FleetLeaseIndex#project`/`#all`) -- kept separate from `coordinator` because this
+   * dispatcher only ever *reads* it, never mutates it. */
+  readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all">;
 }
 
 export class GatewayDispatcher {
@@ -129,12 +153,12 @@ export class GatewayDispatcher {
       "doctor.run": unsupportedByDesign("doctor.run"),
       "driver.passthrough": unsupportedByDesign("driver.passthrough"),
 
-      "lease.request": unsupportedUntilRouting("lease.request"),
-      "lease.renew": unsupportedUntilRouting("lease.renew"),
-      "lease.release": unsupportedUntilRouting("lease.release"),
-      "lease.cancel": unsupportedUntilRouting("lease.cancel"),
-      "lease.release-all": unsupportedUntilRouting("lease.release-all"),
-      "device.exec": unsupportedUntilRouting("device.exec"),
+      "lease.request": this.#leaseRequest,
+      "lease.renew": this.#leaseRenew,
+      "lease.release": this.#leaseRelease,
+      "lease.cancel": this.#leaseCancel,
+      "lease.release-all": this.#leaseReleaseAll,
+      "device.exec": this.#deviceExec,
       // "daemon.stop" is absent for the same reason it is absent from the worker's table: the
       // transport intercepts it ahead of any dispatch (ADR 0003 §6's frozen exception).
     };
@@ -147,10 +171,14 @@ export class GatewayDispatcher {
   ): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
     return runDispatch(operation, rawInput, session, {
       handlers: this.#handlers,
-      // No `authorizeLookups`: the gateway holds no leases and no pending requests of its own
-      // in this PR, so both lookups answer `undefined`, which every `authorize` hook treats as
-      // authorized -- and every operation carrying one is refused here anyway. #118 supplies
-      // the real lookups along with the lease index they read.
+      // #118: `ownsLease`/`device.exec`'s own hook and `lease.cancel`'s resolve these against
+      // the fleet's own lease index and pending-request queue -- the same shape a worker's own
+      // `Dispatcher` supplies from its registry and queue, read through `coordinator` instead.
+      authorizeLookups: {
+        leaseRequesterId: (id) => this.options.coordinator.leaseRequesterId(id),
+        ownerId: (id) => this.options.coordinator.ownerId(id),
+        pendingRequestOwner: (id) => this.options.coordinator.pendingRequestOwner(id),
+      },
       awaitReady: () => this.options.awaitReady(),
       onOutputMismatch: (operationName, issues) => {
         this.#logger.error("Operation output failed contract validation", {
@@ -166,9 +194,9 @@ export class GatewayDispatcher {
   #statusGet: Handler<"status.get"> = () =>
     aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
-      // ADR 0005 §20: the *gateway's* queue depth. It has no queue until #118, and 0 is the
-      // honest answer for a queue that cannot hold anything -- not a placeholder.
-      queueDepth: 0,
+      // ADR 0005 §20: the gateway's own fleet queue depth.
+      queueDepth: this.options.coordinator.queueDepth,
+      leaseIndex: this.options.leaseIndex,
     });
 
   #catalogGet: Handler<"catalog.get"> = (input) =>
@@ -226,25 +254,36 @@ export class GatewayDispatcher {
   });
 
   /**
-   * Every lease the fleet's views report, each carrying its `workerId` (ADR 0005 §20), for an
-   * admin session. A non-admin session sees none of them.
-   *
-   * P-1 (third review round): P2's version of this handler compared a namespaced form of the
-   * session's own principal (`gatewayRequesterPrefix` + `session.principal`) against each
-   * lease's `ownerId` -- but on a worker, `ownerId` is the *raw*, un-namespaced local principal
-   * (`daemon/dispatcher.ts`'s own `lease.list`), and the gateway's own principal at `hello` is
-   * `gw:<instanceId>` with no `:<requester>` suffix (`GatewayService`). A string ending in
-   * `:<principal>` can therefore never equal `gw:<instanceId>`, so that comparison returned
-   * `[]` for every non-admin session *by construction* -- not "until #118", as its comment
-   * claimed -- and nothing exercised it except a test that hand-built an `ownerId` no code path
-   * actually produces. #118 replaces this handler outright with its own `FleetLeaseIndex`,
-   * filtered by `ownerId` for the real, routed case; this handler is deliberately left inert
-   * rather than growing a second, competing namespacing scheme #118 would then have to undo.
-   * Same observable behavior as before (`[]`), no comparison pretending to be live.
+   * ADR 0005 §14/§20: a non-admin session sees only the fleet leases *it* owns -- resolved
+   * through the lease index by `ownerId`, never by scanning every worker's raw leases and
+   * comparing `ownerId` to `session.principal` directly. That comparison would let an agent
+   * token on the gateway that happens to name itself the same as some worker's own local agent
+   * see that machine's local lease (`session.principal` is client-chosen and unverified, per
+   * `daemon/server.ts`'s `hello` handling) -- the index only ever holds leases this gateway
+   * itself issued, so it cannot produce that collision. An admin session sees the whole fleet,
+   * which is what `GET /v1/leases` is for.
    */
   #leaseList: Handler<"lease.list"> = (_input, session) => ({
-    leases: session.role === "admin" ? this.#fleetLeases() : [],
+    leases:
+      session.role === "admin" ? this.#fleetLeases() : this.#ownedFleetLeases(session.principal),
   });
+
+  /** Every lease this gateway issued to `ownerId`, projected to its fleet-facing form. Looks up
+   * each entry's current record from the owning worker's view rather than caching one on the
+   * index itself, so a renewed TTL/`lastRenewedAt` is always current. An entry whose worker view
+   * (or the specific lease on it) is momentarily missing -- a race with a reconnect rebuild, or
+   * a worker that just disconnected -- is skipped rather than fabricated. */
+  #ownedFleetLeases(ownerId: string) {
+    const leases = [];
+    for (const entry of this.options.leaseIndex.all()) {
+      if (entry.ownerId !== ownerId) continue;
+      const view = this.options.workers.view(entry.workerId);
+      const raw = view?.leases.find((lease) => lease.id === entry.workerLeaseId);
+      if (view === undefined || raw === undefined) continue;
+      leases.push(this.options.leaseIndex.project(raw, view.id, view.label));
+    }
+    return leases;
+  }
 
   /**
    * The admin inspection of the fleet. `devices` and `leases` are the aggregate with
@@ -266,10 +305,118 @@ export class GatewayDispatcher {
     }
   };
 
+  /** Every lease every worker's view reports, each projected through the lease index -- rewritten
+   * to its gateway id/requester/`worker` for a lease this gateway issued (test: "lease.list
+   * rewrites ids only for gateway-issued leases"), passed through with only `workerId` added for
+   * a worker's own local lease. Admin-only visibility (`list.get`, and `#leaseList` for an admin
+   * session): a non-admin session never reaches this, see `#ownedFleetLeases` above. */
   #fleetLeases() {
     return this.options.workers
       .views()
-      .flatMap((view) => view.leases.map((lease) => ({ ...lease, workerId: view.id })));
+      .flatMap((view) =>
+        view.leases.map((lease) => this.options.leaseIndex.project(lease, view.id, view.label)),
+      );
+  }
+
+  /**
+   * ADR 0005 §15: "the gateway's `lease.defaultTtlMs` fills in a request that names no `ttlMs`
+   * and its `lease.maxTtlMs` caps what its own clients may ask for, both before anything is
+   * dispatched". `owner` (§27a, narrowed round 3 review H3) is read only from `session.
+   * isGatewayUplink` -- never merely `role === "admin"`, which HTTP's `operator` token also maps
+   * onto (`dispatcher-session.ts`), the same over-wide gate `daemon/dispatcher.ts`'s own
+   * `#leaseRequest` used to share with this one.
+   *
+   * Unlike the worker, nothing ever forwards *into* a gateway's own front door the way this
+   * gateway forwards into a worker -- there is no "gateway of gateways" in ADR 0005, so no
+   * session reaching this handler is ever the uplink `isGatewayUplink` identifies (that flag is
+   * stamped only on a worker's own `DaemonServer#acceptUplink` connection, never on a gateway's).
+   * The practical effect is what the user's decision asked for stated plainly: `owner` is
+   * unconditionally `FORBIDDEN` here, admin included -- a fleet client's own principal
+   * (`session.principal`, the default below) is already the correct, un-spoofable owner for
+   * anything this gateway itself issues.
+   */
+  // fallow-ignore-next-line complexity -- one transaction, moved verbatim from the worker's own #leaseRequest shape.
+  #leaseRequest: Handler<"lease.request"> = async (input, session) => {
+    this.#requireTtlWithinCap(input.ttlMs);
+    if (input.owner !== undefined && session.isGatewayUplink !== true) {
+      throw new DispatchError(
+        "FORBIDDEN",
+        "Only the gateway's own uplink session may set lease.request's `owner` field",
+      );
+    }
+    return this.options.coordinator.request(
+      {
+        model: input.model,
+        platform: input.platform,
+        ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
+        ...(input.full ? { full: true } : {}),
+      },
+      {
+        allowDownload: input.allowDownload ?? false,
+        noWait: input.noWait ?? false,
+        ownerId: input.owner ?? session.principal,
+        requesterId: input.requesterId ?? session.principal,
+        ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
+        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+        // Always explicit past this point (§15): a request that named none is filled in here,
+        // before dispatch, rather than left for whichever worker happens to grant it to default
+        // on its own -- which could differ fleet to fleet.
+        ttlMs: input.ttlMs ?? this.options.config.lease.defaultTtlMs,
+      },
+    );
+  };
+
+  #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
+    const requesterId = input.requesterId ?? session.principal;
+    const result = await this.options.coordinator.cancelPending(requesterId);
+    return { result };
+  };
+
+  /** ADR §15's cap applies here too -- "what its own clients may ask for" is any `ttlMs` a
+   * fleet client names, renew included, not only the initial request. */
+  #leaseRenew: Handler<"lease.renew"> = async (input) => {
+    this.#requireTtlWithinCap(input.ttlMs);
+    return this.options.coordinator.renew(input.leaseId, input.ttlMs);
+  };
+
+  #leaseRelease: Handler<"lease.release"> = async (input) => {
+    await this.options.coordinator.release(input.leaseId);
+    return { leaseId: input.leaseId };
+  };
+
+  #leaseReleaseAll: Handler<"lease.release-all"> = async () => {
+    const leaseIds = await this.options.coordinator.releaseAll();
+    return { leaseIds: [...leaseIds] };
+  };
+
+  /** ADR §19b: proxied to the worker that owns the device, over the same uplink as everything
+   * else. Ownership was already checked once, at the gateway (this operation's own `authorize`
+   * hook, via `leaseRequesterId`/`ownerId` above) -- the worker checks it again, against the
+   * namespaced requester `FleetLeaseCoordinator#exec` forwards (§19a'). */
+  #deviceExec: Handler<"device.exec"> = async (input, session) =>
+    this.options.coordinator.exec(
+      {
+        leaseId: input.leaseId,
+        tool: input.tool,
+        args: input.args,
+        ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+      },
+      session,
+    );
+
+  /**
+   * ADR §15/§4's cap, applied identically to a request and a renew. Lives here rather than in
+   * the contract schema for the same reason the worker's own copy does: `lease.maxTtlMs` is a
+   * daemon config value the contract module cannot see.
+   */
+  #requireTtlWithinCap(ttlMs: number | undefined): void {
+    const maxTtlMs = this.options.config.lease.maxTtlMs;
+    if (ttlMs !== undefined && ttlMs > maxTtlMs) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `ttlMs ${String(ttlMs)} exceeds lease.maxTtlMs (${String(maxTtlMs)})`,
+      );
+    }
   }
 
   #requireTokens(): GatewayTokenStore {
@@ -286,17 +433,6 @@ function unsupportedByDesign(operation: OperationName): ErasedHandler {
     throw new DispatchError(
       "UNSUPPORTED_IN_GATEWAY_MODE",
       `${operation} acts on one machine's devices; run it against a worker`,
-      { operation },
-    );
-  };
-}
-
-/** Answered once #118 gives the gateway a queue, a routing policy, and lease forwarding. */
-function unsupportedUntilRouting(operation: OperationName): ErasedHandler {
-  return () => {
-    throw new DispatchError(
-      "UNSUPPORTED_IN_GATEWAY_MODE",
-      `${operation} is not available on a gateway yet; fleet routing implements it`,
       { operation },
     );
   };

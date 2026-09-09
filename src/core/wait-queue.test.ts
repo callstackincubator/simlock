@@ -122,6 +122,109 @@ describe("WaitQueue", () => {
     expect(timedOut).toHaveBeenCalledWith(queued);
   });
 
+  // Pre-existing gap, now routinely triggered by the gateway's own stale-view re-queue (round 2
+  // review): a waiter cycling queued -> processing -> queued used to have `timeoutMs` re-armed
+  // from zero on every return to `queued`, so the total wait before `QUEUE_TIMEOUT` could exceed
+  // the caller's own budget by a multiple. These two tests pin the fixed behaviour: the budget is
+  // one fixed deadline from the *first* enqueue, survives any number of cycles, and a re-enqueue
+  // past that deadline settles immediately rather than granting another full window.
+  it("rejects immediately on a re-enqueue past the original deadline, instead of granting a fresh timeoutMs window", async () => {
+    const timedOut = vi.fn();
+    const { clock, queue } = createQueue(timedOut);
+    const waiter = createWaiter(queue, "agent", { timeoutMs: 100 });
+
+    queue.enqueue(waiter);
+    clock.advance(60); // still well inside the original 100ms budget
+    queue.markProcessing(waiter);
+    // The original timer (armed for the full 100ms at t=0) fires during this advance, at
+    // t=100 -- but the waiter is `processing`, not `queued`, so `#armTimeout`'s own timer
+    // callback does nothing here. Total elapsed is now 120ms, past the original deadline.
+    clock.advance(60);
+    expect(waiter.state).toBe("processing");
+
+    // A stale-view (or worker retry) re-queue lands after the deadline already passed.
+    expect(queue.enqueue(waiter)).toBe(false);
+
+    await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
+    expect(waiter.state).toBe("rejected");
+    expect(queue.depth).toBe(0);
+    expect(timedOut).toHaveBeenCalledWith(waiter);
+  });
+
+  // H5 (round 3 review): this test used to claim it proved a re-enqueue "re-arms only the time
+  // actually remaining" -- but every assertion in it (the waiter's `state` at various clock
+  // ticks, and when its promise finally rejects) would come out identical whether `#armTimeout`
+  // actually cancelled the original timer and started a fresh one for the recomputed remainder,
+  // or simply left that still-live timer alone. Both mechanisms hit the same fixed `deadlineAt`.
+  // The `setTimer` spy below is what tells them apart: it asserts directly on the *mechanism* --
+  // exactly one timer is ever armed across the whole `queued -> processing -> queued` cycle, not
+  // two -- which is what `#armTimeout`'s own doc comment now documents as the only thing that
+  // can happen (its `waiter.timer !== undefined` guard makes a genuine recompute-and-re-arm
+  // unreachable through this class's public API). The externally observed timing this test also
+  // pins is real and worth keeping; it just is not, on its own, evidence of which mechanism
+  // produced it.
+  it("leaves a still-live timer alone across a queued -> processing -> queued cycle, rather than cancelling and re-arming it, so the total wait never exceeds the original timeoutMs (H5, round 3 review)", async () => {
+    const { clock, queue } = createQueue();
+    const waiter = createWaiter(queue, "agent", { timeoutMs: 100 });
+    const setTimerSpy = vi.spyOn(clock, "setTimer");
+    const cancelSpy = vi.spyOn(clock, "cancel");
+
+    queue.enqueue(waiter);
+    expect(setTimerSpy).toHaveBeenCalledTimes(1); // the first (and, this test proves, only) arm
+    clock.advance(30);
+    queue.markProcessing(waiter);
+    clock.advance(20); // t=50: still well before the t=100 deadline
+    expect(queue.enqueue(waiter)).toBe(true); // re-queued, e.g. a stale-view NO_CAPACITY
+    expect(waiter.state).toBe("queued");
+
+    // The proof this test exists for: re-enqueuing well before the deadline armed nothing new
+    // and cancelled nothing -- `#armTimeout`'s guard found the original timer still live and
+    // returned immediately. A recompute-and-re-arm implementation would have cancelled that
+    // timer and called `setTimer` a second time here, for the ~50ms actually remaining.
+    expect(setTimerSpy).toHaveBeenCalledTimes(1);
+    expect(cancelSpy).not.toHaveBeenCalled();
+
+    // If this cycle had re-armed a fresh 100ms window, the waiter would still be pending here
+    // (t=50 + 49ms = 99ms of its own window, or 149ms of total elapsed time either way). It
+    // does not: the original deadline was t=100, and only 50ms of elapsed time remain from it.
+    clock.advance(49);
+    expect(waiter.state).toBe("queued");
+    clock.advance(1); // t=100: the original deadline, reached exactly once, not once per cycle
+    await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
+    expect(queue.depth).toBe(0);
+    // Still just the one timer, start to finish -- the fixed deadline was honoured by leaving it
+    // running, not by any second arm.
+    expect(setTimerSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("never delivers a progress push to a waiter that already settled, even the very same tick (P3, round 2 review)", async () => {
+    // `enqueue` can reject synchronously once a waiter's deadline has already passed (the
+    // re-arm-only-remaining-time fix above); a caller that unconditionally pushes progress right
+    // after its own `enqueue` call (`LeaseAcquisitionCoordinator#defer` always does, for its
+    // reclaim-wait notice) must not be able to deliver that push to a waiter `enqueue` just
+    // rejected out from under it.
+    const received: LeaseProgress[] = [];
+    const { clock, queue } = createQueue();
+    const waiter = queue.create(request satisfies DeviceRequest, {
+      onProgress: (progress) => received.push(progress),
+      ownerId: "agent",
+      requesterId: "agent",
+      timeoutMs: 100,
+    });
+    queue.enqueue(waiter);
+    queue.markProcessing(waiter);
+    clock.advance(150); // past the 100ms deadline while `processing`, same as the test above
+
+    expect(queue.enqueue(waiter)).toBe(false); // rejects synchronously with QueueTimeoutError
+    expect(waiter.state).toBe("rejected");
+    received.length = 0; // only care about anything delivered *after* settlement
+
+    queue.notifyProgress(waiter, { etaMs: 5_000, stage: "reclaiming" });
+
+    await expect(waiter.promise).rejects.toEqual(expect.any(QueueTimeoutError));
+    expect(received).toEqual([]);
+  });
+
   it("attaches and detaches queued progress without changing the request outcome", () => {
     const received: LeaseProgress[] = [];
     const reattached: LeaseProgress[] = [];

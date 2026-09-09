@@ -277,6 +277,40 @@ describe("POST /v1/lease-requests", () => {
     expect(dispatcher.calls).toHaveLength(0);
   });
 
+  it("forwards a body's owner field to the dispatched lease.request rather than silently dropping it (ADR §27a, H7)", async () => {
+    // Before this, `leaseRequestBodySchema` had no `owner` field at all, so a caller naming one
+    // was answered as though it had named none -- the same anti-pattern this codebase's own
+    // `device.exec`'s `requesterId` precedent already rejected: an identity named and answered
+    // as if it had not is the kind of silence that reads like authorization. The gate itself
+    // (FORBIDDEN for a non-admin token) lives in the shared dispatcher, exercised once for every
+    // transport in `daemon/dispatcher.test.ts`/`gateway/dispatcher.test.ts` -- this only proves
+    // the field actually reaches that dispatcher from HTTP instead of being dropped in transit.
+    const { app, dispatcher } = buildHarness();
+    void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+
+    expect((call.input as { owner?: string }).owner).toBe("someone-else");
+  });
+
+  it("builds an operator token's session as admin but never as the gateway's uplink, so §27a's owner gate still refuses it at the shared dispatcher (ADR §27a, H3)", async () => {
+    // §27a's `owner` field is narrowed to `session.isGatewayUplink` (round 3 review, H3): an
+    // HTTP `operator` bearer token maps onto `role: "admin"` (`dispatcher-session.ts`'s
+    // `toRole`), same as before, but `buildHttpSession` never sets `isGatewayUplink` -- no HTTP
+    // request is ever the worker's own uplink connection to its configured gateway, which is the
+    // only session that connection-acceptance signal is stamped on (`DaemonServer#acceptUplink`,
+    // via `connection.forcedRole`). This is what makes the real gate in
+    // `daemon/dispatcher.test.ts`/`gateway/dispatcher.test.ts` (FORBIDDEN for `isGatewayUplink !==
+    // true`, exercised there against the real dispatcher) actually bite an operator token too,
+    // not just an agent one -- this test only proves the session HTTP hands that dispatcher never
+    // carries the one flag that would let it through.
+    const { app, dispatcher } = buildHarness();
+    void postLeaseRequest(app, { ...defaultBody, owner: "someone-else" }, operatorAuth);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+
+    expect(call.session.role).toBe("admin");
+    expect(call.session.isGatewayUplink).not.toBe(true);
+  });
+
   it("maps a fast RequesterAlreadyLeasedError to 409, naming the existing lease", async () => {
     const { app, dispatcher } = buildHarness();
     const responsePromise = postLeaseRequest(app, defaultBody);
@@ -878,6 +912,15 @@ describe("lease routes", () => {
       // ADR 0005 §19e: a command that prints nothing for nine minutes still gets its `200` and
       // its keepalives, and an `EXEC_TIMEOUT` therefore always arrives as the stream's terminal
       // event rather than as a status the client can no longer be given.
+      //
+      // C3 (round 3 review): this only proves that half of the route's *own* logic given a
+      // dispatcher that calls `onStarted` when told to (`call.session.onStarted?.()` below is
+      // this test driving that by hand) -- it says nothing about when a real dispatcher actually
+      // calls it, and cannot notice a dispatcher that stops calling it for a genuinely silent,
+      // long-running command. That is `FleetLeaseCoordinator`'s own job for a gateway
+      // (`src/gateway/fleet-coordinator.ts#exec`); the invariant this comment describes is
+      // guarded end to end there, not here -- see `fleet-coordinator.test.ts`'s "relays the
+      // worker's own started push for a silent, long-running command".
       const { app, clock, dispatcher } = buildHarness();
 
       const responsePromise = postExec(app);

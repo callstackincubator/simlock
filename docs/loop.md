@@ -44,8 +44,9 @@ specifications have been removed from `docs/stages/`.
     - every rule in `docs/agent-rules/architecture.md`, `events.md`,
       `safety.md` against the new code;
     - the stage's "Watch out" list;
-    - test quality: would each test fail if the behavior regressed? Delete
-      tests that can't fail.
+    - test quality, against `docs/agent-rules/testing.md` — which is the
+      binding statement of it; this file is historical and does not restate
+      it.
 11. Fix every issue found, then re-run `pnpm check`. Repeat until a review
     pass finds nothing.
 

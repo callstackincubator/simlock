@@ -456,6 +456,7 @@ class SimlockClientImpl {
       this.#parseInput("device.exec", input),
       undefined,
       options.onOutput,
+      options.onStarted,
     );
     return this.#parseOutput("device.exec", payload);
   }
@@ -729,11 +730,14 @@ class SimlockClientImpl {
     input: unknown,
     onProgress?: (progress: LeaseProgress) => void,
     onOutput?: (chunk: DeviceOutputChunk) => void,
+    onStarted?: () => void,
   ): Promise<unknown> {
     const parsed = this.#parseInput(name, input);
-    return this.#wire.call(name, parsed, onProgress, onOutput).catch((error: unknown) => {
-      throw toSimlockError(error);
-    });
+    return this.#wire
+      .call(name, parsed, onProgress, onOutput, onStarted)
+      .catch((error: unknown) => {
+        throw toSimlockError(error);
+      });
   }
 }
 

@@ -6,6 +6,7 @@
 import type { z } from "zod";
 
 import { OPERATIONS, type Platform } from "../contract/index.js";
+import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
 
 type StatusOutput = z.infer<(typeof OPERATIONS)["status.get"]["output"]>;
@@ -38,6 +39,16 @@ export interface AggregateStatusOptions {
   readonly health: StatusOutput["daemon"]["health"];
   /** The gateway's fleet queue depth -- 0 until #118 gives it a queue. */
   readonly queueDepth: number;
+  /**
+   * #118: rewrites each view's leases to gateway-facing form (its own id, fleet-level
+   * `requesterId`, `worker`) for the ones this gateway actually issued -- see
+   * `FleetLeaseIndex#project`. A caller's own `status.get`-derived lease id must round-trip into
+   * `lease.renew` the same way `lease.list`'s does; leaving this out (as every caller before
+   * #118 did, and every `aggregate.test.ts` case that still omits it) reports each worker's raw
+   * lease record instead, which is still correct for a worker's own local lease -- it only stops
+   * being correct for one the gateway granted.
+   */
+  readonly leaseIndex?: Pick<FleetLeaseIndex, "project">;
 }
 
 /**
@@ -63,7 +74,13 @@ export function aggregateStatus(
     devices: views.flatMap((view) =>
       view.devices.map((device) => ({ ...device, workerId: view.id })),
     ),
-    leases: views.flatMap((view) => view.leases.map((lease) => ({ ...lease, workerId: view.id }))),
+    leases: views.flatMap((view) =>
+      view.leases.map((lease) =>
+        options.leaseIndex === undefined
+          ? { ...lease, workerId: view.id }
+          : options.leaseIndex.project(lease, view.id, view.label),
+      ),
+    ),
     queueDepth: options.queueDepth,
     workers: [...views],
   };

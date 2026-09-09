@@ -48,6 +48,9 @@ interface PendingCall {
   /** ADR 0005 §19a's `output` push, routed exactly like `progress`: by frame id, to the call
    * that is still waiting on it. */
   readonly onOutput?: ((chunk: DeviceOutputChunk) => void) | undefined;
+  /** ADR 0005 §19a's `started` push, routed by frame id like `output`. Fires once, between the
+   * spawn and the first chunk; a call that never sees it simply never had a process. */
+  readonly onStarted?: (() => void) | undefined;
 }
 
 export type LeaseScopedPush =
@@ -186,9 +189,10 @@ export class SimlockWire {
     payload: unknown,
     onProgress?: (progress: LeaseProgress) => void,
     onOutput?: (chunk: DeviceOutputChunk) => void,
+    onStarted?: () => void,
   ): Promise<unknown> {
     if (this.#dead !== undefined) return Promise.reject(this.#dead);
-    return this.#send(type, payload, onProgress, onOutput);
+    return this.#send(type, payload, onProgress, onOutput, onStarted);
   }
 
   onLeaseScopedPush(listener: (push: LeaseScopedPush) => void): () => void {
@@ -219,10 +223,11 @@ export class SimlockWire {
     payload: unknown,
     onProgress?: (progress: LeaseProgress) => void,
     onOutput?: (chunk: DeviceOutputChunk) => void,
+    onStarted?: () => void,
   ): Promise<unknown> {
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { onOutput, onProgress, reject, resolve });
+      this.#pending.set(id, { onOutput, onProgress, onStarted, reject, resolve });
       void this.#connection.write(serializeFrame({ id, payload, type })).catch((error: unknown) => {
         this.#pending.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -295,6 +300,16 @@ export class SimlockWire {
         const id = typeof requestId === "number" ? requestId : Number(requestId);
         const pending = this.#pending.get(id);
         pending?.onOutput?.({ chunk: parsed.data.chunk, stream: parsed.data.stream });
+        return;
+      }
+      case "started": {
+        const parsed = PUSH_SCHEMAS.started.safeParse(payload);
+        if (!parsed.success) return;
+        // Same routing as `output` above: request-scoped, by frame id, dropped for a call that
+        // already settled or was never this connection's (ADR 0003 §8).
+        const requestId = parsed.data.requestId;
+        const id = typeof requestId === "number" ? requestId : Number(requestId);
+        this.#pending.get(id)?.onStarted?.();
         return;
       }
       case "lease-lost": {

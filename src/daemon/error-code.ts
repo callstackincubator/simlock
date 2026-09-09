@@ -75,6 +75,12 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   if (error instanceof AdminAuthenticationFailedError) {
     return "ADMIN_AUTHENTICATION_FAILED";
   }
+  // The gateway's own admission refusal (`FleetLeaseCoordinator#admit`) is a plain
+  // `DispatchError("NO_CAPACITY", ...)`, not a distinct class -- caught by the `DispatchError`
+  // branch above (H9, round 2 review). Before this it was its own class in
+  // `src/gateway/fleet-coordinator.ts`, imported here so `src/daemon` -- every worker-mode
+  // daemon, not just gateway mode -- pulled the whole gateway module graph into ordinary
+  // startup just to recognize it.
   if (error instanceof NoCapacityError) {
     return "NO_CAPACITY";
   }

@@ -66,6 +66,10 @@ const leaseRequestBodySchema = z.object({
   device: z.string().min(1),
   full: z.boolean().optional(),
   noWait: z.boolean().optional(),
+  // ADR §27a (H7, round 2 review): declared and forwarded, not silently dropped -- the shared
+  // dispatcher's own `lease.request` handler is the one place that decides whether this token
+  // may set it (`FORBIDDEN` for non-admin), the same gate every other transport is held to.
+  owner: z.string().min(1).optional(),
   os: z.string().min(1).optional(),
   platform: z.enum(["ios", "android"]),
   timeoutMs: z.number().int().positive().optional(),
@@ -111,6 +115,7 @@ function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): Leas
     ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.full === undefined ? {} : { full: body.full }),
+    ...(body.owner === undefined ? {} : { owner: body.owner }),
   };
 }
 

@@ -336,10 +336,20 @@ drive the device it leased.
      and the local passthrough does not: **a bare `adb shell` with no
      command is refused** ("needs a terminal"), because there is no
      pseudo-terminal to attach it to and accepting it would only stall until
-     the timeout. Output streams back as request-scoped pushes (`output`,
-     carrying `stream: "stdout" | "stderr"` and a chunk, keyed by the frame
-     id like `progress`); chunks are UTF-8 text, so a command whose output
-     is binary should write a file on the worker instead. The operation
+     the timeout. Two request-scoped pushes carry the command, both keyed by
+     the frame id like `progress`. **`started`** (payload: the frame id
+     alone) says the process now exists — sent once, after every failure
+     that can happen before one does (a refused verb, an unknown tool, an
+     unowned lease, a daemon still starting) and before any output. It is
+     the fact a transport chooses its response shape on, which is why it is
+     on the wire rather than inferred: a gateway proxying the command holds
+     no driver refusal list and cannot repeat the worker's ownership check,
+     so it relays this instead of guessing, and a pre-process refusal keeps
+     its own status code (§19a′'s `FORBIDDEN`, `PASSTHROUGH_REFUSED`)
+     instead of arriving inside an already-committed stream. **`output`**
+     carries `stream: "stdout" | "stderr"` and a chunk; chunks are UTF-8
+     text, so a command whose output is binary should write a file on the
+     worker instead. The operation
      resolves with `{ exitCode }` — the tool's own, so a non-zero one is the
      command's answer and not an API failure. `stdin` is a **single string
      sent with the request** and written to the process, which is then
@@ -606,7 +616,8 @@ drive the device it leased.
 
 - The contract gains: `mode` in `status.get`'s daemon block, `workerId` on
   devices and leases, `worker` on the lease object, `workers` on status,
-  `worker.*` operations, `device.exec` with its `output` push family, the
+  `worker.*` operations, `device.exec` with its `started`/`output` push
+  family, the
   `worker` token role, and five error codes. All additive.
 - **The five new error codes, with the columns the contract's table already
   has for every other code** (`kind`, `cliExitCode`, `httpStatus`):
@@ -619,7 +630,8 @@ drive the device it leased.
   all: they reuse `PASSTHROUGH_REFUSED` and `UNKNOWN_PASSTHROUGH_TOOL`
   (requirement 19a), which already carry exit 2 and `422`.
 - **The socket wire moves to protocol 5 with no compatibility shim**, so
-  both sides advertise `{min: 5, max: 5}`: `device.exec` and its `output`
+  both sides advertise `{min: 5, max: 5}`: `device.exec` and its
+  `started`/`output`
   push family are new frames and no compatibility path is kept for them, and
   under ADR 0003 §6's honesty rule a range widens only where one is. This is
   the same wire ADR 0004 took to 4, so what ships carries both moves at

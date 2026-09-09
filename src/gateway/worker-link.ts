@@ -128,8 +128,10 @@ export class WorkerLink {
   }
 
   /** `./fleet-ports.ts`'s `WorkerDispatchTarget#reachable` -- false once this link is closing or
-   * closed (`close()`/`#handleClosed` both set `#closed` before anything else). */
-  // fallow-ignore-next-line unused-class-member -- #118's seam (WorkerDispatchTarget); nothing in this PR calls it yet.
+   * closed (`close()`/`#handleClosed` both set `#closed` before anything else). Read by #118's
+   * `FleetLeaseCoordinator` through that interface, which is a structural access `fallow`'s
+   * audit cannot follow -- hence the ignore below. */
+  // fallow-ignore-next-line unused-class-member -- reached only through the `WorkerDispatchTarget` interface (FleetLeaseCoordinator); the audit cannot follow a member access through that.
   get reachable(): boolean {
     return !this.#closed;
   }
@@ -142,10 +144,11 @@ export class WorkerLink {
   }
 
   /** `./fleet-ports.ts`'s `WorkerDispatchTarget#client` -- the gateway's own admin session on
-   * this worker, the same one `#rebuildView`'s refresh round trips use. `undefined` before
+   * this worker, the same one `#rebuildView`'s refresh round trips use and the one #118's
+   * `FleetLeaseCoordinator` forwards every lease/exec operation through. `undefined` before
    * `start()` has assigned it or after `close()`/`#handleClosed` has run -- neither clears
    * `#client` itself, so this mirrors `reachable` rather than checking it separately. */
-  // fallow-ignore-next-line unused-class-member -- #118's seam (WorkerDispatchTarget); nothing in this PR calls it yet.
+  // fallow-ignore-next-line unused-class-member -- reached only through the `WorkerDispatchTarget` interface (FleetLeaseCoordinator); the audit cannot follow a member access through that.
   client(): SimlockAdminClient | undefined {
     return this.#closed ? undefined : this.#client;
   }

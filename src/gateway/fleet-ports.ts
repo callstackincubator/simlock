@@ -1,16 +1,14 @@
 /**
- * `src/gateway/fleet-ports.ts` -- the seam #118 (fleet queue, routing, forwarding) codes
- * against, declared here so that PR can be written while this one's internals are still
- * being revised.
+ * `src/gateway/fleet-ports.ts` -- the seam #118 (`FleetLeaseCoordinator`, in
+ * `fleet-coordinator.ts`) codes against instead of importing `WorkerLink`/`WorkerRegistry`/
+ * `GatewayService` directly, so a change *behind* one of these shapes (a call timeout, the
+ * drain-flag split, a truncation guard) is not a change the coordinator has to see.
  *
- * Nothing here has an implementation of its own: `WorkerLink`, `WorkerRegistry` and
- * `GatewayService` satisfy these shapes, and the point is that #118 never imports those
- * classes directly -- so a change *behind* one of these shapes (a call timeout, the
- * drain-flag split, a truncation guard) is not a change #118 has to see.
- *
- * Declared before its consumer exists, so `fallow` is told that is deliberate -- the same
- * annotation `DrainStore` already carries in `index.ts`. #118 owns these shapes once it
- * lands: if one is wrong, that PR changes it rather than working around it.
+ * Nothing here has an implementation of its own: `WorkerLink` satisfies `WorkerDispatchTarget`,
+ * `WorkerRegistry` satisfies `FleetViews`, and `GatewayService` satisfies `WorkerDirectory`.
+ * These shapes are #118's now: `refresh()` on `WorkerDispatchTarget` is this PR's own addition
+ * (see its doc comment) -- the seam changes here, not around it, when one of these shapes turns
+ * out to be missing something the coordinator needs.
  */
 import type { SimlockAdminClient } from "../admin/index.js";
 import type { WorkerView } from "./worker-registry.js";
@@ -32,10 +30,22 @@ export interface WorkerDispatchTarget {
   readonly workerId: string;
   readonly reachable: boolean;
   client(): SimlockAdminClient | undefined;
+  /**
+   * Added by #118. Forces this worker's view to be re-read now, rather than waiting for the
+   * next lease event or the periodic tick. Called after a stale-view `NO_CAPACITY` (ADR §11:
+   * "it means the view was stale, so the gateway refreshes that worker's view and the request
+   * waits") -- without it, a request that lost a race to a stale view would sit queued for up
+   * to the periodic tick's whole interval before the gateway even tried to find out whether the
+   * view was right. `WorkerLink` already does this same refresh for every other trigger this
+   * interface's other members are read from (a lease event, the periodic tick); this is the one
+   * more call site, and `WorkerLink#refresh` already accepts being called with no arguments.
+   * Never rejects, mirroring `WorkerLink#refresh`'s own best-effort contract.
+   */
+  refresh(): Promise<void>;
 }
 
-/** Resolves a worker id to its live link. `GatewayService` satisfies this. */
-// fallow-ignore-next-line unused-type -- #118's seam; declared before its consumer exists.
+/** Resolves a worker id to its live link. `GatewayService` satisfies this;
+ * `FleetLeaseCoordinator` is the consumer. */
 export interface WorkerDirectory {
   target(workerId: string): WorkerDispatchTarget | undefined;
 }
@@ -48,7 +58,6 @@ export interface WorkerDirectory {
  * it. Listeners are called *after* the change is committed (and after the corresponding event
  * is emitted), per `events.md`'s post-commit rule; the returned function unsubscribes.
  */
-// fallow-ignore-next-line unused-type -- #118's seam; declared before its consumer exists.
 export interface FleetViews {
   views(): readonly WorkerView[];
   view(workerId: string): WorkerView | undefined;

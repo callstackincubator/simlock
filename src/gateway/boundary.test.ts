@@ -14,13 +14,12 @@ const daemonDir = join(srcDir, "daemon");
  * platform-agnostic queue and bus modules it reuses; never the registry, capacity, or lifecycle
  * modules (enforced like `src/contract/boundary.test.ts`)."
  *
- * In this PR the gateway reuses nothing from `core` at all -- the fleet queue arrives with #118
- * -- so the allowance is written as an explicit list rather than a blanket "core is fine": a
- * gateway that starts importing `core/registry.js` should fail here, and a later PR adding
- * `core/wait-queue.js` should have to say so in this list rather than silently widening the
- * boundary. `src/http` is off limits for the same reason (`GatewayTokenStore` is a structural
- * interface precisely so the token store need not be imported), as are `src/cli`, `src/mcp` and
- * `src/drivers`.
+ * `drivers`, `http`, `cli`, and `mcp` stay wholesale forbidden -- `src/http` for the same reason
+ * as always (`GatewayTokenStore` is a structural interface precisely so the token store need not
+ * be imported). `core` is *not* in this list any more: #118 is the "later PR adding
+ * `core/wait-queue.js`" the old comment here predicted, and it has to say so explicitly rather
+ * than silently widening the boundary -- see `ALLOWED_CORE_IMPORTS` below, checked the same way
+ * `ALLOWED_DAEMON_IMPORTS` already was.
  *
  * Named as top-level directories under `src/`, matched against a specifier normalised relative
  * to `src/` (see `normalizeSpecifier`) rather than against the raw text of the specifier -- a
@@ -29,7 +28,7 @@ const daemonDir = join(srcDir, "daemon");
  * reaches core as `"../../core/registry.js"`, which does not start with `"../core"`, so the
  * check silently stopped applying to exactly the files a subdirectory newly reaches.
  */
-const FORBIDDEN_IMPORT_DIRS = ["core", "drivers", "http", "cli", "mcp"];
+const FORBIDDEN_IMPORT_DIRS = ["drivers", "http", "cli", "mcp"];
 
 /**
  * The only `src/daemon` module the gateway may import: the transport-facing dispatch contract
@@ -39,6 +38,25 @@ const FORBIDDEN_IMPORT_DIRS = ["core", "drivers", "http", "cli", "mcp"];
  * `FORBIDDEN_IMPORT_DIRS` above.
  */
 const ALLOWED_DAEMON_IMPORTS = ["daemon/dispatch.js"];
+
+/**
+ * #118's fleet queue and its ownership check reuse `core`'s platform-agnostic FIFO
+ * (`wait-queue.js`) and short critical-section serializer (`serialized-decision.js`) rather than
+ * forking either -- ADR 0005 §33's "only the platform-agnostic queue and bus modules it reuses".
+ * `domain.js` and `driver.js` are here too, explicitly, as the doc comment on the old
+ * (now-removed) blanket `core` entry above asked the PR that widened this list to do: they are
+ * `wait-queue.js`'s own transitive *type* imports (`DeviceRecord`/`LeaseRecord`/`DeviceSpec` and
+ * `DeviceRequest`), which the fleet queue and coordinator need to name the same shapes wait-queue
+ * itself is typed against rather than redeclaring them. Neither module is the registry, capacity,
+ * or lifecycle engine §33 keeps off limits -- `domain.js` is pure data shapes and a spec-equality
+ * predicate, `driver.js` is interface declarations only.
+ */
+const ALLOWED_CORE_IMPORTS = [
+  "core/wait-queue.js",
+  "core/serialized-decision.js",
+  "core/domain.js",
+  "core/driver.js",
+];
 
 /**
  * A relative import specifier, resolved against the directory of the file that wrote it and
@@ -105,6 +123,9 @@ describe("gateway module boundary", () => {
         if (isUnder(normalized, "daemon")) {
           expect(ALLOWED_DAEMON_IMPORTS).toContain(normalized);
         }
+        if (isUnder(normalized, "core")) {
+          expect(ALLOWED_CORE_IMPORTS).toContain(normalized);
+        }
       }
     },
   );
@@ -119,6 +140,47 @@ describe("gateway module boundary", () => {
       expect(isUnder(normalized, "http")).toBe(false);
     }
   });
+});
+
+/**
+ * H9 (round 2 review): the reverse direction from the one this file otherwise checks. Before
+ * this, `src/daemon/error-code.ts` imported `NoCapacityError` from
+ * `src/gateway/fleet-coordinator.js` just to recognize it in an `instanceof` branch, so every
+ * worker-mode daemon -- not just gateway mode -- pulled the whole gateway module graph (and
+ * `src/admin`'s client) into ordinary startup, with nothing here to notice. `main.ts` is the one
+ * legitimate exception: it is the composition root that wires up whichever mode `config.mode`
+ * names, and gateway mode's own wiring (`GatewayService`, `FleetLeaseCoordinator`,
+ * `GatewayOwnerRoutedFacts`, ...) has to live somewhere that can see both.
+ */
+describe("daemon module boundary (reverse direction, H9)", () => {
+  const daemonSourceFiles = sourceFilesRecursive(daemonDir).filter(
+    (path) => path !== join(daemonDir, "main.ts"),
+  );
+
+  it("found the daemon's own source files (excluding main.ts, the composition root)", () => {
+    expect(daemonSourceFiles.length).toBeGreaterThan(0);
+  });
+
+  it.each(daemonSourceFiles.map((path) => [path.slice(daemonDir.length + 1), path] as const))(
+    "%s does not import src/gateway",
+    (relativePath, filePath) => {
+      const contents = stripComments(readFileSync(filePath, "utf8"));
+      const fileDir = dirname(filePath);
+
+      for (const specifier of importSpecifiers(contents)) {
+        const normalized = normalizeSpecifier(fileDir, specifier);
+        expect({
+          fileName: relativePath,
+          matchesGateway: isUnder(normalized, "gateway"),
+          normalized,
+        }).toEqual({
+          fileName: relativePath,
+          matchesGateway: false,
+          normalized,
+        });
+      }
+    },
+  );
 });
 
 describe("sourceFilesRecursive", () => {
@@ -171,16 +233,21 @@ describe("normalizeSpecifier / isUnder", () => {
 });
 
 describe("gateway module boundary regression fixtures", () => {
-  // C2, made concrete: this is exactly the file #118 adds, reduced to the one line that matters.
-  // Against the pre-fix `specifier.startsWith("../core")` check, this import passes silently --
-  // `"../../core/registry.js"` does not start with `"../core"` -- even though it reaches the
-  // exact module the boundary exists to keep out.
+  // C2, made concrete: a hypothetical nested module reaching for a forbidden `core` module
+  // through a longer relative path. Against the pre-fix `specifier.startsWith("../core")`
+  // check, this import passed silently -- `"../../core/registry.js"` does not start with
+  // `"../core"` -- even though it reaches exactly the kind of module the boundary exists to
+  // keep out. `core/registry.js` is the registry itself, never in `ALLOWED_CORE_IMPORTS` (only
+  // `wait-queue.js`/`serialized-decision.js`/`domain.js`/`driver.js` are, per #118) -- so a
+  // nested file reaching it is caught the same way the daemon-allowlist gap below is: recognized
+  // as `core`, and absent from the allowlist that governs it.
   it("catches a nested module importing core through a longer relative path", () => {
     const nestedDir = join(gatewayDir, "routing");
     const specifier = "../../core/registry.js";
     const normalized = normalizeSpecifier(nestedDir, specifier);
 
-    expect(FORBIDDEN_IMPORT_DIRS.some((forbidden) => isUnder(normalized, forbidden))).toBe(true);
+    expect(isUnder(normalized, "core")).toBe(true);
+    expect(ALLOWED_CORE_IMPORTS).not.toContain(normalized);
   });
 
   // And the matching allowlist gap: `"../../daemon/dispatcher.js"` does not start with

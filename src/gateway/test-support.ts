@@ -8,7 +8,22 @@
  */
 import type { z } from "zod";
 
-import type { SimlockAdminClient, StatusGetOutput } from "../admin/index.js";
+import type {
+  ExecInput,
+  ExecOptions,
+  ExecOutput,
+  LeaseCancelInput,
+  LeaseCancelOutput,
+  LeaseGrant,
+  LeaseRecord,
+  LeaseReleaseInput,
+  LeaseReleaseOutput,
+  LeaseRenewInput,
+  LeaseRequestInput,
+  RequestLeaseOptions,
+  SimlockAdminClient,
+  StatusGetOutput,
+} from "../admin/index.js";
 import { SimlockError } from "../admin/index.js";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import type { OPERATIONS, platformCatalogSchema } from "../contract/index.js";
@@ -67,12 +82,91 @@ export function catalogFixture(entries: readonly PlatformCatalog[]): CatalogOutp
   return { platforms: [...entries] };
 }
 
+export function grantFixture(overrides: Partial<LeaseGrant> = {}): LeaseGrant {
+  return {
+    device: {
+      id: "dev_1",
+      driverDeviceId: "udid-1",
+      spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+    },
+    environment: {},
+    lease: leaseFixture("lse_1", "dev_1") as LeaseRecord,
+    timing: {
+      estimatedBootMs: 0,
+      estimatedProvisionMs: 0,
+      estimatedReclaimMs: 0,
+      estimatedReadyMs: 0,
+    },
+    ...overrides,
+  };
+}
+
+/** A `NO_CAPACITY` a scripted worker refuses a forwarded `lease.request` with -- the shape
+ * `FleetLeaseCoordinator` recognizes as a stale view (ADR §11), not a terminal failure. */
+export function noCapacityError(): SimlockError<"NO_CAPACITY"> {
+  return new SimlockError("NO_CAPACITY", "domain", "No device capacity is currently available", {});
+}
+
 type DownloadPolicy = "never" | "on-request" | "always";
 
+/** One scripted answer to a forwarded `lease.request` -- consumed FIFO from
+ * `ScriptedWorkerClient#requestLeaseQueue`, oldest first, one per call. */
+export type RequestLeaseOutcome =
+  | {
+      readonly kind: "grant";
+      readonly grant: LeaseGrant;
+      readonly progress?: readonly LeaseProgressLike[];
+    }
+  | {
+      readonly kind: "error";
+      readonly error: unknown;
+      /** P1 (round 2 review): a `NO_CAPACITY` reached *after* progress fired -- the worker's own
+       * `#evictManaged` failure path can answer this to a `noWait` waiter after already pushing
+       * `provisioning`/`reclaiming`, which is a terminal failure (device work had begun), never
+       * a re-queue, unlike an *immediate* `NO_CAPACITY` (no progress) that means a stale view. */
+      readonly progress?: readonly LeaseProgressLike[];
+    }
+  /** Never settles -- for exercising a dispatch attempt still in flight (finding 1's test: "a
+   * dispatch tick firing while a previous attempt for the same waiter is in flight"), and (C4,
+   * round 2 review) a request that is genuinely dispatched (a `progress` push fired) but then
+   * never resolves at all -- the only way to prove `request.dispatched` fired *before*
+   * settlement rather than merely alongside a grant that would have emitted it anyway. */
+  | { readonly kind: "hang"; readonly progress?: readonly LeaseProgressLike[] };
+
+type LeaseProgressLike =
+  | { readonly stage: "queued"; readonly queuePosition: number }
+  | { readonly stage: "provisioning"; readonly etaMs: number }
+  | { readonly stage: "booting"; readonly etaMs: number }
+  | { readonly stage: "reclaiming"; readonly etaMs: number };
+
+type RenewLeaseOutcome =
+  | { readonly kind: "ok"; readonly record: LeaseRecord }
+  | { readonly kind: "error"; readonly error: unknown };
+type ReleaseLeaseOutcome =
+  | { readonly kind: "ok" }
+  | { readonly kind: "error"; readonly error: unknown };
+type ExecOutcome =
+  | {
+      readonly kind: "ok";
+      readonly exitCode: number;
+      readonly output?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
+      /** ADR 0005 §19a: the worker's own "the process now exists" push, sent before any output.
+       * Every protocol-5 worker sends it; this flag exists so a scripted outcome can model a
+       * worker that refuses *before* a process exists, which is the case that must not announce
+       * it. */
+      readonly started?: boolean;
+    }
+  | { readonly kind: "error"; readonly error: unknown }
+  /** Never settles -- for exercising `gateway.execTimeoutMs` (P5, round 2 review): the worker
+   * never answers `device.exec` at all. With `started: true` this is the silent, long-running
+   * command of §19b/§19e -- a process that exists and has written nothing yet. */
+  | { readonly kind: "hang"; readonly started?: boolean };
+
 /**
- * A `SimlockAdminClient` with only the methods a `WorkerLink` actually calls. Everything else
- * rejects loudly rather than returning a plausible-looking empty value: if the link starts
- * calling something new, the test that notices should be the one that says so.
+ * A `SimlockAdminClient` with only the methods a `WorkerLink` or a `FleetLeaseCoordinator`
+ * actually call. Everything else rejects loudly rather than returning a plausible-looking empty
+ * value: if either starts calling something new, the test that notices should be the one that
+ * says so.
  */
 export class ScriptedWorkerClient {
   status: StatusGetOutput = statusFixture();
@@ -107,6 +201,33 @@ export class ScriptedWorkerClient {
   hangUnsubscribe = false;
   #eventListener: ((push: { event: EventEnvelope }) => void) | undefined;
 
+  /** #118: one scripted `lease.request` answer per call, oldest first. Empty when unset --
+   * `requestLeaseDefault` answers every call once this queue runs dry. */
+  readonly requestLeaseQueue: RequestLeaseOutcome[] = [];
+  /** What a `lease.request` this worker was not explicitly scripted for answers with. Defaults
+   * to `NO_CAPACITY`, deliberately: an un-scripted worker in a multi-worker test should refuse
+   * rather than silently grant, so a routing bug that dispatches to the *wrong* worker shows up
+   * as a rejection there instead of a second, unnoticed grant. */
+  requestLeaseDefault: RequestLeaseOutcome = { kind: "error", error: noCapacityError() };
+  readonly renewLeaseQueue: RenewLeaseOutcome[] = [];
+  readonly releaseLeaseQueue: ReleaseLeaseOutcome[] = [];
+  readonly execQueue: ExecOutcome[] = [];
+  /**
+   * H4 (round 3 review): the `options` most recently passed to `exec` -- captured before
+   * `execQueue`'s own outcome is even read, so a `"hang"` outcome (whose returned promise never
+   * settles) still leaves a test a way to invoke `onOutput` later by hand, simulating a worker
+   * that keeps streaming output on a call the gateway has already given up awaiting.
+   */
+  lastExecOptions: ExecOptions | undefined;
+  /**
+   * P4 (round 3 review): the mirror of `lastExecOptions` above, for `requestLease` -- captured
+   * before `requestLeaseQueue`'s own outcome is even read, so a `"hang"` outcome leaves a test a
+   * way to invoke `onProgress` later by hand, simulating a worker whose still-pending
+   * `lease.request` RPC pushes progress after the gateway's own `leaseRequestTimeoutMs` already
+   * gave up on it.
+   */
+  lastRequestLeaseOptions: RequestLeaseOptions | undefined;
+
   constructor(
     readonly role: "admin" | "agent" = "admin",
     readonly daemonVersion = "0.3.0",
@@ -135,7 +256,6 @@ export class ScriptedWorkerClient {
     return this as unknown as SimlockAdminClient;
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getStatus(): Promise<StatusGetOutput> {
     this.calls.push("status.get");
     if (this.hangingCalls.has("status.get")) return new Promise<never>(() => {});
@@ -150,6 +270,64 @@ export class ScriptedWorkerClient {
     if (this.hangingCalls.has(name)) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return this.devices;
+  }
+
+  /** #118: `FleetLeaseCoordinator#attempt` forwards every dispatch through this, always with
+   * `noWait: true` (ADR §12) -- scripted per `requestLeaseQueue`/`requestLeaseDefault` above. */
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  async requestLease(
+    input: LeaseRequestInput,
+    options: RequestLeaseOptions = {},
+  ): Promise<LeaseGrant> {
+    this.calls.push(`lease.request:${input.requesterId ?? ""}`);
+    this.#throwIfFailing();
+    this.lastRequestLeaseOptions = options;
+    const outcome = this.requestLeaseQueue.shift() ?? this.requestLeaseDefault;
+    for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
+    if (outcome.kind === "hang") return new Promise<never>(() => {});
+    if (outcome.kind === "error") throw outcome.error;
+    return outcome.grant;
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  async renewLease(input: LeaseRenewInput): Promise<LeaseRecord> {
+    this.calls.push(`lease.renew:${input.leaseId}`);
+    this.#throwIfFailing();
+    const outcome = this.renewLeaseQueue.shift();
+    if (outcome?.kind === "error") throw outcome.error;
+    return outcome?.record ?? (leaseFixture(input.leaseId, "dev_1") as LeaseRecord);
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  async releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput> {
+    this.calls.push(`lease.release:${input.leaseId}`);
+    this.#throwIfFailing();
+    const outcome = this.releaseLeaseQueue.shift();
+    if (outcome?.kind === "error") throw outcome.error;
+    return { leaseId: input.leaseId };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  async cancelLease(_input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
+    this.calls.push("lease.cancel");
+    this.#throwIfFailing();
+    return { result: "cancelled" };
+  }
+
+  /** #118: `FleetLeaseCoordinator#exec` forwards here with the namespaced requester -- assert
+   * on `calls` (test: "device.exec forwarding sends the namespaced requesterId"). */
+  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
+  async exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
+    this.calls.push(`device.exec:${input.requesterId ?? ""}`);
+    this.#throwIfFailing();
+    this.lastExecOptions = options;
+    const outcome = this.execQueue.shift();
+    if (outcome?.kind === "error") throw outcome.error;
+    const { onOutput, onStarted } = options;
+    if (outcome?.started === true) onStarted?.();
+    if (outcome?.kind === "hang") return new Promise<never>(() => {});
+    for (const chunk of outcome?.output ?? []) onOutput?.(chunk);
+    return { exitCode: outcome?.exitCode ?? 0 };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
@@ -171,7 +349,6 @@ export class ScriptedWorkerClient {
     return { downloads: { policy: this.downloadPolicy }, lease: { maxTtlMs: this.leaseMaxTtlMs } };
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async subscribeEvents(
     listener: (push: { event: EventEnvelope }) => void,
   ): Promise<() => Promise<void>> {

@@ -50,6 +50,24 @@ export type DispatchProgress = z.infer<typeof leaseProgressSchema>;
 export interface DispatchSession {
   readonly principal: string;
   readonly role: Role;
+  /**
+   * ADR 0005 §27a (narrowed, round 3 review, H3): true only for the one session `owner` was
+   * ever meant for -- a worker's own connection to *its own configured gateway*, accepted
+   * through `DaemonServer#acceptUplink` and forced to `admin` there regardless of any
+   * credential, because that connection's existence already proves the trust chain (this
+   * worker dialled `gateway.url`, presenting `gateway.token`, before the connection existed --
+   * see `acceptUplink`'s own comment). `role === "admin"` alone used to gate `owner`, but HTTP's
+   * `operator` token maps onto that same role (`dispatcher-session.ts`), so any operator bearer
+   * credential -- on a plain worker with no gateway anywhere -- passed the same check a real
+   * uplink was supposed to require. This field is that narrower, harder-to-forge signal: it
+   * reflects how the *connection* was accepted, never anything a `hello` payload can claim, and
+   * is left `undefined`/`false` by every other session-building path (HTTP's
+   * `buildHttpSession`, an ordinary socket connection's `#session`, and every session a
+   * `GatewayDispatcher` itself is ever handed -- nothing forwards *into* a gateway's own front
+   * door the way a gateway forwards into a worker, so `owner` is unconditionally refused there
+   * now, admin included).
+   */
+  readonly isGatewayUplink?: boolean;
   /** Called for each progress update while this specific `lease.request` call is in flight.
    * Ignored by every other operation. */
   readonly onProgress?: (progress: DispatchProgress) => void;

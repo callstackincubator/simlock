@@ -890,3 +890,39 @@ in the job that does not mean to pipe anything (`simlock adb shell getprop
 </dev/null`), or pass `stdin` some other way once a future need justifies
 one — not in `readPipedStdin` guessing at a timeout ADR 0005 does not ask
 for.
+
+## `device.exec` backpressure through a gateway does not slow the worker's own process
+
+ADR 0005 §19e requires that a client reading a `device.exec` stream slowly
+stalls the command at its own pipe rather than having simlock buffer output
+for it — proven end to end for a worker reached directly (`http/app.test.ts`'s
+"stalls the command when the client stops reading"), where the HTTP route's
+own `onOutput` awaits its SSE write and the driver's process runner awaits
+that same promise before writing the pipe's next chunk.
+
+**The pitfall:** through a gateway that chain breaks at the uplink hop.
+`FleetLeaseCoordinator#exec` forwards a worker's `output` push with
+`void session.onOutput?.(...)` (`src/gateway/fleet-coordinator.ts`), and
+`simlock-client`'s own `onOutput` callback shape is `=> void`, not
+`=> void | Promise<void>` — so even though the *worker's* own process runner
+still awaits its local write exactly as it does today, nothing on the
+gateway's side of the uplink ever waits for the far end (the actual fleet
+client behind the gateway) to keep up before telling the worker's driver
+"go ahead, write the next chunk." A slow fleet client behind a gateway gets
+its data queued in the gateway's own process instead of the backpressure
+§19e promises — the worker's device keeps writing at full speed regardless.
+
+**Why it is not fixed here:** it predates the round 3 hardening batch this
+file's other new entries describe, and closing it means widening a wire
+contract (`simlock-client`'s `onOutput` return type, and the uplink's own
+`output` push acknowledgement) that reaches every uplink implementation, not
+a self-contained fix inside one class the way the round's other findings
+were. It is `#119`-or-later-shaped work (ADR §28/§29's own uplink-recovery
+scope), not something to bolt onto this round in passing.
+
+**Status:** accepted for now, and worth closing before a fleet's own worked
+examples lean on `device.exec` for anything genuinely large or slow to
+consume. Docs and code comments should describe §19e's backpressure
+guarantee as holding for a worker reached directly, not (yet) end to end
+through a gateway — this entry is that correction; nothing in
+`src/gateway/` should claim otherwise.

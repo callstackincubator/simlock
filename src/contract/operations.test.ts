@@ -377,7 +377,12 @@ describe("operation input/output round trips", () => {
   it("config.get: round-trips a representative config", () => {
     const config = {
       mode: "worker",
-      gateway: { disconnectedRetentionMs: 86_400_000, execTimeoutMs: 660_000 },
+      gateway: {
+        disconnectedRetentionMs: 86_400_000,
+        execTimeoutMs: 660_000,
+        leaseRequestTimeoutMs: 300_000,
+        routing: "warm-then-free",
+      },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },

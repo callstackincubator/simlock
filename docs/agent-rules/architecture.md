@@ -43,3 +43,52 @@ grounds for rejecting a change even if it works.
    application code. Tests use the in-memory/fake implementations; if a new
    external dependency appears, define its port first. See "External APIs
    behind interfaces" in [../ARCHITECTURE.md](../ARCHITECTURE.md).
+10. **A rule is enforced in exactly one place.** Never implement the same
+    decision twice — not in two modules, not on two code paths through one
+    module, not "once for the fast path and once for the general path". If
+    two call sites both have to answer the same question, one of them calls
+    the other or they both call a third; whichever shape you pick, deleting
+    the duplicate must be part of the change, not a follow-up.
+
+    This is not a style preference. Duplicated enforcement does not stay
+    duplicated — it *diverges*, and it diverges silently, because each copy
+    keeps passing its own tests. The two copies then answer differently
+    depending on which path a caller happened to take, which reads to
+    everyone downstream as non-determinism rather than as a bug with an
+    address.
+
+    Worked example, from this repo: the gateway's `noWait` rejection was
+    enforced both in `FleetLeaseCoordinator#admit`'s direct look and in
+    `#dispatch`'s ordered walk. Four consecutive review rounds each found a
+    real defect in that loop, and each fix to one path opened a gap in the
+    other — a request that answered `NO_CAPACITY` immediately or waited in
+    the queue depending on whether *unrelated* requests happened to be
+    queued at the time. No single patch closed it; the duplication was the
+    defect, and it was only fixed by making one path call the other.
+
+    So when a review finding says "and the same check in the other path
+    needs updating too", treat that sentence as the finding. Fix the
+    duplication, not the symptom.
+11. **Every wait that crosses a process boundary is bounded, and the budget
+    does not reset.** An RPC to a worker, a handshake, a subscription, a
+    forwarded command: each needs an explicit deadline, and a caller that
+    times out must leave the far side no worse off. A budget that restarts
+    on an internal state change (a waiter cycling `processing` -> `queued`,
+    a link reconnecting) is not a bound at all — the caller can wait forever
+    while every individual wait looks bounded. Say what the budget is
+    measured from, and make it monotonic from there.
+12. **Every exit from a method leaves its subject in exactly one named
+    state.** A waiter, lease, timer, subscription or callback is, at every
+    return and every throw, either terminal or in a state something else is
+    driving — never both, never neither, and never live after the thing it
+    belongs to has settled. Two pieces of bookkeeping that must agree about
+    one subject will eventually disagree; keep the state in one place and
+    let the other read it. The tell is a resource that "usually" gets
+    cleaned up on the happy path: enumerate the exits instead, including
+    the ones that throw.
+13. **A claim in a comment or doc is part of the change.** If your change
+    makes a nearby comment, doc paragraph or test name false, fix it or
+    delete it in the same commit — a stale claim is worse than no claim,
+    because it is trusted. Do not trust the comments you are reading either:
+    verify a strong claim about an invariant against the code before relying
+    on it, and treat one that is no longer true as a defect you found.

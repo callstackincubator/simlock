@@ -177,10 +177,10 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   `driver.passthrough` answer `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they
   act on one machine's devices, and stay per-worker. The lease lifecycle
   (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`
-  answer the same code until the fleet queue and routing land; reads —
-  `lease.list`,
-  `list.get`, `status.get`, `catalog.get`, `events.*` — already answer for the
-  whole fleet.
+  are forwarded through the fleet's own queue and routing policy (§10-§19,
+  `FleetLeaseCoordinator`) rather than answering `UNSUPPORTED_IN_GATEWAY_MODE`;
+  reads — `lease.list`, `list.get`, `status.get`, `catalog.get`, `events.*` —
+  answer for the whole fleet the same way.
 - **The one piece of persisted gateway state** is the drained set
   (`workers.json`, owner-only): drain is an operator's decision about a
   machine, not a fact the machine reports, so it must survive both the

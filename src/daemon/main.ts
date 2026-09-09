@@ -56,9 +56,14 @@ import {
   type TcpProbe,
 } from "../ports/index.js";
 import {
+  createRoutingPolicy,
   FileDrainStore,
+  FleetLeaseCoordinator,
+  FleetLeaseIndex,
   GatewayDispatcher,
+  GatewayOwnerRoutedFacts,
   GatewayService,
+  isRoutingPolicyName,
   type GatewayServiceOptions,
 } from "../gateway/index.js";
 import {
@@ -518,6 +523,19 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     verifyAdminSecret: (secret) => adminSecret.verify(secret),
   });
 
+  // ADR 0005 §14/§27: stamped on every requester id this gateway forwards, and what
+  // `FleetLeaseIndex` recognizes its own leases by when rebuilding from a worker's view.
+  const gatewayRequesterPrefix = `gw:${instanceId}:`;
+  const leaseIndex = new FleetLeaseIndex(gatewayRequesterPrefix, logger.child("lease-index"));
+  if (!isRoutingPolicyName(config.gateway.routing)) {
+    // Unreachable in production: `loadConfig` already validates `gateway.routing` against this
+    // same registry's names before a daemon ever starts. Guards the cast below rather than
+    // trusting `Config`'s own `string` typing (ADR §33: `src/gateway` cannot see `core`'s
+    // `Config` type, so the contract this value already satisfies cannot be expressed there).
+    throw new Error(`Unknown gateway.routing policy: ${config.gateway.routing}`);
+  }
+  const routing = createRoutingPolicy(config.gateway.routing);
+
   const uplinks = new WebSocketUplinkListenerFactory();
   const gatewayService = new GatewayService({
     // ADR 0005 §4/§25: only a `worker`-role token opens an uplink. A token of another role is
@@ -547,6 +565,30 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     uplinks,
   } satisfies GatewayServiceOptions);
 
+  // ADR 0005 §10-§16/§27a: the fleet queue, routing, and lease/exec forwarding (#118).
+  // `gatewayService` itself satisfies `WorkerDirectory` (`target()`), and its own registry
+  // satisfies `FleetViews` -- neither is imported as its concrete class by the coordinator,
+  // only through `fleet-ports.ts`'s seam.
+  const fleetCoordinator = new FleetLeaseCoordinator({
+    clock,
+    directory: gatewayService,
+    eventBus,
+    // ADR §19e (P5, round 2 review): the gateway-side backstop on a forwarded `device.exec`.
+    execTimeoutMs: config.gateway.execTimeoutMs,
+    idGenerator,
+    leaseIndex,
+    // P2 (round 2 review): bounds a forwarded `lease.request`, the one uplink call that used to
+    // have no timeout of its own.
+    leaseRequestTimeoutMs: config.gateway.leaseRequestTimeoutMs,
+    logger: logger.child("gateway"),
+    routing,
+    views: gatewayService.workers,
+  });
+  // #118: replaces the inert `OwnerRoutedFacts` gateway mode used since #117 -- see
+  // `GatewayOwnerRoutedFacts`'s own doc comment for why the fleet's lease index, not a worker's
+  // relayed payload, is what a fleet lease's push has to be routed by.
+  const gatewayOwnerRoutedFacts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
+
   let stopHttpGateway: (() => Promise<void>) | undefined;
   let resolveHttpStarted: (() => void) | undefined;
   let rejectHttpStarted: ((error: unknown) => void) | undefined;
@@ -568,8 +610,10 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       // only writing the store and waiting for that worker's next reconnect.
       closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
       config,
+      coordinator: fleetCoordinator,
       eventBus,
       health: () => daemon.health,
+      leaseIndex,
       logger: logger.child("gateway"),
       tokens,
       workers: gatewayService.workers,
@@ -582,7 +626,12 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       listenerFactory: options.ipc,
       logger: logger.child("connection-host"),
     }),
+    // #118: a fleet client's own `lease.release-all` needs this to suppress its own
+    // `lease-lost` pushes, exactly as a worker's own registry does for its engine.
+    leaseSnapshot: () =>
+      leaseIndex.all().map((entry) => ({ id: entry.gatewayLeaseId, ownerId: entry.ownerId })),
     logger: logger.child("server"),
+    ownerRoutedFacts: gatewayOwnerRoutedFacts,
     resolveRole,
     version: options.version,
     // A gateway's "convergence" is starting to accept uplinks and arming the refresh tick.
@@ -594,6 +643,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gatewayService.start();
     },
     dispose: async () => {
+      fleetCoordinator.dispose();
+      gatewayOwnerRoutedFacts.dispose();
       await gatewayService.stop();
     },
     stopAuxiliary: async () => {

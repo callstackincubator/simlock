@@ -367,6 +367,64 @@ describe("Dispatcher: ownership", () => {
     return (grant as { lease: { id: string } }).lease.id;
   }
 
+  it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", owner: "someone-else", platform: "ios" },
+        session({ principal: "tok_agent", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  // H3 (round 3 review): §27a's gate used to be `role !== "admin"`, which an HTTP `operator`
+  // bearer token satisfies just as well as the gateway's own uplink -- on a plain worker with no
+  // gateway anywhere, any operator token could name someone else as owner. `isGatewayUplink` is
+  // the narrower signal `DaemonServer#session` stamps only for a connection accepted through
+  // `acceptUplink` (this worker dialled its own configured `gateway.url`); a session merely
+  // carrying `role: "admin"` from anywhere else -- an operator token's HTTP session included --
+  // no longer suffices.
+  it("lease.request: rejects a plain admin session (not the gateway's uplink) naming owner with FORBIDDEN (ADR §27a, H3)", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", owner: "someone-else", platform: "ios" },
+        session({ principal: "tok_operator", role: "admin" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("lease.request: the gateway's own uplink session may set owner, and the granted lease ends up owned by that, not the uplink's own principal (ADR §27a, H3)", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", owner: "agent-7", platform: "ios" },
+      session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+    );
+
+    expect((grant as { lease: { ownerId: string } }).lease.ownerId).toBe("agent-7");
+    // The lease is now gated on the named owner, not the uplink session that requested it.
+    await expect(
+      dispatcher.dispatch(
+        "lease.renew",
+        { leaseId: (grant as { lease: { id: string } }).lease.id },
+        session({ principal: "tok_gateway", role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      dispatcher.dispatch(
+        "lease.renew",
+        { leaseId: (grant as { lease: { id: string } }).lease.id },
+        session({ principal: "agent-7", role: "agent" }),
+      ),
+    ).resolves.toMatchObject({ id: (grant as { lease: { id: string } }).lease.id });
+  });
+
   it("lease.renew: rejects a non-owner with FORBIDDEN, admits the owner, admin bypasses", async () => {
     const { dispatcher } = await buildDispatcher();
     const leaseId = await grantLease(dispatcher);
@@ -1253,7 +1311,12 @@ function testConfig(
 ): Config {
   return {
     mode: "worker",
-    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
+    gateway: {
+      disconnectedRetentionMs: 24 * 60 * 60_000,
+      execTimeoutMs: 11 * 60_000,
+      leaseRequestTimeoutMs: 5 * 60_000,
+      routing: "warm-then-free" as const,
+    },
     drivers: {},
     exec: { timeoutMs: 600_000, ...execOverrides },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },

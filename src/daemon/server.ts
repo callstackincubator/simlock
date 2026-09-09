@@ -82,6 +82,18 @@ interface Connection {
    */
   readonly forcedRole: Role | undefined;
   /**
+   * H3 (round 3 review, narrowed further): set only by `acceptUplink`, and only there -- a
+   * dedicated fact about *how this connection was accepted*, not derived from `forcedRole`.
+   * Before this, `#session` read `forcedRole !== undefined` as the proxy for "this is the
+   * worker's own uplink to its configured gateway", which happened to be true only because
+   * `acceptUplink` is `#accept`'s one caller that ever sets `forcedRole` at all -- a future
+   * `#accept(socket, "agent")` (or any other forced role added for an unrelated reason) would
+   * silently satisfy that same check and reopen ADR §27a's `owner` gate to whatever forced that
+   * connection, with no test failing to say so. This field is set directly, once, at the one call
+   * site that is actually the uplink, so a future forced role elsewhere cannot be mistaken for it.
+   */
+  readonly isGatewayUplink: boolean;
+  /**
    * Lease ids this connection is *currently* explicitly releasing (`lease.release`/
    * `lease.release-all`), added right before the dispatched call and consumed by
    * `#notifyLeaseLost`. ADR 0003 §8 says a client "never fires `onLeaseLost` for a release the
@@ -211,6 +223,25 @@ export interface DaemonServerCommonOptions {
    * default leaves today's behaviour (no auxiliary frontend at all) unchanged.
    */
   readonly onSocketClaimed?: () => void;
+  /**
+   * #118: a gateway's own `OwnerRoutedFacts` (`src/gateway/owner-routed-facts.ts`'s
+   * `GatewayOwnerRoutedFacts`), replacing the inert one gateway mode has used since #117. Worker
+   * mode ignores this entirely -- it builds its own `OwnerRoutedFactBus` from the engine's
+   * registry, exactly as before. Structurally typed (not imported) so this module need not
+   * depend on `src/gateway`; see that class's own doc comment for why the shapes line up with
+   * no cast.
+   */
+  readonly ownerRoutedFacts?: OwnerRoutedFacts & { dispose(): void };
+  /**
+   * #118: every lease this daemon currently knows about, for `lease.release-all`'s self-push
+   * suppression (`#handleRequest`'s `lease.release-all` case below). Worker mode reads its own
+   * registry directly and never needs this (`this.#engine?.registry` already answers it); a
+   * gateway has no registry, so it supplies its fleet lease index's own entries here instead --
+   * without it, a fleet client's own `lease.release-all` would push every one of its own
+   * `lease-lost` facts back at itself, since nothing would ever mark them self-initiated.
+   * Optional so a test exercising neither engine nor gateway leases need not supply one.
+   */
+  readonly leaseSnapshot?: () => readonly { readonly id: string; readonly ownerId: string }[];
 }
 
 /**
@@ -326,7 +357,12 @@ export class DaemonServer {
       // than wrong.
       this.#engine = undefined;
       this.#dispatcher = options.dispatcher;
-      this.#ownerRoutedFacts = inertOwnerRoutedFacts();
+      // #118: a gateway now issues leases of its own, and `GatewayOwnerRoutedFacts` (built by
+      // `main.ts`, with the fleet's own lease index) is what routes their `lease-lost`/
+      // `device-unhealthy`/`device-recovered` facts to the right owner -- see that class's doc
+      // comment for why a worker's own republished `lease.expired` cannot be routed off its raw
+      // payload. Falls back to inert only for a gateway test harness that supplies neither.
+      this.#ownerRoutedFacts = options.ownerRoutedFacts ?? inertOwnerRoutedFacts();
     }
   }
 
@@ -595,10 +631,10 @@ export class DaemonServer {
    * mismatched range still refuses every operation but `daemon.stop`.
    */
   acceptUplink(connection: IpcConnection): void {
-    this.#accept(connection, "admin");
+    this.#accept(connection, "admin", true);
   }
 
-  #accept(socket: IpcConnection, forcedRole?: Role): void {
+  #accept(socket: IpcConnection, forcedRole?: Role, isGatewayUplink = false): void {
     if (this.#stopping) {
       void socket.close();
       return;
@@ -608,6 +644,7 @@ export class DaemonServer {
       closed: false,
       forcedRole,
       helloReceived: false,
+      isGatewayUplink,
       // Overwritten by `#handleHello` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
       // construction (`#dispatchLine` routes to `#handleHello` until then).
@@ -947,7 +984,13 @@ export class DaemonServer {
         // and one granted inside the window is not suppressed, so its holder gets the push it
         // would have got for any other force-release. Neither can suppress a push for a lease
         // this principal does not own, which is the property that matters.
-        const releasing = (this.#engine?.registry.snapshot.leases ?? [])
+        // #118: a gateway has no `#engine`, so it falls back to `options.leaseSnapshot` (its
+        // fleet lease index) -- see that option's own doc comment.
+        const releasing = (
+          this.#engine?.registry.snapshot.leases ??
+          this.options.leaseSnapshot?.() ??
+          []
+        )
           .filter((lease) => connection.role === "admin" || lease.ownerId === connection.principal)
           .map((lease) => lease.id);
         for (const leaseId of releasing) connection.selfInitiatedReleases.add(leaseId);
@@ -1092,9 +1135,16 @@ export class DaemonServer {
    * principal and role -- all that is left of it, since ADR 0004 removed the per-connection
    * lease state that used to travel alongside. `onProgress` is unset here: only `#requestLease`
    * needs one, and builds its own session inline so the closure can see that specific call's
-   * `requestId`. */
+   * `requestId`.
+   *
+   * `isGatewayUplink` (ADR §27a, H3, round 3 review; narrowed further, see the `Connection`
+   * field's own doc) reads `connection.isGatewayUplink` directly, not `connection.role` and not
+   * `connection.forcedRole`: `role` itself is always `"admin"` for such a connection, but so is
+   * an ordinary HTTP `operator` token's, which is the very confusion this field exists to stop
+   * propagating into `lease.request`'s `owner` gate. */
   #session(connection: Connection): DispatchSession {
     return {
+      isGatewayUplink: connection.isGatewayUplink,
       manageEventSubscription: (subscribe) => this.#manageEventSubscription(connection, subscribe),
       principal: connection.principal,
       role: connection.role,
@@ -1209,6 +1259,14 @@ export class DaemonServer {
           if (outputSocket === undefined) return;
           await this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
         },
+        // ADR 0005 §19a: the process now exists. Fired and forgotten rather than awaited --
+        // unlike `onOutput` this carries no backpressure meaning, and the dispatcher calls it
+        // synchronously between the spawn and the first chunk. Every peer that negotiates
+        // protocol 5 understands the frame (§31), so this is not a signal anyone opts out of.
+        onStarted: () => {
+          if (outputSocket === undefined) return;
+          void this.#pushStarted(outputSocket, requestId).catch(() => undefined);
+        },
       });
     } finally {
       connection.progressDisposers.delete(disposeOutput);
@@ -1235,6 +1293,18 @@ export class DaemonServer {
     return writeFrame(socket, {
       push: "output",
       payload: this.#parseOutput(PUSH_SCHEMAS.output, { chunk, requestId, stream }, "push:output"),
+    });
+  }
+
+  /**
+   * ADR 0005 §19a: `started` carries the originating request's frame id, exactly as `output`
+   * does. It is the one fact a gateway forwarding this command cannot infer for itself -- see
+   * `startedPushSchema`'s own doc -- so the worker that knows it sends it.
+   */
+  async #pushStarted(socket: IpcConnection, requestId: RequestId): Promise<void> {
+    return writeFrame(socket, {
+      push: "started",
+      payload: this.#parseOutput(PUSH_SCHEMAS.started, { requestId }, "push:started"),
     });
   }
 

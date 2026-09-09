@@ -286,13 +286,30 @@ export class Dispatcher {
     const requesterId = input.requesterId ?? session.principal;
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
+    // ADR 0005 §27a (narrowed, round 3 review, H3): `owner` is read only from the gateway's own
+    // uplink session -- forwarding the principal it authorized the request against on its own
+    // side -- never merely from `role === "admin"`. HTTP's `operator` token maps onto that same
+    // role (`dispatcher-session.ts`), so gating on role alone let *any* operator bearer
+    // credential set someone else's owner on a plain worker with no gateway anywhere; the field
+    // exists for one caller (the gateway's uplink, forced to `admin` by `acceptUplink`
+    // regardless of credential -- see `session.isGatewayUplink`'s own doc), not for every
+    // session that happens to carry that role. Any session that is not the uplink naming one is
+    // rejected outright rather than silently ignored: a caller free to name someone else as
+    // owner would be naming its way into their lease, and "ignore the field" would hide that a
+    // non-uplink caller tried. Omitting it keeps today's behaviour -- the owner is always the
+    // calling connection.
+    if (input.owner !== undefined && session.isGatewayUplink !== true) {
+      throw new DispatchError(
+        "FORBIDDEN",
+        "Only the gateway's own uplink session may set lease.request's `owner` field",
+      );
+    }
+    const ownerId = input.owner ?? session.principal;
     try {
       return await this.options.leases.request(request, {
         allowDownload: effectiveAllowDownload(downloadsPolicy, requestedAllowDownload),
         noWait: input.noWait ?? false,
-        // ADR §4: the lease's owner is always the session principal -- never client-supplied,
-        // unlike `requesterId`.
-        ownerId: session.principal,
+        ownerId,
         requesterId,
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
