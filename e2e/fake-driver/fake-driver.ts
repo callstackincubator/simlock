@@ -118,12 +118,21 @@ const PASSTHROUGH_REFUSALS: Readonly<
  * its own environment rather than from the script file, so a test controls the exit code
  * through the CLI invocation it is already making and this stays synchronous.
  *
- * It also answers two flags of its own -- `--fake-exec-stderr=<text>` and
- * `--fake-exec-exit=<n>` -- because `device.exec` (ADR 0005 §19a) runs this program in the
+ * It also answers three flags of its own -- `--fake-exec-stderr=<text>`, `--fake-exec-exit=<n>`
+ * and `--fake-exec-silent` -- because `device.exec` (ADR 0005 §19a) runs this program in the
  * *daemon's* process, where a per-invocation environment variable cannot reach it: an HTTP
- * caller has only the argument list. They are the minimum needed to observe the two things a
+ * caller has only the argument list. They are the minimum needed to observe the three things a
  * streamed exec must get right and a local passthrough never showed: output on the second
- * stream, and an exit code that is not zero.
+ * stream, an exit code that is not zero, and a process that produces **no output at all**.
+ *
+ * `--fake-exec-silent` and `--fake-exec-sleep=<ms>` exist for that last one, together. What
+ * §19a's `started` push buys a transport is *timing*, not status: `http/app.ts` races the
+ * command settling against `started`, and a command that merely succeeds reaches the same
+ * committed `200` either way -- just not until it exits. Only a command that is both silent and
+ * slow separates them, because only then is there a stretch where the route must already have
+ * answered and has nothing else to answer on. That is what makes "a silent long-running command
+ * gets its `200` and its keepalives immediately" (the route's own words) an assertion rather
+ * than a claim.
  */
 const PASSTHROUGH_PROGRAM =
   "const argv = process.argv.slice(1);" +
@@ -137,6 +146,11 @@ const PASSTHROUGH_PROGRAM =
   // is only observable from the far end if the tool reads it back out. Opt-in, so every other
   // flow's command still exits without waiting on a stdin nobody wrote to.
   "const echoStdin = argv.includes('--fake-exec-echo-stdin');" +
+  "const silent = argv.includes('--fake-exec-silent');" +
+  // Keeps the event loop alive without writing anything, so the process genuinely exists and is
+  // running while the route has to decide what to answer.
+  "const sleepMs = Number(flag('--fake-exec-sleep') ?? 0);" +
+  "if (sleepMs > 0) setTimeout(() => {}, sleepMs);" +
   "const report = (stdin) => process.stdout.write(JSON.stringify({" +
   "argv," +
   "platform: process.env.SIMLOCK_FAKE_PASSTHROUGH_PLATFORM ?? null," +
@@ -151,7 +165,7 @@ const PASSTHROUGH_PROGRAM =
   // the tool's own process, not merely that the daemon returned it in the resolved command --
   // the half of ADR 0001 decision 7 the wrapper exists for: handing back the scoping that
   // containment removed.
-  "} else report(undefined);" +
+  "} else if (!silent) report(undefined);" +
   // `exitCode` rather than `exit()`: over a pipe (which is how `device.exec` reads it, unlike
   // the CLI's inherited stdio) an immediate `exit()` can truncate a write that has not
   // flushed. Setting the code lets the process end once its streams have drained.
