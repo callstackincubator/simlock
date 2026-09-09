@@ -18,6 +18,8 @@ import { IpcError, type Clock, type DaemonLauncher, type IpcConnector } from "..
 
 export interface ConnectWithAutoLaunchOptions {
   readonly clock: Clock;
+  /** Dead as of ADR 0004 §4 -- nothing passes `true` any more, and the capability itself goes
+   * away with the daemon's push in PR B, which removes this option with it. */
   readonly heartbeat?: boolean;
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;
@@ -65,7 +67,9 @@ export async function connectWithAutoLaunch(
 function attempt(options: ConnectWithAutoLaunchOptions): Promise<SimlockClient> {
   return connectSimlock({
     endpoint: options.socketPath,
-    heartbeat: options.heartbeat ?? true,
+    // ADR 0004 §2/§4: the session renews its own lease on a timer, so it declares no heartbeat
+    // capability unless a caller explicitly asks for one.
+    heartbeat: options.heartbeat ?? false,
     ipc: options.ipc,
     principal: options.principal,
   });

@@ -132,8 +132,15 @@ export interface ConnectOptions {
    * option (programmatic client)". Only meaningful via `connectSimlockAdmin` -- the base
    * `connectSimlock` does not accept one, by design (ADR §10: "the split is by import path"). */
   readonly credential?: string;
-  /** Declares heartbeat support at `hello`; defaults to `true` so held leases keep sliding
-   * without the caller doing anything. */
+  /**
+   * Declares heartbeat support at `hello`. Defaults to `false`: ADR 0004 §1/§2 makes a
+   * client-initiated `lease.renew` the only thing that keeps a lease alive, and §4 removes the
+   * daemon-initiated heartbeat outright, so a frontend that wants its lease to survive renews
+   * on its own timer (`src/lease-policy`) rather than declaring a capability. The flag is still
+   * accepted -- the daemon still speaks the push until PR B deletes it -- but nothing in this
+   * repository asks for it any more. This client starts no timer of its own either way: renew
+   * and reconnect policy is the frontend's (ADR 0003 §10, `docs/CLIENT.md`).
+   */
   readonly heartbeat?: boolean;
 }
 
@@ -211,7 +218,7 @@ export async function connectSimlockClient(
     hello = await wire.hello({
       ...(options.principal === undefined ? {} : { principal: options.principal }),
       ...(options.credential === undefined ? {} : { credential: options.credential }),
-      capabilities: { heartbeat: options.heartbeat ?? true },
+      capabilities: { heartbeat: options.heartbeat ?? false },
     });
   } catch (error: unknown) {
     // ADR §6: a `PROTOCOL_VERSION_UNSUPPORTED` `hello` rejection is the one handshake failure

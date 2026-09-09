@@ -50,6 +50,10 @@ export class FakeSimlockClient implements SimlockClient {
   readonly daemonVersion: string;
   closeCalls = 0;
   readonly calls: Array<{ readonly method: string; readonly input: unknown }> = [];
+  /** Set by `close()`. Every operation after it rejects, the way `SimlockWire` does once the
+   * connection is gone (ADR 0003 §10) -- a fake that stayed usable would let a test pass on a
+   * dead wire. */
+  #dead = false;
 
   getCatalogImpl: (input: CatalogGetInput) => Promise<CatalogGetOutput> = notStubbed("getCatalog");
   getStatusImpl: () => Promise<StatusGetOutput> = notStubbed("getStatus");
@@ -81,58 +85,57 @@ export class FakeSimlockClient implements SimlockClient {
 
   getCatalog(input: CatalogGetInput = {}): Promise<CatalogGetOutput> {
     this.calls.push({ input, method: "getCatalog" });
-    return this.getCatalogImpl(input);
+    return this.#dead ? this.#deadConnection() : this.getCatalogImpl(input);
   }
 
   // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls status.get.
   getStatus(): Promise<StatusGetOutput> {
     this.calls.push({ input: undefined, method: "getStatus" });
-    return this.getStatusImpl();
+    return this.#dead ? this.#deadConnection() : this.getStatusImpl();
   }
 
   requestLease(input: LeaseRequestInput, options: RequestLeaseOptions = {}): Promise<LeaseGrant> {
     this.calls.push({ input, method: "requestLease" });
-    return this.requestLeaseImpl(input, options);
+    return this.#dead ? this.#deadConnection() : this.requestLeaseImpl(input, options);
   }
 
   // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls lease.cancel.
   cancelLease(input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
     this.calls.push({ input, method: "cancelLease" });
-    return this.cancelLeaseImpl(input);
+    return this.#dead ? this.#deadConnection() : this.cancelLeaseImpl(input);
   }
 
-  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls lease.renew.
   renewLease(input: LeaseRenewInput): Promise<LeaseRecord> {
     this.calls.push({ input, method: "renewLease" });
-    return this.renewLeaseImpl(input);
+    return this.#dead ? this.#deadConnection() : this.renewLeaseImpl(input);
   }
 
   releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput> {
     this.calls.push({ input, method: "releaseLease" });
-    return this.releaseLeaseImpl(input);
+    return this.#dead ? this.#deadConnection() : this.releaseLeaseImpl(input);
   }
 
   listLeases(): Promise<LeaseListOutput> {
     this.calls.push({ input: undefined, method: "listLeases" });
-    return this.listLeasesImpl();
+    return this.#dead ? this.#deadConnection() : this.listLeasesImpl();
   }
 
   // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls lease.heartbeat (the client handles it internally).
   heartbeat(): Promise<LeaseHeartbeatOutput> {
     this.calls.push({ input: undefined, method: "heartbeat" });
-    return this.heartbeatImpl();
+    return this.#dead ? this.#deadConnection() : this.heartbeatImpl();
   }
 
   // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never calls doctor.run.
   runDoctor(input: DoctorRunInput = {}): Promise<DoctorReport> {
     this.calls.push({ input, method: "runDoctor" });
-    return this.runDoctorImpl(input);
+    return this.#dead ? this.#deadConnection() : this.runDoctorImpl(input);
   }
 
   // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP itself never resolves a passthrough.
   resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand> {
     this.calls.push({ input, method: "resolvePassthrough" });
-    return this.resolvePassthroughImpl(input);
+    return this.#dead ? this.#deadConnection() : this.resolvePassthroughImpl(input);
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {
@@ -181,8 +184,16 @@ export class FakeSimlockClient implements SimlockClient {
 
   async close(): Promise<void> {
     this.closeCalls += 1;
+    this.#dead = true;
     this.emitConnectionLost(
       new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Client closed the connection", {}),
+    );
+  }
+
+  /** The rejection every operation gets once this connection is closed. */
+  #deadConnection<T>(): Promise<T> {
+    return Promise.reject(
+      new SimlockError("DAEMON_CONNECTION_LOST", "transport", "Connection is closed", {}),
     );
   }
 }
