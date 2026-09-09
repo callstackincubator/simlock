@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { OPERATIONS, type OperationName } from "../src/contract/index.js";
+import { GATEWAY_ONLY_OPERATIONS, OPERATIONS, type OperationName } from "../src/contract/index.js";
 import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
-import { withDaemon } from "./helpers/index.js";
+import { freeLoopbackPort, withDaemon } from "./helpers/index.js";
+import type { TestEnv } from "./helpers/env.js";
 
 /**
  * The contract's own surface, checked against a daemon that is actually running.
@@ -44,28 +45,27 @@ describe("contract surface", () => {
    */
   const UNPARSEABLE_PAYLOAD = "not-an-object";
 
-  it("answers every operation it declares, rather than falling through to UNKNOWN_REQUEST", async () => {
-    const env = await withDaemon();
-    // The sweep talks to the daemon directly, so nothing here would start one implicitly the
-    // way `env.cli` does.
-    expect((await env.startDaemon()).code).toBe(0);
+  /** Every operation this sweep probes: the registry minus the one the transport intercepts. */
+  function probedOperations(): OperationName[] {
+    const probed = Object.keys(OPERATIONS).filter(
+      (name) => !INTERCEPTED.has(name),
+    ) as OperationName[];
+    // Guards the guard: if `INTERCEPTED` ever swallowed the registry, a sweep would pass by
+    // doing nothing at all.
+    expect(probed.length).toBeGreaterThan(15);
+    return probed;
+  }
 
+  /** The code each operation answers an unparseable payload with, keyed by operation. */
+  async function sweep(env: TestEnv): Promise<Record<string, string>> {
     // The real client transport, not a hand-rolled one: `SimlockWire.call` takes the
     // operation name as a plain string, which is exactly what a sweep over the registry
     // needs and what the typed `SimlockClient` facade deliberately does not expose.
     const wire = new SimlockWire(await new NodeIpcTransport().connect(env.socketPath));
     try {
       await wire.hello({ principal: "contract-surface-agent" });
-
-      const probed = Object.keys(OPERATIONS).filter(
-        (name) => !INTERCEPTED.has(name),
-      ) as OperationName[];
-      // Guards the guard: if `INTERCEPTED` ever swallowed the registry, the loop below
-      // would pass by doing nothing at all.
-      expect(probed.length).toBeGreaterThan(15);
-
       const answers = await Promise.all(
-        probed.map(async (name) => {
+        probedOperations().map(async (name) => {
           try {
             await wire.call(name, UNPARSEABLE_PAYLOAD);
             return [name, "accepted an unparseable payload"] as const;
@@ -77,15 +77,52 @@ describe("contract surface", () => {
           }
         }),
       );
-
-      // Asserted as one object rather than per operation so a failure names every
-      // unreachable operation at once, instead of stopping at the first.
-      expect(Object.fromEntries(answers)).toEqual(
-        Object.fromEntries(probed.map((name) => [name, "BAD_REQUEST"])),
-      );
+      return Object.fromEntries(answers);
     } finally {
       await wire.close();
     }
+  }
+
+  it("answers every operation it declares, rather than falling through to UNKNOWN_REQUEST", async () => {
+    const env = await withDaemon();
+    // The sweep talks to the daemon directly, so nothing here would start one implicitly the
+    // way `env.cli` does.
+    expect((await env.startDaemon()).code).toBe(0);
+
+    // Asserted as one object rather than per operation so a failure names every unreachable
+    // operation at once, instead of stopping at the first. The gateway-only operations
+    // (ADR 0005 §23) are the one deliberate exception: a worker has no worker registry, so
+    // `UNKNOWN_REQUEST` -- "this daemon does not implement that operation" -- is the honest
+    // answer rather than a routing mistake. The gateway's own sweep below is what proves they
+    // are reachable somewhere.
+    expect(await sweep(env)).toEqual(
+      Object.fromEntries(
+        probedOperations().map((name) => [
+          name,
+          (GATEWAY_ONLY_OPERATIONS as readonly string[]).includes(name)
+            ? "UNKNOWN_REQUEST"
+            : "BAD_REQUEST",
+        ]),
+      ),
+    );
+  });
+
+  it("answers every operation on a gateway too, including the ones it refuses", async () => {
+    // ADR 0005 §32: the gateway is a second implementation of the same contract, reached
+    // through the same socket switch -- so it needs the same sweep. Every operation must parse
+    // its input before deciding anything, so even the ones a gateway answers
+    // `UNSUPPORTED_IN_GATEWAY_MODE` reject an unparseable payload with `BAD_REQUEST` first.
+    // Anything that came back `UNKNOWN_REQUEST` here would be an operation a gateway forgot.
+    const port = await freeLoopbackPort();
+    const env = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    expect((await env.startDaemon()).code).toBe(0);
+
+    expect(await sweep(env)).toEqual(
+      Object.fromEntries(probedOperations().map((name) => [name, "BAD_REQUEST"])),
+    );
   });
 
   /**

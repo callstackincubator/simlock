@@ -1,0 +1,293 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  createConnectionPair,
+  FakeClock,
+  MemoryUplinkTransport,
+  UplinkError,
+  type IpcConnection,
+  type UplinkConnector,
+  type UplinkDialOptions,
+} from "../ports/index.js";
+import { GatewayUplink } from "./gateway-uplink.js";
+
+/** A connector a test drives by hand: every dial is recorded, and each one either hands back a
+ * connection or fails with the scripted error. */
+class ScriptedConnector implements UplinkConnector {
+  readonly dials: UplinkDialOptions[] = [];
+  readonly connections: IpcConnection[] = [];
+  #outcomes: Array<"connect" | UplinkError> = [];
+
+  script(...outcomes: Array<"connect" | UplinkError>): void {
+    this.#outcomes.push(...outcomes);
+  }
+
+  async connect(options: UplinkDialOptions): Promise<IpcConnection> {
+    this.dials.push(options);
+    const outcome = this.#outcomes.shift() ?? "connect";
+    if (outcome !== "connect") throw outcome;
+    const [workerEnd, gatewayEnd] = createConnectionPair();
+    this.connections.push(gatewayEnd);
+    return workerEnd;
+  }
+}
+
+function uplink(
+  connector: UplinkConnector,
+  overrides: Partial<ConstructorParameters<typeof GatewayUplink>[0]> = {},
+) {
+  const clock = new FakeClock(1_000);
+  const accepted: IpcConnection[] = [];
+  const link = new GatewayUplink({
+    accept: (connection) => accepted.push(connection),
+    clock,
+    connector,
+    // Pinned so the delays a test asserts are the schedule, not a coin flip. The real default
+    // is Math.random; jitter itself is asserted separately below.
+    random: () => 1,
+    token: "join-secret",
+    url: "ws://gateway.test",
+    workerId: "wrk_1",
+    ...overrides,
+  });
+  return { accepted, clock, link };
+}
+
+describe("GatewayUplink", () => {
+  it("dials on start and hands the connection to the daemon", async () => {
+    const connector = new ScriptedConnector();
+    const { accepted, link } = uplink(connector);
+
+    link.start();
+    await vi.waitFor(() => expect(accepted).toHaveLength(1));
+
+    // The base URL travels verbatim: deriving `/v1/uplink` is the adapter's job, so a test of
+    // the supervisor asserts what the operator configured.
+    expect(connector.dials).toEqual([
+      { token: "join-secret", url: "ws://gateway.test", workerId: "wrk_1" },
+    ]);
+    await link.stop();
+  });
+
+  it("sends the label when the worker configured one", async () => {
+    const connector = new ScriptedConnector();
+    const { link } = uplink(connector, { label: "mac-mini-1" });
+
+    link.start();
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(1));
+
+    expect(connector.dials[0]?.label).toBe("mac-mini-1");
+    await link.stop();
+  });
+
+  it("reconnects after the gateway drops the uplink", async () => {
+    const connector = new ScriptedConnector();
+    const { accepted, clock, link } = uplink(connector);
+    link.start();
+    await vi.waitFor(() => expect(accepted).toHaveLength(1));
+
+    // The gateway's end goes away -- a restart, a network drop, a revoked token being cut off.
+    await connector.connections[0]?.close();
+    clock.advance(1_000);
+    await vi.waitFor(() => expect(accepted).toHaveLength(2));
+
+    await link.stop();
+  });
+
+  it("backs off exponentially and stops growing at the cap", async () => {
+    const connector = new ScriptedConnector();
+    const unreachable = () => new UplinkError("unreachable", "no gateway");
+    connector.script(unreachable(), unreachable(), unreachable(), unreachable(), unreachable());
+    const { clock, link } = uplink(connector, {
+      backoff: { initialMs: 1_000, maxMs: 4_000, multiplier: 2 },
+    });
+
+    link.start();
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(1));
+
+    // 1s, then 2s, then 4s, then the cap holds at 4s. Each `advance` is one millisecond short
+    // of the next delay first, to prove the retry is actually scheduled rather than eager.
+    for (const delayMs of [1_000, 2_000, 4_000, 4_000]) {
+      const before = connector.dials.length;
+      clock.advance(delayMs - 1);
+      expect(connector.dials).toHaveLength(before);
+      clock.advance(1);
+      await vi.waitFor(() => expect(connector.dials).toHaveLength(before + 1));
+    }
+
+    await link.stop();
+  });
+
+  // H1: `#attempt` used to reset to 0 the instant `connect()` resolved, regardless of how long
+  // the link actually stayed up -- so a gateway that accepts the connection and then immediately
+  // closes it (an accept-then-immediately-close loop: a proxy misconfiguration, a mismatched
+  // protocol version the gateway does not retry past) redialled at `backoff.initialMs` forever,
+  // never backing off. Every prior test scripts either an outright dial *failure* (which always
+  // incremented `#attempt` correctly) or a single successful connect; none closes a
+  // *successful* connection immediately, repeatedly, which is exactly the case that used to
+  // reset the counter every cycle.
+  it("keeps backing off through an accept-then-immediately-close loop, instead of resetting every cycle (H1)", async () => {
+    const connector = new ScriptedConnector();
+    const { accepted, clock, link } = uplink(connector, {
+      backoff: { initialMs: 1_000, maxMs: 8_000, multiplier: 2 },
+      minStableMs: 8_000,
+    });
+
+    link.start();
+    await vi.waitFor(() => expect(accepted).toHaveLength(1));
+
+    // 1s, 2s, 4s, then the cap holds at 8s -- exactly the growing schedule a dial *failure*
+    // already gets, proving a connection that never survives `minStableMs` is treated the same
+    // way. Against the pre-fix code every one of these delays would instead be 1s: `#attempt`
+    // reset to 0 as soon as each connect resolved, before its immediate close ever ran.
+    for (const delayMs of [1_000, 2_000, 4_000, 8_000, 8_000]) {
+      const connectionsBefore = accepted.length;
+      await connector.connections[connectionsBefore - 1]?.close();
+      clock.advance(delayMs - 1);
+      // Flushes the microtask queue before asserting nothing redialled yet: closing a
+      // connection triggers `#onClosed`'s scheduling synchronously, but a redial itself runs
+      // through an `await`, so a check made with no yield at all would not observe one that
+      // fired too early against a shorter, buggy delay -- exactly the gap the pre-fix code hid
+      // behind, since the assertion below would otherwise pass whether the real delay was
+      // `delayMs` or a flat `initialMs`.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(accepted).toHaveLength(connectionsBefore);
+      clock.advance(1);
+      await vi.waitFor(() => expect(accepted).toHaveLength(connectionsBefore + 1));
+    }
+
+    await link.stop();
+  });
+
+  // H1's other half: every test above either never lets a connection survive `minStableMs` (the
+  // accept-then-close loop just above) or never grows `#attempt` past 1 before a stable success
+  // (every other passing case). Neither exercises the actual reset itself -- deleting
+  // `this.#attempt = 0` from the stable timer's callback fails none of them, since the very
+  // first reconnect after one success looks identical whether `#attempt` was reset to 0 or left
+  // at 1. This grows `#attempt` to 4 with real failures first, *then* lets a connection survive
+  // `minStableMs`, so the reset is the only thing that can explain the next delay being back at
+  // `initialMs` instead of the cap `#attempt` would otherwise still be sitting at.
+  it("resets the backoff once a connection has genuinely stayed up, not merely connected (H1)", async () => {
+    const connector = new ScriptedConnector();
+    const unreachable = () => new UplinkError("unreachable", "no gateway");
+    connector.script(unreachable(), unreachable(), unreachable());
+    const { accepted, clock, link } = uplink(connector, {
+      backoff: { initialMs: 1_000, maxMs: 8_000, multiplier: 2 },
+      minStableMs: 5_000,
+    });
+
+    link.start();
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(1));
+
+    // Three straight failures grow `#attempt` to 3 (delays 1s, 2s, 4s) before the 4th dial ever
+    // gets a chance to succeed.
+    for (const delayMs of [1_000, 2_000, 4_000]) {
+      const before = connector.dials.length;
+      clock.advance(delayMs);
+      await vi.waitFor(() => expect(connector.dials).toHaveLength(before + 1));
+    }
+    await vi.waitFor(() => expect(accepted).toHaveLength(1));
+
+    // Stays up past `minStableMs`: the stable timer fires and, if the reset is intact, `#attempt`
+    // goes back to 0 here -- well before anything closes.
+    clock.advance(5_000);
+
+    // Without the reset, `#attempt` is still 4 from the dial that succeeded, and the next delay
+    // would be the cap (`1000 * 2**3` = 8000, already at `maxMs`) rather than `initialMs`.
+    await connector.connections[0]?.close();
+    const before = connector.dials.length;
+    clock.advance(999);
+    expect(connector.dials).toHaveLength(before);
+    clock.advance(1);
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(before + 1));
+
+    await link.stop();
+  });
+
+  it("keeps retrying at the cap when the gateway rejects the join token (ADR 0005 §8)", async () => {
+    const connector = new ScriptedConnector();
+    const rejected = () => new UplinkError("rejected", "revoked");
+    connector.script(rejected(), rejected(), rejected(), rejected(), rejected(), rejected());
+    const { clock, link } = uplink(connector, {
+      backoff: { initialMs: 1_000, maxMs: 2_000, multiplier: 2 },
+    });
+
+    link.start();
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(1));
+    // A revoked token is not a reason to give up: an operator may mint a new one at any time,
+    // and a worker that stopped dialling would need a restart nobody would think to perform.
+    for (let index = 0; index < 4; index += 1) {
+      const before = connector.dials.length;
+      clock.advance(2_000);
+      await vi.waitFor(() => expect(connector.dials.length).toBeGreaterThan(before));
+    }
+
+    await link.stop();
+  });
+
+  it("jitters the delay across the lower half of the window", async () => {
+    const connector = new ScriptedConnector();
+    connector.script(new UplinkError("unreachable", "no gateway"));
+    const { clock, link } = uplink(connector, {
+      backoff: { initialMs: 1_000, maxMs: 1_000, multiplier: 2 },
+      // Smallest possible jitter: half the window.
+      random: () => 0,
+    });
+
+    link.start();
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(1));
+    clock.advance(499);
+    expect(connector.dials).toHaveLength(1);
+    clock.advance(1);
+    await vi.waitFor(() => expect(connector.dials).toHaveLength(2));
+
+    await link.stop();
+  });
+
+  it("stops dialling and closes the uplink on stop", async () => {
+    const connector = new ScriptedConnector();
+    const { accepted, clock, link } = uplink(connector);
+    link.start();
+    await vi.waitFor(() => expect(accepted).toHaveLength(1));
+
+    await link.stop();
+
+    expect(accepted[0]?.closed).toBe(true);
+    // Neither the closed connection nor the passage of time redials after a stop.
+    clock.advance(60_000);
+    expect(connector.dials).toHaveLength(1);
+  });
+
+  it("closes a connection that lands after a stop rather than serving it", async () => {
+    let release: ((connection: IpcConnection) => void) | undefined;
+    const pending = new Promise<IpcConnection>((resolve) => {
+      release = resolve;
+    });
+    const connector: UplinkConnector = { connect: async () => pending };
+    const { accepted, link } = uplink(connector);
+
+    link.start();
+    await link.stop();
+    const [workerEnd] = createConnectionPair();
+    release?.(workerEnd);
+    await vi.waitFor(() => expect(workerEnd.closed).toBe(true));
+
+    expect(accepted).toEqual([]);
+  });
+
+  it("works against the in-memory transport end to end", async () => {
+    const transport = new MemoryUplinkTransport();
+    const accepted: string[] = [];
+    await transport.listen({
+      accept: (uplinkConnection) => accepted.push(uplinkConnection.workerId),
+      authenticate: async (token) => (token === "join-secret" ? "accept" : "unauthenticated"),
+    });
+    const { link } = uplink(transport);
+
+    link.start();
+    await vi.waitFor(() => expect(accepted).toEqual(["wrk_1"]));
+
+    await link.stop();
+  });
+});

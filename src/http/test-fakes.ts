@@ -8,9 +8,13 @@ import type { TokenIdentity } from "./token-store.js";
 const gibibyte = 1024 * 1024 * 1024;
 
 /** Shared config fixture; every field `Config` currently declares (see `src/core/config.ts`). */
-export function testConfig(overrides: Partial<Config["lease"]> = {}): Config {
+export function testConfig(
+  overrides: Partial<Config["lease"]> = {},
+  mode: Config["mode"] = "worker",
+): Config {
   return {
-    mode: "worker",
+    mode,
+    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
     drivers: {},
     capacity: {
       strategy: "resource",

@@ -58,6 +58,11 @@ const ROLE_MATRIX: ReadonlyArray<{
   },
   { name: "token.list", input: {}, role: "admin" },
   { name: "token.revoke", input: { id: "tok_1" }, role: "admin" },
+  // ADR 0005 §8/§23: gateway-only, admin throughout.
+  { name: "worker.list", input: {}, role: "admin" },
+  { name: "worker.drain", input: { workerId: "wrk_1" }, role: "admin" },
+  { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
+  { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -204,6 +209,112 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
   });
 
+  it("status.get: round-trips a gateway's aggregate, workers and all (ADR 0005 §20)", () => {
+    const capacityEntry = {
+      running: 1,
+      maxRunning: 2,
+      reserved: 0,
+      overLimit: false,
+      limit: 2,
+      warm: 0,
+      used: 1,
+    };
+    const capacity = {
+      ios: capacityEntry,
+      android: capacityEntry,
+      global: { running: 1, maxRunning: 4, reserved: 0, overLimit: false, warm: 0 },
+    };
+    const lease = {
+      id: "lease_1",
+      deviceId: "dev_1",
+      requesterId: "agent-1",
+      ownerId: "agent-1",
+      grantedAt: 1,
+      ttlMs: 2,
+      ttlDeadline: 3,
+      lastRenewedAt: 1,
+      workerId: "wrk_1",
+    };
+    const parsed = OPERATIONS["status.get"].output.parse({
+      devices: [
+        {
+          id: "dev_1",
+          spec: { platform: "ios", model: "iPhone 17", osVersion: "26.0" },
+          state: "leased",
+          workerId: "wrk_1",
+        },
+      ],
+      leases: [lease],
+      capacity,
+      daemon: { health: "running", mode: "gateway" },
+      queueDepth: 0,
+      workers: [
+        {
+          id: "wrk_1",
+          label: "mac-mini-1",
+          connection: "connected",
+          drained: false,
+          lastSeenAt: 10,
+          health: "running",
+          version: "0.3.0",
+          capacity,
+          queueDepth: 0,
+          leases: [lease],
+          devices: [],
+          catalog: [{ platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"] }],
+        },
+        {
+          id: "wrk_2",
+          connection: "incompatible",
+          drained: false,
+          lastSeenAt: 11,
+          protocol: { gateway: { min: 4, max: 4 }, worker: { min: 3, max: 3 } },
+          leases: [],
+          devices: [],
+          catalog: [],
+        },
+      ],
+    });
+    expect(parsed.workers?.[1]?.protocol?.worker).toEqual({ min: 3, max: 3 });
+    expect(parsed.devices[0]?.workerId).toBe("wrk_1");
+    expect(parsed.leases[0]?.workerId).toBe("wrk_1");
+  });
+
+  it("catalog.get: round-trips a gateway's per-entry worker annotations (ADR 0005 §21)", () => {
+    const parsed = OPERATIONS["catalog.get"].output.parse({
+      platforms: [
+        {
+          platform: "ios",
+          models: ["iPhone 17"],
+          runtimes: ["26.0"],
+          modelWorkers: { "iPhone 17": ["wrk_1", "wrk_2"] },
+          runtimeWorkers: { "26.0": ["wrk_1"] },
+        },
+      ],
+    });
+    expect(parsed.platforms[0]?.modelWorkers).toEqual({ "iPhone 17": ["wrk_1", "wrk_2"] });
+  });
+
+  it("worker.remove reports whether there was a view to forget; drain never lies", () => {
+    // `remove` is idempotent: forgetting a worker the gateway has already forgotten is done,
+    // not an error -- so `false` is a legitimate outcome, the same shape `token.revoke` uses.
+    expect(OPERATIONS["worker.remove"].output.parse({ workerId: "wrk_1", removed: false })).toEqual(
+      { workerId: "wrk_1", removed: false },
+    );
+    // Drain and undrain each report the state they establish, and only that state: an
+    // `undrain` answering `drained: true` would be a contradiction rather than an outcome.
+    expect(OPERATIONS["worker.drain"].output.parse({ workerId: "wrk_1", drained: true })).toEqual({
+      workerId: "wrk_1",
+      drained: true,
+    });
+    expect(() =>
+      OPERATIONS["worker.drain"].output.parse({ workerId: "wrk_1", drained: false }),
+    ).toThrow();
+    expect(() =>
+      OPERATIONS["worker.undrain"].output.parse({ workerId: "wrk_1", drained: true }),
+    ).toThrow();
+  });
+
   it("list.get: accepts each kind's array shape", () => {
     expect(OPERATIONS["list.get"].output.parse([])).toEqual([]);
     expect(OPERATIONS["list.get"].output.parse([{ name: "idle-shutdown" }])).toEqual([
@@ -265,6 +376,8 @@ describe("operation input/output round trips", () => {
 
   it("config.get: round-trips a representative config", () => {
     const config = {
+      mode: "worker",
+      gateway: { disconnectedRetentionMs: 86_400_000, execTimeoutMs: 660_000 },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },

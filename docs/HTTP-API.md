@@ -683,6 +683,10 @@ route it arrives as the stream's terminal `error` event — as does a
 `WORKER_UNREACHABLE` that only happens mid-stream. The status is what a
 client mapping the code without a route in front of it should use.
 
+`404` also covers `UNKNOWN_WORKER` (body names the `workerId`) on the worker
+routes. Where an error carries typed details, they are inlined beside `code`
+and `message` — details are contract, message text is not.
+
 ## Lifecycle semantics
 
 - **Daemon restart.** In-flight lease requests are in-memory and do not

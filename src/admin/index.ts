@@ -57,6 +57,12 @@ export type {
   TokenListOutput,
   TokenRevokeInput,
   TokenRevokeOutput,
+  WorkerDrainInput,
+  WorkerDrainOutput,
+  WorkerListOutput,
+  WorkerRemoveOutput,
+  WorkerUndrainOutput,
+  WorkerView,
 } from "../simlock-client/client.js";
 export { isSimlockError, SimlockError } from "../simlock-client/client.js";
 

@@ -1854,6 +1854,7 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
     mode: "worker",
     exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 1 },
+    gateway: { disconnectedRetentionMs: 24 * 60 * 60_000, execTimeoutMs: 11 * 60_000 },
     drivers: {},
     eventBuffer: { capacity: 10 },
     health: {

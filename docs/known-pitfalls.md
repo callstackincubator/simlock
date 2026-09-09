@@ -803,6 +803,55 @@ dispatches without touching the leases anyone already holds.
 [ADR 0005](adr/0005-gateway-and-worker-modes.md) and recorded in
 [IDEAS.md](IDEAS.md#capacity-slices-reserved-for-the-gateway).
 
+## A worker's claimed id is never verified against its join token
+
+`WORKER_ID_HEADER` (`x-simlock-worker-id`) travels on the WebSocket upgrade
+request, alongside — but entirely independent of — the `Authorization: Bearer`
+join token `authenticate` checks (ADR 0005 §4). A `worker`-role token proves
+only that the *dial* is authorized to open an uplink; it says nothing about
+which worker id the dial is entitled to claim, and nothing on the gateway's
+side cross-checks the two. `GatewayService#accept` then keys everything —
+`#links`, the registry's view, the drain flag — by that unverified claim, and
+a reconnect under the same id is trusted to *be* a reconnect (`#accept`
+closes the previous link and replaces it, exactly ADR 0005 §6's own
+reconnect story).
+
+**The pitfall:** any holder of a valid `worker`-role join token — every
+worker in the fleet shares one token per `simlock token create --role worker`
+unless an operator mints one per machine — can dial claiming *any* worker id,
+including one another real worker currently holds. `#accept`'s reconnect
+logic cannot distinguish this from a genuine reconnect: it closes the real
+worker's link, inherits its view and drain state under the new (impostor)
+connection, and the real worker is evicted with no more warning than an
+ordinary network blip would produce. Two smaller issues share the same root
+cause: `workerId` is taken from an unauthenticated header before truncation
+(`MAX_CLAIMED_FIELD_LENGTH`, P3), so two ids differing only past that length
+collide as the same map key; and nothing filters non-printable characters out
+of it before it reaches a view, a log line, or `simlock worker list`'s
+output.
+
+**Why this is not fixed in the #117/#118 stack:** proving `workerId` against
+the token would mean either binding one join token to one worker id at
+`token create` time (a real workflow change — an operator names the worker
+when minting its token, and a fleet that currently shares one token across
+every machine cannot any more without minting per-machine ones first) or
+having each worker generate and persist its own keypair and sign its claimed
+id (a second credential mechanism beside the join token ADR 0005 already
+specifies). Either is a real design decision for a later ADR, not a fix that
+belongs inside a gateway-skeleton PR whose own scope is making the fleet
+*visible* before it is routable.
+
+**Status:** accepted as a gap for v1, tracked here per `safety.md` rule 8
+("ownership proven not inferred") rather than left unrecorded. Mitigating
+factors: exploiting it requires a real `worker`-role join token, which is
+already the credential an operator hands only to machines meant to join the
+fleet, and the blast radius is one worker's view and drain flag, not any
+device a lease actually holds (leases stay the workers' own local business
+until #118 routes them through the gateway). Truncation-driven id collisions
+and non-printable `workerId`s are narrower, cheaper mitigations that do not
+require the credential redesign above and are worth doing without waiting for
+it.
+
 ## `simlock simctl` / `simlock adb` can hang forever reading a piped stdin
 
 ADR 0005 §19c: a piped stdin is read to EOF first, then sent as `device.exec`'s
