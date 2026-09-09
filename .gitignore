@@ -4,3 +4,4 @@ dist/
 .DS_Store
 .fallow/
 .claude/settings.local.json
+.claude/worktrees/
