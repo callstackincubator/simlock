@@ -185,7 +185,17 @@ function defaultEnvironment(
     // The renew timer's trigger: connects to a daemon that is already listening and never
     // launches one, so an operator's `simlock daemon stop` is not undone by an idle session
     // (ADR 0004 §2).
-    connectForRenew: () => connectToRunningDaemon({ ipc, principal: requesterId, socketPath }),
+    connectForRenew: () =>
+      connectToRunningDaemon({
+        ipc,
+        principal: requesterId,
+        // Resolved here rather than hoisted into a shared `const`, for the same reason
+        // `connect` resolves it inline above: `resolveDaemonSocketPath` throws for an over-long
+        // `SIMLOCK_HOME`, and a throw during construction escapes before the server can report
+        // it -- leaving a dead server and a raw stack trace on the stdio channel an MCP client
+        // is trying to speak protocol over.
+        socketPath: resolveDaemonSocketPath(dataDirectory),
+      }),
     createTransport: () => new StdioServerTransport(),
   };
 }
