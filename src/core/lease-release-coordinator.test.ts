@@ -35,7 +35,7 @@ async function createHarness() {
     eventBus,
     expiryScheduler: scheduler,
     registry,
-    ttl: { detachedMs: 20, heldBackstopMs: 10 },
+    ttl: { defaultMs: 20 },
   });
   const reclaims: ReleasedLease[] = [];
   const warmPool = {
@@ -74,7 +74,7 @@ async function createHarness() {
 
 async function grant(
   harness: Awaited<ReturnType<typeof createHarness>>,
-  mode: LeaseRecord["mode"] = "held",
+  ttlMs?: number,
 ): Promise<{ readonly device: DeviceRecord; readonly lease: LeaseRecord }> {
   const device = await harness.registry.registerDevice({
     driverData: {},
@@ -88,9 +88,9 @@ async function grant(
   });
   const result = await harness.lifecycle.grant({
     deviceId: device.id,
-    mode,
     requesterId: `agent_${device.id}`,
     ownerId: `agent_${device.id}`,
+    ...(ttlMs === undefined ? {} : { ttlMs }),
   });
   return result;
 }
@@ -98,7 +98,6 @@ async function grant(
 describe("LeaseReleaseCoordinator", () => {
   it.each([
     ["explicit", "lease.released"],
-    ["closed", "lease.released"],
     ["killed", "lease.released"],
     ["expired", "lease.expired"],
   ] as const)("commits %s release attribution before warm reclaim", async (reason, event) => {
@@ -137,35 +136,30 @@ describe("LeaseReleaseCoordinator", () => {
     );
   });
 
-  it("delegates renewal to the lifecycle for both detached and held leases", async () => {
+  it("delegates renewal to the lifecycle, applying the TTL the caller named", async () => {
     const harness = await createHarness();
-    const detached = await grant(harness, "detached");
-    await expect(harness.coordinator.renew(detached.lease.id, 30)).resolves.toMatchObject({
+    const granted = await grant(harness);
+    await expect(harness.coordinator.renew(granted.lease.id, 30)).resolves.toMatchObject({
       ttlDeadline: 1_030,
-    });
-
-    const heldHarness = await createHarness();
-    const held = await grant(heldHarness, "held");
-    await expect(heldHarness.coordinator.renew(held.lease.id, 30)).resolves.toMatchObject({
-      ttlDeadline: 1_030,
+      ttlMs: 30,
     });
   });
 
-  it("delegates heartbeat to the lifecycle and slides the held lease's deadline", async () => {
+  it("delegates a body-less renewal, which re-applies the lease's own stored width", async () => {
     const harness = await createHarness();
-    const held = await grant(harness, "held");
-    expect(held.lease.ttlDeadline).toBe(1_010);
+    const granted = await grant(harness, 50);
 
     harness.clock.advance(3);
-    await expect(harness.coordinator.heartbeat(held.lease.id)).resolves.toMatchObject({
-      ttlDeadline: 1_013,
+    await expect(harness.coordinator.renew(granted.lease.id)).resolves.toMatchObject({
+      ttlDeadline: 1_053,
+      ttlMs: 50,
     });
-    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_013 }]);
+    expect(harness.registry.snapshot.leases).toMatchObject([{ ttlDeadline: 1_053 }]);
   });
 
   it("ignores an expiry delivery for a deadline replaced by renewal", async () => {
     const harness = await createHarness();
-    const granted = await grant(harness, "detached");
+    const granted = await grant(harness);
     const staleDeadline = granted.lease.ttlDeadline;
 
     await harness.coordinator.renew(granted.lease.id, 30);
@@ -290,7 +284,7 @@ describe("LeaseReleaseCoordinator", () => {
 
   it("retries an expiry after maintenance reopens", async () => {
     const harness = await createHarness();
-    const granted = await grant(harness, "detached");
+    const granted = await grant(harness);
 
     await harness.coordinator.beginMaintenance();
     const expiry = harness.coordinator.expire(granted.lease.id, granted.lease.ttlDeadline);
@@ -313,7 +307,7 @@ describe("LeaseReleaseCoordinator", () => {
   });
 
   describe("backgrounded reclaim", () => {
-    it.each(["explicit", "closed", "device-lost", "orphaned"] as const)(
+    it.each(["explicit", "device-lost", "killed"] as const)(
       "commits the registry-only %s release and resolves without waiting for the reclaim",
       async (reason) => {
         const harness = await createHarness();
@@ -328,10 +322,10 @@ describe("LeaseReleaseCoordinator", () => {
         };
 
         // The registry-only half (device -> reclaiming, lease gone, `lease.released`
-        // emitted) is the whole of what the releasing caller needs -- an agent's MCP
-        // or CLI release, a closing connection, or startup's orphan sweep. The
-        // driver-side reclaim is still stuck on `blocked` and none of them may wait
-        // for it, or nothing was gained over the old inline-await shape.
+        // emitted) is the whole of what the releasing caller needs -- an agent's MCP or CLI
+        // release, an operator `release --all`, or a device recovery giving up. The
+        // driver-side reclaim is still stuck on `blocked` and none of them may wait for it,
+        // or nothing was gained over the old inline-await shape.
         if (reason === "device-lost") await harness.coordinator.releaseDeviceLost(granted.lease.id);
         else await harness.coordinator.release(granted.lease.id, reason);
 
@@ -354,7 +348,7 @@ describe("LeaseReleaseCoordinator", () => {
 
     it("resolves an expiry without waiting for the reclaim either", async () => {
       const harness = await createHarness();
-      const granted = await grant(harness, "detached");
+      const granted = await grant(harness);
       let unblockReclaim!: () => void;
       const blocked = new Promise<void>((resolve) => {
         unblockReclaim = resolve;

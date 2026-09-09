@@ -7,21 +7,33 @@ export interface EventMap {
     readonly waitPolicy: string;
   };
   "lease.queued": { readonly requestId: string; readonly queuePosition: number };
+  /** ADR 0004's Consequences: `mode` left this payload, a deliberate one-off exception to
+   * events rule 6 (additive changes only) taken while the package is 0.x -- there is one kind
+   * of lease now, so there is nothing to report. `EVENTS.md` records the exception. */
   "lease.granted": {
     readonly leaseId: string;
     readonly deviceId: string;
     readonly requester: string;
-    readonly mode: "held" | "detached";
   };
   "lease.renewed": { readonly leaseId: string; readonly newDeadline: number };
   "lease.released": {
     readonly leaseId: string;
     readonly deviceId: string;
-    readonly reason: "closed" | "explicit" | "killed" | "orphaned" | "device-lost";
+    /**
+     * Who ended this lease, and whether its holder asked: `explicit` is a `lease.release` the
+     * holder itself sent (including the one a `simlock lease` sends on its way out), `killed`
+     * an operator taking it away (`release --all`, `nuke`), `device-lost` crash recovery
+     * giving up. Expiry is not in this union at all -- it has its own event.
+     *
+     * ADR 0004's Consequences: `closed` and `orphaned` are gone from it, the same deliberate
+     * 0.x exception to events rule 6. Closing a connection is not a release any more (§3), and
+     * there is no startup sweep left to orphan anything.
+     */
+    readonly reason: "explicit" | "killed" | "device-lost";
     /** ADR 0003 §8: the released lease's owner, so a `lease-lost` push can be routed to every
-     * live connection whose principal owns it (in either mode), not just the held-lease
-     * holder -- the registry no longer has the lease to look this up from by the time this
-     * event fires (`beginRelease` already removed it), so it travels on the event instead. */
+     * live connection whose principal owns it -- the registry no longer has the lease to look
+     * this up from by the time this event fires (`beginRelease` already removed it), so it
+     * travels on the event instead. */
     readonly ownerId: string;
   };
   "lease.expired": {

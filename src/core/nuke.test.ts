@@ -103,7 +103,7 @@ describe("Nuke", () => {
     });
     const grant = await engine.request(
       { model: "Phone", osVersion: "1", platform: "ios" },
-      { mode: "held", ownerId: "agent", requesterId: "agent" },
+      { ownerId: "agent", requesterId: "agent" },
     );
 
     const release = engine.release(grant.lease.id, "explicit");
@@ -161,7 +161,7 @@ function config(): Config {
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
-    lease: { detachedTtlMs: 60_000, heldTtlBackstopMs: 60_000, heartbeatIntervalMs: 15_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
     capacity: {
       strategy: "resource",
       config: {

@@ -43,7 +43,6 @@ import type {
   LeaseCancelOutput,
   PassthroughCommand,
   LeaseGrant,
-  LeaseHeartbeatOutput,
   LeaseListOutput,
   LeaseLostPush,
   LeaseProgress,
@@ -86,7 +85,6 @@ export type {
   LeaseCancelInput,
   LeaseCancelOutput,
   LeaseGrant,
-  LeaseHeartbeatOutput,
   LeaseListOutput,
   LeaseLostPush,
   LeaseProgress,
@@ -132,16 +130,6 @@ export interface ConnectOptions {
    * option (programmatic client)". Only meaningful via `connectSimlockAdmin` -- the base
    * `connectSimlock` does not accept one, by design (ADR §10: "the split is by import path"). */
   readonly credential?: string;
-  /**
-   * Declares heartbeat support at `hello`. Defaults to `false`: ADR 0004 §1/§2 makes a
-   * client-initiated `lease.renew` the only thing that keeps a lease alive, and §4 removes the
-   * daemon-initiated heartbeat outright, so a frontend that wants its lease to survive renews
-   * on its own timer (`src/lease-policy`) rather than declaring a capability. The flag is still
-   * accepted -- the daemon still speaks the push until PR B deletes it -- but nothing in this
-   * repository asks for it any more. This client starts no timer of its own either way: renew
-   * and reconnect policy is the frontend's (ADR 0003 §10, `docs/CLIENT.md`).
-   */
-  readonly heartbeat?: boolean;
 }
 
 /** The full agent-visible method surface (ADR §3's operation matrix, `agent` rows) plus the
@@ -159,18 +147,24 @@ export interface SimlockClient {
   renewLease(input: LeaseRenewInput): Promise<LeaseRecord>;
   releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput>;
   listLeases(): Promise<LeaseListOutput>;
-  heartbeat(): Promise<LeaseHeartbeatOutput>;
   runDoctor(input?: DoctorRunInput): Promise<DoctorReport>;
   /** Resolves the scoped command behind `simlock simctl` / `simlock adb` (ADR 0001, decision
    * 7). Resolution only -- the caller is the process with a terminal, so it runs it. */
   resolvePassthrough(input: DriverPassthroughInput): Promise<PassthroughCommand>;
 
+  /**
+   * Reports a lease the *daemon* ended -- an expiry, an operator release, an unrecoverable
+   * device. ADR 0004 §3 narrows ADR 0003 §10 here: a dead connection is not a dead lease, so
+   * this no longer fires with a synthesized `daemon-connection-lost` when the socket dies. The
+   * leases this client held are still granted and still counting down; `onConnectionLost` is
+   * what reports the connection, and reconnecting and renewing is the frontend's call.
+   */
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void;
   onDeviceUnhealthy(listener: (push: DeviceUnhealthyPush) => void): () => void;
   onDeviceRecovered(listener: (push: DeviceRecoveredPush) => void): () => void;
   /** Fires exactly once, when the connection dies for any reason (including a deliberate
-   * `close()`). Every in-flight call has already rejected `DAEMON_CONNECTION_LOST` and every
-   * `onLeaseLost` for a held lease has already fired by the time this listener runs. */
+   * `close()`). Every in-flight call has already rejected `DAEMON_CONNECTION_LOST` by the time
+   * this listener runs. Any lease this client was holding is still alive on the daemon. */
   onConnectionLost(listener: (error: AnySimlockError) => void): () => void;
 
   close(): Promise<void>;
@@ -218,7 +212,6 @@ export async function connectSimlockClient(
     hello = await wire.hello({
       ...(options.principal === undefined ? {} : { principal: options.principal }),
       ...(options.credential === undefined ? {} : { credential: options.credential }),
-      capabilities: { heartbeat: options.heartbeat ?? false },
     });
   } catch (error: unknown) {
     // ADR §6: a `PROTOCOL_VERSION_UNSUPPORTED` `hello` rejection is the one handshake failure
@@ -274,7 +267,6 @@ function buildDegradedClient(
     renewLease: () => rejected(),
     releaseLease: () => rejected(),
     listLeases: () => rejected(),
-    heartbeat: () => rejected(),
     runDoctor: () => rejected(),
     resolvePassthrough: () => rejected(),
 
@@ -334,12 +326,12 @@ async function resolveConnection(options: ConnectOptions): Promise<IpcConnection
  * The single implementation both `SimlockClient` and `SimlockAdminClient` are backed by --
  * `asAdmin()` returns the same instance typed with the extra methods, since every admin
  * operation is a plain operation call like any other and there is nothing role-specific to
- * duplicate. Held-lease bookkeeping (`#heldLeaseIds`) exists for exactly one reason: so a
- * connection death can synthesize `onLeaseLost` for each lease this client held, per ADR §10.
+ * duplicate. It tracks no leases at all: ADR 0004 §3 deleted the one reason it used to
+ * (synthesizing `onLeaseLost` on connection death), because a lease outlives the connection
+ * that asked for it.
  */
 class SimlockClientImpl {
   readonly #wire: SimlockWire;
-  readonly #heldLeaseIds = new Map<string, string>(); // leaseId -> deviceId
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();
   readonly #deviceUnhealthyListeners = new Set<(push: DeviceUnhealthyPush) => void>();
   readonly #deviceRecoveredListeners = new Set<(push: DeviceRecoveredPush) => void>();
@@ -383,10 +375,9 @@ class SimlockClientImpl {
 
     if (signal?.aborted === true) throw cancelledError();
 
-    const requestPromise = this.#callRaw("lease.request", parsed, onProgress).then((grant) => {
-      this.#trackGrant(grant as LeaseGrant);
-      return grant as LeaseGrant;
-    });
+    const requestPromise = this.#callRaw("lease.request", parsed, onProgress).then(
+      (grant) => grant as LeaseGrant,
+    );
 
     if (signal === undefined) return requestPromise;
     return this.#requestLeaseWithAbort(requestPromise, signal, requesterId);
@@ -404,17 +395,11 @@ class SimlockClientImpl {
     const parsed = this.#parseInput("lease.release", input);
     // The daemon suppresses the matching `lease-lost` push to this connection itself (ADR
     // §8) -- see the comment on `SimlockWire`'s `#deliveredLeaseLost`. Nothing to mark here.
-    const result = await this.#call("lease.release", parsed);
-    this.#heldLeaseIds.delete(parsed.leaseId);
-    return result;
+    return this.#call("lease.release", parsed);
   }
 
   listLeases(): Promise<LeaseListOutput> {
     return this.#call("lease.list", {});
-  }
-
-  heartbeat(): Promise<LeaseHeartbeatOutput> {
-    return this.#call("lease.heartbeat", {});
   }
 
   runDoctor(input: DoctorRunInput = {}): Promise<DoctorReport> {
@@ -452,10 +437,7 @@ class SimlockClientImpl {
   // ---- admin-only operations ------------------------------------------------------------------
 
   releaseAllLeases(): Promise<LeaseReleaseAllOutput> {
-    return this.#call("lease.release-all", {}).then((result) => {
-      this.#heldLeaseIds.clear();
-      return result;
-    });
+    return this.#call("lease.release-all", {});
   }
 
   list(input: ListGetInput = {}): Promise<ListGetOutput> {
@@ -611,7 +593,6 @@ class SimlockClientImpl {
   #handleLeaseScopedPush(push: LeaseScopedPush): void {
     switch (push.kind) {
       case "lease-lost":
-        this.#heldLeaseIds.delete(push.leaseId);
         for (const listener of this.#leaseLostListeners) {
           listener({ deviceId: push.deviceId, leaseId: push.leaseId, reason: push.reason });
         }
@@ -629,19 +610,14 @@ class SimlockClientImpl {
     }
   }
 
+  /**
+   * ADR 0004 §3: a dead connection ends no lease, so nothing is synthesized here. The daemon
+   * releases nothing on close, so every lease this client was holding is still granted, still
+   * counting down its own TTL, and still renewable by whatever connects next -- which is the
+   * frontend's decision to make, not this client's (ADR 0003 §10).
+   */
   #handleConnectionLost(error: AnySimlockError): void {
-    const held = [...this.#heldLeaseIds.entries()];
-    this.#heldLeaseIds.clear();
-    for (const [leaseId, deviceId] of held) {
-      for (const listener of this.#leaseLostListeners) {
-        listener({ deviceId, leaseId, reason: "daemon-connection-lost" });
-      }
-    }
     for (const listener of this.#connectionLostListeners) listener(error);
-  }
-
-  #trackGrant(grant: LeaseGrant): void {
-    if (grant.lease.mode === "held") this.#heldLeaseIds.set(grant.lease.id, grant.lease.deviceId);
   }
 
   // ---- call plumbing --------------------------------------------------------------------------

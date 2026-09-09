@@ -64,8 +64,9 @@ describe("leaseGrantSchema's device projection", () => {
         deviceId: "device-1",
         requesterId: "req",
         ownerId: "req",
-        mode: "held",
         grantedAt: 0,
+        lastRenewedAt: 0,
+        ttlMs: 1000,
         ttlDeadline: 1000,
       },
       timing: {

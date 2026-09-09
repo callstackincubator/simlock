@@ -148,23 +148,29 @@ export const grantedDeviceSchema = z.object({
   featureProfile: featureProfileSchema.optional(),
 });
 
-export const leaseModeSchema = z.enum(["held", "detached"]);
-
 /**
- * Mirrors `LeaseRecord` (src/core/domain.ts) plus the `status`/`list` decoration's derived
- * `lastHeartbeatAt` (see `DaemonServer#decorateLease`). Includes `ownerId` (ADR §4): the
- * session principal that requested the lease, distinct from `requesterId` (attribution,
- * defaults to the principal but may differ per request on the same connection).
+ * Mirrors `LeaseRecord` (src/core/domain.ts) field for field -- there is no decoration on top
+ * of it any more. Includes `ownerId` (ADR 0003 §4): the session principal that requested the
+ * lease, distinct from `requesterId` (attribution, defaults to the principal but may differ
+ * per request on the same connection).
+ *
+ * ADR 0004: there is one kind of lease, so `mode` is gone; `ttlMs` and `lastRenewedAt` are
+ * stored fields of the record rather than anything derived. `ttlMs` is the width this lease
+ * was granted with, or last renewed with when a renew named one -- what a body-less
+ * `lease.renew` re-applies, which is why it travels with the record instead of the caller
+ * having to remember it. `lastRenewedAt` is written at grant and on every renew; it replaces
+ * the old derived `lastHeartbeatAt` decoration, which was computed as `ttlDeadline -
+ * heldTtlBackstopMs` and has no answer once every lease carries its own TTL.
  */
 export const leaseRecordSchema = z.object({
   id: z.string(),
   deviceId: z.string(),
   requesterId: z.string(),
   ownerId: z.string(),
-  mode: leaseModeSchema,
   grantedAt: z.number(),
+  ttlMs: z.number(),
   ttlDeadline: z.number(),
-  lastHeartbeatAt: z.number().optional(),
+  lastRenewedAt: z.number(),
 });
 
 const leaseTimingSchema = z.object({
@@ -394,9 +400,8 @@ export const configSchema = z.object({
     }),
   }),
   lease: z.object({
-    heldTtlBackstopMs: z.number(),
-    detachedTtlMs: z.number(),
-    heartbeatIntervalMs: z.number(),
+    defaultTtlMs: z.number(),
+    maxTtlMs: z.number(),
   }),
   diskPressure: z.object({ freeBytesThreshold: z.number() }),
   eventBuffer: z.object({ capacity: z.number() }),

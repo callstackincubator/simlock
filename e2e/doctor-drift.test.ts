@@ -24,7 +24,7 @@ async function deviceRows(env: Awaited<ReturnType<typeof withDaemon>>): Promise<
   return result.json as DeviceRow[];
 }
 
-/** Launches a held-mode lease for `agentId`; caller launches every agent it needs
+/** Launches a `simlock lease` holder for `agentId`; caller launches every agent it needs
  *  before awaiting any of their grants, so none is warm-pool reused for the next
  *  (a sequential lease/release/lease would just reuse the same warm device). */
 function leaseHeld(

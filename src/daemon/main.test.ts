@@ -201,7 +201,6 @@ describe("startDaemon startup readiness", () => {
       expect(starting.payload).toMatchObject({ health: "starting" });
 
       const parkedLease = client.request("lease.request", {
-        mode: "detached",
         model: "iPhone 16",
         osVersion: "26.5",
         platform: "ios",

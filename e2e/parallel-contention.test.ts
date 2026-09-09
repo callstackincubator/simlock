@@ -36,14 +36,22 @@ describe("parallel contention invariant", () => {
 
     const servedDeviceByAgent = new Map<string, string>();
 
-    // As soon as each holder is granted, immediately kill it -- releasing capacity so
-    // the remaining queued agents can be served in turn. All eight are started
-    // concurrently; none is awaited before the next starts.
+    // As soon as each holder is granted, stop it -- releasing capacity so the remaining
+    // queued agents can be served in turn. All eight are started concurrently; none is
+    // awaited before the next starts.
+    //
+    // `SIGTERM`, not `SIGKILL`: under ADR 0004 §3 the daemon releases nothing when a
+    // connection closes, so only the holder's own release-on-exit path frees the device
+    // this quickly. A `SIGKILL`ed holder would hold its device until the TTL expired, and
+    // eight agents queueing behind that is a different (and much slower) test.
     const releaseChains = handles.map(async (handle, index) => {
       const line = await handle.firstStdoutLine(60_000);
-      const grant = JSON.parse(line) as { lease: string; udid: string };
-      servedDeviceByAgent.set(AGENT_IDS[index] as string, grant.udid);
-      handle.kill("SIGKILL");
+      const grant = JSON.parse(line) as {
+        lease: { id: string };
+        device: { driverDeviceId: string };
+      };
+      servedDeviceByAgent.set(AGENT_IDS[index] as string, grant.device.driverDeviceId);
+      handle.kill("SIGTERM");
       await handle.waitForExit(15_000).catch(() => undefined);
     });
 
@@ -75,6 +83,14 @@ describe("parallel contention invariant", () => {
     expect(servedDeviceByAgent.size, "every requester was eventually served").toBe(
       AGENT_IDS.length,
     );
+    // Eight agents, but only ever two devices to go round: the point of the cap is that the
+    // pool is *reused* as holders exit, not quietly grown past `ios.maxDevices` to serve
+    // everyone at once. The poll above can miss a moment; the set of devices actually handed
+    // out cannot.
+    expect(
+      new Set(servedDeviceByAgent.values()).size,
+      `eight requesters were served from more than the two devices the config allows: ${JSON.stringify([...servedDeviceByAgent])}`,
+    ).toBeLessThanOrEqual(2);
 
     await waitForLeaseCount(env, 0);
     const finalStatus = await env.cli(["status", "--json"]);

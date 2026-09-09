@@ -41,7 +41,7 @@ function config(maxDevices = 1): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
+    lease: { defaultTtlMs: 100, maxTtlMs: 100 },
     capacity: {
       strategy: "resource",
       config: {
@@ -103,7 +103,7 @@ async function createHarness(
     eventBus: bus,
     expiryScheduler: expiry,
     registry,
-    ttl: { detachedMs: 100, heldBackstopMs: 100 },
+    ttl: { defaultMs: 100 },
   });
   let coordinator: LeaseAcquisitionCoordinator | undefined;
   const queue = new WaitQueue({
@@ -155,14 +155,12 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("admits one requester and rejects an active or pending duplicate", async () => {
     const harness = await createHarness();
     const granted = await harness.coordinator.request(request, {
-      mode: "held",
       ownerId: "agent",
       requesterId: "agent",
     });
 
     await expect(
       harness.coordinator.request(request, {
-        mode: "held",
         ownerId: "agent",
         requesterId: "agent",
       }),
@@ -190,7 +188,6 @@ describe("LeaseAcquisitionCoordinator", () => {
       if (path === "ready") await seedReady(harness);
 
       const granted = await harness.coordinator.request(request, {
-        mode: "held",
         ownerId: "agent",
         requesterId: "agent",
       });
@@ -205,7 +202,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness();
 
     const granted = await harness.coordinator.request(request, {
-      mode: "held",
       ownerId: "agent",
       requesterId: "agent",
     });
@@ -217,7 +213,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     const empty = await createHarness({ drivers: [] });
     await expect(
       empty.coordinator.request(request, {
-        mode: "held",
         ownerId: "missing-driver",
         requesterId: "missing-driver",
       }),
@@ -228,7 +223,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(
       harness.coordinator.request(
         { ...request, osVersion: "99" },
-        { mode: "held", ownerId: "bad-spec", requesterId: "bad-spec" },
+        { ownerId: "bad-spec", requesterId: "bad-spec" },
       ),
     ).rejects.toThrow("Runtime missing");
     expect(harness.coordinator.queueDepth).toBe(0);
@@ -237,25 +232,21 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("enforces FIFO, rejects no-wait demand, and skips timed-out waiters", async () => {
     const harness = await createHarness();
     const first = await harness.coordinator.request(request, {
-      mode: "held",
       requesterId: "first",
       ownerId: "first",
     });
     const timedOut = harness.coordinator.request(request, {
-      mode: "held",
       requesterId: "timed-out",
       ownerId: "timed-out",
       timeoutMs: 10,
     });
     const next = harness.coordinator.request(request, {
-      mode: "held",
       ownerId: "next",
       requesterId: "next",
     });
     await flush();
     await expect(
       harness.coordinator.request(request, {
-        mode: "held",
         noWait: true,
         ownerId: "no-wait",
         requesterId: "no-wait",
@@ -281,7 +272,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     const progress: string[] = [];
 
     const grant = await harness.coordinator.request(request, {
-      mode: "held",
       onProgress: (update) => progress.push(update.stage),
       requesterId: "agent",
       ownerId: "agent",
@@ -295,7 +285,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness();
     harness.driver.failOn("provision", 1, new DriverCrashError("temporary"));
     const grant = await harness.coordinator.request(request, {
-      mode: "held",
       requesterId: "retry",
       ownerId: "retry",
     });
@@ -306,7 +295,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     failing.driver.failOn("makeReady", 1, new DriverCrashError("boot failure"));
     await expect(
       failing.coordinator.request(request, {
-        mode: "held",
         ownerId: "boot-failure",
         requesterId: "boot-failure",
       }),
@@ -328,7 +316,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     const progress: string[] = [];
     await expect(
       bootHarness.coordinator.request(request, {
-        mode: "held",
         onProgress: (update) => progress.push(update.stage),
         requesterId: "boot",
         ownerId: "boot",
@@ -340,7 +327,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     const old = await seedReady(eviction, { ...request, model: "iPhone SE" });
     await expect(
       eviction.coordinator.request(request, {
-        mode: "held",
         ownerId: "new-spec",
         requesterId: "new-spec",
       }),
@@ -368,7 +354,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     ).length;
 
     const acquisition = harness.coordinator.request(request, {
-      mode: "held",
       requesterId: "drained",
       ownerId: "drained",
     });
@@ -386,7 +371,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(harness.registry.snapshot.leases).toEqual([]);
     await expect(
       harness.coordinator.request(request, {
-        mode: "held",
         ownerId: "during-maintenance",
         requesterId: "during-maintenance",
       }),
@@ -403,7 +387,6 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("coalesces simultaneous kicks for the same queued waiter", async () => {
     const harness = await createHarness({ maxDevices: 2 });
     const first = await harness.coordinator.request(request, {
-      mode: "held",
       requesterId: "first",
       ownerId: "first",
     });
@@ -419,7 +402,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
 
     const queued = harness.coordinator.request(request, {
-      mode: "held",
       ownerId: "queued",
       requesterId: "queued",
     });
@@ -460,12 +442,10 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("cancels a queued request, emits lease.rejected(cancelled), and frees the requester immediately", async () => {
     const harness = await createHarness();
     await harness.coordinator.request(request, {
-      mode: "held",
       ownerId: "first",
       requesterId: "first",
     });
     const queued = harness.coordinator.request(request, {
-      mode: "held",
       ownerId: "queued",
       requesterId: "queued",
     });
@@ -484,7 +464,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     // not RequesterAlreadyLeasedError -- the cancelled requester is no longer pending.
     await expect(
       harness.coordinator.request(request, {
-        mode: "held",
         noWait: true,
         ownerId: "queued",
         requesterId: "queued",
@@ -512,7 +491,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     harness.driver.hangMakeReady();
 
     const acquisition = harness.coordinator.request(request, {
-      mode: "held",
       requesterId: "booting",
       ownerId: "booting",
     });
@@ -532,7 +510,6 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     await expect(
       harness.coordinator.request(request, {
-        mode: "held",
         ownerId: "still-maintained",
         requesterId: "still-maintained",
       }),
@@ -541,7 +518,6 @@ describe("LeaseAcquisitionCoordinator", () => {
     await harness.coordinator.endMaintenance();
     await expect(
       harness.coordinator.request(request, {
-        mode: "held",
         ownerId: "reopened",
         requesterId: "reopened",
       }),
@@ -561,7 +537,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
     const granted = await harness.coordinator.request(
       { ...request, full: true },
-      { mode: "held", ownerId: "agent", requesterId: "agent" },
+      { ownerId: "agent", requesterId: "agent" },
     );
 
     expect(granted.device.spec).toMatchObject({ full: true });
@@ -570,7 +546,6 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("never stamps full: false onto a spec for a plain request", async () => {
     const harness = await createHarness();
     const granted = await harness.coordinator.request(request, {
-      mode: "held",
       requesterId: "agent",
       ownerId: "agent",
     });
@@ -594,7 +569,7 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     const granted = await harness.coordinator.request(
       { ...request, full: true },
-      { mode: "held", ownerId: "agent", requesterId: "agent" },
+      { ownerId: "agent", requesterId: "agent" },
     );
 
     // A fresh device was provisioned rather than the warm slim one being handed out.
@@ -607,7 +582,7 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     const fullRequest = await harness.coordinator.request(
       { ...request, full: true },
-      { mode: "held", ownerId: "agent-full", requesterId: "agent-full" },
+      { ownerId: "agent-full", requesterId: "agent-full" },
     );
 
     expect(fullRequest.device.spec).not.toHaveProperty("full");

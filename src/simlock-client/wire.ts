@@ -29,7 +29,6 @@ const LEGACY_MISMATCH_CODE = "PROTOCOL_VERSION_MISMATCH";
 export interface HelloOptions {
   readonly principal?: string;
   readonly credential?: string;
-  readonly capabilities?: { readonly heartbeat?: boolean };
 }
 
 export interface HelloResult {
@@ -126,7 +125,6 @@ export class SimlockWire {
         protocolRange: PROTOCOL_VERSION_RANGE,
         ...(options.principal === undefined ? {} : { principal: options.principal }),
         ...(options.credential === undefined ? {} : { credential: options.credential }),
-        ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
       });
     } catch (error: unknown) {
       throw this.#toHelloError(error);
@@ -312,13 +310,6 @@ export class SimlockWire {
           kind: "device-recovered",
           leaseId: parsed.data.leaseId,
         });
-        return;
-      }
-      case "lease.heartbeat": {
-        // Reactive pong: answer with an ordinary request frame carrying the same payload
-        // (nonce), fire-and-forget. Only a connection that declared the heartbeat capability
-        // at `hello` ever receives this push, so this handler is otherwise inert.
-        void this.#send("lease.heartbeat", payload).catch(() => undefined);
         return;
       }
       case "event": {

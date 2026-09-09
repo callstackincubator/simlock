@@ -35,7 +35,6 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "lease.renew", input: { leaseId: "lease_1" }, role: "agent" },
   { name: "lease.release", input: { leaseId: "lease_1" }, role: "agent" },
   { name: "lease.list", input: {}, role: "agent" },
-  { name: "lease.heartbeat", input: {}, role: "agent" },
   { name: "doctor.run", input: { fix: false }, role: "agent" },
   { name: "doctor.run", input: {}, role: "agent" },
   { name: "doctor.run", input: { fix: true }, role: "admin" },
@@ -75,7 +74,7 @@ describe("operation role matrix", () => {
 });
 
 describe("operation input/output round trips", () => {
-  it("lease.request: round-trips a representative held request and rejects legacy aliases", () => {
+  it("lease.request: round-trips a representative request and rejects legacy aliases", () => {
     const input = OPERATIONS["lease.request"].input.parse({
       model: "iPhone 17 Pro",
       platform: "ios",
@@ -93,26 +92,37 @@ describe("operation input/output round trips", () => {
     ).toThrow();
   });
 
-  it("lease.request: rejects ttlMs on a held lease as a schema-level BAD_REQUEST", () => {
-    expect(() =>
+  it("lease.request: accepts ttlMs on any request (ADR 0004 §4)", () => {
+    expect(
       OPERATIONS["lease.request"].input.parse({
         model: "iPhone 17 Pro",
         platform: "ios",
-        mode: "held",
         ttlMs: 60_000,
+      }),
+    ).toMatchObject({ ttlMs: 60_000 });
+  });
+
+  it("lease.request: rejects mode, which ADR 0004 removed from the contract", () => {
+    expect(() =>
+      OPERATIONS["lease.request"].input.parse({
+        model: "iPhone 17 Pro",
+        mode: "held",
+        platform: "ios",
       }),
     ).toThrow();
   });
 
-  it("lease.request: accepts ttlMs on a detached lease", () => {
+  it("lease.request/lease.renew: a non-positive ttlMs is a schema-level BAD_REQUEST", () => {
+    // The upper bound (`lease.maxTtlMs`) is the dispatcher's to enforce -- it is a daemon
+    // config value this module cannot see -- but "a TTL is a positive number" is shape.
     expect(() =>
       OPERATIONS["lease.request"].input.parse({
         model: "iPhone 17 Pro",
         platform: "ios",
-        mode: "detached",
-        ttlMs: 60_000,
+        ttlMs: 0,
       }),
-    ).not.toThrow();
+    ).toThrow();
+    expect(() => OPERATIONS["lease.renew"].input.parse({ leaseId: "lse_1", ttlMs: -1 })).toThrow();
   });
 
   it("lease.request: round-trips a representative output grant", () => {
@@ -131,8 +141,9 @@ describe("operation input/output round trips", () => {
         deviceId: "dev_1",
         requesterId: "req_1",
         ownerId: "req_1",
-        mode: "held",
         grantedAt: 1,
+        lastRenewedAt: 1,
+        ttlMs: 1,
         ttlDeadline: 2,
       },
       timing: {
@@ -207,7 +218,7 @@ describe("operation input/output round trips", () => {
           maxRetryBackoffMs: 1,
         },
       },
-      lease: { heldTtlBackstopMs: 1, detachedTtlMs: 1, heartbeatIntervalMs: 1 },
+      lease: { defaultTtlMs: 1, maxTtlMs: 1 },
       diskPressure: { freeBytesThreshold: 1 },
       eventBuffer: { capacity: 1 },
       log: { level: "info", rotateBytes: 1 },

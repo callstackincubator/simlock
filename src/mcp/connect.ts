@@ -16,16 +16,19 @@ import {
 } from "../client/index.js";
 import { IpcError, type Clock, type DaemonLauncher, type IpcConnector } from "../ports/index.js";
 
-export interface ConnectWithAutoLaunchOptions {
-  readonly clock: Clock;
-  /** Dead as of ADR 0004 §4 -- nothing passes `true` any more, and the capability itself goes
-   * away with the daemon's push in PR B, which removes this option with it. */
-  readonly heartbeat?: boolean;
+/** What it takes to reach a daemon that is already listening -- no launcher anywhere in it,
+ * which is the whole point of the type existing separately. The `heartbeat` option that used
+ * to sit here is gone with the daemon's push (ADR 0004 §4). */
+export interface ConnectToRunningDaemonOptions {
   readonly ipc: IpcConnector;
-  readonly launcher: DaemonLauncher;
   readonly principal: string;
-  readonly retryIntervalMs?: number;
   readonly socketPath: string;
+}
+
+export interface ConnectWithAutoLaunchOptions extends ConnectToRunningDaemonOptions {
+  readonly clock: Clock;
+  readonly launcher: DaemonLauncher;
+  readonly retryIntervalMs?: number;
   readonly startupTimeoutMs?: number;
 }
 
@@ -40,7 +43,7 @@ export async function connectWithAutoLaunch(
   options: ConnectWithAutoLaunchOptions,
 ): Promise<SimlockClient> {
   try {
-    return await attempt(options);
+    return await connectToRunningDaemon(options);
   } catch (error: unknown) {
     if (!isUnavailable(error)) throw error;
   }
@@ -49,7 +52,7 @@ export async function connectWithAutoLaunch(
   let lastError: unknown;
   while (options.clock.now() < deadline) {
     try {
-      return await attempt(options);
+      return await connectToRunningDaemon(options);
     } catch (error: unknown) {
       if (!isUnavailable(error)) throw error;
       lastError = error;
@@ -64,12 +67,22 @@ export async function connectWithAutoLaunch(
   );
 }
 
-function attempt(options: ConnectWithAutoLaunchOptions): Promise<SimlockClient> {
+/**
+ * Connects only to a daemon that is already listening, and never launches one -- which is
+ * exactly `connectWithAutoLaunch` minus its one extra power, so the latter is written in terms
+ * of this rather than beside it.
+ *
+ * ADR 0004 §2 gives it a caller of its own: the session's renew timer. An idle session should
+ * not lose its lease waiting for a tool call that may never come, but an operator's `simlock
+ * daemon stop` must not be undone by that same idle session -- so auto-launch stays a tool-call
+ * concern, and a lease held across a stopped daemon expires unless the daemon is back before
+ * its deadline.
+ */
+export function connectToRunningDaemon(
+  options: ConnectToRunningDaemonOptions,
+): Promise<SimlockClient> {
   return connectSimlock({
     endpoint: options.socketPath,
-    // ADR 0004 §2/§4: the session renews its own lease on a timer, so it declares no heartbeat
-    // capability unless a caller explicitly asks for one.
-    heartbeat: options.heartbeat ?? false,
     ipc: options.ipc,
     principal: options.principal,
   });

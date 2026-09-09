@@ -38,7 +38,7 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
       ...overrides,
     },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
-    lease: { detachedTtlMs: 100, heldTtlBackstopMs: 100, heartbeatIntervalMs: 25 },
+    lease: { defaultTtlMs: 100, maxTtlMs: 100 },
     capacity: {
       strategy: "resource",
       config: {
@@ -129,9 +129,9 @@ async function seedLeased(
   });
   const lease = await harness.registry.createLease({
     deviceId: device.id,
-    mode: "held",
     requesterId: options.requesterId ?? "agent-1",
     ownerId: options.requesterId ?? "agent-1",
+    ttlMs: 60_000,
     ttlDeadline: 10_000_000,
   });
   return { device, lease };

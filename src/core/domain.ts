@@ -85,9 +85,23 @@ export interface LeaseRecord {
    * to `requesterId` -- see `parseLease` in `registry.ts`.
    */
   readonly ownerId: string;
-  readonly mode: "held" | "detached";
   readonly grantedAt: number;
+  /**
+   * The width this lease was granted with, or last renewed with when a renew named one (ADR
+   * 0004 §4). Stored, not derived: a `lease.renew` carrying no `ttlMs` re-applies exactly this,
+   * rather than falling back to `lease.defaultTtlMs`, so a lease granted for four hours does
+   * not shrink to fifteen minutes the first time something renews it. A record written before
+   * ADR 0004 loads with `lease.defaultTtlMs` here -- see `parseLease` in `registry.ts`.
+   */
+  readonly ttlMs: number;
   readonly ttlDeadline: number;
+  /**
+   * When this lease was last renewed -- written at grant and on every renew. It replaces the
+   * old `lastHeartbeatAt`, which was never stored at all: the dispatcher derived it as
+   * `ttlDeadline - heldTtlBackstopMs`, arithmetic that only worked while every held lease
+   * shared one backstop width. A record written before ADR 0004 loads with `grantedAt` here.
+   */
+  readonly lastRenewedAt: number;
 }
 
 /**
