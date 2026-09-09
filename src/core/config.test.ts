@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
+import { configSchema } from "../contract/schemas.js";
 import { type Config, effectiveAllowDownload, loadConfig } from "./index.js";
 
 /** Narrows the capacity block for assertions on resource-strategy configs. */
@@ -21,6 +22,20 @@ function dottedValue(config: Config, key: string): unknown {
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
+}
+
+/**
+ * Every leaf of a config object as a dotted key. Recursive on purpose: a first version of this
+ * walked only one level and so would have missed a key dropped from a *nested* block such as
+ * `capacity.config` or `warmPool.quarantine`.
+ */
+function dottedLeafKeys(value: unknown, prefix = ""): string[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return prefix === "" ? [] : [prefix];
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+    dottedLeafKeys(child, prefix === "" ? key : `${prefix}.${key}`),
+  );
 }
 
 const configPath = "/home/agent/.simlock/config.json";
@@ -1175,5 +1190,57 @@ describe("effectiveAllowDownload", () => {
   it("defers to the request's own flag under the on-request policy", () => {
     expect(effectiveAllowDownload("on-request", false)).toBe(false);
     expect(effectiveAllowDownload("on-request", true)).toBe(true);
+  });
+});
+
+describe("configSchema agrees with the config the daemon actually loads", () => {
+  /**
+   * `config.get` declares `configSchema` as its output (`contract/operations.ts`), and zod's
+   * object mode strips unknown keys -- so a key this schema does not list is not a type error
+   * anywhere, it simply vanishes on the way to the caller.
+   *
+   * Round 6 review found `gateway.leaseRequestTimeoutMs` doing exactly that: declared on
+   * `Config`, validated by `loadConfig`, documented in CONFIGURATION.md as inspectable via
+   * `simlock config get`, and silently dropped. Nothing referenced `configSchema` from any test,
+   * so the drift was invisible in both directions.
+   *
+   * This compares key sets per block rather than asserting one key, so the next block that gains
+   * a field fails here instead of shipping a `config get` that quietly omits it (testing rule 4:
+   * a test that enforces a rule has to see everything the rule covers).
+   */
+  it("strips no key from any block of a freshly loaded config", async () => {
+    const config = await loadConfig({
+      configPath,
+      filesystem: new MemoryFilesystem(),
+      systemStats: createStats(),
+    });
+
+    const parsed = configSchema.parse(config);
+    // `drivers` is deliberately off the wire: an open-ended
+    // `Record<string, Record<string, …>>` whose contents are each driver's own business
+    // (architecture rule 2), so the contract cannot declare its shape. Excluded by name and
+    // asserted separately below rather than skipped silently -- it defaults to `{}`, so a
+    // key-walk would otherwise "cover" it by finding nothing to lose and keep passing if it
+    // ever gained something.
+    const declared = dottedLeafKeys(config).filter((key) => !key.startsWith("drivers"));
+    const onTheWire = new Set(dottedLeafKeys(parsed));
+
+    expect(declared.filter((key) => !onTheWire.has(key))).toEqual([]);
+    // The one intentional omission, stated as an assertion so it is a decision and not an
+    // accident: if `drivers` is ever added to the wire, this fails and the filter is revisited.
+    expect(Object.keys(parsed)).not.toContain("drivers");
+  });
+
+  it("carries gateway.leaseRequestTimeoutMs through to what config get answers", async () => {
+    const config = await loadConfig({
+      configPath,
+      filesystem: new MemoryFilesystem(),
+      systemStats: createStats(),
+    });
+
+    const parsed = configSchema.parse(config) as unknown as Config;
+    expect(dottedValue(parsed, "gateway.leaseRequestTimeoutMs")).toBe(
+      config.gateway.leaseRequestTimeoutMs,
+    );
   });
 });

@@ -8,7 +8,7 @@ import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
 import { RequesterAlreadyLeasedError } from "./queue.js";
-import { createRoutingPolicy } from "./routing.js";
+import { createRoutingPolicy, type RoutingPolicy } from "./routing.js";
 import {
   catalogFixture,
   deviceFixture,
@@ -76,6 +76,9 @@ function harness(
     readonly execTimeoutMs?: number;
     readonly leaseRequestTimeoutMs?: number;
     readonly logger?: Logger;
+    /** Built with the registry so a stub can change the views from inside the dispatch walk --
+     * the one way to reach `#dispatch`'s re-entrancy guard. Defaults to the real policy. */
+    readonly routing?: (workers: WorkerRegistry) => RoutingPolicy;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -110,7 +113,7 @@ function harness(
     // execTimeoutMs above.
     leaseRequestTimeoutMs: overrides.leaseRequestTimeoutMs ?? 5 * 60_000,
     ...(overrides.logger === undefined ? {} : { logger: overrides.logger }),
-    routing: createRoutingPolicy("warm-then-free"),
+    routing: overrides.routing?.(workers) ?? createRoutingPolicy("warm-then-free"),
     views: workers,
   });
   return { clock, coordinator, directory, eventBus, leaseIndex, workers };
@@ -1165,6 +1168,150 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
 
     expect(relayed).toEqual([]);
+  });
+
+  // Round 6 review: `#raceTimeout`'s own doc claims no late frame "reaches `session.onOutput`
+  // (or spuriously fires `onStarted`) once that has happened", but only the `onOutput` half was
+  // tested -- both `detached` guards were deletable with the whole suite green. HTTP survives a
+  // spurious `onStarted` only because `OutputRelay` swallows it, which is the transport saving
+  // this class again: exactly the reasoning H4 rejected for `onOutput`.
+  it("does not announce started from a worker frame that arrives after gateway.execTimeoutMs already rejected the call (H4, round 6 review)", async () => {
+    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    client.execQueue.push({ kind: "hang" });
+
+    let startedCount = 0;
+    const rejection = coordinator
+      .exec(
+        { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+        {
+          manageEventSubscription: () => undefined,
+          onStarted: () => {
+            startedCount += 1;
+          },
+          principal: "agent-1",
+          role: "agent",
+        },
+      )
+      .catch((error: unknown) => error);
+    await tick();
+    clock.advance(5_000);
+    const error = await rejection;
+    expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
+
+    // The worker finally spawns the process and says so -- the same closure `client.exec` was
+    // given, well after this gateway answered `EXEC_TIMEOUT`.
+    client.lastExecOptions?.onStarted?.();
+    await tick();
+
+    expect(startedCount).toBe(0);
+  });
+
+  it("announces started once even if the worker sends the frame more than once", async () => {
+    // A `started` push is request-scoped and should arrive once, but nothing on the wire stops a
+    // worker from sending it twice, and a transport that has already chosen its response shape
+    // cannot un-choose it. The dedupe is what makes the signal idempotent for every consumer.
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    client.execQueue.push({ exitCode: 0, kind: "ok", started: true });
+
+    let startedCount = 0;
+    await coordinator.exec(
+      { args: ["devices"], leaseId: grant.lease.id, tool: "adb" },
+      {
+        manageEventSubscription: () => undefined,
+        onStarted: () => {
+          startedCount += 1;
+        },
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    client.lastExecOptions?.onStarted?.();
+    await tick();
+
+    expect(startedCount).toBe(1);
+  });
+
+  // Round 6 review: `#dispatch`'s re-entrancy guard and its `#passRequested` deferral were
+  // deletable with the whole suite green, and instrumenting the `#dispatchDepth > 0` branch
+  // showed *zero* hits across every test in the repo -- round 4 finding 6's fix ("defer instead
+  // of dropping") was a green light wired to nothing.
+  //
+  // It takes a synchronous view change raised from inside the walk to reach, which no production
+  // path does today (`WorkerLink#refresh` mutates only past its first await). That is precisely
+  // why it needs a test rather than deletion: the guard exists so that a future caller which
+  // *does* mutate synchronously cannot silently reintroduce C1's stall, and nothing but this
+  // test would notice if the deferral were removed again.
+  it("runs another pass for a view change raised from inside the walk, rather than dropping it (round 4 finding 6, round 6 review)", async () => {
+    // Call 1 is the admission look (worker still carries the wrong model, so the real policy
+    // refuses and the waiter queues). Call 2 is the pass the single refresh below triggers --
+    // that is the one that injects. Call 3 can only happen if the nested change was deferred
+    // rather than dropped.
+    let selectCalls = 0;
+    const { coordinator, directory, workers } = harness({
+      routing: (registry) => {
+        const real = createRoutingPolicy("warm-then-free");
+        return {
+          select(request, workerViews) {
+            selectCalls += 1;
+            if (selectCalls === 2) {
+              // A view change *during* the walk: re-enters `#dispatch`, which cannot run a pass
+              // now (one is already walking a snapshot) and must therefore remember to run one
+              // when this one unwinds.
+              registry.refresh("wrk_a", {});
+              // ...and this waiter finds nothing this pass, so only that next pass can serve it.
+              return undefined;
+            }
+            return real.select(request, workerViews);
+          },
+        };
+      },
+    });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    // Connected, but carrying a model this request cannot use -- so the waiter queues, and the
+    // worker is already fully connected. That matters: `connectWorker` raises *two* view changes
+    // (`connected`, then `refresh`), and a second top-level dispatch would serve the waiter on
+    // its own, masking whether the deferred pass did anything at all. Getting the worker
+    // connected before the request leaves exactly one trigger below.
+    connectWorker(workers, "wrk_a", { models: ["iPhone 16"] });
+    const grantPromise = coordinator.request(REQUEST, requestOptions());
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    // The single trigger: one refresh that makes the worker eligible. Pass 1 refuses the waiter
+    // and raises a nested view change; only the deferred pass 2 can dispatch it. Asserted on the
+    // forwarded RPC rather than by awaiting the grant, so dropping the deferral fails here on a
+    // named assertion instead of by timing out (testing rule 2).
+    workers.refresh("wrk_a", {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      devices: [],
+      downloads: { policy: "on-request" },
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+    await tick();
+
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    // Three looks: admission, the injecting pass, and the deferred pass that actually dispatched.
+    expect(selectCalls).toBe(3);
+    const grant = await grantPromise;
+    expect(grant.lease.worker?.id).toBe("wrk_a");
+    expect(coordinator.queueDepth).toBe(0);
   });
 
   it("rejects a no-wait request immediately with NO_CAPACITY when no worker is eligible at all", async () => {

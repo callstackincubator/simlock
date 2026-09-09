@@ -380,6 +380,7 @@ describe("operation input/output round trips", () => {
       gateway: {
         disconnectedRetentionMs: 86_400_000,
         execTimeoutMs: 660_000,
+        leaseRequestTimeoutMs: 300_000,
         routing: "warm-then-free",
       },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },

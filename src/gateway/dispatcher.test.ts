@@ -291,10 +291,15 @@ describe("GatewayDispatcher", () => {
   // P-1 (third review round): the previous version of `#leaseList` compared a namespaced form
   // of the session's own principal to each lease's `ownerId` -- a comparison that was false by
   // construction (see `#leaseList`'s own comment) and so, in practice, indistinguishable from
-  // simply returning `[]`. This asserts the actual, current contract: a non-admin session sees
-  // no fleet leases at all, whatever its principal, until #118's own `FleetLeaseIndex` replaces
-  // this handler.
-  it("shows a non-admin session no fleet leases at all, regardless of its principal", async () => {
+  // simply returning `[]`.
+  //
+  // Round 6 review: this test's title used to claim a non-admin session sees "no fleet leases at
+  // all", which #118 -- this PR -- made false when it replaced the handler with `FleetLeaseIndex`:
+  // such a session now does see leases this gateway issued to it, as the third test below proves.
+  // What this one actually pins is the baseline the other two build on: a worker's *own local*
+  // lease is not a fleet lease and is never a candidate, whoever asks. The title says only that
+  // now (testing rule 1).
+  it("shows a non-admin session none of a worker's own local leases", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
     workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
@@ -591,7 +596,9 @@ describe("GatewayDispatcher", () => {
     });
 
     it("lease.request: rejects a non-admin session naming owner with FORBIDDEN, never silently ignoring it (ADR §27a, H7)", async () => {
-      const { dispatcher, workers } = harness();
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
         capacity: statusFixture().capacity,
@@ -599,11 +606,19 @@ describe("GatewayDispatcher", () => {
           .platforms,
         downloads: { policy: "on-request" },
       });
+      // Round 6 review: this harness used to connect `wrk_1` to the registry without adding a
+      // client for it, so removing the gate under test made the request route to an unreachable
+      // target, get re-queued by `#staleView`, and fail the test by *timing out* -- an outcome a
+      // gateway with no gate at all produces just as well. Its H3 sibling below already had the
+      // fix and said why; this one had been left behind. A worker able and willing to grant,
+      // plus `noWait`, means an ungated `owner` is caught by the lease actually being issued
+      // (testing rule 2: fail on a named assertion, not a schedule).
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
 
       await expect(
         dispatcher.dispatch(
           "lease.request",
-          { model: "iPhone 17", owner: "someone-else", platform: "ios" },
+          { model: "iPhone 17", noWait: true, owner: "someone-else", platform: "ios" },
           session({ principal: "agent-1", role: "agent" }),
         ),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });

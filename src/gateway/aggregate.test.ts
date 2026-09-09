@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { OPERATIONS } from "../contract/index.js";
 import { aggregateCatalog, aggregateStatus } from "./aggregate.js";
+import { FleetLeaseIndex } from "./lease-index.js";
 import { deviceFixture, leaseFixture } from "./test-support.js";
 import type { WorkerView } from "./worker-registry.js";
 
@@ -50,6 +51,57 @@ describe("aggregateStatus", () => {
     expect(() => OPERATIONS["status.get"].output.parse(status)).not.toThrow();
     expect(status.daemon.mode).toBe("gateway");
     expect(status.workers).toEqual([]);
+  });
+
+  // Round 6 review: `aggregateStatus`'s whole `leaseIndex` branch was deletable with a green
+  // suite -- replacing it with the pre-#118 `{...lease, workerId}` passthrough broke nothing,
+  // because every case here omitted the optional `leaseIndex` and so exercised only the
+  // fallback. `lease.list`'s equivalent projection was covered; `status.get`'s was not.
+  //
+  // What that left unguarded is the reason the parameter exists: an id an operator reads out of
+  // `status.get` has to be the id `lease.renew` accepts. A raw worker id answers `UNKNOWN_LEASE`.
+  it("reports a gateway-issued lease under the id lease.renew accepts, not the worker's own", () => {
+    const leaseIndex = new FleetLeaseIndex("gw:instance-1:");
+    leaseIndex.add({
+      gatewayLeaseId: "wrk_a.lease_1",
+      grantedAt: 1,
+      ownerId: "agent-1",
+      requesterId: "gw:instance-1:agent-1",
+      workerId: "wrk_a",
+      workerLeaseId: "lease_1",
+    });
+
+    const status = aggregateStatus(
+      [view({ id: "wrk_a", label: "mac-mini-1", leases: [leaseFixture("lease_1", "dev_1")] })],
+      { health: "running", leaseIndex, queueDepth: 0 },
+    );
+
+    expect(status.leases).toEqual([
+      expect.objectContaining({
+        id: "wrk_a.lease_1",
+        requesterId: "gw:instance-1:agent-1",
+        worker: { id: "wrk_a", label: "mac-mini-1" },
+        workerId: "wrk_a",
+      }),
+    ]);
+    // Still the same shape a worker returns (ADR §20) with the projection applied.
+    expect(() => OPERATIONS["status.get"].output.parse(status)).not.toThrow();
+  });
+
+  // The other half of the same contract: a lease this gateway never issued is a worker's own
+  // local one, and renaming it would invent a gateway id that `lease.renew` would then reject.
+  it("leaves a worker's own local lease's id alone", () => {
+    const leaseIndex = new FleetLeaseIndex("gw:instance-1:");
+
+    const status = aggregateStatus(
+      [view({ id: "wrk_a", label: "mac-mini-1", leases: [leaseFixture("lease_1", "dev_1")] })],
+      { health: "running", leaseIndex, queueDepth: 0 },
+    );
+
+    expect(status.leases).toEqual([
+      expect.objectContaining({ id: "lease_1", requesterId: "agent-1", workerId: "wrk_a" }),
+    ]);
+    expect(status.leases[0]).not.toHaveProperty("worker");
   });
 
   it("sums capacity across connected workers", () => {

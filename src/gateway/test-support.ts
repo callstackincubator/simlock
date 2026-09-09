@@ -151,7 +151,9 @@ type ExecOutcome =
       readonly exitCode: number;
       readonly output?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
       /** ADR 0005 §19a: the worker's own "the process now exists" push, sent before any output.
-       * A worker older than that frame simply never sends it. */
+       * Every protocol-5 worker sends it; this flag exists so a scripted outcome can model a
+       * worker that refuses *before* a process exists, which is the case that must not announce
+       * it. */
       readonly started?: boolean;
     }
   | { readonly kind: "error"; readonly error: unknown }
@@ -320,13 +322,11 @@ export class ScriptedWorkerClient {
     this.#throwIfFailing();
     this.lastExecOptions = options;
     const outcome = this.execQueue.shift();
-    if (outcome?.kind === "hang") {
-      if (outcome.started === true) options.onStarted?.();
-      return new Promise<never>(() => {});
-    }
     if (outcome?.kind === "error") throw outcome.error;
-    if (outcome?.started === true) options.onStarted?.();
-    for (const chunk of outcome?.output ?? []) options.onOutput?.(chunk);
+    const { onOutput, onStarted } = options;
+    if (outcome?.started === true) onStarted?.();
+    if (outcome?.kind === "hang") return new Promise<never>(() => {});
+    for (const chunk of outcome?.output ?? []) onOutput?.(chunk);
     return { exitCode: outcome?.exitCode ?? 0 };
   }
 

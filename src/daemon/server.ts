@@ -1261,8 +1261,8 @@ export class DaemonServer {
         },
         // ADR 0005 §19a: the process now exists. Fired and forgotten rather than awaited --
         // unlike `onOutput` this carries no backpressure meaning, and the dispatcher calls it
-        // synchronously between the spawn and the first chunk. A peer that ignores the frame is
-        // unaffected, which is what keeps this additive.
+        // synchronously between the spawn and the first chunk. Every peer that negotiates
+        // protocol 5 understands the frame (§31), so this is not a signal anyone opts out of.
         onStarted: () => {
           if (outputSocket === undefined) return;
           void this.#pushStarted(outputSocket, requestId).catch(() => undefined);

@@ -62,8 +62,10 @@ const outputPushSchema = z.object({
  * refusal that arrived after the timer got a `200` with the error buried in the stream, where
  * §19a requires a `422`. Sending the fact removes the guess.
  *
- * Additive: a peer that never sends it leaves a gateway on its previous behaviour, so the
- * protocol range does not move (ADR 0003 §6).
+ * Part of protocol 5, not an addition on top of it: 5 has never shipped, so nothing will ever
+ * advertise 5 without this frame, and a peer older than 5 is `incompatible` by range (ADR 0005
+ * §31) rather than a peer that merely stays quiet. There is no "never sends it" case to keep a
+ * fallback for, which is why the gateway has exactly one path to this signal.
  */
 const startedPushSchema = z.object({
   requestId: requestIdSchema,

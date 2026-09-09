@@ -470,6 +470,13 @@ export const configSchema = z.object({
     label: z.string().optional(),
     disconnectedRetentionMs: z.number(),
     execTimeoutMs: z.number(),
+    /** ADR 0005 §29/P2: the forwarded `lease.request`'s own bound. Round 6 review: this was
+     * declared on `Config`, validated by `loadConfig`, and documented in CONFIGURATION.md, but
+     * missing here -- and since this schema is `config.get`'s declared output, zod stripped it,
+     * so an operator inspecting the effective config saw every other gateway key and concluded
+     * this one did not exist. `config.test.ts` now parses a loaded config through this schema
+     * and compares key sets, so the next such omission fails rather than disappears. */
+    leaseRequestTimeoutMs: z.number(),
     /** ADR 0005 §13/Decision 7: which routing policy dispatch uses. Gateway-side, read once at
      * construction like `capacity.strategy` -- never a per-request choice. The set of names is
      * re-declared here rather than imported from `src/gateway/routing.ts`'s own registry, the
