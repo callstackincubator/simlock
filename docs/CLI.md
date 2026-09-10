@@ -429,7 +429,9 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
   interrupted lease spends its recovery budget rebooting; one that runs out
   ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
 - `runtime delete` — it deletes a runtime shared with Xcode, and Simlock will
-  not download one back. Delete it through Xcode if that is what you mean.
+  not download one back. It does not free the disk the runtime's download
+  takes either (see `doctor`'s `runtime-cache-unreclaimable` finding). Delete
+  it through Xcode if that is what you mean.
 - `--set` and `--profiles`, wherever they appear *before* the subcommand and
   however they are spelled (`-set`, `--set <path>`, `--set=<path>`) —
   `simlock simctl` supplies the device set itself. A caller-supplied one would
@@ -996,6 +998,18 @@ silently does nothing on those runtimes otherwise; this finding is what
 makes that visible. It is advisory only — there is no `--fix` for it, since
 the fix is either upgrading the runtime or narrowing `ios.slim` to the
 runtimes that support it.
+
+On macOS, `doctor` also reports a `driver-advisory` finding (code
+`runtime-cache-unreclaimable`) for each iOS runtime that was downloaded to
+this machine and is no longer installed. Deleting a simulator runtime only
+unregisters it: the download it was installed from — roughly 7-8 GiB of it
+— stays in the operating system's own asset store, where it keeps spending
+the same free space the download preflight measures, and where nothing
+Simlock runs can reclaim it. On a host that has been leasing with downloads
+enabled for a while, several of these can accumulate unnoticed. The finding
+names each one and the one supported way to get the space back: remove the
+platform in Xcode's Settings → Platforms. Advisory only, like the finding
+above — reclaiming this space is outside anything `--fix` may do.
 
 ## `simlock nuke [--delete-devices] [--yes]`
 

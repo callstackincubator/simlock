@@ -314,6 +314,40 @@ built in stage 4. `component.install-started`'s payload already carries
 enough (`platform`, `componentId`) that a future pass wiring this through
 would mostly be plumbing, not new information to invent.
 
+## An iOS runtime download outlives the runtime, and only Xcode can reclaim it (#79)
+
+`xcrun simctl runtime delete` unregisters a runtime from CoreSimulator and
+stops there. The download it was installed from — one `.asset` bundle of
+roughly 7-8 GiB, marked never-collected — stays in macOS's own asset store at
+`/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime`, on the
+same volume as the device root. CoreSimulator can re-register a runtime from
+what is still sitting there, which is why a deleted runtime sometimes
+reappears as installed.
+
+**The pitfall:** on a host running `downloads.policy` with agents pinning
+different `--os` versions, these bundles accumulate for as long as the host
+lives, and nothing Simlock does reclaims any of them. The iOS driver's
+`IOS_RUNTIME_MIN_FREE_BYTES` preflight then measures free space this cache has
+already spent — it refuses a download for want of room the machine could get
+back, and cannot say so.
+
+**Why it is accepted:** deleting a bundle is root surgery on a system
+directory, and destroying anything that is not a device in Simlock's own
+registry is exactly what the safety rules forbid; Apple exposes no supported
+way to evict a store entry for a runtime that is no longer registered. So the
+driver reports instead of acting: `advisories()` compares the store's bundles
+against the installed catalog by build and reports the leftovers as
+`doctor`'s `driver-advisory` / `runtime-cache-unreclaimable` finding, naming
+Xcode's Settings → Platforms as the way to reclaim them. It reads each
+bundle's `Info.plist` and never its size — measuring the store means walking
+tens of gigabytes on every `doctor` run — and stays silent when the store is
+absent or unreadable, which is the normal state on a machine that has never
+downloaded a runtime.
+
+**The knob:** `downloads.policy` decides whether the host downloads runtimes
+at all; short of that, the reclaim is manual and periodic, driven by what
+`doctor` reports.
+
 ## True cancellation during provisioning is not implemented (ADR 0003 §10)
 
 `simlock/client`'s `requestLease` takes an `AbortSignal`. When device work is
