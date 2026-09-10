@@ -45,24 +45,36 @@ gh issue view <N> --json comments --jq '[.comments[] | select(.body | startswith
 git fetch origin <kind>/<N> 2>/dev/null && git log --oneline origin/<kind>/<N> ^main
 ```
 
-If either exists, continue from there rather than starting over: check out
-the branch, read its log, and make Not done your task list.
+If either exists, continue from there rather than starting over: branch
+from `origin/<kind>/<N>` (step 3), read its log, and make Not done your
+task list.
 
 ## 3. Branch
 
 The branch name is `<kind>/<N>` where `<kind>` is the label prefix, nothing
-appended (rule 11). If it already exists on the remote, someone was here
-before: check out that branch and read its log before doing anything else.
+appended (rule 11). You are probably in a worktree (rule 13): always branch
+from `origin/...`, never from a local branch, and never assume you can
+switch to a branch another checkout holds.
 
 ```bash
-git switch -c task/<N> main               # or feature/<N>
+git fetch origin
+git switch -c task/<N> origin/main         # or feature/<N>
 ```
 
-For a bug, start from the reproduction branch when it exists so the failing
-test is carried forward:
+For a bug, start from the reproduction branch so the failing test is
+carried forward:
 
 ```bash
-git fetch origin bug/<N>-repro && git switch -c bug/<N> origin/bug/<N>-repro
+git switch -c bug/<N> origin/bug/<N>-repro
+```
+
+If `origin/<kind>/<N>` already exists, someone was here before (step 2a):
+branch from it, and if the local name is taken by another worktree, work
+under a temporary name and push to the real one:
+
+```bash
+git switch -c <kind>/<N> origin/<kind>/<N> || git switch -c wip/<N> origin/<kind>/<N>
+git push origin HEAD:<kind>/<N>
 ```
 
 ## 4. Build
@@ -72,6 +84,11 @@ prove, and `docs/internal/agent-rules/testing.md` says what proving means. Rerea
 files named under Rules in play before touching the code they cover. New or
 changed events need their entries in both `docs/EVENTS.md` and `docs/internal/EVENTS.md` in the same change.
 
+Before opening the PR, search `docs/` and every user-facing string (help
+text, error messages, HTTP error bodies) for claims your change makes
+false, and fix them in the same PR. A behaviour that changed while its
+description stayed put is a bug you shipped.
+
 Run `pnpm check` before opening the PR.
 
 If something in the spec turns out to be wrong or impossible, do not work
@@ -80,13 +97,23 @@ maintainer reopens a spec session.
 
 ## 5. Open the PR
 
+If a person is present in this session, show the text first and wait for a
+yes before posting. Running unattended, post directly.
+
 The PR body must contain `Closes #<N>` and nothing that closes any other
 issue; CI checks that the branch name and the closing reference agree.
 Beyond that:
 
-- **task**: walk every line of Done when and say how each was checked.
+- **task**: walk every line of Done when and say how each was checked. If
+  no other sub-issue of the parent is still open, also walk the parent's
+  Completion conditions: verification is part of delivery, and this PR is
+  the last one.
 - **bug**: name the regression test; it is the triage test, now passing.
 - **feature**: walk every Completion condition and say how each was checked.
+
+Rule 12 applies to the PR body: 200 words plus the checklist, what changed
+and why, no narration of how you got there, and `*Written by an agent.*` as
+the last line.
 
 ```bash
 gh pr create --title "<type>(<scope>): <summary>" --body-file <file>
@@ -98,7 +125,7 @@ Leave the issue assigned and labelled as it is. Merge closes it.
 
 If you stop for any reason before the PR is merged — blocked, out of
 context, told to stop, spec turned out wrong — push the branch, then leave
-exactly one comment and release the claim:
+exactly one comment and release the claim. If a person is present in this session, show the text first and wait for a yes before posting. Running unattended, post directly.
 
 ```markdown
 ## Handoff
@@ -119,6 +146,8 @@ exactly one comment and release the claim:
 ### Blocked on
 
 <who or what, or "nothing">
+
+_Written by an agent._
 ```
 
 ```bash
@@ -127,5 +156,13 @@ gh issue comment <N> --body-file <file>
 gh issue edit <N> --remove-assignee @me
 ```
 
-A handoff is state, never spec. Do not post progress updates at any other
-time.
+If Blocked on is anything but "nothing", also move the issue out of the
+ready state so the next agent does not hit the same wall. The maintainer
+re-adds `<kind>:ready` once the blocker is gone:
+
+```bash
+gh issue edit <N> --add-label <kind>:blocked --remove-label <kind>:ready
+```
+
+A handoff is state, never spec, and rule 12 applies: 150 words, plain
+words, conclusion first. Do not post progress updates at any other time.

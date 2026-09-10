@@ -1,10 +1,18 @@
 name: Issue state
 
-# The one place that enforces docs/agent-rules/delivery.md mechanically:
+# The one place that enforces docs/internal/agent-rules/delivery.md
+# mechanically:
 # - one <kind>:<state> label per issue (adding the next label drops the old);
-# - task:draft becomes task:ready when approved, specified, and unblocked;
-# - a reporter's reply moves bug:needs-info back to bug:triage;
-# - a feature whose last sub-issue closed gets a completion-conditions note;
+# - task:draft becomes task:ready when approved, specified, and unblocked, and
+#   task:ready goes back to task:draft when that stops being true;
+# - a reporter's reply moves bug:needs-info back to bug:triage, reopening the
+#   issue if the stale job closed it (agents post under a maintainer's
+#   account, so comments carrying the agent footer from rule 12 do not count);
+# - a feature whose last sub-issue closed gets a note to check completion
+#   conditions and close;
+# - a feature closed as completed closes the request it came from;
+# - a PR closed without merge releases the claim on the issue it would close;
+# - a claim with no activity for three days is released;
 # - bug:needs-info with no activity for two weeks closes as not planned;
 # - a PR from a <kind>/<n> branch must close issue <n> and no other.
 # Actions taken with the workflow token do not trigger this workflow again,
@@ -12,11 +20,11 @@ name: Issue state
 
 on:
   issues:
-    types: [labeled, edited, closed]
+    types: [labeled, edited, closed, reopened]
   issue_comment:
     types: [created]
   pull_request:
-    types: [opened, edited, synchronize]
+    types: [opened, edited, synchronize, closed]
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -29,6 +37,7 @@ concurrency:
 
 env:
   STATE_LABEL: "^(request|bug|feature|task):"
+  AGENT_FOOTER: "Written by an agent."
 
 jobs:
   exclusive-label:
@@ -55,10 +64,10 @@ jobs:
             }
 
   task-ready:
-    name: Promote task:draft to task:ready
+    name: Promote or demote between task:draft and task:ready
     if: >-
       github.event_name == 'issues' &&
-      (github.event.action == 'closed' ||
+      (github.event.action == 'closed' || github.event.action == 'reopened' ||
        (github.event.action == 'edited' && github.event.changes.body != null))
     runs-on: ubuntu-24.04
     permissions:
@@ -87,14 +96,17 @@ jobs:
 
             const candidates = [];
             if (context.payload.action === "edited") {
-              if (hasLabel(context.payload.issue, "task:draft")) candidates.push(context.payload.issue);
+              const issue = context.payload.issue;
+              if (hasLabel(issue, "task:draft") || hasLabel(issue, "task:ready")) candidates.push(issue);
             } else {
-              const closed = context.payload.issue.number;
-              const drafts = await github.paginate(github.rest.issues.listForRepo, {
-                ...context.repo, state: "open", labels: "task:draft", per_page: 100,
-              });
-              for (const issue of drafts) {
-                if (dependencies(issue.body ?? "").includes(closed)) candidates.push(issue);
+              const changed = context.payload.issue.number;
+              for (const labels of ["task:draft", "task:ready"]) {
+                const issues = await github.paginate(github.rest.issues.listForRepo, {
+                  ...context.repo, state: "open", labels, per_page: 100,
+                });
+                for (const issue of issues) {
+                  if (dependencies(issue.body ?? "").includes(changed)) candidates.push(issue);
+                }
               }
             }
 
@@ -109,22 +121,33 @@ jobs:
                 if (dep.data.state !== "closed") open.push(`#${n}`);
               }
               if (open.length) why.push(`waiting on ${open.join(", ")}`);
-              if (why.length) {
-                core.info(`#${issue.number} stays task:draft: ${why.join("; ")}`);
-                continue;
+              const ready = why.length === 0;
+              const isReady = hasLabel(issue, "task:ready");
+              const issue_number = issue.number;
+
+              if (ready && !isReady) {
+                await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["task:ready"] });
+                await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "task:draft" });
+                const deps = dependencies(body).map((n) => `#${n}`);
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number,
+                  body: `Now \`task:ready\`: approved, technical spec present${deps.length ? `, ${deps.join(", ")} closed` : ""}.`,
+                });
+                core.info(`#${issue_number}: task:draft -> task:ready`);
+              } else if (!ready && isReady) {
+                if (issue.assignees?.length) {
+                  core.info(`#${issue_number} no longer ready (${why.join("; ")}) but is claimed; leaving it`);
+                  continue;
+                }
+                await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["task:draft"] });
+                await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "task:ready" });
+                await github.rest.issues.createComment({
+                  ...context.repo, issue_number, body: `Back to \`task:draft\`: ${why.join("; ")}.`,
+                });
+                core.info(`#${issue_number}: task:ready -> task:draft`);
+              } else {
+                core.info(`#${issue_number} unchanged${why.length ? ` (${why.join("; ")})` : ""}`);
               }
-              await github.rest.issues.addLabels({
-                ...context.repo, issue_number: issue.number, labels: ["task:ready"],
-              });
-              await github.rest.issues.removeLabel({
-                ...context.repo, issue_number: issue.number, name: "task:draft",
-              });
-              const deps = dependencies(body).map((n) => `#${n}`);
-              await github.rest.issues.createComment({
-                ...context.repo, issue_number: issue.number,
-                body: `Now \`task:ready\`: approved, technical spec present${deps.length ? `, ${deps.join(", ")} closed` : ""}.`,
-              });
-              core.info(`#${issue.number}: task:draft -> task:ready`);
             }
 
   needs-info-reply:
@@ -133,6 +156,7 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request == null &&
       github.event.comment.user.login == github.event.issue.user.login &&
+      !contains(github.event.comment.body, 'Written by an agent.') &&
       contains(github.event.issue.labels.*.name, 'bug:needs-info')
     runs-on: ubuntu-24.04
     permissions:
@@ -143,11 +167,15 @@ jobs:
         with:
           script: |
             const issue_number = context.payload.issue.number;
+            if (context.payload.issue.state === "closed") {
+              await github.rest.issues.update({ ...context.repo, issue_number, state: "open" });
+              core.info(`#${issue_number}: reopened`);
+            }
             await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["bug:triage"] });
             await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "bug:needs-info" });
             core.info(`#${issue_number}: bug:needs-info -> bug:triage`);
 
-  feature-verify:
+  feature-complete:
     name: Last sub-issue closed
     if: github.event_name == 'issues' && github.event.action == 'closed'
     runs-on: ubuntu-24.04
@@ -170,9 +198,104 @@ jobs:
             if (completed < total) return;
             await github.rest.issues.createComment({
               ...context.repo, issue_number: parent.number,
-              body: `All ${total} sub-issues are closed. Completion conditions are now due: an agent proves each one against \`main\` and reports here, then the maintainer closes this feature and flips its ADRs to *Accepted*.`,
+              body: `All ${total} sub-issues are closed. If the completion conditions hold on \`main\`, close this feature and flip its ADRs to *Accepted*.`,
             });
-            core.info(`#${parent.number}: completion conditions due`);
+            core.info(`#${parent.number}: all sub-issues closed`);
+
+  request-close:
+    name: Feature completed, close its request
+    if: >-
+      github.event_name == 'issues' && github.event.action == 'closed' &&
+      github.event.issue.state_reason == 'completed' &&
+      (contains(github.event.issue.labels.*.name, 'feature:planned') ||
+       contains(github.event.issue.labels.*.name, 'feature:ready') ||
+       contains(github.event.issue.labels.*.name, 'feature:spec'))
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const feature = context.payload.issue;
+            const m = (feature.body ?? "").match(/^Request:\s*#(\d+)/im);
+            if (!m) return;
+            const issue_number = Number(m[1]);
+            const request = await github.rest.issues.get({ ...context.repo, issue_number });
+            if (request.data.state !== "open") return;
+            await github.rest.issues.createComment({
+              ...context.repo, issue_number, body: `Shipped as #${feature.number}.`,
+            });
+            await github.rest.issues.update({
+              ...context.repo, issue_number, state: "closed", state_reason: "completed",
+            });
+            core.info(`#${issue_number}: closed, shipped as #${feature.number}`);
+
+  pr-closed-unmerged:
+    name: PR closed without merge releases the claim
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
+      github.event.pull_request.merged == false
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const closes = [...(pr.body ?? "").matchAll(/\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi)]
+              .map((x) => Number(x[1]));
+            for (const issue_number of new Set(closes)) {
+              const issue = await github.rest.issues.get({ ...context.repo, issue_number });
+              if (issue.data.state !== "open") continue;
+              const assignees = issue.data.assignees.map((a) => a.login);
+              if (assignees.length) {
+                await github.rest.issues.removeAssignees({ ...context.repo, issue_number, assignees });
+              }
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number,
+                body: `#${pr.number} was closed without merging. Claim released; the label is unchanged, so the next agent starts from the branch and the last handoff.`,
+              });
+              core.info(`#${issue_number}: claim released after #${pr.number} closed unmerged`);
+            }
+
+  stale-claims:
+    name: Release claims with no activity
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const days = 3;
+            const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open -no:assignee label:bug:ready,feature:ready,task:ready`;
+            const found = await github.paginate(github.rest.search.issuesAndPullRequests, { q, per_page: 100 });
+            for (const issue of found) {
+              let last = new Date(issue.updated_at).getTime();
+              const kind = issue.labels.map((l) => l.name).find((n) => /:ready$/.test(n))?.split(":")[0];
+              try {
+                const branch = await github.rest.repos.getBranch({ ...context.repo, branch: `${kind}/${issue.number}` });
+                last = Math.max(last, new Date(branch.data.commit.commit.committer.date).getTime());
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+              if (last > cutoff) continue;
+              const assignees = issue.assignees.map((a) => a.login);
+              await github.rest.issues.removeAssignees({ ...context.repo, issue_number: issue.number, assignees });
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `Claim released: no activity for ${days} days. The label is unchanged; the next agent starts from the branch and the last handoff.`,
+              });
+              core.info(`#${issue.number}: stale claim released`);
+            }
 
   stale-needs-info:
     name: Close silent bug:needs-info
@@ -201,7 +324,7 @@ jobs:
 
   branch-matches-issue:
     name: Branch name closes its issue
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

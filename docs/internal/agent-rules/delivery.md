@@ -22,11 +22,14 @@ else happens to it.
 | `bug:triage`       | maintainer                          | An agent may reproduce it and write the triage report.    |
 | `bug:needs-info`   | triage agent                        | Could not reproduce. Waiting on the reporter.             |
 | `bug:ready`        | maintainer, after the triage report | An agent may fix it.                                      |
+| `bug:blocked`      | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 | `feature:spec`     | spec session, on creation           | Business or technical spec in progress.                   |
 | `feature:ready`    | maintainer                          | No sub-issues; one PR delivers the whole feature.         |
 | `feature:planned`  | spec session, on split              | Split into tasks. Never picked up itself.                 |
+| `feature:blocked`  | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 | `task:draft`       | spec session, on creation           | Scope written; technical spec, approval, or deps missing. |
 | `task:ready`       | automation, or maintainer           | An agent may implement it.                                |
+| `task:blocked`     | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 
 Transitions per kind:
 
@@ -35,7 +38,11 @@ Transitions per kind:
 - **bug**: `new` → `triage` → `ready`, with `needs-info` as a side-trip that
   returns to `triage` when the reporter answers.
 - **feature**: `spec` → `ready` or `planned`. Both end at closed.
-- **task**: `draft` → `ready`.
+- **task**: `draft` → `ready`, and back to `draft` if the approval, the
+  technical spec, or a closed dependency goes away.
+- **any kind**: `triage` or `ready` → `blocked` when an agent stops on a
+  blocker it names in its handoff. The maintainer clears it by re-adding the
+  label it came from.
 
 Everything after `ready` is read from GitHub itself, not from a label:
 in progress means an assignee is set, in review means a linked pull request
@@ -63,6 +70,9 @@ is open, done means closed as completed.
    wrong or incomplete, the handoff says "spec needs: ..." and the agent
    stops; it does not amend the spec in the comment. One handoff per stop,
    no progress log — an agent comments when it stops, not while it works.
+   If Blocked on is anything but "nothing", the agent also moves the issue
+   to `<kind>:blocked`, so the next agent does not walk into the same wall;
+   the maintainer clears it by re-adding the label it came from.
 
 3. **The body is the spec. Comments are discussion.** Whoever implements an
    issue reads its body, the documents it links, the latest `## Handoff`
@@ -103,10 +113,17 @@ is open, done means closed as completed.
    matter what anyone says in a comment.
 
 8. **Triage produces a report, not a fix.** An agent working `bug:triage`
-   reproduces the bug as a failing test whose title states the claim,
-   finds the root cause, and posts one comment with exactly these sections:
-   *Reproduction*, *Root cause* (with file and line), *Simplest fix*,
-   *Alternatives rejected*, *Risk*. It pushes the failing test to a
+   reproduces the bug as a failing test whose title states the claim the
+   test proves, finds the root cause, and posts one comment with exactly
+   these sections: *Reproduction*, *Root cause* (with file and line),
+   *Simplest fix*, *Alternatives rejected* (at most three, one line each),
+   *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
+   (Simlock does the wrong thing) or a gap (Simlock does nothing wrong and
+   something is missing); for a gap the test's expectation is a proposal
+   and the report says so; `bug:ready` on a gap accepts that proposal. A
+   separate problem found on the way is opened as
+   its own `bug:new` issue and listed under Side findings, not described in
+   the report. It pushes the failing test to a
    `bug/<number>-repro` branch and opens no pull request. It then unassigns
    itself. If it cannot reproduce, it moves the issue to `bug:needs-info`,
    says exactly what is missing, and unassigns itself.
@@ -115,9 +132,11 @@ is open, done means closed as completed.
    that closes it is merged; for a bug the failing test from triage is the
    regression test and must be in that PR. A `feature:ready` issue is done
    when its PR is merged and the PR body walks every completion condition.
-   A `feature:planned` issue is done when every sub-issue is closed *and* an
-   agent has proven the completion conditions against main, usually by an
-   end-to-end run reported in a comment; the maintainer closes it.
+   A `feature:planned` issue is done when every sub-issue is closed.
+   Verification is part of delivery, not a step after it: every task PR
+   walks its Done when, and the PR that closes the last open sub-issue also
+   walks the parent's Completion conditions. The maintainer closes the
+   feature.
 
 10. **ADR status follows the feature.** A decision made during a spec session
     that constrains more than one task, or would be expensive to reverse,
@@ -133,6 +152,28 @@ is open, done means closed as completed.
     can name its branch without looking; given a branch you can name its
     issue by reading the second path segment. A PR from such a branch must
     close that issue and no other.
+
+12. **Everything an agent writes on an issue or a PR is short and plain.**
+    Lead with the conclusion. Short sentences, common words, no filler, no
+    narration of what the agent did or considered. Evidence goes in a code
+    block or a link, never in prose. Cut anything that does not change the
+    reader's next decision. Budgets, counted outside code blocks: a triage
+    report 300 words, a handoff 150, a PR body 200 plus its checklist, a
+    "Spec updated" comment one line. Text over budget is cut before it is
+    posted, not excused after. Do not restate the issue body: confirm or
+    correct what it says, then add only what is new. Every comment, issue
+    body, and PR body an agent writes ends with the line
+    `*Written by an agent.*`, those exact characters — people and automation
+    use it to tell agent text from a person's, since agents post under a
+    maintainer's account.
+
+13. **Assume every agent is in a worktree.** Several agents share one clone
+    through `git worktree`, so a branch may already be checked out somewhere
+    else and `git switch` to it will fail. Create branches in whatever
+    checkout you have, push them, and treat `origin/<branch>` as the truth;
+    to continue a branch another checkout holds, branch from
+    `origin/<branch>` rather than switching to it. Nothing depends on which
+    worktree a branch was made in.
 
 ## Procedures
 
@@ -175,11 +216,21 @@ rules mechanically, so nobody has to remember them:
   is ticked, its Technical spec section is filled in, and every issue under
   Depends on is closed. It is re-evaluated whenever its body changes and
   whenever an issue it depends on closes.
+- A `task:ready` issue with no assignee goes back to `task:draft` when the
+  approval box is unticked, the technical spec is emptied, or a dependency
+  is reopened. A claimed task is left alone.
 - A comment by the reporter on a `bug:needs-info` issue moves it back to
-  `bug:triage`. Two weeks of silence closes it as not planned; a later
-  comment does not reopen it automatically, the maintainer does.
+  `bug:triage`, reopening the issue if it had been closed. Two weeks of
+  silence closes it as not planned.
 - When the last sub-issue of a `feature:planned` issue closes, the workflow
-  comments that completion conditions are due.
+  comments that the feature can be closed once the completion conditions
+  hold.
+- A feature closed as completed closes the `request:new` issue it names on
+  its `Request:` line, with a comment pointing at the feature.
+- A pull request closed without merging releases the claim on every issue
+  its body closes, with a comment. The label is left as it was.
+- A claim on a `*:ready` issue with no comment, label change, or commit on
+  `<kind>/<n>` for three days is released, with a comment.
 - A pull request from a `<kind>/<n>` branch fails its check unless its body
   closes `#<n>` and closes nothing else.
 
