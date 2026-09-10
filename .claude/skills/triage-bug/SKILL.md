@@ -176,3 +176,10 @@ waiting on the maintainer's answer about the slow lane — push whatever is on
 `bug/<N>-repro`, leave one comment headed `## Handoff` with Done, Not done,
 Findings and Blocked on, and unassign yourself. Findings is where a partial
 root cause or a rejected hypothesis goes so the next agent does not redo it.
+If you are waiting on the maintainer, also move the issue to `bug:blocked`
+so no other agent starts the same triage; the maintainer re-adds
+`bug:triage` when the answer is in:
+
+```bash
+gh issue edit <N> --add-label bug:blocked --remove-label bug:triage
+```

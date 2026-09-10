@@ -26,11 +26,14 @@ request, closed — not from a label. The branch for issue `<n>` is always
 | `bug:triage`      | An agent may reproduce it and write the triage report.   |
 | `bug:needs-info`  | Could not reproduce. Waiting on the reporter.            |
 | `bug:ready`       | An agent may fix it.                                     |
+| `bug:blocked`     | Waiting on the maintainer to clear a blocker.            |
 | `feature:spec`    | Business or technical spec in progress.                  |
 | `feature:ready`   | No sub-issues; one PR delivers the whole feature.        |
 | `feature:planned` | Split into tasks. Never picked up itself.                |
+| `feature:blocked` | Waiting on the maintainer to clear a blocker.            |
 | `task:draft`      | Scope written; technical spec, approval or deps missing. |
 | `task:ready`      | An agent may implement it.                               |
+| `task:blocked`    | Waiting on the maintainer to clear a blocker.            |
 
 ## A bug, from report to fix
 
@@ -100,10 +103,12 @@ of a Technical spec section on the feature, it produces sub-issues.
    under Depends on is closed. Nobody re-reads the dependency graph by hand.
 7. Agents claim `task:ready` issues one PR each, on `task/<n>`. As tasks close, the ones they
    unblocked become ready on their own.
-8. When the last sub-issue closes, the automation comments on the feature
-   that completion conditions are due. An agent proves them against `main`,
-   usually with an end-to-end run, and reports in a comment. The maintainer
-   closes the feature.
+8. Verification is part of delivery. Every task PR walks its Done when, and
+   the PR that closes the last open sub-issue also walks the feature's
+   Completion conditions. When that last sub-issue closes, the automation
+   comments on the feature, and the maintainer closes it. If the feature
+   came from a request, the request closes on its own with a pointer to the
+   feature.
 
 ## Handoffs between agents
 
@@ -115,7 +120,11 @@ knows where the commits are without being told. A handoff records the state
 of the work, never a change to the spec; if the work showed the spec is
 wrong, the handoff says so and the maintainer runs a revise spec session.
 Agents do not post progress updates, only handoffs, so the one comment that
-matters is easy to find.
+matters is easy to find. A handoff that names a blocker also moves the issue
+to `<kind>:blocked`, so nobody picks it up until the maintainer re-adds the
+label it came from. A claim that goes silent — no comment, label change, or
+commit for three days — or whose PR is closed without merging is released by
+the automation, so a crashed agent cannot hold an issue forever.
 
 Everything an agent writes on an issue or a PR — report, handoff, spec, PR
 body — is short and plain: conclusion first, short sentences, common words,
@@ -129,10 +138,13 @@ and readers and automation need to tell the two apart.
 The workflow in `.github/workflows/issue-state.yml` handles the transitions
 that are mechanical: adding a state label removes the previous one, so every
 transition is a single add; `task:draft` becomes `task:ready` when approved,
-specified and unblocked; a reporter's reply moves `bug:needs-info` back to
-`bug:triage`; a silent `bug:needs-info` closes after two weeks; a feature
-whose last sub-issue closed gets the completion-conditions note; a PR from a
-`<kind>/<n>` branch must close `#<n>` and nothing else. The repo's
+specified and unblocked, and goes back when that stops being true; a
+reporter's reply moves `bug:needs-info` back to `bug:triage` and reopens the
+issue if needed; a silent `bug:needs-info` closes after two weeks; a feature
+whose last sub-issue closed gets a note to close it; a completed feature
+closes its request; a PR closed without merging or a claim silent for three
+days releases the claim; a PR from a `<kind>/<n>` branch must close `#<n>`
+and nothing else. The repo's
 skills — `spec-session`, `triage-bug`, `deliver` — handle the transitions an
 agent makes as part of its own procedure.
 
