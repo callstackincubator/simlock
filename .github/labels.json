@@ -4,7 +4,11 @@
     "color": "bfdadc",
     "description": "Inbox. Never picked up, body never edited."
   },
-  { "name": "bug:new", "color": "d73a4a", "description": "Reported. Nobody has looked yet." },
+  {
+    "name": "bug:new",
+    "color": "d73a4a",
+    "description": "Reported. Nobody has looked yet."
+  },
   {
     "name": "bug:triage",
     "color": "d73a4a",
@@ -15,7 +19,16 @@
     "color": "d73a4a",
     "description": "Could not reproduce. Waiting on the reporter."
   },
-  { "name": "bug:ready", "color": "d73a4a", "description": "An agent may fix it." },
+  {
+    "name": "bug:triaged",
+    "color": "d73a4a",
+    "description": "Triage report posted. Waiting on the maintainer to accept or send back."
+  },
+  {
+    "name": "bug:ready",
+    "color": "d73a4a",
+    "description": "An agent may fix it."
+  },
   {
     "name": "feature:spec",
     "color": "0e8a16",
@@ -36,7 +49,11 @@
     "color": "5319e7",
     "description": "Scope written; technical spec, approval, or deps missing."
   },
-  { "name": "task:ready", "color": "5319e7", "description": "An agent may implement it." },
+  {
+    "name": "task:ready",
+    "color": "5319e7",
+    "description": "An agent may implement it."
+  },
   {
     "name": "documentation",
     "color": "0075ca",
