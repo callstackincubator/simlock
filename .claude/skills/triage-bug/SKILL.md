@@ -125,7 +125,9 @@ happens to it.
 If a person is present in this session, show the text first and wait for a
 yes before posting. Running unattended, post directly.
 
-Post one comment with exactly these sections, then unassign:
+Post one comment with exactly these sections, then unassign. If a report
+already exists on the thread, yours replaces it: make the first line
+`Supersedes the report above.` so the maintainer knows which one is current.
 
 ```markdown
 ## Reproduction
