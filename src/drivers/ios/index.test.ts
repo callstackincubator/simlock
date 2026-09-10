@@ -2649,7 +2649,7 @@ describe("IosSimctlDriver", () => {
         await expect(driver.advisories()).resolves.toEqual([]);
       });
 
-      it("reports the downloaded runtime assets that outlive `simctl runtime delete` and that nothing in Simlock can reclaim (#79)", async () => {
+      it("reports downloaded runtime assets whose runtime is not in the catalog, and only those (#79)", async () => {
         // `simctl runtime delete` only unregisters a runtime from CoreSimulator: its ~7.5 GiB
         // asset bundle stays in mobileassetd's store, tagged `NeverCollected`, on the same
         // volume the download preflight measures. So the bytes stay spent and CoreSimulator can
@@ -2670,12 +2670,17 @@ describe("IosSimctlDriver", () => {
         }
         const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
 
-        await expect(driver.advisories()).resolves.toEqual([
-          {
-            code: "runtime-cache-unreclaimable",
-            message: expect.stringContaining("18.6"),
-          },
-        ]);
+        // The advisory code and message shape are a proposal (see the triage report), so this
+        // pins only what any fix must do: name both orphan builds, name neither installed one.
+        const advisories = await driver.advisories();
+        const text = advisories.map((advisory) => advisory.message).join("\n");
+        expect(advisories.map((advisory) => advisory.code)).toContain(
+          "runtime-cache-unreclaimable",
+        );
+        expect(text).toContain("18.6");
+        expect(text).toContain("26.3");
+        expect(text).not.toContain("18.4");
+        expect(text).not.toContain("26.5");
       });
     });
   });
