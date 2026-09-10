@@ -25,6 +25,11 @@ changes in this repo:
   docs (`docs/`) vs. maintainer/agent docs (`docs/internal/`); no ADR links
   or internal-doc links from end-user docs; nothing the tool prints names a
   file path in this repo.
+- [delivery.md](docs/internal/agent-rules/delivery.md) — GitHub Issues as
+  spec and queue: one `<kind>:<state>` label per issue, agents act only on
+  `*:ready` and `bug:triage`, the body is the spec and comments are
+  discussion, reporters' issues are never rewritten, branches are
+  `<kind>/<n>`, handoffs are one `## Handoff` comment per stop.
 
 So are the accepted records in [docs/internal/adr/](docs/internal/adr/). An ADR marked
 _Accepted — not yet implemented_ means the documentation already describes the
@@ -49,6 +54,10 @@ End-user docs live directly under [docs/](docs/) and must stay self-contained
 Maintainer/agent docs live under [docs/internal/](docs/internal/):
 
 - [ARCHITECTURE.md](docs/internal/ARCHITECTURE.md) — high-level architecture overview
+- [DELIVERY.md](docs/internal/DELIVERY.md) — how work flows through GitHub
+  Issues: the three walkthroughs, handoffs, what is automated, where ADRs fit
+- [templates/](docs/internal/templates/) — the feature and task spec bodies a
+  spec session writes
 - [EVENTS.md](docs/internal/EVENTS.md) — the same catalog with rationale and ADR references
 - [IDEAS.md](docs/internal/IDEAS.md) — post-v1 ideas; don't implement these unless asked
 - [KNOWN-PITFALLS.md](docs/internal/KNOWN-PITFALLS.md) — accepted gaps and their planned fixes

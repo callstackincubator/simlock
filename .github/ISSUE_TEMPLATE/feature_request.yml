@@ -1,0 +1,32 @@
+name: Feature request
+description: Something you want Simlock to do that it does not do today.
+labels: ["request:new"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem, not the solution. If the request is taken up, a maintainer writes a separate spec issue and links it here; this issue stays yours and stays open until that feature ships.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who runs into this
+      description: You, a team, a coding agent, a CI job? What does that situation look like?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+      description: The behaviour you would want, from the outside. Implementation ideas are welcome but optional.
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Workarounds you use today, related issues, links.

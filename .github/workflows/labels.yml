@@ -1,0 +1,35 @@
+name: Labels
+
+# Keeps the repo's labels equal to .github/labels.json. Creates and updates
+# only; a label that is no longer listed is deleted by hand, on purpose.
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/labels.json]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  sync:
+    name: Sync labels
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create or update every listed label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          jq -c '.[]' .github/labels.json | while read -r label; do
+            name=$(jq -r .name <<<"$label")
+            color=$(jq -r .color <<<"$label")
+            description=$(jq -r .description <<<"$label")
+            gh label create "$name" --color "$color" --description "$description" --force
+          done

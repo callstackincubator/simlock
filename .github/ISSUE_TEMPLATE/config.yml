@@ -1,0 +1,3 @@
+# Blank issues stay enabled: feature and task specs are authored by the
+# maintainer from docs/internal/templates/, not through a form.
+blank_issues_enabled: true

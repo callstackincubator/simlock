@@ -1,0 +1,40 @@
+name: Bug report
+description: Something Simlock does that it should not, or does not do that it should.
+labels: ["bug:new"]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: What Simlock did, as precisely as you can. Paste the exact command and its output where there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: Steps from a fresh state. If it only happens sometimes, say how often.
+      placeholder: |
+        1. simlock daemon start
+        2. simlock lease --platform ios
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Simlock version, platform (iOS, Android, or both), OS version, and the output of `simlock doctor` if it runs.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs and evidence
+      description: Daemon logs, screenshots, or anything else that shows the problem.

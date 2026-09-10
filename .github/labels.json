@@ -1,0 +1,55 @@
+[
+  {
+    "name": "request:new",
+    "color": "bfdadc",
+    "description": "Inbox. Never picked up, body never edited."
+  },
+  { "name": "bug:new", "color": "d73a4a", "description": "Reported. Nobody has looked yet." },
+  {
+    "name": "bug:triage",
+    "color": "d73a4a",
+    "description": "An agent may reproduce it and write the triage report."
+  },
+  {
+    "name": "bug:needs-info",
+    "color": "d73a4a",
+    "description": "Could not reproduce. Waiting on the reporter."
+  },
+  { "name": "bug:ready", "color": "d73a4a", "description": "An agent may fix it." },
+  {
+    "name": "feature:spec",
+    "color": "0e8a16",
+    "description": "Business or technical spec in progress."
+  },
+  {
+    "name": "feature:ready",
+    "color": "0e8a16",
+    "description": "No sub-issues; one PR delivers the whole feature."
+  },
+  {
+    "name": "feature:planned",
+    "color": "0e8a16",
+    "description": "Split into tasks. Never picked up itself."
+  },
+  {
+    "name": "task:draft",
+    "color": "5319e7",
+    "description": "Scope written; technical spec, approval, or deps missing."
+  },
+  { "name": "task:ready", "color": "5319e7", "description": "An agent may implement it." },
+  {
+    "name": "documentation",
+    "color": "0075ca",
+    "description": "Improvements or additions to documentation"
+  },
+  {
+    "name": "dependencies",
+    "color": "0366d6",
+    "description": "Pull requests that update a dependency file"
+  },
+  {
+    "name": "github_actions",
+    "color": "000000",
+    "description": "Pull requests that update GitHub Actions code"
+  }
+]
