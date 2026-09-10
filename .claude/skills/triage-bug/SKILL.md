@@ -34,8 +34,9 @@ git fetch origin bug/<N>-repro 2>/dev/null && git log --oneline origin/bug/<N>-r
 
 ## 2. Reproduce
 
-Read the body and the comment thread. Write a test in the project that can
-prove it — a unit test when the behaviour is in-process, an e2e test when it
+Read the body and the comment thread. The reporter may already have done
+part of the analysis; the report confirms or corrects what the body says
+and adds only what is new. Write a test in the project that can prove it — a unit test when the behaviour is in-process, an e2e test when it
 needs a daemon. The test must fail on a named assertion, not a timeout. Run
 it and keep the failing output.
 
@@ -60,7 +61,9 @@ driver allows.
 If you cannot reproduce after a genuine attempt:
 
 ```bash
-gh issue comment <N> --body "<what you tried, and exactly what information would let you reproduce it>"
+gh issue comment <N> --body "<what you tried, and exactly what information would let you reproduce it>
+
+*Written by an agent.*"
 gh issue edit <N> --add-label bug:needs-info --remove-label bug:triage --remove-assignee @me
 ```
 
@@ -87,13 +90,21 @@ Say first which of three things this is:
 ## 4. Push the reproduction
 
 ```bash
-git switch -c bug/<N>-repro main
+git fetch origin
+git switch -c bug/<N>-repro origin/main
 git add <test files only>
 git commit -m "test: reproduce #<N> — <claim>"
 git push -u origin bug/<N>-repro
 ```
 
-Only the test goes on this branch. No fix, no pull request.
+Only the test goes on this branch. No fix, no pull request. You are
+probably in a worktree (rule 13): branch from `origin/main`, not `main`,
+and if `bug/<N>-repro` is already held by another checkout, branch from
+`origin/bug/<N>-repro` under a temporary name and push to the real one:
+
+```bash
+git switch -c wip/<N>-repro origin/bug/<N>-repro && git push origin HEAD:bug/<N>-repro
+```
 
 ## 5. Side findings
 
@@ -101,7 +112,9 @@ A separate problem found on the way — a stale doc, a wrong error reason,
 another bug — is its own issue, not a paragraph in the report:
 
 ```bash
-gh issue create --label bug:new --title "<what is wrong, in one line>" --body "<what you saw, file:line, found while triaging #<N>>"
+gh issue create --label bug:new --title "<what is wrong, in one line>" --body "<what you saw, file:line, found while triaging #<N>>
+
+*Written by an agent.*"
 ```
 
 List each one as a link under Side findings. The maintainer decides what
@@ -126,15 +139,17 @@ Post one comment with exactly these sections, then unassign:
 
 ## Alternatives rejected
 
-<each one with the reason>
+<at most three, one line each: the alternative, then why not>
 
 ## Risk
 
-<what else the fix touches; what a reviewer should check>
+<at most three bullets: what a reviewer should check>
 
 ## Side findings
 
 <one link per issue opened, or omit the section>
+
+_Written by an agent._
 ```
 
 The report exists for one decision: `bug:ready` or not. Rule 12 applies:

@@ -106,8 +106,8 @@ is open, done means closed as completed.
    reproduces the bug as a failing test whose title states the claim the
    test proves, finds the root cause, and posts one comment with exactly
    these sections: *Reproduction*, *Root cause* (with file and line),
-   *Simplest fix*, *Alternatives rejected*, *Risk*, and *Side findings* when
-   there are any. The root cause says first whether this is a defect
+   *Simplest fix*, *Alternatives rejected* (at most three, one line each),
+   *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
    (Simlock does the wrong thing) or a gap (Simlock does nothing wrong and
    something is missing); for a gap the test's expectation is a proposal
    and the report says so. A separate problem found on the way is opened as
@@ -147,7 +147,19 @@ is open, done means closed as completed.
     reader's next decision. Budgets, counted outside code blocks: a triage
     report 300 words, a handoff 150, a PR body 200 plus its checklist, a
     "Spec updated" comment one line. Text over budget is cut before it is
-    posted, not excused after.
+    posted, not excused after. Do not restate the issue body: confirm or
+    correct what it says, then add only what is new. Every comment, issue
+    body, and PR body an agent writes ends with the line
+    `*Written by an agent.*` — people and automation use it to tell agent
+    text from a person's, since agents post under a maintainer's account.
+
+13. **Assume every agent is in a worktree.** Several agents share one clone
+    through `git worktree`, so a branch may already be checked out somewhere
+    else and `git switch` to it will fail. Create branches in whatever
+    checkout you have, push them, and treat `origin/<branch>` as the truth;
+    to continue a branch another checkout holds, branch from
+    `origin/<branch>` rather than switching to it. Nothing depends on which
+    worktree a branch was made in.
 
 ## Procedures
 
