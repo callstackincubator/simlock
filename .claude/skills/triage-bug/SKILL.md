@@ -24,6 +24,14 @@ is false, stop and say so. Otherwise:
 gh issue edit <N> --add-assignee @me
 ```
 
+Then look for a previous attempt and continue from it rather than repeating
+it:
+
+```bash
+gh issue view <N> --json comments --jq '[.comments[] | select(.body | startswith("## Handoff"))] | last | .body'
+git fetch origin bug/<N>-repro 2>/dev/null && git log --oneline origin/bug/<N>-repro ^main
+```
+
 ## 2. Reproduce
 
 Read the body and the comment thread. Write a test whose title is the claim
@@ -96,3 +104,11 @@ gh issue edit <N> --remove-assignee @me
 
 Leave the label at `bug:triage`. Moving it to `bug:ready` is the
 maintainer's decision after reading the report.
+
+## Stopping early
+
+If you stop before the report is posted — out of context, told to stop,
+waiting on the maintainer's answer about the slow lane — push whatever is on
+`bug/<N>-repro`, leave one comment headed `## Handoff` with Done, Not done,
+Findings and Blocked on, and unassign yourself. Findings is where a partial
+root cause or a rejected hypothesis goes so the next agent does not redo it.
