@@ -21,6 +21,7 @@ else happens to it.
 | `bug:new`          | bug report form                     | Reported. Nobody has looked yet.                          |
 | `bug:triage`       | maintainer                          | An agent may reproduce it and write the triage report.    |
 | `bug:needs-info`   | triage agent                        | Could not reproduce. Waiting on the reporter.             |
+| `bug:triaged`      | triage agent                        | Report posted. Waiting on the maintainer.                 |
 | `bug:ready`        | maintainer, after the triage report | An agent may fix it.                                      |
 | `feature:spec`     | spec session, on creation           | Business or technical spec in progress.                   |
 | `feature:ready`    | maintainer                          | No sub-issues; one PR delivers the whole feature.         |
@@ -32,8 +33,9 @@ Transitions per kind:
 
 - **request**: `new` until closed. Closed as not planned, or as completed with
   a comment naming the feature it became.
-- **bug**: `new` → `triage` → `ready`, with `needs-info` as a side-trip that
-  returns to `triage` when the reporter answers.
+- **bug**: `new` → `triage` → `triaged` → `ready`, with `needs-info` as a
+  side-trip that returns to `triage` when the reporter answers. The
+  maintainer sends a `triaged` bug back to `triage` by re-adding the label.
 - **feature**: `spec` → `ready` or `planned`. Both end at closed.
 - **task**: `draft` → `ready`.
 
@@ -114,8 +116,10 @@ is open, done means closed as completed.
    separate problem found on the way is opened as
    its own `bug:new` issue and listed under Side findings, not described in
    the report. It pushes the failing test to a
-   `bug/<number>-repro` branch and opens no pull request. It then unassigns
-   itself. If it cannot reproduce, it moves the issue to `bug:needs-info`,
+   `bug/<number>-repro` branch and opens no pull request. It then moves the
+   issue to `bug:triaged` and unassigns itself, so no triage agent picks it
+   up again and the maintainer can see it is waiting on them. If it cannot
+   reproduce, it moves the issue to `bug:needs-info`,
    says exactly what is missing, and unassigns itself.
 
 9. **Done is defined per kind.** A task or bug is done when the pull request

@@ -25,6 +25,7 @@ request, closed — not from a label. The branch for issue `<n>` is always
 | `bug:new`         | Reported. Nobody has looked yet.                         |
 | `bug:triage`      | An agent may reproduce it and write the triage report.   |
 | `bug:needs-info`  | Could not reproduce. Waiting on the reporter.            |
+| `bug:triaged`     | Report posted. Waiting on the maintainer.                |
 | `bug:ready`       | An agent may fix it.                                     |
 | `feature:spec`    | Business or technical spec in progress.                  |
 | `feature:ready`   | No sub-issues; one PR delivers the whole feature.        |
@@ -42,7 +43,8 @@ request, closed — not from a label. The branch for issue `<n>` is always
    failing test whose title states the claim, finds the root cause, pushes
    only the test to `bug/<n>-repro`, and posts one comment with five
    sections: Reproduction, Root cause, Simplest fix, Alternatives rejected,
-   Risk. It opens no pull request, and it unassigns itself when done.
+   Risk. It opens no pull request, moves the issue to `bug:triaged`, and
+   unassigns itself.
 4. If it could not reproduce, it swaps the label to `bug:needs-info` and says
    exactly what is missing. A reply from the reporter moves the issue back to
    `bug:triage` on its own; two weeks of silence closes it.

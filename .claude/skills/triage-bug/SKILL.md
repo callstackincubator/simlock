@@ -163,10 +163,11 @@ words, evidence in code blocks. Root cause is one paragraph. If it runs
 long, cut what does not change the decision.
 
 ```bash
-gh issue edit <N> --remove-assignee @me
+gh issue edit <N> --add-label bug:triaged --remove-label bug:triage --remove-assignee @me
 ```
 
-Leave the label at `bug:triage`. Moving it to `bug:ready` is the
+`bug:triaged` means the report is waiting on the maintainer; no agent acts
+on it. Moving on to `bug:ready`, or back to `bug:triage`, is the
 maintainer's decision after reading the report.
 
 ## Stopping early
