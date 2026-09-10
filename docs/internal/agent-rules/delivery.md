@@ -151,8 +151,9 @@ is open, done means closed as completed.
     posted, not excused after. Do not restate the issue body: confirm or
     correct what it says, then add only what is new. Every comment, issue
     body, and PR body an agent writes ends with the line
-    `*Written by an agent.*` — people and automation use it to tell agent
-    text from a person's, since agents post under a maintainer's account.
+    `*Written by an agent.*`, those exact characters — people and automation
+    use it to tell agent text from a person's, since agents post under a
+    maintainer's account.
 
 13. **Assume every agent is in a worktree.** Several agents share one clone
     through `git worktree`, so a branch may already be checked out somewhere
