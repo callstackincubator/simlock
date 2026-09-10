@@ -591,7 +591,7 @@ export class IosSimctlDriver implements Driver {
     args: readonly string[],
     requesterId: string | undefined,
   ): Promise<number> {
-    const key = args.join(" ");
+    const key = args.join("\0");
     const inFlight = this.#downloadLocks.get(key);
     if (inFlight !== undefined) {
       return inFlight;
