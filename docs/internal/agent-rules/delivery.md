@@ -163,3 +163,26 @@ gh issue edit <n> --add-label bug:needs-info --remove-label bug:triage
 
 The repo's own skills (`spec-session`, `triage-bug`, `deliver`) encode these
 procedures; use them rather than retyping the steps.
+
+## Automation
+
+`.github/workflows/issue-state.yml` is the one place that enforces the label
+rules mechanically, so nobody has to remember them:
+
+- Adding a `<kind>:<state>` label removes any other one on the issue. Every
+  transition is therefore a single add.
+- A `task:draft` issue becomes `task:ready` on its own when its approval box
+  is ticked, its Technical spec section is filled in, and every issue under
+  Depends on is closed. It is re-evaluated whenever its body changes and
+  whenever an issue it depends on closes.
+- A comment by the reporter on a `bug:needs-info` issue moves it back to
+  `bug:triage`. Two weeks of silence closes it as not planned; a later
+  comment does not reopen it automatically, the maintainer does.
+- When the last sub-issue of a `feature:planned` issue closes, the workflow
+  comments that completion conditions are due.
+- A pull request from a `<kind>/<n>` branch fails its check unless its body
+  closes `#<n>` and closes nothing else.
+
+The judgment calls stay manual by design: `bug:new` → `bug:triage`,
+`bug:triage` → `bug:ready`, `feature:spec` → `feature:ready`, and the
+approval box on each task.
