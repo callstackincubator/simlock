@@ -110,6 +110,9 @@ build is a sentence to cut.
 
 ## 4. Write back and leave a marker
 
+If a person is present in this session, show the new body first and wait for a
+yes before posting. Running unattended, post directly.
+
 Edit the body in place, keeping every section that already existed:
 
 ```bash

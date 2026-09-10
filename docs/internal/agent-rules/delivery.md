@@ -110,7 +110,8 @@ is open, done means closed as completed.
    *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
    (Simlock does the wrong thing) or a gap (Simlock does nothing wrong and
    something is missing); for a gap the test's expectation is a proposal
-   and the report says so. A separate problem found on the way is opened as
+   and the report says so; `bug:ready` on a gap accepts that proposal. A
+   separate problem found on the way is opened as
    its own `bug:new` issue and listed under Side findings, not described in
    the report. It pushes the failing test to a
    `bug/<number>-repro` branch and opens no pull request. It then unassigns

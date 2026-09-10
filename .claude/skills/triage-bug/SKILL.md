@@ -122,6 +122,9 @@ happens to it.
 
 ## 6. Report and release
 
+If a person is present in this session, show the text first and wait for a
+yes before posting. Running unattended, post directly.
+
 Post one comment with exactly these sections, then unassign:
 
 ```markdown

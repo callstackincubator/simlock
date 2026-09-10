@@ -84,6 +84,11 @@ prove, and `docs/internal/agent-rules/testing.md` says what proving means. Rerea
 files named under Rules in play before touching the code they cover. New or
 changed events need their entries in both `docs/EVENTS.md` and `docs/internal/EVENTS.md` in the same change.
 
+Before opening the PR, search `docs/` and every user-facing string (help
+text, error messages, HTTP error bodies) for claims your change makes
+false, and fix them in the same PR. A behaviour that changed while its
+description stayed put is a bug you shipped.
+
 Run `pnpm check` before opening the PR.
 
 If something in the spec turns out to be wrong or impossible, do not work
@@ -91,6 +96,9 @@ around it: push what you have, leave a handoff (step 6), and stop. The
 maintainer reopens a spec session.
 
 ## 5. Open the PR
+
+If a person is present in this session, show the text first and wait for a
+yes before posting. Running unattended, post directly.
 
 The PR body must contain `Closes #<N>` and nothing that closes any other
 issue; CI checks that the branch name and the closing reference agree.
@@ -114,7 +122,7 @@ Leave the issue assigned and labelled as it is. Merge closes it.
 
 If you stop for any reason before the PR is merged — blocked, out of
 context, told to stop, spec turned out wrong — push the branch, then leave
-exactly one comment and release the claim:
+exactly one comment and release the claim. If a person is present in this session, show the text first and wait for a yes before posting. Running unattended, post directly.
 
 ```markdown
 ## Handoff

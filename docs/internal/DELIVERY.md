@@ -48,7 +48,10 @@ request, closed — not from a label. The branch for issue `<n>` is always
    `bug:triage` on its own; two weeks of silence closes it.
 5. The maintainer reads the report. Agree: add `bug:ready`. Disagree: reply
    with what is wrong and re-add `bug:triage`; the next agent starts from
-   that reply.
+   that reply. When the report says the bug is a gap rather than a defect,
+   `bug:ready` also accepts the shape the report proposes — the advisory
+   code, the message, the field. To reject the shape but keep the
+   reproduction, reply and re-add `bug:triage`.
 6. An agent running `deliver` claims the `bug:ready` issue, creates `bug/<n>`
    from the repro branch, and opens a PR that closes the issue. The triage test is now
    the regression test. Merge closes the bug.
