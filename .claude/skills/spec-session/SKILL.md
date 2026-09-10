@@ -60,7 +60,9 @@ interview for the business sections of `docs/internal/templates/feature.md`, the
 
 ```bash
 gh issue create --title "<title>" --label feature:spec --body-file <file>
-gh issue comment <request> --body "Being specified in #<new>. This issue stays open until that feature ships."
+gh issue comment <request> --body "Being specified in #<new>. This issue stays open until that feature ships.
+
+*Written by an agent.*"
 ```
 
 The new body's first line is `Request: #<request>`.
@@ -112,8 +114,12 @@ Edit the body in place, keeping every section that already existed:
 
 ```bash
 gh issue edit <N> --body-file <file>
-gh issue comment <N> --body "Spec updated: <which sections were added or changed, one line>."
+gh issue comment <N> --body "Spec updated: <which sections were added or changed, one line>.
+
+*Written by an agent.*"
 ```
 
-Never set `feature:ready`. Never post the spec, or a summary of it, as a
+Issue bodies you create end with `*Written by an agent.*` too; the spec
+sections above it are what the maintainer approved, the line just says who
+typed them. Never set `feature:ready`. Never post the spec, or a summary of it, as a
 comment. Never edit a `request:new` or `bug:*` body.

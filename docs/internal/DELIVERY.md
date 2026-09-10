@@ -117,7 +117,9 @@ matters is easy to find.
 Everything an agent writes on an issue or a PR — report, handoff, spec, PR
 body — is short and plain: conclusion first, short sentences, common words,
 evidence in code blocks, nothing that does not change the reader's next
-decision. Each has a word budget in the rule.
+decision. Each has a word budget in the rule, and each ends with the line
+`*Written by an agent.*`, because agents post under a maintainer's account
+and readers and automation need to tell the two apart.
 
 ## What is automated and what is not
 

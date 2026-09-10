@@ -3,7 +3,9 @@ name: Issue state
 # The one place that enforces docs/agent-rules/delivery.md mechanically:
 # - one <kind>:<state> label per issue (adding the next label drops the old);
 # - task:draft becomes task:ready when approved, specified, and unblocked;
-# - a reporter's reply moves bug:needs-info back to bug:triage;
+# - a reporter's reply moves bug:needs-info back to bug:triage (agents post
+#   under a maintainer's account, so comments ending in the agent footer
+#   from docs/internal/agent-rules/delivery.md rule 12 do not count);
 # - a feature whose last sub-issue closed gets a completion-conditions note;
 # - bug:needs-info with no activity for two weeks closes as not planned;
 # - a PR from a <kind>/<n> branch must close issue <n> and no other.
@@ -133,6 +135,7 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request == null &&
       github.event.comment.user.login == github.event.issue.user.login &&
+      !endsWith(trim(github.event.comment.body), '*Written by an agent.*') &&
       contains(github.event.issue.labels.*.name, 'bug:needs-info')
     runs-on: ubuntu-24.04
     permissions:

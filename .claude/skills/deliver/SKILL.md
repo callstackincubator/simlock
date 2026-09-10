@@ -45,24 +45,36 @@ gh issue view <N> --json comments --jq '[.comments[] | select(.body | startswith
 git fetch origin <kind>/<N> 2>/dev/null && git log --oneline origin/<kind>/<N> ^main
 ```
 
-If either exists, continue from there rather than starting over: check out
-the branch, read its log, and make Not done your task list.
+If either exists, continue from there rather than starting over: branch
+from `origin/<kind>/<N>` (step 3), read its log, and make Not done your
+task list.
 
 ## 3. Branch
 
 The branch name is `<kind>/<N>` where `<kind>` is the label prefix, nothing
-appended (rule 11). If it already exists on the remote, someone was here
-before: check out that branch and read its log before doing anything else.
+appended (rule 11). You are probably in a worktree (rule 13): always branch
+from `origin/...`, never from a local branch, and never assume you can
+switch to a branch another checkout holds.
 
 ```bash
-git switch -c task/<N> main               # or feature/<N>
+git fetch origin
+git switch -c task/<N> origin/main         # or feature/<N>
 ```
 
-For a bug, start from the reproduction branch when it exists so the failing
-test is carried forward:
+For a bug, start from the reproduction branch so the failing test is
+carried forward:
 
 ```bash
-git fetch origin bug/<N>-repro && git switch -c bug/<N> origin/bug/<N>-repro
+git switch -c bug/<N> origin/bug/<N>-repro
+```
+
+If `origin/<kind>/<N>` already exists, someone was here before (step 2a):
+branch from it, and if the local name is taken by another worktree, work
+under a temporary name and push to the real one:
+
+```bash
+git switch -c <kind>/<N> origin/<kind>/<N> || git switch -c wip/<N> origin/<kind>/<N>
+git push origin HEAD:<kind>/<N>
 ```
 
 ## 4. Build
@@ -89,7 +101,8 @@ Beyond that:
 - **feature**: walk every Completion condition and say how each was checked.
 
 Rule 12 applies to the PR body: 200 words plus the checklist, what changed
-and why, no narration of how you got there.
+and why, no narration of how you got there, and `*Written by an agent.*` as
+the last line.
 
 ```bash
 gh pr create --title "<type>(<scope>): <summary>" --body-file <file>
@@ -122,6 +135,8 @@ exactly one comment and release the claim:
 ### Blocked on
 
 <who or what, or "nothing">
+
+_Written by an agent._
 ```
 
 ```bash
