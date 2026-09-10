@@ -2648,6 +2648,35 @@ describe("IosSimctlDriver", () => {
 
         await expect(driver.advisories()).resolves.toEqual([]);
       });
+
+      it("reports the downloaded runtime assets that outlive `simctl runtime delete` and that nothing in Simlock can reclaim (#79)", async () => {
+        // `simctl runtime delete` only unregisters a runtime from CoreSimulator: its ~7.5 GiB
+        // asset bundle stays in mobileassetd's store, tagged `NeverCollected`, on the same
+        // volume the download preflight measures. So the bytes stay spent and CoreSimulator can
+        // re-register the runtime from them later. The catalog here installs 18.4 and 26.5 while
+        // the store still holds two builds nobody deleted the assets for.
+        const filesystem = new MemoryFilesystem();
+        for (const [bundle, simulatorVersion, build] of [
+          ["a1.asset", "18.4", "22E238"],
+          ["b2.asset", "26.5", "23F79"],
+          ["c3.asset", "18.6", "22G86"],
+          ["d4.asset", "26.3", "23D60"],
+        ] as const) {
+          await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/${bundle}`);
+          await filesystem.writeFileAtomic(
+            `${IOS_RUNTIME_ASSET_ROOT}/${bundle}/Info.plist`,
+            assetInfoPlist(simulatorVersion, build),
+          );
+        }
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        await expect(driver.advisories()).resolves.toEqual([
+          {
+            code: "runtime-cache-unreclaimable",
+            message: expect.stringContaining("18.6"),
+          },
+        ]);
+      });
     });
   });
 });
@@ -2789,4 +2818,33 @@ function scriptedListRunner(): ScriptedProcessRunner {
       result: { code: 0, stderr: "", stdout: listFixture },
     },
   ]);
+}
+
+/**
+ * Where macOS keeps the simulator runtimes `xcodebuild -downloadPlatform` fetches. Spelled out
+ * here rather than imported: no driver code knows about this path yet, and a test that failed to
+ * compile would prove nothing (#79).
+ */
+const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
+
+/**
+ * mobileassetd's own metadata for one downloaded simulator runtime, cut down to the keys that
+ * identify it. `NeverCollected` is verbatim from a real bundle on macOS 26.6.1 / Xcode 27: the
+ * store is told not to reclaim these, which is why deleting the runtime does not shrink it.
+ */
+function assetInfoPlist(simulatorVersion: string, build: string): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<plist version="1.0">',
+    "<dict>",
+    "  <key>MobileAssetProperties</key>",
+    "  <dict>",
+    "    <key>__AssetDefaultGarbageCollectionBehavior</key><string>NeverCollected</string>",
+    `    <key>Build</key><string>${build}</string>`,
+    `    <key>SimulatorVersion</key><string>${simulatorVersion}</string>`,
+    "  </dict>",
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
 }
