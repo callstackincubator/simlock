@@ -18,6 +18,14 @@ Status values:
   toward it should treat the documentation as the specification.
 - **Superseded by NNNN** — no longer binding; read the replacement.
 
+An ADR's status follows the feature that produced it, per
+[agent-rules/delivery.md](../agent-rules/delivery.md): it is *Proposed*
+while the feature is still `feature:spec`, becomes *Accepted — not yet
+implemented* when the feature leaves that state, and becomes *Accepted*
+when the feature closes. An ADR that is *Accepted — not yet implemented*
+with no open feature behind it is a gap: either the feature is missing or
+the status is stale.
+
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted |
