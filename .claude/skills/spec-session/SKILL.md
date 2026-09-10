@@ -60,7 +60,9 @@ interview for the business sections of `docs/internal/templates/feature.md`, the
 
 ```bash
 gh issue create --title "<title>" --label feature:spec --body-file <file>
-gh issue comment <request> --body "Being specified in #<new>. This issue stays open until that feature ships."
+gh issue comment <request> --body "Being specified in #<new>. This issue stays open until that feature ships.
+
+*Written by an agent.*"
 ```
 
 The new body's first line is `Request: #<request>`.
@@ -101,14 +103,26 @@ Do not tick any task's approval box. That is the maintainer's click.
 
 **`revise`**: only the reconcile step plus whatever amendments it produced.
 
+Write the spec the way rule 12 asks for everything else: short sentences,
+common words, one idea per sentence. A spec is read by an agent that will
+build exactly what it says, so every sentence that does not constrain the
+build is a sentence to cut.
+
 ## 4. Write back and leave a marker
+
+If a person is present in this session, show the new body first and wait for a
+yes before posting. Running unattended, post directly.
 
 Edit the body in place, keeping every section that already existed:
 
 ```bash
 gh issue edit <N> --body-file <file>
-gh issue comment <N> --body "Spec updated: <which sections were added or changed, one line>."
+gh issue comment <N> --body "Spec updated: <which sections were added or changed, one line>.
+
+*Written by an agent.*"
 ```
 
-Never set `feature:ready`. Never post the spec, or a summary of it, as a
+Issue bodies you create end with `*Written by an agent.*` too; the spec
+sections above it are what the maintainer approved, the line just says who
+typed them. Never set `feature:ready`. Never post the spec, or a summary of it, as a
 comment. Never edit a `request:new` or `bug:*` body.

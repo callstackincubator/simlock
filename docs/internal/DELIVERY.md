@@ -48,7 +48,10 @@ request, closed — not from a label. The branch for issue `<n>` is always
    `bug:triage` on its own; two weeks of silence closes it.
 5. The maintainer reads the report. Agree: add `bug:ready`. Disagree: reply
    with what is wrong and re-add `bug:triage`; the next agent starts from
-   that reply.
+   that reply. When the report says the bug is a gap rather than a defect,
+   `bug:ready` also accepts the shape the report proposes — the advisory
+   code, the message, the field. To reject the shape but keep the
+   reproduction, reply and re-add `bug:triage`.
 6. An agent running `deliver` claims the `bug:ready` issue, creates `bug/<n>`
    from the repro branch, and opens a PR that closes the issue. The triage test is now
    the regression test. Merge closes the bug.
@@ -113,6 +116,13 @@ of the work, never a change to the spec; if the work showed the spec is
 wrong, the handoff says so and the maintainer runs a revise spec session.
 Agents do not post progress updates, only handoffs, so the one comment that
 matters is easy to find.
+
+Everything an agent writes on an issue or a PR — report, handoff, spec, PR
+body — is short and plain: conclusion first, short sentences, common words,
+evidence in code blocks, nothing that does not change the reader's next
+decision. Each has a word budget in the rule, and each ends with the line
+`*Written by an agent.*`, because agents post under a maintainer's account
+and readers and automation need to tell the two apart.
 
 ## What is automated and what is not
 

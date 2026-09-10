@@ -103,10 +103,17 @@ is open, done means closed as completed.
    matter what anyone says in a comment.
 
 8. **Triage produces a report, not a fix.** An agent working `bug:triage`
-   reproduces the bug as a failing test whose title states the claim,
-   finds the root cause, and posts one comment with exactly these sections:
-   *Reproduction*, *Root cause* (with file and line), *Simplest fix*,
-   *Alternatives rejected*, *Risk*. It pushes the failing test to a
+   reproduces the bug as a failing test whose title states the claim the
+   test proves, finds the root cause, and posts one comment with exactly
+   these sections: *Reproduction*, *Root cause* (with file and line),
+   *Simplest fix*, *Alternatives rejected* (at most three, one line each),
+   *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
+   (Simlock does the wrong thing) or a gap (Simlock does nothing wrong and
+   something is missing); for a gap the test's expectation is a proposal
+   and the report says so; `bug:ready` on a gap accepts that proposal. A
+   separate problem found on the way is opened as
+   its own `bug:new` issue and listed under Side findings, not described in
+   the report. It pushes the failing test to a
    `bug/<number>-repro` branch and opens no pull request. It then unassigns
    itself. If it cannot reproduce, it moves the issue to `bug:needs-info`,
    says exactly what is missing, and unassigns itself.
@@ -133,6 +140,28 @@ is open, done means closed as completed.
     can name its branch without looking; given a branch you can name its
     issue by reading the second path segment. A PR from such a branch must
     close that issue and no other.
+
+12. **Everything an agent writes on an issue or a PR is short and plain.**
+    Lead with the conclusion. Short sentences, common words, no filler, no
+    narration of what the agent did or considered. Evidence goes in a code
+    block or a link, never in prose. Cut anything that does not change the
+    reader's next decision. Budgets, counted outside code blocks: a triage
+    report 300 words, a handoff 150, a PR body 200 plus its checklist, a
+    "Spec updated" comment one line. Text over budget is cut before it is
+    posted, not excused after. Do not restate the issue body: confirm or
+    correct what it says, then add only what is new. Every comment, issue
+    body, and PR body an agent writes ends with the line
+    `*Written by an agent.*`, those exact characters — people and automation
+    use it to tell agent text from a person's, since agents post under a
+    maintainer's account.
+
+13. **Assume every agent is in a worktree.** Several agents share one clone
+    through `git worktree`, so a branch may already be checked out somewhere
+    else and `git switch` to it will fail. Create branches in whatever
+    checkout you have, push them, and treat `origin/<branch>` as the truth;
+    to continue a branch another checkout holds, branch from
+    `origin/<branch>` rather than switching to it. Nothing depends on which
+    worktree a branch was made in.
 
 ## Procedures
 
