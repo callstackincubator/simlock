@@ -121,7 +121,8 @@ that are mechanical: adding a state label removes the previous one, so every
 transition is a single add; `task:draft` becomes `task:ready` when approved,
 specified and unblocked; a reporter's reply moves `bug:needs-info` back to
 `bug:triage`; a silent `bug:needs-info` closes after two weeks; a feature
-whose last sub-issue closed gets the completion-conditions note. The repo's
+whose last sub-issue closed gets the completion-conditions note; a PR from a
+`<kind>/<n>` branch must close `#<n>` and nothing else. The repo's
 skills — `spec-session`, `triage-bug`, `deliver` — handle the transitions an
 agent makes as part of its own procedure.
 

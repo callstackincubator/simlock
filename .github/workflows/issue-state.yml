@@ -1,0 +1,227 @@
+name: Issue state
+
+# The one place that enforces docs/agent-rules/delivery.md mechanically:
+# - one <kind>:<state> label per issue (adding the next label drops the old);
+# - task:draft becomes task:ready when approved, specified, and unblocked;
+# - a reporter's reply moves bug:needs-info back to bug:triage;
+# - a feature whose last sub-issue closed gets a completion-conditions note;
+# - bug:needs-info with no activity for two weeks closes as not planned;
+# - a PR from a <kind>/<n> branch must close issue <n> and no other.
+# Actions taken with the workflow token do not trigger this workflow again,
+# so every job removes the label it replaces itself.
+
+on:
+  issues:
+    types: [labeled, edited, closed]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, edited, synchronize]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: issue-state-${{ github.event.issue.number || github.event.pull_request.number || 'schedule' }}
+  cancel-in-progress: false
+
+env:
+  STATE_LABEL: "^(request|bug|feature|task):"
+
+jobs:
+  exclusive-label:
+    name: One state label per issue
+    if: github.event_name == 'issues' && github.event.action == 'labeled'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const re = new RegExp(process.env.STATE_LABEL);
+            const added = context.payload.label.name;
+            if (!re.test(added)) return;
+            const issue = context.payload.issue;
+            for (const label of issue.labels.map((l) => l.name)) {
+              if (label === added || !re.test(label)) continue;
+              await github.rest.issues.removeLabel({
+                ...context.repo, issue_number: issue.number, name: label,
+              });
+              core.info(`#${issue.number}: ${label} replaced by ${added}`);
+            }
+
+  task-ready:
+    name: Promote task:draft to task:ready
+    if: >-
+      github.event_name == 'issues' &&
+      (github.event.action == 'closed' ||
+       (github.event.action == 'edited' && github.event.changes.body != null))
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const hasLabel = (issue, name) => issue.labels.some((l) => l.name === name);
+            const section = (body, heading) => {
+              const m = body.match(new RegExp(`^## ${heading}\\s*$([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, "m"));
+              return m ? m[1] : null;
+            };
+            const dependencies = (body) =>
+              [...(section(body, "Depends on") ?? "").matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
+            const specified = (body) => {
+              const spec = section(body, "Technical spec");
+              if (spec === null) return false;
+              return spec
+                .replace(/<!--[\s\S]*?-->/g, "")
+                .split("\n")
+                .some((line) => line.trim() !== "" && !line.startsWith("#") && line.trim() !== "- ...");
+            };
+            const approved = (body) => /^- \[x\] Approved for delivery/im.test(body);
+
+            const candidates = [];
+            if (context.payload.action === "edited") {
+              if (hasLabel(context.payload.issue, "task:draft")) candidates.push(context.payload.issue);
+            } else {
+              const closed = context.payload.issue.number;
+              const drafts = await github.paginate(github.rest.issues.listForRepo, {
+                ...context.repo, state: "open", labels: "task:draft", per_page: 100,
+              });
+              for (const issue of drafts) {
+                if (dependencies(issue.body ?? "").includes(closed)) candidates.push(issue);
+              }
+            }
+
+            for (const issue of candidates) {
+              const body = issue.body ?? "";
+              const why = [];
+              if (!approved(body)) why.push("approval box not ticked");
+              if (!specified(body)) why.push("Technical spec section empty");
+              const open = [];
+              for (const n of dependencies(body)) {
+                const dep = await github.rest.issues.get({ ...context.repo, issue_number: n });
+                if (dep.data.state !== "closed") open.push(`#${n}`);
+              }
+              if (open.length) why.push(`waiting on ${open.join(", ")}`);
+              if (why.length) {
+                core.info(`#${issue.number} stays task:draft: ${why.join("; ")}`);
+                continue;
+              }
+              await github.rest.issues.addLabels({
+                ...context.repo, issue_number: issue.number, labels: ["task:ready"],
+              });
+              await github.rest.issues.removeLabel({
+                ...context.repo, issue_number: issue.number, name: "task:draft",
+              });
+              const deps = dependencies(body).map((n) => `#${n}`);
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `Now \`task:ready\`: approved, technical spec present${deps.length ? `, ${deps.join(", ")} closed` : ""}.`,
+              });
+              core.info(`#${issue.number}: task:draft -> task:ready`);
+            }
+
+  needs-info-reply:
+    name: Reporter replied on bug:needs-info
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.login == github.event.issue.user.login &&
+      contains(github.event.issue.labels.*.name, 'bug:needs-info')
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const issue_number = context.payload.issue.number;
+            await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["bug:triage"] });
+            await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "bug:needs-info" });
+            core.info(`#${issue_number}: bug:needs-info -> bug:triage`);
+
+  feature-verify:
+    name: Last sub-issue closed
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { repository } = await github.graphql(`
+              query($owner:String!,$repo:String!,$number:Int!){
+                repository(owner:$owner,name:$repo){ issue(number:$number){
+                  parent{ number state labels(first:10){nodes{name}} subIssuesSummary{ total completed } }
+                }}}`, { ...context.repo, number: context.payload.issue.number });
+            const parent = repository.issue.parent;
+            if (!parent || parent.state !== "OPEN") return;
+            if (!parent.labels.nodes.some((l) => l.name === "feature:planned")) return;
+            const { total, completed } = parent.subIssuesSummary;
+            if (completed < total) return;
+            await github.rest.issues.createComment({
+              ...context.repo, issue_number: parent.number,
+              body: `All ${total} sub-issues are closed. Completion conditions are now due: an agent proves each one against \`main\` and reports here, then the maintainer closes this feature and flips its ADRs to *Accepted*.`,
+            });
+            core.info(`#${parent.number}: completion conditions due`);
+
+  stale-needs-info:
+    name: Close silent bug:needs-info
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open label:bug:needs-info updated:<${cutoff}`;
+            const found = await github.paginate(github.rest.search.issuesAndPullRequests, { q, per_page: 100 });
+            for (const issue of found) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: "Closing: no reply in two weeks. Comment with the missing information and it reopens for triage.",
+              });
+              await github.rest.issues.update({
+                ...context.repo, issue_number: issue.number, state: "closed", state_reason: "not_planned",
+              });
+              core.info(`#${issue.number}: closed as not planned (stale bug:needs-info)`);
+            }
+
+  branch-matches-issue:
+    name: Branch name closes its issue
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const m = pr.head.ref.match(/^(bug|feature|task)\/(\d+)$/);
+            if (!m) {
+              core.info(`${pr.head.ref} is not a <kind>/<n> branch; nothing to check`);
+              return;
+            }
+            const expected = Number(m[2]);
+            const closes = [...(pr.body ?? "").matchAll(/\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi)]
+              .map((x) => Number(x[1]));
+            if (!closes.includes(expected)) {
+              core.setFailed(`Branch ${pr.head.ref} must close #${expected}: add "Closes #${expected}" to the PR body.`);
+              return;
+            }
+            const others = closes.filter((n) => n !== expected);
+            if (others.length) {
+              core.setFailed(`Branch ${pr.head.ref} closes #${expected} but also ${others.map((n) => `#${n}`).join(", ")}; one branch closes one issue.`);
+            }
