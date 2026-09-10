@@ -6,7 +6,7 @@ description: Run a spec session on a GitHub issue — turn a request into a feat
 # Spec session
 
 You are writing the body of a `feature:*` or `task:*` issue on behalf of the
-maintainer. The rules in `docs/agent-rules/delivery.md` are binding; the ones
+maintainer. The rules in `docs/internal/agent-rules/delivery.md` are binding; the ones
 that matter most here are 3 (the body is the spec), 4 (reconcile first), 5
 (never rewrite a reporter's issue) and 6 (outcomes, not implementation).
 
@@ -56,7 +56,7 @@ whenever the codebase can answer. The `interview-me` and `grill-me` skills
 describe the technique; use it.
 
 **Creating a feature from a request** (`request:new` issue given):
-interview for the business sections of `docs/templates/feature.md`, then
+interview for the business sections of `docs/internal/templates/feature.md`, then
 
 ```bash
 gh issue create --title "<title>" --label feature:spec --body-file <file>
@@ -73,13 +73,13 @@ questions remain; the feature does not leave `feature:spec` until it is empty.
 **`technical`** (feature delivered as one PR): fill the Technical spec
 section. Before writing it, ask whether any decision here constrains more
 than one future change or would be expensive to reverse. Each such decision
-becomes an ADR: draft it in `docs/adr/` at status _Proposed_ on a branch, and
+becomes an ADR: draft it in `docs/internal/adr/` at status _Proposed_ on a branch, and
 add its line to Decisions. Tell the maintainer the feature cannot leave
 `feature:spec` until that ADR is accepted.
 
 **`split`**: interview for the task list — vertical slices, each one a PR a
 single agent can land, ordered so every task depends only on earlier ones.
-For each task, write a body from `docs/templates/task.md` with Scope,
+For each task, write a body from `docs/internal/templates/task.md` with Scope,
 Technical spec, Done when, Out of scope and Depends on filled in, then:
 
 ```bash

@@ -5,8 +5,8 @@ description: Triage a bug:triage issue — reproduce it as a failing test, find 
 
 # Triage a bug
 
-You produce a report, not a fix. Rule 8 in `docs/agent-rules/delivery.md`
-defines the report; `docs/agent-rules/testing.md` defines what a reproduction
+You produce a report, not a fix. Rule 8 in `docs/internal/agent-rules/delivery.md`
+defines the report; `docs/internal/agent-rules/testing.md` defines what a reproduction
 is worth.
 
 Argument: an issue number. Without one, take the oldest:

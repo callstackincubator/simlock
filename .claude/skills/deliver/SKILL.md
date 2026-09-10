@@ -5,7 +5,7 @@ description: Claim and implement a ready issue (task:ready, bug:ready, or featur
 
 # Deliver a ready issue
 
-Rules 1, 2, 3 and 9 in `docs/agent-rules/delivery.md` govern this skill: act
+Rules 1, 2, 3 and 9 in `docs/internal/agent-rules/delivery.md` govern this skill: act
 only on ready labels, the assignee is the claim, build from the body, done is
 defined per kind.
 
@@ -68,9 +68,9 @@ git fetch origin bug/<N>-repro && git switch -c bug/<N> origin/bug/<N>-repro
 ## 4. Build
 
 Implement the Technical spec. Every test title under Tests is a claim to
-prove, and `docs/agent-rules/testing.md` says what proving means. Reread the
+prove, and `docs/internal/agent-rules/testing.md` says what proving means. Reread the
 files named under Rules in play before touching the code they cover. New or
-changed events need their `docs/EVENTS.md` entry in the same change.
+changed events need their entries in both `docs/EVENTS.md` and `docs/internal/EVENTS.md` in the same change.
 
 Run `pnpm check` before opening the PR.
 
