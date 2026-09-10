@@ -38,15 +38,19 @@ reading it.
 
 ## 3. Branch
 
+The branch name is `<kind>/<N>` where `<kind>` is the label prefix, nothing
+appended (rule 11). If it already exists on the remote, someone was here
+before: check out that branch and read its log before doing anything else.
+
 ```bash
-git switch -c task/<N>-<slug> main        # or feature/<N>-<slug>
+git switch -c task/<N> main               # or feature/<N>
 ```
 
 For a bug, start from the reproduction branch when it exists so the failing
 test is carried forward:
 
 ```bash
-git fetch origin bug/<N>-repro && git switch -c bug/<N>-<slug> origin/bug/<N>-repro
+git fetch origin bug/<N>-repro && git switch -c bug/<N> origin/bug/<N>-repro
 ```
 
 ## 4. Build
@@ -64,7 +68,9 @@ stop. The maintainer reopens a spec session.
 
 ## 5. Open the PR
 
-The PR body must contain `Closes #<N>`. Beyond that:
+The PR body must contain `Closes #<N>` and nothing that closes any other
+issue; CI checks that the branch name and the closing reference agree.
+Beyond that:
 
 - **task**: walk every line of Done when and say how each was checked.
 - **bug**: name the regression test; it is the triage test, now passing.

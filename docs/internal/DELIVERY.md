@@ -16,7 +16,8 @@ comment changes nothing until a spec session folds it into the body. A
 reporter's issue is never rewritten: bugs are triaged in a comment, and a
 feature that came from a request is a new issue the maintainer owns. What
 happens after `ready` is read from GitHub itself — assignee, linked pull
-request, closed — not from a label.
+request, closed — not from a label. The branch for issue `<n>` is always
+`<kind>/<n>`, so an issue names its branch and a branch names its issue.
 
 | Label             | Meaning                                                  |
 | ----------------- | -------------------------------------------------------- |
@@ -48,8 +49,8 @@ request, closed — not from a label.
 5. The maintainer reads the report. Agree: add `bug:ready`. Disagree: reply
    with what is wrong and re-add `bug:triage`; the next agent starts from
    that reply.
-6. An agent running `deliver` claims the `bug:ready` issue, branches from the
-   repro branch, and opens a PR that closes the issue. The triage test is now
+6. An agent running `deliver` claims the `bug:ready` issue, creates `bug/<n>`
+   from the repro branch, and opens a PR that closes the issue. The triage test is now
    the regression test. Merge closes the bug.
 
 ## A feature, delivered as one PR
@@ -76,8 +77,8 @@ request, closed — not from a label.
 5. Once Open questions is empty and every linked ADR is accepted, the
    maintainer adds `feature:ready`. The ADRs move to _Accepted — not yet
    implemented_.
-6. An agent running `deliver` claims it and opens a PR whose body walks every
-   completion condition. Merge closes the feature, and its ADRs flip to
+6. An agent running `deliver` claims it, works on `feature/<n>`, and opens a
+   PR whose body walks every completion condition. Merge closes the feature, and its ADRs flip to
    _Accepted_.
 
 ## A feature, split into tasks
@@ -94,7 +95,7 @@ of a Technical spec section on the feature, it produces sub-issues.
    time. From then on the automation promotes a task to `task:ready` the
    moment its box is ticked, its Technical spec has content, and every issue
    under Depends on is closed. Nobody re-reads the dependency graph by hand.
-7. Agents claim `task:ready` issues one PR each. As tasks close, the ones they
+7. Agents claim `task:ready` issues one PR each, on `task/<n>`. As tasks close, the ones they
    unblocked become ready on their own.
 8. When the last sub-issue closes, the automation comments on the feature
    that completion conditions are due. An agent proves them against `main`,

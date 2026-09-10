@@ -126,6 +126,14 @@ is open, done means closed as completed.
     feature closes. A feature does not leave `feature:spec` while any ADR it
     links is still *Proposed*.
 
+11. **The branch is named from the issue, and only from the issue.** Work on
+    issue `<n>` of kind `<kind>` happens on `<kind>/<n>` — `task/118`,
+    `bug/79`, `feature/88` — and a bug's reproduction lives on
+    `bug/<n>-repro`. No slug, no author prefix, no date. Given an issue you
+    can name its branch without looking; given a branch you can name its
+    issue by reading the second path segment. A PR from such a branch must
+    close that issue and no other.
+
 ## Procedures
 
 **Claiming work.** Find it, claim it, branch, and finish with a PR that
@@ -134,7 +142,7 @@ closes the issue:
 ```bash
 gh issue list --search 'label:bug:ready,feature:ready,task:ready no:assignee'
 gh issue edit <n> --add-assignee @me
-git switch -c task/<n>-<slug>        # or bug/<n>-<slug>, feature/<n>-<slug>
+git switch -c task/<n>              # or bug/<n>, feature/<n>
 ```
 
 The PR body contains `Closes #<n>`. For a bug, branch from `bug/<n>-repro`
