@@ -104,7 +104,10 @@ The PR body must contain `Closes #<N>` and nothing that closes any other
 issue; CI checks that the branch name and the closing reference agree.
 Beyond that:
 
-- **task**: walk every line of Done when and say how each was checked.
+- **task**: walk every line of Done when and say how each was checked. If
+  no other sub-issue of the parent is still open, also walk the parent's
+  Completion conditions: verification is part of delivery, and this PR is
+  the last one.
 - **bug**: name the regression test; it is the triage test, now passing.
 - **feature**: walk every Completion condition and say how each was checked.
 
@@ -151,6 +154,14 @@ _Written by an agent._
 git push -u origin <kind>/<N>
 gh issue comment <N> --body-file <file>
 gh issue edit <N> --remove-assignee @me
+```
+
+If Blocked on is anything but "nothing", also move the issue out of the
+ready state so the next agent does not hit the same wall. The maintainer
+re-adds `<kind>:ready` once the blocker is gone:
+
+```bash
+gh issue edit <N> --add-label <kind>:blocked --remove-label <kind>:ready
 ```
 
 A handoff is state, never spec, and rule 12 applies: 150 words, plain
