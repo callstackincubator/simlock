@@ -88,6 +88,9 @@ Beyond that:
 - **bug**: name the regression test; it is the triage test, now passing.
 - **feature**: walk every Completion condition and say how each was checked.
 
+Rule 12 applies to the PR body: 200 words plus the checklist, what changed
+and why, no narration of how you got there.
+
 ```bash
 gh pr create --title "<type>(<scope>): <summary>" --body-file <file>
 ```
@@ -127,5 +130,5 @@ gh issue comment <N> --body-file <file>
 gh issue edit <N> --remove-assignee @me
 ```
 
-A handoff is state, never spec. Do not post progress updates at any other
-time.
+A handoff is state, never spec, and rule 12 applies: 150 words, plain
+words, conclusion first. Do not post progress updates at any other time.

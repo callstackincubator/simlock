@@ -34,15 +34,28 @@ git fetch origin bug/<N>-repro 2>/dev/null && git log --oneline origin/bug/<N>-r
 
 ## 2. Reproduce
 
-Read the body and the comment thread. Write a test whose title is the claim
-the bug makes, in the project that can prove it — a unit test when the
-behaviour is in-process, an e2e test when it needs a daemon. The test must
-fail on a named assertion, not a timeout. Run it and keep the failing output.
+Read the body and the comment thread. Write a test in the project that can
+prove it — a unit test when the behaviour is in-process, an e2e test when it
+needs a daemon. The test must fail on a named assertion, not a timeout. Run
+it and keep the failing output.
 
-Do not run the slow e2e lane or anything that needs real simulators or
-emulators without asking the maintainer first. If reproduction needs it, ask;
-if the answer is no, say so in the report and go as far as the fake driver
-allows.
+The title is the claim the test proves: the bug's claim narrowed to what
+this process can observe. What the OS or a tool outside Simlock does is
+evidence for the report, never part of the title. "Reports assets that
+outlive `simctl runtime delete`" claims a delete the test never runs;
+"reports downloaded runtime assets for runtimes not in the catalog" is what
+the body shows.
+
+Assert the whole claim. Every case the fixture sets up appears in the
+expectation, so a fix that does less than the report proposes fails the
+test. Two orphan builds in the fixture means two builds in the assertion.
+
+Read-only inspection of the host — listing a directory, reading a plist,
+running `df` — is fine and often the fastest evidence. Say what you read.
+Do not run the slow e2e lane or anything that starts real simulators or
+emulators without asking the maintainer first. If reproduction needs it,
+ask; if the answer is no, say so in the report and go as far as the fake
+driver allows.
 
 If you cannot reproduce after a genuine attempt:
 
@@ -57,9 +70,19 @@ and stop.
 
 Follow the failing assertion back to the line that makes it fail. Name the
 file and line. Distinguish the root cause from the place the symptom shows
-up. If the cause is a decision rather than a defect — the code does what an
-ADR says and the ADR is wrong — say so; that bug becomes a feature with a
-superseding ADR, not a fix.
+up.
+
+Say first which of three things this is:
+
+- **Defect**: Simlock does the wrong thing. The test's expectation is the
+  right behaviour.
+- **Gap**: Simlock does nothing wrong and something is missing. The test's
+  expectation is a proposal — say so in Reproduction, and put the shape it
+  pins (a code, a message, a field) under Simplest fix so the maintainer can
+  reject the shape without rejecting the reproduction. A gap that needs more
+  than one PR is a feature: recommend a spec session and stop there.
+- **Decision**: the code does what an ADR says and the ADR is wrong. Say so;
+  that bug becomes a feature with a superseding ADR, not a fix.
 
 ## 4. Push the reproduction
 
@@ -72,7 +95,19 @@ git push -u origin bug/<N>-repro
 
 Only the test goes on this branch. No fix, no pull request.
 
-## 5. Report and release
+## 5. Side findings
+
+A separate problem found on the way — a stale doc, a wrong error reason,
+another bug — is its own issue, not a paragraph in the report:
+
+```bash
+gh issue create --label bug:new --title "<what is wrong, in one line>" --body "<what you saw, file:line, found while triaging #<N>>"
+```
+
+List each one as a link under Side findings. The maintainer decides what
+happens to it.
+
+## 6. Report and release
 
 Post one comment with exactly these sections, then unassign:
 
@@ -96,7 +131,16 @@ Post one comment with exactly these sections, then unassign:
 ## Risk
 
 <what else the fix touches; what a reviewer should check>
+
+## Side findings
+
+<one link per issue opened, or omit the section>
 ```
+
+The report exists for one decision: `bug:ready` or not. Rule 12 applies:
+300 words outside code blocks, conclusion first, short sentences, plain
+words, evidence in code blocks. Root cause is one paragraph. If it runs
+long, cut what does not change the decision.
 
 ```bash
 gh issue edit <N> --remove-assignee @me

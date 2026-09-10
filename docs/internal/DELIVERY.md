@@ -114,6 +114,11 @@ wrong, the handoff says so and the maintainer runs a revise spec session.
 Agents do not post progress updates, only handoffs, so the one comment that
 matters is easy to find.
 
+Everything an agent writes on an issue or a PR — report, handoff, spec, PR
+body — is short and plain: conclusion first, short sentences, common words,
+evidence in code blocks, nothing that does not change the reader's next
+decision. Each has a word budget in the rule.
+
 ## What is automated and what is not
 
 The workflow in `.github/workflows/issue-state.yml` handles the transitions

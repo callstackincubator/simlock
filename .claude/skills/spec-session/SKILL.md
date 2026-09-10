@@ -101,6 +101,11 @@ Do not tick any task's approval box. That is the maintainer's click.
 
 **`revise`**: only the reconcile step plus whatever amendments it produced.
 
+Write the spec the way rule 12 asks for everything else: short sentences,
+common words, one idea per sentence. A spec is read by an agent that will
+build exactly what it says, so every sentence that does not constrain the
+build is a sentence to cut.
+
 ## 4. Write back and leave a marker
 
 Edit the body in place, keeping every section that already existed:
