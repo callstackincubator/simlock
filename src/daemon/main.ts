@@ -159,6 +159,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     filesystem,
     idGenerator,
+    leaseIdentity: config.lease.identity,
     statePath,
   });
   // Before discovery, because every root a driver validates is checked against it, and it

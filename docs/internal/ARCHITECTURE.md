@@ -879,11 +879,18 @@ One shared lifecycle for both platforms; drivers map onto it, never extend it:
 
 ```
 provisioning → ready → leased → reclaiming → ready/shutdown → deleted
-      ↓                              ↓
-      └──────────→ quarantined ←─────┘
+      ↓                              ↓               ↓
+      └──────────→ quarantined ←─────┴───────────────┘
                         ↓
                  ready/shutdown/deleted
 ```
+
+A device created under `lease.identity: fresh` serves one lease. Its lease end
+skips the purge: `reclaiming → shutdown` (driver shutdown), then
+`shutdown → deleted` (driver destroy). `mayBeGranted` in `domain.ts` keeps a
+spent fresh device out of every grant path, including in the window between
+those two commits. A failed delete enters quarantine from `shutdown`, and
+quarantine retries the delete, never a reclaim.
 
 All transitions go through the core. `simlock status` reads identically for
 iOS and Android because of this.
@@ -905,9 +912,10 @@ helpers select targets by exact state (`state === "ready"`), never by
 excluding known-bad states. Anything that needs "in the registry, counts
 against capacity, not grantable" is expressed by adding its own entry into
 `quarantined`, not by inventing a second state: the release-time purge
-failure (`reclaiming → quarantined`) and the stalled-transition timeout
-(`provisioning → quarantined`, both owned by `QuarantineCoordinator`) are its
-two entries. The latter fires from `simlock doctor`'s `stalled-transition`
+failure (`reclaiming → quarantined`), a fresh device's failed delete
+(`shutdown → quarantined`), and the stalled-transition timeout
+(`provisioning → quarantined`, all owned by `QuarantineCoordinator`) are its
+three entries. The latter fires from `simlock doctor`'s `stalled-transition`
 finding — a `provisioning`/`reclaiming` device whose time in that state has
 outrun a driver-derived threshold, meaning the driver call meant to resolve
 it never did and the registry's view has diverged from the driver's. Safer

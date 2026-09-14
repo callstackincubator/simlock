@@ -28,6 +28,7 @@ describe("leaseGrantSchema's device projection", () => {
     "quarantinedAt",
     "quarantineAttempts",
     "quarantineNextRetryAt",
+    "leaseIdentity",
     "transitionAgeMs",
   ] as const;
 
@@ -51,6 +52,7 @@ describe("leaseGrantSchema's device projection", () => {
       quarantineNextRetryAt: 60,
       address: "127.0.0.1:1234",
       featureProfile: "reduced",
+      leaseIdentity: "fresh",
       transitionAgeMs: 70,
     };
   }
@@ -137,6 +139,7 @@ describe("statusDeviceSchema's device projection", () => {
       quarantineNextRetryAt: 60,
       address: "127.0.0.1:1234",
       featureProfile: "reduced",
+      leaseIdentity: "fresh",
       transitionAgeMs: 70,
     };
   }

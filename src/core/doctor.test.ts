@@ -1871,7 +1871,11 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       stableObservations: 2,
     },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
-    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
+    lease: {
+      defaultTtlMs: 60_000,
+      maxTtlMs: 3_600_000,
+      identity: { ios: "reusable", android: "reusable" },
+    },
     capacity: {
       strategy: "resource",
       config: {

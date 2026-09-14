@@ -11,6 +11,7 @@ import {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 import { resourceOptionValidators } from "./capacity/strategies/resource/index.js";
+import type { LeaseIdentity } from "./domain.js";
 import {
   booleanValue,
   ConfigError,
@@ -142,6 +143,15 @@ export interface Config {
     /** The largest TTL a request or a renew may ask for; more is `BAD_REQUEST`, never a
      * silent clamp, so a caller is never left believing it has more time than it does. */
     readonly maxTtlMs: number;
+    /**
+     * The lease-identity policy per platform (see `LeaseIdentity`), read by key for a new
+     * device's own platform when it is registered. Daemon configuration only: no lease request
+     * can change it, and a device keeps the value it was created under after this changes.
+     */
+    readonly identity: {
+      readonly ios: LeaseIdentity;
+      readonly android: LeaseIdentity;
+    };
   };
   /**
    * ADR 0005 §19e. Platform-agnostic on purpose: it bounds the *daemon's* willingness to wait
@@ -567,6 +577,7 @@ function defaultConfig(
     lease: {
       defaultTtlMs: DEFAULT_LEASE_TTL_MS,
       maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
+      identity: { ios: "reusable", android: "reusable" },
     },
     exec: { timeoutMs: DEFAULT_EXEC_TIMEOUT_MS },
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
@@ -646,6 +657,7 @@ function validateConfigLayer(
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const DAEMON_MODES: readonly DaemonMode[] = ["worker", "gateway"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
+const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
 /**
  * The `capacity.config` validator is the selected strategy's own, so a strategy
@@ -692,6 +704,10 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     lease: objectValidator({
       defaultTtlMs: positiveNumber,
       maxTtlMs: positiveNumber,
+      identity: objectValidator({
+        ios: stringUnion(LEASE_IDENTITIES),
+        android: stringUnion(LEASE_IDENTITIES),
+      }),
     }),
     exec: objectValidator({ timeoutMs: positiveNumber }),
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),

@@ -43,7 +43,11 @@ const gatewayConfig = {
   http: { enabled: true, host: "127.0.0.1", port: 4700 },
   idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
   ios: { slim: { bootTimeoutMs: 1, enabled: false } },
-  lease: { defaultTtlMs: 900_000, maxTtlMs: 3_600_000 },
+  lease: {
+    defaultTtlMs: 900_000,
+    maxTtlMs: 3_600_000,
+    identity: { ios: "reusable" as const, android: "reusable" as const },
+  },
   log: { level: "info" as const, rotateBytes: 1 },
   mode: "gateway" as const,
   stalledTransition: { minimumThresholdMs: 1, thresholdMultiplier: 1 },

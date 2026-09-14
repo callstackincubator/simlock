@@ -4,6 +4,7 @@ import {
   type DeviceRecord,
   type DeviceSpec,
   type LeaseRecord,
+  mayBeGranted,
   type Platform,
   sameSpec,
 } from "./domain.js";
@@ -58,14 +59,18 @@ export class AcquisitionPlanner {
     const ready = snapshot.devices.find(
       (device) =>
         device.state === "ready" &&
+        mayBeGranted(device) &&
         !this.claims.isClaimed(device.id) &&
         sameSpec(device.spec, spec),
     );
     if (ready !== undefined) return { device: ready, kind: "grant-ready" };
 
+    // A spent fresh device sits `shutdown` between its lease-end shutdown commit and its
+    // delete; `mayBeGranted` is what keeps it from being booted for a new lease in that window.
     const shutdown = snapshot.devices.find(
       (device) =>
         device.state === "shutdown" &&
+        mayBeGranted(device) &&
         !this.claims.isClaimed(device.id) &&
         sameSpec(device.spec, spec),
     );

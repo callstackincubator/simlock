@@ -88,7 +88,11 @@ describe("loadConfig", () => {
         maxConcurrentRecoveries: 1,
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
-      lease: { defaultTtlMs: 15 * 60_000, maxTtlMs: 4 * 60 * 60_000 },
+      lease: {
+        defaultTtlMs: 15 * 60_000,
+        maxTtlMs: 4 * 60 * 60_000,
+        identity: { ios: "reusable", android: "reusable" },
+      },
       capacity: {
         strategy: "resource",
         config: {
@@ -358,6 +362,35 @@ describe("loadConfig", () => {
   });
 
   it.each([
+    [{ lease: { identity: { ios: "disposable" } } }, "lease.identity.ios"],
+    [{ lease: { identity: { android: true } } }, "lease.identity.android"],
+  ])(
+    "rejects a lease.identity value other than reusable or fresh, naming the key (%#)",
+    async (contents, path) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+      await expect(
+        loadConfig({ configPath, filesystem, systemStats: createStats() }),
+      ).rejects.toThrow(path);
+    },
+  );
+
+  it("reads lease.identity per platform and leaves the unset platform reusable", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { identity: { ios: "fresh" } } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(config.lease.identity).toEqual({ android: "reusable", ios: "fresh" });
+  });
+
+  it.each([
     [{ lease: { defaultTtlMs: 0 } }, "lease.defaultTtlMs"],
     [{ lease: { maxTtlMs: -1 } }, "lease.maxTtlMs"],
     [{ lease: { defaultTtlMs: "soon" } }, "lease.defaultTtlMs"],
@@ -420,7 +453,11 @@ describe("loadConfig", () => {
 
       expect(warn).toHaveBeenCalledWith(`Unknown config key: "lease.${retired}"`);
       // Not aliased onto anything: the new keys keep their own defaults.
-      expect(config.lease).toEqual({ defaultTtlMs: 15 * 60_000, maxTtlMs: 4 * 60 * 60_000 });
+      expect(config.lease).toEqual({
+        defaultTtlMs: 15 * 60_000,
+        identity: { android: "reusable", ios: "reusable" },
+        maxTtlMs: 4 * 60 * 60_000,
+      });
     },
   );
 

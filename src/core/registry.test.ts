@@ -58,6 +58,7 @@ describe("Registry", () => {
         driverData: { driverOnly: "value" },
         driverDeviceId: "driver_test",
         id: "dev_test",
+        leaseIdentity: "reusable",
         spec,
         state: "provisioning",
       },
@@ -118,6 +119,119 @@ describe("Registry", () => {
     });
 
     expect(registry.snapshot.devices).toMatchObject([{ id: "dev_legacy", state: "reclaiming" }]);
+  });
+
+  it("loads a registry written before leaseIdentity existed with every device reusable", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const legacy = (id: string, platform: "ios" | "android", state: string) => ({
+      createdAt: 500,
+      driverData: {},
+      driverDeviceId: `driver_${id}`,
+      id,
+      lastLeaseEndedAt: 900,
+      spec: { ...spec, platform },
+      state,
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [legacy("dev_ios", "ios", "shutdown"), legacy("dev_android", "android", "ready")],
+        leases: [],
+      }),
+    );
+
+    // Loaded under a config that says `fresh`: a record's policy comes from the record, and a
+    // record with none was created under the only policy there was.
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator: { generate: () => "new" },
+      leaseIdentity: { android: "fresh", ios: "fresh" },
+      statePath,
+    });
+
+    expect(registry.snapshot.devices.map((device) => device.leaseIdentity)).toEqual([
+      "reusable",
+      "reusable",
+    ]);
+  });
+
+  it("refuses to load a device record whose leaseIdentity is not a known policy", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [
+          {
+            createdAt: 500,
+            driverData: {},
+            driverDeviceId: "driver_odd",
+            id: "dev_odd",
+            leaseIdentity: "disposable",
+            spec,
+            state: "ready",
+          },
+        ],
+        leases: [],
+      }),
+    );
+
+    await expect(
+      Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem,
+        idGenerator: { generate: () => "new" },
+        statePath,
+      }),
+    ).rejects.toThrow("Invalid device record");
+  });
+
+  it("stamps each registered device with its own platform's policy and keeps it across a reload under another", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    let nextId = 1;
+    const idGenerator = { generate: () => `${nextId++}` };
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator,
+      leaseIdentity: { android: "reusable", ios: "fresh" },
+      statePath,
+    });
+    const ios = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_ios",
+      provisionDuration: 0,
+      spec,
+    });
+    const android = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_android",
+      provisionDuration: 0,
+      spec: { model: "Pixel 9", osVersion: "36", platform: "android" },
+    });
+
+    expect([ios.leaseIdentity, android.leaseIdentity]).toEqual(["fresh", "reusable"]);
+
+    const reloaded = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem,
+      idGenerator,
+      leaseIdentity: { android: "fresh", ios: "reusable" },
+      statePath,
+    });
+    expect(reloaded.snapshot.devices.map((device) => device.leaseIdentity)).toEqual([
+      "fresh",
+      "reusable",
+    ]);
   });
 
   it("preserves unknown persisted fields when saving a later mutation", async () => {
@@ -332,6 +446,41 @@ describe("Registry", () => {
     });
   });
 
+  it("enters quarantine from shutdown, a spent fresh device's failed-delete entry point", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      leaseIdentity: { android: "reusable", ios: "fresh" },
+      statePath,
+    });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+    await registry.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      requesterId: "agent-1",
+      ownerId: "agent-1",
+      ttlMs: 60_000,
+      ttlDeadline: 2_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.completeReclaimWithoutPurge(device.id);
+
+    const quarantined = await registry.enterQuarantine(device.id, 5_000);
+
+    expect(quarantined).toMatchObject({ quarantineNextRetryAt: 5_000, state: "quarantined" });
+  });
+
   it("refuses to quarantine a device that is still leased", async () => {
     // Quarantine is a post-release disposition: it is only ever entered from `reclaiming`, which
     // a device reaches by having its lease released. A leased device reaching it would mean
@@ -444,6 +593,7 @@ describe("Registry", () => {
       driverDeviceId: "driver_test",
       id: device.id,
       lastLeaseEndedAt: 1_000,
+      leaseIdentity: "reusable",
       spec,
       state: "ready",
     });
@@ -452,11 +602,11 @@ describe("Registry", () => {
     );
   });
 
-  it("abandons a quarantined device to deleted and emits device.deleted", async () => {
+  it("deletes a quarantined device and emits device.deleted with the caller's initiator", async () => {
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);
-    const events: string[] = [];
-    bus.subscribe("device.deleted", (envelope) => events.push(envelope.event));
+    const events: unknown[] = [];
+    bus.subscribe("device.deleted", (envelope) => events.push(envelope.payload));
     const registry = await Registry.load({
       clock,
       eventBus: bus,
@@ -484,10 +634,10 @@ describe("Registry", () => {
     await registry.beginRelease(lease.id);
     await registry.enterQuarantine(device.id, 5_000);
 
-    const abandoned = await registry.abandonQuarantine(device.id);
+    const deleted = await registry.deleteQuarantined(device.id, "lease-end");
 
-    expect(abandoned.state).toBe("deleted");
-    expect(events).toEqual(["device.deleted"]);
+    expect(deleted.state).toBe("deleted");
+    expect(events).toEqual([{ deviceId: device.id, initiator: "lease-end" }]);
   });
 
   it("rejects mutations for a device that is not registered", async () => {

@@ -42,7 +42,7 @@ const config: Config = {
       retryBackoffMultiplier: 2,
     },
   },
-  lease: { defaultTtlMs: 100, maxTtlMs: 100 },
+  lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
   capacity: {
     strategy: "resource",
     config: {
@@ -193,5 +193,40 @@ describe("AcquisitionPlanner", () => {
     expect(plan(acquisitionPlanner, [quarantined], { noWait: true })).toEqual({
       kind: "no-capacity",
     });
+  });
+
+  it("never selects a spent fresh device from the ready scan or from the shutdown scan", () => {
+    const unused = (state: "ready" | "shutdown") => ({
+      ...device(`unused-${state}`, state),
+      leaseIdentity: "fresh" as const,
+    });
+    const spent = (state: "ready" | "shutdown") => ({ ...unused(state), lastLeaseEndedAt: 5 });
+
+    // Control: the same fresh records that have not served a lease yet are selected, so what
+    // turns the spent ones away below is the lease they already served.
+    expect(plan(planner().planner, [unused("ready")])).toMatchObject({ kind: "grant-ready" });
+    expect(plan(planner().planner, [unused("shutdown")])).toMatchObject({ kind: "boot-shutdown" });
+
+    // ios.maxDevices is 1 here, so the spent device is also the only managed eviction victim.
+    expect(plan(planner().planner, [spent("ready")])).toMatchObject({ kind: "evict-managed" });
+    expect(plan(planner().planner, [spent("shutdown")])).toMatchObject({ kind: "evict-managed" });
+  });
+
+  it("counts a spent fresh device against managed-device capacity until it is deleted", () => {
+    const spent = {
+      ...device("spent", "shutdown"),
+      lastLeaseEndedAt: 5,
+      leaseIdentity: "fresh" as const,
+    };
+
+    // At ios.maxDevices 1, the spent device fills the only slot: no provision is planned.
+    expect(plan(planner().planner, [spent])).toMatchObject({
+      device: spent,
+      kind: "evict-managed",
+    });
+
+    const result = plan(planner().planner, [{ ...spent, state: "deleted" }]);
+    expect(result).toMatchObject({ kind: "provision" });
+    if (result.kind === "provision") result.reservation.release();
   });
 });
