@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type DeviceRecord, IllegalTransition, transition, transitionEnteredAt } from "./index.js";
-import { type DeviceSpec, sameSpec } from "./domain.js";
+import { type DeviceSpec, mayBeGranted, sameSpec } from "./domain.js";
 
 const baseDevice: Omit<DeviceRecord, "state"> = {
   createdAt: 1_000,
@@ -27,6 +27,7 @@ describe("transition", () => {
     ["quarantined", "deleted"],
     ["shutdown", "ready"],
     ["shutdown", "deleted"],
+    ["shutdown", "quarantined"],
   ] as const)("allows %s -> %s", (from, to) => {
     const result = transition({ ...baseDevice, state: from }, to);
 
@@ -121,6 +122,19 @@ describe("transitionEnteredAt", () => {
     for (const state of ["ready", "leased", "quarantined", "shutdown", "deleted"] as const) {
       expect(transitionEnteredAt({ ...baseDevice, state })).toBeUndefined();
     }
+  });
+});
+
+describe("mayBeGranted", () => {
+  it("refuses only a fresh device that has ended a lease", () => {
+    const ready = { ...baseDevice, state: "ready" as const };
+
+    expect(mayBeGranted({ ...ready, leaseIdentity: "fresh", lastLeaseEndedAt: 2_000 })).toBe(false);
+    expect(mayBeGranted({ ...ready, leaseIdentity: "fresh" })).toBe(true);
+    expect(mayBeGranted({ ...ready, leaseIdentity: "reusable", lastLeaseEndedAt: 2_000 })).toBe(
+      true,
+    );
+    expect(mayBeGranted({ ...ready, lastLeaseEndedAt: 2_000 })).toBe(true);
   });
 });
 

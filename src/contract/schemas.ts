@@ -34,6 +34,8 @@ const deviceStateSchema = z.enum([
 
 const featureProfileSchema = z.enum(["full", "reduced"]);
 
+const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
+
 const deviceSpecSchema = z.object({
   platform: platformSchema,
   model: z.string(),
@@ -60,6 +62,7 @@ export const deviceRecordSchema = z.object({
   quarantineNextRetryAt: z.number().optional(),
   address: z.string().optional(),
   featureProfile: featureProfileSchema.optional(),
+  leaseIdentity: leaseIdentitySchema.optional(),
   /** Decoration added by `status.get`/`list.get`; absent for a device not mid-transition. */
   transitionAgeMs: z.number().optional(),
 });
@@ -433,6 +436,10 @@ export const configSchema = z.object({
   lease: z.object({
     defaultTtlMs: z.number(),
     maxTtlMs: z.number(),
+    identity: z.object({
+      ios: leaseIdentitySchema,
+      android: leaseIdentitySchema,
+    }),
   }),
   exec: z.object({ timeoutMs: z.number() }),
   diskPressure: z.object({ freeBytesThreshold: z.number() }),

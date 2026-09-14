@@ -68,7 +68,7 @@ function config(): Config {
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 100, maxTtlMs: 100 },
+    lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
     capacity: {
       strategy: "resource",
       config: {

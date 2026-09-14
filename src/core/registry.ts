@@ -6,6 +6,7 @@ import {
   type DeviceSpec,
   type DeviceState,
   type DeviceTransitionUpdate,
+  type LeaseIdentity,
   type LeaseRecord,
   type Platform,
   transition,
@@ -26,6 +27,12 @@ export interface RegistryOptions {
    * a granted lease's width always comes from the grant itself.
    */
   readonly defaultTtlMs?: number;
+  /**
+   * `lease.identity`: the policy a newly registered device is stamped with, looked up by its
+   * spec's platform. Only registration reads it -- a loaded record keeps the policy it was
+   * created under. Defaults to `reusable` for both platforms.
+   */
+  readonly leaseIdentity?: Readonly<Record<Platform, LeaseIdentity>>;
 }
 
 export interface RegistrySnapshot {
@@ -101,6 +108,7 @@ export class Registry {
     const registry = new Registry({
       ...options,
       defaultTtlMs: options.defaultTtlMs ?? DEFAULT_LEASE_TTL_MS,
+      leaseIdentity: options.leaseIdentity ?? { android: "reusable", ios: "reusable" },
       statePath: options.statePath ?? DEFAULT_REGISTRY_PATH,
     });
 
@@ -129,6 +137,7 @@ export class Registry {
       driverData,
       driverDeviceId,
       id: `dev_${this.options.idGenerator.generate()}`,
+      leaseIdentity: this.options.leaseIdentity[spec.platform],
       spec: { ...spec },
       state: "provisioning",
     };
@@ -183,9 +192,14 @@ export class Registry {
     return cloneDevice(updated);
   }
 
-  /** Commits an unleased reclaim interrupted by daemon shutdown, found still `reclaiming` at startup. */
+  /**
+   * Commits `reclaiming -> shutdown` for a device whose driver shutdown ran without a purge, so
+   * no `device.reclaimed` fact fits: an unleased reclaim interrupted by daemon shutdown and found
+   * at startup, or a spent fresh device's lease-end shutdown before its delete. The caller emits
+   * whatever fact its own path owns.
+   */
   // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's registry port.
-  async completeInterruptedReclaim(deviceId: string): Promise<DeviceRecord> {
+  async completeReclaimWithoutPurge(deviceId: string): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.state !== "reclaiming") {
       throw new RegistryEventError(`Device is not reclaiming: ${deviceId}`);
@@ -198,18 +212,24 @@ export class Registry {
   }
 
   /**
-   * Commits quarantine entry from either of its two legal sources (see domain.ts):
-   * a release-time purge failure leaves `reclaiming`, and a stalled-transition
-   * timeout leaves `provisioning`. The caller -- WarmPoolCoordinator for the former,
-   * QuarantineCoordinator's stalled-transition entry point for the latter -- emits
-   * `device.quarantined` (and, for a purge failure, `device.purge-failed`) after this
-   * commits.
+   * Commits quarantine entry from any of its legal sources (see domain.ts): a
+   * release-time purge failure, or a fresh device's failed lease-end shutdown, leaves
+   * `reclaiming`; a fresh device's failed delete leaves `shutdown`; and a
+   * stalled-transition timeout leaves `provisioning`. The caller -- QuarantineCoordinator,
+   * reached from WarmPoolCoordinator for the lease-end paths -- emits `device.quarantined`
+   * (and, for a lease-end failure, `device.purge-failed`) after this commits.
    */
   // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
   async enterQuarantine(deviceId: string, nextRetryAt: number): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
-    if (device.state !== "reclaiming" && device.state !== "provisioning") {
-      throw new RegistryEventError(`Device is not reclaiming or provisioning: ${deviceId}`);
+    if (
+      device.state !== "reclaiming" &&
+      device.state !== "provisioning" &&
+      device.state !== "shutdown"
+    ) {
+      throw new RegistryEventError(
+        `Device is not reclaiming, provisioning, or shutdown: ${deviceId}`,
+      );
     }
     const updated: DeviceRecord = {
       ...transition(device, "quarantined"),
@@ -264,7 +284,6 @@ export class Registry {
     return cloneDevice(updated as DeviceRecord);
   }
 
-  /** Commits giving up on a quarantined device once its driver `destroy` has already run. */
   /**
    * Records that a quarantined device exhausted its retries *and* could not be destroyed, so
    * nothing is armed for it any more. Clears the retry deadline rather than leaving a stale one
@@ -286,8 +305,13 @@ export class Registry {
     return cloneDevice(updated);
   }
 
+  /**
+   * Commits `quarantined -> deleted` once the driver `destroy` has already run: a spent fresh
+   * device whose retried delete succeeded (initiator `lease-end`), or any device quarantine gave
+   * up on (initiator `quarantine-coordinator`).
+   */
   // fallow-ignore-next-line unused-class-member -- called through QuarantineCoordinator's registry port.
-  async abandonQuarantine(deviceId: string): Promise<DeviceRecord> {
+  async deleteQuarantined(deviceId: string, initiator: string): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.state !== "quarantined") {
       throw new RegistryEventError(`Device is not quarantined: ${deviceId}`);
@@ -301,11 +325,7 @@ export class Registry {
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
     await this.#commit(devices, this.#leases);
-    this.options.eventBus.emit(
-      "device.deleted",
-      { deviceId, initiator: "quarantine-coordinator" },
-      "registry",
-    );
+    this.options.eventBus.emit("device.deleted", { deviceId, initiator }, "registry");
     return cloneDevice(updated as DeviceRecord);
   }
 
@@ -586,6 +606,7 @@ const deviceRecordKeys = [
   "quarantineNextRetryAt",
   "address",
   "featureProfile",
+  "leaseIdentity",
 ] as const;
 const leaseRecordKeys = [
   "id",
@@ -698,9 +719,21 @@ function parseDevice(value: unknown): DeviceRecord {
     driverData,
     driverDeviceId,
     id,
+    leaseIdentity: parseLeaseIdentity(value.leaseIdentity),
     spec,
     state: state === "warm" ? "reclaiming" : state,
   };
+}
+
+/**
+ * A record written before `leaseIdentity` existed was created under the only policy there was,
+ * so it loads as `reusable`. Unlike `featureProfile`, a present-but-unknown value fails the
+ * load: guessing `reusable` for it could hand a fresh identity out for a second lease.
+ */
+function parseLeaseIdentity(value: unknown): LeaseIdentity {
+  if (value === undefined) return "reusable";
+  if (value === "reusable" || value === "fresh") return value;
+  throw new RegistryLoadError("Invalid device record in registry state");
 }
 
 /**

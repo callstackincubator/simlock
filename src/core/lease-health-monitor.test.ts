@@ -46,7 +46,7 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
       ...overrides,
     },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 100, maxTtlMs: 100 },
+    lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
     capacity: {
       strategy: "resource",
       config: {

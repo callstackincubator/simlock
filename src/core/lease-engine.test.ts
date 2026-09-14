@@ -46,7 +46,12 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 100, maxTtlMs: 14_400_000, ...overrides },
+    lease: {
+      defaultTtlMs: 100,
+      maxTtlMs: 14_400_000,
+      identity: { ios: "reusable", android: "reusable" },
+      ...overrides,
+    },
     capacity: {
       strategy: "resource",
       config: {
@@ -80,6 +85,7 @@ async function createHarness(
   options: {
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
+    readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
     readonly limits?: CapacityLimits;
   } = {},
@@ -95,9 +101,13 @@ async function createHarness(
     eventBus: bus,
     filesystem,
     idGenerator: { generate: () => `${nextId++}` },
+    ...(options.identity === undefined ? {} : { leaseIdentity: options.identity }),
     statePath,
   });
-  const baseConfig = config(options.lease);
+  const baseConfig = config({
+    ...options.lease,
+    ...(options.identity === undefined ? {} : { identity: options.identity }),
+  });
   const engineConfig: Config =
     options.limits === undefined
       ? baseConfig
@@ -1436,5 +1446,325 @@ describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
     // The lease itself is untouched -- disposal cancels a timer, it does not expire a
     // lease, which is what lets a lease survive the restart with its deadline intact.
     expect(harness.registry.snapshot.leases).toHaveLength(1);
+  });
+});
+
+describe("LeaseEngine fresh lease identity (#75)", () => {
+  const freshIos = { android: "reusable", ios: "fresh" } as const;
+
+  function driverDeviceIdOf(
+    harness: { readonly registry: Registry },
+    deviceId: string,
+  ): string | undefined {
+    return harness.registry.snapshot.devices.find((device) => device.id === deviceId)
+      ?.driverDeviceId;
+  }
+
+  function destroyedDriverDeviceIds(driver: FakeDriver): string[] {
+    return driver.calls
+      .filter((call) => call.operation === "destroy")
+      .map((call) => (call.arguments[0] as { readonly deviceId: string }).deviceId);
+  }
+
+  it("gives two sequential fresh leases for one shape different driver device ids", async () => {
+    const harness = await createHarness({ identity: freshIos });
+
+    const first = await harness.engine.request(request, { ownerId: "first", requesterId: "first" });
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    const second = await harness.engine.request(request, {
+      ownerId: "second",
+      requesterId: "second",
+    });
+
+    expect(second.device.id).not.toBe(first.device.id);
+    expect(driverDeviceIdOf(harness, second.device.id)).not.toBe(
+      driverDeviceIdOf(harness, first.device.id),
+    );
+    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
+  });
+
+  it("takes a released fresh device to deleted and destroys its driver device, without an erase", async () => {
+    const harness = await createHarness({ identity: freshIos });
+    const granted = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    const driverDeviceId = driverDeviceIdOf(harness, granted.device.id);
+
+    await harness.engine.release(granted.lease.id, "explicit");
+    await harness.engine.settle();
+
+    expect(harness.registry.snapshot.devices).toMatchObject([
+      { id: granted.device.id, state: "deleted" },
+    ]);
+    expect(destroyedDriverDeviceIds(harness.driver)).toEqual([driverDeviceId]);
+    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("reclaim");
+    expect(harness.bus.replay().filter((event) => event.event === "device.deleted")).toMatchObject([
+      { payload: { deviceId: granted.device.id, initiator: "lease-end" } },
+    ]);
+    expect(harness.bus.replay().map((event) => event.event)).not.toContain("device.reclaimed");
+  });
+
+  it("deletes the device of an expired fresh lease", async () => {
+    const harness = await createHarness({ identity: freshIos, lease: { defaultTtlMs: 10 } });
+    const granted = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+
+    harness.clock.advance(10);
+    await flush();
+    await harness.engine.settle();
+
+    expect(harness.bus.replay().map((event) => event.event)).toContain("lease.expired");
+    expect(harness.registry.snapshot.devices).toMatchObject([
+      { id: granted.device.id, state: "deleted" },
+    ]);
+    expect(destroyedDriverDeviceIds(harness.driver)).toHaveLength(1);
+  });
+
+  it("deletes the device of a recovery-driven lease termination", async () => {
+    const harness = await createHarness({
+      identity: freshIos,
+      lease: { defaultTtlMs: 14_400_000 },
+    });
+    const granted = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    // The device vanished from driver reality: recovery gives up and ends the lease as lost.
+    harness.driver.setManagedReality({ devices: [], processes: [] });
+
+    harness.engine.healthMonitor.start();
+    for (let tick = 0; tick < 3; tick += 1) {
+      harness.clock.advance(30_000);
+      await flush();
+    }
+    await harness.engine.settle();
+    harness.engine.healthMonitor.dispose();
+
+    expect(harness.bus.replay().filter((event) => event.event === "lease.released")).toMatchObject([
+      { payload: { leaseId: granted.lease.id, reason: "device-lost" } },
+    ]);
+    expect(harness.registry.snapshot.devices).toMatchObject([
+      { id: granted.device.id, state: "deleted" },
+    ]);
+  });
+
+  it("quarantines a fresh device whose delete fails, keeps it ungrantable, and reports strategy delete", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    driver.failOn("destroy", 1, new DriverCrashError("delete exploded"));
+    const harness = await createHarness({
+      driver,
+      identity: freshIos,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 2 },
+        maxRunning: 3,
+      },
+    });
+    const first = await harness.engine.request(request, { ownerId: "first", requesterId: "first" });
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+
+    expect(harness.registry.snapshot.devices).toMatchObject([
+      { id: first.device.id, state: "quarantined" },
+    ]);
+    expect(
+      harness.bus.replay().filter((event) => event.event === "device.purge-failed"),
+    ).toMatchObject([
+      {
+        payload: {
+          attemptedStrategy: "delete",
+          deviceId: first.device.id,
+          error: "DriverCrashError: delete exploded",
+          leaseId: first.lease.id,
+        },
+      },
+    ]);
+    const second = await harness.engine.request(request, {
+      noWait: true,
+      ownerId: "second",
+      requesterId: "second",
+    });
+    expect(second.device.id).not.toBe(first.device.id);
+  });
+
+  it("still deletes a device created under fresh after the configuration changes to reusable", async () => {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    let nextId = 1;
+    const idGenerator = { generate: () => `${nextId++}` };
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const systemStats = new FakeSystemStats({
+      cpuCount: 8,
+      freeRamBytes: 32 * gibibyte,
+      totalRamBytes: 32 * gibibyte,
+    });
+    const before = new LeaseEngine({
+      clock,
+      config: config({ identity: freshIos }),
+      drivers: [driver],
+      eventBus: bus,
+      idGenerator,
+      registry: await Registry.load({
+        clock,
+        eventBus: bus,
+        filesystem,
+        idGenerator,
+        leaseIdentity: freshIos,
+        statePath,
+      }),
+      systemStats,
+    });
+    const granted = await before.request(request, { ownerId: "a", requesterId: "a" });
+    before.dispose();
+
+    // The operator switches iOS back to reusable and restarts the daemon mid-lease.
+    const reusable = { android: "reusable", ios: "reusable" } as const;
+    const registry = await Registry.load({
+      clock,
+      eventBus: bus,
+      filesystem,
+      idGenerator,
+      leaseIdentity: reusable,
+      statePath,
+    });
+    const after = new LeaseEngine({
+      clock,
+      config: config({ identity: reusable, defaultTtlMs: 14_400_000 }),
+      drivers: [driver],
+      eventBus: bus,
+      idGenerator,
+      registry,
+      systemStats,
+    });
+    await after.convergeRunningCapacity();
+    await after.release(granted.lease.id, "explicit");
+    await after.settle();
+    after.dispose();
+
+    expect(registry.snapshot.devices).toMatchObject([
+      { id: granted.device.id, leaseIdentity: "fresh", state: "deleted" },
+    ]);
+    expect(driver.calls.map((call) => call.operation)).not.toContain("reclaim");
+  });
+
+  it("still reclaims a device created under reusable and returns it to the pool", async () => {
+    const harness = await createHarness();
+    const first = await harness.engine.request(request, { ownerId: "first", requesterId: "first" });
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    const second = await harness.engine.request(request, {
+      ownerId: "second",
+      requesterId: "second",
+    });
+
+    expect(harness.registry.snapshot.devices).toMatchObject([
+      { id: first.device.id, leaseIdentity: "reusable", state: "leased" },
+    ]);
+    expect(second.device.id).toBe(first.device.id);
+    const operations = harness.driver.calls.map((call) => call.operation);
+    expect(operations.filter((operation) => operation === "reclaim")).toHaveLength(1);
+    expect(operations).not.toContain("destroy");
+  });
+
+  /**
+   * The persisted state a daemon leaves behind when it dies part-way through a fresh device's
+   * lease end, built through the same registry calls that path makes, then read by a new process.
+   */
+  async function restartAfterCrash(crashedIn: "reclaiming" | "shutdown") {
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock(1_000);
+    const bus = new EventBus(clock);
+    let nextId = 1;
+    const idGenerator = { generate: () => `${nextId++}` };
+    // One driver across both processes: the simulator outlives the daemon.
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const crashed = await Registry.load({
+      clock,
+      eventBus: bus,
+      filesystem,
+      idGenerator,
+      leaseIdentity: freshIos,
+      statePath,
+    });
+    const driverDevice = await driver.makeReady(await driver.provision(request));
+    const device = await crashed.registerDevice({
+      driverData: driverDevice.driverData,
+      driverDeviceId: driverDevice.deviceId,
+      provisionDuration: 0,
+      spec: request,
+    });
+    await crashed.transitionDevice(device.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: device.id },
+    });
+    const lease = await crashed.createLease({
+      deviceId: device.id,
+      ownerId: "gone",
+      requesterId: "gone",
+      ttlDeadline: 60_000,
+      ttlMs: 60_000,
+    });
+    await crashed.beginRelease(lease.id);
+    if (crashedIn === "shutdown") {
+      await driver.shutdown(driverDevice);
+      await crashed.completeReclaimWithoutPurge(device.id);
+    }
+
+    const registry = await Registry.load({
+      clock,
+      eventBus: bus,
+      filesystem,
+      idGenerator,
+      leaseIdentity: freshIos,
+      statePath,
+    });
+    const engine = new LeaseEngine({
+      clock,
+      config: config({ identity: freshIos }),
+      drivers: [driver],
+      eventBus: bus,
+      idGenerator,
+      registry,
+      systemStats: new FakeSystemStats({
+        cpuCount: 8,
+        freeRamBytes: 32 * gibibyte,
+        totalRamBytes: 32 * gibibyte,
+      }),
+    });
+    const operationsBeforeStart = driver.calls.length;
+    return {
+      device,
+      driver,
+      engine,
+      operationsSinceStart: () =>
+        driver.calls.slice(operationsBeforeStart).map((call) => call.operation),
+      registry,
+    };
+  }
+
+  it("deletes a fresh device on the next start when the daemon crashed while it was reclaiming", async () => {
+    const restarted = await restartAfterCrash("reclaiming");
+    expect(restarted.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+
+    await restarted.engine.convergeRunningCapacity();
+
+    expect(restarted.registry.snapshot.devices).toMatchObject([
+      { id: restarted.device.id, state: "deleted" },
+    ]);
+    expect(restarted.operationsSinceStart()).toEqual(["shutdown", "destroy"]);
+  });
+
+  it("deletes a fresh device on the next start when the daemon crashed after its shutdown commit and before its delete", async () => {
+    const restarted = await restartAfterCrash("shutdown");
+    expect(restarted.registry.snapshot.devices).toMatchObject([{ state: "shutdown" }]);
+
+    await restarted.engine.convergeRunningCapacity();
+
+    expect(restarted.registry.snapshot.devices).toMatchObject([
+      { id: restarted.device.id, state: "deleted" },
+    ]);
+    expect(restarted.operationsSinceStart()).toEqual(["destroy"]);
   });
 });

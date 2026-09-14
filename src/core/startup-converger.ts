@@ -1,5 +1,5 @@
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
-import type { DeviceRecord, LeaseRecord, Platform } from "./domain.js";
+import { type DeviceRecord, type LeaseRecord, mayBeGranted, type Platform } from "./domain.js";
 import type { CapacityReader } from "./lease-ports.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { compareLeastRecentlyUsed } from "./warm-pool.js";
@@ -19,6 +19,11 @@ export interface LeaseTimerRestorer {
 /** Safely completes a reclaim operation interrupted by daemon shutdown. */
 export interface InterruptedReclaimRecovery {
   recoverInterruptedReclaim(device: DeviceRecord): Promise<void>;
+}
+
+/** Deletes a spent fresh device the previous process shut down but did not delete. */
+export interface SpentDeviceDeletion {
+  deleteSpent(device: DeviceRecord): Promise<void>;
 }
 
 /** Re-arms retry timers for devices still `quarantined` at startup, from persisted state. */
@@ -45,6 +50,7 @@ export interface StartupConvergerOptions {
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
+  readonly spentDeviceDeletion: SpentDeviceDeletion;
   readonly timers: LeaseTimerRestorer;
 }
 
@@ -82,6 +88,9 @@ export class StartupConverger {
     // either step.
     this.options.quarantineRestore.restore();
     await this.#recoverInterruptedReclaims();
+    // After interrupted reclaims: a spent fresh device found `reclaiming` has just been shut
+    // down there, and is deleted here along with any the previous process left `shutdown`.
+    await this.#deleteSpentDevices();
 
     const refused = new Set<string>();
     for (;;) {
@@ -99,19 +108,20 @@ export class StartupConverger {
   }
 
   async #recoverInterruptedReclaims(): Promise<void> {
-    const interrupted = await this.options.decisions.run(() => {
-      const snapshot = this.options.registry.snapshot;
-      const leasedDeviceIds = new Set(snapshot.leases.map((lease) => lease.deviceId));
-      return snapshot.devices.filter(
-        (device) =>
-          device.state === "reclaiming" &&
-          this.options.drivers.has(device.spec.platform) &&
-          !leasedDeviceIds.has(device.id) &&
-          !this.options.claims.isClaimed(device.id),
-      );
-    });
+    const interrupted = await this.options.decisions.run(() =>
+      this.#actionableDevices("reclaiming"),
+    );
     for (const device of interrupted) {
       await this.options.interruptedReclaimRecovery.recoverInterruptedReclaim(device);
+    }
+  }
+
+  async #deleteSpentDevices(): Promise<void> {
+    const spent = await this.options.decisions.run(() =>
+      this.#actionableDevices("shutdown").filter((device) => !mayBeGranted(device)),
+    );
+    for (const device of spent) {
+      await this.options.spentDeviceDeletion.deleteSpent(device);
     }
   }
 
@@ -124,18 +134,28 @@ export class StartupConverger {
       return undefined;
     }
 
-    const snapshot = this.options.registry.snapshot;
-    const leasedDeviceIds = new Set(snapshot.leases.map((lease) => lease.deviceId));
-    return snapshot.devices
+    return this.#actionableDevices("ready")
       .filter(
         (device) =>
-          device.state === "ready" &&
-          this.options.drivers.has(device.spec.platform) &&
-          !leasedDeviceIds.has(device.id) &&
-          !this.options.claims.isClaimed(device.id) &&
           !refused.has(device.id) &&
           (overPlatforms.length === 0 || overPlatforms.includes(device.spec.platform)),
       )
       .sort(compareLeastRecentlyUsed)[0];
+  }
+
+  /**
+   * Devices in `state` that startup may act on: their platform has a driver, no lease holds
+   * them, and no in-process operation has claimed them. Read inside a decision section.
+   */
+  #actionableDevices(state: DeviceRecord["state"]): DeviceRecord[] {
+    const snapshot = this.options.registry.snapshot;
+    const leasedDeviceIds = new Set(snapshot.leases.map((lease) => lease.deviceId));
+    return snapshot.devices.filter(
+      (device) =>
+        device.state === state &&
+        this.options.drivers.has(device.spec.platform) &&
+        !leasedDeviceIds.has(device.id) &&
+        !this.options.claims.isClaimed(device.id),
+    );
   }
 }

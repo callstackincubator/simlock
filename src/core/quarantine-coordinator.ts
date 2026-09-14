@@ -1,6 +1,6 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, TimerHandle } from "../ports/index.js";
-import type { DeviceRecord, Platform } from "./domain.js";
+import { type DeviceRecord, mayBeGranted, type Platform } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
@@ -19,13 +19,14 @@ export interface QuarantineRegistry {
   ): Promise<DeviceRecord>;
   recoverFromQuarantine(deviceId: string, to: "ready" | "shutdown"): Promise<DeviceRecord>;
   strandQuarantine(deviceId: string, attempts: number): Promise<DeviceRecord>;
-  abandonQuarantine(deviceId: string): Promise<DeviceRecord>;
+  deleteQuarantined(deviceId: string, initiator: string): Promise<DeviceRecord>;
 }
 
 export interface QuarantinePurgeFailure {
   readonly deviceId: string;
   readonly leaseId: string;
-  readonly attemptedStrategy: "erase" | "snapshot" | "wipe";
+  /** A reclaim strategy, or `delete` for a spent fresh device's failed lease-end shutdown or delete. */
+  readonly attemptedStrategy: "erase" | "snapshot" | "wipe" | "delete";
   readonly duration: number;
   readonly error: string;
 }
@@ -59,6 +60,8 @@ export interface QuarantineCoordinatorOptions {
  *
  * A quarantined device retries its purge on a Clock-driven backoff until it
  * either succeeds (the device rejoins the warm pool) or exhausts
+ * `config.maxRetries`. A spent fresh device (see `mayBeGranted`) retries its
+ * delete instead, never a purge, and success deletes it. Either way, exhausting
  * `config.maxRetries`, at which point it is destroyed -- never merely shut
  * down, since `shutdown` is a state AcquisitionPlanner treats as reusable
  * warm inventory (`boot-shutdown`), which would silently reintroduce the
@@ -170,6 +173,10 @@ export class QuarantineCoordinator {
 
     const attempts = (device.quarantineAttempts ?? 0) + 1;
     const driver = this.options.drivers.get(device.spec.platform);
+    if (!mayBeGranted(device)) {
+      await this.#retryDelete(driver, device, attempts);
+      return;
+    }
     let result: Awaited<ReturnType<Driver["reclaim"]>>;
     try {
       result = await driver.reclaim(toDriverDevice(device), { clean: "standard" });
@@ -185,6 +192,24 @@ export class QuarantineCoordinator {
       "device.quarantine-recovered",
       { attempts, deviceId, strategy: result.strategy },
       "quarantine-coordinator",
+    );
+    this.options.notifyAvailability();
+  }
+
+  /**
+   * A spent fresh device already served its one lease, so a successful reclaim would put it
+   * back in the pool for a second one. It retries the delete instead, and success is
+   * `device.deleted`, not `device.quarantine-recovered`: nothing rejoined the pool.
+   */
+  async #retryDelete(driver: Driver, device: DeviceRecord, attempts: number): Promise<void> {
+    try {
+      await driver.destroy(toDriverDevice(device));
+    } catch {
+      await this.#retryFailed(device, attempts);
+      return;
+    }
+    await this.options.decisions.run(() =>
+      this.options.registry.deleteQuarantined(device.id, "lease-end"),
     );
     this.options.notifyAvailability();
   }
@@ -222,7 +247,9 @@ export class QuarantineCoordinator {
       );
       return;
     }
-    await this.options.decisions.run(() => this.options.registry.abandonQuarantine(device.id));
+    await this.options.decisions.run(() =>
+      this.options.registry.deleteQuarantined(device.id, "quarantine-coordinator"),
+    );
     this.options.eventBus.emit(
       "device.quarantine-abandoned",
       { attempts, deviceId: device.id },

@@ -5,6 +5,7 @@ import {
   type DeviceRecord,
   type DeviceSpec,
   type DeviceState,
+  mayBeGranted,
   type Platform,
   transitionEnteredAt,
 } from "./domain.js";
@@ -578,7 +579,14 @@ export class Doctor {
         event: "device.shutdown",
         payload: { deviceId: finding.deviceId, initiator: "doctor" },
       });
-    } else if (device.state === "shutdown" && finding.observed === "running") {
+    } else if (
+      device.state === "shutdown" &&
+      finding.observed === "running" &&
+      // A spent fresh device stays `shutdown`, running or not: every path that deletes it
+      // selects `shutdown`, and the delete stops a running simulator first. Moving it to
+      // `ready` would strand it as ungrantable warm inventory that nothing deletes.
+      mayBeGranted(device)
+    ) {
       await this.options.registry.transitionDevice(finding.deviceId, "ready", {
         event: "device.ready",
         payload: { bootDuration: 0, deviceId: finding.deviceId },

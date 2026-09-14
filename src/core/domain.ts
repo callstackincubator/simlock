@@ -28,6 +28,13 @@ export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
   );
 }
 
+/**
+ * Whether a device may serve more than one lease. `reusable` devices are purged and returned to
+ * the pool after each lease; a `fresh` device serves exactly one lease and is then deleted. Read
+ * from `lease.identity.<platform>` when the device is created and fixed on its record from then on.
+ */
+export type LeaseIdentity = "reusable" | "fresh";
+
 export type DeviceState =
   | "provisioning"
   | "ready"
@@ -71,6 +78,22 @@ export interface DeviceRecord {
    * driver.
    */
   readonly featureProfile?: "full" | "reduced";
+  /**
+   * The lease-identity policy this device was created under (see `LeaseIdentity`). The registry
+   * stamps it on every device it registers and loads a record written before this field existed
+   * as `reusable`; absent reads the same way.
+   */
+  readonly leaseIdentity?: LeaseIdentity;
+}
+
+/**
+ * The one answer to "may this device be handed to a new lease?". A `fresh` device that has ended
+ * a lease is spent: `beginRelease` stamps `lastLeaseEndedAt` on every lease end, so that stamp is
+ * the proof it already served its one lease. Every other device is grantable as far as identity
+ * goes; state, spec, and claims are the caller's own checks.
+ */
+export function mayBeGranted(device: DeviceRecord): boolean {
+  return device.leaseIdentity !== "fresh" || device.lastLeaseEndedAt === undefined;
 }
 
 export interface LeaseRecord {
@@ -110,9 +133,11 @@ export interface LeaseRecord {
  * right now, sitting outside the `ready`/`shutdown` states every grant and
  * eviction path already selects on. `reclaiming -> quarantined` is its release-time
  * purge-failure entry (see WarmPoolCoordinator); `provisioning -> quarantined` is its
- * stalled-transition entry (Doctor, for a `provisioning` that never finished) -- its
- * own entry into the same state rather than a second one. Exits are symmetric either
- * way: `ready` on a successful retry, `shutdown`/`deleted` on giving up.
+ * stalled-transition entry (Doctor, for a `provisioning` that never finished);
+ * `shutdown -> quarantined` is a spent fresh device whose delete failed after its
+ * lease-end shutdown committed -- each its own entry into the same state rather than a
+ * second one. Exits: `ready` on a successful retry, `deleted` on a successful retried
+ * delete, `shutdown`/`deleted` on giving up.
  */
 const legalTransitions: Readonly<Record<DeviceState, readonly DeviceState[]>> = {
   provisioning: ["ready", "deleted", "quarantined"],
@@ -120,7 +145,7 @@ const legalTransitions: Readonly<Record<DeviceState, readonly DeviceState[]>> = 
   leased: ["reclaiming"],
   reclaiming: ["ready", "shutdown", "quarantined"],
   quarantined: ["ready", "shutdown", "deleted"],
-  shutdown: ["ready", "deleted"],
+  shutdown: ["ready", "deleted", "quarantined"],
   deleted: [],
 };
 

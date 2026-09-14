@@ -10,7 +10,11 @@ import { DriverCatalog } from "./driver-catalog.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import { WarmPoolCoordinator, type WarmPoolQuarantine } from "./warm-pool-coordinator.js";
+import {
+  WarmPoolCoordinator,
+  type WarmPoolQuarantine,
+  type WarmPoolRegistry,
+} from "./warm-pool-coordinator.js";
 
 const gibibyte = 1024 ** 3;
 const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
@@ -47,7 +51,7 @@ const config: Config = {
       retryBackoffMultiplier: 2,
     },
   },
-  lease: { defaultTtlMs: 100, maxTtlMs: 100 },
+  lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
   capacity: {
     strategy: "resource",
     config: {
@@ -83,15 +87,8 @@ class TestRegistry {
 
   async transitionDevice(
     deviceId: string,
-    to: "ready" | "shutdown",
-    event: {
-      readonly event: "device.reclaimed";
-      readonly payload: {
-        readonly deviceId: string;
-        readonly duration: number;
-        readonly strategy: "erase" | "snapshot" | "wipe";
-      };
-    },
+    to: Parameters<WarmPoolRegistry["transitionDevice"]>[1],
+    event: Parameters<WarmPoolRegistry["transitionDevice"]>[2],
     update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
@@ -100,11 +97,15 @@ class TestRegistry {
     this.lastUpdate = update;
     const updated = { ...current, ...update, state: to } as DeviceRecord;
     this.#devices[index] = updated;
-    this.eventBus.emit("device.reclaimed", event.payload, "test-registry");
+    if (event.event === "device.reclaimed") {
+      this.eventBus.emit(event.event, event.payload, "test-registry");
+    } else {
+      this.eventBus.emit(event.event, event.payload, "test-registry");
+    }
     return updated;
   }
 
-  async completeInterruptedReclaim(deviceId: string): Promise<DeviceRecord> {
+  async completeReclaimWithoutPurge(deviceId: string): Promise<DeviceRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
     const current = this.#devices[index];
     if (index === -1 || current === undefined) throw new Error("missing device");
@@ -325,5 +326,97 @@ describe("WarmPoolCoordinator", () => {
     expect(stateAtFact).toBe("shutdown");
     expect(harness.driver.calls.map((call) => call.operation)).toContain("shutdown");
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
+  });
+
+  describe("a spent fresh device", () => {
+    function spent(record: DeviceRecord): DeviceRecord {
+      return { ...record, lastLeaseEndedAt: 900, leaseIdentity: "fresh" };
+    }
+
+    async function freshHarness(state: DeviceRecord["state"]) {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+      const target = spent(device("fresh", state, (await driver.provision(spec)).deviceId, spec));
+      const harness = await createHarness({ devices: [target], driver });
+      const operations = () =>
+        driver.calls.map((call) => call.operation).filter((operation) => operation !== "provision");
+      return { ...harness, operations, target };
+    }
+
+    it("is never erased: its lease end is a shutdown and a delete", async () => {
+      const harness = await freshHarness("reclaiming");
+
+      await harness.coordinator.reclaim(released(harness.target));
+
+      expect(harness.operations()).toEqual(["shutdown", "destroy"]);
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("deleted");
+      expect(
+        harness.bus.replay().map((event) => ({ event: event.event, payload: event.payload })),
+      ).toEqual([
+        {
+          event: "device.deleted",
+          payload: { deviceId: harness.target.id, initiator: "lease-end" },
+        },
+      ]);
+      expect(harness.quarantined).toEqual([]);
+    });
+
+    it("hands a failed delete to quarantine with strategy delete, after the shutdown commit", async () => {
+      const harness = await freshHarness("reclaiming");
+      harness.driver.failOn("destroy", 1, new Error("delete exploded"));
+
+      await harness.coordinator.reclaim(released(harness.target));
+
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+      expect(harness.quarantined).toEqual([
+        {
+          attemptedStrategy: "delete",
+          deviceId: harness.target.id,
+          duration: 0,
+          error: "Error: delete exploded",
+          leaseId: "lease-1",
+        },
+      ]);
+      expect(harness.bus.replay().map((event) => event.event)).not.toContain("device.deleted");
+    });
+
+    it("hands a failed lease-end shutdown to quarantine with strategy delete, without deleting", async () => {
+      const harness = await freshHarness("reclaiming");
+      harness.driver.failOn("shutdown", 1, new Error("shutdown exploded"));
+
+      await harness.coordinator.reclaim(released(harness.target));
+
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
+      expect(harness.operations()).toEqual(["shutdown"]);
+      expect(harness.quarantined).toMatchObject([
+        { attemptedStrategy: "delete", error: "Error: shutdown exploded" },
+      ]);
+    });
+
+    it("is deleted by deleteSpent when found shutdown, while a reusable shutdown device is left alone", async () => {
+      const harness = await freshHarness("shutdown");
+      const reusable = device("reusable", "shutdown", "reusable-driver", spec);
+      const registry = new TestRegistry([harness.target, reusable], [], harness.bus);
+      const coordinator = new WarmPoolCoordinator({
+        capacity: capacity(),
+        clock: harness.clock,
+        decisions: new SerializedDecision(),
+        drivers: new DriverCatalog([harness.driver]),
+        eventBus: harness.bus,
+        notifyAvailability: harness.notifyAvailability,
+        quarantine: harness.quarantine,
+        queueHeadDemand: () => undefined,
+        registry,
+      });
+
+      await expect(coordinator.deleteSpent(reusable.id)).resolves.toBe(false);
+      await expect(coordinator.deleteSpent(harness.target.id)).resolves.toBe(true);
+
+      expect(harness.operations()).toEqual(["destroy"]);
+      expect(registry.snapshot.devices.map((record) => record.state)).toEqual([
+        "deleted",
+        "shutdown",
+      ]);
+    });
   });
 });

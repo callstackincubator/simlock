@@ -50,6 +50,7 @@ export function testConfig(
     lease: {
       defaultTtlMs: 900_000,
       maxTtlMs: 14_400_000,
+      identity: { ios: "reusable", android: "reusable" },
       ...overrides,
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },

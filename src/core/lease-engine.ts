@@ -200,6 +200,20 @@ export class LeaseEngine {
       },
       quarantineRestore: { restore: () => this.#quarantine.restore() },
       registry: options.registry,
+      spentDeviceDeletion: {
+        // A failed delete must not stop the daemon from starting: the device stays `shutdown`
+        // and ungrantable, and the next start (or the idle delete rule) tries again.
+        deleteSpent: async (device) => {
+          try {
+            await this.#warmPool.deleteSpent(device.id);
+          } catch (error: unknown) {
+            options.logger?.error("startup delete of a spent device failed", {
+              deviceId: device.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      },
       timers: this.#leases,
     });
     this.healthMonitor = new LeaseHealthMonitor({

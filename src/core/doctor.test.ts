@@ -1159,6 +1159,64 @@ describe("Doctor", () => {
     expect(shutdown?.foreignStateDetectedAt).toBeUndefined();
   });
 
+  it("--fix keeps a spent fresh device shutdown when it is observed running, so its delete still finds it", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await Registry.load({
+      clock,
+      eventBus,
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequence(),
+      leaseIdentity: { android: "reusable", ios: "fresh" },
+      statePath: "/state.json",
+    });
+    const spent = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "simlock-spent",
+      provisionDuration: 0,
+      spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    await registry.transitionDevice(spent.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: spent.id },
+    });
+    const lease = await registry.createLease({
+      deviceId: spent.id,
+      ownerId: "gone",
+      requesterId: "gone",
+      ttlDeadline: 60_000,
+      ttlMs: 60_000,
+    });
+    await registry.beginRelease(lease.id);
+    await registry.completeReclaimWithoutPurge(spent.id);
+
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setManagedReality({
+      devices: [
+        {
+          address: "spent-address",
+          deviceId: "simlock-spent",
+          driverData: {},
+          runState: "running",
+        },
+      ],
+      processes: [],
+    });
+
+    const report = await new Doctor({
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile({ fix: true });
+
+    expect(report.findings.map((finding) => finding.kind)).toContain("foreign-state-change");
+    expect(registry.snapshot.devices.find((device) => device.id === spent.id)?.state).toBe(
+      "shutdown",
+    );
+  });
+
   it("--fix leaves a leased device untouched while still reporting the finding", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
@@ -1871,7 +1929,11 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       stableObservations: 2,
     },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
-    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
+    lease: {
+      defaultTtlMs: 60_000,
+      maxTtlMs: 3_600_000,
+      identity: { ios: "reusable", android: "reusable" },
+    },
     capacity: {
       strategy: "resource",
       config: {

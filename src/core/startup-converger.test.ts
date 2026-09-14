@@ -79,6 +79,12 @@ function createHarness(
     }),
   };
   const quarantineRestore = { restore: vi.fn(() => void order.push("quarantine-restore")) };
+  const spentDeviceDeletion = {
+    deleteSpent: vi.fn(async (target: DeviceRecord) => {
+      order.push(`delete-spent:${target.id}`);
+      updateState(target.id, "deleted");
+    }),
+  };
   const converger = new StartupConverger({
     capacity: {
       deviceLimit: () => limits.ios + limits.android,
@@ -97,6 +103,7 @@ function createHarness(
         return { devices, leases };
       },
     },
+    spentDeviceDeletion,
     timers,
   });
 
@@ -119,6 +126,7 @@ function createHarness(
     order,
     quarantineRestore,
     recovery,
+    spentDeviceDeletion,
     timers,
   };
 }
@@ -306,6 +314,34 @@ describe("StartupConverger", () => {
 
     expect(harness.cleanupCalls).toEqual([]);
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
+  });
+
+  it("deletes every spent fresh device found reclaiming or shutdown, after recovering interrupted reclaims", async () => {
+    // `device()` stamps `lastLeaseEndedAt` on every record, so the reusable one below has ended
+    // a lease too: only its identity policy keeps it out of the delete.
+    const spentReclaiming = { ...device("spent-reclaiming", "ios", "reclaiming", 1) };
+    const spentShutdown = { ...device("spent-shutdown", "ios", "shutdown", 2) };
+    const reusableShutdown = device("reusable-shutdown", "ios", "shutdown", 3);
+    const harness = createHarness(
+      [
+        { ...spentReclaiming, leaseIdentity: "fresh" },
+        { ...spentShutdown, leaseIdentity: "fresh" },
+        reusableShutdown,
+      ],
+      [],
+      { android: 3, global: 3, ios: 3 },
+    );
+
+    await harness.converger.converge();
+
+    expect(harness.order).toEqual([
+      "timers",
+      "quarantine-restore",
+      "recover:spent-reclaiming",
+      "delete-spent:spent-reclaiming",
+      "delete-spent:spent-shutdown",
+    ]);
+    expect(harness.devices.find((item) => item.id === reusableShutdown.id)?.state).toBe("shutdown");
   });
 
   it("restores timers before quarantine and interrupted-reclaim recovery", async () => {

@@ -36,7 +36,11 @@ const config: Config = {
       retryBackoffMultiplier: 2,
     },
   },
-  lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
+  lease: {
+    defaultTtlMs: 60_000,
+    maxTtlMs: 3_600_000,
+    identity: { ios: "reusable", android: "reusable" },
+  },
   capacity: {
     strategy: "resource",
     config: {

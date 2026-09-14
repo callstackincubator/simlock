@@ -1334,7 +1334,12 @@ function testConfig(
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000, ...leaseOverrides },
+    lease: {
+      defaultTtlMs: 60_000,
+      maxTtlMs: 3_600_000,
+      identity: { ios: "reusable", android: "reusable" },
+      ...leaseOverrides,
+    },
     capacity: {
       strategy: "resource",
       config: {

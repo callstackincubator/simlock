@@ -6,6 +6,7 @@ import {
   type DeviceSpec,
   type DeviceTransitionUpdate,
   type LeaseRecord,
+  mayBeGranted,
   type Platform,
   sameSpec,
 } from "./domain.js";
@@ -26,18 +27,23 @@ export interface WarmPoolRegistry {
   };
   transitionDevice(
     deviceId: string,
-    to: "ready" | "shutdown",
-    event: {
-      readonly event: "device.reclaimed";
-      readonly payload: {
-        readonly deviceId: string;
-        readonly duration: number;
-        readonly strategy: "erase" | "snapshot" | "wipe";
-      };
-    },
+    to: "ready" | "shutdown" | "deleted",
+    event:
+      | {
+          readonly event: "device.reclaimed";
+          readonly payload: {
+            readonly deviceId: string;
+            readonly duration: number;
+            readonly strategy: "erase" | "snapshot" | "wipe";
+          };
+        }
+      | {
+          readonly event: "device.deleted";
+          readonly payload: { readonly deviceId: string; readonly initiator: string };
+        },
     update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord>;
-  completeInterruptedReclaim(deviceId: string): Promise<DeviceRecord>;
+  completeReclaimWithoutPurge(deviceId: string): Promise<DeviceRecord>;
 }
 
 export interface WarmPoolCapacityReader {
@@ -70,6 +76,10 @@ export class WarmPoolCoordinator {
   constructor(private readonly options: WarmPoolCoordinatorOptions) {}
 
   async reclaim(released: ReleasedLease): Promise<void> {
+    if (!mayBeGranted(released.device)) {
+      await this.#retireSpent(released);
+      return;
+    }
     const driver = this.options.drivers.get(released.device.spec.platform);
     const startedAt = this.options.clock.now();
     const attemptedStrategy = driver.reclaimStrategy({ clean: "standard" });
@@ -127,7 +137,7 @@ export class WarmPoolCoordinator {
         (lease) => lease.deviceId === deviceId,
       );
       if (current?.state !== "reclaiming" || leased) return false;
-      await this.options.registry.completeInterruptedReclaim(deviceId);
+      await this.options.registry.completeReclaimWithoutPurge(deviceId);
       this.options.eventBus.emit(
         "device.shutdown",
         { deviceId, initiator: "startup-interrupted-reclaim" },
@@ -140,6 +150,72 @@ export class WarmPoolCoordinator {
   }
 
   /**
+   * Finishes a spent fresh device found `shutdown` at startup: the daemon stopped after its
+   * lease-end shutdown committed and before its delete did. A delete that fails throws and
+   * leaves the device `shutdown`, where `mayBeGranted` still keeps it out of every grant.
+   */
+  async deleteSpent(deviceId: string): Promise<boolean> {
+    const device = await this.options.decisions.run(async () => {
+      const current = this.#unleasedDevice(deviceId, "shutdown");
+      return current === undefined || mayBeGranted(current) ? undefined : current;
+    });
+    if (device === undefined) return false;
+    return this.#deleteSpent(device);
+  }
+
+  /**
+   * A spent fresh device is never purged and never returns to the pool. Its lease end is a
+   * driver shutdown, a `reclaiming -> shutdown` commit with no `device.reclaimed` (nothing was
+   * reclaimed), then the delete. Either driver step failing hands the device to quarantine,
+   * which retries the delete.
+   */
+  async #retireSpent(released: ReleasedLease): Promise<void> {
+    const driver = this.options.drivers.get(released.device.spec.platform);
+    const startedAt = this.options.clock.now();
+    try {
+      await driver.shutdown(toDriverDevice(released.device));
+    } catch (error: unknown) {
+      await this.#recoverPurgeFailure(released, startedAt, "delete", error);
+      return;
+    }
+    const shutdown = await this.options.decisions.run(() =>
+      this.options.registry.completeReclaimWithoutPurge(released.device.id),
+    );
+    // Running capacity is free from here; the device itself stays ungrantable.
+    this.options.notifyAvailability();
+
+    try {
+      await this.#deleteSpent(shutdown);
+    } catch (error: unknown) {
+      await this.#recoverPurgeFailure(released, startedAt, "delete", error);
+    }
+  }
+
+  /** Destroys a spent device and commits `shutdown -> deleted`, if it is still that device. */
+  async #deleteSpent(device: DeviceRecord): Promise<boolean> {
+    await this.options.drivers.get(device.spec.platform).destroy(toDriverDevice(device));
+    const deleted = await this.options.decisions.run(async () => {
+      if (this.#unleasedDevice(device.id, "shutdown") === undefined) return false;
+      await this.options.registry.transitionDevice(device.id, "deleted", {
+        event: "device.deleted",
+        payload: { deviceId: device.id, initiator: "lease-end" },
+      });
+      return true;
+    });
+    if (deleted) this.options.notifyAvailability();
+    return deleted;
+  }
+
+  #unleasedDevice(deviceId: string, state: DeviceRecord["state"]): DeviceRecord | undefined {
+    const { devices, leases } = this.options.registry.snapshot;
+    const current = devices.find((candidate) => candidate.id === deviceId);
+    if (current?.state !== state || leases.some((lease) => lease.deviceId === deviceId)) {
+      return undefined;
+    }
+    return current;
+  }
+
+  /**
    * Hands the release-time purge failure to the quarantine coordinator instead
    * of readiness-checking the device back into circulation: the first warm-pool
    * version did that (see docs/internal/KNOWN-PITFALLS.md) so a dirty device could still
@@ -148,7 +224,7 @@ export class WarmPoolCoordinator {
   async #recoverPurgeFailure(
     released: ReleasedLease,
     startedAt: number,
-    attemptedStrategy: "erase" | "snapshot" | "wipe",
+    attemptedStrategy: QuarantinePurgeFailure["attemptedStrategy"],
     error: unknown,
   ): Promise<void> {
     await this.options.quarantine.enter({

@@ -394,7 +394,7 @@ describe("operation input/output round trips", () => {
           maxRetryBackoffMs: 1,
         },
       },
-      lease: { defaultTtlMs: 1, maxTtlMs: 1 },
+      lease: { defaultTtlMs: 1, maxTtlMs: 1, identity: { ios: "fresh", android: "reusable" } },
       exec: { timeoutMs: 1 },
       diskPressure: { freeBytesThreshold: 1 },
       eventBuffer: { capacity: 1 },
