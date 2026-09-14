@@ -29,7 +29,8 @@ changes in this repo:
   spec and queue: one `<kind>:<state>` label per issue, agents act only on
   `*:ready` and `bug:triage`, the body is the spec and comments are
   discussion, reporters' issues are never rewritten, branches are
-  `<kind>/<n>`, handoffs are one `## Handoff` comment per stop.
+  `<kind>/<n>`, handoffs are one `## Handoff` comment per stop, every PR
+  gets a spec review and a code review before it opens.
 
 So are the accepted records in [docs/internal/adr/](docs/internal/adr/). An ADR marked
 _Accepted — not yet implemented_ means the documentation already describes the

@@ -158,8 +158,8 @@ is open, done means closed as completed.
     narration of what the agent did or considered. Evidence goes in a code
     block or a link, never in prose. Cut anything that does not change the
     reader's next decision. Budgets, counted outside code blocks: a triage
-    report 300 words, a handoff 150, a PR body 200 plus its checklist, a
-    "Spec updated" comment one line. Text over budget is cut before it is
+    report 300 words, a handoff 150, a PR body 200 plus its checklist and
+    its Review section, a "Spec updated" comment one line. Text over budget is cut before it is
     posted, not excused after. Do not restate the issue body: confirm or
     correct what it says, then add only what is new. Every comment, issue
     body, and PR body an agent writes ends with the line
@@ -174,6 +174,39 @@ is open, done means closed as completed.
     to continue a branch another checkout holds, branch from
     `origin/<branch>` rather than switching to it. Nothing depends on which
     worktree a branch was made in.
+
+14. **A PR is opened only after two reviews, and every finding is answered.**
+    Review is part of delivery in the same way verification is (rule 9): the
+    PR arrives reviewed, it is not reviewed on arrival. Before opening a PR,
+    the delivering agent runs two reviews of the diff against `main`, each
+    by a fresh sub-agent on the most capable model available (never a
+    smaller one chosen for speed), and each blind to the delivering session
+    and to the other reviewer.
+    The *spec review* gets the issue body, its parent feature, the ADRs
+    under Decisions, the files under Rules in play, and the diff — nothing
+    else, and never the PR body. It answers: is every line of Scope and Done
+    when delivered, does the diff do anything the spec did not ask for, and
+    does every test title state a claim the spec made. It reads; it does not
+    run anything.
+    The *code review* gets every file under this directory, the ADR index,
+    and the diff — never the issue. It answers, in this order: for each
+    changed function, what input, state, or interleaving makes it wrong; and
+    does the diff break a rule in this directory. It works in its own
+    worktree and may run the suite, delete a changed path, or break a branch
+    to see what stays green (testing rules 2 and 3), restoring the tree
+    afterwards.
+    Each review returns findings, one per defect: a claim, the evidence as
+    `file:line` or a command and its output, and *blocking* or *note*. A
+    finding is a claim, not a fact: the delivering agent verifies each one
+    against the code before acting. A confirmed finding is fixed and the
+    review that raised it runs again on the new diff; a rejected finding is
+    listed in the PR body under `## Review`, one line each with the reason,
+    so the maintainer sees what was overruled. Accepted findings are not
+    narrated. Two rounds at most: a blocking finding the agent could neither
+    fix nor reject after the second round means it stops and hands off with
+    the finding under Findings (rule 2), rather than opening a PR it knows is
+    contested. A PR from a person gets the same two reviews when the
+    maintainer asks for them.
 
 ## Procedures
 
@@ -202,8 +235,8 @@ command, so the one-label invariant never breaks in between:
 gh issue edit <n> --add-label bug:needs-info --remove-label bug:triage
 ```
 
-The repo's own skills (`spec-session`, `triage-bug`, `deliver`) encode these
-procedures; use them rather than retyping the steps.
+The repo's own skills (`spec-session`, `triage-bug`, `deliver`, `review`)
+encode these procedures; use them rather than retyping the steps.
 
 ## Automation
 

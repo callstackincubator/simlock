@@ -5,9 +5,9 @@ description: Claim and implement a ready issue (task:ready, bug:ready, or featur
 
 # Deliver a ready issue
 
-Rules 1, 2, 3 and 9 in `docs/internal/agent-rules/delivery.md` govern this skill: act
-only on ready labels, the assignee is the claim, build from the body, done is
-defined per kind.
+Rules 1, 2, 3, 9 and 14 in `docs/internal/agent-rules/delivery.md` govern this
+skill: act only on ready labels, the assignee is the claim, build from the
+body, done is defined per kind, and the PR is reviewed before it is opened.
 
 Argument: an issue number. Without one, take the oldest ready issue, tasks
 before bugs before features:
@@ -89,11 +89,20 @@ text, error messages, HTTP error bodies) for claims your change makes
 false, and fix them in the same PR. A behaviour that changed while its
 description stayed put is a bug you shipped.
 
-Run `pnpm check` before opening the PR.
+Run `pnpm check` before moving on.
 
 If something in the spec turns out to be wrong or impossible, do not work
 around it: push what you have, leave a handoff (step 6), and stop. The
 maintainer reopens a spec session.
+
+## 4a. Review
+
+Run the `review` skill on the branch (rule 14). It spawns two reviewers
+that have not seen this session, one holding the spec and one holding the
+rules, and it ends in one of two states: fixes on the branch plus a
+`## Review` section for the PR body, or a blocking finding that survived two
+rounds, in which case it tells you to stop and hand off (step 6). Do not
+open a PR from the second state.
 
 ## 5. Open the PR
 
@@ -110,10 +119,11 @@ Beyond that:
   the last one.
 - **bug**: name the regression test; it is the triage test, now passing.
 - **feature**: walk every Completion condition and say how each was checked.
+- **all kinds**: the `## Review` section from step 4a, after the checklist.
 
-Rule 12 applies to the PR body: 200 words plus the checklist, what changed
-and why, no narration of how you got there, and `*Written by an agent.*` as
-the last line.
+Rule 12 applies to the PR body: 200 words plus the checklist and the Review
+section, what changed and why, no narration of how you got there, and
+`*Written by an agent.*` as the last line.
 
 ```bash
 gh pr create --title "<type>(<scope>): <summary>" --body-file <file>
@@ -124,7 +134,8 @@ Leave the issue assigned and labelled as it is. Merge closes it.
 ## 6. Stopping early
 
 If you stop for any reason before the PR is merged — blocked, out of
-context, told to stop, spec turned out wrong — push the branch, then leave
+context, told to stop, spec turned out wrong, a blocking review finding
+open after two rounds — push the branch, then leave
 exactly one comment and release the claim. If a person is present in this session, show the text first and wait for a yes before posting. Running unattended, post directly.
 
 ```markdown

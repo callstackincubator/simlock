@@ -56,8 +56,9 @@ request, closed — not from a label. The branch for issue `<n>` is always
    code, the message, the field. To reject the shape but keep the
    reproduction, reply and re-add `bug:triage`.
 6. An agent running `deliver` claims the `bug:ready` issue, creates `bug/<n>`
-   from the repro branch, and opens a PR that closes the issue. The triage test is now
-   the regression test. Merge closes the bug.
+   from the repro branch, has the change reviewed (below), and opens a PR
+   that closes the issue. The triage test is now the regression test. Merge
+   closes the bug.
 
 ## A feature, delivered as one PR
 
@@ -83,9 +84,9 @@ request, closed — not from a label. The branch for issue `<n>` is always
 5. Once Open questions is empty and every linked ADR is accepted, the
    maintainer adds `feature:ready`. The ADRs move to _Accepted — not yet
    implemented_.
-6. An agent running `deliver` claims it, works on `feature/<n>`, and opens a
-   PR whose body walks every completion condition. Merge closes the feature, and its ADRs flip to
-   _Accepted_.
+6. An agent running `deliver` claims it, works on `feature/<n>`, has the
+   change reviewed (below), and opens a PR whose body walks every completion
+   condition. Merge closes the feature, and its ADRs flip to _Accepted_.
 
 ## A feature, split into tasks
 
@@ -101,14 +102,40 @@ of a Technical spec section on the feature, it produces sub-issues.
    time. From then on the automation promotes a task to `task:ready` the
    moment its box is ticked, its Technical spec has content, and every issue
    under Depends on is closed. Nobody re-reads the dependency graph by hand.
-7. Agents claim `task:ready` issues one PR each, on `task/<n>`. As tasks close, the ones they
-   unblocked become ready on their own.
+7. Agents claim `task:ready` issues one PR each, on `task/<n>`, each PR
+   reviewed before it opens (below). As tasks close, the ones they unblocked
+   become ready on their own.
 8. Verification is part of delivery. Every task PR walks its Done when, and
    the PR that closes the last open sub-issue also walks the feature's
    Completion conditions. When that last sub-issue closes, the automation
    comments on the feature, and the maintainer closes it. If the feature
    came from a request, the request closes on its own with a pointer to the
    feature.
+
+## Review before the PR
+
+A PR arrives reviewed; it is not reviewed on arrival. Before opening one,
+the delivering agent runs the `review` skill, which spawns two reviewers on
+the most capable model available. Neither has seen the delivering session,
+and neither sees what the other sees. The spec reviewer gets the issue, its
+parent, its ADRs and the diff, and answers whether every line of the spec
+is delivered, whether the diff does anything the spec did not ask for, and
+whether each test proves the claim in its title. The code reviewer gets the
+agent rules, the ADR index and the diff, never the issue, and answers what
+input or interleaving makes each changed function wrong and whether a rule
+is broken; it works in its own worktree and may break code to see what the
+suite catches. The two are blind to each other on purpose: a reviewer
+holding both the spec and the rules resolves a conflict between them
+silently, and the maintainer wants to see that conflict, because it usually
+means the spec is missing a line.
+
+Findings are claims. The agent verifies each against the code, fixes what
+it confirms, and lists what it rejects in the PR body under `## Review`, one
+line each with the reason. A confirmed fix re-runs the review that raised
+it, once. A blocking finding still open after that is a contested change:
+the agent hands off with it instead of opening the PR. The same two reviews
+run on a person's PR when the maintainer asks; there the agent posts the
+findings as a comment and pushes nothing.
 
 ## Handoffs between agents
 
@@ -144,9 +171,9 @@ issue if needed; a silent `bug:needs-info` closes after two weeks; a feature
 whose last sub-issue closed gets a note to close it; a completed feature
 closes its request; a PR closed without merging or a claim silent for three
 days releases the claim; a PR from a `<kind>/<n>` branch must close `#<n>`
-and nothing else. The repo's
-skills — `spec-session`, `triage-bug`, `deliver` — handle the transitions an
-agent makes as part of its own procedure.
+and nothing else. The repo's skills — `spec-session`, `triage-bug`,
+`deliver`, `review` — handle the transitions an agent makes as part of its
+own procedure, and the reviews are the delivering agent's job, not CI's.
 
 Four transitions are judgments and stay manual on purpose: `bug:new` to
 `bug:triage`, `bug:triage` to `bug:ready`, `feature:spec` to
@@ -171,4 +198,4 @@ when it closes. See [adr/README.md](adr/README.md).
 - Labels: `.github/labels.json`, synced by `.github/workflows/labels.yml`
 - Automation: `.github/workflows/issue-state.yml`
 - Skills: `.claude/skills/spec-session`, `.claude/skills/triage-bug`,
-  `.claude/skills/deliver`
+  `.claude/skills/deliver`, `.claude/skills/review`
