@@ -471,7 +471,7 @@ export const configSchema = z.object({
   android: z.object({
     emulator: z.object({
       headless: z.boolean(),
-      gpu: z.string(),
+      gpu: z.string().min(1),
       audio: z.boolean(),
       bootAnimation: z.boolean(),
     }),

@@ -838,6 +838,11 @@ describe("AndroidDriver", () => {
         filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
       ).resolves.toBe(true);
       expect(runner.calls.filter((call) => call.args.includes("save"))).toHaveLength(0);
+      // A recovered device is re-marked like any other ready device: the mark is what proves
+      // the device is still Simlock's on the next reconcile.
+      expect(
+        runner.calls.filter((call) => call.args.some((arg) => arg.includes("simlock-mark.json"))),
+      ).toHaveLength(1);
     });
   });
 

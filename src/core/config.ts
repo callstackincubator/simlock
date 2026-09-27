@@ -188,9 +188,10 @@ export interface Config {
   };
   /**
    * How this machine's Android emulators are launched. Operator configuration of the Android
-   * driver, the same way `ios.slim` configures the iOS one: the core hands the block to the
-   * driver unread, and no lease request can set it. Which emulator flag a key becomes is the
-   * driver's business. Applies at a device's next boot.
+   * driver, the same way `ios.slim` configures the iOS one: the core validates each value's
+   * type and hands the block to the driver without interpreting it, and no lease request can
+   * set it. Which emulator flag a key becomes is the driver's business. Applies at a device's
+   * next boot.
    */
   readonly android: {
     readonly emulator: {
