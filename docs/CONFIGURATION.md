@@ -77,7 +77,9 @@ non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 `android.emulator.headless`, `android.emulator.audio`, and
 `android.emulator.bootAnimation` are booleans, and `android.emulator.gpu` a
 non-empty string. Any other value is rejected at load, and the error names the
-key.
+key. Simlock does not check that a `gpu` string names a mode the emulator
+knows: a mode the emulator rejects fails that device's next boot, not the
+config load.
 `mode` must be exactly `"worker"` or `"gateway"`. `gateway.url` must be an
 absolute `ws`/`wss` URL — `http`/`https` are rejected — and `gateway.token`
 a non-empty string; **in `mode: "worker"`**, setting either without the other

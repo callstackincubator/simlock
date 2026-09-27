@@ -600,19 +600,27 @@ describe("AndroidDriver", () => {
       emulator: AndroidEmulatorLaunchOptions,
       expectations: (flags: readonly string[]) => ScriptedProcessExpectation[],
       flags: readonly string[],
+      capturedUnder: {
+        readonly emulator?: AndroidEmulatorLaunchOptions;
+        readonly emulatorFlags?: readonly string[];
+      } = {},
+      purpose?: "prepare" | "recover",
     ) => {
-      const harness = await provisionedHarness();
+      const harness = await provisionedHarness(capturedUnder);
       await harness.driver.makeReady(harness.device);
       await harness.filesystem.mkdirp(
         `${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`,
       );
+      // A recovery boot never reads the baseline hash, so it never asks the emulator's version.
       const runner = new ScriptedProcessRunner([
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ...(purpose === "recover"
+          ? []
+          : [processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9")]),
         ...expectations(flags),
         markWriteExpectation("emulator-5586", "device-0"),
       ]);
       const driver = await createDriver(harness.filesystem, runner, { emulator });
-      await driver.makeReady(harness.device);
+      await driver.makeReady(harness.device, purpose === undefined ? undefined : { purpose });
       return { filesystem: harness.filesystem, runner };
     };
     const rebuild = (flags: readonly string[]) =>
@@ -699,6 +707,138 @@ describe("AndroidDriver", () => {
         ).resolves.toBe(true);
       },
     );
+
+    it("rebuilds the clean baseline on the next boot after gpu changes from one explicit mode to another", async () => {
+      const flags = ["-gpu", "swiftshader_indirect"];
+      const { filesystem, runner } = await bootAfterRestartWith(
+        { ...defaults, gpu: "swiftshader_indirect" },
+        rebuild,
+        flags,
+        { emulator: { ...defaults, gpu: "host" }, emulatorFlags: ["-gpu", "host"] },
+      );
+
+      expect(emulatorLaunches(runner)[0]).toEqual([
+        "-avd",
+        "simlock_one",
+        "-port",
+        "5586",
+        "-no-snapshot-save",
+        ...flags,
+        "-wipe-data",
+        "-no-snapshot-load",
+      ]);
+      await expect(
+        filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
+      ).resolves.toBe(false);
+    });
+
+    it("keeps the clean baseline after audio changes while headless stays on", async () => {
+      const flags = ["-no-window", "-no-audio"];
+      const { filesystem, runner } = await bootAfterRestartWith(
+        { ...defaults, audio: false, headless: true },
+        restore,
+        flags,
+        { emulator: { ...defaults, headless: true }, emulatorFlags: ["-no-window"] },
+      );
+
+      expect(emulatorLaunches(runner)).toEqual([
+        [
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          ...flags,
+          "-snapshot",
+          "simlock_clean_baseline",
+        ],
+      ]);
+      await expect(
+        filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
+      ).resolves.toBe(true);
+    });
+
+    it("keeps a clean baseline captured before android.emulator existed, so an upgrade does not wipe the device", async () => {
+      // The hash the driver wrote for this exact fixture (image, emulator version, config.ini)
+      // before `android.emulator` existed. Under the default launch the hash must still be
+      // this value; otherwise every device's first boot after the upgrade is a data wipe.
+      const hashBeforeLaunchOptionsExisted = "4e9b7a98";
+      const harness = await provisionedHarness();
+      await harness.driver.makeReady(harness.device);
+      const metadataPath = `${avdDirectory}/simlock_one.avd/simlock-clean-baseline.json`;
+      const written = JSON.parse(await harness.filesystem.readFile(metadataPath)) as {
+        readonly configHash: string;
+      };
+      expect(written.configHash).toBe(hashBeforeLaunchOptionsExisted);
+
+      await harness.filesystem.mkdirp(
+        `${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`,
+      );
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ...restore([]),
+        markWriteExpectation("emulator-5586", "device-0"),
+      ]);
+      const driver = await createDriver(harness.filesystem, runner, { emulator: defaults });
+      await driver.makeReady(harness.device);
+
+      expect(emulatorLaunches(runner)[0]).toContain("simlock_clean_baseline");
+      expect(emulatorLaunches(runner)[0]).not.toContain("-wipe-data");
+    });
+
+    it("recovering a leased device after a restart boots it cold, never wiping it or loading a snapshot, even when headless changed", async () => {
+      const flags = ["-no-window"];
+      const coldBoot = (launchFlags: readonly string[]): ScriptedProcessExpectation[] => [
+        {
+          hangs: true,
+          match: {
+            args: [
+              "-avd",
+              "simlock_one",
+              "-port",
+              "5586",
+              "-no-snapshot-save",
+              ...launchFlags,
+              "-no-snapshot-load",
+            ],
+            command: binaries.emulator,
+          },
+        },
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
+          "1\n",
+        ),
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
+          "",
+        ),
+      ];
+      const { filesystem, runner } = await bootAfterRestartWith(
+        { ...defaults, headless: true },
+        coldBoot,
+        flags,
+        {},
+        "recover",
+      );
+
+      expect(emulatorLaunches(runner)).toEqual([
+        [
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          ...flags,
+          "-no-snapshot-load",
+        ],
+      ]);
+      await expect(
+        filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
+      ).resolves.toBe(true);
+      expect(runner.calls.filter((call) => call.args.includes("save"))).toHaveLength(0);
+    });
   });
 
   it("shuts down and deletes only the provisioned simlock AVD", async () => {

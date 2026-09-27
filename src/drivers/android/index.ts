@@ -819,8 +819,22 @@ export class AndroidDriver implements Driver {
     return { address: serialFor(port), deviceId: avdName, driverData };
   }
 
-  /** Returns the device with its address re-read: see `Driver.makeReady` for why it is read here. */
-  async makeReady(device: DriverDevice): Promise<DriverDevice> {
+  /**
+   * Returns the device with its address re-read: see `Driver.makeReady` for why it is read here.
+   *
+   * `options.purpose === "recover"` boots and nothing else. The clean-baseline check below can
+   * decide to wipe the device (a baseline hash that no longer matches: an emulator upgrade, a
+   * config.ini change, or a changed `android.emulator.headless`/`gpu`) or to capture a fresh
+   * baseline from whatever is on the device -- and either would run against a device that is
+   * still leased, whose data is the agent's. So a recovery boot skips the baseline logic
+   * entirely: a cold boot from disk, never a snapshot load and never a wipe. Whatever the
+   * baseline check would have decided is decided instead by the next `reclaim`, once the
+   * lease is over.
+   */
+  async makeReady(
+    device: DriverDevice,
+    options?: { readonly purpose: "prepare" | "recover" },
+  ): Promise<DriverDevice> {
     const data = this.#dataFor(device);
     return this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
@@ -834,30 +848,14 @@ export class AndroidDriver implements Driver {
         return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
-      const baselineHash = await this.#baselineHash(data.avdName);
-      if (!state.needsWipe && baselineHash !== undefined) {
-        const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
-        if (baselineHash === currentHash) {
-          state.baselineCaptured = true;
-          state.snapshotExpected = true;
-        } else {
-          await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
-          state.baselineCaptured = false;
-          state.needsWipe = true;
-          state.snapshotExpected = false;
-        }
+      if (options?.purpose === "recover") {
+        await this.#startEmulator(data, state, ["-no-snapshot-load"], false);
+        await this.#writeMark(data);
+        return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
-      await this.#startEmulator(
-        data,
-        state,
-        state.needsWipe
-          ? ["-wipe-data", "-no-snapshot-load"]
-          : state.snapshotExpected
-            ? ["-snapshot", CLEAN_BASELINE]
-            : ["-no-snapshot-load"],
-        state.snapshotExpected,
-      );
+      await this.#reconcileBaseline(data, state);
+      await this.#startEmulator(data, state, prepareLaunchArgs(state), state.snapshotExpected);
       state.needsWipe = false;
       state.snapshotExpected = false;
       if (!state.baselineCaptured) {
@@ -1567,6 +1565,30 @@ export class AndroidDriver implements Driver {
     }
   }
 
+  /**
+   * Decides, from the persisted baseline metadata, whether the coming boot can load the clean
+   * baseline or must wipe and rebuild it: a stored hash that still matches means load it; one
+   * that no longer matches (emulator upgrade, config.ini change, a changed
+   * `android.emulator.headless`/`gpu`) means the snapshot directory goes and the boot wipes.
+   * Never called on a recovery boot -- see `makeReady`.
+   */
+  async #reconcileBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
+    const baselineHash = await this.#baselineHash(data.avdName);
+    if (state.needsWipe || baselineHash === undefined) {
+      return;
+    }
+    const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
+    if (baselineHash === currentHash) {
+      state.baselineCaptured = true;
+      state.snapshotExpected = true;
+      return;
+    }
+    await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
+    state.baselineCaptured = false;
+    state.needsWipe = true;
+    state.snapshotExpected = false;
+  }
+
   async #captureBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
     await this.#runOrThrow(this.#sdk.adb, [
       "-s",
@@ -2050,6 +2072,14 @@ function baselineLaunchInputs(
     return [];
   }
   return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+}
+
+/** The boot a `prepare`-purpose `makeReady` runs, from what `#reconcileBaseline` decided. */
+function prepareLaunchArgs(state: DeviceState): readonly string[] {
+  if (state.needsWipe) {
+    return ["-wipe-data", "-no-snapshot-load"];
+  }
+  return state.snapshotExpected ? ["-snapshot", CLEAN_BASELINE] : ["-no-snapshot-load"];
 }
 
 function stableHash(parts: readonly string[]): string {

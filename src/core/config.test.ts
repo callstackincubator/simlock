@@ -821,7 +821,7 @@ describe("loadConfig", () => {
     ).rejects.toThrow(`Invalid config value for "${path}"`);
   });
 
-  it("warns about and drops an unknown key under android.emulator, so no free-form launch argument reaches the driver", async () => {
+  it("warns about and drops an unknown key under android.emulator", async () => {
     const filesystem = new MemoryFilesystem();
     const warn = vi.fn();
     await filesystem.mkdirp("/home/agent/.simlock");
