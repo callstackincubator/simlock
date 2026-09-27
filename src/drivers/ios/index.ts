@@ -79,7 +79,7 @@ export const IOS_PASSTHROUGH_TOOL = "simctl";
  * reads as tampering on the next reconcile. Injecting `--set` for them would hand back
  * exactly the capability the device set exists to take away (ADR 0001, decision 7).
  */
-const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
+export const REFUSED_SIMCTL_VERBS: ReadonlySet<string> = new Set(["create", "erase", "delete"]);
 
 /**
  * simctl's usage is `simctl [--set <path>] [--profiles <path>] <subcommand>`, so these are
@@ -98,7 +98,7 @@ const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
  * set, for every agent, and each affected lease then spends its recovery budget rebooting
  * -- one that runs out ends as `lease_lost`. Shutting down a single device stays allowed.
  */
-const SHUTDOWN_ALL_TARGET = "all";
+export const SHUTDOWN_ALL_TARGET = "all";
 
 /** Every lifecycle refusal ends the same way: the Simlock command that does it safely. */
 const RECLAIM_INSTEAD =

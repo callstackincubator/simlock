@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ProgressNotification } from "@modelcontextprotocol/sdk/types.js";
 
+import { AGENT_INSTRUCTIONS } from "../instructions/index.js";
+
 import {
   leaseSimulatorInputSchema,
   leaseSimulatorOutputSchema,
@@ -19,6 +21,8 @@ import {
 } from "./session.js";
 
 const SERVER_INFO = { name: "simlock", version: "1.0.0" };
+
+const INSTRUCTIONS_URI = "simlock://instructions";
 
 /**
  * Progress is reported on a 3-stage scale (queued / provisioning-or-reclaiming / booting), each
@@ -93,7 +97,23 @@ function createLeaseProgressReporter(
 
 /** Creates the MCP tool surface for one lease-owning session. */
 export function createMcpServer(session: McpSession): McpServer {
-  const server = new McpServer(SERVER_INFO, { capabilities: { logging: {} } });
+  const server = new McpServer(SERVER_INFO, { capabilities: { logging: {}, resources: {} } });
+
+  // The same text `simlock instructions` prints, so a client can put it in the agent's context
+  // without an operator pasting it. A resource, not a tool: it is read, never invoked.
+  server.registerResource(
+    "instructions",
+    INSTRUCTIONS_URI,
+    {
+      title: "Simlock agent instructions",
+      description:
+        "The rules an agent must follow to share simulators and emulators through Simlock: never call the platform tools directly, how to lease and release, what each exit code means, and which commands are refused.",
+      mimeType: "text/markdown",
+    },
+    (uri) => ({
+      contents: [{ mimeType: "text/markdown", text: AGENT_INSTRUCTIONS, uri: uri.href }],
+    }),
+  );
 
   server.registerTool(
     "lease_simulator",

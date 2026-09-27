@@ -44,6 +44,7 @@ import {
 } from "../lease-policy/index.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
+import { renderInstructions } from "../instructions/index.js";
 
 const USAGE = `Usage: simlock <command> [options]
 
@@ -55,6 +56,7 @@ Commands:
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
+  instructions [--json]       Print the rules an agent must follow, for its prompt
 Run 'simlock <command> --help' for command usage.
 
 Pass --token <secret> anywhere on the command line to connect as admin
@@ -608,6 +610,8 @@ export async function runCli(
         );
       case "mcp":
         return await runMcp(rest.slice(1), environment);
+      case "instructions":
+        return runInstructions(rest.slice(1), environment);
       default:
         throw new UsageError(withHelpHint(`Unknown command: ${rest[0]}`));
     }
@@ -867,6 +871,26 @@ async function runMcp(argv: readonly string[], environment: CliEnvironment): Pro
   const runMcpStdio =
     environment.runMcpStdio ?? (await (environment.loadMcpStdio ?? loadDefaultMcpStdio)());
   await runMcpStdio();
+  return 0;
+}
+
+/**
+ * Prints the static agent instructions. Never connects to the daemon, so it never auto-starts
+ * one either: the text belongs to the frontend, and the daemon has nothing to add to it.
+ */
+function runInstructions(argv: readonly string[], environment: CliEnvironment): number {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+  });
+  if (values.help) {
+    environment.stdout.write("Usage: simlock instructions [--json]\n");
+    return 0;
+  }
+  if (values.positionals.length > 0)
+    throw new UsageError(`instructions accepts no arguments: ${values.positionals.join(" ")}`);
+  if (values.json) environment.stdout.write(`${renderInstructions("json")}\n`);
+  else environment.stdout.write(renderInstructions("text"));
   return 0;
 }
 

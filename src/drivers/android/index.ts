@@ -227,7 +227,7 @@ const RECLAIM_INSTEAD =
  * positional scan is the only rule that catches every spelling without this module having
  * to parse adb's own option grammar.
  */
-const REFUSED_ADB_VERB = "kill-server";
+export const REFUSED_ADB_VERB = "kill-server";
 
 /**
  * Console commands `simlock adb` will not proxy, matched as a run of adjacent arguments
@@ -346,7 +346,7 @@ function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
   return walked.kind === "refused" ? walked.argument : undefined;
 }
 
-const REFUSED_ADB_SEQUENCES: readonly {
+export const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
   readonly reason: string;
 }[] = [

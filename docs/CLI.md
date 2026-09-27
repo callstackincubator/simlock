@@ -3,7 +3,7 @@
 Part of the user manual: every command the simlock CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
-agents are the primary audience. `status`, `catalog`, and
+agents are the primary audience. `status`, `catalog`, `instructions`, and
 `daemon <start|stop|status|logs>` are the exception: they default to a
 human-oriented view for interactive/operator use and accept `--json` to
 switch to the structured form. Every other command's output is already
@@ -792,7 +792,8 @@ token revoke <token-id>` closes any uplink that token opened.
 Start Simlock's local stdio MCP server. It accepts no flags. Standard output is
 reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The server
 exposes the focused `list_devices`, `lease_simulator`, `release_simulator`, and
-`lease_status` tool surface for one agent session. The server auto-starts the
+`lease_status` tool surface for one agent session, and one resource,
+`simlock://instructions`: the text `simlock instructions` prints. The server auto-starts the
 daemon when needed, on a tool call; its renew timer reconnects only to a
 daemon that is already listening, and never launches one. `lease_simulator`
 accepts the contract's optional `ttlMs` — defaulting to `lease.defaultTtlMs`
@@ -845,6 +846,27 @@ Every other field keeps the contract's own camelCase names it already had
 under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
 `allowDownload`, `requesterId`, ...); those did not change shape, only their
 schema's source of truth.
+
+## `simlock instructions [--json]`
+
+Prints the rules an agent must follow to share devices through Simlock, as one
+self-contained Markdown block to paste into an agent's system prompt or its
+`AGENTS.md`. Simlock only works when every agent goes through it, and this is
+the text that tells an agent how: never call `simctl`, `adb`, `avdmanager`, or
+`emulator` directly; set a stable `SIMLOCK_AGENT_ID`; run `simlock catalog`
+before `simlock lease`, and keep the lease alive or renew it; hold one lease at
+a time and release it; never pass `--allow-download` unless told to; what exit
+codes 10, 11, 13, and 14 mean; how to reach the leased device, and which
+passthrough commands are refused on purpose; and the four MCP tools.
+
+`--json` prints one JSON object instead, `{"instructions":"<markdown>"}`, whose
+`instructions` field is exactly the text the plain command prints. Any other
+flag or argument is a usage error (exit 2).
+
+The text is static: it does not depend on the catalog, the config, or the
+daemon, and the command never connects to or starts the daemon. The MCP server
+serves the same text as the `simlock://instructions` resource
+(`text/markdown`), so an MCP client can read it without anyone pasting it.
 
 ## `simlock status`
 
