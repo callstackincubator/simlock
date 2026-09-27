@@ -30,6 +30,17 @@ describe("daemon lifecycle & recovery", () => {
     expect(countOccurrences(after, "Daemon started")).toBe(startedCountBefore);
   });
 
+  it("simlock config renders the android.emulator block with its defaults", async () => {
+    const env = await withDaemon({ mode: "running" });
+
+    const config = await env.cli(["config"]);
+
+    expect(config.code).toBe(0);
+    expect((config.json as { android?: unknown }).android).toEqual({
+      emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: false },
+    });
+  });
+
   it("recovers from a kill -9 that leaves a stale socket behind", async () => {
     const env = await withDaemon({ mode: "running" });
     expect(existsSync(env.socketPath)).toBe(true);

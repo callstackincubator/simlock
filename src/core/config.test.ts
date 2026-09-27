@@ -764,6 +764,82 @@ describe("loadConfig", () => {
     expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.turboMode"');
   });
 
+  it("defaults android.emulator to a windowed launch with the emulator's GPU, audio, and boot animation", async () => {
+    const config = await loadConfig({
+      configPath,
+      filesystem: new MemoryFilesystem(),
+      systemStats: createStats(),
+    });
+
+    expect(config.android.emulator).toEqual({
+      audio: true,
+      bootAnimation: true,
+      gpu: "auto",
+      headless: false,
+    });
+  });
+
+  it("applies a file-level android.emulator override", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({
+        android: {
+          emulator: {
+            audio: false,
+            bootAnimation: false,
+            gpu: "swiftshader_indirect",
+            headless: true,
+          },
+        },
+      }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.android.emulator).toEqual({
+      audio: false,
+      bootAnimation: false,
+      gpu: "swiftshader_indirect",
+      headless: true,
+    });
+  });
+
+  it.each([
+    [{ android: { emulator: { headless: "yes" } } }, "android.emulator.headless"],
+    [{ android: { emulator: { audio: 0 } } }, "android.emulator.audio"],
+    [{ android: { emulator: { bootAnimation: "false" } } }, "android.emulator.bootAnimation"],
+    [{ android: { emulator: { gpu: "" } } }, "android.emulator.gpu"],
+    [{ android: { emulator: { gpu: true } } }, "android.emulator.gpu"],
+  ])("rejects a malformed android.emulator key at load, naming it", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(`Invalid config value for "${path}"`);
+  });
+
+  it("warns about and drops an unknown key under android.emulator, so no free-form launch argument reaches the driver", async () => {
+    const filesystem = new MemoryFilesystem();
+    const warn = vi.fn();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ android: { emulator: { launchArgs: ["-port", "5554"] } } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "android.emulator.launchArgs"');
+    expect(Object.keys(config.android.emulator).sort()).toEqual([
+      "audio",
+      "bootAnimation",
+      "gpu",
+      "headless",
+    ]);
+  });
+
   it("applies a file-level stalledTransition override", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
@@ -1111,6 +1187,20 @@ describe("loadConfig modes (ADR 0005)", () => {
     // merged, so a config file can be shared between a worker and a gateway with only `mode`
     // differing. The warning is what makes that visible rather than silent.
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Ignoring "lease"'));
+  });
+
+  it("warns about android.emulator on a gateway without refusing the config", async () => {
+    const warn = vi.fn();
+    const config = await load(
+      { mode: "gateway", android: { emulator: { headless: true } } },
+      { warn },
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      'Ignoring "android": it configures a worker, and this daemon runs in gateway mode.',
+    );
+    // Ignored, not rejected: the gateway still starts.
+    expect(config.mode).toBe("gateway");
   });
 
   it("warns about the worker-side gateway.* keys on a gateway, but not the gateway's own", async () => {

@@ -24,6 +24,7 @@ import {
   ANDROID_PASSTHROUGH_TOOL,
   SdkMissingError,
   type AndroidDriverDiagnostic,
+  type AndroidEmulatorLaunchOptions,
 } from "../drivers/android/index.js";
 import type { ComponentInstallDiagnostic } from "../drivers/diagnostics.js";
 import { IOS_PASSTHROUGH_TOOL, IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
@@ -190,6 +191,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           processSupervisor,
           simlockHome: dataDirectory,
           slim: config.ios.slim,
+          androidEmulator: config.android.emulator,
           tcpProbe,
         })
       : { drivers: options.drivers, rejections: [] };
@@ -762,6 +764,11 @@ export interface DriverDiscoveryContext {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
   };
+  /**
+   * How the Android driver launches emulators (`android.emulator` in config). Handed over
+   * unread; omitted or undefined leaves the driver's own default launch untouched.
+   */
+  readonly androidEmulator?: AndroidEmulatorLaunchOptions;
 }
 
 /** Drivers that started, and the platforms that refused to -- both are startup outcomes. */
@@ -870,6 +877,7 @@ async function discoverAndroidDriver(
         ? {}
         : { downloadTimeoutMs: options.downloadTimeoutMs }),
       driverConfig: options.driversConfig["android"] ?? {},
+      emulator: options.androidEmulator,
       env: process.env,
       filesystem: options.filesystem,
       homeDirectory: homedir(),

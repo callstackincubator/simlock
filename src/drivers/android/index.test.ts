@@ -32,6 +32,7 @@ import {
   AndroidLicenseNotAcceptedError,
   SdkMissingError,
   type AndroidDriverDiagnostic,
+  type AndroidEmulatorLaunchOptions,
 } from "./index.js";
 
 const sdk = "/android-sdk";
@@ -508,6 +509,196 @@ describe("AndroidDriver", () => {
       ],
       command: binaries.emulator,
     });
+  });
+
+  describe("android.emulator launch options", () => {
+    const defaults: AndroidEmulatorLaunchOptions = {
+      audio: true,
+      bootAnimation: true,
+      gpu: "auto",
+      headless: false,
+    };
+    const emulatorLaunches = (runner: ScriptedProcessRunner) =>
+      runner.calls
+        .filter((call) => call.command === binaries.emulator && call.args.includes("-avd"))
+        .map((call) => call.args);
+
+    it("launches with the same arguments as before these options existed under the default config", async () => {
+      for (const emulator of [undefined, defaults]) {
+        const harness = await provisionedHarness(emulator === undefined ? {} : { emulator });
+
+        await harness.driver.makeReady(harness.device);
+
+        expect(emulatorLaunches(harness.runner)).toEqual([
+          ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-no-snapshot-load"],
+          [
+            "-avd",
+            "simlock_one",
+            "-port",
+            "5586",
+            "-no-snapshot-save",
+            "-snapshot",
+            "simlock_clean_baseline",
+          ],
+        ]);
+      }
+    });
+
+    it("adds -no-window for headless, -no-audio for audio: false, and -no-boot-anim for bootAnimation: false", async () => {
+      const flags = ["-no-window", "-no-audio", "-no-boot-anim"];
+      const harness = await provisionedHarness({
+        emulator: { ...defaults, audio: false, bootAnimation: false, headless: true },
+        emulatorFlags: flags,
+      });
+
+      await harness.driver.makeReady(harness.device);
+
+      const launches = emulatorLaunches(harness.runner);
+      expect(launches).toHaveLength(2);
+      for (const args of launches) {
+        expect(args.slice(0, 5 + flags.length)).toEqual([
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          ...flags,
+        ]);
+      }
+    });
+
+    it("passes a gpu mode as -gpu <mode>, and passes nothing for auto", async () => {
+      const harness = await provisionedHarness({
+        emulator: { ...defaults, gpu: "swiftshader_indirect" },
+        emulatorFlags: ["-gpu", "swiftshader_indirect"],
+      });
+      await harness.driver.makeReady(harness.device);
+      expect(emulatorLaunches(harness.runner)[0]).toEqual([
+        "-avd",
+        "simlock_one",
+        "-port",
+        "5586",
+        "-no-snapshot-save",
+        "-gpu",
+        "swiftshader_indirect",
+        "-no-snapshot-load",
+      ]);
+
+      const auto = await provisionedHarness({ emulator: { ...defaults, gpu: "auto" } });
+      await auto.driver.makeReady(auto.device);
+      for (const args of emulatorLaunches(auto.runner)) {
+        expect(args).not.toContain("-gpu");
+      }
+    });
+
+    /**
+     * A settings change reaches the driver through a daemon restart, so each case captures a
+     * baseline under the default launch and then boots the device from a driver constructed with
+     * the changed setting, reading the persisted baseline metadata the way a restarted daemon does.
+     */
+    const bootAfterRestartWith = async (
+      emulator: AndroidEmulatorLaunchOptions,
+      expectations: (flags: readonly string[]) => ScriptedProcessExpectation[],
+      flags: readonly string[],
+    ) => {
+      const harness = await provisionedHarness();
+      await harness.driver.makeReady(harness.device);
+      await harness.filesystem.mkdirp(
+        `${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`,
+      );
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ...expectations(flags),
+        markWriteExpectation("emulator-5586", "device-0"),
+      ]);
+      const driver = await createDriver(harness.filesystem, runner, { emulator });
+      await driver.makeReady(harness.device);
+      return { filesystem: harness.filesystem, runner };
+    };
+    const rebuild = (flags: readonly string[]) =>
+      baselineBuildExpectations({
+        emulatorFlags: flags,
+        launchArgs: ["-wipe-data", "-no-snapshot-load"],
+      });
+    const restore = (flags: readonly string[]): ScriptedProcessExpectation[] => [
+      {
+        hangs: true,
+        match: {
+          args: [
+            "-avd",
+            "simlock_one",
+            "-port",
+            "5586",
+            "-no-snapshot-save",
+            ...flags,
+            "-snapshot",
+            "simlock_clean_baseline",
+          ],
+          command: binaries.emulator,
+        },
+      },
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
+        "1\n",
+      ),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
+        "",
+      ),
+    ];
+
+    it.each([
+      ["headless", { ...defaults, headless: true }, ["-no-window"]],
+      ["gpu", { ...defaults, gpu: "swiftshader_indirect" }, ["-gpu", "swiftshader_indirect"]],
+    ] as const)(
+      "rebuilds the clean baseline on the next boot after %s changes",
+      async (_key, emulator, flags) => {
+        const { filesystem, runner } = await bootAfterRestartWith(emulator, rebuild, flags);
+
+        expect(emulatorLaunches(runner)[0]).toEqual([
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          ...flags,
+          "-wipe-data",
+          "-no-snapshot-load",
+        ]);
+        await expect(
+          filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
+        ).resolves.toBe(false);
+        expect(runner.calls.filter((call) => call.args.includes("save"))).toHaveLength(1);
+      },
+    );
+
+    it.each([
+      ["audio", { ...defaults, audio: false }, ["-no-audio"]],
+      ["bootAnimation", { ...defaults, bootAnimation: false }, ["-no-boot-anim"]],
+    ] as const)(
+      "keeps the clean baseline and boots from it after %s changes",
+      async (_key, emulator, flags) => {
+        const { filesystem, runner } = await bootAfterRestartWith(emulator, restore, flags);
+
+        expect(emulatorLaunches(runner)).toEqual([
+          [
+            "-avd",
+            "simlock_one",
+            "-port",
+            "5586",
+            "-no-snapshot-save",
+            ...flags,
+            "-snapshot",
+            "simlock_clean_baseline",
+          ],
+        ]);
+        await expect(
+          filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
+        ).resolves.toBe(true);
+      },
+    );
   });
 
   it("shuts down and deletes only the provisioned simlock AVD", async () => {
@@ -2237,6 +2428,9 @@ live(
 async function provisionedHarness(
   options: {
     readonly bootCompleted?: string;
+    readonly emulator?: AndroidEmulatorLaunchOptions;
+    /** The flags `emulator` is expected to add to every launch. */
+    readonly emulatorFlags?: readonly string[];
     readonly forBaselineReclaim?: boolean;
     readonly forFullCleanBoot?: boolean;
     readonly forReclaim?: boolean;
@@ -2285,6 +2479,7 @@ async function provisionedHarness(
     expectations.push(
       ...baselineBuildExpectations({
         bootCompleted: options.bootCompleted,
+        emulatorFlags: options.emulatorFlags,
         initialAdbFailures: options.initialAdbFailures,
         launchArgs: ["-no-snapshot-load"],
       }),
@@ -2319,6 +2514,7 @@ async function provisionedHarness(
   const runner = new ScriptedProcessRunner(expectations);
   const driver = await createDriver(filesystem, runner, {
     clock,
+    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
     ids: ["one"],
     ...(options.readinessTimeoutMs === undefined
       ? {}
@@ -2350,6 +2546,7 @@ async function createDriver(
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
     readonly diskSpaceGuard?: DiskSpaceGuard;
     readonly downloadTimeoutMs?: number;
+    readonly emulator?: AndroidEmulatorLaunchOptions;
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly readinessTimeoutMs?: number;
@@ -2390,6 +2587,7 @@ function onlyProvided(options: {
   readonly acceptAndroidLicenses?: boolean;
   readonly diskSpaceGuard?: DiskSpaceGuard;
   readonly downloadTimeoutMs?: number;
+  readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly readinessTimeoutMs?: number;
 }) {
@@ -2401,6 +2599,7 @@ function onlyProvided(options: {
     ...(options.downloadTimeoutMs === undefined
       ? {}
       : { downloadTimeoutMs: options.downloadTimeoutMs }),
+    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
     ...(options.readinessTimeoutMs === undefined
       ? {}
@@ -2491,15 +2690,26 @@ async function androidFilesystem(
 
 function baselineBuildExpectations(options: {
   readonly bootCompleted?: string | undefined;
+  /** What `android.emulator` adds to every launch, right after `-no-snapshot-save`. */
+  readonly emulatorFlags?: readonly string[] | undefined;
   readonly initialAdbFailures?: number | undefined;
   readonly launchArgs: readonly string[];
 }): ScriptedProcessExpectation[] {
   const bootCompleted = options.bootCompleted ?? "1\n";
+  const emulatorFlags = options.emulatorFlags ?? [];
   const expectations: ScriptedProcessExpectation[] = [
     {
       hangs: bootCompleted.trim() !== "1",
       match: {
-        args: ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", ...options.launchArgs],
+        args: [
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          ...emulatorFlags,
+          ...options.launchArgs,
+        ],
         command: binaries.emulator,
       },
     },
@@ -2555,6 +2765,7 @@ function baselineBuildExpectations(options: {
           "-port",
           "5586",
           "-no-snapshot-save",
+          ...emulatorFlags,
           "-snapshot",
           "simlock_clean_baseline",
         ],

@@ -409,6 +409,7 @@ describe("operation input/output round trips", () => {
         maxConcurrentRecoveries: 1,
       },
       ios: { slim: { enabled: false, bootTimeoutMs: 1 } },
+      android: { emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false } },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();

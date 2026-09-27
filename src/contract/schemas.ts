@@ -468,6 +468,14 @@ export const configSchema = z.object({
       bootTimeoutMs: z.number(),
     }),
   }),
+  android: z.object({
+    emulator: z.object({
+      headless: z.boolean(),
+      gpu: z.string(),
+      audio: z.boolean(),
+      bootAnimation: z.boolean(),
+    }),
+  }),
   /** ADR 0005 §3/§6. `url`/`token`/`label` are the worker's half, `disconnectedRetentionMs`
    * the gateway's; a daemon carries the whole block whichever mode it runs in, and simply
    * reads the half that applies (see `Config["gateway"]`). */

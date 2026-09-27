@@ -53,6 +53,10 @@ a warning. Inspect the effective, merged configuration at any time with
 | `ios.slim.enabled`                | Master switch for slim mode: disables iOS simulator daemon categories to cut RAM and CPU overhead per device.                                                                                                                | `false`                                                          |
 | `ios.slim.categories`             | Which daemon categories to disable when slim mode is on. Omitted means every category the driver knows.                                                                                                                      | every known category                                             |
 | `ios.slim.bootTimeoutMs`          | Boot deadline used while slim mode is on, in place of the normal boot timeout.                                                                                                                                                | `10 minutes`                                                     |
+| `android.emulator.headless`       | Launch emulators without a window (`-no-window`). Needed on a host with no display, such as a Linux CI runner. See [Android emulator launch options](#android-emulator-launch-options). | `false`                                                          |
+| `android.emulator.gpu`            | The emulator's GPU mode, passed as `-gpu <mode>` (for example `host`, `swiftshader_indirect`, `guest`). `auto` passes nothing and leaves the emulator's own choice.                                                        | `auto`                                                           |
+| `android.emulator.audio`          | `false` launches emulators without audio (`-no-audio`).                                                                                                                                                                      | `true`                                                           |
+| `android.emulator.bootAnimation`  | `false` launches emulators without the boot animation (`-no-boot-anim`).                                                                                                                                                     | `true`                                                           |
 
 All limit values must be positive integers; all durations and byte sizes
 must be non-negative numbers (milliseconds and bytes, respectively).
@@ -70,6 +74,10 @@ integer in `1`-`65535`.
 numbers.
 `ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
+`android.emulator.headless`, `android.emulator.audio`, and
+`android.emulator.bootAnimation` are booleans, and `android.emulator.gpu` a
+non-empty string. Any other value is rejected at load, and the error names the
+key.
 `mode` must be exactly `"worker"` or `"gateway"`. `gateway.url` must be an
 absolute `ws`/`wss` URL — `http`/`https` are rejected — and `gateway.token`
 a non-empty string; **in `mode: "worker"`**, setting either without the other
@@ -125,7 +133,7 @@ off by default.
 
 **A gateway reads a deliberately small slice of this file**: `mode`, `http.*`,
 `log.*`, `lease.*`, `eventBuffer.*` and `gateway.*`. Every other key —
-capacity, drivers, downloads, idle, warmPool, health, ios, stalledTransition —
+capacity, drivers, downloads, idle, warmPool, health, ios, android, stalledTransition —
 configures devices, which a gateway does not have; each one present in a
 gateway's config is reported with a warning and ignored, the same treatment an
 unknown key gets. The worker-side `gateway.url`/`token`/`label` are warned
@@ -215,7 +223,7 @@ the mismatch changes on a later refresh) — loud enough to catch the
 misconfiguration without silently overriding it.
 
 Everything else — `capacity.*`, `idle.*`, `warmPool.*`, `health.*`,
-`stalledTransition.*`, `drivers.*`, `ios.slim.*`, `diskPressure.*`,
+`stalledTransition.*`, `drivers.*`, `ios.slim.*`, `android.emulator.*`, `diskPressure.*`,
 `downloads.*`, and the worker-side `gateway.url`/`gateway.token`/
 `gateway.label`/`exec.timeoutMs` — is **ignored with a warning**, exactly as
 an unknown key is. That is deliberately the softer treatment: a gateway's
@@ -361,6 +369,42 @@ on costs an extra boot per device -- the daemons are disabled between a
 first boot and a second, slower one -- which is why
 `ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
 especially on slower CI runners.
+
+## Android emulator launch options
+
+`android.emulator` sets how this machine's Android emulators are launched.
+By default each one opens a window, uses the emulator's default GPU mode,
+plays audio, and shows the boot animation. Set it once, in the config file;
+no lease request, MCP call, or HTTP request can change it.
+
+```json
+{
+  "android": {
+    "emulator": {
+      "headless": true,
+      "gpu": "swiftshader_indirect",
+      "audio": false,
+      "bootAnimation": false
+    }
+  }
+}
+```
+
+**A change applies at a device's next boot.** A running emulator keeps the
+flags it started with; restart the daemon to load the new config, and each
+device picks it up the next time it boots.
+
+**Changing `headless` or `gpu` rebuilds a device's clean snapshot.** Simlock
+resets an Android device between leases by loading a clean snapshot, and a
+snapshot taken under one window or GPU mode does not load cleanly under
+another. So on the next boot after either key changes, Simlock wipes the
+device and captures a fresh snapshot, instead of letting every later reset
+fall back to a full wipe. Changing `audio` or `bootAnimation` keeps the
+snapshot.
+
+Only these four keys exist. There is no way to pass other emulator
+arguments from config, so nothing here can move an emulator's port or AVD
+home.
 
 ## Capacity strategies
 

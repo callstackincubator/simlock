@@ -117,6 +117,31 @@ const CLEAN_BASELINE = "simlock_clean_baseline";
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
+/**
+ * How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
+ * reaches the driver at construction and never from a lease request. Only these four settings
+ * exist, each mapped to one fixed emulator flag by `emulatorLaunchFlags`, so config cannot add
+ * `-port`, a different AVD home, or any other argument that would break containment.
+ */
+export interface AndroidEmulatorLaunchOptions {
+  /** `true` adds `-no-window`. */
+  readonly headless: boolean;
+  /** Passed as `-gpu <mode>`; `"auto"` passes nothing. */
+  readonly gpu: string;
+  /** `false` adds `-no-audio`. */
+  readonly audio: boolean;
+  /** `false` adds `-no-boot-anim`. */
+  readonly bootAnimation: boolean;
+}
+
+/** Equal to `android.emulator`'s config defaults: the launch this driver always made. */
+const DEFAULT_EMULATOR_LAUNCH: AndroidEmulatorLaunchOptions = {
+  audio: true,
+  bootAnimation: true,
+  gpu: "auto",
+  headless: false,
+};
+
 export interface AndroidDriverOptions {
   /**
    * Explicit legal consent for Android SDK licenses (`downloads.acceptAndroidLicenses`),
@@ -160,6 +185,12 @@ export interface AndroidDriverOptions {
   readonly tcpProbe: TcpProbe;
   /** `process.getuid?.()`; `undefined` skips the root's ownership check. */
   readonly uid?: number;
+  /**
+   * Launch options applied at each emulator boot; a running emulator keeps the flags it
+   * started with. Omitted means `DEFAULT_EMULATOR_LAUNCH`, the same launch as before these
+   * options existed.
+   */
+  readonly emulator?: AndroidEmulatorLaunchOptions | undefined;
 }
 
 export type AndroidDriverDiagnostic =
@@ -406,6 +437,10 @@ export class AndroidDriver implements Driver {
   readonly #legacyAvdHome: string;
   readonly #diskSpaceGuard: DiskSpaceGuard;
   readonly #downloadTimeoutMs: number;
+  /** `android.emulator` as emulator flags, fixed for this driver's lifetime. */
+  readonly #emulatorFlags: readonly string[];
+  /** The part of `android.emulator` a clean baseline depends on; see `baselineLaunchInputs`. */
+  readonly #baselineLaunchInputs: readonly string[];
   readonly #installLocks = new Map<string, Promise<void>>();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
@@ -433,6 +468,8 @@ export class AndroidDriver implements Driver {
     this.#deviceRoot = deviceRoot;
     this.#diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
     this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
+    this.#baselineLaunchInputs = baselineLaunchInputs(options.emulator);
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi ?? hostAbiFor(process.arch);
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
@@ -1304,19 +1341,20 @@ export class AndroidDriver implements Driver {
   }
 
   async #configHash(avdName: string, image: SystemImage): Promise<string> {
-    const [emulatorVersion, config] = await Promise.all([
-      this.#emulatorVersion(),
-      this.#avdConfig(avdName),
-    ]);
-    return stableHash([`${image.path}@${image.version}`, emulatorVersion, config]);
+    return this.#currentConfigHash(avdName, `${image.path}@${image.version}`);
   }
 
+  /**
+   * What a clean baseline snapshot depends on. A mismatch against the hash stored with the
+   * baseline rebuilds it on the next boot rather than loading a snapshot the emulator would
+   * refuse, which would degrade every later reclaim to a full wipe.
+   */
   async #currentConfigHash(avdName: string, imageIdentity: string): Promise<string> {
     const [emulatorVersion, config] = await Promise.all([
       this.#emulatorVersion(),
       this.#avdConfig(avdName),
     ]);
-    return stableHash([imageIdentity, emulatorVersion, config]);
+    return stableHash([imageIdentity, emulatorVersion, config, ...this.#baselineLaunchInputs]);
   }
 
   async #emulatorVersion(): Promise<string> {
@@ -1495,7 +1533,15 @@ export class AndroidDriver implements Driver {
     // long as any emulator ran.
     const handle = this.#processRunner.spawn(
       this.#sdk.emulator,
-      ["-avd", data.avdName, "-port", String(data.port), "-no-snapshot-save", ...launchArgs],
+      [
+        "-avd",
+        data.avdName,
+        "-port",
+        String(data.port),
+        "-no-snapshot-save",
+        ...this.#emulatorFlags,
+        ...launchArgs,
+      ],
       { env: this.#env(), stdio: "ignore" },
     );
     handle.unref();
@@ -1970,6 +2016,40 @@ function portsFromAdbDevices(output: string): number[] {
 /** See `#mergeConfigIniLines`'s defense-in-depth check. */
 function containsLineBreak(value: string): boolean {
   return /[\r\n]/.test(value);
+}
+
+/**
+ * The one place an `android.emulator` setting becomes an emulator flag. Every value maps to a
+ * fixed flag; `gpu` is the only one carrying a value, and it is always the argument of `-gpu`.
+ */
+function emulatorLaunchFlags(
+  launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
+): string[] {
+  return [
+    ...(launch.headless ? ["-no-window"] : []),
+    ...(launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu ? [] : ["-gpu", launch.gpu]),
+    ...(launch.audio ? [] : ["-no-audio"]),
+    ...(launch.bootAnimation ? [] : ["-no-boot-anim"]),
+  ];
+}
+
+/**
+ * The launch settings a baseline snapshot depends on: the window and the GPU mode change the
+ * emulator's graphics state, so a baseline taken under one does not load cleanly under the
+ * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
+ * their defaults, so a baseline captured before these settings existed keeps its hash and is
+ * not rebuilt (with a data wipe) on the first boot after an upgrade.
+ */
+function baselineLaunchInputs(
+  launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
+): string[] {
+  if (
+    launch.headless === DEFAULT_EMULATOR_LAUNCH.headless &&
+    launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu
+  ) {
+    return [];
+  }
+  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
 }
 
 function stableHash(parts: readonly string[]): string {

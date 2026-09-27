@@ -11,6 +11,7 @@ import {
   Registry,
   type Config,
 } from "../core/index.js";
+import { OPERATIONS } from "../contract/index.js";
 import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
@@ -202,6 +203,24 @@ describe("Dispatcher: parsing", () => {
       dispatcher.dispatch("lease.request", { platform: "ios" }, session()),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
+
+  it.each([
+    ["android", { emulator: { headless: true } }],
+    ["emulator", { headless: true }],
+  ])(
+    "rejects a lease.request carrying an %s field with BAD_REQUEST: emulator launch options are config-only",
+    async (field, value) => {
+      const { dispatcher } = await buildDispatcher();
+      const valid = { model: "Pixel 8", osVersion: "34", platform: "android" };
+      // The same request without the field is well-formed, so the refusal below is about the
+      // field and nothing else.
+      expect(OPERATIONS["lease.request"].input.safeParse(valid).success).toBe(true);
+
+      await expect(
+        dispatcher.dispatch("lease.request", { ...valid, [field]: value }, session()),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    },
+  );
 
   it("rejects a ttlMs above lease.maxTtlMs on a request, rather than clamping it", async () => {
     // ADR 0004 §4: the cap is enforced here rather than in the contract schema, because
@@ -1333,6 +1352,7 @@ function testConfig(
     downloads: { policy: downloadsPolicy, acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
+    android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
       defaultTtlMs: 60_000,
