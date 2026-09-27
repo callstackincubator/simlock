@@ -97,10 +97,11 @@ function createLeaseProgressReporter(
 
 /** Creates the MCP tool surface for one lease-owning session. */
 export function createMcpServer(session: McpSession): McpServer {
-  const server = new McpServer(SERVER_INFO, { capabilities: { logging: {}, resources: {} } });
+  const server = new McpServer(SERVER_INFO, { capabilities: { logging: {} } });
 
   // The same text `simlock instructions` prints, so a client can put it in the agent's context
   // without an operator pasting it. A resource, not a tool: it is read, never invoked.
+  // Registering it is also what declares the `resources` capability -- the SDK adds it.
   server.registerResource(
     "instructions",
     INSTRUCTIONS_URI,

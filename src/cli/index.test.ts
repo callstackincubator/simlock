@@ -2863,6 +2863,26 @@ describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
   });
 });
 
+describe("CLI: instructions", () => {
+  it("--help prints the command's usage instead of the instructions, exit 0", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["instructions", "--help"], output.environmentWith())).resolves.toBe(0);
+
+    expect(output.stdout).toBe("Usage: simlock instructions [--json]\n");
+    expect(output.stderr).toBe("");
+  });
+
+  it("a positional argument fails with USAGE and exit 2, printing nothing on stdout", async () => {
+    const output = outputCapture();
+
+    await expect(runCli(["instructions", "extra"], output.environmentWith())).resolves.toBe(2);
+
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
+  });
+});
+
 describe("CLI: pure helpers", () => {
   it("fallbackRequesterId prefers SIMLOCK_AGENT_ID over a pid-derived default", () => {
     expect(fallbackRequesterId({ SIMLOCK_AGENT_ID: "agent-7" })).toBe("agent-7");

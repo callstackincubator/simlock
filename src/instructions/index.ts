@@ -38,7 +38,7 @@ Simlock hands out simulators and emulators to parallel agents so they do not fig
 
 - \`10\`: timed out waiting for a device. Retry later, or with a longer \`--timeout\`.
 - \`11\`: no capacity, and \`--no-wait\` was set. Retry later, or drop \`--no-wait\` to wait in the queue.
-- \`13\`: you already hold a lease or have a request queued. The error message names that lease: keep using it, or release it first.
+- \`13\`: you already hold a lease or have a request queued. When it is a lease, the error message names it: keep using it, or release it first. When it is a queued request, wait for it or stop the \`simlock lease\` that made it.
 - \`14\`: your background \`simlock lease\` ended because Simlock took the lease back (TTL expiry, an operator release, or a device that could not be recovered). The device is no longer yours: stop using it, and lease again if you still need one.
 
 Every failure also writes one JSON line on stderr, \`{"error":{"code":"...","message":"..."}}\`. Branch on \`code\`, not on the message.
@@ -49,7 +49,7 @@ Every failure also writes one JSON line on stderr, \`{"error":{"code":"...","mes
 - If another tool has to call the real binary, use the grant's \`environment\` block: \`SIMLOCK_IOS_DEVICE_SET\` is the path to pass as \`xcrun simctl --set\`, and \`ANDROID_ADB_SERVER_PORT\` is the port \`adb\` reads on its own. \`simlock lease ... --export-env\` prints it as shell \`export\` lines.
 - When the device is on another machine (through a gateway), only \`simlock simctl --lease <lease-id>\` and \`simlock adb --lease <lease-id>\` can reach it.
 - Some commands are refused on purpose, because they would break the device for Simlock or for other agents. Do not look for a way around them; use \`simlock release\` instead:
-  - \`simlock simctl\` refuses \`create\`, \`erase\`, \`delete\`, \`shutdown all\`, \`runtime delete\`, and a \`--set\` or \`--profiles\` of your own.
+  - \`simlock simctl\` refuses \`create\`, \`erase\`, \`delete\`, \`shutdown all\`, \`runtime delete\`, and any option before the subcommand, \`--set\` and \`--profiles\` included.
   - \`simlock adb\` refuses \`kill-server\`, \`emu kill\`, \`emu avd stop\`, \`emu avd snapshot delete\`, and any option before the subcommand other than \`-s\`, \`-t\`, \`-d\`, or \`-e\`.
 
 ## Over MCP
