@@ -50,7 +50,7 @@ Every failure also writes one JSON line on stderr, \`{"error":{"code":"...","mes
 - When the device is on another machine (through a gateway), only \`simlock simctl --lease <lease-id>\` and \`simlock adb --lease <lease-id>\` can reach it.
 - Some commands are refused on purpose, because they would break the device for Simlock or for other agents. Do not look for a way around them; use \`simlock release\` instead:
   - \`simlock simctl\` refuses \`create\`, \`erase\`, \`delete\`, \`shutdown all\`, \`runtime delete\`, and any option before the subcommand, \`--set\` and \`--profiles\` included.
-  - \`simlock adb\` refuses \`kill-server\`, \`emu kill\`, \`emu avd stop\`, \`emu avd snapshot delete\`, and any option before the subcommand other than \`-s\`, \`-t\`, \`-d\`, or \`-e\`.
+  - \`simlock adb\` refuses \`kill-server\`, \`emu kill\`, \`emu avd stop\`, \`emu avd snapshot delete\`, any option before the subcommand other than \`-s\`, \`-t\`, \`-d\`, or \`-e\` (\`--version\` and \`--help\` on their own still work), and, when the device is on another machine, a bare \`shell\` with no command to run.
 
 ## Over MCP
 

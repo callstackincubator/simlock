@@ -860,8 +860,8 @@ codes 10, 11, 13, and 14 mean; how to reach the leased device, and which
 passthrough commands are refused on purpose; and the four MCP tools.
 
 `--json` prints one JSON object instead, `{"instructions":"<markdown>"}`, whose
-`instructions` field is exactly the text the plain command prints. Any other
-flag or argument is a usage error (exit 2).
+`instructions` field is exactly the text the plain command prints. `--help`
+prints the usage line; any other flag or argument is a usage error (exit 2).
 
 The text is static: it does not depend on the catalog, the config, or the
 daemon, and the command never connects to or starts the daemon. The MCP server
