@@ -109,7 +109,12 @@ describe("daemon lifecycle & recovery", () => {
         timeout: 15_000,
         label: "daemon.log.1 created after low rotateBytes",
       });
-      expect(existsSync(env.logPath)).toBe(true);
+      // Rotation renames daemon.log away and then opens a fresh one; with a 200-byte cap
+      // nearly every startup line rotates, so a one-shot check can land in that gap.
+      await waitFor(() => existsSync(env.logPath), {
+        timeout: 15_000,
+        label: "a fresh daemon.log opened after rotation",
+      });
     });
   });
 
