@@ -210,6 +210,10 @@ describe("MCP stdio lifecycle", () => {
     );
   });
 
+  it("falls back to mcp:<pid> when no requesterId, SIMLOCK_AGENT_ID or session id is given", async () => {
+    await expect(principalFor({ env: {} })).resolves.toBe(`mcp:${process.pid}`);
+  });
+
   it("prefers an explicit requesterId over a session-derived id", async () => {
     await expect(
       principalFor({ env: { CLAUDE_CODE_SESSION_ID: "abc" }, requesterId: "explicit-agent" }),

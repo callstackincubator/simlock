@@ -2871,6 +2871,19 @@ describe("CLI: requester id from the agent session", () => {
     );
   });
 
+  it("buildCliEnvironment prefers SIMLOCK_AGENT_ID over a session-derived id", () => {
+    expect(
+      buildCliEnvironment(realCliEnvironmentPorts(), { ...sessionEnv, SIMLOCK_AGENT_ID: "agent-7" })
+        .requesterId,
+    ).toBe("agent-7");
+  });
+
+  it("buildCliEnvironment falls back to the pid when no agent id or session id is set", () => {
+    expect(buildCliEnvironment(realCliEnvironmentPorts(), {}).requesterId).toBe(
+      String(process.pid),
+    );
+  });
+
   it("simlock lease --agent-id overrides a session-derived id", async () => {
     const requested: string[] = [];
     const client = fakeClient({
