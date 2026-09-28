@@ -47,7 +47,6 @@ import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import {
   buildCliEnvironment,
   errorExitCode,
-  fallbackRequesterId,
   parseDuration,
   readLogFile,
   readPipedStdin,
@@ -2863,12 +2862,55 @@ describe("CLI: a SIMLOCK_HOME the kernel could not bind", () => {
   });
 });
 
-describe("CLI: pure helpers", () => {
-  it("fallbackRequesterId prefers SIMLOCK_AGENT_ID over a pid-derived default", () => {
-    expect(fallbackRequesterId({ SIMLOCK_AGENT_ID: "agent-7" })).toBe("agent-7");
-    expect(fallbackRequesterId({})).toBe(String(process.pid));
+describe("CLI: requester id from the agent session", () => {
+  const sessionEnv = { CLAUDE_CODE_SESSION_ID: "abc" };
+
+  it("buildCliEnvironment resolves requesterId to the session-derived id when SIMLOCK_AGENT_ID is unset", () => {
+    expect(buildCliEnvironment(realCliEnvironmentPorts(), sessionEnv).requesterId).toBe(
+      "claude-code:abc",
+    );
   });
 
+  it("simlock lease --agent-id overrides a session-derived id", async () => {
+    const requested: string[] = [];
+    const client = fakeClient({
+      requestLease: (input, _options) => {
+        requested.push(input.requesterId ?? "<none>");
+        return fakeClient().requestLease(input);
+      },
+    });
+    const output = outputCapture();
+    const environment = {
+      ...buildCliEnvironment(realCliEnvironmentPorts(), sessionEnv),
+      connectAdmin: async () => client,
+      stderr: { write: (value: string) => (output.stderr += value) },
+      stdout: { write: (value: string) => (output.stdout += value) },
+    };
+
+    await expect(
+      runCli(["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"], environment),
+    ).resolves.toBe(0);
+    await expect(
+      runCli(
+        [
+          "lease",
+          "--platform",
+          "ios",
+          "--device",
+          "iPhone 17 Pro",
+          "--detach",
+          "--agent-id",
+          "explicit-agent",
+        ],
+        environment,
+      ),
+    ).resolves.toBe(0);
+
+    expect(requested).toEqual(["claude-code:abc", "explicit-agent"]);
+  });
+});
+
+describe("CLI: pure helpers", () => {
   it("parseDuration parses units and rejects garbage", () => {
     expect(parseDuration("500")).toBe(500);
     expect(parseDuration("500ms")).toBe(500);

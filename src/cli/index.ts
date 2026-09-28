@@ -24,6 +24,7 @@ import {
   type ParentWatchHandle,
   type SystemStats,
 } from "../ports/index.js";
+import { resolveRequesterId } from "../agent-identity/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import {
   isSimlockError,
@@ -124,7 +125,8 @@ export interface CliEnvironment {
    */
   readonly clock: Clock;
   readonly configPath: string;
-  /** ADR §4's requester default and this connection's fixed principal -- see §9's
+  /** ADR §4's requester default and this connection's fixed principal: `SIMLOCK_AGENT_ID`, else
+   * the agent tool's session id, else the pid (`resolveRequesterId`). See §9's
    * "SIMLOCK_AGENT_ID and --agent-id still set the requester id ... they are not the
    * principal": `--agent-id` overrides `lease.request`'s `requesterId` field, never this. */
   readonly requesterId: string;
@@ -184,16 +186,6 @@ export interface CliEnvironment {
    * effect a test has to be able to script.
    */
   readonly readStdin?: () => Promise<string | undefined>;
-}
-
-/**
- * Resolves the fallback requester identity from the environment: `SIMLOCK_AGENT_ID`
- * when set, else a pid-derived value so callers that never configure a stable id
- * keep today's behavior. The per-invocation `--agent-id` flag on `lease` (parsed at
- * that command's own boundary) takes precedence over this default.
- */
-export function fallbackRequesterId(env: NodeJS.ProcessEnv): string {
-  return env.SIMLOCK_AGENT_ID ?? String(process.pid);
 }
 
 /**
@@ -377,7 +369,10 @@ export function buildCliEnvironment(
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
-  const requesterId = fallbackRequesterId(env);
+  // `SIMLOCK_AGENT_ID`, else the agent tool's session id, else this process's pid. The
+  // per-invocation `--agent-id` flag on `lease` (parsed at that command's own boundary) takes
+  // precedence over this default.
+  const requesterId = resolveRequesterId(env, String(process.pid));
   const autoLaunchIpc = new AutoLaunchIpcConnector(ipc, clock, launcher);
 
   // ADR §5 / B2: the raw connection (and, for `connectAdmin`, any auto-launch it triggers) is
@@ -823,8 +818,8 @@ function extractLeaseFlag(args: readonly string[]): {
  * whenever the requester id differs from the principal (an `--agent-id` used on the lease but
  * not on this invocation): a refusal with no safety behind it.
  *
- * Identity rather than a flag, in either case: `--agent-id`/`SIMLOCK_AGENT_ID` already names
- * who is asking, `simlock lease` attributes a lease to it, and one requester holds at most one
+ * Identity rather than a flag, in either case: `--agent-id`, `SIMLOCK_AGENT_ID` or the agent
+ * session's id already names who is asking, `simlock lease` attributes a lease to it, and one requester holds at most one
  * lease -- so the usual invocation needs nothing, and `--lease` is there for the rest.
  */
 async function resolveRemoteLeaseId(

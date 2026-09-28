@@ -4,7 +4,14 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 
-import { FakeClock } from "../ports/index.js";
+import { buildCliEnvironment } from "../cli/index.js";
+import {
+  FakeClock,
+  FakeDaemonLauncher,
+  FakeSystemStats,
+  MemoryFilesystem,
+  MemoryIpcTransport,
+} from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { startMcpStdio, type McpTransport } from "./main.js";
 
@@ -197,6 +204,39 @@ describe("MCP stdio lifecycle", () => {
     await runner.shutdown();
   });
 
+  it("sources the connection principal as claude-code:<id> from CLAUDE_CODE_SESSION_ID when neither requesterId nor SIMLOCK_AGENT_ID is given", async () => {
+    await expect(principalFor({ env: { CLAUDE_CODE_SESSION_ID: "abc" } })).resolves.toBe(
+      "claude-code:abc",
+    );
+  });
+
+  it("prefers an explicit requesterId over a session-derived id", async () => {
+    await expect(
+      principalFor({ env: { CLAUDE_CODE_SESSION_ID: "abc" }, requesterId: "explicit-agent" }),
+    ).resolves.toBe("explicit-agent");
+  });
+
+  it.each([{ CLAUDE_CODE_SESSION_ID: "abc" }, { CODEX_SESSION_ID: "xyz" }])(
+    "the CLI and simlock mcp resolve the same requester id from the same environment (%o)",
+    async (env) => {
+      const cli = buildCliEnvironment(
+        {
+          clock: new FakeClock(0),
+          dataDirectory: "/simlock",
+          filesystem: new MemoryFilesystem(),
+          ipc: new MemoryIpcTransport(),
+          launcher: new FakeDaemonLauncher(),
+          systemStats: new FakeSystemStats({ cpuCount: 1, freeRamBytes: 1, totalRamBytes: 1 }),
+        },
+        env,
+      );
+      const expected = "CLAUDE_CODE_SESSION_ID" in env ? "claude-code:abc" : "codex:xyz";
+
+      expect(cli.requesterId).toBe(expected);
+      await expect(principalFor({ env })).resolves.toBe(cli.requesterId);
+    },
+  );
+
   it("closes once when stdin reaches EOF", async () => {
     const transport = new FakeTransport();
     const server = new FakeServer();
@@ -243,6 +283,32 @@ describe("MCP stdio lifecycle", () => {
     expect(transport.closeCalls).toBe(1);
   });
 });
+
+/** The principal `startMcpStdio` connects under, read off the first daemon connection it makes. */
+async function principalFor(options: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly requesterId?: string;
+}): Promise<unknown> {
+  connectWithAutoLaunch.mockReset().mockResolvedValue(new FakeSimlockClient());
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const runner = await startMcpStdio({
+    createTransport: () => serverTransport,
+    signals: new FakeSignals(),
+    ...options,
+  });
+  const mcpClient = new Client({ name: "test", version: "1.0.0" });
+  await mcpClient.connect(clientTransport);
+  await mcpClient
+    .request(
+      { method: "tools/call", params: { arguments: {}, name: "lease_status" } },
+      CallToolResultSchema,
+    )
+    .catch(() => undefined);
+  await mcpClient.close();
+  await runner.shutdown();
+  const [connectOptions] = connectWithAutoLaunch.mock.calls[0] ?? [];
+  return (connectOptions as { readonly principal?: unknown } | undefined)?.principal;
+}
 
 class FakeServer {
   closeCalls = 0;
