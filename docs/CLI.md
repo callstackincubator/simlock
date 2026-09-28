@@ -55,9 +55,9 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 
-Every row but 14 and the CLI-level codes (`INTERNAL`, `USAGE`,
-`SETUP_REFUSED`) matches the `cliExitCode` column of the contract's error
-table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
+Every row but 14 and the CLI-level codes `USAGE` and `SETUP_REFUSED` matches
+the `cliExitCode` column of the contract's error table
+(`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
 maintain a second mapping; 14 is not a daemon error code but an outcome of a
 `lease` that stays alive, so it lives beside the table's other `lease`
 outcome, 0.
@@ -871,7 +871,6 @@ The text is static: it does not depend on the catalog, the config, or the
 daemon, and the command never connects to or starts the daemon. The MCP server
 serves the same text as the `simlock://instructions` resource
 (`text/markdown`), so an MCP client can read it without anyone pasting it.
-To put the text where an agent tool loads it on its own, use `simlock setup`.
 
 ## `simlock setup [--project] [--tool <claude-code|codex>] [--json]`
 

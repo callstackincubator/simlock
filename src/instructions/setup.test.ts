@@ -1,6 +1,10 @@
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { MemoryFilesystem } from "../ports/filesystem.js";
+import { MemoryFilesystem, NodeFilesystem } from "../ports/filesystem.js";
 import { renderSkill } from "./index.js";
 import { SetupRefusedError, setupAgentTools, type SetupAgentToolsOptions } from "./setup.js";
 
@@ -73,6 +77,17 @@ describe("setupAgentTools", () => {
     expect(await filesystem.exists(`${HOME}/.codex`)).toBe(false);
   });
 
+  it("with no tool named, a file where a tool's presence directory belongs counts as not set up", async () => {
+    const filesystem = await withBases();
+    await filesystem.mkdirp(`${HOME}/.claude`);
+    await filesystem.writeFileAtomic(`${HOME}/.codex`, "not a directory");
+
+    const report = await setup(filesystem);
+
+    expect(report.tools.map(({ status }) => status)).toEqual(["wrote", "skipped"]);
+    expect(await filesystem.readFile(`${HOME}/.codex`)).toBe("not a directory");
+  });
+
   it("the project scope writes under the working directory and nothing under the home directory, and the user scope the reverse", async () => {
     const project = await withBases();
     const projectReport = await setup(project, { scope: "project", tool: "claude-code" });
@@ -98,7 +113,10 @@ describe("setupAgentTools", () => {
 
     expect(report.tools.map(({ status }) => status)).toEqual(["replaced", "replaced"]);
     expect(await tree(filesystem, HOME)).toEqual(first);
-    expect(await filesystem.readFile(`${HOME}/.codex/skills/simlock/SKILL.md`)).toBe(renderSkill());
+    for (const tool of [".claude", ".codex"])
+      expect(await filesystem.readFile(`${HOME}/${tool}/skills/simlock/SKILL.md`)).toBe(
+        renderSkill(),
+      );
   });
 
   it("removes a stale file inside the Simlock directory from an earlier run, and overwrites an old SKILL.md", async () => {
@@ -122,6 +140,30 @@ describe("setupAgentTools", () => {
       renderSkill(),
     );
     expect(await filesystem.readFile(`${HOME}/.claude/skills/other.md`)).toBe("not ours");
+  });
+
+  // On the real filesystem: a rename onto a directory fails there, and the in-memory double
+  // would quietly let it through.
+  it("replaces a directory named SKILL.md inside the Simlock directory with the skill", async () => {
+    const home = await mkdtemp(join(tmpdir(), "simlock-setup-"));
+    try {
+      const simlock = join(home, ".codex/skills/simlock");
+      await mkdir(join(simlock, "SKILL.md/nested"), { recursive: true });
+
+      const report = await setupAgentTools({
+        filesystem: new NodeFilesystem(),
+        homeDirectory: home,
+        workingDirectory: CWD,
+        scope: "user",
+        tool: "codex",
+      });
+
+      expect(report.tools.map(({ status }) => status)).toEqual(["replaced"]);
+      expect(await readdir(simlock)).toEqual(["SKILL.md"]);
+      expect(await readFile(join(simlock, "SKILL.md"), "utf8")).toBe(renderSkill());
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it.each([

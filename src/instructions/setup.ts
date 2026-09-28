@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import { isMissingPathError, type Filesystem } from "../ports/filesystem.js";
+import { isMissingPathError, type Filesystem, type PathDetails } from "../ports/filesystem.js";
 import { renderSkill } from "./index.js";
 
 /**
@@ -68,34 +68,44 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
   const base = scope === "user" ? options.homeDirectory : options.workingDirectory;
   const tools = tool === undefined ? AGENT_TOOL_IDS : [tool];
 
-  const plan: { tool: AgentTool; path: string; install: boolean; existed: boolean }[] = [];
+  // Inspect: every status is settled, and every refusal thrown, before anything is written.
+  const report: SetupToolReport[] = [];
   for (const id of tools) {
     const layout = AGENT_TOOLS[id];
     const path = join(base, layout.skills, SIMLOCK_DIRECTORY);
-    const install = tool !== undefined || (await filesystem.exists(join(base, layout.presence)));
-    const existed = install && (await isExistingDirectory(filesystem, path));
-    plan.push({ tool: id, path, install, existed });
+    const install =
+      tool !== undefined || (await isDirectory(filesystem, join(base, layout.presence)));
+    const status = !install
+      ? "skipped"
+      : (await isExistingDirectory(filesystem, path))
+        ? "replaced"
+        : "wrote";
+    report.push({ tool: id, status, path });
   }
 
+  // Write.
   const skill = renderSkill();
-  const report: SetupToolReport[] = [];
-  for (const entry of plan) {
-    if (!entry.install) {
-      report.push({ tool: entry.tool, status: "skipped", path: entry.path });
-      continue;
-    }
-    await filesystem.mkdirp(entry.path);
-    await filesystem.writeFileAtomic(join(entry.path, SKILL_FILE), skill);
-    for (const name of await filesystem.readdir(entry.path)) {
-      if (name !== SKILL_FILE) await filesystem.rm(join(entry.path, name));
-    }
-    report.push({
-      tool: entry.tool,
-      status: entry.existed ? "replaced" : "wrote",
-      path: entry.path,
-    });
+  for (const entry of report) {
+    if (entry.status !== "skipped") await installSkill(filesystem, entry.path, skill);
   }
   return { scope, tools: report };
+}
+
+/** Leaves `directory` holding exactly one file, `SKILL.md`, with `skill` in it. */
+async function installSkill(
+  filesystem: Filesystem,
+  directory: string,
+  skill: string,
+): Promise<void> {
+  await filesystem.mkdirp(directory);
+  const skillPath = join(directory, SKILL_FILE);
+  // Anything but a file under that name (a directory left by hand) cannot be renamed over.
+  // It is inside the Simlock directory, so it is Simlock's to remove.
+  if ((await lstatKind(filesystem, skillPath)) !== "file") await filesystem.rm(skillPath);
+  await filesystem.writeFileAtomic(skillPath, skill);
+  for (const name of await filesystem.readdir(directory)) {
+    if (name !== SKILL_FILE) await filesystem.rm(join(directory, name));
+  }
 }
 
 /**
@@ -104,13 +114,27 @@ export async function setupAgentTools(options: SetupAgentToolsOptions): Promise<
  * whole, and a symlink would point that replacement somewhere Simlock does not own.
  */
 async function isExistingDirectory(filesystem: Filesystem, path: string): Promise<boolean> {
-  let kind;
-  try {
-    ({ kind } = await filesystem.lstat(path));
-  } catch (error: unknown) {
-    if (isMissingPathError(error)) return false;
-    throw error;
-  }
+  const kind = await lstatKind(filesystem, path);
+  if (kind === undefined) return false;
   if (kind !== "directory") throw new SetupRefusedError(path);
   return true;
+}
+
+/** What is at `path`, not following a final symlink; `undefined` when nothing is. */
+async function lstatKind(
+  filesystem: Filesystem,
+  path: string,
+): Promise<PathDetails["kind"] | undefined> {
+  try {
+    return (await filesystem.lstat(path)).kind;
+  } catch (error: unknown) {
+    if (isMissingPathError(error)) return undefined;
+    throw error;
+  }
+}
+
+/** Whether a tool is set up at `path`: a directory there, or a symlink to one. A file is not. */
+async function isDirectory(filesystem: Filesystem, path: string): Promise<boolean> {
+  if (!(await filesystem.exists(path))) return false;
+  return (await filesystem.stat(path)).kind === "directory";
 }
