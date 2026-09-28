@@ -1,6 +1,6 @@
 # 0006. Opt-in slim Android emulators
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-09-28
 - **Issue:** [#159](https://github.com/callstackincubator/simlock/issues/159)
 - **Supersedes:** nothing
