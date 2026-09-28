@@ -217,7 +217,7 @@ describe("MCP stdio lifecycle", () => {
   });
 
   it.each([{ CLAUDE_CODE_SESSION_ID: "abc" }, { CODEX_SESSION_ID: "xyz" }])(
-    "the CLI and simlock mcp resolve the same requester id from the same environment (%o)",
+    "the CLI and simlock mcp resolve the same session-derived requester id from the same environment (%o)",
     async (env) => {
       const cli = buildCliEnvironment(
         {

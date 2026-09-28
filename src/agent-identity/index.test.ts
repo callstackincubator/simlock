@@ -22,6 +22,12 @@ describe("resolveRequesterId", () => {
     expect(resolveRequesterId({ CODEX_SESSION_ID: "xyz" }, "fallback")).toBe("codex:xyz");
   });
 
+  it("takes CLAUDE_CODE_SESSION_ID over CODEX_SESSION_ID when both are set", () => {
+    expect(
+      resolveRequesterId({ CLAUDE_CODE_SESSION_ID: "abc", CODEX_SESSION_ID: "xyz" }, "fallback"),
+    ).toBe("claude-code:abc");
+  });
+
   it("skips a session variable set to the empty string and takes the next row", () => {
     expect(
       resolveRequesterId({ CLAUDE_CODE_SESSION_ID: "", CODEX_SESSION_ID: "xyz" }, "fallback"),
