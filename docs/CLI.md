@@ -20,12 +20,12 @@ On failure, every command writes one structured line to stderr:
 `code` is the daemon's own error code where the failure came from the
 daemon, or a stable CLI-level code otherwise: `USAGE` for bad flags/missing
 arguments/unknown commands, `SETUP_REFUSED` for a `simlock setup` that found
-something other than a directory where it installs, `INTERNAL` for anything
-unexpected. An unknown
-command or a missing required argument gets a `message` that ends with a
-pointer to `simlock --help`, so a human hitting one from a terminal isn't
-stranded with only a JSON blob — the full command banner itself is no
-longer dumped to stderr on every failure, only on request via `--help`.
+a file or symlink where its `simlock` directory belongs, `INTERNAL` for
+anything unexpected. An unknown command or a missing required argument gets a
+`message` that ends with a pointer to `simlock --help`, so a human hitting one
+from a terminal isn't stranded with only a JSON blob — the full command banner
+itself is no longer dumped to stderr on every failure, only on request via
+`--help`.
 
 ## Global exit codes
 

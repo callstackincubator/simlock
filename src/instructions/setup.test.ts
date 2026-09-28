@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -86,6 +86,31 @@ describe("setupAgentTools", () => {
 
     expect(report.tools.map(({ status }) => status)).toEqual(["wrote", "skipped"]);
     expect(await filesystem.readFile(`${HOME}/.codex`)).toBe("not a directory");
+  });
+
+  // On the real filesystem: the in-memory double's `mkdirp` does not walk through a symlink.
+  it("with no tool named, a presence directory reached through a symlink counts as set up", async () => {
+    const root = await mkdtemp(join(tmpdir(), "simlock-setup-"));
+    try {
+      const home = join(root, "home");
+      await mkdir(join(root, "dotfiles/claude"), { recursive: true });
+      await mkdir(home);
+      await symlink(join(root, "dotfiles/claude"), join(home, ".claude"));
+
+      const report = await setupAgentTools({
+        filesystem: new NodeFilesystem(),
+        homeDirectory: home,
+        workingDirectory: CWD,
+        scope: "user",
+      });
+
+      expect(report.tools.map(({ status }) => status)).toEqual(["wrote", "skipped"]);
+      expect(await readFile(join(root, "dotfiles/claude/skills/simlock/SKILL.md"), "utf8")).toBe(
+        renderSkill(),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("the project scope writes under the working directory and nothing under the home directory, and the user scope the reverse", async () => {
