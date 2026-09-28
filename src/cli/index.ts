@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -45,6 +46,15 @@ import {
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 import { renderInstructions } from "../instructions/index.js";
+import {
+  AGENT_TOOL_IDS,
+  isAgentTool,
+  SetupRefusedError,
+  setupAgentTools,
+  type SetupReport,
+  type SetupScope,
+  type AgentTool,
+} from "../instructions/setup.js";
 
 const USAGE = `Usage: simlock <command> [options]
 
@@ -57,6 +67,8 @@ Commands:
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
   instructions [--json]       Print the rules an agent must follow, for its prompt
+  setup [--project] [--tool <claude-code|codex>] [--json]
+                              Install those rules as a skill for Claude Code and Codex
 Run 'simlock <command> --help' for command usage.
 
 Pass --token <secret> anywhere on the command line to connect as admin
@@ -156,6 +168,12 @@ export interface CliEnvironment {
   readonly sleep: (milliseconds: number) => Promise<void>;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;
   readonly writeConfigFile: (contents: Record<string, unknown>) => Promise<void>;
+  /** `simlock setup`: installs the agent rules into agent tools under the home directory
+   * (user scope) or the working directory (project scope), both fixed at startup. */
+  readonly setupAgentTools: (options: {
+    readonly scope: SetupScope;
+    readonly tool?: AgentTool | undefined;
+  }) => Promise<SetupReport>;
   /** `config set` (ADR §11 part D): validates the merged file through the config loader before
    * `writeConfigFile` is ever called. Throws (any error) for an invalid merged config. */
   readonly validateConfig: (merged: Record<string, unknown>) => Promise<void>;
@@ -351,6 +369,10 @@ export interface CliEnvironmentPorts {
   readonly ipc: IpcConnector;
   readonly launcher: DaemonLauncher;
   readonly dataDirectory: string;
+  /** Where `simlock setup` installs by default, and where `--project` installs. Read once at
+   * the composition root, so nothing below it reaches for `homedir()` or `process.cwd()`. */
+  readonly homeDirectory: string;
+  readonly workingDirectory: string;
   readonly parentWatch?: ParentWatch;
   readonly signals?: Signals;
   readonly stderr?: Output;
@@ -432,6 +454,14 @@ export function buildCliEnvironment(
       await filesystem.mkdirp(dataDirectory);
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`);
     },
+    setupAgentTools: ({ scope, tool }) =>
+      setupAgentTools({
+        filesystem,
+        homeDirectory: ports.homeDirectory,
+        workingDirectory: ports.workingDirectory,
+        scope,
+        tool,
+      }),
     // ADR §11 part D: "validates the merged file through the config loader before writing."
     // B9: two things the pre-fix version got wrong --
     //  - `warn` was never passed, so `validateConfigLayer`'s default no-op silently dropped
@@ -499,6 +529,8 @@ function defaultCliEnvironment(env: NodeJS.ProcessEnv = process.env): CliEnviron
         simlockHome: dataDirectory,
       }),
       dataDirectory,
+      homeDirectory: homedir(),
+      workingDirectory: process.cwd(),
     },
     env,
   );
@@ -612,6 +644,8 @@ export async function runCli(
         return await runMcp(rest.slice(1), environment);
       case "instructions":
         return runInstructions(rest.slice(1), environment);
+      case "setup":
+        return await runSetup(rest.slice(1), environment);
       default:
         throw new UsageError(withHelpHint(`Unknown command: ${rest[0]}`));
     }
@@ -636,6 +670,7 @@ function writeError(environment: CliEnvironment, error: unknown): void {
 
 function cliErrorCode(error: unknown): string {
   if (error instanceof UsageError || error instanceof SocketPathTooLongError) return "USAGE";
+  if (error instanceof SetupRefusedError) return "SETUP_REFUSED";
   if (isSimlockError(error)) return error.code;
   return "INTERNAL";
 }
@@ -858,6 +893,7 @@ async function resolveRemoteLeaseId(
  * CLI-maintained map. */
 export function errorExitCode(error: unknown): number {
   if (error instanceof UsageError || error instanceof SocketPathTooLongError) return 2;
+  if (error instanceof SetupRefusedError) return 2;
   if (isSimlockError(error)) return ERROR_TABLE[error.code].cliExitCode;
   return 1;
 }
@@ -892,6 +928,50 @@ function runInstructions(argv: readonly string[], environment: CliEnvironment): 
   if (values.json) environment.stdout.write(`${renderInstructions("json")}\n`);
   else environment.stdout.write(renderInstructions("text"));
   return 0;
+}
+
+const SETUP_USAGE = `Usage: simlock setup [--project] [--tool <${AGENT_TOOL_IDS.join("|")}>] [--json]`;
+
+/**
+ * Installs the agent rules as a skill into Claude Code and Codex. Never connects to the daemon,
+ * so it never auto-starts one: like `instructions`, the text is the frontend's.
+ */
+async function runSetup(argv: readonly string[], environment: CliEnvironment): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+    project: { type: "boolean" },
+    tool: { type: "string", multiple: true },
+  });
+  if (values.help) {
+    environment.stdout.write(`${SETUP_USAGE}\n`);
+    return 0;
+  }
+  if (values.positionals.length > 0)
+    throw new UsageError(`setup accepts no arguments: ${values.positionals.join(" ")}`);
+  const tools = (values.tool ?? []) as string[];
+  if (tools.length > 1) throw new UsageError("setup accepts one --tool at most");
+  const tool = tools[0];
+  if (tool !== undefined && !isAgentTool(tool))
+    throw new UsageError(`Unknown --tool: ${tool} (expected ${AGENT_TOOL_IDS.join(" or ")})`);
+  const report = await environment.setupAgentTools({
+    scope: values.project === true ? "project" : "user",
+    tool,
+  });
+  environment.stdout.write(
+    values.json === true ? `${JSON.stringify(report)}\n` : renderSetupReport(report),
+  );
+  return 0;
+}
+
+function renderSetupReport(report: SetupReport): string {
+  return report.tools
+    .map(({ path, status, tool }) => {
+      const hint =
+        status === "skipped" ? `  (not set up here; pass --tool ${tool} to install)` : "";
+      return `${tool}  ${status}  ${path}${hint}\n`;
+    })
+    .join("");
 }
 
 /** Parses user-facing durations only at the CLI boundary. */

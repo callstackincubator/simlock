@@ -11,7 +11,7 @@ import {
   REFUSED_SIMCTL_VERBS,
   SHUTDOWN_ALL_TARGET,
 } from "../drivers/ios/index.js";
-import { AGENT_INSTRUCTIONS } from "./index.js";
+import { AGENT_INSTRUCTIONS, renderSkill } from "./index.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -25,9 +25,12 @@ function refusalLine(tool: "simctl" | "adb"): string {
 }
 
 describe("agent instructions", () => {
-  it("name no path inside this repository", () => {
-    expect(AGENT_INSTRUCTIONS).not.toMatch(/docs\//);
-    expect(AGENT_INSTRUCTIONS).not.toMatch(/\.md\b/);
+  it.each([
+    ["the agent instructions name", AGENT_INSTRUCTIONS],
+    ["the rendered skill names", renderSkill()],
+  ])("%s no path inside this repository", (_name, text) => {
+    expect(text).not.toMatch(/docs\//);
+    expect(text).not.toMatch(/\.md\b/);
 
     // Every tracked file, and every directory holding one, as it would be written in prose.
     // Enumerated from the git index so the check covers the whole repository, not a list of
@@ -44,8 +47,22 @@ describe("agent instructions", () => {
           .map((_, index, parts) => `${parts.slice(0, index + 1).join("/")}/`),
       ),
     );
-    const named = [...files, ...directories].filter((path) => AGENT_INSTRUCTIONS.includes(path));
+    const named = [...files, ...directories].filter((path) => text.includes(path));
     expect(named).toEqual([]);
+  });
+
+  it("the rendered skill ends with the exact agent instructions, and its front matter names the skill simlock", () => {
+    const skill = renderSkill();
+
+    expect(skill.endsWith(AGENT_INSTRUCTIONS)).toBe(true);
+    const header = skill.slice(0, skill.length - AGENT_INSTRUCTIONS.length);
+    // Front matter, one blank line, then the instructions: nothing else around them.
+    const match = /^---\n([\s\S]*?)\n---\n\n$/.exec(header);
+    expect(match, `front matter then a blank line, got ${JSON.stringify(header)}`).not.toBeNull();
+    const fields = (match?.[1] ?? "").split("\n");
+    expect(fields).toContain("name: simlock");
+    expect(fields.filter((line) => line.startsWith("description: "))).toHaveLength(1);
+    expect(fields).toHaveLength(2);
   });
 
   it("name every refused passthrough verb the drivers refuse", () => {

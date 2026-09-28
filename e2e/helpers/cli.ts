@@ -7,6 +7,8 @@ const CLI_ENTRY = join(REPO_ROOT, "dist/cli/main.js");
 
 export interface CliOptions {
   readonly env?: NodeJS.ProcessEnv;
+  /** The working directory the CLI runs in; the test runner's own when omitted. */
+  readonly cwd?: string;
   readonly input?: string;
   readonly timeout?: number;
 }
@@ -38,6 +40,7 @@ export function cli(
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
       env: { ...env, ...options.env },
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     });
     let stdout = "";
     let stderr = "";
@@ -92,6 +95,7 @@ export function cliBackground(
 ): CliBackgroundHandle {
   const child = spawn(process.execPath, [CLI_ENTRY, ...args], {
     env: { ...env, ...options.env },
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
   });
   let stdout = "";
   let stderr = "";

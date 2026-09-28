@@ -72,3 +72,23 @@ export function renderInstructions(format: "text" | "json"): string {
     ? JSON.stringify({ instructions: AGENT_INSTRUCTIONS })
     : AGENT_INSTRUCTIONS;
 }
+
+/**
+ * The skill header `simlock setup` puts in front of the instructions. Its `description` is what
+ * an agent tool reads to decide when the skill applies, so it names the situation, not Simlock's
+ * internals, and no file in this repository (documentation rule 3).
+ */
+const SKILL_FRONT_MATTER = `---
+name: simlock
+description: Use before you touch an iOS simulator or Android emulator, or run simctl, adb, avdmanager, or emulator, so you lease the device through Simlock and never break another agent's device.
+---
+`;
+
+/**
+ * The `SKILL.md` `simlock setup` installs: the skill header, a blank line, then
+ * `AGENT_INSTRUCTIONS` unchanged, so the installed rules are byte for byte what
+ * `simlock instructions` prints.
+ */
+export function renderSkill(): string {
+  return `${SKILL_FRONT_MATTER}\n${AGENT_INSTRUCTIONS}`;
+}
