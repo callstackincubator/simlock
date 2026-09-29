@@ -1163,6 +1163,8 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       dataDirectory: "/simlock",
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -1200,6 +1202,8 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       ipc: ipcTransport,
       launcher,
       dataDirectory: "/simlock",
+      homeDirectory: "/home/operator",
+      workingDirectory: "/work/project",
     });
     const exitCode = await runCli(
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
@@ -2883,6 +2887,106 @@ describe("CLI: instructions", () => {
   });
 });
 
+describe("CLI: setup", () => {
+  /** Every path in the filesystem, so a test can say a run wrote nothing at all. */
+  async function everyPath(filesystem: MemoryFilesystem, root = "/"): Promise<string[]> {
+    const paths: string[] = [];
+    for (const name of await filesystem.readdir(root)) {
+      const path = root === "/" ? `/${name}` : `${root}/${name}`;
+      paths.push(path);
+      if ((await filesystem.lstat(path)).kind === "directory")
+        paths.push(...(await everyPath(filesystem, path)));
+    }
+    return paths.sort();
+  }
+
+  /** A home where both tools are set up, so a run that wrote anything would show it. */
+  async function setUpHome(): Promise<MemoryFilesystem> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/operator/.claude");
+    await filesystem.mkdirp("/home/operator/.codex");
+    await filesystem.mkdirp("/work/project");
+    return filesystem;
+  }
+
+  it("--help prints the usage line and exits 0", async () => {
+    const filesystem = await setUpHome();
+    const output = outputCapture(realCliEnvironmentPorts(filesystem));
+
+    await expect(runCli(["setup", "--help"], output.environmentWith())).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      "Usage: simlock setup [--project] [--tool <claude-code|codex>] [--json]\n",
+    );
+    expect(output.stderr).toBe("");
+  });
+
+  it.each([
+    ["--tool bogus", ["setup", "--tool", "bogus"]],
+    ["two --tool flags", ["setup", "--tool", "codex", "--tool", "claude-code"]],
+    ["a positional", ["setup", "codex"]],
+  ])("%s fails with USAGE, exit 2, and writes nothing", async (_case, argv) => {
+    const filesystem = await setUpHome();
+    const before = await everyPath(filesystem);
+    const output = outputCapture(realCliEnvironmentPorts(filesystem));
+
+    await expect(runCli(argv, output.environmentWith())).resolves.toBe(2);
+
+    expect(output.stdout).toBe("");
+    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "USAGE" } });
+    expect(await everyPath(filesystem)).toEqual(before);
+  });
+
+  it("--json prints one JSON object with scope and one entry per tool", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/operator/.claude");
+    const output = outputCapture(realCliEnvironmentPorts(filesystem));
+
+    await expect(runCli(["setup", "--json"], output.environmentWith())).resolves.toBe(0);
+
+    expect(output.stdout.endsWith("\n")).toBe(true);
+    expect(output.stdout.trimEnd().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stdout)).toEqual({
+      scope: "user",
+      tools: [
+        {
+          tool: "claude-code",
+          status: "wrote",
+          path: "/home/operator/.claude/skills/simlock",
+        },
+        { tool: "codex", status: "skipped", path: "/home/operator/.codex/skills/simlock" },
+      ],
+    });
+  });
+
+  it("the human view prints one line per tool, with a --tool hint for a skipped one", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/work/project/.codex");
+    const output = outputCapture(realCliEnvironmentPorts(filesystem));
+
+    await expect(runCli(["setup", "--project"], output.environmentWith())).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      "claude-code  skipped  /work/project/.claude/skills/simlock  (not set up here; pass --tool claude-code to install)\n" +
+        "codex  wrote  /work/project/.codex/skills/simlock\n",
+    );
+  });
+
+  it("a refused run fails with SETUP_REFUSED, exit 2, and prints nothing on stdout", async () => {
+    const filesystem = await setUpHome();
+    await filesystem.mkdirp("/home/operator/.claude/skills");
+    await filesystem.writeFileAtomic("/home/operator/.claude/skills/simlock", "a file");
+    const output = outputCapture(realCliEnvironmentPorts(filesystem));
+
+    await expect(runCli(["setup"], output.environmentWith())).resolves.toBe(2);
+
+    expect(output.stdout).toBe("");
+    const { error } = JSON.parse(output.stderr) as { error: { code: string; message: string } };
+    expect(error.code).toBe("SETUP_REFUSED");
+    expect(error.message).toContain("/home/operator/.claude/skills/simlock");
+  });
+});
+
 describe("CLI: pure helpers", () => {
   it("fallbackRequesterId prefers SIMLOCK_AGENT_ID over a pid-derived default", () => {
     expect(fallbackRequesterId({ SIMLOCK_AGENT_ID: "agent-7" })).toBe("agent-7");
@@ -3106,6 +3210,11 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           sleep: async () => {},
           readConfigFile: async () => ({}),
           writeConfigFile: async () => {},
+          // `setup` is exercised through the real `buildCliEnvironment` (pass `ports`); a
+          // suite that reaches it through this mock has wired the wrong environment.
+          setupAgentTools: async () => {
+            throw new Error("setupAgentTools is not wired in the mocked environment");
+          },
           validateConfig: async () => {},
           readLogFile: async () => "",
           signals: new EventEmitter() as unknown as CliEnvironment["signals"],
@@ -3229,6 +3338,8 @@ function realCliEnvironmentPorts(
     ipc: new MemoryIpcTransport(),
     launcher: new FakeDaemonLauncher(),
     dataDirectory: "/simlock",
+    homeDirectory: "/home/operator",
+    workingDirectory: "/work/project",
   };
 }
 

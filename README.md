@@ -175,6 +175,8 @@ The daemon starts on demand — there's no separate setup step. Use
 `simlock nuke --yes --delete-devices` only for an emergency reset of
 Simlock-managed devices. Run `simlock instructions` to print the rules your
 agents must follow, ready to paste into their system prompt or `AGENTS.md`.
+Run `simlock setup` to install those rules as a skill for Claude Code and
+Codex instead, for your user or, with `--project`, for the current project.
 
 See [docs/CLI.md](docs/CLI.md) for the full command reference and
 [docs/CLI.md#simlock-mcp](docs/CLI.md#simlock-mcp) or the [README section
