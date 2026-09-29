@@ -3,8 +3,8 @@
 Part of the user manual: every command the simlock CLI is expected to
 implement. Results are JSON on **stdout**; progress/diagnostics are JSON
 lines on **stderr** — this is the default output, not an opt-in, because
-agents are the primary audience. `status`, `catalog`, and
-`daemon <start|stop|status|logs>` are the exception: they default to a
+agents are the primary audience. `status`, `catalog`, `instructions`,
+`setup`, and `daemon <start|stop|status|logs>` are the exception: they default to a
 human-oriented view for interactive/operator use and accept `--json` to
 switch to the structured form. Every other command's output is already
 unconditionally JSON, so passing `--json` to it is a usage error (exit 2)
@@ -19,11 +19,13 @@ On failure, every command writes one structured line to stderr:
 
 `code` is the daemon's own error code where the failure came from the
 daemon, or a stable CLI-level code otherwise: `USAGE` for bad flags/missing
-arguments/unknown commands, `INTERNAL` for anything unexpected. An unknown
-command or a missing required argument gets a `message` that ends with a
-pointer to `simlock --help`, so a human hitting one from a terminal isn't
-stranded with only a JSON blob — the full command banner itself is no
-longer dumped to stderr on every failure, only on request via `--help`.
+arguments/unknown commands, `SETUP_REFUSED` for a `simlock setup` that found
+a file or symlink where its `simlock` directory belongs, `INTERNAL` for
+anything unexpected. An unknown command or a missing required argument gets a
+`message` that ends with a pointer to `simlock --help`, so a human hitting one
+from a terminal isn't stranded with only a JSON blob — the full command banner
+itself is no longer dumped to stderr on every failure, only on request via
+`--help`.
 
 ## Global exit codes
 
@@ -33,6 +35,7 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 1 | `INTERNAL` | internal / unexpected error |
 | 1 | `WORKER_UNREACHABLE` | the gateway cannot reach the worker this lease or request lives on (its uplink is down) |
 | 2 | `USAGE` | usage error (bad flags, missing required args, unknown command) |
+| 2 | `SETUP_REFUSED` | `simlock setup` found a file or symlink where its `simlock` skill directory belongs, and wrote nothing |
 | 2 | `BAD_FRAME` | malformed request frame sent to the daemon |
 | 2 | `BAD_REQUEST` | request payload failed validation |
 | 2 | `UNSUPPORTED_IN_GATEWAY_MODE` | this command acts on one machine's devices and the daemon answering is a gateway; run it on the worker |
@@ -52,8 +55,9 @@ longer dumped to stderr on every failure, only on request via `--help`.
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 
-Every row but 14 matches the `cliExitCode` column of the contract's error
-table (`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
+Every row but 14 and the CLI-level codes `USAGE` and `SETUP_REFUSED` matches
+the `cliExitCode` column of the contract's error table
+(`src/contract/errors.ts`'s `ERROR_TABLE`) exactly — the CLI does not
 maintain a second mapping; 14 is not a daemon error code but an outcome of a
 `lease` that stays alive, so it lives beside the table's other `lease`
 outcome, 0.
@@ -792,7 +796,8 @@ token revoke <token-id>` closes any uplink that token opened.
 Start Simlock's local stdio MCP server. It accepts no flags. Standard output is
 reserved for MCP JSON-RPC; fatal diagnostics are written to stderr. The server
 exposes the focused `list_devices`, `lease_simulator`, `release_simulator`, and
-`lease_status` tool surface for one agent session. The server auto-starts the
+`lease_status` tool surface for one agent session, and one resource,
+`simlock://instructions`: the text `simlock instructions` prints. The server auto-starts the
 daemon when needed, on a tool call; its renew timer reconnects only to a
 daemon that is already listening, and never launches one. `lease_simulator`
 accepts the contract's optional `ttlMs` — defaulting to `lease.defaultTtlMs`
@@ -845,6 +850,67 @@ Every other field keeps the contract's own camelCase names it already had
 under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
 `allowDownload`, `requesterId`, ...); those did not change shape, only their
 schema's source of truth.
+
+## `simlock instructions [--json]`
+
+Prints the rules an agent must follow to share devices through Simlock, as one
+self-contained Markdown block to paste into an agent's system prompt or its
+`AGENTS.md`. Simlock only works when every agent goes through it, and this is
+the text that tells an agent how: never call `simctl`, `adb`, `avdmanager`, or
+`emulator` directly; set a stable `SIMLOCK_AGENT_ID`; run `simlock catalog`
+before `simlock lease`, and keep the lease alive or renew it; hold one lease at
+a time and release it; never pass `--allow-download` unless told to; what exit
+codes 10, 11, 13, and 14 mean; how to reach the leased device, and which
+passthrough commands are refused on purpose; and the four MCP tools.
+
+`--json` prints one JSON object instead, `{"instructions":"<markdown>"}`, whose
+`instructions` field is exactly the text the plain command prints. `--help`
+prints the usage line; any other flag or argument is a usage error (exit 2).
+
+The text is static: it does not depend on the catalog, the config, or the
+daemon, and the command never connects to or starts the daemon. The MCP server
+serves the same text as the `simlock://instructions` resource
+(`text/markdown`), so an MCP client can read it without anyone pasting it.
+
+## `simlock setup [--project] [--tool <claude-code|codex>] [--json]`
+
+Installs the text `simlock instructions` prints as a skill for Claude Code and
+Codex, so each of their sessions starts with the rules and nobody pastes them.
+The skill is one file, `SKILL.md`: a short header naming the skill `simlock`
+and saying when it applies, a blank line, then the instructions byte for byte.
+
+By default it installs for the current user, under your home directory.
+`--project` installs into the current directory instead, so the files can be
+committed and the whole team gets them:
+
+| Tool | `--tool` | User (default) | Project (`--project`) |
+|---|---|---|---|
+| Claude Code | `claude-code` | `~/.claude/skills/simlock/SKILL.md` | `.claude/skills/simlock/SKILL.md` |
+| Codex | `codex` | `~/.codex/skills/simlock/SKILL.md` | `.codex/skills/simlock/SKILL.md` |
+
+With `--tool`, only that tool is installed, and its directories are created if
+they are missing. Without it, a tool is installed only where it is already set
+up (its `.claude` or `.codex` directory exists in that scope); the others are
+reported as skipped. Any other `--tool` value, a second `--tool`, or an
+argument is a usage error (exit 2) and writes nothing.
+
+The `simlock` directory is Simlock's own. Each run writes `SKILL.md` and
+deletes anything else in that directory, so a re-run after an upgrade leaves
+only the new text. Nothing outside it is touched: other skills, `AGENTS.md`,
+`CLAUDE.md`, and each tool's settings stay as they are. To uninstall, delete
+the directory. If a file or symlink sits where that directory belongs, the run
+is refused with `SETUP_REFUSED` (exit 2), whose message names the path, and
+nothing is written for any tool.
+
+The output is one line per tool: the tool, `wrote`, `replaced` (the directory
+was already there), or `skipped`, and the directory. A skipped line ends with
+a hint to pass `--tool`. `--json` prints the same report as one JSON object:
+
+```json
+{"scope":"user","tools":[{"tool":"claude-code","status":"wrote","path":"/Users/me/.claude/skills/simlock"},{"tool":"codex","status":"skipped","path":"/Users/me/.codex/skills/simlock"}]}
+```
+
+The command never connects to or starts the daemon.
 
 ## `simlock status`
 

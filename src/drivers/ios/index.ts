@@ -79,7 +79,7 @@ export const IOS_PASSTHROUGH_TOOL = "simctl";
  * reads as tampering on the next reconcile. Injecting `--set` for them would hand back
  * exactly the capability the device set exists to take away (ADR 0001, decision 7).
  */
-const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
+export const REFUSED_SIMCTL_VERBS: ReadonlySet<string> = new Set(["create", "erase", "delete"]);
 
 /**
  * simctl's usage is `simctl [--set <path>] [--profiles <path>] <subcommand>`, so these are
@@ -91,14 +91,17 @@ const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
  * its own terms: this wrapper exists to supply the device set, and a caller-supplied one
  * would aim Simlock's own containment wherever it pointed.
  */
-const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
+export const CALLER_SUPPLIED_SCOPE_FLAGS: ReadonlySet<string> = new Set(["set", "profiles"]);
 
 /**
  * `shutdown all` is the iOS analogue of `adb kill-server`: it stops every device in the
  * set, for every agent, and each affected lease then spends its recovery budget rebooting
  * -- one that runs out ends as `lease_lost`. Shutting down a single device stays allowed.
  */
-const SHUTDOWN_ALL_TARGET = "all";
+export const SHUTDOWN_ALL_TARGET = "all";
+
+/** `runtime delete`: the one `runtime` operation refused -- see `#assertProxyable`. */
+export const REFUSED_RUNTIME_OPERATION = "delete";
 
 /** Every lifecycle refusal ends the same way: the Simlock command that does it safely. */
 const RECLAIM_INSTEAD =
@@ -1275,9 +1278,12 @@ export class IosSimctlDriver implements Driver {
     // A bare `simctl` reaches this too, so refusing it takes no capability away. The
     // wrapper is advertised as the safe path, and being the convenient route to an
     // unrecoverable multi-gigabyte deletion is not that.
-    if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
+    if (
+      verb === "runtime" &&
+      operands.find((operand) => !operand.startsWith("-")) === REFUSED_RUNTIME_OPERATION
+    ) {
       this.#refuse(
-        "runtime delete",
+        `runtime ${REFUSED_RUNTIME_OPERATION}`,
         "it deletes a runtime shared with Xcode, and Simlock will not download one back (`--allow-download` cannot install iOS runtimes). Delete it through Xcode if that is really what you meant.",
       );
     }

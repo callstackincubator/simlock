@@ -8,6 +8,29 @@ interface McpErrorPayload {
 }
 
 describe("MCP session semantics", () => {
+  it("declares the resources capability, lists simlock://instructions, and reading it returns the same text the CLI prints", async () => {
+    const env = await withDaemon();
+    const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "flow7-instructions" } });
+
+    try {
+      expect(mcp.client.getServerCapabilities()?.resources).toBeDefined();
+      const listed = await mcp.client.listResources();
+      expect(listed.resources).toContainEqual(
+        expect.objectContaining({ mimeType: "text/markdown", uri: "simlock://instructions" }),
+      );
+
+      const read = await mcp.client.readResource({ uri: "simlock://instructions" });
+      const printed = await env.cli(["instructions"]);
+      expect(printed.code).toBe(0);
+      expect(printed.stdout.length).toBeGreaterThan(0);
+      expect(read.contents).toEqual([
+        { mimeType: "text/markdown", text: printed.stdout, uri: "simlock://instructions" },
+      ]);
+    } finally {
+      await mcp.close();
+    }
+  });
+
   it("exercises all four tools, and streams strictly increasing progress with human messages", async () => {
     const env = await withDaemon();
     await env.driverScript.set({

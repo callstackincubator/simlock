@@ -173,7 +173,10 @@ simlock status --json
 The daemon starts on demand — there's no separate setup step. Use
 `simlock doctor` to reconcile managed state with reality, and
 `simlock nuke --yes --delete-devices` only for an emergency reset of
-Simlock-managed devices.
+Simlock-managed devices. Run `simlock instructions` to print the rules your
+agents must follow, ready to paste into their system prompt or `AGENTS.md`.
+Run `simlock setup` to install those rules as a skill for Claude Code and
+Codex instead, for your user or, with `--project`, for the current project.
 
 See [docs/CLI.md](docs/CLI.md) for the full command reference and
 [docs/CLI.md#simlock-mcp](docs/CLI.md#simlock-mcp) or the [README section
@@ -196,7 +199,8 @@ with its own id.
 The server exposes exactly four tools: `list_devices` (read-only catalog of
 what can be leased), `lease_simulator`, `release_simulator`, and `lease_status`
 (cheap, safe to poll after a context compaction to check whether a device is
-still leased to this session). Full tool contracts, progress reporting, and
+still leased to this session). It also serves the agent rules
+`simlock instructions` prints as one resource, `simlock://instructions`. Full tool contracts, progress reporting, and
 lease-loss notifications are documented in
 [docs/CLI.md](docs/CLI.md#simlock-mcp).
 
