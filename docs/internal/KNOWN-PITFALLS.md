@@ -1,5 +1,30 @@
 # Known pitfalls
 
+## `simlock mcp` under Codex cannot see the session id
+
+The requester id comes from the agent tool's session variable
+(`CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`). The CLI runs in the agent's
+shell, so it sees them.
+
+**The pitfall:** Codex starts MCP servers with its own `CODEX_*` variables
+stripped (verified against Codex 0.159.0 with a stub server that printed its
+`CODEX_*` environment: empty). Claude Code passes its variable through. MCP
+stdio servers inherit only a limited environment by contract, and MCP has no
+session id for stdio, so this is client behaviour we cannot rely on. Under
+Codex, `simlock mcp` falls back to `mcp:<pid>`, so an agent using both the CLI
+(`codex:<id>`) and MCP in one session is two requesters and can hold two
+leases. The daemon still enforces one lease per requester on each side.
+
+**Why it is accepted:** mixing the CLI and MCP in one agent session is
+uncommon, and the id is only a per-requester key, so nothing collides across
+agents. Removing MCP would cost a supported interface for a narrow gap.
+
+**The fix, if needed:** an optional `agentId` argument on `lease_simulator`,
+which the agent fills from its shell's session variable. This matches MCP's
+direction that cross-request identity be an explicit identifier the client
+passes. Until then, use one interface per session or set the same
+`SIMLOCK_AGENT_ID` for both.
+
 ## A SIGKILLed lease holder keeps its device until the TTL expires
 
 A lease ends in exactly one of two ways: somebody releases it, or its TTL

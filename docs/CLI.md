@@ -114,9 +114,11 @@ Resolution order, first match wins:
    The first variable in the table that is set and not empty wins.
 4. a pid-derived value (not stable across invocations).
 
-Under Claude Code or Codex nothing needs setting: every `simlock` command in
-one agent session, including its sub-agents and parallel commands, is the same
-requester and shares that session's one lease. Elsewhere, export
+Under Claude Code or Codex nothing needs setting for the CLI: every `simlock`
+command in one agent session, including its sub-agents and parallel commands,
+is the same requester and shares that session's one lease. (`simlock mcp` gets
+the session id under Claude Code only; see [`simlock mcp`](#simlock-mcp).)
+Elsewhere, export
 `SIMLOCK_AGENT_ID` once per agent session, with a distinct id per agent so
 they don't collide. An explicit id always wins over the session id. The id
 shows up as the requester in `simlock status` and `simlock list --leases`, so
@@ -815,11 +817,16 @@ relayed as MCP `notifications/progress` for that request. See
 
 The requester identity for leases made through this server is
 `SIMLOCK_AGENT_ID`, then the agent tool's session id, then a pid-derived
-value — see [Agent identity](#agent-identity). Under Claude Code or Codex the
-server gets the session's id with no setup, the same id the CLI resolves in
-that session. Under any other client, set a distinct `SIMLOCK_AGENT_ID` per
-MCP server process (one per agent session) so the one-lease-per-agent rule is
-meaningful.
+value — see [Agent identity](#agent-identity). Under Claude Code the server
+gets the session's id with no setup, the same id the CLI resolves in that
+session. Codex starts MCP servers without its own environment variables, so
+under Codex the server cannot see the session id: it falls back to a
+pid-derived requester, which differs from the id the CLI resolves in the same
+Codex session. An agent that leases through both the CLI and MCP in one Codex
+session can therefore hold two leases. To avoid that, use one interface per
+session, or set the same `SIMLOCK_AGENT_ID` for both. Under any other client,
+set a distinct `SIMLOCK_AGENT_ID` per MCP server process (one per agent
+session) so the one-lease-per-agent rule is meaningful.
 
 ### Breaking in 0.3.0: tool schemas are now the contract's own field names
 

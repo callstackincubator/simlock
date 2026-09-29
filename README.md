@@ -189,9 +189,12 @@ never has to ask it to. Start it with `simlock mcp` — it reserves stdout for
 MCP JSON-RPC, so lease results never mix with protocol framing.
 
 Simlock allows at most one active lease per requester identity, so each agent
-session needs a distinct, stable id. Under Claude Code or Codex the server
-takes it from the agent session (`claude-code:<id>` or `codex:<id>`), the same
-id the CLI uses there, with no setup. Under other clients, set
+session needs a distinct, stable id. Under Claude Code the server takes it
+from the agent session (`claude-code:<id>`), the same id the CLI uses there,
+with no setup. Codex does not pass its session id to MCP servers, so under
+Codex the server uses a pid-derived id that differs from the CLI's `codex:<id>`
+in the same session; use one interface per session, or set the same
+`SIMLOCK_AGENT_ID` for both. Under other clients, set
 `SIMLOCK_AGENT_ID` as in the config above and run one MCP server process per
 agent session, each with its own id. `SIMLOCK_AGENT_ID` always wins when set.
 
