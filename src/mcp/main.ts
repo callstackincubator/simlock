@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveRequesterId } from "../agent-identity/index.js";
 import type { SimlockClient } from "../client/index.js";
 import {
   NodeDaemonLauncher,
@@ -43,7 +44,8 @@ export interface McpStdioEnvironment {
   readonly connectForRenew?: () => Promise<SimlockClient>;
   readonly createServer?: (session: McpSession) => McpServer;
   readonly createTransport?: () => McpTransport;
-  /** Source for `SIMLOCK_AGENT_ID` when `requesterId` is not given explicitly. */
+  /** Source for `SIMLOCK_AGENT_ID` and the agent tool's session id (`resolveRequesterId`) when
+   * `requesterId` is not given explicitly. */
   readonly env?: NodeJS.ProcessEnv;
   readonly requesterId?: string;
   readonly signals?: Signals;
@@ -71,7 +73,7 @@ export async function startMcpStdio(
   environment: McpStdioEnvironment = {},
 ): Promise<McpStdioRunner> {
   const env = environment.env ?? process.env;
-  const requesterId = environment.requesterId ?? env.SIMLOCK_AGENT_ID ?? `mcp:${process.pid}`;
+  const requesterId = environment.requesterId ?? resolveRequesterId(env, `mcp:${process.pid}`);
   // One `Clock` for the whole frontend: the session's renew timer and the auto-launch retry
   // loop must not be able to disagree about what time it is (architecture rule 9).
   const clock = environment.clock ?? new SystemClock();

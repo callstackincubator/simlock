@@ -96,22 +96,33 @@ implement them:
 ## Agent identity
 
 Leases are keyed by requester: at most one active lease per agent id,
-enforced by the daemon. Give each agent session a **stable**
-id so this actually constrains anything — a fresh id on every CLI invocation
-(the default) makes the constraint a no-op, since every invocation looks
-like a different requester.
+enforced by the daemon. Each agent session needs a **stable** id for this to
+constrain anything — a fresh id on every CLI invocation makes the constraint a
+no-op, since every invocation looks like a different requester.
 
 Resolution order, first match wins:
 
 1. `--agent-id <id>` on `simlock lease`.
 2. the `SIMLOCK_AGENT_ID` environment variable.
-3. a pid-derived value (today's behavior; not stable across invocations).
+3. the session id of the agent tool Simlock runs under, as `<tool>:<session id>`:
 
-Reuse the same id across an agent's own invocations (e.g. export
-`SIMLOCK_AGENT_ID` once per agent session) and use a distinct id per agent so
-they don't collide with each other. The id shows up as the requester in
-`simlock status` and `simlock list --leases`, so an operator can tell which
-agent holds what.
+   | Tool        | Variable                 | Id                 |
+   | ----------- | ------------------------ | ------------------ |
+   | Claude Code | `CLAUDE_CODE_SESSION_ID` | `claude-code:<id>` |
+   | Codex       | `CODEX_SESSION_ID`       | `codex:<id>`       |
+
+   The first variable in the table that is set and not empty wins.
+4. a pid-derived value (not stable across invocations).
+
+Under Claude Code or Codex nothing needs setting for the CLI: every `simlock`
+command in one agent session, including its sub-agents and parallel commands,
+is the same requester and shares that session's one lease. (`simlock mcp` gets
+the session id under Claude Code only; see [`simlock mcp`](#simlock-mcp).)
+Elsewhere, export
+`SIMLOCK_AGENT_ID` once per agent session, with a distinct id per agent so
+they don't collide. An explicit id always wins over the session id. The id
+shows up as the requester in `simlock status` and `simlock list --leases`, so
+an operator can tell which agent holds what.
 
 ## `simlock lease`
 
@@ -134,8 +145,8 @@ granted.
 - `--platform`, `--device` — required. `--os` defaults to the newest runtime
   already installed for that platform.
 - `--agent-id` — this invocation's requester identity; see
-  [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then a
-  pid-derived value.
+  [Agent identity](#agent-identity). Defaults to `SIMLOCK_AGENT_ID`, then the
+  agent tool's session id, then a pid-derived value.
 - `--timeout` — max time to wait in the queue (exit 10 on expiry).
 - `--no-wait` — fail immediately with exit 11 instead of queueing.
 - `--allow-download` — permit downloading a missing runtime / system image
@@ -805,10 +816,17 @@ relayed as MCP `notifications/progress` for that request. See
 [../README.md](../README.md#mcp-integration-optional) for details.
 
 The requester identity for leases made through this server is
-`SIMLOCK_AGENT_ID`, falling back to a pid-derived value — see
-[Agent identity](#agent-identity). Set a distinct `SIMLOCK_AGENT_ID` per MCP
-server process (one per agent session) so the one-lease-per-agent rule is
-meaningful.
+`SIMLOCK_AGENT_ID`, then the agent tool's session id, then a pid-derived
+value — see [Agent identity](#agent-identity). Under Claude Code the server
+gets the session's id with no setup, the same id the CLI resolves in that
+session. Codex starts MCP servers without its own environment variables, so
+under Codex the server cannot see the session id: it falls back to a
+pid-derived requester, which differs from the id the CLI resolves in the same
+Codex session. An agent that leases through both the CLI and MCP in one Codex
+session can therefore hold two leases. To avoid that, use one interface per
+session, or set the same `SIMLOCK_AGENT_ID` for both. Under any other client,
+set a distinct `SIMLOCK_AGENT_ID` per MCP server process (one per agent
+session) so the one-lease-per-agent rule is meaningful.
 
 ### Breaking in 0.3.0: tool schemas are now the contract's own field names
 
@@ -1157,7 +1175,7 @@ connection's resolved `role` so a caller can tell which one it got.
 
 This is also why `simlock lease --detach` followed later by
 `simlock lease renew <lease-id>` or `simlock release <lease-id>` from a
-different invocation works even though each CLI process has a different
+different invocation works even when each CLI process has a different
 pid-derived identity: all of them connect as admin (when the local file is
 readable), and admin bypasses the per-connection ownership check that would
 otherwise apply.
