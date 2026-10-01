@@ -1,40 +1,19 @@
 import { execFile } from "node:child_process";
-import { readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { withDaemon } from "./helpers/index.js";
+import {
+  emptyDeviceSet,
+  iosDeviceSet,
+  setDevices,
+  sweepStaleDeviceSets,
+  type SimctlDevice,
+} from "./helpers/ios-device-set.js";
 import type { TestEnv } from "./helpers/env.js";
 import { waitFor } from "./helpers/wait.js";
 
 const execFileAsync = promisify(execFile);
-
-interface SimctlDevice {
-  readonly udid: string;
-  readonly name: string;
-  readonly state: string;
-}
-
-/**
- * Devices in one device set. Every simctl call here carries `--set`, exactly as the
- * driver's do: a device in a custom set is not addressable, or even listable, without it.
- * Omitting the flag is how this lane checks the *other* half of containment -- see
- * `defaultSetDevices`.
- */
-async function setDevices(deviceSet: string): Promise<SimctlDevice[]> {
-  const { stdout } = await execFileAsync("xcrun", [
-    "simctl",
-    "--set",
-    deviceSet,
-    "list",
-    "devices",
-    "-j",
-  ]);
-  const parsed = JSON.parse(stdout) as { devices: Record<string, SimctlDevice[]> };
-  return Object.values(parsed.devices).flat();
-}
 
 /** The machine's own device set -- the one Xcode shows. Simlock's devices must never be in it. */
 async function defaultSetDevices(): Promise<SimctlDevice[]> {
@@ -50,50 +29,6 @@ async function simctlRuntimes(): Promise<string[]> {
     runtimes: { name: string; version: string; isAvailable: boolean }[];
   };
   return parsed.runtimes.filter((runtime) => runtime.isAvailable).map((runtime) => runtime.version);
-}
-
-/**
- * Everything in the set, by membership rather than by name: the set is Simlock's own, so
- * nothing else can be in it, and CoreSimulator has to be told to forget these devices
- * before the temporary home holding them is removed.
- *
- * Shut down first, always. `simctl delete` refuses a booted device, and this runs on the
- * failure path too -- a `waitFor` that gave up leaves devices booted -- so deleting
- * without shutting down would leave a running `launchd_sim` attached to a set directory
- * that `withDaemon`'s teardown is about to remove recursively.
- */
-async function emptyDeviceSet(deviceSet: string): Promise<void> {
-  for (const device of await setDevices(deviceSet).catch(() => [])) {
-    await execFileAsync("xcrun", ["simctl", "--set", deviceSet, "shutdown", device.udid]).catch(
-      () => undefined,
-    );
-    await execFileAsync("xcrun", ["simctl", "--set", deviceSet, "delete", device.udid]).catch(
-      () => undefined,
-    );
-  }
-}
-
-/** Older than any run of this lane can be: its own timeout is five minutes. */
-const STALE_SET_AGE_MS = 60 * 60 * 1000;
-
-/**
- * Device sets left behind by a run that died before its own cleanup -- a killed vitest, a
- * crashed machine. Nothing else reclaims them now that the set lives inside a per-test
- * temporary home instead of the shared default set the old prefix sweep covered, so the
- * tens of gigabytes each holds would sit in `$TMPDIR` forever. Age-gated rather than
- * scoped to this run so it can never sweep a set out from under a live one, including a
- * sibling running in parallel.
- */
-async function sweepStaleDeviceSets(): Promise<void> {
-  const entries = await readdir(tmpdir(), { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !entry.name.startsWith("simlock-e2e-")) continue;
-    const deviceSet = join(tmpdir(), entry.name, "devices", "ios");
-    const details = await stat(deviceSet).catch(() => undefined);
-    if (details === undefined || Date.now() - details.mtimeMs < STALE_SET_AGE_MS) continue;
-    await emptyDeviceSet(deviceSet);
-    await rm(deviceSet, { force: true, recursive: true });
-  }
 }
 
 // This lane needs the real simctl toolchain, hence darwin-only and gated on an
@@ -128,7 +63,7 @@ describe.skipIf(process.platform !== "darwin")(
         }
 
         const env = await withDaemon({ driver: "real" });
-        const deviceSet = join(env.home, "devices", "ios");
+        const deviceSet = iosDeviceSet(env.home);
         try {
           const catalog = await env.cli(["catalog", "--json", "--platform", "ios"]);
           expect(catalog.code).toBe(0);
