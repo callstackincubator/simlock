@@ -1,6 +1,6 @@
 # 0007. A lease request chooses the device mode
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-01
 - **Issue:** [#172](https://github.com/callstackincubator/simlock/issues/172)
 - **Supersedes:** nothing. Narrows [ADR
