@@ -521,8 +521,16 @@ gateway sends it `lease.request` with **`noWait: true`**:
   request belongs to that worker and dispatch stops considering it;
 - an **immediate `NO_CAPACITY`** is the only answer that leaves it queued: it
   means the view was stale, so the gateway refreshes that worker's view and
-  the request waits, no worse off than before. A failure *after* work has
-  begun is the request's own terminal failure, not a return to the queue;
+  the request waits, no worse off than before. The gateway remembers the
+  refusal for that request against a key built from the worker's view
+  (capacity, queue depth, health, devices, lease ids; not timestamps), and
+  does not pick that worker for that request again while the key is
+  unchanged: another worker is tried instead, and the refusing worker is
+  asked once per change of its state, not on every refresh (ADR 0009 §5). A
+  `noWait` request refused this way gets one more walk without that worker,
+  and fails with `NO_CAPACITY` if no worker is picked in it. A failure
+  *after* work has begun is the request's own terminal failure, not a return
+  to the queue;
 - a request no worker can serve right now is **passed over, not blocked on**,
   so an Android request behind an iOS one proceeds the moment Android
   capacity frees.
