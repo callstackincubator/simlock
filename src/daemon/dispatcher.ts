@@ -7,6 +7,7 @@ import {
   type DeviceRecord,
   type DeviceRequest,
   type Doctor,
+  type HostFacts,
   type Nuke,
   type Registry,
   effectiveAllowDownload,
@@ -122,6 +123,8 @@ export interface DispatcherOptions {
   readonly tokens?: TokenStore;
   /** Reports current daemon health for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
+  /** `status.get`'s host block, from memory: answering never waits for a read (ADR 0008 §7). */
+  readonly hostFacts: () => HostFacts;
   /**
    * ADR §2 step 4: every operation but `status.get` parks here before its handler runs.
    * `hello` never reaches `dispatch()` at all -- it is answered before a `Session` exists,
@@ -280,6 +283,7 @@ export class Dispatcher {
       // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
       // #117 is what makes `gateway` mean something beyond this field.
       daemon: { health: this.options.health(), mode: this.options.config.mode },
+      host: this.options.hostFacts(),
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
     };

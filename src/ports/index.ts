@@ -56,6 +56,7 @@ export type { LogRecord } from "./logger.js";
 export { CryptoIdGenerator, type IdGenerator } from "./id-generator.js";
 export { CryptoTokenSecrets, type TokenSecrets } from "./token-secrets.js";
 export { FakeSystemStats, NodeSystemStats, type SystemStats } from "./system-stats.js";
+export { FakeHostInfo, type HostInfo, type HostSystem, NodeHostInfo } from "./host-info.js";
 export { FakeParentWatch, NodeParentWatch, type ParentWatch } from "./parent-watch.js";
 export type { ParentWatchHandle } from "./parent-watch.js";
 export { FakeProcessSupervisor, NodeProcessSupervisor } from "./process-supervisor.js";

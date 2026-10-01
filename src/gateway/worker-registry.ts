@@ -29,6 +29,7 @@ export type WorkerViewSnapshot = Pick<
   | "devices"
   | "downloads"
   | "health"
+  | "host"
   | "lease"
   | "leases"
   | "queueDepth"
@@ -198,9 +199,12 @@ export class WorkerRegistry {
       ...(label === undefined ? {} : { label }),
       ...(version === undefined ? {} : { version }),
     };
-    this.#workers.set(workerId, view);
+    // ADR 0008 §8: host facts come from `status.get`, which an incompatible worker is never
+    // asked. A view left over from an earlier, compatible session must not keep showing them.
+    const { host: _stale, ...withoutHost } = view;
+    this.#workers.set(workerId, withoutHost);
     this.#notifyViewsChanged();
-    return view;
+    return withoutHost;
   }
 
   /**

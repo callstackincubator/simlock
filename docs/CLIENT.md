@@ -215,6 +215,27 @@ but cannot pair them, and that request fails there. `modelAliases` and
 `images` are the unions of each worker's own. The gateway does not yet route
 by another name, so ask it for a model by its name in `models`.
 
+## What machine answered: `getStatus().host`
+
+`getStatus()` carries a `host` block beside `daemon`: the machine the daemon
+runs on, worked out from the machine itself.
+
+```ts
+const { host } = await client.getStatus();
+// { os: "macOS", osVersion: "15.5", arch: "arm64",
+//   tools: [{ platform: "ios", name: "xcode", version: "16.4", build: "16F6" },
+//           { platform: "android", name: "emulator", version: "35.4.9" }] }
+```
+
+- `tools` has one entry per platform tool the daemon's drivers use. A tool
+  that is not installed is left out. Versions are read in the background, so
+  `getStatus` never waits for them, and right after a daemon starts the list
+  can be empty for a moment. They are read again once a minute has passed;
+  if a read fails, the version from the last good read stays.
+- A gateway reports its own machine with no tools, since it runs no
+  drivers. Each worker's `host` is on its entry in `workers`, and on
+  `listWorkers()` from the admin client.
+
 ## One connection, no reconnect, no retry
 
 This is the one thing to internalize before building anything on top of this

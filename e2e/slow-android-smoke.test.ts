@@ -122,10 +122,13 @@ describe.skipIf(!hasAndroidSdk)(
           );
           expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
           const grant = lease.json as {
-            lease: string;
-            udid: string;
+            device: { driverDeviceId: string };
             environment: Record<string, string>;
+            lease: { id: string };
           };
+          // On Android the driver's device id is the AVD name (the driver refuses a record
+          // where they differ), so this is the name to look for on disk and in avdmanager.
+          const avdName = grant.device.driverDeviceId;
 
           // Without this, a holder's `adb` talks to the shared server, which by design
           // cannot see a Simlock emulator at all (ADR 0001, decision 7).
@@ -145,7 +148,7 @@ describe.skipIf(!hasAndroidSdk)(
 
           // The adb serial (e.g. "emulator-5554") is a driver-internal detail simlock
           // deliberately keeps opaque outside drivers/android (architecture.md #2) --
-          // `grant.udid` is simlock's own AVD name, not the adb serial, so this only
+          // the grant names simlock's own AVD, not the adb serial, so this only
           // asserts that *an* emulator is actually online, not which one by serial.
           const onlineSerials = await adbDevices(adbServerPort);
           expect(
@@ -156,16 +159,17 @@ describe.skipIf(!hasAndroidSdk)(
           // Ownership is root membership, not a name: the AVD must be inside the root this
           // env's Simlock owns, and must not be in the user's own AVD home at all.
           expect(
-            existsSync(join(env.home, "devices", "android", `${grant.udid}.avd`)),
+            existsSync(join(env.home, "devices", "android", `${avdName}.avd`)),
             "expected the AVD to live inside Simlock's own device root",
           ).toBe(true);
           const avdNames = await avdManagerList();
           expect(
-            avdNames.includes(grant.udid),
+            avdNames.includes(avdName),
             "a Simlock AVD must not appear in the user's own AVD home",
           ).toBe(false);
 
-          await env.cli(["release", grant.lease]);
+          const release = await env.cli(["release", grant.lease.id]);
+          expect(release.code, `release failed: ${release.stderr}`).toBe(0);
 
           // Force the idle-shutdown rule (see flow 9) rather than waiting on the slow
           // periodic tick, so the emulator process actually stops.
@@ -176,9 +180,7 @@ describe.skipIf(!hasAndroidSdk)(
                 driverDeviceId: string;
                 state: string;
               }[];
-              return rows.some(
-                (row) => row.driverDeviceId === grant.udid && row.state === "shutdown",
-              );
+              return rows.some((row) => row.driverDeviceId === avdName && row.state === "shutdown");
             },
             { timeout: 60_000, interval: 500, label: "device demoted to shutdown" },
           );
@@ -195,7 +197,7 @@ describe.skipIf(!hasAndroidSdk)(
             id: string;
             driverDeviceId: string;
           }[];
-          const registryId = devices.find((device) => device.driverDeviceId === grant.udid)?.id;
+          const registryId = devices.find((device) => device.driverDeviceId === avdName)?.id;
           expect(
             findings.some(
               (finding) =>

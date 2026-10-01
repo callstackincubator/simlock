@@ -38,6 +38,8 @@ const EMPTY_GLOBAL_CAPACITY = {
 export interface AggregateStatusOptions {
   /** The *gateway's* own health, not any worker's. */
   readonly health: StatusOutput["daemon"]["health"];
+  /** The *gateway's* own machine. Each worker's is on its view. */
+  readonly host: StatusOutput["host"];
   /** The gateway's fleet queue depth -- 0 until #118 gives it a queue. */
   readonly queueDepth: number;
   /**
@@ -72,6 +74,7 @@ export function aggregateStatus(
   return {
     capacity: sumCapacity(views.filter((view) => view.connection === "connected")),
     daemon: { health: options.health, mode: "gateway" },
+    host: options.host,
     devices: views.flatMap((view) =>
       view.devices.map((device) => ({ ...device, workerId: view.id })),
     ),

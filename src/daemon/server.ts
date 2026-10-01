@@ -8,6 +8,7 @@ import {
   type CleanupReaper,
   type Doctor,
   type DriverRejection,
+  type HostFacts,
   type LeaseHealthMonitor,
   NoDriverError,
   type Nuke,
@@ -139,6 +140,8 @@ export interface DaemonServerEngineOptions {
   /** What `events.replay` answers from; see `EventHistory`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
   readonly leases: LeaseCommands;
+  /** `status.get`'s host block (ADR 0008 §5); see `DispatcherOptions.hostFacts`. */
+  readonly hostFacts: () => HostFacts;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor;
@@ -285,6 +288,7 @@ function buildDispatcher(
     errorCode: classifyError,
     eventHistory: options.eventHistory,
     health: hooks.health,
+    hostFacts: options.hostFacts,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),

@@ -69,6 +69,12 @@ export interface FakeDriverPlatformScript {
     readonly tag: string;
     readonly abi: string;
   }[];
+  /** What `toolVersions` reports for `status.get`'s host facts. None by default. */
+  readonly toolVersions?: readonly {
+    readonly name: string;
+    readonly version: string;
+    readonly build?: string;
+  }[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
   readonly reclaimResult?: "ready" | "shutdown";

@@ -20,6 +20,7 @@ import {
   catalogFixture,
   deviceFixture,
   grantFixture,
+  hostFixture,
   leaseFixture,
   ScriptedWorkerClient,
   statusFixture,
@@ -98,6 +99,9 @@ class FakeTokens implements GatewayTokenStore {
  * prefix is that principal plus a trailing `:`, the same shape `worker-registry.test.ts` uses. */
 const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
 
+/** The gateway's own machine, as the composition root hands it over: read once, no tools. */
+const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] };
+
 /** A `WorkerDirectory` a test populates by hand -- see `fleet-coordinator.test.ts`'s own copy
  * for the fuller doc comment; this file only ever needs one worker at a time. */
 class FakeDirectory implements WorkerDirectory {
@@ -168,6 +172,7 @@ function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay">
         path: "/events.jsonl",
       }),
     health: () => "running",
+    host: GATEWAY_HOST,
     leaseIndex,
     // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
@@ -255,6 +260,17 @@ describe("GatewayDispatcher", () => {
     expect(status.workers).toHaveLength(1);
     expect(status.devices).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
+  });
+
+  it("reports its own host with no tools on status.get, and each worker's on its view", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.refresh("wrk_1", { host: hostFixture() });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.host).toEqual({ arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] });
+    expect(status.workers?.[0]?.host).toEqual(hostFixture());
   });
 
   it("reports each worker device's mode on status.get and worker.list", async () => {

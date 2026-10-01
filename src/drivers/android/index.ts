@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { DeviceSpec } from "../../core/domain.js";
 import {
@@ -12,6 +12,7 @@ import {
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
+  type DriverToolVersion,
   LicenseNotAcceptedError,
   type ObservedDevice,
   type ObservedMark,
@@ -173,7 +174,12 @@ export interface AndroidDriverOptions {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
-  readonly hostAbi?: string;
+  /**
+   * The ABI this host runs natively (`hostAbiFor` of the host port's architecture), passed in
+   * by the composition root so the image this driver prefers and the architecture `status.get`
+   * reports come from the same reading.
+   */
+  readonly hostAbi: string;
   readonly idGenerator?: IdGenerator;
   /** Identity this driver's device root ownership marker is checked against. */
   readonly instanceId: string;
@@ -472,7 +478,7 @@ export class AndroidDriver implements Driver {
     this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
     this.#baselineLaunchInputs = baselineLaunchInputs(options.emulator);
     this.#filesystem = options.filesystem;
-    this.#hostAbi = options.hostAbi ?? hostAbiFor(process.arch);
+    this.#hostAbi = options.hostAbi;
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
     this.#onDiagnostic = options.onDiagnostic;
     this.#processRunner = options.processRunner;
@@ -1091,6 +1097,31 @@ export class AndroidDriver implements Driver {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Revisions of the SDK packages this driver runs: the emulator, platform-tools (adb), and the
+   * command-line tools (or legacy SDK tools) whose `sdkmanager` it uses. Read from each package's `source.properties`,
+   * so no tool is started; a package whose file cannot be read is left out.
+   */
+  async toolVersions(): Promise<readonly DriverToolVersion[]> {
+    const packages = [
+      { name: "emulator", path: dirname(this.#sdk.emulator) },
+      { name: "platform-tools", path: dirname(this.#sdk.adb) },
+      // `<sdk>/cmdline-tools/<version>/bin/sdkmanager`, or the obsolete `<sdk>/tools/bin/` one
+      // this driver falls back to, which is a different package and is named as such.
+      {
+        name: this.#sdk.sdkmanager.includes("/cmdline-tools/") ? "cmdline-tools" : "tools",
+        path: dirname(dirname(this.#sdk.sdkmanager)),
+      },
+    ];
+    const versions = await Promise.all(
+      packages.map(async ({ name, path }) => {
+        const version = await packageRevision(this.#filesystem, path);
+        return version === undefined ? undefined : { name, version };
+      }),
+    );
+    return versions.filter((version) => version !== undefined);
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
@@ -1980,17 +2011,24 @@ function systemImagePackage(apiLevel: string, tag: string, abi: string): string 
 }
 
 async function systemImageVersion(filesystem: Filesystem, imagePath: string): Promise<string> {
+  return (await packageRevision(filesystem, imagePath)) ?? "unknown";
+}
+
+/** `Pkg.Revision` from an SDK package's `source.properties`; undefined when it cannot be read. */
+async function packageRevision(
+  filesystem: Filesystem,
+  packagePath: string,
+): Promise<string | undefined> {
   try {
-    const properties = await filesystem.readFile(`${imagePath}/source.properties`);
-    return (
-      properties
-        .split(/\r?\n/)
-        .find((line) => line.startsWith("Pkg.Revision="))
-        ?.slice("Pkg.Revision=".length)
-        .trim() ?? "unknown"
-    );
+    const properties = await filesystem.readFile(`${packagePath}/source.properties`);
+    const revision = properties
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("Pkg.Revision="))
+      ?.slice("Pkg.Revision=".length)
+      .trim();
+    return revision === "" ? undefined : revision;
   } catch {
-    return "unknown";
+    return undefined;
   }
 }
 
@@ -2118,7 +2156,8 @@ function stableHash(parts: readonly string[]): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function hostAbiFor(architecture: string): string {
+/** The Android ABI that runs natively on a CPU of this architecture, as Node names it. */
+export function hostAbiFor(architecture: string): string {
   return architecture === "arm64" ? "arm64-v8a" : "x86_64";
 }
 

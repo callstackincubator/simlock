@@ -33,6 +33,7 @@ export {
   type DriverEstimate,
   type DriverReality,
   type DriverRejection,
+  type DriverToolVersion,
   InsufficientDiskSpaceError,
   type LegacyDevice,
   LicenseNotAcceptedError,
@@ -47,6 +48,7 @@ export { UnknownPassthroughToolError } from "./driver-catalog.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.
 export type { AdbServerRejectionReason, DriverRejectionReason } from "./driver.js";
 export { Doctor } from "./doctor.js";
+export { type HostFacts, HostFactsReader } from "./host-facts.js";
 export { ensureOwnedRoot, OWNED_ROOT_MARKER_FILE, OwnedRootError } from "./device-root.js";
 export type { EnsureOwnedRootOptions } from "./device-root.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary, carried in the driver.root-rejected payload.

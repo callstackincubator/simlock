@@ -6,6 +6,7 @@ import {
   DiskSpaceGuard,
   type Driver,
   type DriverAdvisory,
+  type DriverToolVersion,
   type DriverCatalogEntry,
   type DriverDevice,
   DriverCrashError,
@@ -37,6 +38,9 @@ import type { ComponentInstallDiagnostic } from "../diagnostics.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
+// `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
+// longer while it checks its components, and a hang must not hold host facts forever.
+const XCODE_VERSION_TIMEOUT_MS = 15_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
 const PROVISION_ESTIMATE_MS = 500;
 // Mirrors `downloads.timeoutMs`'s config default (`src/core/config.ts`) -- used only when a
@@ -1217,6 +1221,26 @@ export class IosSimctlDriver implements Driver {
    */
   async advisories(): Promise<readonly DriverAdvisory[]> {
     return [...(await this.#unreclaimableCacheAdvisories()), ...(await this.#slimAdvisories())];
+  }
+
+  /**
+   * The Xcode version and build `xcodebuild -version` prints. A Mac with only the command line
+   * tools has an `xcodebuild` that refuses to run without Xcode: that is no Xcode, and reports
+   * no entry. Any other failure -- a run that errors, times out, or prints a shape this does not
+   * know -- rejects, so the core keeps the version it last read.
+   */
+  async toolVersions(): Promise<readonly DriverToolVersion[]> {
+    const result = await this.#processRunner.run("xcodebuild", ["-version"], {
+      timeoutMs: XCODE_VERSION_TIMEOUT_MS,
+    });
+    if (result.code !== 0) {
+      if (/requires Xcode/.test(result.stderr)) return [];
+      throw new Error(`xcodebuild -version exited with ${String(result.code)}`);
+    }
+    const version = /^Xcode (\S+)$/m.exec(result.stdout)?.[1];
+    const build = /^Build version (\S+)$/m.exec(result.stdout)?.[1];
+    if (version === undefined) throw new Error("xcodebuild -version printed no Xcode version");
+    return [{ name: "xcode", version, ...(build === undefined ? {} : { build }) }];
   }
 
   /**

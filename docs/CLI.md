@@ -716,9 +716,10 @@ the `admin` role (see [Admin credential
 resolution](#admin-credential-resolution)). A worker has no workers of its
 own, so it does not implement these operations at all and answers
 `UNKNOWN_REQUEST` — they are not a gateway-mode refusal of something a worker
-could otherwise do, they are simply not part of a worker's surface. Output is
-JSON on stdout, unconditionally — `--json` is a usage error (exit 2), as
-everywhere except `status`/`catalog`/`daemon`.
+could otherwise do, they are simply not part of a worker's surface. `list`
+prints one line per worker, or the views as JSON with `--json`; `drain`,
+`undrain` and `remove` print JSON on stdout, unconditionally — `--json` is a
+usage error (exit 2) for those three.
 
 ```
 simlock worker list
@@ -727,26 +728,90 @@ simlock worker undrain <worker-id>
 simlock worker remove <worker-id>
 ```
 
-`list` prints one worker view per connected-or-remembered worker:
+`list --json` prints one worker view per connected-or-remembered worker. This
+one is a real answer from a test fleet whose drivers are simulated, which is
+why its Android catalog looks thin, trimmed to one worker:
 
 ```json
-{"workers":[{"id":"3f81a2c4","label":"mac-studio-2","state":"connected","drained":false,
-  "daemonVersion":"0.4.0","protocol":{"min":7,"max":7},
-  "connectedAt":1735689600000,"lastSeenAt":1735689930000,
-  "capacity":{"ios":{"running":2,"limit":4},"android":{"running":0,"limit":2}},
-  "downloads":{"policy":"on-request"},
-  "queueDepth":0,"leases":3,"devices":5}]}
+{
+  "workers": [
+    {
+      "id": "2b026432-7743-4a08-98fc-ce494d11866f",
+      "label": "worker-a",
+      "connection": "connected",
+      "drained": false,
+      "lastSeenAt": 1790864080506,
+      "health": "running",
+      "version": "1.0.0",
+      "capacity": {
+        "ios": {
+          "running": 0,
+          "maxRunning": 8,
+          "reserved": 0,
+          "overLimit": false,
+          "limit": 8,
+          "warm": 0,
+          "used": 0
+        },
+        "android": {
+          "running": 0,
+          "maxRunning": 8,
+          "reserved": 0,
+          "overLimit": false,
+          "limit": 8,
+          "warm": 0,
+          "used": 0
+        },
+        "global": {"running": 0, "maxRunning": 8, "reserved": 0, "overLimit": false, "warm": 0}
+      },
+      "downloads": {"policy": "on-request"},
+      "lease": {"maxTtlMs": 14400000},
+      "queueDepth": 0,
+      "leases": [],
+      "devices": [],
+      "catalog": [
+        {
+          "platform": "ios",
+          "models": ["iPhone 16"],
+          "runtimes": ["18.4", "26.0"],
+          "defaultRuntime": "26.0",
+          "modelRuntimes": {"iPhone 16": ["18.4"]},
+          "modelAliases": {}
+        },
+        {
+          "platform": "android",
+          "models": [],
+          "runtimes": ["18.0"],
+          "defaultRuntime": "18.0",
+          "modelRuntimes": {},
+          "modelAliases": {},
+          "images": [{"runtime": "18.0", "tag": "google_apis", "abi": "arm64-v8a"}]
+        }
+      ],
+      "host": {
+        "os": "macOS",
+        "osVersion": "26.6.1",
+        "arch": "arm64",
+        "tools": [{"platform": "ios", "name": "xcode", "version": "16.4", "build": "16F6"}]
+      }
+    }
+  ]
+}
 ```
 
-`downloads.policy` is that worker's own effective policy, read once with
-`config.get` when its uplink connects — routing needs it to know whether a
-machine may install a missing runtime before sending it a request that needs
-one. `protocol` is the range that worker negotiated; the wire moves
-to `{min: 7, max: 7}` with no shim, so a worker older than it does not
-overlap and shows as `incompatible`. Worker ids are UUIDs — the examples here
-abbreviate them to their first segment.
+`downloads.policy` and `lease.maxTtlMs` are that worker's own effective
+config, read when its uplink connects and again on every periodic refresh —
+routing needs the policy to know whether a machine may install a missing
+runtime before sending it a request that needs one. `catalog` is what that
+worker can lease, each model with the runtimes it pairs with. `host` is the
+machine: operating system, its version, CPU architecture, and the version of
+each platform tool its drivers use (`xcode` with its build; the Android
+`emulator`, `platform-tools` and `cmdline-tools`). A tool the worker does not
+have is left out. `protocol` appears only on an `incompatible` worker and
+names both ranges, the worker's and the gateway's, so you can see which side
+to upgrade. Worker ids are UUIDs; the console example below shortens them to fit.
 
-`state` is `connected`, `disconnected`, or `incompatible`. A **disconnected**
+`connection` is `connected`, `disconnected`, or `incompatible`. A **disconnected**
 worker keeps its last-known view (nothing is dispatched to it) until an
 operator removes it or `gateway.disconnectedRetentionMs` (24 hours) elapses.
 The retention clock is held while the gateway still knows of gateway-issued
@@ -889,7 +954,8 @@ A device currently `provisioning` or `reclaiming` carries a derived
 and `list --devices` well before it crosses the threshold that would make
 `doctor` flag it as stalled.
 
-Human-oriented overview: daemon health *and mode*, managed capacity
+Human-oriented overview: daemon health *and mode*, the host it runs on
+(`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
 platform), every managed device with its state and device mode
 (`Device dev_7: ready, mode slim`), current leases (who — the agent
@@ -907,7 +973,15 @@ lives on (`Device dev_7 on wrk_a: leased, mode full`). `--json` gains a `workers
 device and lease; `daemon.mode` says which kind of daemon answered.
 
 The daemon block carries `mode` (`"worker"` or `"gateway"`) — the one field
-that tells a client which kind of daemon answered. Do not confuse it with each
+that tells a client which kind of daemon answered. Beside it, `host` says
+what machine the daemon runs on: `os`, `osVersion`, `arch`, and `tools`, one
+entry per platform tool its drivers use with the `platform`, `name`,
+`version` and, for Xcode, `build`. Tool versions are read when the daemon
+starts and again in the background once a minute has passed, so `status`
+never waits for them. Right after a start, or for a tool that is not
+installed, `tools` has no entry; if a later read fails, the last version read
+stays. A gateway runs no drivers, so its own `host` has no
+tools; each worker's is on its worker view. Do not confuse it with each
 device's own `mode`, the device mode (`"slim"` or `"full"`). Against a **gateway** the
 same view is the fleet's: capacity summed over the connected workers, every
 lease and device tagged with the `workerId` it lives on, the gateway queue's
@@ -1188,8 +1262,9 @@ operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
 
 - `list [--json]` — one line per worker: its id (the worker's own instance
   identity — stable across restarts, and not its label or host name), its
-  label if it set one, connection state, capacity, and how many leases it
-  holds. A worker the gateway cannot speak to shows `incompatible` with both
+  label if it set one, connection state, capacity, how many leases it
+  holds, and its host: operating system, version, architecture, and tool
+  versions. A worker the gateway cannot speak to shows `incompatible` with both
   protocol ranges, which is what version skew looks like from here. `--json`
   prints the raw worker views, which is what the console renders.
 - `drain <worker-id>` / `undrain <worker-id>` — a drained worker keeps its
@@ -1209,8 +1284,8 @@ operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
 
 ```console
 $ simlock worker list
-wrk_9f2c (mac-mini-1): connected -- ios 1/2, android 0/1, 1 lease(s)
-wrk_4a10 (ci-runner-3): disconnected, drained -- ios 0/4, android 0/2, 0 lease(s)
+wrk_9f2c (mac-mini-1): connected -- ios 1/2, android 0/1, 1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9
+wrk_4a10 (ci-runner-3): disconnected, drained -- ios 0/4, android 0/2, 0 lease(s) -- macOS 14.7 x64; xcode 16.2 (16C5032a)
 ```
 
 ## `simlock config [get <key>|set <key> <value>]`
