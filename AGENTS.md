@@ -33,9 +33,12 @@ changes in this repo:
   gets a spec review and a code review before it opens.
 
 So are the accepted records in [docs/internal/adr/](docs/internal/adr/). An ADR marked
-_Accepted — not yet implemented_ means the documentation already describes the
-decided end state while the code has not caught up: treat the docs as the
-specification, and do not "fix" them back to match current behaviour.
+_Accepted — not yet implemented_ is binding as a target while the code has not
+caught up: build toward the ADR and the spec of the issue that links it. The
+PR that implements a change updates the docs it makes true. Where the docs
+already describe a decided end state the code has not reached (ADRs 0004 and
+0005), treat them as the specification too, and do not "fix" them back to
+match current behaviour.
 
 ## Documentation
 

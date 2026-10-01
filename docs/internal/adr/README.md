@@ -13,9 +13,12 @@ Status values:
 
 - **Proposed** — under discussion, not binding.
 - **Accepted** — binding. Code that contradicts it is a bug.
-- **Accepted — not yet implemented** — binding as a target. The docs describe
-  the decided end state; the code has not caught up. Anyone implementing
-  toward it should treat the documentation as the specification.
+- **Accepted — not yet implemented** — binding as a target; the code has not
+  caught up. The ADR and the spec of the issue that links it are the
+  specification. The PR that implements a change updates the docs it makes
+  true. ADRs 0004 and 0005 were accepted with their docs already rewritten to
+  the end state; for those two the docs are the specification too, and
+  nobody "fixes" them back to match current behaviour.
 - **Superseded by NNNN** — no longer binding; read the replacement.
 
 An ADR's status follows the feature that produced it, per
@@ -33,3 +36,4 @@ the status is stale.
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — not yet implemented |
 | [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — not yet implemented |
+| [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted — not yet implemented |
