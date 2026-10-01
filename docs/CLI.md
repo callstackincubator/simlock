@@ -1072,7 +1072,7 @@ own `events.jsonl` along with its own, so `--since` reaches back across a
 gateway restart. It holds only what arrived while the gateway was up — a
 worker's events from before its uplink connected are not backfilled.
 
-## `simlock daemon <start|stop|status|logs>`
+## `simlock daemon <start|stop|status|logs [--follow]>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
@@ -1084,8 +1084,12 @@ stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
 that is still granted; renew it from a later invocation once the daemon is
 back. A lease whose deadline passed while no daemon was running expires as soon
-as one is. `logs` tails daemon logs and works even when the daemon is dead — it
-reads the log file directly, no connection attempted. `status` never
+as one is. `logs` prints the last 100 lines of the daemon log and works even when
+the daemon is dead — it reads the log file directly, no connection attempted.
+`logs --follow` then keeps printing each new line as it is written, until you
+press Ctrl-C (exit 0). It keeps following when the log rotates, and if no
+daemon has written a log yet it waits for one. `--follow` cannot be combined
+with `--json` (exit 2). `status` never
 auto-starts the daemon and distinguishes two failure shapes:
 `{"status":"stopped"}` when nothing is listening on the socket at all, versus
 `{"status":"handshake-refused","error":{"code":...}}` (exit 1) when a daemon
@@ -1105,11 +1109,28 @@ about the config, because nothing ever answered — the reason is in `simlock
 daemon logs`, which reads the log file directly and so works even though the
 daemon never came up.
 
-The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
-(timestamp, level, module, message, and any fields) covering startup (version,
-protocol version, socket path, effective config), socket claim/stale-endpoint
-recovery, driver discovery, connection open/close, shutdown, and unexpected or
-handled errors. Growth is bounded: once the file passes `log.rotateBytes` it is
+The daemon writes one JSON line per record to `~/.simlock/daemon.log`
+(timestamp, level, module, message, and any fields). The log says what the
+daemon was asked to do and what went wrong; what happened to leases and
+devices is in `simlock events`, not here. It records:
+
+- **Startup and shutdown**: version, protocol version, socket path, effective
+  config, socket claim, driver discovery, and why a driver was skipped.
+- **Every request that changes something**, on every frontend (CLI, MCP,
+  HTTP, and a gateway's dispatch): one `operation` line when it finishes,
+  with the operation, who asked (`principal`, and `requesterId` or `leaseId`
+  when the request named one), how long it took, and the error code if it
+  failed. A request that only reads is logged at `debug`, unless it fails.
+- **Background failures** that Simlock handled by retrying, waiting, or
+  destroying a device: the device, the lease when there is one, the step that
+  failed, and the error text.
+- **At `log.level: debug`**, every device command (`simctl`, `adb`,
+  `sdkmanager`, …): the command, its arguments, its exit code, and how long it
+  took. Never its environment, its input, or its output.
+- Connection open and close, and errors nobody expected.
+
+The wording and fields of a line can change in any release; don't parse them
+as a contract. Growth is bounded: once the file passes `log.rotateBytes` it is
 rotated to `daemon.log.1` (replacing any previous generation), so `logs` always
 shows the current file with the immediately preceding one prepended.
 

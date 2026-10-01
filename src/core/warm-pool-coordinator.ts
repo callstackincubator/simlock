@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock } from "../ports/index.js";
+import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { CapacityDecision, CapacityDevice, RunningCapacity } from "./capacity/index.js";
 import {
   type DeviceRecord,
@@ -66,6 +66,7 @@ export interface WarmPoolCoordinatorOptions {
   readonly quarantine: WarmPoolQuarantine;
   readonly queueHeadDemand: () => { readonly spec?: DeviceSpec } | undefined;
   readonly registry: WarmPoolRegistry;
+  readonly logger?: Logger;
 }
 
 /**
@@ -73,7 +74,11 @@ export interface WarmPoolCoordinatorOptions {
  * work remains outside the serialized registry decision sections.
  */
 export class WarmPoolCoordinator {
-  constructor(private readonly options: WarmPoolCoordinatorOptions) {}
+  readonly #logger: Logger;
+
+  constructor(private readonly options: WarmPoolCoordinatorOptions) {
+    this.#logger = options.logger?.child("warm-pool-coordinator") ?? new NoopLogger();
+  }
 
   async reclaim(released: ReleasedLease): Promise<void> {
     if (!mayBeGranted(released.device)) {
@@ -94,7 +99,7 @@ export class WarmPoolCoordinator {
     const keepReady = await this.options.decisions.run(async () =>
       this.#mayRemainWarm(released.device),
     );
-    const disposition = await this.#disposition(driver, released.device, result.state, keepReady);
+    const disposition = await this.#disposition(driver, released, result.state, keepReady);
     await this.options.decisions.run(async () => {
       await this.options.registry.transitionDevice(
         released.device.id,
@@ -238,19 +243,21 @@ export class WarmPoolCoordinator {
 
   async #disposition(
     driver: Driver,
-    device: DeviceRecord,
+    released: ReleasedLease,
     reclaimedState: "ready" | "shutdown",
     keepReady: boolean,
   ): Promise<{ readonly state: "ready" | "shutdown"; readonly readyDevice?: DriverDevice }> {
+    const { device } = released;
     if (keepReady && reclaimedState === "shutdown") {
-      const readyDevice = await this.#tryMakeReady(driver, device);
+      const readyDevice = await this.#tryMakeReady(driver, released);
       return readyDevice === undefined ? { state: "shutdown" } : { readyDevice, state: "ready" };
     }
     if (!keepReady && reclaimedState === "ready") {
       try {
         await driver.shutdown(toDriverDevice(device));
         return { state: "shutdown" };
-      } catch {
+      } catch (error: unknown) {
+        this.#logFailure("shutting down a reclaimed device failed", released, "shutdown", error);
         return { state: "ready" };
       }
     }
@@ -258,12 +265,22 @@ export class WarmPoolCoordinator {
   }
 
   /** Undefined on failure; otherwise the driver's freshly re-read device, address included. */
-  async #tryMakeReady(driver: Driver, device: DeviceRecord): Promise<DriverDevice | undefined> {
+  async #tryMakeReady(driver: Driver, released: ReleasedLease): Promise<DriverDevice | undefined> {
     try {
-      return await driver.makeReady(toDriverDevice(device));
-    } catch {
+      return await driver.makeReady(toDriverDevice(released.device));
+    } catch (error: unknown) {
+      this.#logFailure("making a reclaimed device ready failed", released, "make-ready", error);
       return undefined;
     }
+  }
+
+  #logFailure(message: string, released: ReleasedLease, step: string, error: unknown): void {
+    this.#logger.warn(message, {
+      deviceId: released.device.id,
+      leaseId: released.lease.id,
+      step,
+      error: stableError(error),
+    });
   }
 
   #mayRemainWarm(device: DeviceRecord): boolean {

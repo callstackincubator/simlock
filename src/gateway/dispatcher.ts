@@ -37,7 +37,7 @@ import {
   type DispatchSession,
   type ErasedHandler,
 } from "../daemon/dispatch.js";
-import type { Logger } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus } from "./aggregate.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
@@ -96,7 +96,13 @@ export interface GatewayDispatcherOptions {
    * not supply one -- revocation still writes the store either way.
    */
   readonly closeUplinksForToken?: (tokenId: string) => Promise<void>;
+  /** Times each call for its `operation` log line. */
+  readonly clock: Clock;
   readonly logger?: Logger;
+  /** Classifies a thrown error for the `operation` log line (`classifyError` in production),
+   * injected because `src/gateway` imports nothing from `src/core`. Unset or `undefined`:
+   * `INTERNAL`. */
+  readonly errorCode?: (error: unknown) => string | undefined;
   /** The gateway's own health, for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
   readonly awaitReady: () => Promise<void>;
@@ -128,10 +134,12 @@ export interface GatewayDispatcherOptions {
 
 export class GatewayDispatcher {
   readonly #logger: Logger;
+  readonly #dispatchLogger: Logger;
   readonly #handlers: Record<Exclude<OperationName, "daemon.stop">, ErasedHandler>;
 
   constructor(private readonly options: GatewayDispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#dispatchLogger = this.#logger.child("dispatch");
     this.#handlers = {
       "catalog.get": this.#catalogGet,
       "status.get": this.#statusGet,
@@ -186,6 +194,11 @@ export class GatewayDispatcher {
           operation: operationName,
           issues,
         });
+      },
+      observe: {
+        clock: this.options.clock,
+        logger: this.#dispatchLogger,
+        codeOf: (error) => this.options.errorCode?.(error) ?? "INTERNAL",
       },
     });
   }

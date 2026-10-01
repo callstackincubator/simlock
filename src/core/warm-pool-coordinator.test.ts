@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, FakeSystemStats } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeSystemStats,
+  JsonLinesLogger,
+  type Logger,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
 import type { DeviceRecord, DeviceSpec, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
@@ -142,6 +148,7 @@ async function createHarness(
     readonly driver?: FakeDriver;
     readonly headSpec?: DeviceSpec;
     readonly leases?: readonly LeaseRecord[];
+    readonly logger?: Logger;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -162,6 +169,7 @@ async function createHarness(
     decisions: new SerializedDecision(),
     drivers: new DriverCatalog([driver]),
     eventBus: bus,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     notifyAvailability,
     quarantine,
     queueHeadDemand: () =>
@@ -320,6 +328,55 @@ describe("WarmPoolCoordinator", () => {
     // wakes a queued waiter -- and no readiness probe ever runs.
     expect(harness.driver.calls.map((call) => call.operation)).not.toContain("makeReady");
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
+  });
+
+  it("A reclaimed device that fails to shut down logs the error.", async () => {
+    const sink = new MemoryLogSink();
+    // A different queue head cannot reserve capacity, so the reclaimed ready device is shut down.
+    const harness = await createHarness({
+      headSpec: { model: "Pixel 9", osVersion: "36", platform: "android" },
+      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
+    });
+    harness.driver.failOn("shutdown", 1, new Error("shutdown wedged"));
+
+    await harness.coordinator.reclaim(released(harness.reclaiming));
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        module: "daemon.warm-pool-coordinator",
+        fields: {
+          deviceId: harness.reclaiming.id,
+          error: "Error: shutdown wedged",
+          leaseId: "lease-1",
+          step: "shutdown",
+        },
+      }),
+    ]);
+  });
+
+  it("A reclaimed device that fails to become ready logs the error.", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
+    driver.failOn("makeReady", 1, new Error("boot wedged"));
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({ driver, logger: new JsonLinesLogger({ clock, sink }) });
+
+    await harness.coordinator.reclaim(released(harness.reclaiming));
+
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: {
+          deviceId: harness.reclaiming.id,
+          error: "Error: boot wedged",
+          leaseId: "lease-1",
+          step: "make-ready",
+        },
+      }),
+    ]);
   });
 
   it("recovers an unleased interrupted reclaim through shutdown and a committed fact", async () => {

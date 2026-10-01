@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { EVENT_FILE_NAME, EventBus, EventHistory } from "../bus/index.js";
+import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
 import {
   type Config,
   type ConfigOverrides,
@@ -35,6 +35,7 @@ import {
   CryptoIdGenerator,
   CryptoTokenSecrets,
   JsonLinesLogger,
+  LoggingProcessRunner,
   NodeFileLogSink,
   type Clock,
   type Filesystem,
@@ -42,6 +43,7 @@ import {
   type IpcConnector,
   type IpcListenerFactory,
   type Logger,
+  type LogLevel,
   NodeFilesystem,
   NodeIpcTransport,
   NodeProcessRunner,
@@ -71,6 +73,7 @@ import {
   WebSocketUplinkConnector,
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
+import { classifyError } from "./error-code.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminSecretManager } from "./admin-secret.js";
@@ -107,7 +110,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const systemStats = options.systemStats ?? new NodeSystemStats();
   const idGenerator = options.idGenerator ?? new CryptoIdGenerator();
   const ipc = options.ipc ?? new NodeIpcTransport();
-  const processRunner = options.processRunner ?? new NodeProcessRunner();
+  const baseProcessRunner = options.processRunner ?? new NodeProcessRunner();
   const processSupervisor = options.processSupervisor ?? new NodeProcessSupervisor();
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
@@ -129,7 +132,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         path: join(dataDirectory, "daemon.log"),
       }),
     });
-  const eventBus = new EventBus(clock, config.eventBuffer.capacity);
+  const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
+  const eventBus = new EventBus(clock, config.eventBuffer.capacity, eventBusLogger(logger));
   const eventHistory = openEventHistory({ config, dataDirectory, eventBus, filesystem, logger });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
@@ -215,6 +219,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     executor: leaseEngine.cleanup,
     filesystem,
+    logger,
     registry,
     diskPath: dataDirectory,
   });
@@ -622,6 +627,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
     dispatcher: new GatewayDispatcher({
       awaitReady: () => Promise.resolve(),
+      clock,
+      errorCode: classifyError,
       // C-2: makes `token.revoke` actually close the uplink it names (ADR 0005 §8), rather than
       // only writing the store and waiting for that worker's next reconnect.
       closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
@@ -1141,6 +1148,36 @@ function openEventHistory(options: {
     path,
     ...(sink === undefined ? {} : { sink }),
   });
+}
+
+/**
+ * The runner every driver and `device.exec` shell out through. At `log.level: debug` each
+ * command leaves a `process` line; at any other level the runner is used unwrapped, so a
+ * daemon not asked for that detail pays nothing for it.
+ */
+export function processRunnerFor(
+  level: LogLevel,
+  runner: ProcessRunner,
+  logger: Logger,
+  clock: Clock,
+): ProcessRunner {
+  if (level !== "debug") return runner;
+  return new LoggingProcessRunner({ clock, inner: runner, logger: logger.child("process") });
+}
+
+/** Writes a failing event subscriber to the daemon log as one JSON line, not to stderr. */
+export function eventBusLogger(logger: Logger): EventBusLogger {
+  const bus = logger.child("bus");
+  return {
+    error(message, { error, envelope }) {
+      bus.error(message, {
+        event: envelope.event,
+        seq: envelope.seq,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    },
+  };
 }
 
 /**

@@ -66,6 +66,7 @@ export { FakeTcpProbe, NodeTcpProbe } from "./tcp-probe.js";
 // fallow-ignore-next-line unused-type -- public shape of FakeTcpProbe.sends.
 export type { FakeSend } from "./tcp-probe.js";
 export type { TcpProbe } from "./tcp-probe.js";
+export { LoggingProcessRunner } from "./logging-process-runner.js";
 export {
   exitCodeOf,
   ExecOutputDeliveryStalledError,

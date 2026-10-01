@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 
 const lease = (id: string, ttlDeadline: number) => ({
@@ -72,5 +72,31 @@ describe("LeaseExpiryScheduler", () => {
     scheduler.arm(lease("one", 110));
     expect(() => clock.advance(10)).not.toThrow();
     await Promise.resolve();
+  });
+
+  it("A lease expiry that throws logs at error with the lease id.", async () => {
+    const clock = new FakeClock(100);
+    const sink = new MemoryLogSink();
+    const scheduler = new LeaseExpiryScheduler(
+      clock,
+      async () => {
+        throw new Error("release exploded");
+      },
+      new JsonLinesLogger({ clock, sink }),
+    );
+
+    scheduler.arm(lease("one", 110));
+    clock.advance(10);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "error",
+        module: "daemon.lease-expiry-scheduler",
+        fields: { error: "Error: release exploded", leaseId: "one", step: "expire" },
+      }),
+    ]);
   });
 });

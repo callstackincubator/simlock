@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import {
+  FakeClock,
+  JsonLinesLogger,
+  type Logger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { type CapacityReservation } from "./capacity/index.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
@@ -20,10 +26,13 @@ function reservation(): CapacityReservation & { readonly releaseCount: () => num
   return { release: () => void releases++, releaseCount: () => releases };
 }
 
-async function createHarness(latencyMs?: {
-  readonly makeReady?: number;
-  readonly provision?: number;
-}) {
+async function createHarness(
+  latencyMs?: {
+    readonly makeReady?: number;
+    readonly provision?: number;
+  },
+  logger?: Logger,
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const driver = new FakeDriver({
@@ -53,6 +62,7 @@ async function createHarness(latencyMs?: {
     clock,
     decisions,
     lifecycle,
+    ...(logger === undefined ? {} : { logger }),
     registry,
   });
   return { clock, driver, eventBus, lifecycle, provisioner, registry };
@@ -137,6 +147,61 @@ describe("DeviceProvisioner", () => {
       expect.objectContaining({ event: "device.deleted" }),
     );
     expect(reserved.releaseCount()).toBe(1);
+  });
+
+  it("A new device that fails to become ready logs the driver's error with the device id.", async () => {
+    const sink = new MemoryLogSink();
+    const harness = await createHarness(
+      undefined,
+      new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
+    );
+    harness.driver.failOn("makeReady", 1, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.provisioner.provision(spec, { reservation: reservation() }),
+    ).rejects.toBeInstanceOf(BootTimeoutError);
+
+    const deviceId = harness.registry.snapshot.devices[0]?.id;
+    expect(deviceId).toBeDefined();
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        module: "daemon.device-provisioner",
+        fields: {
+          deviceId,
+          error: "DriverCrashError: simulator never booted",
+          step: "boot",
+        },
+      }),
+    ]);
+  });
+
+  it("A failed destroy after a failed boot logs the device id and the error.", async () => {
+    const sink = new MemoryLogSink();
+    const harness = await createHarness(
+      undefined,
+      new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
+    );
+    harness.driver.failOn("makeReady", 1, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simctl delete refused"));
+
+    await expect(
+      harness.provisioner.provision(spec, { reservation: reservation() }),
+    ).rejects.toBeInstanceOf(BootTimeoutError);
+
+    const deviceId = harness.registry.snapshot.devices[0]?.id;
+    expect(deviceId).toBeDefined();
+    expect(harness.registry.snapshot.devices[0]?.state).not.toBe("deleted");
+    expect(sink.records.filter((record) => record.fields?.["step"] === "destroy")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: {
+          deviceId,
+          error: "DriverCrashError: simctl delete refused",
+          step: "destroy",
+        },
+      }),
+    ]);
   });
 
   it("releases its capacity reservation when the driver cannot provision", async () => {

@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import { OPERATIONS, type OperationName } from "../contract/index.js";
-import type { DispatchSession } from "../daemon/dispatch.js";
-import { FakeClock, MemoryFilesystem, NoopLogger } from "../ports/index.js";
+import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
+import {
+  FakeClock,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  NoopLogger,
+} from "../ports/index.js";
 import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
@@ -110,6 +116,7 @@ class FakeDirectory implements WorkerDirectory {
 
 function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay"> } = {}) {
   const clock = new FakeClock(1_000);
+  const logSink = new MemoryLogSink();
   const eventBus = new EventBus(clock);
   const workers = new WorkerRegistry({
     clock,
@@ -146,6 +153,7 @@ function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay">
   });
   const dispatcher = new GatewayDispatcher({
     awaitReady: async () => {},
+    clock,
     closeUplinksForToken: async (tokenId) => {
       closedUplinkTokens.push(tokenId);
     },
@@ -161,11 +169,15 @@ function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay">
       }),
     health: () => "running",
     leaseIndex,
+    // `classifyError`'s answer for the errors this dispatcher throws itself.
+    errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
+    logger: new JsonLinesLogger({ clock, module: "gateway", sink: logSink }),
     tokens,
     workers,
   });
   return {
     clock,
+    logSink,
     closedUplinkTokens,
     coordinator,
     directory,
@@ -192,6 +204,40 @@ const EVERY_OPERATION = (Object.keys(OPERATIONS) as OperationName[]).filter(
 );
 
 describe("GatewayDispatcher", () => {
+  it("The gateway dispatcher logs the same line for the same operation", async () => {
+    const { clock, dispatcher, logSink, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    // The line `runDispatch` writes for the same call through any other dispatcher, a worker's
+    // included: only the module differs.
+    const otherSink = new MemoryLogSink();
+    const other = (role: "admin" | "agent") =>
+      runDispatch("worker.drain", { workerId: "wrk_1" }, session({ role }), {
+        handlers: { "worker.drain": () => ({ drained: true, workerId: "wrk_1" }) },
+        observe: {
+          clock,
+          codeOf: (error) => (error instanceof DispatchError ? error.code : "INTERNAL"),
+          logger: new JsonLinesLogger({ clock, module: "other.dispatch", sink: otherSink }),
+        },
+      });
+
+    await dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session());
+    await other("admin");
+    await expect(
+      dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session({ role: "agent" })),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(other("agent")).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const gatewayLines = logSink.records.filter((record) => record.message === "operation");
+    expect(gatewayLines.map((record) => record.module)).toEqual([
+      "gateway.dispatch",
+      "gateway.dispatch",
+    ]);
+    expect(gatewayLines.map(({ module: _module, ...rest }) => rest)).toEqual(
+      otherSink.records.map(({ module: _module, ...rest }) => rest),
+    );
+    expect(gatewayLines[1]?.fields).toMatchObject({ code: "FORBIDDEN" });
+  });
+
   it("answers status.get from the fleet", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");

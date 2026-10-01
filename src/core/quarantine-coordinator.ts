@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, TimerHandle } from "../ports/index.js";
+import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../ports/index.js";
 import { type DeviceRecord, mayBeGranted, type Platform } from "./domain.js";
 import type { Driver, DriverDevice } from "./driver.js";
 import type { SerializedDecision } from "./serialized-decision.js";
@@ -47,6 +47,7 @@ export interface QuarantineCoordinatorOptions {
   readonly eventBus: Pick<EventBus, "emit">;
   readonly notifyAvailability: () => void;
   readonly registry: QuarantineRegistry;
+  readonly logger?: Logger;
 }
 
 /**
@@ -70,8 +71,11 @@ export interface QuarantineCoordinatorOptions {
 export class QuarantineCoordinator {
   readonly #timers = new Map<string, TimerHandle>();
   #disposed = false;
+  readonly #logger: Logger;
 
-  constructor(private readonly options: QuarantineCoordinatorOptions) {}
+  constructor(private readonly options: QuarantineCoordinatorOptions) {
+    this.#logger = options.logger?.child("quarantine-coordinator") ?? new NoopLogger();
+  }
 
   /**
    * Commits quarantine entry for a device whose release-time purge just
@@ -81,6 +85,7 @@ export class QuarantineCoordinator {
    * count as running -- so no queued waiter can be satisfied by this alone
    * and `notifyAvailability` is not called.
    */
+  // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's quarantine port.
   async enter(failure: QuarantinePurgeFailure): Promise<void> {
     const nextRetryAt = this.options.clock.now() + this.options.config.retryBackoffMs;
     await this.options.decisions.run(async () => {
@@ -154,7 +159,13 @@ export class QuarantineCoordinator {
       deviceId,
       this.options.clock.setTimer(delay, () => {
         this.#timers.delete(deviceId);
-        void this.#retry(deviceId).catch(() => undefined);
+        void this.#retry(deviceId).catch((error: unknown) => {
+          this.#logger.error("quarantine retry threw", {
+            deviceId,
+            step: "retry",
+            error: stableError(error),
+          });
+        });
       }),
     );
   }
@@ -180,7 +191,8 @@ export class QuarantineCoordinator {
     let result: Awaited<ReturnType<Driver["reclaim"]>>;
     try {
       result = await driver.reclaim(toDriverDevice(device), { clean: "standard" });
-    } catch {
+    } catch (error: unknown) {
+      this.#logRetryFailure("quarantine reclaim retry failed", device, "reclaim", attempts, error);
       await this.#retryFailed(device, attempts);
       return;
     }
@@ -204,7 +216,8 @@ export class QuarantineCoordinator {
   async #retryDelete(driver: Driver, device: DeviceRecord, attempts: number): Promise<void> {
     try {
       await driver.destroy(toDriverDevice(device));
-    } catch {
+    } catch (error: unknown) {
+      this.#logRetryFailure("quarantine delete retry failed", device, "delete", attempts, error);
       await this.#retryFailed(device, attempts);
       return;
     }
@@ -212,6 +225,16 @@ export class QuarantineCoordinator {
       this.options.registry.deleteQuarantined(device.id, "lease-end"),
     );
     this.options.notifyAvailability();
+  }
+
+  #logRetryFailure(
+    message: string,
+    device: DeviceRecord,
+    step: string,
+    attempts: number,
+    error: unknown,
+  ): void {
+    this.#logger.warn(message, { deviceId: device.id, step, attempts, error: stableError(error) });
   }
 
   async #retryFailed(device: DeviceRecord, attempts: number): Promise<void> {

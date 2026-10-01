@@ -1,4 +1,5 @@
 import type { EventBus } from "../bus/index.js";
+import { type Logger, NoopLogger } from "../ports/index.js";
 import type { CapacityReservation } from "./capacity/index.js";
 import { type AcquisitionPlan, type AcquisitionPlanner } from "./acquisition-planner.js";
 import {
@@ -17,6 +18,7 @@ import {
   type ReadyDeviceHandoff,
 } from "./managed-device-lifecycle.js";
 import { type SerializedDecision } from "./serialized-decision.js";
+import { stableError } from "./stable-error.js";
 import {
   type LeaseGrant,
   type LeaseRequestOptions,
@@ -91,6 +93,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly queue: AcquisitionQueue;
   readonly registry: LeaseAcquisitionRegistry;
+  readonly logger?: Logger;
   /** Stores each request before it is queued and answers repeats of it (`LeaseRequestBook`). */
   readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "replay">;
 }
@@ -119,8 +122,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   readonly #driving = new WeakSet<AcquisitionWaiter>();
   #admissionClosed = false;
   #maintenanceDepth = 0;
+  readonly #logger: Logger;
 
-  constructor(private readonly options: LeaseAcquisitionCoordinatorOptions) {}
+  constructor(private readonly options: LeaseAcquisitionCoordinatorOptions) {
+    this.#logger = options.logger?.child("lease-acquisition-coordinator") ?? new NoopLogger();
+  }
 
   get queueDepth(): number {
     return this.options.queue.depth;
@@ -456,7 +462,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       );
       if (shutdown === undefined)
         throw new Error(`Eviction target is no longer safe: ${device.id}`);
-    } catch {
+    } catch (error: unknown) {
+      this.#logFailure(
+        "shutting down an eviction target failed",
+        waiter,
+        device,
+        "shutdown",
+        error,
+      );
       await this.options.decisions.run(async () => {
         claim.release();
         this.#defer(waiter);
@@ -479,7 +492,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         claim,
       );
       if (deleted === undefined) throw new Error(`Eviction target is no longer safe: ${device.id}`);
-    } catch {
+    } catch (error: unknown) {
+      this.#logFailure("deleting an eviction target failed", waiter, device, "delete", error);
       await this.options.decisions.run(async () => {
         claim.release();
         this.#defer(waiter);
@@ -501,6 +515,23 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     await this.#perform(waiter, next);
   }
 
+  /** One `warn` line for a device step that failed in the background and is handled here by
+   * deferring the waiter or destroying the device. The waiter only ever sees a generic outcome. */
+  #logFailure(
+    message: string,
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+    step: string,
+    error: unknown,
+  ): void {
+    this.#logger.warn(message, {
+      deviceId: device.id,
+      requesterId: waiter.options.requesterId,
+      step,
+      error: stableError(error),
+    });
+  }
+
   async #bootShutdown(
     waiter: AcquisitionWaiter,
     device: DeviceRecord,
@@ -517,12 +548,26 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       const ready = await this.options.lifecycle.bootForLease(device, claim);
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
       handoff = ready;
-    } catch {
+    } catch (error: unknown) {
+      this.#logFailure(
+        "booting a shut-down device for a waiter failed",
+        waiter,
+        device,
+        "boot",
+        error,
+      );
       let destroyed = true;
       try {
         destroyed =
           (await this.options.lifecycle.destroy(device, "lease-engine", "boot")) !== undefined;
-      } catch {
+      } catch (destroyError: unknown) {
+        this.#logFailure(
+          "destroying a device that failed to boot failed",
+          waiter,
+          device,
+          "destroy",
+          destroyError,
+        );
         destroyed = false;
       }
       await this.options.decisions.run(async () => {

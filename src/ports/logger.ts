@@ -134,9 +134,10 @@ export interface NodeFileLogSinkOptions {
  * across an interleaved write to the same fd (`NodeDaemonLauncher` hands the child an
  * inherited append fd on this same path for uncaught fatal output -- see below), and is
  * the only kind of write that reliably lands from a handler where the process is about
- * to exit. This is sound only because volume is low by design: operational lifecycle
- * lines (startup, connection churn, shutdown) in `daemon.log`, and one line per business
- * event in `events.jsonl` -- not per-request logging.
+ * to exit. The cost is that every line blocks its caller on a disk write, and volume is
+ * no longer low: `daemon.log` gets a line per operation, and at `debug` a line per device
+ * command; `events.jsonl` a line per business event. Accepted as long as a line stays one
+ * small `writeSync`.
  *
  * `#bytesWritten` only counts what this sink itself writes. The daemon launcher's
  * inherited fd can append a fatal crash dump to the same file without going through

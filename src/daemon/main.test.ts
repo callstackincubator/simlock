@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect, createServer, Server } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver, OWNED_ROOT_MARKER_FILE, type OwnedRootError } from "../core/index.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
@@ -25,6 +25,7 @@ import {
   discoverDrivers,
   emitComponentInstallDiagnostic,
   emitSlimDiagnostic,
+  processRunnerFor,
   startDaemon,
   type DriverDiscoveryContext,
   type StartDaemonOptions,
@@ -993,6 +994,34 @@ describe("slim diagnostic bridging", () => {
   });
 });
 
+describe("processRunnerFor", () => {
+  async function runOnce(level: "debug" | "info") {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const inner = new ScriptedProcessRunner([
+      { match: { args: ["devices"], command: "adb" }, result: { code: 0, stderr: "", stdout: "" } },
+    ]);
+
+    await processRunnerFor(level, inner, logger, clock).run("adb", ["devices"]);
+    return sink.records.filter((record) => record.message === "process");
+  }
+
+  it("at log.level: info no process line is written", async () => {
+    expect(await runOnce("info")).toEqual([]);
+  });
+
+  it("at log.level: debug each command leaves one process line under daemon.process", async () => {
+    expect(await runOnce("debug")).toEqual([
+      expect.objectContaining({
+        level: "debug",
+        module: "daemon.process",
+        fields: expect.objectContaining({ command: "adb", args: ["devices"], code: 0 }),
+      }),
+    ]);
+  });
+});
+
 describe("startDaemon event file", () => {
   const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
 
@@ -1128,6 +1157,39 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     }
   });
 
+  it("a throwing event subscriber writes one JSON line through the logger and nothing through console.error", async () => {
+    // The drivers module is the one seam that reaches the daemon's own bus from outside.
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers(context) {
+         context.eventBus.subscribe("daemon.started", () => {
+           throw new Error("subscriber broke");
+         });
+         return [];
+       }`,
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const { sink } = await start({ drivers: undefined });
+
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(sink.records.filter((record) => record.message === "Event handler failed")).toEqual([
+        expect.objectContaining({
+          level: "error",
+          module: "daemon.bus",
+          fields: expect.objectContaining({
+            event: "daemon.started",
+            seq: expect.any(Number),
+            message: "subscriber broke",
+            stack: expect.stringContaining("subscriber broke"),
+          }),
+        }),
+      ]);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("supports a synchronous createDrivers returning an array directly", async () => {
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers() { return []; }`,
@@ -1252,5 +1314,65 @@ async function readFileRetrying(
       if (Date.now() >= deadline) throw error;
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
+  }
+}
+
+/** A disk whose free-space query fails, as `statfs` does on a data directory gone unreadable. */
+class UnmeasurableDiskFilesystem extends MemoryFilesystem {
+  async diskFree(_path: string): Promise<number> {
+    throw Object.assign(new Error("statfs failed"), { code: "EIO" });
+  }
+}
+
+describe("startDaemon logger wiring", () => {
+  it("startDaemon hands its logger to the cleanup reaper: a scheduled cleanup run that fails is logged", async () => {
+    const { sink } = await start({ filesystem: new UnmeasurableDiskFilesystem() });
+
+    // `daemon.started` triggers a run nobody awaits; its failure has no caller to reach.
+    await pollUntil(() =>
+      sink.records.some((record) => record.message === "scheduled cleanup run failed"),
+    );
+    expect(
+      sink.records.filter((record) => record.message === "scheduled cleanup run failed"),
+    ).toMatchObject([
+      {
+        level: "error",
+        module: "daemon.reaper",
+        fields: { step: "cleanup", error: expect.stringContaining("statfs failed") },
+      },
+    ]);
+  });
+
+  it("startDaemon hands the gateway dispatcher its error classifier: a typed refusal is logged with its code at info, not as INTERNAL at error", async () => {
+    const { daemon, sink } = await start({ configOverrides: { mode: "gateway" } });
+
+    await expect(
+      daemon.dispatch(
+        "worker.drain",
+        { workerId: "wrk_ghost" },
+        { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" },
+      ),
+    ).rejects.toMatchObject({ code: "UNKNOWN_WORKER" });
+
+    expect(
+      sink.records.filter(
+        (record) => record.message === "operation" && record.fields?.operation === "worker.drain",
+      ),
+    ).toMatchObject([
+      {
+        level: "info",
+        module: "daemon.gateway.dispatch",
+        fields: { code: "UNKNOWN_WORKER", principal: "test-operator" },
+      },
+    ]);
+  });
+});
+
+/** Polls until `condition` holds or the time runs out, without failing: the caller's own
+ * assertion afterwards is what names a miss. */
+async function pollUntil(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }

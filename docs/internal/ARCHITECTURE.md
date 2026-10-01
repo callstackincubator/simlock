@@ -1383,20 +1383,59 @@ state (`reclaiming` included), so a separate aggregate would duplicate
 information already visible per-device rather than add any.
 
 Operational logging is a separate concern from the event bus (ADR 0006): two
-records, and no fact is copied from one into the other. The `Logger` port
-writes durable, structured JSON lines — one per record — for startup, socket
-claim/recovery, driver discovery, connection lifecycle, shutdown, and
-unexpected/handled errors. `startDaemon` builds the production `Logger`
-(`JsonLinesLogger` over a `NodeFileLogSink`) from `config.log` right after
-config loads, then hands module-scoped children (`logger.child("server")`,
-`.child("connection-host")`, `.child("driver-discovery")`) to each component
-so every line is attributable. The sink tracks bytes written and rotates
-`daemon.log` to `daemon.log.1` (replacing any previous generation) once
-`config.log.rotateBytes` is exceeded, so growth is bounded and `simlock daemon
-logs` reads the rotated generation before the current file. The one exception
-is the fatal top-level handler: it cannot depend on `config.log` having loaded
-successfully, so it builds its own logger straight from the default log path
-at a fixed level, falling back to `console.error` only if that itself fails.
+records, and no fact is copied from one into the other. `simlock events`
+carries business facts (lease granted, device cleaned up, …), while the
+`Logger` port writes structured JSON lines saying what the daemon was asked to
+do and what went wrong. The log records:
+
+- **One `operation` line per dispatched call**, built in exactly one place:
+  `runDispatch` (`src/daemon/dispatch.ts`), through the `observe` hook both
+  dispatchers pass (`logger.child("dispatch")`). It names the operation,
+  `principal`, `role`, `durationMs`, `leaseId`/`requesterId` from the
+  validated input when present (nothing else from the input, nothing from the
+  output), and on failure `code`, plus `message` once the input has passed
+  its schema (before that the message quotes raw wire input). Level follows the operation's
+  contract `effect`: a `write` success is `info`, a `read` success `debug`, a
+  failure `info`, an `INTERNAL` failure `error`. A call refused before its
+  handler (`UNKNOWN_REQUEST`, `BAD_REQUEST`, `FORBIDDEN`) gets the line too.
+  `codeOf` is injected (`classifyError`) so `dispatch.ts` stays free of
+  `src/core`. The HTTP app's own `request` line stays as the transport's
+  record; `daemon.stop` and `hello` are answered by the socket server and keep
+  their own lines.
+- **One line per handled background failure** — a boot, an eviction, a
+  quarantine retry, a warm-pool disposition, a scheduled cleanup run, a lease
+  expiry — from the core module that caught it (`logger.child("<module>")`,
+  `NoopLogger` by default), with `deviceId`, `step`, `error`, and the lease or
+  requester where the site knows one. A failure whose error already travels on
+  an event (`device.purge-failed`, `device.recovery-failed`,
+  `device.quarantine-stranded`) is not logged again.
+- **At `log.level: debug`, one `process` line per device command**:
+  `LoggingProcessRunner` wraps the daemon's one `ProcessRunner` and logs the
+  command, arguments, exit code and duration when it settles — never `env`,
+  `input`, or output. Below `debug` the runner is not wrapped at all.
+- **A failing event subscriber**, through `logger.child("bus")`, as one JSON
+  line with the event, `seq`, message and stack.
+- Startup, socket claim/recovery, driver discovery, connection lifecycle,
+  shutdown, and unexpected errors with their stacks.
+
+`startDaemon` builds the production `Logger` (`JsonLinesLogger` over a
+`NodeFileLogSink`) from `config.log` right after config loads, then hands
+module-scoped children (`logger.child("server")`, `.child("connection-host")`,
+`.child("driver-discovery")`) to each component so every line is attributable.
+The sink tracks bytes written and rotates `daemon.log` to `daemon.log.1`
+(replacing any previous generation) once `config.log.rotateBytes` is exceeded,
+so growth is bounded and `simlock daemon logs` reads the rotated generation
+before the current file. `daemon logs --follow` (`src/cli/follow-log.ts`) polls
+through the `Filesystem` and `Clock` ports every 250 ms, reading from a byte
+offset (`readFileFrom`). It detects a rotation from `daemon.log.1` changing
+identity (`FileStat.identity`), not from the current file shrinking, because a
+fresh file can outgrow the old offset within one poll; it then prints the rest
+of the rotated file and restarts at offset 0. Two rotations inside one poll lose
+the middle generation, which the sink has already deleted. The one exception
+is the fatal top-level handler: it
+cannot depend on `config.log` having loaded successfully, so it builds its own
+logger straight from the default log path at a fixed level, falling back to
+`console.error` only if that itself fails.
 
 Business facts live in the bus's two records. The ring buffer
 (`eventBuffer.capacity`) holds recent events in memory and resets on restart.
