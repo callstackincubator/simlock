@@ -15,7 +15,7 @@ The **event bus** carries business facts: `lease.granted`,
 `EVENTS.md`, emitted only after the state change it describes is committed,
 and has a payload that changes additively only. Events reach agents and
 operators through `simlock events`, the HTTP API, and a gateway's relay. They
-live in an in-memory ring buffer of 1000 entries.
+live in an in-memory ring buffer, 1000 entries by default.
 
 The **`Logger` port** carries operational lines: startup, driver discovery,
 connection churn, errors. They go to `daemon.log` as JSON lines, rotated by
@@ -23,9 +23,10 @@ size. Their wording and fields carry no contract.
 
 Neither answers "what happened to this lease or device" after the fact. The
 ring is empty after a restart and overwritten within minutes on a busy
-gateway. `daemon.log` survives a restart but records two events only, copied
-there by hand. It also records no socket request and drops the error of most
-background failures.
+gateway. `daemon.log` survives a restart, but the only lease or device facts
+in it are two events copied there by a bus subscriber (`component.installed`,
+`device.slimmed`). It records a socket request only when one fails, and it
+drops the error of most background failures.
 
 The obvious repair is to merge the two: one stream, saved as `daemon.log`,
 with a filter deciding what `simlock events` shows. This record says why that
@@ -49,15 +50,25 @@ events out, and events cannot rotate log lines out.
 Which events are worth keeping is not decided per event. The one left out is
 the one that is needed later.
 
-### 3. A fact is never repeated in the daemon log
+### 3. A lease or device fact is never copied into the daemon log
 
-`daemon.log` does not record that a lease was granted or a device was
-reclaimed. The event file does. A background failure whose error text already
-travels on an event (`device.purge-failed`, `device.recovery-failed`) is not
-logged a second time.
+No subscriber copies events into `daemon.log`. The two existing copies,
+`component.installed` and `device.slimmed`, are removed.
 
-The two existing copies, `component.installed` and `device.slimmed`, are
-removed from `daemon.log`.
+The log may record that an operation was asked for and how it ended: its
+name, who asked, how long it took, its error code. That is a record of the
+request. The fact itself, which lease was granted on which device, is in the
+event file only.
+
+A background failure whose error text already travels on an event
+(`device.purge-failed`, `device.recovery-failed`,
+`device.quarantine-stranded`) is not logged a second time.
+
+One exception: the daemon's own lifecycle. Start, stop, and a driver skipped
+at discovery are logged where they happen, although `daemon.started`,
+`daemon.stopping` and `driver.root-rejected` report them too. The log has to
+explain a daemon that never came up, and no event is emitted until startup
+has finished.
 
 ### 4. A log line never becomes an event
 
@@ -78,11 +89,14 @@ contract. Its message and fields may change in any release.
 `simlock daemon logs` reads the log. Neither prints the other. Someone who
 needs both reads both and joins them by timestamp.
 
+Both files can be read with no daemon running. The CLI then reads the event
+file directly, the way `simlock daemon logs` already reads the log.
+
 ### 7. The event file is an observer
 
 The writer subscribes to the bus like any other observer. If the file cannot
-be opened or written, the daemon logs one error and carries on. No lease
-operation waits on it or fails because of it.
+be opened or written, the daemon logs one error and carries on. A failed
+write never fails or delays a lease operation.
 
 ## Consequences
 
@@ -93,15 +107,19 @@ operation waits on it or fails because of it.
 - A later audit trail builds on the event file. Its retention can change
   without touching the log.
 - On a gateway the event file holds the relayed fleet events too, so its
-  volume is the fleet's. Writes are synchronous. This is accepted until it is
-  seen failing.
+  volume is the fleet's. Writes are synchronous, so each emit waits for its
+  line to be written. This is accepted until it is seen failing.
+- `seq` restarts at 1 with every daemon. In the file it orders events within
+  one run only; `timestamp` orders them across runs.
 - An event payload is now written to disk. A secret in a payload is a defect
   in the event and is fixed where it is emitted
   ([#170](https://github.com/callstackincubator/simlock/issues/170)).
-- `daemon.log` gains the lines that make it useful on its own terms: one per
-  operation, one per background failure. It stops being low-volume.
-- Events rule 7 changes: an event is appended to the ring buffer and to the
-  event file.
+- `daemon.log` gains request and failure lines (#169) and stops being
+  low-volume.
+- The docs change with the code, not ahead of it. Until #168 and #169 land,
+  the docs describe today's behaviour and this record is the only statement
+  of the target. Each feature's PR updates the docs it makes true, events
+  rule 7 among them.
 
 ## Alternatives considered
 
