@@ -80,9 +80,9 @@ async function startFleet(specs: readonly WorkerSpec[], agentId: string): Promis
         gateway: { label: spec.label, token: secret, url: `ws://127.0.0.1:${port}` },
         ...(spec.limits === undefined ? {} : { limits: spec.limits }),
       },
-    });
-    await worker.driverScript.set({
-      android: { knownModels: [...spec.models], availableOsVersions: ["35"] },
+      // Before the daemon starts, not after: the worker reports its catalog as its uplink
+      // opens, and the gateway would otherwise only see these models on its 30s refresh.
+      driverScript: { android: { knownModels: [...spec.models], availableOsVersions: ["35"] } },
     });
     workers.push(worker);
   }
