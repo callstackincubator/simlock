@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach } from "vitest";
 
+import type { FakeDriverScript } from "../fake-driver/types.js";
 import {
   cli,
   cliBackground,
@@ -115,6 +116,14 @@ export interface WithDaemonOptions {
    * worker-only key it is given (ADR 0005 §2).
    */
   readonly driver?: "fake" | "real" | "none";
+  /**
+   * Written to the fake driver's script file before the daemon starts, so the daemon's very
+   * first driver calls already see it. Setting `driverScript` after `withDaemon()` returns is
+   * fine for anything the test asks for afterwards, but not for what the daemon read on its own
+   * at startup: a worker joining a gateway reports its catalog the moment its uplink opens, and
+   * a script written later only reaches the gateway on its 30s periodic refresh.
+   */
+  readonly driverScript?: FakeDriverScript;
 }
 
 export interface TestEnv {
@@ -281,6 +290,10 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
       }
     },
   };
+
+  if (options.driverScript !== undefined) {
+    await testEnv.driverScript.set(options.driverScript);
+  }
 
   if (options.mode !== "auto") {
     await testEnv.startDaemon();

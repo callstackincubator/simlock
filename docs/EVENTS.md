@@ -9,13 +9,13 @@ through `simlock events` and `simlock events --follow`.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `lease.requested` | request spec, requester, wait policy | a lease request is accepted by the daemon | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway — its own fleet queue's admission, before any worker is chosen) | implemented |
+| `lease.requested` | request id, request spec, requester, wait policy | a lease request is accepted by the daemon and stored; the request id is the stored request's, so an observer can match this event to it | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway — its own fleet queue's admission, before any worker is chosen) | implemented |
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway) | implemented |
 | `lease.granted` | lease id, device id, requester | a device was assigned and handed out | LeaseLifecycle | implemented |
 | `lease.renewed` | lease id, new deadline | a `lease.renew` succeeded — whether it came from `simlock lease renew`, `POST /v1/leases/{id}/renew`, or the renew timer a running `simlock lease` / MCP session keeps over its own lease. There is one renew path and this is it | LeaseLifecycle | implemented |
 | `lease.released` | lease id, device id, reason (explicit/killed/device-lost), owner id | an explicit `lease.release` (which is what a `simlock lease` holder does on its way out), (killed) an operator `release --all` or `nuke`, or (device-lost) a leased device could not be recovered after it stopped running outside simlock. Closing a connection is not a release and never emits this | LeaseLifecycle | implemented |
 | `lease.expired` | lease id, device id, owner id | the lease's deadline passed with no `lease.renew` behind it — the grant-time TTL, or the TTL of the last renew, simply ran out. This is the one way a lease ends without somebody asking, and the only bound on a holder that was killed outright | LeaseLifecycle | implemented |
-| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled) | a request ended without a grant; `cancelled` is an explicit single-request cancel (backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter — one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue (worker) / FleetLeaseCoordinator (gateway) | implemented |
+| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled/daemon-restarted) | a request ended without a grant; `daemon-restarted` is a request still waiting when the daemon stopped, settled as failed when it starts again. The reason list can grow: a consumer must tolerate a reason it does not know; `cancelled` is an explicit single-request cancel (backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter — one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue / StartupConverger (worker) / FleetLeaseCoordinator (gateway) | implemented |
 
 On a **gateway**, the first three of these are its own fleet queue's facts,
 emitted by `FleetLeaseCoordinator` and never by the worker whose device is
@@ -127,9 +127,12 @@ documented above arrives with an extra field: additive, and only ever on a
 gateway. The events in this section's own table are the gateway's own, and
 carry no `workerId` beyond the worker they are about.
 
-Two consequences of relaying rather than owning: the gateway's ring buffer
-only holds what arrived while its uplinks were up (a worker's events from
-before it connected are not backfilled), and a worker's own
+Relayed events are written to the gateway's own event file
+(`events.jsonl`) along with its own, so `simlock events --since` against a
+gateway reaches back across a gateway restart. Two consequences of relaying
+rather than owning: the gateway's history only holds what arrived while its
+uplinks were up (a worker's events from before it connected are not
+backfilled), and a worker's own
 `simlock events` keeps showing exactly what it always did, un-prefixed and
 unaware that anything is watching.
 
@@ -142,5 +145,9 @@ lease index, rather than trusting the relayed payload's `ownerId` verbatim.
 ## Conventions recap
 
 - Every event carries: `timestamp`, `event`, `payload`, emitting module.
-- Events are appended to a ring buffer that powers `simlock events --follow`
-  and serves as the audit trail.
+- Events are appended to an in-memory ring buffer, which `simlock events`
+  without `--since` replays, and to the event file `~/.simlock/events.jsonl`,
+  one JSON line per event with the same fields. The file survives daemon
+  restarts and crashes, is what `simlock events --since` reads, and is the
+  durable record: no event is copied into `daemon.log`. It is capped by
+  `eventLog.rotateBytes`, keeping one rotated generation.

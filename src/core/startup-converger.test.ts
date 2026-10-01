@@ -96,9 +96,11 @@ function createHarness(
     cleanup,
     decisions: new SerializedDecision(),
     drivers: { has: (platform) => !darkPlatforms.has(platform) },
+    eventBus: { emit: vi.fn() as never },
     interruptedReclaimRecovery: recovery,
     quarantineRestore,
     registry: {
+      failOpenLeaseRequests: async () => [],
       get snapshot() {
         return { devices, leases };
       },

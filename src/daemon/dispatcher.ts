@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { EventBus } from "../bus/index.js";
+import type { EventHistory } from "../bus/index.js";
 import {
   type CleanupReaper,
   type Config,
@@ -82,7 +82,8 @@ export interface DispatcherOptions {
   readonly clock: Clock;
   readonly config: Config;
   readonly doctor?: Doctor;
-  readonly eventBus: EventBus;
+  /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
+  readonly eventHistory: Pick<EventHistory, "replay">;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
   /** Classifies a thrown error for the `operation` log line (`classifyError` in production).
@@ -322,6 +323,10 @@ export class Dispatcher {
         ownerId,
         requesterId,
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
+        ...(session.onRequestAdmitted === undefined
+          ? {}
+          : { onAdmitted: session.onRequestAdmitted }),
+        ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
       });
@@ -556,7 +561,7 @@ export class Dispatcher {
   };
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
-    this.options.eventBus.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+    this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

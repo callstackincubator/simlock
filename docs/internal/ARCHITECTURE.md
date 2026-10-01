@@ -169,8 +169,8 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   the fleet.
 - **What a gateway does not do.** It starts no drivers, validates no device
   roots, and runs no reaper, health monitor or capacity strategy; of the
-  config it reads only `mode`, `http.*`, `log.*`, `lease.*`, `eventBuffer.*`
-  and `gateway.*` (worker-only keys warn and are ignored). It always listens
+  config it reads only `mode`, `http.*`, `log.*`, `lease.*`, `eventBuffer.*`,
+  `eventLog.*` and `gateway.*` (worker-only keys warn and are ignored). It always listens
   on HTTP — that is how agents reach it and what the uplink upgrades from — so
   `http.enabled: false` in gateway mode fails the start rather than being
   silently overridden. `nuke.run`, `cleanup.run`, `doctor.run` and
@@ -665,8 +665,9 @@ views, and `workerId` on every device and lease in the aggregate.
 annotated with the workers that have it.
 
 Worker business events are republished on the gateway's bus with `workerId`
-added to the payload and land in the gateway's own ring buffer, so `simlock
-events --follow` against a gateway shows the whole fleet. The gateway also
+added to the payload and land in the gateway's own ring buffer and event
+file, so `simlock events --follow` against a gateway shows the whole fleet and
+`--since` reaches back across a gateway restart. The gateway also
 emits its own facts — `worker.connected`, `worker.disconnected`,
 `worker.rejected`, `worker.removed`, `worker.drain-started`,
 `worker.drain-ended`, and `request.dispatched`; see [EVENTS.md](EVENTS.md).
@@ -684,10 +685,10 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   `WORKER_UNREACHABLE`. If the worker actually granted it, that lease exists
   on the worker and expires there on its TTL. A retry hits the fleet-wide
   one-lease rule only once the uplink is back and the index is rebuilt —
-  which is the `409 → GET` recovery loop the HTTP API already documents,
-  applied across the uplink gap.
-- **Gateway restart.** In-flight requests are lost, exactly as a worker
-  restart loses them today (durable requests arrive with #72, for both).
+  so the client re-requests, and a `409 REQUESTER_ALREADY_LEASED` names the
+  lease to read back.
+- **Gateway restart.** In-flight requests are lost: a gateway keeps its lease
+  requests in memory only, while a worker stores its own in `state.json` (#72).
   Leases survive on their workers; workers reconnect on their backoff and the
   gateway rebuilds every view and its lease index from them — picking its own
   leases out of each `lease.list` by the `gw:<its own instance id>:`
@@ -1071,6 +1072,12 @@ composition root and compatibility facade: it wires one shared
 `SerializedDecision`, `DeviceOperationClaims`, `DriverCatalog`, registry, and
 capacity coordinator into these direct transactional call chains:
 
+- `LeaseRequestBook` stores every lease request in the registry before the
+  queue sees it, answers a repeat under the same `(requesterId,
+  idempotencyKey)` with the stored result or the wait still open, and writes
+  the result once that wait settles. The HTTP request resource reads requests
+  through it; a gateway's `FleetLeaseCoordinator` runs the same book over an
+  in-memory store.
 - `WaitQueue` owns pending demand, FIFO order, request timeouts, and progress;
   `AcquisitionPlanner` makes read-only grant/provision/boot/eviction plans;
   `DeviceProvisioner` and `ManagedDeviceLifecycle` perform the resulting driver
@@ -1086,13 +1093,17 @@ capacity coordinator into these direct transactional call chains:
   `CleanupActionExecutor`; the executor revalidates registry ownership,
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
-- `StartupConverger` runs TTL-timer restoration, interrupted-reclaim
+- `StartupConverger` settles every lease request the previous process left
+  open as failed, then runs TTL-timer restoration, interrupted-reclaim
   recovery, and running-capacity convergence in that order. `NukeService`
   coordinates lease release, pending-request cancellation, and
   registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
-Driver work remains outside it. Component boundaries use direct calls for
+Driver work remains outside it. One `state.json` write does sit inside it: a
+new lease request is stored in the same section that checks it is unique, so
+two concurrent requests under one key cannot both pass. A file write costs
+nothing next to the device work a lease waits on. Component boundaries use direct calls for
 transactions; capacity-changing components notify the FIFO acquisition
 coordinator directly. The event bus remains only for post-commit facts and
 observers.
@@ -1371,12 +1382,11 @@ kicked off has settled — `simlock status` already reports each device's own
 state (`reclaiming` included), so a separate aggregate would duplicate
 information already visible per-device rather than add any.
 
-Operational logging is a separate concern from the event bus (ADR 0006):
-`simlock events` carries business facts (lease granted, device cleaned up, …),
-while the `Logger` port writes structured JSON lines saying what the daemon
-was asked to do and what went wrong. No log line becomes an event, and nothing
-below copies a fact into the log; the `component.installed` copy described at
-the end of this section predates ADR 0006. The log records:
+Operational logging is a separate concern from the event bus (ADR 0006): two
+records, and no fact is copied from one into the other. `simlock events`
+carries business facts (lease granted, device cleaned up, …), while the
+`Logger` port writes structured JSON lines saying what the daemon was asked to
+do and what went wrong. The log records:
 
 - **One `operation` line per dispatched call**, built in exactly one place:
   `runDispatch` (`src/daemon/dispatch.ts`), through the `observe` hook both
@@ -1406,7 +1416,9 @@ the end of this section predates ADR 0006. The log records:
 - **A failing event subscriber**, through `logger.child("bus")`, as one JSON
   line with the event, `seq`, message and stack.
 - Startup, socket claim/recovery, driver discovery, connection lifecycle,
-  shutdown, and unexpected errors with their stacks. `startDaemon` builds the production `Logger` (`JsonLinesLogger` over a
+  shutdown, and unexpected errors with their stacks.
+
+`startDaemon` builds the production `Logger` (`JsonLinesLogger` over a
 `NodeFileLogSink`) from `config.log` right after config loads, then hands
 module-scoped children (`logger.child("server")`, `.child("connection-host")`,
 `.child("driver-discovery")`) to each component so every line is attributable.
@@ -1419,20 +1431,28 @@ offset (`readFileFrom`). It detects a rotation from `daemon.log.1` changing
 identity (`FileStat.identity`), not from the current file shrinking, because a
 fresh file can outgrow the old offset within one poll; it then prints the rest
 of the rotated file and restarts at offset 0. Two rotations inside one poll lose
-the middle generation, which the sink has already deleted. The one exception is the fatal top-level handler: it
+the middle generation, which the sink has already deleted. The one exception
+is the fatal top-level handler: it
 cannot depend on `config.log` having loaded successfully, so it builds its own
 logger straight from the default log path at a fixed level, falling back to
 `console.error` only if that itself fails.
 
-`startDaemon` also subscribes `logger.child("components")` to `component.installed`
-(`wireComponentInstallLogging` in `src/daemon/main.ts`) so a component simlock
-installed on an agent's behalf stays attributable in `daemon.log` after the
-event ring buffer resets on restart — the same durable-vs-ring-buffer split as
-everything else in this section, applied to component installs specifically
-because there is no registry entry or uninstall for them to be recovered from
-otherwise (see "Out of scope" in the #67 issue). The log line carries
-`requesterId` whenever the event payload has one, so the durable record names
-which agent's request caused the install, not just that one happened.
+Business facts live in the bus's two records. The ring buffer
+(`eventBuffer.capacity`) holds recent events in memory and resets on restart.
+`EventHistory` (`src/bus/event-file.ts`) subscribes to every event and writes
+each envelope as one JSON line to `events.jsonl` in the data directory,
+through a second `NodeFileLogSink` that `startDaemon` opens right after the
+bus with `config.eventLog.rotateBytes`. That file is the durable record and
+the audit trail: it survives restarts and crashes, rotates independently of
+`daemon.log`, and on a gateway holds the relayed fleet events too. A file
+that cannot be opened, or a write that fails, costs the history and never the
+daemon or the emitter: one error line, writing stops, and replay falls back
+to the ring. `events.replay` in both dispatchers asks `EventHistory`: without
+`sinceTs` it answers from the ring, with `sinceTs` from the file (current
+file, then its rotated generation, deduplicated by `seq` and `timestamp`).
+The CLI reads the file itself only for `simlock events --since` when no
+daemon answers; `--follow` subscribes first, replays, and drops replayed
+pushes, so the join neither loses nor repeats an event.
 
 ## Device requests
 

@@ -193,16 +193,26 @@ unclamped, so a `"never"` policy could still be bypassed over HTTP even
 though it already blocked the same thing on the socket. Both frontends now
 go through the one shared dispatcher, so there is only one place left to get
 this wrong.
-An `Idempotency-Key` header (at most 200 characters) makes a replay of the
-same key, from the same requester, return the original request resource
-instead of double-queueing — held in memory with a TTL, so a replay after a
-daemon restart creates a fresh request (see
-[Lifecycle semantics](#lifecycle-semantics) below).
+An `Idempotency-Key` header (1 to 200 characters) makes the request
+repeatable. Simlock stores every request before it queues it, and with a key
+it stores it under that key for your token. Sending the same request again
+with the same key returns `201` with the stored request instead of queueing
+a second one: its current state while it is still waiting, or its result
+once it has one. A result is never worked out again, even if the machine has
+changed since — a request that failed with `NO_CAPACITY` stays failed. To
+try again, use a new key. Repeating works across a daemon restart, for
+`lease.requestRetentionMs` after the request finished (see
+[CONFIGURATION.md](CONFIGURATION.md)). The same key with a different
+`platform`, `device`, `os`, or `full` is `409 IDEMPOTENCY_CONFLICT`. Keys
+belong to your token: another token sending the same key starts a request of
+its own.
 
-With `allowDownload: true` the `201` is returned immediately, before the
-request is even admitted — resolving a downloadable runtime can take minutes,
-so progress (and any admission failure, `REQUESTER_ALREADY_LEASED` included)
-surfaces on the request resource instead of on the `POST` itself.
+With `allowDownload: true` the `201` is returned as soon as the request is
+stored — resolving a downloadable runtime can take minutes, so progress and
+any later failure surface on the request resource instead of on the `POST`
+itself. A refusal that comes before the request is stored
+(`409 REQUESTER_ALREADY_LEASED`, `400` for a `ttlMs` above `lease.maxTtlMs`)
+still fails the `POST`.
 
 → `201`, `Location: /v1/lease-requests/{id}`:
 
@@ -231,6 +241,12 @@ cancelled`, carrying `queuePosition` (`queued`) or `etaSeconds`
 (`reclaiming`/`provisioning`/`booting`) where the stage has one. Terminal
 `granted` embeds the [lease object](#the-lease-object); terminal `failed`
 embeds `{ code, message }`.
+
+The request is the one Simlock stored, so `GET` answers across a daemon
+restart and for a request your token sent over the socket too. A finished
+request answers for `lease.requestRetentionMs`, then `404`. A `granted`
+request's lease object is the lease as it was granted: after a renew, read
+the current deadline from [`GET /v1/leases/{id}`](#get-v1leasesid).
 
 ### `GET /v1/lease-requests/{id}/events`
 
@@ -320,17 +336,16 @@ and release were moved off the `lease.list`-filtered lookup — see
 split, with renew and release.)
 
 This is different again from the lease-*request* routes below
-(`/v1/lease-requests/{id}` and friends), which are still HTTP's own resource
-and still answer `403 FORBIDDEN` for another requester's request — that
-envelope stays HTTP-specific until
-[#72](https://github.com/callstackincubator/simlock/issues/72).
+(`/v1/lease-requests/{id}` and friends), which answer `403 FORBIDDEN` for a
+request another token sent.
 
 `expiresAt` is always the authoritative deadline, and `ttlMs` is always the
 lease's own width — the TTL it was granted with, or last renewed with when a
 renew carried one. The daemon stores it on the lease record, so it survives a
-**daemon** restart along with the deadline and the restored TTL timer; a
-payload served after a restart may still omit `requestId`, which was only
-ever HTTP-side. Schedule renewals from `expiresAt` rather than from
+**daemon** restart along with the deadline and the restored TTL timer.
+`requestId` names the request that was granted this lease. It is present
+while that request is still stored, which is `lease.requestRetentionMs` after
+it was granted, and omitted after that. Schedule renewals from `expiresAt` rather than from
 `ttlMs` all the same: the deadline is the fact, the width is how far the next
 body-less renew will push it.
 
@@ -621,8 +636,12 @@ an all-or-nothing that leaves the operator guessing.
 - `GET /v1/leases` — every active lease (`simlock list --leases`).
 - `GET /v1/devices` — every managed device, with state and
   `transitionAgeMs` (`simlock list --devices`).
-- `GET /v1/events?since=<duration>` — replay from the in-memory business-event
-  ring buffer (`simlock events`).
+- `GET /v1/events?since=<duration>` — replay business events newer than
+  `since` (`simlock events --since`). They come from the daemon's event file,
+  so they include events from before a daemon restart and beyond the 1000
+  held in memory, back to the oldest event the file still holds
+  (`eventLog.rotateBytes`). Without `since`, the recent events held in
+  memory.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`).
 
@@ -645,9 +664,9 @@ Every failure is the same shape the daemon protocol uses:
 |---|---|
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
-| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request belongs to another requester; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease) |
+| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease) |
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
-| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open) |
+| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
 | 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine's devices, asked of a gateway) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
@@ -685,17 +704,16 @@ and `message` — details are contract, message text is not.
 
 ## Lifecycle semantics
 
-- **Daemon restart.** In-flight lease requests are in-memory and do not
-  survive, same as the socket protocol's queue today. A client polling a
-  request id from before the restart gets `404 UNKNOWN_LEASE_REQUEST`; if its
-  grant had actually landed before the crash, the persisted lease
-  answers a retried `POST` with `409 REQUESTER_ALREADY_LEASED` naming the
-  lease id, which the client then `GET`s to recover its state. This is the
-  documented recovery loop: `404` → re-request → (maybe) `409` → `GET`.
-- **Idempotency keys** are in-memory with a TTL; a replay after that window
-  (including across a restart) creates a fresh request rather than erroring
-  — the `409` above is the real backstop against a double grant, not the
-  idempotency cache.
+- **Daemon restart.** Lease requests are stored, so a request id from before
+  the restart still answers `GET`. A request that already had its result
+  keeps it. A request that was still waiting when the daemon stopped ends as
+  `failed`, with a message saying the daemon restarted: no wait survives a
+  restart. Repeating it under the same `Idempotency-Key` returns that same
+  failure, so send a new key to ask again.
+- **Idempotency keys** are stored with their request. A repeat inside
+  `lease.requestRetentionMs` of the request finishing gets the stored request
+  back, across a restart too. After that window the record is removed and
+  the same key starts a new request.
 - **Startup.** The HTTP listener now starts the moment the daemon
   claims its socket — the same instant the unix socket itself starts
   accepting connections, before startup convergence (`doctor.reconcile()`,
@@ -705,12 +723,15 @@ and `message` — details are contract, message text is not.
   now waits on the shared dispatcher's readiness gate exactly like a socket
   request, instead of being refused — every route but the routes that don't
   dispatch at all (`GET /v1/healthz`) can block briefly on a cold start.
-- **Gateway restart, and a worker that goes away.** A gateway's queue is
-  in-memory too, so a restart loses in-flight lease requests exactly as a
-  worker's does — and leases survive it, on their workers, which reconnect on
-  their own backoff and let the gateway rebuild every view and its lease
-  index. The recovery loop is the same one: `404` → re-request → (maybe)
-  `409` → `GET`. While a worker's uplink is down, anything routed to it is
+- **Gateway restart, and a worker that goes away.** A gateway keeps its lease
+  requests in memory only, so a gateway restart loses them: their ids answer
+  `404 UNKNOWN_LEASE_REQUEST`, and a repeat under the same `Idempotency-Key`
+  is treated as a new request. Leases survive it, on their workers, which
+  reconnect on their own backoff and let the gateway rebuild every view and
+  its lease index. So a client that repeats its request after a gateway
+  restart gets `409 REQUESTER_ALREADY_LEASED` naming the lease if one was
+  granted — `GET` that lease to recover it — or a new request if not. While a
+  worker's uplink is down, anything routed to it is
   `503 WORKER_UNREACHABLE`; the gateway never reports a lease as gone before
   the worker says so, and the lease meanwhile runs out its TTL on the
   worker's own clock.

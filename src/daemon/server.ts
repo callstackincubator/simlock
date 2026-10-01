@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { type EventBus, type EventEnvelope } from "../bus/index.js";
+import { type EventBus, type EventEnvelope, type EventHistory } from "../bus/index.js";
 import {
   type Config,
   type LeaseProgress,
@@ -28,7 +28,6 @@ import {
   helloRequestSchema,
   helloReplySchema,
   leaseRelease,
-  leaseRequest,
   negotiateProtocolVersion,
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
@@ -63,7 +62,6 @@ interface Connection {
    * reason and at the same moment.
    */
   readonly progressDisposers: Set<() => void>;
-  readonly progressRequesters: Set<string>;
   buffer: string;
   helloReceived: boolean;
   closed: boolean;
@@ -138,6 +136,8 @@ export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
   readonly doctor?: Doctor;
+  /** What `events.replay` answers from; see `EventHistory`. */
+  readonly eventHistory: Pick<EventHistory, "replay">;
   readonly leases: LeaseCommands;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
@@ -283,7 +283,7 @@ function buildDispatcher(
     ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
     // The `operation` log line's error code: the same classifier this server answers with.
     errorCode: classifyError,
-    eventBus: options.eventBus,
+    eventHistory: options.eventHistory,
     health: hooks.health,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -653,7 +653,6 @@ export class DaemonServer {
       principal: "",
       role: "agent",
       progressDisposers: new Set(),
-      progressRequesters: new Set(),
       protocolMismatch: undefined,
       selfInitiatedReleases: new Set(),
       socket,
@@ -1189,17 +1188,8 @@ export class DaemonServer {
       progressSocket = undefined;
     };
     connection.progressDisposers.add(disposeProgress);
-    // `requesterId` is only meaningful after input parsing, which `dispatch()` below also
-    // does -- parsed again here (cheap, side-effect-free) purely so `progressRequesters`
-    // tracks the same id the dispatcher's handler will actually use, and a connection close
-    // mid-request detaches progress from the right queued waiter. A parse failure here just
-    // falls back to the connection's principal; `dispatch()` throws `BAD_REQUEST` before any
-    // waiter is created, so no queue entry will ever exist to detach.
-    const parsedForTracking = leaseRequest.input.safeParse(value ?? {});
-    const requesterId =
-      (parsedForTracking.success ? parsedForTracking.data.requesterId : undefined) ??
-      connection.principal;
-    connection.progressRequesters.add(requesterId);
+    // A connection close only silences this call's pushes (`disposeProgress`): the request
+    // itself keeps waiting, and a client that reconnects repeats it to get its answer.
     let grant;
     try {
       grant = await this.#dispatcher.dispatch("lease.request", value ?? {}, {
@@ -1212,7 +1202,6 @@ export class DaemonServer {
       });
     } finally {
       connection.progressDisposers.delete(disposeProgress);
-      connection.progressRequesters.delete(requesterId);
       disposeProgress();
     }
     // A grant that lands after its requester's connection died (or during a stop) is left
@@ -1469,10 +1458,6 @@ export class DaemonServer {
       disposeProgress();
     }
     connection.progressDisposers.clear();
-    for (const requesterId of connection.progressRequesters) {
-      void this.#engine?.queue.detachQueuedProgress(requesterId);
-    }
-    connection.progressRequesters.clear();
     this.#connections.delete(connection);
     connection.unsubscribeEvents?.();
     connection.unsubscribeEvents = undefined;

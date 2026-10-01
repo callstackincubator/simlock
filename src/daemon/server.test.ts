@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, EventHistory } from "../bus/index.js";
 import {
   type Config,
   type DriverRejection,
@@ -28,6 +28,7 @@ import {
   MemoryLogSink,
   NodeFilesystem,
   NodeIpcTransport,
+  NoopLogger,
   ScriptedProcessRunner,
   type IpcConnection,
   type Logger,
@@ -38,6 +39,7 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
+import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
 import { AdminSecretManager } from "./admin-secret.js";
@@ -1229,6 +1231,120 @@ describe("DaemonServer startup readiness", () => {
  * also waits on convergence), so a test that connects while convergence is deliberately
  * held open must poll for the listener rather than assume it exists synchronously.
  */
+describe("DaemonServer stored lease requests", () => {
+  const iPhone = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+
+  /** `holder` takes the one device; `waiter` queues behind it under `key-1`. */
+  async function queueBehindHolder(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const holder = await createClient(harness.socketPath);
+    const waiter = await createClient(harness.socketPath);
+    await Promise.all([hello(holder), hello(waiter)]);
+    await holder.request("lease.request", { ...iPhone, requesterId: "holder" });
+    void waiter.request("lease.request", {
+      ...iPhone,
+      idempotencyKey: "key-1",
+      requesterId: "waiter",
+    });
+    await expect
+      .poll(() => harness.eventBus.replay().some((event) => event.event === "lease.queued"))
+      .toBe(true);
+    return { holder, waiter };
+  }
+
+  it("ends only the caller's wait on a disconnect, writing no result for the request", async () => {
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), level: "debug", sink }),
+    });
+    const { waiter } = await queueBehindHolder(harness);
+
+    await waiter.close();
+    await expect
+      .poll(() => sink.records.some((record) => record.message === "Connection closed"))
+      .toBe(true);
+
+    expect(
+      harness.registry.leaseRequests().find((record) => record.requesterId === "waiter"),
+    ).toMatchObject({ state: "open" });
+    expect(harness.engine.queueDepth).toBe(1);
+  });
+
+  it("gives a client that reconnects after a disconnect its result when it repeats the request", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
+    const { waiter } = await queueBehindHolder(harness);
+    await waiter.close();
+
+    const reconnected = await createClient(harness.socketPath);
+    await hello(reconnected);
+    const repeat = reconnected.request("lease.request", {
+      ...iPhone,
+      idempotencyKey: "key-1",
+      requesterId: "waiter",
+    });
+    harness.clock.advance(40);
+
+    await expect(repeat).resolves.toMatchObject({
+      ok: true,
+      payload: { lease: { requesterId: "waiter" } },
+    });
+    expect(harness.registry.snapshot.leases.map((lease) => lease.requesterId)).toEqual(["waiter"]);
+  });
+
+  it("answers IDEMPOTENCY_CONFLICT on the wire when a key is reused for a different device", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    await client.request("lease.request", { ...iPhone, idempotencyKey: "key-1" });
+
+    await expect(
+      client.request("lease.request", { ...iPhone, idempotencyKey: "key-1", model: "iPhone 17" }),
+    ).resolves.toMatchObject({ error: { code: "IDEMPOTENCY_CONFLICT" }, ok: false });
+  });
+
+  it("answers FORBIDDEN on the wire to a repeat from a different principal", async () => {
+    const harness = await createHarness();
+    const owner = await createClient(harness.socketPath);
+    const other = await createClient(harness.socketPath);
+    await helloAs(owner, "alice");
+    await helloAs(other, "mallory");
+    await owner.request("lease.request", {
+      ...iPhone,
+      idempotencyKey: "key-1",
+      requesterId: "agent",
+    });
+
+    await expect(
+      other.request("lease.request", { ...iPhone, idempotencyKey: "key-1", requesterId: "agent" }),
+    ).resolves.toMatchObject({ error: { code: "FORBIDDEN" }, ok: false });
+  });
+
+  it("replays a stored failure with the code it failed with", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    const client = await createClient(harness.socketPath);
+    await Promise.all([hello(holder), hello(client)]);
+    const held = (await holder.request("lease.request", { ...iPhone, requesterId: "holder" })) as {
+      readonly payload: { readonly lease: { readonly id: string } };
+    };
+    const noWait = { ...iPhone, idempotencyKey: "key-1", noWait: true, requesterId: "agent" };
+    await expect(client.request("lease.request", noWait)).resolves.toMatchObject({
+      error: { code: "NO_CAPACITY" },
+    });
+
+    // Capacity frees up: a fresh evaluation would now grant the device.
+    await holder.request("lease.release", { leaseId: held.payload.lease.id });
+    await expect
+      .poll(() => harness.registry.snapshot.devices.map((device) => device.state))
+      .toEqual(["ready"]);
+
+    await expect(client.request("lease.request", noWait)).resolves.toMatchObject({
+      error: { code: "NO_CAPACITY" },
+      ok: false,
+    });
+    expect(harness.registry.snapshot.leases).toEqual([]);
+  });
+});
+
 async function createClientRetrying(socketPath: string, timeoutMs = 2_000): Promise<Client> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -2686,6 +2802,7 @@ async function createHarness(
   const engine = new LeaseEngine({
     clock,
     config,
+    describeFailure: describeLeaseRequestFailure,
     drivers: [driver],
     eventBus,
     idGenerator: sequence(),
@@ -2716,6 +2833,12 @@ async function createHarness(
       : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
+    eventHistory: new EventHistory({
+      bus: eventBus,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      path: "/events.jsonl",
+    }),
     host:
       options.host ??
       new DaemonEndpointHost({
@@ -3027,6 +3150,8 @@ function testConfig(
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
       identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
       ...leaseOverrides,
     },
     capacity: {
@@ -3041,6 +3166,7 @@ function testConfig(
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
         maxRetries: 3,

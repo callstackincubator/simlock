@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { EventBus, type EventBusLogger } from "../bus/index.js";
+import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
 import {
   type Config,
   type ConfigOverrides,
@@ -77,6 +77,7 @@ import { classifyError } from "./error-code.js";
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminSecretManager } from "./admin-secret.js";
+import { describeLeaseRequestFailure } from "./error-code.js";
 import { GatewayUplink } from "./gateway-uplink.js";
 import { createCredentialRoleResolver } from "./session.js";
 
@@ -133,10 +134,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     });
   const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
   const eventBus = new EventBus(clock, config.eventBuffer.capacity, eventBusLogger(logger));
-  // Durable bookkeeping for component installs: `simlock events` is an in-memory ring buffer
-  // that resets on restart (see ARCHITECTURE.md "Event bus"), so a component simlock installed
-  // is only attributable later through the daemon's own log file.
-  wireComponentInstallLogging(eventBus, logger);
+  const eventHistory = openEventHistory({ config, dataDirectory, eventBus, filesystem, logger });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
@@ -147,6 +145,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       config,
       dataDirectory,
       eventBus,
+      eventHistory,
       filesystem,
       idGenerator,
       ipc,
@@ -165,6 +164,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     filesystem,
     idGenerator,
     leaseIdentity: config.lease.identity,
+    leaseRequestLimits: {
+      maxRecords: config.lease.maxRequestRecords,
+      retentionMs: config.lease.requestRetentionMs,
+    },
     statePath,
   });
   // Before discovery, because every root a driver validates is checked against it, and it
@@ -202,6 +205,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const leaseEngine = new LeaseEngine({
     clock,
     config,
+    describeFailure: describeLeaseRequestFailure,
     drivers,
     eventBus,
     idGenerator,
@@ -311,6 +315,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     defaultRequesterId:
       options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
     eventBus,
+    eventHistory,
     healthMonitor: leaseEngine.healthMonitor,
     host: new DaemonEndpointHost({
       connector: ipc,
@@ -426,6 +431,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
       eventBus,
       idGenerator,
+      leaseRequests: leaseEngine.requests,
       logger: httpLogger,
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
@@ -482,6 +488,7 @@ interface GatewayDaemonOptions {
   readonly config: Config;
   readonly dataDirectory: string;
   readonly eventBus: EventBus;
+  readonly eventHistory: EventHistory;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
@@ -503,7 +510,8 @@ interface GatewayDaemonOptions {
  */
 // fallow-ignore-next-line complexity -- explicit production composition, exactly like `startDaemon`'s worker half.
 async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<DaemonServer> {
-  const { clock, config, dataDirectory, eventBus, filesystem, idGenerator, logger } = options;
+  const { clock, config, dataDirectory, eventBus, eventHistory, filesystem, idGenerator, logger } =
+    options;
   // The gateway's own identity, used to namespace the principal it announces to each worker
   // (ADR 0005 §27's shape) so a worker's logs attribute what the gateway did to the gateway.
   const instanceId = await loadInstanceId({
@@ -588,6 +596,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // P2 (round 2 review): bounds a forwarded `lease.request`, the one uplink call that used to
     // have no timeout of its own.
     leaseRequestTimeoutMs: config.gateway.leaseRequestTimeoutMs,
+    describeFailure: describeLeaseRequestFailure,
+    leaseRequestLimits: {
+      maxRecords: config.lease.maxRequestRecords,
+      retentionMs: config.lease.requestRetentionMs,
+    },
     logger: logger.child("gateway"),
     routing,
     views: gatewayService.workers,
@@ -621,7 +634,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       closeUplinksForToken: (tokenId) => gatewayService.closeLinksForToken(tokenId),
       config,
       coordinator: fleetCoordinator,
-      eventBus,
+      eventHistory,
       health: () => daemon.health,
       leaseIndex,
       logger: logger.child("gateway"),
@@ -681,6 +694,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
       eventBus,
       idGenerator,
+      // The fleet coordinator's in-memory request book: a gateway stores nothing on disk.
+      leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).
@@ -996,7 +1011,7 @@ async function loadDriversModule(
  * bus event. Drivers never depend on the event bus directly (architecture rule 5 -- loose
  * coupling via the bus is for observers only) -- this is the one place, at driver construction,
  * that bridges the driver's diagnostic callback to a post-commit fact for observers (`simlock
- * events`, and the durable-log subscription in `startDaemon`).
+ * events`, and the event file behind it).
  */
 export function emitComponentInstallDiagnostic(
   eventBus: Pick<EventBus, "emit">,
@@ -1055,7 +1070,7 @@ export function emitComponentInstallDiagnostic(
  * `emitComponentInstallDiagnostic`: the driver never depends on the event bus directly
  * (architecture rule 5) -- this is the one place, at driver construction, that bridges the
  * driver's `onSlimmed` callback to a post-commit fact for observers (`simlock events`, and the
- * durable-log subscription in `startDaemon`). A *skipped* slim is deliberately not bridged here
+ * event file behind it). A *skipped* slim is deliberately not bridged here
  * -- see `onSlimSkipped` in `discoverDrivers`, which logs it instead (see `docs/internal/EVENTS.md`).
  */
 export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: SlimmedFact) => void {
@@ -1105,38 +1120,33 @@ export function bridgeAndroidDriverDiagnostic(
 }
 
 /**
- * Durable bookkeeping for component installs (and iOS slims, below): the event ring buffer
- * (`simlock events`) resets on daemon restart, so a component simlock installed -- or a device it
- * slimmed -- on an agent's behalf is only attributable later through this log line -- see the
- * `Logger` port ("Operational logging is a separate concern from the event bus" in
- * ARCHITECTURE.md).
+ * Every event the daemon emits, also in `events.jsonl` (ADR 0006). An event file that cannot be
+ * opened costs the history, never the daemon: one error line, and replay answers from the ring.
  */
-export function wireComponentInstallLogging(
-  eventBus: Pick<EventBus, "subscribe">,
-  logger: Logger,
-): void {
-  const componentsLogger = logger.child("components");
-  eventBus.subscribe("component.installed", (envelope) => {
-    componentsLogger.info("Component installed", {
-      componentId: envelope.payload.componentId,
-      durationMs: envelope.payload.durationMs,
-      platform: envelope.payload.platform,
-      ...(envelope.payload.requesterId === undefined
-        ? {}
-        : { requesterId: envelope.payload.requesterId }),
+function openEventHistory(options: {
+  readonly config: Config;
+  readonly dataDirectory: string;
+  readonly eventBus: EventBus;
+  readonly filesystem: Filesystem;
+  readonly logger: Logger;
+}): EventHistory {
+  const path = join(options.dataDirectory, EVENT_FILE_NAME);
+  const logger = options.logger.child("events");
+  let sink: NodeFileLogSink | undefined;
+  try {
+    sink = new NodeFileLogSink({ maxBytes: options.config.eventLog.rotateBytes, path });
+  } catch (error: unknown) {
+    logger.error("Event file could not be opened; events are kept in memory only", {
+      error: error instanceof Error ? error.message : String(error),
+      path,
     });
-  });
-
-  const slimLogger = logger.child("slim");
-  eventBus.subscribe("device.slimmed", (envelope) => {
-    slimLogger.info("Device slimmed", {
-      categories: envelope.payload.categories,
-      deviceId: envelope.payload.deviceId,
-      durationMs: envelope.payload.durationMs,
-      labelCount: envelope.payload.labelCount,
-      signature: envelope.payload.signature,
-      unknownLabels: envelope.payload.unknownLabels,
-    });
+  }
+  return new EventHistory({
+    bus: options.eventBus,
+    filesystem: options.filesystem,
+    logger,
+    path,
+    ...(sink === undefined ? {} : { sink }),
   });
 }
 

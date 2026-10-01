@@ -46,7 +46,13 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
       ...overrides,
     },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
+    lease: {
+      defaultTtlMs: 100,
+      maxTtlMs: 100,
+      identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
+    },
     capacity: {
       strategy: "resource",
       config: {
@@ -59,6 +65,7 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },

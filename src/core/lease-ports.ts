@@ -21,7 +21,6 @@ export interface LeaseCommands {
 /** Pending-demand operations used by status and connection cleanup. */
 export interface QueueControl {
   readonly queueDepth: number;
-  detachQueuedProgress(requesterId: string): Promise<void>;
   cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable">;
   /** ADR §4: the session principal a pending request was created under -- always the creating
    * session's principal (`LeaseRequestOptions.ownerId`), never the caller-suppliable

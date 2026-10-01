@@ -7,6 +7,7 @@ import {
   type DeviceOperationClaims,
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
+import { type LeaseRequestBook } from "./lease-request-book.js";
 import { type DeviceRecord, type DeviceSpec, type LeaseRecord, sameSpec } from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
 import { type DriverCatalog } from "./driver-catalog.js";
@@ -66,7 +67,6 @@ export type AcquisitionQueue = Pick<
   | "create"
   | "cancelAll"
   | "depth"
-  | "detachProgress"
   | "enqueue"
   | "findPendingWaiter"
   | "hasPendingRequester"
@@ -94,6 +94,8 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly queue: AcquisitionQueue;
   readonly registry: LeaseAcquisitionRegistry;
   readonly logger?: Logger;
+  /** Stores each request before it is queued and answers repeats of it (`LeaseRequestBook`). */
+  readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "replay">;
 }
 
 interface AcquisitionWaiter extends Waiter {
@@ -149,10 +151,18 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return (this.options.queue.head as AcquisitionWaiter | undefined)?.spec;
   }
 
+  /**
+   * Admits a request, or answers a repeat of one. A repeat under a stored key is answered before
+   * any other check -- its result never depends on what changed on the host since. A new
+   * request is stored before the queue sees it, inside the same serialized section as the
+   * one-request-per-requester check, so two concurrent requests under one key cannot both pass.
+   */
   async request(request: DeviceRequest, options: LeaseRequestOptions): Promise<LeaseGrant> {
-    let waiter: AcquisitionWaiter;
+    let admitted: { readonly waiter: AcquisitionWaiter } | { readonly replay: Promise<LeaseGrant> };
     try {
-      waiter = await this.options.decisions.run(async () => {
+      admitted = await this.options.decisions.run(async () => {
+        const replay = this.options.requests.replay(request, options);
+        if (replay !== undefined) return { replay };
         if (this.#admissionClosed) {
           this.options.eventBus.emit(
             "lease.rejected",
@@ -175,22 +185,29 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           );
           throw new RequesterAlreadyLeasedError(options.requesterId, activeLease?.id);
         }
-        const accepted = this.#newWaiter(request, options);
+        const { id, started: accepted } = await this.options.requests.admit(
+          request,
+          options,
+          (id, onProgress) => this.#newWaiter(request, { ...options, onProgress }, id),
+        );
         this.options.eventBus.emit(
           "lease.requested",
           {
+            requestId: id,
             requestSpec: request,
             requester: options.requesterId,
             waitPolicy: options.noWait ? "no-wait" : "wait",
           },
           "lease-acquisition-coordinator",
         );
-        return accepted;
+        return { waiter: accepted };
       });
     } catch (error: unknown) {
       return Promise.reject(error);
     }
 
+    if ("replay" in admitted) return admitted.replay;
+    const { waiter } = admitted;
     this.#track(this.#resolveAndDrive(waiter, request, options));
     return waiter.promise;
   }
@@ -267,12 +284,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
 
     await this.#drive(waiter);
-  }
-
-  async detachQueuedProgress(requesterId: string): Promise<void> {
-    await this.options.decisions.run(async () => {
-      this.options.queue.detachProgress(requesterId);
-    });
   }
 
   /**
@@ -668,8 +679,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     );
   }
 
-  #newWaiter(request: DeviceRequest, options: LeaseRequestOptions): AcquisitionWaiter {
-    return Object.assign(this.options.queue.create(request, options), {
+  #newWaiter(request: DeviceRequest, options: LeaseRequestOptions, id: string): AcquisitionWaiter {
+    return Object.assign(this.options.queue.create(request, options, id), {
       failures: 0,
       timing: noTiming,
     });

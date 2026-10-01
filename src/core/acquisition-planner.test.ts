@@ -43,7 +43,13 @@ const config: Config = {
       retryBackoffMultiplier: 2,
     },
   },
-  lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
+  lease: {
+    defaultTtlMs: 100,
+    maxTtlMs: 100,
+    identity: { ios: "reusable", android: "reusable" },
+    requestRetentionMs: 600_000,
+    maxRequestRecords: 10_000,
+  },
   capacity: {
     strategy: "resource",
     config: {
@@ -56,6 +62,7 @@ const config: Config = {
     },
   },
   log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+  eventLog: { rotateBytes: 5 * 1024 * 1024 },
 };
 
 function device(

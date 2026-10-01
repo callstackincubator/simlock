@@ -1933,6 +1933,8 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
       identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
     },
     capacity: {
       strategy: "resource",
@@ -1946,6 +1948,7 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
         maxRetries: 3,

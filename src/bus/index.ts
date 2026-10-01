@@ -2,6 +2,8 @@ import type { Clock } from "../ports/index.js";
 
 export interface EventMap {
   "lease.requested": {
+    /** The stored request's id, so an observer can correlate this event with its record. */
+    readonly requestId: string;
     readonly requestSpec: unknown;
     readonly requester: string;
     readonly waitPolicy: string;
@@ -50,7 +52,9 @@ export interface EventMap {
       | "already-leased"
       | "boot-timeout"
       | "killed"
-      | "cancelled";
+      | "cancelled"
+      /** A request still open when the daemon stopped, settled as failed at the next start. */
+      | "daemon-restarted";
   };
   "device.provisioned": {
     readonly deviceId: string;
@@ -403,3 +407,5 @@ export class EventBus {
     }
   }
 }
+
+export { EVENT_FILE_NAME, EventHistory, eventKey, readEventFile } from "./event-file.js";

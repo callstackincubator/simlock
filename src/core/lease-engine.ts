@@ -8,7 +8,12 @@ import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
-import type { LeaseRecord, Platform } from "./domain.js";
+import type {
+  LeaseGrant as StoredLeaseGrant,
+  LeaseRecord,
+  LeaseRequestFailure,
+  Platform,
+} from "./domain.js";
 import type { DeviceRequest, Driver, PassthroughCommand, PassthroughContext } from "./driver.js";
 import { DriverCatalog, type PlatformCatalog } from "./driver-catalog.js";
 import {
@@ -20,6 +25,7 @@ import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
+import { LeaseRequestBook } from "./lease-request-book.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { NukeService } from "./nuke-service.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
@@ -45,6 +51,12 @@ export interface LeaseEngineOptions {
   readonly logger?: Logger;
   readonly registry: Registry;
   readonly systemStats: SystemStats;
+  /**
+   * Turns the error a lease request failed with into the code and message stored for it. The
+   * daemon passes its contract error classifier; the core never reads the code. Omitted, every
+   * failure is stored as `INTERNAL` with its own message.
+   */
+  readonly describeFailure?: (error: unknown) => LeaseRequestFailure;
 }
 
 export {
@@ -84,6 +96,8 @@ export class LeaseEngine {
   readonly #quarantine: QuarantineCoordinator;
   readonly #queue: WaitQueue;
   readonly #releaseCoordinator: LeaseReleaseCoordinator;
+  /** Every lease request, stored in the registry; read by the HTTP request resource too. */
+  readonly requests: LeaseRequestBook<StoredLeaseGrant>;
   readonly #decisions = new SerializedDecision();
   readonly #startup: StartupConverger;
   readonly #warmPool: WarmPoolCoordinator;
@@ -136,6 +150,11 @@ export class LeaseEngine {
         this.#acquisition.kick();
       },
     });
+    this.requests = new LeaseRequestBook({
+      decisions: this.#decisions,
+      describeFailure: options.describeFailure ?? describeUnclassifiedFailure,
+      store: options.registry,
+    });
     this.#acquisition = new LeaseAcquisitionCoordinator({
       claims: this.#claims,
       decisions: this.#decisions,
@@ -148,6 +167,7 @@ export class LeaseEngine {
       queue: this.#queue,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
+      requests: this.requests,
     });
     this.#quarantine = new QuarantineCoordinator({
       clock: options.clock,
@@ -201,6 +221,7 @@ export class LeaseEngine {
       cleanup: this.cleanup,
       decisions: this.#decisions,
       drivers: this.#drivers,
+      eventBus: options.eventBus,
       interruptedReclaimRecovery: {
         recoverInterruptedReclaim: async (device) => {
           await this.#warmPool.recoverInterrupted(device.id);
@@ -330,14 +351,8 @@ export class LeaseEngine {
     await this.#startup.converge();
   }
 
-  /** Stops client feedback for a queued request without affecting its lease outcome. */
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by the dispatcher (same as the sibling queueDepth).
-  async detachQueuedProgress(requesterId: string): Promise<void> {
-    await this.#acquisition.detachQueuedProgress(requesterId);
-  }
-
   /** Cancels a single pending request by requester id, for the HTTP lease-request delete route. */
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling detachQueuedProgress).
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling queueDepth).
   async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.#acquisition.cancelPending(requesterId);
   }
@@ -369,4 +384,8 @@ export class LeaseEngine {
       state: device.state,
     }));
   }
+}
+
+function describeUnclassifiedFailure(error: unknown): LeaseRequestFailure {
+  return { code: "INTERNAL", message: error instanceof Error ? error.message : String(error) };
 }

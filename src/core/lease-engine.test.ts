@@ -58,6 +58,8 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
       defaultTtlMs: 100,
       maxTtlMs: 14_400_000,
       identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
       ...overrides,
     },
     capacity: {
@@ -72,6 +74,7 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
         maxRetries: 3,
@@ -93,6 +96,8 @@ async function createHarness(
   options: {
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
+    /** The state directory of an earlier harness: loading it again is a daemon restart. */
+    readonly filesystem?: MemoryFilesystem;
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
     readonly limits?: CapacityLimits;
@@ -100,11 +105,11 @@ async function createHarness(
   } = {},
 ) {
   const clock = new FakeClock(1_000);
-  const filesystem = new MemoryFilesystem();
+  const filesystem = options.filesystem ?? new MemoryFilesystem();
   const bus = new EventBus(clock);
   const driver =
     options.driver ?? new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  let nextId = 1;
+  let nextId = options.filesystem === undefined ? 1 : 1_000;
   const registry = await Registry.load({
     clock,
     eventBus: bus,
@@ -903,28 +908,6 @@ describe("LeaseEngine", () => {
       }),
     ).resolves.toMatchObject({ device: { state: "leased" } });
     expect(callbackFailure.driver.calls.map((call) => call.operation)).toContain("makeReady");
-  });
-
-  it("detaches progress from a queued request without cancelling its lease", async () => {
-    const harness = await createHarness();
-    const holder = await harness.engine.request(request, {
-      ownerId: "holder",
-      requesterId: "holder",
-    });
-    const progress: string[] = [];
-    const queued = harness.engine.request(request, {
-      onProgress: (update) => progress.push(update.stage),
-      requesterId: "queued",
-      ownerId: "queued",
-    });
-    await flush();
-
-    await harness.engine.detachQueuedProgress("queued");
-    await harness.engine.release(holder.lease.id, "explicit");
-    await expect(queued).resolves.toMatchObject({
-      lease: { ownerId: "queued", requesterId: "queued" },
-    });
-    expect(progress).toEqual(["queued"]);
   });
 
   it("cancels a queued request through the QueueControl facade and frees the requester for a later grant", async () => {
@@ -1970,5 +1953,59 @@ describe("LeaseEngine logger wiring", () => {
         },
       },
     ]);
+  });
+});
+
+describe("LeaseEngine restart recovery of stored lease requests", () => {
+  /** Leaves `agent`'s request queued behind the one device, then restarts on the same state. */
+  async function restartWithAgentQueued(idempotencyKey?: string) {
+    const before = await createHarness();
+    await before.engine.request(request, { ownerId: "holder", requesterId: "holder" });
+    void before.engine
+      .request(request, {
+        ownerId: "agent",
+        requesterId: "agent",
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      })
+      .catch(() => undefined);
+    await expect
+      .poll(() => before.registry.leaseRequests().find((record) => record.requesterId === "agent"))
+      .toMatchObject({ state: "open" });
+
+    const after = await createHarness({ filesystem: before.filesystem });
+    await after.engine.convergeRunningCapacity();
+    return after;
+  }
+
+  it("settles a request still open at a restart as failed and says the daemon restarted", async () => {
+    const after = await restartWithAgentQueued("key-1");
+
+    expect(
+      after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
+    ).toMatchObject({
+      failure: { code: "INTERNAL", message: expect.stringContaining("daemon restarted") },
+      state: "failed",
+    });
+    expect(
+      after.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload),
+    ).toEqual([{ reason: "daemon-restarted", requestSpec: request }]);
+    await expect(
+      after.engine.request(request, {
+        idempotencyKey: "key-1",
+        ownerId: "agent",
+        requesterId: "agent",
+      }),
+    ).rejects.toMatchObject({ message: expect.stringContaining("daemon restarted") });
+  });
+
+  it("settles a request that carried no idempotency key at a restart too", async () => {
+    const after = await restartWithAgentQueued();
+
+    expect(
+      after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
+    ).toMatchObject({ state: "failed" });
   });
 });

@@ -76,7 +76,13 @@ function config(): Config {
     ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
     android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
+    lease: {
+      defaultTtlMs: 100,
+      maxTtlMs: 100,
+      identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
+    },
     capacity: {
       strategy: "resource",
       config: {
@@ -89,6 +95,7 @@ function config(): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
         maxRetries: 3,

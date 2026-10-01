@@ -1,3 +1,5 @@
+import type { DeviceRequest } from "./driver.js";
+
 export type Platform = "ios" | "android";
 
 export interface DeviceSpec {
@@ -125,6 +127,71 @@ export interface LeaseRecord {
    * shared one backstop width. A record written before ADR 0004 loads with `grantedAt` here.
    */
   readonly lastRenewedAt: number;
+}
+
+export interface LeaseTiming {
+  readonly estimatedProvisionMs: number;
+  readonly estimatedBootMs: number;
+  readonly estimatedReclaimMs: number;
+  readonly estimatedReadyMs: number;
+}
+
+export interface LeaseGrant {
+  readonly device: DeviceRecord;
+  /**
+   * What the holder needs in its environment to reach this device at all -- the owning
+   * driver's own answer, forwarded verbatim. Empty is a legitimate answer; the core never
+   * reads a key here (architecture rule 2).
+   */
+  readonly environment: Readonly<Record<string, string>>;
+  readonly lease: LeaseRecord;
+  readonly timing: LeaseTiming;
+}
+
+/**
+ * Where a stored lease request stands. `open` is the only state something is still driving;
+ * the other three are its result, and a result is never re-evaluated (see `isSettled`).
+ */
+export type LeaseRequestState = "open" | "granted" | "failed" | "cancelled";
+
+/**
+ * Why a request failed, as the wire will report it. `code` is a contract error code the daemon
+ * classified the failure as; the core stores and returns it without reading it.
+ */
+export interface LeaseRequestFailure {
+  readonly code: string;
+  readonly message: string;
+}
+
+/**
+ * One lease request, stored before it is queued or any driver work starts, so a client that
+ * lost its answer can repeat the request and get the same one. `idempotencyKey` is optional: a
+ * request without one is still stored and still settled at startup, it just cannot be replayed.
+ * `ownerId` is the session principal that sent it -- what authorizes a replay, since
+ * `requesterId` and `idempotencyKey` are both the caller's own claims.
+ *
+ * Generic over the grant so a gateway, whose grants carry a worker's device untyped, keeps the
+ * same record in memory; the daemon's registry stores `LeaseGrant`.
+ */
+export interface LeaseRequestRecord<Grant = LeaseGrant> {
+  readonly id: string;
+  readonly requesterId: string;
+  readonly ownerId: string;
+  readonly idempotencyKey?: string;
+  readonly request: DeviceRequest;
+  readonly createdAt: number;
+  readonly state: LeaseRequestState;
+  /** When the request left `open`. Retention counts from here. */
+  readonly settledAt?: number;
+  /** Set exactly when `state` is `granted`. */
+  readonly grant?: Grant;
+  /** Set exactly when `state` is `failed`. */
+  readonly failure?: LeaseRequestFailure;
+}
+
+/** The one answer to "does this request have its result?". */
+export function isSettled(record: Pick<LeaseRequestRecord<unknown>, "state">): boolean {
+  return record.state !== "open";
 }
 
 /**

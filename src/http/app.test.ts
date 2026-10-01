@@ -9,9 +9,13 @@ import {
   UnknownLeaseError,
 } from "../core/index.js";
 import { DispatchError, DoctorUnavailableError } from "../daemon/dispatcher.js";
-import { StartupFailedError } from "../daemon/error-code.js";
+import { describeLeaseRequestFailure, StartupFailedError } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
-import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import { LeaseRequestBook } from "../core/lease-request-book.js";
+import { Registry } from "../core/registry.js";
+import { SerializedDecision } from "../core/serialized-decision.js";
+import { RequestCancelledError } from "../core/wait-queue.js";
+import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
   FakeDispatcher,
@@ -25,10 +29,15 @@ import {
   waitForDispatch,
 } from "./test-fakes.js";
 
-function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] } = {}) {
+function buildHarness(
+  overrides: {
+    readonly config?: HttpGatewayDeps["config"];
+    readonly leaseRequests?: HttpGatewayDeps["leaseRequests"];
+  } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const dispatcher = new FakeDispatcher();
+  const dispatcher = new FakeDispatcher(clock);
   const registry = new FakeRegistry();
   const ownerRoutedFacts = new OwnerRoutedFactBus(eventBus, registry);
   const tokens = new FakeTokenVerifier();
@@ -55,6 +64,7 @@ function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] }
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     eventBus,
     idGenerator: sequenceIdGenerator("gw"),
+    leaseRequests: overrides.leaseRequests ?? dispatcher.requests,
     logger,
     ownerRoutedFacts,
     registry,
@@ -410,31 +420,14 @@ describe("POST /v1/lease-requests", () => {
     expect(secondBody.request.id).toBe(firstId);
   });
 
-  it("refuses a ttlMs above lease.maxTtlMs with 400, before the request resource exists", async () => {
-    const { app, dispatcher } = buildHarness({
-      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
-    });
-
-    const response = await postLeaseRequest(app, { ...defaultBody, ttlMs: 120_001 });
-
-    expect(response.status).toBe(400);
-    expect((await response.json()) as { error: { code: string } }).toMatchObject({
-      error: { code: "BAD_REQUEST" },
-    });
-    expect(
-      dispatcher.calls.filter((call) => call.operation === "lease.request"),
-      "nothing was admitted, so there is no request resource to poll either",
-    ).toHaveLength(0);
-  });
-
-  it("refuses it the same way when allowDownload makes the 201 settle without waiting", async () => {
-    // The shape that made this route need its own cap check: with `allowDownload: true` the
-    // tracker answers `201 Created` as soon as the dispatch is *started*, so a rejection the
-    // dispatcher raises afterwards would land on the request resource instead of on this
-    // response -- a 201 for a TTL `docs/HTTP-API.md` promises is a 400.
-    const { app, dispatcher } = buildHarness({
-      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
-    });
+  it("answers a dispatcher refusal that lands before admission on the POST itself, even with allowDownload", async () => {
+    // `allowDownload: true` answers `201` once the request is stored, not before: a refusal the
+    // dispatcher raises ahead of admission -- a `ttlMs` above `lease.maxTtlMs` is one -- still
+    // fails the POST, so the route needs no cap check of its own.
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = () => {
+      throw new DispatchError("BAD_REQUEST", "ttlMs 120001 exceeds lease.maxTtlMs (120000)");
+    };
 
     const response = await postLeaseRequest(app, {
       ...defaultBody,
@@ -446,7 +439,6 @@ describe("POST /v1/lease-requests", () => {
     expect((await response.json()) as { error: { code: string } }).toMatchObject({
       error: { code: "BAD_REQUEST" },
     });
-    expect(dispatcher.calls.filter((call) => call.operation === "lease.request")).toHaveLength(0);
   });
 
   it("passes a caller-supplied ttlMs straight onto the dispatch input -- no separate renew call (ADR §9)", async () => {
@@ -532,6 +524,137 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
   });
 });
 
+describe("GET /v1/lease-requests/:id across a daemon restart", () => {
+  it("answers from the core record a previous daemon process stored", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const load = () =>
+      Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem,
+        idGenerator: sequenceIdGenerator("stored"),
+        statePath: "/home/agent/.simlock/state.json",
+      });
+    const before = await load();
+    const stored = await before.createLeaseRequest({
+      ownerId: "tok_agent",
+      request: { model: "iPhone 17 Pro", platform: "ios" },
+      requesterId: "tok_agent",
+    });
+    await before.settleLeaseRequest(stored.id, {
+      grant: makeGrant({ lease: { id: "lse_before_restart" } }),
+      state: "granted",
+    });
+
+    // A new process: a fresh registry read from disk, and a request book nothing was ever
+    // submitted through.
+    const after = await load();
+    const { app } = buildHarness({
+      leaseRequests: new LeaseRequestBook({
+        decisions: new SerializedDecision(),
+        describeFailure: describeLeaseRequestFailure,
+        store: after,
+      }),
+    });
+    const response = await app.request(`/v1/lease-requests/${stored.id}`, {
+      headers: agentAuth,
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      (await response.json()) as { request: { state: string; lease: { id: string } } },
+    ).toMatchObject({
+      request: {
+        id: stored.id,
+        lease: { id: "lse_before_restart", requestId: stored.id },
+        state: "granted",
+      },
+    });
+  });
+});
+
+describe("GET /v1/lease-requests/:id/events for a request nothing is driving", () => {
+  it("ends the stream after the current state when the request has no live wait to report on", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequenceIdGenerator("stored"),
+      statePath: "/home/agent/.simlock/state.json",
+    });
+    // Stored open by a previous process; this one has not settled it yet.
+    const stored = await registry.createLeaseRequest({
+      ownerId: "tok_agent",
+      request: { model: "iPhone 17 Pro", platform: "ios" },
+      requesterId: "tok_agent",
+    });
+    const { app } = buildHarness({
+      leaseRequests: new LeaseRequestBook({
+        decisions: new SerializedDecision(),
+        describeFailure: describeLeaseRequestFailure,
+        store: registry,
+      }),
+    });
+
+    const response = await app.request(`/v1/lease-requests/${stored.id}/events`, {
+      headers: agentAuth,
+    });
+    const body = await Promise.race([
+      response.text(),
+      new Promise<string>((resolve) => setTimeout(() => resolve("STILL OPEN"), 1_000)),
+    ]);
+
+    expect(body).not.toBe("STILL OPEN");
+    expect(body).toContain("event: queued");
+  });
+});
+
+describe("lease-request ownership", () => {
+  /** A request sent over another frontend under `tok_agent`'s requester id, by `tok_other`. */
+  async function requestOwnedByOther(dispatcher: FakeDispatcher): Promise<string> {
+    let id: string | undefined;
+    void dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", platform: "ios", requesterId: "tok_agent" },
+      {
+        manageEventSubscription: () => undefined,
+        onRequestAdmitted: (admitted) => (id = admitted),
+        principal: "tok_other",
+        role: "agent",
+      },
+    );
+    await waitForDispatch(dispatcher, "lease.request");
+    if (id === undefined) throw new Error("expected the request to be stored");
+    return id;
+  }
+
+  it("answers 403 to a GET from the token named as requester, and 200 to the token that sent it", async () => {
+    const { app, dispatcher } = buildHarness();
+    const id = await requestOwnedByOther(dispatcher);
+
+    const named = await app.request(`/v1/lease-requests/${id}`, { headers: agentAuth });
+    const sender = await app.request(`/v1/lease-requests/${id}`, { headers: otherAgentAuth });
+
+    expect(named.status).toBe(403);
+    expect(sender.status).toBe(200);
+  });
+
+  it("answers 403 to a DELETE from a token that did not send the request", async () => {
+    const { app, dispatcher } = buildHarness();
+    const id = await requestOwnedByOther(dispatcher);
+    dispatcher.handlers["lease.cancel"] = () => ({ result: "not-cancellable" });
+
+    const response = await app.request(`/v1/lease-requests/${id}`, {
+      headers: agentAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(403);
+  });
+});
+
 describe("DELETE /v1/lease-requests/:id", () => {
   it("404s an unknown request id", async () => {
     const { app } = buildHarness();
@@ -542,16 +665,24 @@ describe("DELETE /v1/lease-requests/:id", () => {
     expect(response.status).toBe(404);
   });
 
-  it("204s when the request was still queued and cancellable", async () => {
+  it("204s when the request was still queued and cancellable, and a GET right after reads cancelled", async () => {
     const { app, dispatcher } = buildHarness();
-    const { id } = await createLeaseRequest(app, dispatcher);
+    const { id, callIndex } = await createLeaseRequest(app, dispatcher);
 
-    dispatcher.handlers["lease.cancel"] = () => ({ result: "cancelled" });
+    // What the daemon's `lease.cancel` does to a queued wait: rejects it as cancelled.
+    dispatcher.handlers["lease.cancel"] = () => {
+      dispatcher.calls[callIndex]?.reject(new RequestCancelledError(id));
+      return { result: "cancelled" };
+    };
     const response = await app.request(`/v1/lease-requests/${id}`, {
       headers: agentAuth,
       method: "DELETE",
     });
     expect(response.status).toBe(204);
+    const after = await app.request(`/v1/lease-requests/${id}`, { headers: agentAuth });
+    expect(((await after.json()) as { request: { state: string } }).request.state).toBe(
+      "cancelled",
+    );
   });
 
   it("409s not-cancellable once device work is in flight", async () => {

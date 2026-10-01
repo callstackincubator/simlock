@@ -53,6 +53,7 @@ const ALLOWED_DAEMON_IMPORTS = ["daemon/dispatch.js"];
  */
 const ALLOWED_CORE_IMPORTS = [
   "core/wait-queue.js",
+  "core/lease-request-book.js",
   "core/serialized-decision.js",
   "core/domain.js",
   "core/driver.js",

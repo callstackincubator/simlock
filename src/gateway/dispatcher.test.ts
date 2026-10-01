@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import { OPERATIONS, type OperationName } from "../contract/index.js";
 import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
-import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+  NoopLogger,
+} from "../ports/index.js";
 import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
@@ -48,6 +54,8 @@ const gatewayConfig = {
     defaultTtlMs: 900_000,
     maxTtlMs: 3_600_000,
     identity: { ios: "reusable" as const, android: "reusable" as const },
+    requestRetentionMs: 600_000,
+    maxRequestRecords: 10_000,
   },
   log: { level: "info" as const, rotateBytes: 1 },
   mode: "gateway" as const,
@@ -106,7 +114,7 @@ class FakeDirectory implements WorkerDirectory {
   }
 }
 
-function harness() {
+function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay"> } = {}) {
   const clock = new FakeClock(1_000);
   const logSink = new MemoryLogSink();
   const eventBus = new EventBus(clock);
@@ -125,6 +133,11 @@ function harness() {
   const coordinator = new FleetLeaseCoordinator({
     clock,
     directory,
+    describeFailure: (error) => ({
+      code: "INTERNAL",
+      message: error instanceof Error ? error.message : String(error),
+    }),
+    leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
     eventBus,
     execTimeoutMs: gatewayConfig.gateway.execTimeoutMs,
     leaseRequestTimeoutMs: gatewayConfig.gateway.leaseRequestTimeoutMs,
@@ -146,7 +159,14 @@ function harness() {
     },
     config: gatewayConfig,
     coordinator,
-    eventBus,
+    eventHistory:
+      options.eventHistory ??
+      new EventHistory({
+        bus: eventBus,
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        path: "/events.jsonl",
+      }),
     health: () => "running",
     leaseIndex,
     // `classifyError`'s answer for the errors this dispatcher throws itself.
@@ -418,6 +438,26 @@ describe("GatewayDispatcher", () => {
       subscribed: true,
       subscriptionId: "sub_1",
     });
+  });
+
+  it("events.replay with sinceTs returns what the event history returns", async () => {
+    const fromHistory: EventEnvelope[] = [
+      { seq: 7, timestamp: 50, event: "daemon.stopping", payload: { reason: "x" }, module: "d" },
+    ];
+    const asked: unknown[] = [];
+    const { dispatcher } = harness({
+      eventHistory: {
+        replay: async (input) => {
+          asked.push(input);
+          return fromHistory;
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch("events.replay", { sinceTs: 10 }, session())).resolves.toEqual(
+      fromHistory,
+    );
+    expect(asked).toEqual([{ sinceTs: 10 }]);
   });
 
   it("mints and revokes its own tokens, worker join tokens included", async () => {
@@ -725,6 +765,39 @@ describe("GatewayDispatcher", () => {
       const gatewayLeaseId = (grant as { lease: { id: string } }).lease.id;
       expect((grant as { lease: { ownerId: string } }).lease.ownerId).toBe("agent-7");
       expect(leaseIndex.ownerId(gatewayLeaseId)).toBe("agent-7");
+    });
+
+    it("lease.request: names the stored request to the session and replays it under the same idempotency key, forwarding nothing twice", async () => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const admitted: [string, boolean][] = [];
+      const input = { idempotencyKey: "key-1", model: "iPhone 17", platform: "ios" } as const;
+      const track = session({
+        onRequestAdmitted: (id, replayed) => admitted.push([id, replayed]),
+        principal: "agent-1",
+        role: "agent",
+      });
+
+      const first = await dispatcher.dispatch("lease.request", input, track);
+      const repeat = await dispatcher.dispatch("lease.request", input, track);
+
+      expect((repeat as { lease: { id: string } }).lease.id).toBe(
+        (first as { lease: { id: string } }).lease.id,
+      );
+      expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+      expect(admitted).toEqual([
+        [expect.stringMatching(/^req_/), false],
+        [admitted[0]?.[0], true],
+      ]);
     });
   });
 
