@@ -18,7 +18,7 @@
  * (it runs once, at admission, before either RPC). `#beginAttempt` calls `queue.markProcessing`
  * *before* issuing the RPC, taking the waiter out of `queued` state, so `#dispatch`'s own
  * `queue.list()` scan skips it for the whole in-flight window; the waiter only becomes `queued`
- * again (via `#enqueue`, from `#staleView`) once that attempt has fully settled. There used to be
+ * again (via `#enqueue`, from `#staleView`) once that attempt has fully settled, or is rejected. There used to be
  * a second guard here too -- a `Map<FleetWaiter, string>` keyed by in-flight target -- but once
  * every exit from `#attempt` clears its waiter's processing state in exactly one place (the
  * `finally` below), the two checks can never disagree: nothing can observe a waiter that is both
@@ -70,6 +70,7 @@ import {
   type LeaseRequestOptions,
 } from "./queue.js";
 import type { RoutableRequest, RoutingDecision, RoutingPolicy } from "./routing.js";
+import { viewLoadKey } from "./routing/view-state.js";
 
 export interface FleetExecInput {
   readonly leaseId: string;
@@ -135,6 +136,10 @@ export class FleetLeaseCoordinator {
    * explicit clean-up call on every one of those exits to avoid an unbounded leak; the entry is
    * reclaimable the moment nothing else still references the waiter. */
   readonly #createdAt = new WeakMap<FleetWaiter, number>();
+  /** ADR 0009 §5: per waiter, each worker that answered it an immediate `NO_CAPACITY`, and that
+   * worker's `viewLoadKey` at the time. The worker is not picked again for that waiter while its
+   * key is unchanged. A `WeakMap` so the memo dies with the waiter. */
+  readonly #refusals = new WeakMap<FleetWaiter, Map<string, string>>();
   /** C1 (round 3 review): re-entrancy guard for `#dispatch` -- see its own doc comment. */
   #dispatchDepth = 0;
   /** Set when a pass is requested while one is already running; the running pass then repeats
@@ -581,8 +586,8 @@ export class FleetLeaseCoordinator {
    * module graph into ordinary worker startup with no boundary test covering that direction.
    */
   #admit(waiter: FleetWaiter): void {
-    // Attempted -- including attempted and bounced straight back by a stale view, which §11
-    // keeps queued even for a `noWait` caller (`#staleView` has already re-enqueued it).
+    // Attempted. If that attempt is refused, `#attempt` decides the rest: one more walk for a
+    // `noWait` caller (ADR 0009 §5). A target that turned out unreachable re-queues it.
     if (this.#dispatch(waiter)) return;
     if (waiter.options.noWait === true) {
       this.#reject(
@@ -672,21 +677,28 @@ export class FleetLeaseCoordinator {
    * **last**, because it is the newest: that is what keeps ADR §10's single fleet FIFO honest,
    * since an admission can never take a slot an already-queued waiter would have had. Returns
    * whether the candidate was attempted, which is what lets `#admit` tell "nothing could serve
-   * it" from "it was attempted and bounced straight back by a stale view" -- §11 keeps the
-   * second one queued even for a `noWait` caller, and `waiter.state` alone cannot distinguish
-   * them (round 4 review, finding 2).
+   * it" from "it was attempted" -- the attempt, not `#admit`, settles a `noWait` caller whose
+   * worker refuses it, and `waiter.state` alone cannot distinguish the two (round 4 review,
+   * finding 2). `candidate` may also be a waiter whose attempt was just refused (`#attempt`'s
+   * one more walk for a `noWait` caller); it is not walked twice if it is already queued.
+   *
+   * A worker that refused a waiter is left out of that waiter's views while its view is
+   * unchanged (`#refused`, ADR 0009 §5). This is the one place that exclusion is applied, the
+   * same place as the per-pass claim set.
    */
   #dispatchPass(candidate?: FleetWaiter): boolean {
     let candidateAttempted = false;
     const claimedThisPass = new Set<string>();
     const waiters =
-      candidate === undefined ? this.#queue.list() : [...this.#queue.list(), candidate];
+      candidate === undefined || this.#queue.isQueued(candidate)
+        ? this.#queue.list()
+        : [...this.#queue.list(), candidate];
     for (const waiter of waiters) {
       // The candidate is not in the queue yet, so it has no `queued` state to check.
       if (waiter !== candidate && waiter.state !== "queued") continue;
       const eligibleWorkers = this.options.views
         .views()
-        .filter((worker) => !claimedThisPass.has(worker.id));
+        .filter((worker) => !claimedThisPass.has(worker.id) && !this.#refused(waiter, worker));
       const decision = this.options.routing.select(routable(waiter), eligibleWorkers);
       if (decision === undefined) continue;
       claimedThisPass.add(decision.workerId);
@@ -725,8 +737,12 @@ export class FleetLeaseCoordinator {
    * the catch block's own `queue.reject` -- also each call `#dispatch()` themselves, right after.
    * `#staleView`'s own branches (the unreachable-target check above, and the catch's immediate
    * `NO_CAPACITY`) do not need to: both already call a worker's `refresh()`, and a real snapshot
-   * landing for it fires `#onViewsChanged` -> `#dispatch()` regardless of whether the numbers
-   * actually changed. The terminal branches have no such follow-up of their own -- a worker this
+   * landing for it fires `#onViewsChanged` -> `#dispatch()`. That pass offers the waiter to every
+   * other worker; it offers it to a worker that answered `NO_CAPACITY` only once that worker's
+   * view has changed (ADR 0009 §5), so a worker that keeps refusing is asked once per change of
+   * its state, not on every refresh. A `noWait` waiter refused with `NO_CAPACITY` is not
+   * re-queued: it gets one more walk here, and is rejected if no worker is picked in it. The
+   * terminal branches have no such follow-up of their own -- a worker this
    * class gave up on (`WORKER_UNREACHABLE`, `INTERNAL`) or was refused for a reason genuinely
    * unrelated to capacity (any other worker-side code) may still be exactly the worker a different
    * queued waiter needs, and nothing else would ever schedule that second look.
@@ -826,6 +842,23 @@ export class FleetLeaseCoordinator {
       // work already started means the request was this worker's (§11's own wording). Re-queuing
       // it anyway silently reversed a dispatch the caller had already been told about.
       if (isSimlockError(error) && error.code === "NO_CAPACITY" && !announced) {
+        this.#rememberRefusal(waiter, workerId);
+        if (waiter.options.noWait === true) {
+          this.#refreshView(workerId);
+          // ADR 0009 §5: one more walk, with this worker left out until its view changes. A
+          // `noWait` caller never asked to wait for that change.
+          if (!this.#dispatch(waiter)) {
+            this.#reject(
+              waiter,
+              new DispatchError(
+                "NO_CAPACITY",
+                "No worker in the fleet can currently serve this request",
+              ),
+              "no-wait",
+            );
+          }
+          return;
+        }
         this.#staleView(waiter, workerId);
         return;
       }
@@ -878,10 +911,15 @@ export class FleetLeaseCoordinator {
   }
 
   /** ADR §11: "an immediate `NO_CAPACITY` is the only answer that leaves it queued ... the
-   * request waits" -- unconditionally, even for a caller that asked `noWait: true` (the one
-   * explicit exception the ADR calls out), because this is a stale view, not a real refusal. */
+   * request waits", because this is a stale view, not a real refusal. A `noWait` caller reaches
+   * this only from a target that turned out unreachable; a `noWait` caller refused with
+   * `NO_CAPACITY` is settled in `#attempt` instead (ADR 0009 §5). */
   #staleView(waiter: FleetWaiter, workerId: string): void {
     this.#enqueue(waiter);
+    this.#refreshView(workerId);
+  }
+
+  #refreshView(workerId: string): void {
     const target = this.options.directory.target(workerId);
     void target?.refresh().catch((error: unknown) => {
       this.#logger.debug("Failed to refresh a worker's view after a stale-view NO_CAPACITY", {
@@ -889,6 +927,20 @@ export class FleetLeaseCoordinator {
         message: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  #rememberRefusal(waiter: FleetWaiter, workerId: string): void {
+    const view = this.options.views.views().find((worker) => worker.id === workerId);
+    if (view === undefined) return;
+    const refusals = this.#refusals.get(waiter) ?? new Map<string, string>();
+    refusals.set(workerId, viewLoadKey(view));
+    this.#refusals.set(waiter, refusals);
+  }
+
+  /** Whether `worker` refused `waiter` and its view has not changed since. */
+  #refused(waiter: FleetWaiter, worker: WorkerView): boolean {
+    const key = this.#refusals.get(waiter)?.get(worker.id);
+    return key !== undefined && key === viewLoadKey(worker);
   }
 
   /**

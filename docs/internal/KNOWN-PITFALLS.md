@@ -882,7 +882,8 @@ gateway is trying to dispatch into — so a machine that `simlock worker list`
 shows as part of the fleet can be, from the gateway's point of view,
 persistently full for reasons no one looking at the gateway can see. The
 gateway's dispatch handles it correctly (a `NO_CAPACITY` answer is treated as
-a stale view, the request stays queued and goes elsewhere), so this is a
+a stale view: the request stays queued, another worker is tried, and the full
+one is asked again only once its reported state changes), so this is a
 visibility and fairness problem rather than a correctness one.
 
 **Why it is accepted:** the worker's own capacity accounting is the single
