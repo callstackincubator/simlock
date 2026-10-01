@@ -191,13 +191,34 @@ paired with a runtime when at least one connected worker pairs them; the
 gateway does not yet pick a worker by its pairings, so such a request can
 still go to a worker that cannot pair them and fail there.
 
+Each entry also carries `modelAliases`: for a name in `models`, the other
+names a lease request may use for it, in any letter case. Only models that
+have another name appear; on Android that is a built-in profile's AVD id,
+and iOS has none. An Android entry also carries `images`, every installed
+system image with its API level (`runtime`, a value from `runtimes`), `tag`,
+and `abi`, including an image whose ABI the host cannot run natively; an iOS
+entry has no `images`. On a gateway `modelAliases` is the union per model and
+`images` the union of each worker's images, absent when no worker's entry
+for that platform has an `images` field. The gateway does not yet route by another name: send it the name from
+`models`.
+
 ```json
 { "platforms": [ {
     "platform": "ios",
     "models": ["iPhone 16", "iPhone XS"],
     "runtimes": ["18.4", "26.0"],
     "defaultRuntime": "26.0",
-    "modelRuntimes": { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] }
+    "modelRuntimes": { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
+    "modelAliases": {}
+  }, {
+    "platform": "android",
+    "models": ["My Tablet", "Pixel 8"],
+    "runtimes": ["34", "35"],
+    "defaultRuntime": "35",
+    "modelRuntimes": { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
+    "modelAliases": { "Pixel 8": ["pixel_8"] },
+    "images": [ { "runtime": "34", "tag": "default", "abi": "x86_64" },
+                { "runtime": "35", "tag": "google_apis", "abi": "arm64-v8a" } ]
 } ] }
 ```
 
@@ -652,14 +673,17 @@ simulated (hence the thin Android catalog), trimmed to one worker:
           "models": ["iPhone 16"],
           "runtimes": ["18.4", "26.0"],
           "defaultRuntime": "26.0",
-          "modelRuntimes": {"iPhone 16": ["18.4"]}
+          "modelRuntimes": {"iPhone 16": ["18.4"]},
+          "modelAliases": {}
         },
         {
           "platform": "android",
           "models": [],
           "runtimes": ["18.0"],
           "defaultRuntime": "18.0",
-          "modelRuntimes": {}
+          "modelRuntimes": {},
+          "modelAliases": {},
+          "images": [{"runtime": "18.0", "tag": "google_apis", "abi": "arm64-v8a"}]
         }
       ],
       "host": {

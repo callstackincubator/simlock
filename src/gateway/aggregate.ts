@@ -5,7 +5,7 @@
  */
 import type { z } from "zod";
 
-import { OPERATIONS, type Platform } from "../contract/index.js";
+import { CATALOG_LIST_LIMITS, OPERATIONS, type Platform } from "../contract/index.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
 
@@ -13,6 +13,7 @@ type StatusOutput = z.infer<(typeof OPERATIONS)["status.get"]["output"]>;
 type CatalogOutput = z.infer<(typeof OPERATIONS)["catalog.get"]["output"]>;
 type StatusCapacity = StatusOutput["capacity"];
 type PlatformCatalog = CatalogOutput["platforms"][number];
+type CatalogImage = NonNullable<PlatformCatalog["images"]>[number];
 
 const PLATFORMS: readonly Platform[] = ["ios", "android"];
 
@@ -139,6 +140,11 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
  * `modelRuntimes` pairs a model with a runtime only when one worker pairs them itself (ADR 0008
  * §4). It is never built from the fleet's `models` and `runtimes`: one worker having a model and
  * another having a runtime does not make the pair leasable anywhere.
+ *
+ * `modelAliases` is the union per model, deduplicated ignoring case. `images` is the union by
+ * runtime, tag, and ABI, and is absent when no worker reports the field at all. Each worker's
+ * lists fit the contract's bounds but their union may not, so both are cut to those bounds after
+ * sorting: an answer its own clients refuse would lose the whole catalog, not a tail of it.
  */
 export function aggregateCatalog(views: readonly WorkerView[], platform?: Platform): CatalogOutput {
   const byPlatform = indexCatalogs(views, platform);
@@ -160,6 +166,10 @@ interface CatalogBucket {
   readonly runtimes: Map<string, string[]>;
   /** Each model's runtimes, as the union of what each worker pairs it with itself. */
   readonly modelRuntimes: Map<string, Set<string>>;
+  /** Each model's other names, keyed by the name lower-cased so a spelling is listed once. */
+  readonly modelAliases: Map<string, Map<string, string>>;
+  /** Every image reported, keyed by runtime, tag, and ABI; `undefined` until one worker has the field. */
+  images: Map<string, CatalogImage> | undefined;
   readonly defaults: Set<string | undefined>;
 }
 
@@ -187,6 +197,8 @@ function addCatalogEntry(
 ): void {
   const bucket = byPlatform.get(entry.platform) ?? {
     defaults: new Set<string | undefined>(),
+    images: undefined,
+    modelAliases: new Map<string, Map<string, string>>(),
     modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
@@ -195,7 +207,40 @@ function addCatalogEntry(
   for (const model of entry.models) annotate(bucket.models, model, workerId);
   for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
   for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
+  for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
+  if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
+}
+
+/** Folds one worker's other names for `model` into the fleet's, once per spelling ignoring case. */
+function addAliases(
+  index: Map<string, Map<string, string>>,
+  entry: PlatformCatalog,
+  model: string,
+): void {
+  const own = Object.hasOwn(entry.modelAliases, model) ? entry.modelAliases[model] : undefined;
+  const aliases = index.get(model) ?? new Map<string, string>();
+  for (const alias of own ?? []) {
+    const key = alias.toLocaleLowerCase();
+    // The model's own name is not another name for it.
+    if (key !== model.toLocaleLowerCase() && !aliases.has(key)) aliases.set(key, alias);
+  }
+  if (aliases.size > 0) index.set(model, aliases);
+}
+
+/** Folds one worker's images into the fleet's; one whose runtime the worker does not list is dropped. */
+function addImages(
+  index: Map<string, CatalogImage> | undefined,
+  entry: PlatformCatalog,
+  images: readonly CatalogImage[],
+): Map<string, CatalogImage> {
+  const merged = index ?? new Map<string, CatalogImage>();
+  for (const image of images) {
+    if (!entry.runtimes.includes(image.runtime)) continue;
+    const { abi, runtime, tag } = image;
+    merged.set(JSON.stringify([runtime, tag, abi]), { abi, runtime, tag });
+  }
+  return merged;
 }
 
 /** Folds one worker's own pairings for `model` into the fleet's. */
@@ -212,6 +257,23 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
   const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
   const runtimes = [...bucket.runtimes.keys()].sort();
   return {
+    ...(bucket.images === undefined
+      ? {}
+      : {
+          images: [...bucket.images]
+            .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+            .slice(0, CATALOG_LIST_LIMITS.images)
+            .map(([, image]) => image),
+        }),
+    modelAliases: Object.fromEntries(
+      [...bucket.modelAliases]
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .slice(0, CATALOG_LIST_LIMITS.aliasedModels)
+        .map(([model, aliases]) => [
+          model,
+          [...aliases.values()].sort().slice(0, CATALOG_LIST_LIMITS.aliasesPerModel),
+        ]),
+    ),
     modelRuntimes: Object.fromEntries(
       [...bucket.modelRuntimes].map(([model, paired]) => [model, [...paired].sort()]),
     ),

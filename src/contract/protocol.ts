@@ -20,8 +20,8 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * wire (taking it to 4), and ADR 0005 adds `device.exec` and its `output` push family, a
  * `mode` field `status.get` now always carries, and the gateway surface -- `worker.*`,
  * `workerId`, the `worker` token role -- on top (taking it to 5). ADR 0008 makes the catalog
- * carry a required `modelRuntimes` per platform (taking it to 6), which a gateway reading a
- * worker's catalog depends on. ADR 0007 makes a device's mode a required `mode` on the grant,
+ * carry a required `modelRuntimes` and `modelAliases` per platform (taking it to 6), which a
+ * gateway reading a worker's catalog depends on. ADR 0007 makes a device's mode a required `mode` on the grant,
  * `status.get`, and `list.get` (taking it to 7). It only ever widens once a
  * second version is actually kept alive side by side with the first, which nothing here does.
  *

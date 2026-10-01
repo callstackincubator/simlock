@@ -1183,6 +1183,8 @@ export class IosSimctlDriver implements Driver {
       defaultRuntime: newestRuntime(installedRuntimes)?.version,
       // Keyed by name and paired through the device type `resolveSpec` would pick for that name,
       // so two device types that differ only in letter case both list the first one's runtimes.
+      // A device type answers to its name only, in any letter case (`findDeviceType`).
+      modelAliases: {},
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, pairedVersions(catalog, findDeviceType(catalog, model))]),
       ),

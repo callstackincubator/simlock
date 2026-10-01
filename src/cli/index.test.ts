@@ -1629,7 +1629,13 @@ describe("CLI: catalog", () => {
           getCatalog: () =>
             Promise.resolve({
               platforms: [
-                { modelRuntimes: {}, models: ["constructor"], platform: "ios", runtimes: [] },
+                {
+                  modelAliases: {},
+                  modelRuntimes: {},
+                  models: ["constructor"],
+                  platform: "ios",
+                  runtimes: [],
+                },
               ],
             }),
         }),
@@ -1647,7 +1653,15 @@ describe("CLI: catalog", () => {
         fakeClient({
           getCatalog: () =>
             Promise.resolve({
-              platforms: [{ modelRuntimes: {}, models: [], platform: "android", runtimes: ["35"] }],
+              platforms: [
+                {
+                  modelAliases: {},
+                  modelRuntimes: {},
+                  models: [],
+                  platform: "android",
+                  runtimes: ["35"],
+                },
+              ],
             }),
         }),
     });
@@ -1669,6 +1683,7 @@ describe("CLI: catalog", () => {
               platforms: [
                 {
                   defaultRuntime: "26.0",
+                  modelAliases: {},
                   modelRuntimes: {
                     "iPhone 16": ["18.4", "26.0"],
                     "iPhone 8": [],
@@ -1693,6 +1708,83 @@ describe("CLI: catalog", () => {
         "    iPhone 16: 18.4, 26.0",
         "    iPhone XS: 18.4",
         "    iPhone 8: (no paired runtime)",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("prints (none) for a platform that has images but none installed", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  images: [],
+                  modelAliases: {},
+                  modelRuntimes: {},
+                  models: [],
+                  platform: "android",
+                  runtimes: [],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: android",
+        "  Runtimes: (none) (default: (none))",
+        "  Models: (none)",
+        "  Images: (none)",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("prints a model's other names and each image", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  defaultRuntime: "35",
+                  images: [
+                    { abi: "x86_64", runtime: "34", tag: "default" },
+                    { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+                  ],
+                  modelAliases: { "Pixel 8": ["pixel_8"] },
+                  modelRuntimes: { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
+                  models: ["My Tablet", "Pixel 8"],
+                  platform: "android",
+                  runtimes: ["34", "35"],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: android",
+        "  Runtimes: 34, 35 (default: 35)",
+        "  Models:",
+        "    My Tablet: 34, 35",
+        "    Pixel 8: 34, 35",
+        "      Other names: pixel_8",
+        "  Images (runtime, tag, ABI):",
+        "    34 default x86_64",
+        "    35 google_apis arm64-v8a",
         "",
       ].join("\n"),
     );

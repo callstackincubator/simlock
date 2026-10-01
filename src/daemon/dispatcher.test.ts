@@ -917,6 +917,24 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
   });
 
+  it.each(["never", "on-request", "always"] as const)(
+    "catalog.get lists exactly the images the driver finds installed under downloads.policy '%s'",
+    async (downloadsPolicy) => {
+      const installed = [{ abi: "arm64-v8a", runtime: "26.5", tag: "default" }];
+      const { dispatcher, driver } = await buildDispatcher({
+        downloadsPolicy,
+        driverOptions: { images: installed, knownModels: ["iPhone 17 Pro"] },
+      });
+
+      const catalog = await dispatcher.dispatch("catalog.get", {}, session());
+
+      expect(catalog.platforms[0]?.images).toEqual(installed);
+      // The driver is asked with no policy, so no policy can add an image it would download.
+      const listCalls = driver.calls.filter((call) => call.operation === "listCatalog");
+      expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
+    },
+  );
+
   it("leaves allowDownload:true untouched when downloads.policy is 'on-request'", async () => {
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "on-request" });
     await dispatcher.dispatch(

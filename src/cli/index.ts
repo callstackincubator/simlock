@@ -2042,17 +2042,30 @@ function formatCatalog(response: CatalogGetOutput): string {
       const defaultRuntime = entry.defaultRuntime ?? "(none)";
       // Each model with the runtimes it pairs with: a model and a runtime both listed for the
       // platform are not necessarily leasable together.
-      const models = entry.models.map((model) => {
+      // A model's other names follow it on a line of their own.
+      const models = entry.models.flatMap((model) => {
         const paired =
           (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ??
           [];
-        return `    ${model}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`;
+        const aliases =
+          (Object.hasOwn(entry.modelAliases, model) ? entry.modelAliases[model] : undefined) ?? [];
+        return [
+          `    ${model}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
+          ...(aliases.length > 0 ? [`      Other names: ${aliases.join(", ")}`] : []),
+        ];
       });
+      const images = (entry.images ?? []).map(
+        (image) => `    ${image.runtime} ${image.tag} ${image.abi}`,
+      );
       return [
         `Platform: ${entry.platform}`,
         `  Runtimes: ${entry.runtimes.length > 0 ? entry.runtimes.join(", ") : "(none)"} (default: ${defaultRuntime})`,
         models.length > 0 ? "  Models:" : "  Models: (none)",
         ...models,
+        // Only a platform whose driver has images says anything about them.
+        ...(entry.images === undefined
+          ? []
+          : [images.length > 0 ? "  Images (runtime, tag, ABI):" : "  Images: (none)", ...images]),
       ].join("\n");
     })
     .join("\n");

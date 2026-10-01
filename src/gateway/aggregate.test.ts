@@ -211,6 +211,7 @@ describe("aggregateStatus", () => {
 describe("aggregateCatalog", () => {
   const iosOnA = {
     defaultRuntime: "26.0",
+    modelAliases: {},
     modelRuntimes: { "iPhone 17": ["26.0"] },
     models: ["iPhone 17"],
     platform: "ios" as const,
@@ -219,6 +220,7 @@ describe("aggregateCatalog", () => {
   // B has 25.4 installed, but only the iPad pairs with it there.
   const iosOnB = {
     defaultRuntime: "26.0",
+    modelAliases: {},
     modelRuntimes: { "iPad Pro": ["25.4", "26.0"], "iPhone 17": ["26.0"] },
     models: ["iPhone 17", "iPad Pro"],
     platform: "ios" as const,
@@ -274,6 +276,7 @@ describe("aggregateCatalog", () => {
 
   it("pairs a model with a runtime when at least one connected worker pairs them", () => {
     const iosOnC = {
+      modelAliases: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -303,6 +306,7 @@ describe("aggregateCatalog", () => {
 
   it("ignores the pairings of disconnected and incompatible workers", () => {
     const pairsOld = {
+      modelAliases: {},
       modelRuntimes: { "iPhone 17": ["25.4"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -319,6 +323,7 @@ describe("aggregateCatalog", () => {
 
   it("gives every model in the fleet catalog a modelRuntimes entry, empty when nothing pairs", () => {
     const unpaired = {
+      modelAliases: {},
       modelRuntimes: { "iPhone XS": [] },
       models: ["iPhone XS"],
       platform: "ios" as const,
@@ -340,7 +345,15 @@ describe("aggregateCatalog", () => {
     // Wire input: a worker that lists `constructor` without pairing it must not make the fleet
     // catalog read the inherited function.
     const odd = OPERATIONS["catalog.get"].output.parse({
-      platforms: [{ modelRuntimes: {}, models: ["constructor"], platform: "ios", runtimes: [] }],
+      platforms: [
+        {
+          modelAliases: {},
+          modelRuntimes: {},
+          models: ["constructor"],
+          platform: "ios",
+          runtimes: [],
+        },
+      ],
     }).platforms;
 
     const catalog = aggregateCatalog([view({ catalog: odd, id: "wrk_a" })]);
@@ -350,6 +363,7 @@ describe("aggregateCatalog", () => {
 
   it("drops a pairing with a runtime the worker does not list itself, even when another worker has it", () => {
     const claimsMore = {
+      modelAliases: {},
       modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
       models: ["iPhone 17"],
       platform: "ios" as const,
@@ -371,6 +385,7 @@ describe("aggregateCatalog", () => {
           catalog: [
             iosOnA,
             {
+              modelAliases: {},
               modelRuntimes: { "Pixel 9": ["35"] },
               models: ["Pixel 9"],
               platform: "android",
@@ -384,5 +399,181 @@ describe("aggregateCatalog", () => {
     );
 
     expect(catalog.platforms.map((entry) => entry.platform)).toEqual(["android"]);
+  });
+
+  describe("other names and images", () => {
+    const androidOn = (
+      overrides: Partial<{
+        models: string[];
+        modelAliases: Record<string, string[]>;
+        images: { runtime: string; tag: string; abi: string }[];
+        runtimes: string[];
+      }>,
+    ) => {
+      const models = overrides.models ?? ["Pixel 8"];
+      const runtimes = overrides.runtimes ?? ["34", "35"];
+      return {
+        ...(overrides.images === undefined ? {} : { images: overrides.images }),
+        modelAliases: overrides.modelAliases ?? {},
+        modelRuntimes: Object.fromEntries(models.map((model) => [model, runtimes])),
+        models,
+        platform: "android" as const,
+        runtimes,
+      };
+    };
+
+    it("unions other names per model, once per spelling ignoring case", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [androidOn({ modelAliases: { "Pixel 8": ["pixel_8"] } })],
+          id: "wrk_a",
+        }),
+        view({
+          catalog: [
+            androidOn({
+              modelAliases: { "Pixel 8": ["PIXEL_8", "pixel8"], "Pixel 9": ["pixel_9"] },
+              models: ["Pixel 8", "Pixel 9"],
+            }),
+          ],
+          id: "wrk_b",
+        }),
+      ]);
+
+      expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+      expect(catalog.platforms[0]?.modelAliases).toEqual({
+        "Pixel 8": ["pixel8", "pixel_8"],
+        "Pixel 9": ["pixel_9"],
+      });
+    });
+
+    it("lists each distinct image once", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [
+            androidOn({
+              images: [
+                { abi: "x86_64", runtime: "34", tag: "default" },
+                { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+              ],
+            }),
+          ],
+          id: "wrk_a",
+        }),
+        view({
+          catalog: [
+            androidOn({
+              images: [
+                { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+                { abi: "x86_64", runtime: "35", tag: "google_apis" },
+              ],
+            }),
+          ],
+          id: "wrk_b",
+        }),
+      ]);
+
+      expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+      expect(catalog.platforms[0]?.images).toEqual([
+        { abi: "x86_64", runtime: "34", tag: "default" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+        { abi: "x86_64", runtime: "35", tag: "google_apis" },
+      ]);
+    });
+
+    it("omits images when no worker reports any", () => {
+      const catalog = aggregateCatalog([
+        view({ catalog: [iosOnA], id: "wrk_a" }),
+        view({ catalog: [iosOnB], id: "wrk_b" }),
+      ]);
+
+      expect(catalog.platforms[0]).not.toHaveProperty("images");
+    });
+
+    it("does not list a model's own name, in any letter case, as another name for it", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [androidOn({ modelAliases: { "Pixel 8": ["PIXEL 8", "pixel_8"] } })],
+          id: "wrk_a",
+        }),
+      ]);
+
+      expect(catalog.platforms[0]?.modelAliases).toEqual({ "Pixel 8": ["pixel_8"] });
+    });
+
+    it("sorts the fleet's images whatever order the workers report them in", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [
+            androidOn({
+              images: [
+                { abi: "x86_64", runtime: "35", tag: "google_apis" },
+                { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+                { abi: "x86_64", runtime: "34", tag: "default" },
+              ],
+            }),
+          ],
+          id: "wrk_a",
+        }),
+      ]);
+
+      expect(catalog.platforms[0]?.images).toEqual([
+        { abi: "x86_64", runtime: "34", tag: "default" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+        { abi: "x86_64", runtime: "35", tag: "google_apis" },
+      ]);
+    });
+
+    it("keeps the fleet catalog inside the contract's bounds when the union of valid workers is not", () => {
+      const names = (prefix: string, count: number) =>
+        Array.from({ length: count }, (_, index) => `${prefix}${index}`);
+      const worker = (prefix: string) =>
+        androidOn({
+          images: names(prefix, 1024).map((tag) => ({ abi: "x86_64", runtime: "34", tag })),
+          modelAliases: {
+            ...Object.fromEntries(names(`${prefix}m`, 4095).map((model) => [model, ["x"]])),
+            "Pixel 8": names(prefix, 32),
+          },
+          models: ["Pixel 8", ...names(`${prefix}m`, 4095)],
+        });
+      const valid = [worker("a"), worker("b")];
+      for (const entry of valid) {
+        expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).not.toThrow();
+      }
+
+      // Worker b connects first, so what survives the cut is decided by sort order, not arrival.
+      const catalog = aggregateCatalog([
+        view({ catalog: [valid[1]!], id: "wrk_b" }),
+        view({ catalog: [valid[0]!], id: "wrk_a" }),
+      ]);
+
+      expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+      const platform = catalog.platforms[0];
+      expect(platform?.images).toHaveLength(1024);
+      expect(platform?.images?.every((image) => image.tag.startsWith("a"))).toBe(true);
+      const aliasedModels = Object.keys(platform?.modelAliases ?? {});
+      expect(aliasedModels).toHaveLength(4096);
+      expect(aliasedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
+      expect(platform?.modelAliases["Pixel 8"]).toEqual(names("a", 32).sort());
+    });
+
+    it("drops an image whose runtime the reporting worker does not list", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [
+            androidOn({
+              images: [
+                { abi: "x86_64", runtime: "34", tag: "default" },
+                { abi: "x86_64", runtime: "99", tag: "default" },
+              ],
+            }),
+          ],
+          id: "wrk_a",
+        }),
+      ]);
+
+      expect(catalog.platforms[0]?.images).toEqual([
+        { abi: "x86_64", runtime: "34", tag: "default" },
+      ]);
+    });
   });
 });
