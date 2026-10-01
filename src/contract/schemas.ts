@@ -448,6 +448,8 @@ export const configSchema = z.object({
     level: z.enum(["debug", "info", "warn", "error"]),
     rotateBytes: z.number(),
   }),
+  // Optional: a newer gateway parses this from an older worker's `config.get`.
+  eventLog: z.object({ rotateBytes: z.number() }).optional(),
   http: z.object({
     enabled: z.boolean(),
     host: z.string(),

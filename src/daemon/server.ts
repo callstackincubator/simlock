@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { type EventBus, type EventEnvelope } from "../bus/index.js";
+import { type EventBus, type EventEnvelope, type EventHistory } from "../bus/index.js";
 import {
   type Config,
   type LeaseProgress,
@@ -138,6 +138,8 @@ export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
   readonly doctor?: Doctor;
+  /** What `events.replay` answers from; see `EventHistory`. */
+  readonly eventHistory: Pick<EventHistory, "replay">;
   readonly leases: LeaseCommands;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
@@ -281,7 +283,7 @@ function buildDispatcher(
     clock: options.clock,
     config: options.config,
     ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
-    eventBus: options.eventBus,
+    eventHistory: options.eventHistory,
     health: hooks.health,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),

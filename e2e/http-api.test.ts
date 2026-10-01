@@ -308,4 +308,53 @@ describe("HTTP API", () => {
 
     await env.cli(["release", lease?.id ?? ""]);
   });
+
+  it("GET /v1/events?since=1h returns an event from before a daemon restart", async () => {
+    const port = await reservePort();
+    const env = await withDaemon({
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    });
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+    });
+    const lease = await env.cli([
+      "lease",
+      "--platform",
+      "ios",
+      "--device",
+      "iPhone 16",
+      "--os",
+      "18.4",
+      "--detach",
+    ]);
+    expect(lease.code).toBe(0);
+    const leaseId = (lease.json as { lease: { id: string } }).lease.id;
+    const token = await env.cli(["token", "create", "--role", "operator"]);
+    const operatorAuth = { authorization: `Bearer ${(token.json as { secret: string }).secret}` };
+
+    await env.restartDaemon();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    await waitFor(
+      async () => {
+        try {
+          return (await fetch(`${baseUrl}/v1/healthz`)).ok;
+        } catch {
+          return false;
+        }
+      },
+      { label: "HTTP gateway accepting connections after the restart" },
+    );
+    const response = await fetch(`${baseUrl}/v1/events?since=1h`, { headers: operatorAuth });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      events: { event: string; payload: { leaseId?: string } }[];
+    };
+    expect(body.events).toContainEqual(
+      expect.objectContaining({
+        event: "lease.granted",
+        payload: expect.objectContaining({ leaseId }),
+      }),
+    );
+  });
 });

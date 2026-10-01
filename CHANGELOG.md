@@ -216,6 +216,16 @@ those changes add, alongside the breaking changes above.
   `EXEC_TIMEOUT` error code (CLI exit `10`, the code the other "ran out of
   time" outcome already uses, and HTTP `504`) rather than reporting the exit
   code the kill produced.
+- **events:** every business event is also written to `~/.simlock/events.jsonl`,
+  one JSON line each, so the history survives a daemon restart or crash.
+  `simlock events --since` and `GET /v1/events?since=` read it, reaching past
+  a restart and past the 1000 events kept in memory; with no daemon running,
+  `simlock events --since` reads the file and starts none. `--since` with
+  `--follow` prints that history, then streams, with nothing lost or repeated
+  where they meet. The file is capped by the new `eventLog.rotateBytes`
+  (default 5 MiB, one rotated generation). `daemon.log` no longer gets its own
+  copies of `component.installed` and `device.slimmed`; read them from the
+  event file.
 
 ### ADR 0005: gateway and worker modes
 

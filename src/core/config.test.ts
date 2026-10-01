@@ -100,6 +100,7 @@ describe("loadConfig", () => {
         },
       },
       log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+      eventLog: { rotateBytes: 5 * 1024 * 1024 },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
       http: { enabled: false, host: "127.0.0.1", port: 4700 },
       warmPool: {
@@ -226,6 +227,21 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow("log.rotateBytes");
+  });
+
+  it("defaults eventLog.rotateBytes to 5 MiB and rejects zero and negative values", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+
+    const defaults = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(defaults.eventLog).toEqual({ rotateBytes: 5 * 1024 * 1024 });
+
+    for (const rotateBytes of [0, -1]) {
+      await filesystem.writeFileAtomic(configPath, JSON.stringify({ eventLog: { rotateBytes } }));
+      await expect(
+        loadConfig({ configPath, filesystem, systemStats: createStats() }),
+      ).rejects.toThrow("eventLog.rotateBytes");
+    }
   });
 
   it("applies a file-level warm-pool quarantine override", async () => {
@@ -1187,6 +1203,14 @@ describe("loadConfig modes (ADR 0005)", () => {
     // merged, so a config file can be shared between a worker and a gateway with only `mode`
     // differing. The warning is what makes that visible rather than silent.
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Ignoring "lease"'));
+  });
+
+  it("raises no unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
+    const warn = vi.fn();
+    const config = await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(config.eventLog.rotateBytes).toBe(1024);
   });
 
   it("warns about android.emulator on a gateway without refusing the config", async () => {

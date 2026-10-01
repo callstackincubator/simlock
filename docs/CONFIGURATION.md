@@ -38,7 +38,8 @@ a warning. Inspect the effective, merged configuration at any time with
 | `gateway.execTimeoutMs`           | **Gateway side.** Backstop on a proxied `device.exec`, deliberately longer than the worker's own `exec.timeoutMs`, which is the authoritative one.                                                                            | `11 minutes`                                                     |
 | `gateway.leaseRequestTimeoutMs`   | **Gateway side.** Backstop on a forwarded `lease.request` -- expiry answers `WORKER_UNREACHABLE`, freeing the request for the queue's own deadline/cancel handling again.                                                    | `5 minutes`                                                      |
 | `diskPressure.freeBytesThreshold` | Free disk space below which Simlock treats the machine as under disk pressure.                                                                                                                                               | `10 GiB`                                                         |
-| `eventBuffer.capacity`            | Number of business events kept in the in-memory ring buffer (see `simlock events`).                                                                                                                                          | `1000`                                                           |
+| `eventBuffer.capacity`            | Number of recent business events kept in memory, which `simlock events` without `--since` replays.                                                                                                                                          | `1000`                                                           |
+| `eventLog.rotateBytes`            | Size of the event file, `~/.simlock/events.jsonl`, before it rotates. Every business event is written there and survives a daemon restart. One rotated generation, `events.jsonl.1`, is kept, so the history on disk stays within about twice this size and the oldest events are dropped first. | `5 MiB`                                                          |
 | `health.enabled`                  | Master switch for leased-device crash detection and recovery.                                                                                                                                                                | `true`                                                           |
 | `health.probeIntervalMs`          | How often the health monitor observes leased devices against driver reality.                                                                                                                                                | `30 seconds`                                                     |
 | `health.stableObservations`       | Consecutive `stopped` observations required before a leased device is treated as crashed; guards against transient `Booting`/`Shutting Down`/adb-offline readings.                                                         | `2`                                                               |
@@ -134,7 +135,7 @@ local agents whether or not its gateway is reachable, and `http.enabled` stays
 off by default.
 
 **A gateway reads a deliberately small slice of this file**: `mode`, `http.*`,
-`log.*`, `lease.*`, `eventBuffer.*` and `gateway.*`. Every other key —
+`log.*`, `lease.*`, `eventBuffer.*`, `eventLog.*` and `gateway.*`. Every other key —
 capacity, drivers, downloads, idle, warmPool, health, ios, android, stalledTransition —
 configures devices, which a gateway does not have; each one present in a
 gateway's config is reported with a warning and ignored, the same treatment an
@@ -200,7 +201,7 @@ does not apply to it. It reads:
 | `gateway.routing`, `gateway.disconnectedRetentionMs`, `gateway.execTimeoutMs`, `gateway.leaseRequestTimeoutMs` | how to run the fleet |
 | `http.*` | it is the fleet's contact point |
 | `lease.*` | `defaultTtlMs`/`maxTtlMs` bound what its own clients may ask for, before a request is dispatched — see below |
-| `log.*`, `eventBuffer.*` | logging and the event ring buffer, as anywhere |
+| `log.*`, `eventBuffer.*`, `eventLog.*` | logging and the event history, as anywhere |
 
 **Both ends have a `lease.*` block, and on a fleet lease the gateway's is the
 one that decides the width.** A request arriving at a gateway with no `ttlMs`

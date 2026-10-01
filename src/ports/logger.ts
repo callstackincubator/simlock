@@ -135,7 +135,8 @@ export interface NodeFileLogSinkOptions {
  * inherited append fd on this same path for uncaught fatal output -- see below), and is
  * the only kind of write that reliably lands from a handler where the process is about
  * to exit. This is sound only because volume is low by design: operational lifecycle
- * lines (startup, connection churn, shutdown), not per-request logging.
+ * lines (startup, connection churn, shutdown) in `daemon.log`, and one line per business
+ * event in `events.jsonl` -- not per-request logging.
  *
  * `#bytesWritten` only counts what this sink itself writes. The daemon launcher's
  * inherited fd can append a fatal crash dump to the same file without going through
@@ -167,8 +168,8 @@ export class NodeFileLogSink implements LogSink {
   }
 
   /**
-   * Not called anywhere in production: `startDaemon` builds this sink once at startup
-   * and never tears it down, relying on the fd closing at process exit. Deliberate --
+   * Not called anywhere in production: `startDaemon` builds its sinks (`daemon.log`,
+   * `events.jsonl`) once at startup and never tears them down, relying on the fd closing at process exit. Deliberate --
    * threading a close-on-shutdown path through `main.ts` would couple the daemon's
    * shutdown sequence to this specific adapter for no real benefit. Kept as a public
    * method purely so tests can close and reopen deterministically.

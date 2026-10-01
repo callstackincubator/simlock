@@ -127,9 +127,12 @@ documented above arrives with an extra field: additive, and only ever on a
 gateway. The events in this section's own table are the gateway's own, and
 carry no `workerId` beyond the worker they are about.
 
-Two consequences of relaying rather than owning: the gateway's ring buffer
-only holds what arrived while its uplinks were up (a worker's events from
-before it connected are not backfilled), and a worker's own
+Relayed events are written to the gateway's own event file
+(`events.jsonl`) along with its own, so `simlock events --since` against a
+gateway reaches back across a gateway restart. Two consequences of relaying
+rather than owning: the gateway's history only holds what arrived while its
+uplinks were up (a worker's events from before it connected are not
+backfilled), and a worker's own
 `simlock events` keeps showing exactly what it always did, un-prefixed and
 unaware that anything is watching.
 
@@ -142,5 +145,9 @@ lease index, rather than trusting the relayed payload's `ownerId` verbatim.
 ## Conventions recap
 
 - Every event carries: `timestamp`, `event`, `payload`, emitting module.
-- Events are appended to a ring buffer that powers `simlock events --follow`
-  and serves as the audit trail.
+- Events are appended to an in-memory ring buffer, which `simlock events`
+  without `--since` replays, and to the event file `~/.simlock/events.jsonl`,
+  one JSON line per event with the same fields. The file survives daemon
+  restarts and crashes, is what `simlock events --since` reads, and is the
+  durable record: no event is copied into `daemon.log`. It is capped by
+  `eventLog.rotateBytes`, keeping one rotated generation.

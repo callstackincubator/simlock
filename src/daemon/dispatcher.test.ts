@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import {
   CleanupReaper,
   Doctor,
@@ -20,6 +20,7 @@ import {
   FakeSystemStats,
   MemoryFilesystem,
   NodeProcessRunner,
+  NoopLogger,
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
@@ -50,6 +51,17 @@ function resolvePassthroughOverride(
   override: PassthroughResolver | undefined,
 ): PassthroughResolver {
   return override ?? engine;
+}
+
+function resolveEventHistoryOverride(
+  eventBus: EventBus,
+  filesystem: MemoryFilesystem,
+  override: Pick<EventHistory, "replay"> | undefined,
+): Pick<EventHistory, "replay"> {
+  return (
+    override ??
+    new EventHistory({ bus: eventBus, filesystem, logger: new NoopLogger(), path: "/events.jsonl" })
+  );
 }
 
 async function buildDispatcher(
@@ -87,6 +99,8 @@ async function buildDispatcher(
      * `device.exec` command a *real* `NodeProcessRunner` can actually spawn (`node -e ...`
      * takes no `--set`), rather than `ScriptedProcessRunner`'s scripted chunks. */
     readonly passthroughOverride?: PassthroughResolver;
+    /** Stands in for the event history, so `events.replay` can be checked against it. */
+    readonly eventHistory?: Pick<EventHistory, "replay">;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -172,7 +186,7 @@ async function buildDispatcher(
     clock,
     config,
     doctor,
-    eventBus,
+    eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
     health: () => "running",
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
@@ -653,6 +667,28 @@ describe("Dispatcher: lease.release-all", () => {
         .filter((event) => event.event === "lease.released")
         .map((event) => (event.payload as { reason: string }).reason),
     ).toEqual(["killed", "killed"]);
+  });
+});
+
+describe("Dispatcher: events.replay", () => {
+  it("events.replay with sinceTs returns what the event history returns", async () => {
+    const fromHistory: EventEnvelope[] = [
+      { seq: 7, timestamp: 50, event: "daemon.stopping", payload: { reason: "x" }, module: "d" },
+    ];
+    const asked: unknown[] = [];
+    const { dispatcher } = await buildDispatcher({
+      eventHistory: {
+        replay: async (input) => {
+          asked.push(input);
+          return fromHistory;
+        },
+      },
+    });
+
+    await expect(
+      dispatcher.dispatch("events.replay", { sinceTs: 10 }, session({ role: "admin" })),
+    ).resolves.toEqual(fromHistory);
+    expect(asked).toEqual([{ sinceTs: 10 }]);
   });
 });
 
@@ -1372,6 +1408,7 @@ function testConfig(
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
         maxRetries: 3,

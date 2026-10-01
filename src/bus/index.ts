@@ -403,3 +403,5 @@ export class EventBus {
     }
   }
 }
+
+export { EVENT_FILE_NAME, EventHistory, readEventFile } from "./event-file.js";
