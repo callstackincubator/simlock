@@ -41,7 +41,7 @@ await client.close();
 `requestLease` takes an optional `mode`, `"slim"` or `"full"`: the device
 mode the lease asks for. Without it the lease gets the default mode of the
 worker that serves it (`ios.defaultMode`, `full` unless configured). Any
-other value, or the removed `full: true`, is a `BAD_REQUEST`.
+other value, or a field `requestLease` does not know, is a `BAD_REQUEST`.
 
 `grant.device.mode` is the device mode the granted device actually has:
 `"slim"` when its driver reduced its feature set, `"full"` otherwise. `full`

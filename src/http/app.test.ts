@@ -293,7 +293,13 @@ describe("POST /v1/lease-requests", () => {
     ["a key the route does not know", { colour: "blue" }],
   ])("400s a body carrying %s as BAD_REQUEST before ever dispatching", async (_label, extra) => {
     const { app, dispatcher } = buildHarness();
-    const response = await postLeaseRequest(app, { ...defaultBody, ...extra });
+    // Raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
+    // below rather than by waiting for a 201 that only comes once the request is queued.
+    const response = await Promise.race([
+      postLeaseRequest(app, { ...defaultBody, ...extra }),
+      waitForDispatch(dispatcher, "lease.request").then(() => "dispatched" as const),
+    ]);
+    if (response === "dispatched") throw new Error("the body was dispatched instead of refused");
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
     expect(dispatcher.calls).toHaveLength(0);

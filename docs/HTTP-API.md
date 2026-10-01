@@ -211,8 +211,8 @@ can wait for a fresh device even while devices of the other mode sit idle. See
 [CONFIGURATION.md](CONFIGURATION.md#device-mode-slim-and-full) for what a slim
 device leaves out.
 
-The body is strict: a key this route does not know, such as the removed
-`full`, or a `mode` other than `"slim"` or `"full"`, is `400 BAD_REQUEST`.
+The body is strict: a key this route does not know, or a `mode` other than
+`"slim"` or `"full"`, is `400 BAD_REQUEST`.
 
 `allowDownload` is now clamped through `config.downloads.policy` the same
 way the socket protocol always was (**bug fix, 0.3.0**): before this

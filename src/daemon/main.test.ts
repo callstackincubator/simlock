@@ -875,7 +875,7 @@ function discoverIos(
 
 describe("deviceModeWiring", () => {
   it.each(["slim", "full"] as const)(
-    "hands the lease engine ios.defaultMode %s and tells the iOS driver whether it is slim",
+    "maps ios.defaultMode %s to the default-mode map and to whether the iOS default is slim",
     (defaultMode) => {
       expect(deviceModeWiring({ ios: { defaultMode, slim: { bootTimeoutMs: 1 } } })).toEqual({
         defaultModes: { ios: defaultMode },

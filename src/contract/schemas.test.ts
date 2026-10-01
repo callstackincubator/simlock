@@ -204,6 +204,18 @@ describe("statusDeviceSchema's device projection", () => {
     expect(() => statusDeviceSchema.parse({ ...device, mode: "reduced" })).toThrow();
   });
 
+  it("shows no planned mode on a device's spec in a grant, a status device, or a list.get record", () => {
+    const device = {
+      ...fullCoreShapedDevice(),
+      mode: "full",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5", mode: "slim" },
+    };
+
+    expect(grantedDeviceSchema.parse(device).spec).not.toHaveProperty("mode");
+    expect(statusDeviceSchema.parse(device).spec).not.toHaveProperty("mode");
+    expect(deviceRecordSchema.parse(device).spec).not.toHaveProperty("mode");
+  });
+
   it("rejects a list.get device record without a mode, or with a mode other than slim or full", () => {
     const record = {
       id: "device-1",
