@@ -16,18 +16,23 @@ in short: `subject.past-tense-fact`, emitted post-commit, facts not commands.
 > connection close to release on, and no startup sweep to orphan anything.
 > The ADR takes that exception once, while the package is 0.x; this note
 > records it here so the catalogue does not read as a silent rule violation.
+>
+> [ADR 0007](adr/0007-a-lease-request-chooses-the-device-mode.md) §13 takes
+> the same exception once more: `lease.requested` and `lease.rejected` carry
+> the request, and `device.provisioned` the spec, so `full` leaves those
+> payloads and `mode` enters (`requestSpec.mode`, `spec.mode`).
 
 ## Lease lifecycle
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `lease.requested` | request id, request spec, requester, wait policy | a lease request is accepted by the daemon and stored; the request id is the stored request's, so an observer can match this event to it (#72 added the id; additive, events rule 6) | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway, ADR 0005 §11 — its own fleet queue's admission, before any worker is chosen) | implemented |
+| `lease.requested` | request id, request spec (platform, model, os version, device `mode` as the request named it -- absent when it named none, since the worker's default is applied after this event, ADR 0007 §2), requester, wait policy | a lease request is accepted by the daemon and stored; the request id is the stored request's, so an observer can match this event to it (#72 added the id; additive, events rule 6) | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway, ADR 0005 §11 — its own fleet queue's admission, before any worker is chosen) | implemented |
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway) | implemented |
 | `lease.granted` | lease id, device id, requester | a device was assigned and handed out | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
 | `lease.renewed` | lease id, new deadline | a `lease.renew` succeeded — whether it came from `simlock lease renew`, `POST /v1/leases/{id}/renew`, or the renew timer a running `simlock lease` / MCP session keeps over its own lease. There is one renew path and this is it | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
 | `lease.released` | lease id, device id, reason (explicit/killed/device-lost), owner id | an explicit `lease.release` (which is what a `simlock lease` holder does on its way out), (killed) an operator `release --all` or `nuke`, or (device-lost) a leased device could not be recovered after it stopped running outside simlock. Closing a connection is not a release and never emits this | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
 | `lease.expired` | lease id, device id, owner id | the lease's deadline passed with no `lease.renew` behind it — the grant-time TTL, or the TTL of the last renew, simply ran out. This is the one way a lease ends without somebody asking, and the only bound on a holder that was killed outright | LeaseLifecycle | implemented (payload per ADR 0004 pending) |
-| `lease.rejected` | request spec, reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled/daemon-restarted) | a request ended without a grant; `daemon-restarted` is a request still waiting when the daemon stopped, settled as failed when it starts again (#72; widens a published vocabulary, which events rule 6 allows as additive). The reason list can grow: a consumer must tolerate a reason it does not know; `cancelled` is an explicit single-request cancel (`LeaseEngine#cancelPending`, backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter -- one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue / StartupConverger (worker) / FleetLeaseCoordinator (gateway) | implemented |
+| `lease.rejected` | request spec (as on `lease.requested`; `full` replaced by `mode`, ADR 0007 §13), reason (timeout/no-wait/unresolvable-spec/already-leased/boot-timeout/killed/cancelled/daemon-restarted) | a request ended without a grant; `daemon-restarted` is a request still waiting when the daemon stopped, settled as failed when it starts again (#72; widens a published vocabulary, which events rule 6 allows as additive). The reason list can grow: a consumer must tolerate a reason it does not know; `cancelled` is an explicit single-request cancel (`LeaseEngine#cancelPending`, backing `DELETE /v1/lease-requests/{id}`) of a still-queued waiter -- one with device work already in flight is reported `not-cancellable` instead, the same envelope the queue timeout already uses | LeaseAcquisitionCoordinator / WaitQueue / StartupConverger (worker) / FleetLeaseCoordinator (gateway) | implemented |
 
 On a **gateway**, these three are its own fleet queue's facts (ADR 0005 §11/§14),
 emitted by `FleetLeaseCoordinator` and never by the worker whose device is
@@ -42,7 +47,7 @@ worker is ever contacted.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `device.provisioned` | device id, spec, driver, duration | driver `provision` committed to registry | Registry | implemented |
+| `device.provisioned` | device id, spec (`mode: "slim"` for a device planned slim, absent for a full one -- the one place the planned mode is visible, ADR 0007 §9), driver, duration | driver `provision` committed to registry | Registry | implemented |
 | `device.ready` | device id, boot duration | readiness probe passed | Registry | implemented |
 | `device.reclaimed` | device id, strategy (erase/snapshot/wipe), duration | fresh-state reclaim finished. Never emitted for a device created under `lease.identity` `fresh` (#75): nothing is reclaimed, the device is deleted instead | Registry | implemented |
 | `device.purge-failed` | device id, lease id, attempted strategy (erase/snapshot/wipe/delete), duration, stable error summary | release-time purge failed, or (strategy `delete`, #75) the shutdown or delete that ends a `fresh` device's lease failed; the device enters `quarantined` (see below) rather than rejoining the pool. `delete` widens a published vocabulary (events rule 6 allows additive changes): a consumer must tolerate a strategy it does not know | WarmPoolCoordinator (strategy `delete`: WarmPoolCoordinator's spent-device path) | implemented |
@@ -67,9 +72,10 @@ only") is satisfied by waiting for that commit to become observable, not by wait
 write: the driver applies the `launchctl disable` overrides, reboots the device, and only fires
 `onSlimmed` once the second `bootstatus` has passed, proving the overrides survived the reboot and
 are actually in force. The registry's own `device.ready` for that same boot is a separate,
-later event, emitted through the normal readiness path once the driver call returns. A *skipped*
-slim -- the runtime is older than iOS 18.5, its runtime id didn't parse, or the disable pass itself
-failed -- is deliberately not an event: it isn't a fact worth putting in front of every event-bus
+later event, emitted through the normal readiness path once the driver call returns. A slim
+request on a runtime older than iOS 18.5 is resolved to a full spec before planning (ADR 0007
+§4), so it never reaches a slim pass. A *skipped* slim on a slim-spec device -- its runtime id
+didn't parse, or the disable pass itself failed -- is deliberately not an event: it isn't a fact worth putting in front of every event-bus
 consumer, just operator diagnostics, so it's a `warn` log line (`daemon.driver-discovery`) instead.
 
 ## Components

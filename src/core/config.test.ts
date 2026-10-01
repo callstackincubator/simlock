@@ -114,7 +114,7 @@ describe("loadConfig", () => {
         },
       },
       stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-      ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
+      ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
@@ -722,49 +722,67 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
-  it("defaults ios.slim to disabled with no categories and a slim boot timeout", async () => {
+  it("defaults ios.defaultMode to full, and ios.slim to no categories and a slim boot timeout", async () => {
     const config = await loadConfig({
       configPath,
       filesystem: new MemoryFilesystem(),
       systemStats: createStats(),
     });
 
-    expect(config.ios.slim).toEqual({ enabled: false, bootTimeoutMs: 600_000 });
+    expect(config.ios.defaultMode).toBe("full");
+    expect(config.ios.slim).toEqual({ bootTimeoutMs: 600_000 });
     expect(config.ios.slim.categories).toBeUndefined();
     expect("categories" in config.ios.slim).toBe(false);
   });
 
-  it("applies a file-level ios.slim override, including an explicit category list", async () => {
+  it("applies a file-level ios.defaultMode and ios.slim override, including an explicit category list", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
       JSON.stringify({
         ios: {
-          slim: { enabled: true, categories: ["logging", "diagnostics"], bootTimeoutMs: 900_000 },
+          defaultMode: "slim",
+          slim: { categories: ["logging", "diagnostics"], bootTimeoutMs: 900_000 },
         },
       }),
     );
 
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+    expect(config.ios.defaultMode).toBe("slim");
     expect(config.ios.slim).toEqual({
-      enabled: true,
       categories: ["logging", "diagnostics"],
       bootTimeoutMs: 900_000,
     });
   });
 
-  it("rejects a non-boolean ios.slim.enabled", async () => {
+  it.each(["fast", "worker", true])(
+    "rejects an ios.defaultMode of %j, naming the key",
+    async (value) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify({ ios: { defaultMode: value } }));
+
+      await expect(
+        loadConfig({ configPath, filesystem, systemStats: createStats() }),
+      ).rejects.toThrow("ios.defaultMode");
+    },
+  );
+
+  it("loads a config that still sets the removed ios.slim switch with the unknown-key warning and the full default", async () => {
     const filesystem = new MemoryFilesystem();
+    const warn = vi.fn();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(
       configPath,
-      JSON.stringify({ ios: { slim: { enabled: "yes" } } }),
+      JSON.stringify({ ios: { slim: { enabled: true } } }),
     );
 
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("ios.slim.enabled");
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.enabled"');
+    expect(config.ios.defaultMode).toBe("full");
+    expect(config.ios.slim).not.toHaveProperty("enabled");
   });
 
   it.each([
@@ -1219,7 +1237,7 @@ describe("loadConfig modes (ADR 0005)", () => {
       {
         mode: "gateway",
         capacity: { strategy: "fixed", config: { maxRunning: 3 } },
-        ios: { slim: { enabled: true } },
+        ios: { defaultMode: "slim" },
         lease: { defaultTtlMs: 60_000 },
       },
       { warn },

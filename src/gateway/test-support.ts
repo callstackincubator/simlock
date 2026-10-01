@@ -263,6 +263,8 @@ export class ScriptedWorkerClient {
    * gave up on it.
    */
   lastRequestLeaseOptions: RequestLeaseOptions | undefined;
+  /** The input of the last `lease.request` forwarded to this worker. */
+  lastRequestLeaseInput: LeaseRequestInput | undefined;
 
   constructor(
     readonly role: "admin" | "agent" = "admin",
@@ -318,6 +320,7 @@ export class ScriptedWorkerClient {
     this.calls.push(`lease.request:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
     this.lastRequestLeaseOptions = options;
+    this.lastRequestLeaseInput = input;
     const outcome = this.requestLeaseQueue.shift() ?? this.requestLeaseDefault;
     for (const progress of outcome.progress ?? []) options.onProgress?.(progress);
     if (outcome.kind === "hang") return new Promise<never>(() => {});

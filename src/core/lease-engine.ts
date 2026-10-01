@@ -9,6 +9,7 @@ import type { Proposal } from "./cleanup/types.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import type {
+  DeviceMode,
   LeaseGrant as StoredLeaseGrant,
   LeaseRecord,
   LeaseRequestFailure,
@@ -57,6 +58,11 @@ export interface LeaseEngineOptions {
    * failure is stored as `INTERNAL` with its own message.
    */
   readonly describeFailure?: (error: unknown) => LeaseRequestFailure;
+  /**
+   * The worker's default device mode per platform, built from config by the composition root
+   * (ADR 0007 §2). Omitted, or silent on a platform, means `"full"`.
+   */
+  readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
 }
 
 export {
@@ -158,6 +164,7 @@ export class LeaseEngine {
     this.#acquisition = new LeaseAcquisitionCoordinator({
       claims: this.#claims,
       decisions: this.#decisions,
+      defaultModes: options.defaultModes ?? {},
       drivers: this.#drivers,
       eventBus: options.eventBus,
       leases: this.#leases,

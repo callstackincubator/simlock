@@ -804,7 +804,7 @@ export class FleetLeaseCoordinator {
             ...(waiter.request.osVersion === undefined
               ? {}
               : { osVersion: waiter.request.osVersion }),
-            ...(waiter.request.full === true ? { full: true } : {}),
+            ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
             requesterId: namespacedRequesterId,
             // ADR §27a (narrowed, round 3 review, H3): only the worker's own gateway-uplink
             // session may set `owner` -- and this RPC always travels over exactly that

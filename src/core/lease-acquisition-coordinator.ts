@@ -8,7 +8,14 @@ import {
 } from "./device-operation-claims.js";
 import { type DeviceProvisioner } from "./device-provisioner.js";
 import { type LeaseRequestBook } from "./lease-request-book.js";
-import { type DeviceRecord, type DeviceSpec, type LeaseRecord, sameSpec } from "./domain.js";
+import {
+  type DeviceMode,
+  type DeviceRecord,
+  type DeviceSpec,
+  type LeaseRecord,
+  type Platform,
+  sameSpec,
+} from "./domain.js";
 import { BootTimeoutError, type DeviceRequest, type Driver } from "./driver.js";
 import { type DriverCatalog } from "./driver-catalog.js";
 import { type LeaseLifecycle } from "./lease-lifecycle.js";
@@ -82,6 +89,11 @@ export type AcquisitionQueue = Pick<
 export interface LeaseAcquisitionCoordinatorOptions {
   readonly claims: AcquisitionClaims;
   readonly decisions: AcquisitionDecision;
+  /**
+   * The worker's default device mode per platform, built from config at the composition root
+   * (ADR 0007 §2). A platform it does not name defaults to `"full"`.
+   */
+  readonly defaultModes: Readonly<Partial<Record<Platform, DeviceMode>>>;
   readonly drivers: AcquisitionDrivers;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly leases: Pick<LeaseLifecycle, "grant">;
@@ -253,29 +265,22 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return;
     }
     try {
-      const resolved = await driver.resolveSpec(request, {
-        allowDownload: options.allowDownload ?? false,
-        // The waiter is the one place that knows which requester triggered this resolution;
-        // threaded through so a component install a driver ends up doing on this request's
-        // behalf can attribute its diagnostics (and the resulting `component.install-*` events)
-        // to it.
-        requesterId: options.requesterId,
-      });
-      // This is the single place a driver's `resolveSpec` result becomes the spec the core
-      // matches and provisions on -- so `full` is stamped on centrally here, rather than any
-      // driver having to know about the flag (architecture rule 3: drivers stay unaware of
-      // core-only request flags). Never stamped `false`; omitted when the request did not ask
-      // for it, so specs stay byte-identical to every request that predates this flag. Also
-      // omitted when the resolving driver doesn't declare `reducesFeatures` (finding #6, issue
-      // #87 review): a `full` request only means something -- and only earns its own pool key,
-      // never shared with a normal request's (`sameSpec`) -- against a driver that might
-      // otherwise hand back a reduced device. Stamping it regardless would fragment a platform
-      // like Android, which never reduces anything, into two identical pools for no behavioural
-      // difference.
-      waiter.spec =
-        request.full === true && driver.reducesFeatures === true
-          ? { ...resolved, full: true }
-          : resolved;
+      // The one place a request with no mode gets the worker's default (ADR 0007 §2).
+      const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
+      const resolved = await driver.resolveSpec(
+        { ...request, mode },
+        {
+          allowDownload: options.allowDownload ?? false,
+          // The waiter is the one place that knows which requester triggered this resolution;
+          // threaded through so a component install a driver ends up doing on this request's
+          // behalf can attribute its diagnostics (and the resulting `component.install-*` events)
+          // to it.
+          requesterId: options.requesterId,
+        },
+      );
+      // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
+      // driver that returns the wrong thing still cannot put a full request on a slim device.
+      waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);
     } catch (error: unknown) {
       await this.options.decisions.run(async () => {
         this.#reject(waiter, asError(error), "unresolvable-spec");
@@ -736,4 +741,11 @@ function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {
   return plan.kind === "grant-ready" || plan.kind === "wait" || plan.kind === "no-capacity"
     ? undefined
     : plan;
+}
+
+/** The spec without a planned mode: the full spec of the same model and runtime. */
+function fullSpec(spec: DeviceSpec): DeviceSpec {
+  if (spec.mode === undefined) return spec;
+  const { mode: _mode, ...full } = spec;
+  return full;
 }

@@ -9,6 +9,7 @@ import {
   mayBeGranted,
   type Platform,
   sameSpec,
+  specMode,
 } from "./domain.js";
 import { readyTransitionUpdate, type Driver, type DriverDevice } from "./driver.js";
 import type { QuarantinePurgeFailure } from "./quarantine-coordinator.js";
@@ -267,7 +268,10 @@ export class WarmPoolCoordinator {
   /** Undefined on failure; otherwise the driver's freshly re-read device, address included. */
   async #tryMakeReady(driver: Driver, released: ReleasedLease): Promise<DriverDevice | undefined> {
     try {
-      return await driver.makeReady(toDriverDevice(released.device));
+      return await driver.makeReady(toDriverDevice(released.device), {
+        mode: specMode(released.device.spec),
+        purpose: "prepare",
+      });
     } catch (error: unknown) {
       this.#logFailure("making a reclaimed device ready failed", released, "make-ready", error);
       return undefined;

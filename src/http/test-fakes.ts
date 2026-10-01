@@ -50,7 +50,7 @@ export function testConfig(
     },
     http: { enabled: true, host: "127.0.0.1", port: 4700 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
+    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
     android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
     lease: {
       defaultTtlMs: 900_000,
@@ -215,7 +215,7 @@ export class FakeDispatcher {
       model: input.model,
       platform: input.platform,
       ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-      ...(input.full === true ? { full: true } : {}),
+      ...(input.mode === undefined ? {} : { mode: input.mode }),
     };
     const options = fakeRequestOptions(input, session);
     const replay = this.requests.replay(request, options);

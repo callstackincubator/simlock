@@ -186,14 +186,24 @@ describe("operation input/output round trips", () => {
     ).toMatchObject({ ttlMs: 60_000 });
   });
 
-  it("lease.request: rejects mode, which ADR 0004 removed from the contract", () => {
-    expect(() =>
-      OPERATIONS["lease.request"].input.parse({
+  it.each(["slim", "full"] as const)("lease.request: accepts mode %s", (mode) => {
+    expect(
+      OPERATIONS["lease.request"].input.parse({ model: "iPhone 17 Pro", mode, platform: "ios" }),
+    ).toMatchObject({ mode });
+  });
+
+  it.each([
+    ["full", { full: true }],
+    ["a mode other than slim or full", { mode: "fast" }],
+    ["the lease mode ADR 0004 retired", { mode: "held" }],
+  ])("lease.request: rejects %s", (_label, extra) => {
+    expect(
+      OPERATIONS["lease.request"].input.safeParse({
         model: "iPhone 17 Pro",
-        mode: "held",
         platform: "ios",
-      }),
-    ).toThrow();
+        ...extra,
+      }).success,
+    ).toBe(false);
   });
 
   it("lease.request/lease.renew: a non-positive ttlMs is a schema-level BAD_REQUEST", () => {
@@ -598,7 +608,7 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { slim: { enabled: false, bootTimeoutMs: 1 } },
+      ios: { defaultMode: "full", slim: { bootTimeoutMs: 1 } },
       android: { emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false } },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
