@@ -5,7 +5,6 @@ import { SLIM_CATEGORIES, labelsFor } from "../src/drivers/ios/slim-labels.js";
 import { waitForDeviceState, withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import {
-  emptyDeviceSet,
   iosDeviceSet,
   processesInDeviceSet,
   setDevices,
@@ -40,22 +39,15 @@ interface CatalogPlatform {
 
 /**
  * Every device set a test in this file handed to `withDaemon`, so the last test can check that
- * none of them still runs a simulator once each test's own cleanup is done.
+ * none of them still runs a simulator once teardown has emptied it.
  */
 const usedDeviceSets: string[] = [];
 
-/**
- * Starts the daemon for one test and records its device set. The test's own `finally` must
- * `emptyDeviceSet` it: `withDaemon`'s teardown only stops the daemon and removes the home,
- * and neither shuts a booted simulator down.
- */
-async function withSlimDaemon(
-  configOverrides: Record<string, unknown> = {},
-): Promise<{ readonly env: TestEnv; readonly deviceSet: string }> {
+/** Starts the real-driver daemon for one test and records its device set. */
+async function withSlimDaemon(configOverrides: Record<string, unknown> = {}): Promise<TestEnv> {
   const env = await withDaemon({ driver: "real", configOverrides });
-  const deviceSet = iosDeviceSet(env.home);
-  usedDeviceSets.push(deviceSet);
-  return { deviceSet, env };
+  usedDeviceSets.push(iosDeviceSet(env.home));
+  return env;
 }
 
 /**
@@ -176,34 +168,30 @@ describe.skipIf(process.platform !== "darwin")(
       { timeout: 300_000 },
       async () => {
         await sweepStaleDeviceSets();
-        const { env, deviceSet } = await withSlimDaemon();
-        try {
-          const { model, os } = await catalogModelAndOs(env);
-          const grant = await leaseDetached(env, model, os, "slim-off-default");
+        const env = await withSlimDaemon();
+        const { model, os } = await catalogModelAndOs(env);
+        const grant = await leaseDetached(env, model, os, "slim-off-default");
 
-          expect(grant.mode, "a lease must be full when ios.slim is not configured").toBe("full");
+        expect(grant.mode, "a lease must be full when ios.slim is not configured").toBe("full");
 
-          const disabled = await printDisabled(grant);
-          const overlap = [...ALL_LABELS].filter((label) => disabled.has(label));
-          expect(
-            overlap,
-            `expected none of the slim label set disabled on a non-slim device, found: ${overlap.join(", ")}`,
-          ).toEqual([]);
+        const disabled = await printDisabled(grant);
+        const overlap = [...ALL_LABELS].filter((label) => disabled.has(label));
+        expect(
+          overlap,
+          `expected none of the slim label set disabled on a non-slim device, found: ${overlap.join(", ")}`,
+        ).toEqual([]);
 
-          const recorded = await env.events("1h");
-          const slimmedEvents = recorded.filter((event) => event.event === "device.slimmed");
-          expect(slimmedEvents, "no device.slimmed event expected with slim off").toEqual([]);
+        const recorded = await env.events("1h");
+        const slimmedEvents = recorded.filter((event) => event.event === "device.slimmed");
+        expect(slimmedEvents, "no device.slimmed event expected with slim off").toEqual([]);
 
-          const doctorReport = (await env.cli(["doctor"])).json as DoctorReport;
-          const advisories = doctorReport.findings.filter(
-            (finding) => finding.kind === "driver-advisory",
-          );
-          expect(advisories, "no driver-advisory finding expected with slim off").toEqual([]);
+        const doctorReport = (await env.cli(["doctor"])).json as DoctorReport;
+        const advisories = doctorReport.findings.filter(
+          (finding) => finding.kind === "driver-advisory",
+        );
+        expect(advisories, "no driver-advisory finding expected with slim off").toEqual([]);
 
-          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
-        } finally {
-          await emptyDeviceSet(deviceSet);
-        }
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
       },
     );
 
@@ -211,134 +199,130 @@ describe.skipIf(process.platform !== "darwin")(
       "scenario 2/3/4/7: cold slim lease, idempotence across a reclaim, --full opt-out, and doctor advisory absence",
       { timeout: 900_000 },
       async () => {
-        const { env, deviceSet } = await withSlimDaemon({ ios: { slim: { enabled: true } } });
-        try {
-          const { model, os } = await catalogModelAndOs(env);
+        const env = await withSlimDaemon({ ios: { slim: { enabled: true } } });
+        const { model, os } = await catalogModelAndOs(env);
 
-          // --- scenario 4 half A + baseline process count: a --full lease is untouched. ---
-          const fullStart = Date.now();
-          const fullGrant = await leaseDetached(env, model, os, "slim-full-opt-out", ["--full"]);
-          const fullDurationMs = Date.now() - fullStart;
-          expect(fullGrant.mode, "a --full lease's grant must carry mode: full").toBe("full");
-          const fullDisabled = await printDisabled(fullGrant);
-          const fullOverlap = [...ALL_LABELS].filter((label) => fullDisabled.has(label));
-          expect(
-            fullOverlap,
-            `--full device must have none of the slim labels disabled, found: ${fullOverlap.join(", ")}`,
-          ).toEqual([]);
-          const fullProcessCount = await processCount(fullGrant);
+        // --- scenario 4 half A + baseline process count: a --full lease is untouched. ---
+        const fullStart = Date.now();
+        const fullGrant = await leaseDetached(env, model, os, "slim-full-opt-out", ["--full"]);
+        const fullDurationMs = Date.now() - fullStart;
+        expect(fullGrant.mode, "a --full lease's grant must carry mode: full").toBe("full");
+        const fullDisabled = await printDisabled(fullGrant);
+        const fullOverlap = [...ALL_LABELS].filter((label) => fullDisabled.has(label));
+        expect(
+          fullOverlap,
+          `--full device must have none of the slim labels disabled, found: ${fullOverlap.join(", ")}`,
+        ).toEqual([]);
+        const fullProcessCount = await processCount(fullGrant);
 
-          const doctorAfterFull = (await env.cli(["doctor"])).json as DoctorReport;
-          const driftForFull = doctorAfterFull.findings.filter(
-            (finding) => finding.kind !== "driver-advisory" && finding.deviceId !== undefined,
-          );
-          expect(
-            driftForFull.filter((finding) => finding.deviceId === fullGrant.udid),
-            "doctor must report no drift for the --full device",
-          ).toEqual([]);
+        const doctorAfterFull = (await env.cli(["doctor"])).json as DoctorReport;
+        const driftForFull = doctorAfterFull.findings.filter(
+          (finding) => finding.kind !== "driver-advisory" && finding.deviceId !== undefined,
+        );
+        expect(
+          driftForFull.filter((finding) => finding.deviceId === fullGrant.udid),
+          "doctor must report no drift for the --full device",
+        ).toEqual([]);
 
-          // --- scenario 2: a cold, non-full lease produces a slim device. ---
-          const eventsBeforeSlim = await env.events("1h");
-          const slimmedBefore = eventsBeforeSlim.filter(
-            (event) => event.event === "device.slimmed",
-          ).length;
+        // --- scenario 2: a cold, non-full lease produces a slim device. ---
+        const eventsBeforeSlim = await env.events("1h");
+        const slimmedBefore = eventsBeforeSlim.filter(
+          (event) => event.event === "device.slimmed",
+        ).length;
 
-          const slimStart = Date.now();
-          const slimGrant = await leaseDetached(env, model, os, "slim-cold");
-          const slimDurationMs = Date.now() - slimStart;
+        const slimStart = Date.now();
+        const slimGrant = await leaseDetached(env, model, os, "slim-cold");
+        const slimDurationMs = Date.now() - slimStart;
 
-          await expectSlim(env, slimGrant, "a slim lease's grant must carry mode: slim");
-          expect(slimGrant.udid).not.toBe(fullGrant.udid);
+        await expectSlim(env, slimGrant, "a slim lease's grant must carry mode: slim");
+        expect(slimGrant.udid).not.toBe(fullGrant.udid);
 
-          const slimDisabled = await printDisabled(slimGrant);
-          const missing = [...ALL_LABELS].filter((label) => !slimDisabled.has(label));
-          expect(
-            missing.length,
-            `expected every slim label disabled on a slim device, missing ${missing.length} of ${ALL_LABELS.size}: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "..." : ""}`,
-          ).toBe(0);
+        const slimDisabled = await printDisabled(slimGrant);
+        const missing = [...ALL_LABELS].filter((label) => !slimDisabled.has(label));
+        expect(
+          missing.length,
+          `expected every slim label disabled on a slim device, missing ${missing.length} of ${ALL_LABELS.size}: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "..." : ""}`,
+        ).toBe(0);
 
-          const boot = await setDevices(slimGrant.deviceSet);
-          expect(boot.find((device) => device.udid === slimGrant.udid)?.state).toBe("Booted");
+        const boot = await setDevices(slimGrant.deviceSet);
+        expect(boot.find((device) => device.udid === slimGrant.udid)?.state).toBe("Booted");
 
-          const slimProcessCount = await processCount(slimGrant);
-          const reduction = 1 - slimProcessCount / fullProcessCount;
-          expect(
-            reduction,
-            `expected the slim device's launchctl job count (${String(slimProcessCount)}) to be ` +
-              `at least 30% lower than the full device's (${String(fullProcessCount)}), got a ` +
-              `${(reduction * 100).toFixed(1)}% reduction`,
-          ).toBeGreaterThanOrEqual(0.3);
+        const slimProcessCount = await processCount(slimGrant);
+        const reduction = 1 - slimProcessCount / fullProcessCount;
+        expect(
+          reduction,
+          `expected the slim device's launchctl job count (${String(slimProcessCount)}) to be ` +
+            `at least 30% lower than the full device's (${String(fullProcessCount)}), got a ` +
+            `${(reduction * 100).toFixed(1)}% reduction`,
+        ).toBeGreaterThanOrEqual(0.3);
 
-          const eventsAfterSlim = await env.expectEvents(["device.slimmed"], { since: "1h" });
-          const slimmedEvents = eventsAfterSlim.filter((event) => event.event === "device.slimmed");
-          expect(slimmedEvents.length).toBe(slimmedBefore + 1);
-          const slimmedFact = slimmedEvents.at(-1)?.payload as {
-            deviceId: string;
-            platform?: string;
-            categories: readonly string[];
-            labelCount: number;
-            unknownLabels: readonly string[];
-          };
-          expect(slimmedFact.categories.length, "expected every category resolved").toBe(
-            SLIM_CATEGORIES.length,
-          );
-          expect(new Set(slimmedFact.categories)).toEqual(ALL_CATEGORY_NAMES);
-          expect(slimmedFact.labelCount).toBe(ALL_LABELS.size);
-          // Reported, not asserted empty -- known-pitfalls.md documents that Apple drift can
-          // legitimately produce rejected labels here; this is evidence for the report, not a
-          // pass/fail condition.
-          // eslint-disable-next-line no-console
-          console.log(
-            `[slim e2e] scenario 2 unknownLabels (${slimmedFact.unknownLabels.length}): ` +
-              JSON.stringify(slimmedFact.unknownLabels),
-          );
+        const eventsAfterSlim = await env.expectEvents(["device.slimmed"], { since: "1h" });
+        const slimmedEvents = eventsAfterSlim.filter((event) => event.event === "device.slimmed");
+        expect(slimmedEvents.length).toBe(slimmedBefore + 1);
+        const slimmedFact = slimmedEvents.at(-1)?.payload as {
+          deviceId: string;
+          platform?: string;
+          categories: readonly string[];
+          labelCount: number;
+          unknownLabels: readonly string[];
+        };
+        expect(slimmedFact.categories.length, "expected every category resolved").toBe(
+          SLIM_CATEGORIES.length,
+        );
+        expect(new Set(slimmedFact.categories)).toEqual(ALL_CATEGORY_NAMES);
+        expect(slimmedFact.labelCount).toBe(ALL_LABELS.size);
+        // Reported, not asserted empty -- known-pitfalls.md documents that Apple drift can
+        // legitimately produce rejected labels here; this is evidence for the report, not a
+        // pass/fail condition.
+        // eslint-disable-next-line no-console
+        console.log(
+          `[slim e2e] scenario 2 unknownLabels (${slimmedFact.unknownLabels.length}): ` +
+            JSON.stringify(slimmedFact.unknownLabels),
+        );
 
-          console.log(
-            `[slim e2e] lease duration: full=${String(fullDurationMs)}ms slim(cold)=${String(slimDurationMs)}ms; ` +
-              `process count: full=${String(fullProcessCount)} slim=${String(slimProcessCount)} ` +
-              `(${(reduction * 100).toFixed(1)}% reduction)`,
-          );
+        console.log(
+          `[slim e2e] lease duration: full=${String(fullDurationMs)}ms slim(cold)=${String(slimDurationMs)}ms; ` +
+            `process count: full=${String(fullProcessCount)} slim=${String(slimProcessCount)} ` +
+            `(${(reduction * 100).toFixed(1)}% reduction)`,
+        );
 
-          // --- scenario 7: doctor advisory is absent (both installed runtimes are >= 18.5). ---
-          const doctorAfterSlim = (await env.cli(["doctor"])).json as DoctorReport;
-          const advisories = doctorAfterSlim.findings.filter(
-            (finding) => finding.kind === "driver-advisory",
-          );
-          expect(
-            advisories,
-            "expected no slim-runtime-unsupported advisory: both installed runtimes on this " +
-              "machine (26.4.1, 27.0) are >= 18.5",
-          ).toEqual([]);
+        // --- scenario 7: doctor advisory is absent (both installed runtimes are >= 18.5). ---
+        const doctorAfterSlim = (await env.cli(["doctor"])).json as DoctorReport;
+        const advisories = doctorAfterSlim.findings.filter(
+          (finding) => finding.kind === "driver-advisory",
+        );
+        expect(
+          advisories,
+          "expected no slim-runtime-unsupported advisory: both installed runtimes on this " +
+            "machine (26.4.1, 27.0) are >= 18.5",
+        ).toEqual([]);
 
-          // --- scenario 3: release, then re-lease the same spec. Per docs/internal/KNOWN-PITFALLS.md
-          // ("Every reclaim pays two boots, indefinitely"), IosSimctlDriver.reclaim always runs
-          // `simctl erase`, wiping the launchctl overrides -- so the documented behaviour is
-          // that the warm-pooled device comes back stock and pays a SECOND device.slimmed, not
-          // that it's skipped. We assert that documented behaviour here.
-          const releaseResult = await env.cli(["release", slimGrant.lease]);
-          expect(releaseResult.code).toBe(0);
-          await waitForDeviceState(env, slimGrant.udid, "ready", { timeout: 120_000 });
+        // --- scenario 3: release, then re-lease the same spec. Per docs/internal/KNOWN-PITFALLS.md
+        // ("Every reclaim pays two boots, indefinitely"), IosSimctlDriver.reclaim always runs
+        // `simctl erase`, wiping the launchctl overrides -- so the documented behaviour is
+        // that the warm-pooled device comes back stock and pays a SECOND device.slimmed, not
+        // that it's skipped. We assert that documented behaviour here.
+        const releaseResult = await env.cli(["release", slimGrant.lease]);
+        expect(releaseResult.code).toBe(0);
+        await waitForDeviceState(env, slimGrant.udid, "ready", { timeout: 120_000 });
 
-          const relet = await leaseDetached(env, model, os, "slim-cold");
-          expect(relet.udid, "expected the warm-pooled device to be reused").toBe(slimGrant.udid);
-          await expectSlim(env, relet, "re-leased device must still report mode: slim");
+        const relet = await leaseDetached(env, model, os, "slim-cold");
+        expect(relet.udid, "expected the warm-pooled device to be reused").toBe(slimGrant.udid);
+        await expectSlim(env, relet, "re-leased device must still report mode: slim");
 
-          const eventsAfterRelease = await env.expectEvents(["device.slimmed", "device.slimmed"], {
-            since: "1h",
-          });
-          const slimmedAfterRelease = eventsAfterRelease.filter(
-            (event) => event.event === "device.slimmed",
-          );
-          expect(
-            slimmedAfterRelease.length,
-            "expected a SECOND device.slimmed for this udid after release+re-lease, per the " +
-              "documented erase-on-reclaim cost (docs/internal/KNOWN-PITFALLS.md)",
-          ).toBe(slimmedBefore + 2);
+        const eventsAfterRelease = await env.expectEvents(["device.slimmed", "device.slimmed"], {
+          since: "1h",
+        });
+        const slimmedAfterRelease = eventsAfterRelease.filter(
+          (event) => event.event === "device.slimmed",
+        );
+        expect(
+          slimmedAfterRelease.length,
+          "expected a SECOND device.slimmed for this udid after release+re-lease, per the " +
+            "documented erase-on-reclaim cost (docs/internal/KNOWN-PITFALLS.md)",
+        ).toBe(slimmedBefore + 2);
 
-          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
-        } finally {
-          await emptyDeviceSet(deviceSet);
-        }
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
       },
     );
 
@@ -356,52 +340,48 @@ describe.skipIf(process.platform !== "darwin")(
           labelsFor(SLIM_CATEGORIES.filter((category) => category.name === "photos")),
         );
 
-        const { env, deviceSet } = await withSlimDaemon({
+        const env = await withSlimDaemon({
           ios: { slim: { enabled: true, categories: ["siri", "telemetry"] } },
         });
-        try {
-          const { model, os } = await catalogModelAndOs(env);
+        const { model, os } = await catalogModelAndOs(env);
 
-          // --- scenario 5 ---
-          const grant = await leaseDetached(env, model, os, "slim-subset");
-          await expectSlim(env, grant, "a categories-subset lease must be slim");
-          const disabled = await printDisabled(grant);
+        // --- scenario 5 ---
+        const grant = await leaseDetached(env, model, os, "slim-subset");
+        await expectSlim(env, grant, "a categories-subset lease must be slim");
+        const disabled = await printDisabled(grant);
 
-          const missingSiri = [...siriLabels].filter((label) => !disabled.has(label));
-          const missingTelemetry = [...telemetryLabels].filter((label) => !disabled.has(label));
-          expect(missingSiri, "expected every siri label disabled").toEqual([]);
-          expect(missingTelemetry, "expected every telemetry label disabled").toEqual([]);
+        const missingSiri = [...siriLabels].filter((label) => !disabled.has(label));
+        const missingTelemetry = [...telemetryLabels].filter((label) => !disabled.has(label));
+        expect(missingSiri, "expected every siri label disabled").toEqual([]);
+        expect(missingTelemetry, "expected every telemetry label disabled").toEqual([]);
 
-          const leakedPhotos = [...photosLabels].filter((label) => disabled.has(label));
-          expect(
-            leakedPhotos,
-            `expected no photos-category label disabled, found: ${leakedPhotos.join(", ")}`,
-          ).toEqual([]);
+        const leakedPhotos = [...photosLabels].filter((label) => disabled.has(label));
+        expect(
+          leakedPhotos,
+          `expected no photos-category label disabled, found: ${leakedPhotos.join(", ")}`,
+        ).toEqual([]);
 
-          const recorded = await env.expectEvents(["device.slimmed"], { since: "1h" });
-          const fact = recorded.find((event) => event.event === "device.slimmed")?.payload as {
-            categories: readonly string[];
-          };
-          expect(fact.categories).toEqual(["siri", "telemetry"]);
+        const recorded = await env.expectEvents(["device.slimmed"], { since: "1h" });
+        const fact = recorded.find((event) => event.event === "device.slimmed")?.payload as {
+          categories: readonly string[];
+        };
+        expect(fact.categories).toEqual(["siri", "telemetry"]);
 
-          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
 
-          // --- scenario 6: an unknown category alongside a known one is not fatal. ---
-          await env.withConfig(
-            { ios: { slim: { enabled: true, categories: ["siri", "no-such-category"] } } },
-            async () => {
-              const grant2 = await leaseDetached(env, model, os, "slim-unknown-category");
-              await expectSlim(env, grant2, "lease must still succeed and be slim");
-              const disabled2 = await printDisabled(grant2);
-              const missingSiri2 = [...siriLabels].filter((label) => !disabled2.has(label));
-              expect(missingSiri2, "expected every siri label disabled").toEqual([]);
+        // --- scenario 6: an unknown category alongside a known one is not fatal. ---
+        await env.withConfig(
+          { ios: { slim: { enabled: true, categories: ["siri", "no-such-category"] } } },
+          async () => {
+            const grant2 = await leaseDetached(env, model, os, "slim-unknown-category");
+            await expectSlim(env, grant2, "lease must still succeed and be slim");
+            const disabled2 = await printDisabled(grant2);
+            const missingSiri2 = [...siriLabels].filter((label) => !disabled2.has(label));
+            expect(missingSiri2, "expected every siri label disabled").toEqual([]);
 
-              await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
-            },
-          );
-        } finally {
-          await emptyDeviceSet(deviceSet);
-        }
+            await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+          },
+        );
       },
     );
 
@@ -409,116 +389,106 @@ describe.skipIf(process.platform !== "darwin")(
       "scenario 8: a health-monitor recovery boot does not re-slim",
       { timeout: 600_000 },
       async () => {
-        const { env, deviceSet } = await withSlimDaemon({
+        const env = await withSlimDaemon({
           ios: { slim: { enabled: true } },
           health: { probeIntervalMs: 2_000, recoveryBackoffMs: 1_000, stableObservations: 1 },
         });
-        try {
-          const { model, os } = await catalogModelAndOs(env);
-          const grant = await leaseDetached(env, model, os, "slim-recovery", []);
-          await expectSlim(env, grant, "a slim-mode lease must be slim");
-          const disabledBefore = await printDisabled(grant);
-          expect([...ALL_LABELS].filter((label) => !disabledBefore.has(label)).length).toBe(0);
+        const { model, os } = await catalogModelAndOs(env);
+        const grant = await leaseDetached(env, model, os, "slim-recovery", []);
+        await expectSlim(env, grant, "a slim-mode lease must be slim");
+        const disabledBefore = await printDisabled(grant);
+        expect([...ALL_LABELS].filter((label) => !disabledBefore.has(label)).length).toBe(0);
 
-          const eventsBefore = await env.events("1h");
-          const slimmedBefore = eventsBefore.filter(
-            (event) => event.event === "device.slimmed",
-          ).length;
+        const eventsBefore = await env.events("1h");
+        const slimmedBefore = eventsBefore.filter(
+          (event) => event.event === "device.slimmed",
+        ).length;
 
-          // Pull the device out from under simlock, exactly as leased-device-crash-recovery.test.ts
-          // does with the fake driver -- here with the real simctl toolchain.
-          await simctlInSet(grant.deviceSet, ["shutdown", grant.udid]);
+        // Pull the device out from under simlock, exactly as leased-device-crash-recovery.test.ts
+        // does with the fake driver -- here with the real simctl toolchain.
+        await simctlInSet(grant.deviceSet, ["shutdown", grant.udid]);
 
-          await env.expectEvents(["device.crash-detected", "device.recovered"], {
-            since: "1h",
-            timeout: 180_000,
-          });
+        await env.expectEvents(["device.crash-detected", "device.recovered"], {
+          since: "1h",
+          timeout: 180_000,
+        });
 
-          const booted = await setDevices(grant.deviceSet);
-          expect(booted.find((device) => device.udid === grant.udid)?.state).toBe("Booted");
+        const booted = await setDevices(grant.deviceSet);
+        expect(booted.find((device) => device.udid === grant.udid)?.state).toBe("Booted");
 
-          const disabledAfter = await printDisabled(grant);
-          const missingAfter = [...ALL_LABELS].filter((label) => !disabledAfter.has(label));
-          expect(missingAfter, "expected the device to still be fully slim after recovery").toEqual(
-            [],
-          );
+        const disabledAfter = await printDisabled(grant);
+        const missingAfter = [...ALL_LABELS].filter((label) => !disabledAfter.has(label));
+        expect(missingAfter, "expected the device to still be fully slim after recovery").toEqual(
+          [],
+        );
 
-          const eventsAfter = await env.events("1h");
-          const slimmedAfter = eventsAfter.filter(
-            (event) => event.event === "device.slimmed",
-          ).length;
-          expect(
-            slimmedAfter,
-            "recovery must not fire a new device.slimmed (recover purpose never slims)",
-          ).toBe(slimmedBefore);
+        const eventsAfter = await env.events("1h");
+        const slimmedAfter = eventsAfter.filter((event) => event.event === "device.slimmed").length;
+        expect(
+          slimmedAfter,
+          "recovery must not fire a new device.slimmed (recover purpose never slims)",
+        ).toBe(slimmedBefore);
 
-          await env.cli(["release", grant.lease]).catch(() => undefined);
-          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
-        } finally {
-          await emptyDeviceSet(deviceSet);
-        }
+        await env.cli(["release", grant.lease]).catch(() => undefined);
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
       },
     );
 
     it("scenario 9: MCP carries the device mode both ways", { timeout: 600_000 }, async () => {
-      const { env, deviceSet } = await withSlimDaemon({ ios: { slim: { enabled: true } } });
+      const env = await withSlimDaemon({ ios: { slim: { enabled: true } } });
+      const { model, os } = await catalogModelAndOs(env);
+      const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "slim-mcp" } });
       try {
-        const { model, os } = await catalogModelAndOs(env);
-        const mcp = await env.mcpClient({ env: { SIMLOCK_AGENT_ID: "slim-mcp" } });
-        try {
-          // The SDK's default request timeout is 60s; a cold slim lease takes ~160s on this
-          // machine (two real boots). Simlock relays boot progress as MCP progress
-          // notifications, so a client that resets its timeout on progress survives it --
-          // which is what a real agent's client must do too (see docs/internal/KNOWN-PITFALLS.md).
-          const leaseCallOptions = { resetTimeoutOnProgress: true, timeout: 600_000 };
-          const fullResult = await mcp.client.callTool(
-            {
-              name: "lease_simulator",
-              arguments: { full: true, model, osVersion: os, platform: "ios" },
-            },
-            undefined,
-            leaseCallOptions,
-          );
-          const fullLeased = fullResult.structuredContent as {
-            device: { mode: "slim" | "full" };
-            lease: { id: string };
-          };
-          expect(fullLeased.device.mode, "MCP full:true lease must report mode: full").toBe("full");
+        // The SDK's default request timeout is 60s; a cold slim lease takes ~160s on this
+        // machine (two real boots). Simlock relays boot progress as MCP progress
+        // notifications, so a client that resets its timeout on progress survives it --
+        // which is what a real agent's client must do too (see docs/internal/KNOWN-PITFALLS.md).
+        const leaseCallOptions = { resetTimeoutOnProgress: true, timeout: 600_000 };
+        const fullResult = await mcp.client.callTool(
+          {
+            name: "lease_simulator",
+            arguments: { full: true, model, osVersion: os, platform: "ios" },
+          },
+          undefined,
+          leaseCallOptions,
+        );
+        const fullLeased = fullResult.structuredContent as {
+          device: { mode: "slim" | "full" };
+          lease: { id: string };
+        };
+        expect(fullLeased.device.mode, "MCP full:true lease must report mode: full").toBe("full");
 
-          await mcp.client.callTool({
-            name: "release_simulator",
-            arguments: { leaseId: fullLeased.lease.id },
-          });
+        await mcp.client.callTool({
+          name: "release_simulator",
+          arguments: { leaseId: fullLeased.lease.id },
+        });
 
-          const slimResult = await mcp.client.callTool(
-            {
-              name: "lease_simulator",
-              arguments: { model, osVersion: os, platform: "ios" },
-            },
-            undefined,
-            leaseCallOptions,
-          );
-          const slimLeased = slimResult.structuredContent as {
-            device: { mode: "slim" | "full" };
-            lease: { id: string };
-          };
-          expect(
-            slimLeased.device.mode,
-            "MCP plain lease under ios.slim.enabled must report mode: slim",
-          ).toBe("slim");
+        const slimResult = await mcp.client.callTool(
+          {
+            name: "lease_simulator",
+            arguments: { model, osVersion: os, platform: "ios" },
+          },
+          undefined,
+          leaseCallOptions,
+        );
+        const slimLeased = slimResult.structuredContent as {
+          device: { mode: "slim" | "full" };
+          lease: { id: string };
+        };
+        expect(
+          slimLeased.device.mode,
+          "MCP plain lease under ios.slim.enabled must report mode: slim",
+        ).toBe("slim");
 
-          await mcp.client.callTool({
-            name: "release_simulator",
-            arguments: { leaseId: slimLeased.lease.id },
-          });
-        } finally {
-          await mcp.close();
-        }
-
-        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+        await mcp.client.callTool({
+          name: "release_simulator",
+          arguments: { leaseId: slimLeased.lease.id },
+        });
       } finally {
-        await emptyDeviceSet(deviceSet);
+        await mcp.close();
       }
+
+      await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
 
       // HTTP is skipped here: it needs a real reserved port plus its own auth-token setup
       // (see http-api.test.ts) on top of another real cold iOS lease, which -- given MCP

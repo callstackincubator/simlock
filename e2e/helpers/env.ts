@@ -22,6 +22,7 @@ import {
   type DriverScriptControl,
 } from "./driver-script.js";
 import { events, expectEvents, type RecordedEvent } from "./events.js";
+import { emptyDeviceSet, iosDeviceSet } from "./ios-device-set.js";
 import { mcpClient, type McpClientHandle, type McpClientOptions } from "./mcp.js";
 import { REPO_ROOT } from "./repo-root.js";
 import { waitFor } from "./wait.js";
@@ -299,7 +300,14 @@ export async function withDaemon(options: WithDaemonOptions = {}): Promise<TestE
     await testEnv.startDaemon();
   }
 
-  activeEnvs.add({ backgroundProcesses, env, home, mcpClients, socketPath });
+  activeEnvs.add({
+    backgroundProcesses,
+    env,
+    home,
+    mcpClients,
+    realDrivers: options.driver === "real",
+    socketPath,
+  });
   return testEnv;
 }
 
@@ -308,11 +316,13 @@ interface TeardownState {
   readonly env: NodeJS.ProcessEnv;
   readonly home: string;
   readonly mcpClients: ReadonlySet<McpClientHandle>;
+  /** The real-SDK lane: the home holds a real iOS device set that must be emptied first. */
+  readonly realDrivers: boolean;
   readonly socketPath: string;
 }
 
 async function teardown(state: TeardownState): Promise<void> {
-  const { backgroundProcesses, env, home, mcpClients, socketPath } = state;
+  const { backgroundProcesses, env, home, mcpClients, realDrivers, socketPath } = state;
   for (const client of mcpClients) {
     await client.close().catch(() => undefined);
   }
@@ -358,6 +368,11 @@ async function teardown(state: TeardownState): Promise<void> {
     }
   }
 
+  // Here rather than in each test's own `finally`: a test that hits its timeout is abandoned
+  // with its body still running, so its `finally` may not have run yet -- and a booted
+  // simulator keeps writing into its device directory while `rm` below walks it (`ENOTEMPTY`),
+  // then outlives the home. The daemon is stopped by now, so nothing boots another one.
+  if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
   await rm(home, { force: true, recursive: true });
 
   if (strayPids.length > 0) {
