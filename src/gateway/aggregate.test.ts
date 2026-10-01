@@ -335,6 +335,22 @@ describe("aggregateCatalog", () => {
     expect(catalog.platforms[0]?.modelRuntimes).toEqual({ constructor: [] });
   });
 
+  it("drops a pairing with a runtime the worker does not list itself, even when another worker has it", () => {
+    const claimsMore = {
+      modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
+      models: ["iPhone 17"],
+      platform: "ios" as const,
+      runtimes: ["26.0"],
+    };
+    const catalog = aggregateCatalog([
+      view({ catalog: [claimsMore], id: "wrk_a" }),
+      view({ catalog: [iosOnB], id: "wrk_b" }),
+    ]);
+
+    // 25.4 is in the fleet (on B, for the iPad only); A's claim to pair it is not A's to make.
+    expect(catalog.platforms[0]?.modelRuntimes["iPhone 17"]).toEqual(["26.0"]);
+  });
+
   it("filters to one platform when asked", () => {
     const catalog = aggregateCatalog(
       [

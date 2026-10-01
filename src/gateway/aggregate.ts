@@ -191,14 +191,18 @@ function addCatalogEntry(
   byPlatform.set(entry.platform, bucket);
   for (const model of entry.models) annotate(bucket.models, model, workerId);
   for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
-  for (const model of entry.models) {
-    const paired = bucket.modelRuntimes.get(model) ?? new Set<string>();
-    // Own keys only: a model a worker names `constructor` must not read Object.prototype's.
-    const own = Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined;
-    for (const runtime of own ?? []) paired.add(runtime);
-    bucket.modelRuntimes.set(model, paired);
-  }
+  for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
   bucket.defaults.add(entry.defaultRuntime);
+}
+
+/** Folds one worker's own pairings for `model` into the fleet's. */
+function addPairings(index: Map<string, Set<string>>, entry: PlatformCatalog, model: string): void {
+  const paired = index.get(model) ?? new Set<string>();
+  // Own keys only: a model a worker names `constructor` must not read Object.prototype's.
+  const own = Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined;
+  // A pairing is the worker's claim; one with a runtime it does not list itself is dropped.
+  for (const runtime of own ?? []) if (entry.runtimes.includes(runtime)) paired.add(runtime);
+  index.set(model, paired);
 }
 
 function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCatalog {
@@ -206,10 +210,7 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
   const runtimes = [...bucket.runtimes.keys()].sort();
   return {
     modelRuntimes: Object.fromEntries(
-      [...bucket.modelRuntimes].map(([model, paired]) => [
-        model,
-        runtimes.filter((runtime) => paired.has(runtime)),
-      ]),
+      [...bucket.modelRuntimes].map(([model, paired]) => [model, [...paired].sort()]),
     ),
     models: [...bucket.models.keys()].sort(),
     modelWorkers: Object.fromEntries(bucket.models),

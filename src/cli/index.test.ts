@@ -1620,6 +1620,25 @@ describe("CLI: token operations never write tokens.json directly", () => {
 });
 
 describe("CLI: catalog", () => {
+  it("prints a model named after an Object.prototype member with no paired runtime", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                { modelRuntimes: {}, models: ["constructor"], platform: "ios", runtimes: [] },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toContain("    constructor: (no paired runtime)\n");
+  });
+
   it("prints (none) for a platform with no models", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({
