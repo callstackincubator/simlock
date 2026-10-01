@@ -158,6 +158,51 @@ describe("Registry lease requests", () => {
     expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
   });
 
+  it("loads a granted record stored before mode existed with its grant's device as full, without featureProfile", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const grant = (id: string, device: Record<string, unknown>) => ({
+      createdAt: 1_000,
+      grant: {
+        device: {
+          driverDeviceId: "udid",
+          id: "dev_1",
+          spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+          ...device,
+        },
+        environment: {},
+        lease: { id: "lse_1" },
+        timing: {},
+      },
+      id,
+      ownerId: "agent",
+      request,
+      requesterId: "agent",
+      settledAt: 1_000,
+      state: "granted",
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [
+          grant("req_legacy", { featureProfile: "reduced" }),
+          grant("req_slim", { mode: "slim" }),
+          grant("req_unknown", { mode: "reduced" }),
+        ],
+        leases: [],
+      }),
+    );
+
+    const { registry } = await loadRegistry({ filesystem });
+
+    const devices = registry.leaseRequests().map((record) => [record.id, record.grant?.device]);
+    expect(devices.map(([id]) => id)).toEqual(["req_legacy", "req_slim"]);
+    expect(devices[0]?.[1]).toMatchObject({ mode: "full" });
+    expect(devices[0]?.[1]).not.toHaveProperty("featureProfile");
+    expect(devices[1]?.[1]).toMatchObject({ mode: "slim" });
+  });
+
   it("settles every open record as failed, leaving settled ones alone", async () => {
     const { registry } = await loadRegistry();
     const open = await registry.createLeaseRequest(newRequest("open"));

@@ -367,7 +367,7 @@ describe("ManagedDeviceLifecycle", () => {
     });
   });
 
-  it("persists a driver's reported mode alongside address and driverData on boot (#makeReady path)", async () => {
+  it("persists a driver's reported mode on boot (#makeReady path)", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, mode: "slim", platform: "ios" });

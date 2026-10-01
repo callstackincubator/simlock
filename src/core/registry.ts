@@ -1028,12 +1028,27 @@ function parseLeaseRequestResult(
   const { failure, grant, settledAt } = value;
   if (typeof settledAt !== "number") return undefined;
   if (state === "granted") {
-    return isObject(grant) ? { grant: grant as unknown as LeaseGrant, settledAt } : undefined;
+    const parsed = parseStoredGrant(grant);
+    return parsed === undefined ? undefined : { grant: parsed, settledAt };
   }
   if (state === "failed") {
     return isLeaseRequestFailure(failure) ? { failure, settledAt } : undefined;
   }
   return { settledAt };
+}
+
+/**
+ * A stored grant's device follows the device record's own load rule (ADR 0007 §11): no `mode`
+ * loads as `full`, the retired keys are dropped, and an unknown `mode` makes the record
+ * unusable, so it is skipped like any other inconsistent lease request.
+ */
+function parseStoredGrant(grant: unknown): LeaseGrant | undefined {
+  if (!isObject(grant) || !isObject(grant.device)) return undefined;
+  const device: Record<string, unknown> = { ...grant.device };
+  for (const key of retiredDeviceRecordKeys) delete device[key];
+  if (device.mode === undefined) device.mode = "full";
+  if (device.mode !== "slim" && device.mode !== "full") return undefined;
+  return { ...grant, device } as unknown as LeaseGrant;
 }
 
 function isDeviceRequest(value: unknown): value is DeviceRequest {
