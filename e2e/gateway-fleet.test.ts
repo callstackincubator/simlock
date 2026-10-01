@@ -96,15 +96,13 @@ describe("gateway fleet", () => {
     const fleetConfig = { gateway: { token: secret, url: `ws://127.0.0.1:${port}` } };
     const workerA = await withDaemon({
       configOverrides: { gateway: { ...fleetConfig.gateway, label: "worker-a" } },
-    });
-    await workerA.driverScript.set({
-      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+      // Seeded before the daemon starts: the worker reports its catalog as its uplink opens, and
+      // a script written afterwards would only reach the gateway on its 30s periodic refresh.
+      driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
     });
     const workerB = await withDaemon({
       configOverrides: { gateway: { ...fleetConfig.gateway, label: "worker-b" } },
-    });
-    await workerB.driverScript.set({
-      ios: { knownModels: ["iPhone 17"], availableOsVersions: ["18.4"] },
+      driverScript: { ios: { knownModels: ["iPhone 17"], availableOsVersions: ["18.4"] } },
     });
 
     const joined = await waitForWorkers(

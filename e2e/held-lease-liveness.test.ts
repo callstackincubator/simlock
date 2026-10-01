@@ -90,10 +90,14 @@ describe("lease liveness & restart", () => {
   });
 
   it("keeps a lease across an ungraceful daemon restart, with its TTL timer restored", async () => {
-    // 30s, not 15: a kill-and-restart sits inside this window (and waits, best-effort, for the
-    // old process to be gone), so a tighter TTL could expire the lease before the "still there
-    // right after the restart" check runs and turn a real regression into a flake.
-    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 30_000 } } });
+    // The TTL is the floor on this test's wall clock -- the last step waits it out -- so it is
+    // sized against what has to fit inside it, not padded further: a kill-and-restart (and a
+    // wait for the old process to be gone) has to land before the "still there right after the
+    // restart" check, or the lease expires first and a real regression reads as a flake. That
+    // window measures about half a second; 10s leaves it a ~20x margin. The same check is what
+    // tells the restored *timer* apart from restore's startup sweep, which expires a lease whose
+    // deadline already passed: a lease still listed after the restart cannot have taken that path.
+    const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 10_000 } } });
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
@@ -122,8 +126,16 @@ describe("lease liveness & restart", () => {
     await env.killDaemon("SIGKILL");
     await env.startDaemon();
 
-    const afterRestart = (await env.cli(["list", "--leases"])).json as { id: string }[];
+    const afterRestart = (await env.cli(["list", "--leases"])).json as {
+      id: string;
+      ttlDeadline: number;
+    }[];
     expect(afterRestart.map((lease) => lease.id)).toContain(grant.lease.id);
+    // Read here, not from the grant: the holder renews every third of the TTL until the kill,
+    // so the grant's deadline can be stale. Nothing renews it after this -- the holder never
+    // reconnects -- so this is the deadline the restored timer has to honour.
+    const persistedDeadline =
+      afterRestart.find((lease) => lease.id === grant.lease.id)?.ttlDeadline ?? Number.NaN;
 
     // The holder itself does not survive the restart -- the CLI never reconnects (ADR 0003
     // §10) -- so it writes one DAEMON_CONNECTION_LOST line naming the still-standing lease
@@ -137,9 +149,20 @@ describe("lease liveness & restart", () => {
 
     // With nothing left renewing it, the restored timer expires the lease on its own
     // deadline: the record persisted, and so did the deadline it carried.
-    await waitForLeaseCount(env, 0, { timeout: 45_000 });
+    await waitForLeaseCount(env, 0, { timeout: 25_000 });
     await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
-    await env.expectEvents(["lease.expired"]);
+    const recorded = await env.expectEvents(["lease.expired"]);
+    // On that deadline, not merely eventually: the wait above has slack for a slow machine, so
+    // without this a restored timer that fires seconds late would still pass. The upper bound is
+    // scheduling slack. It cannot tell the persisted deadline from a fresh TTL armed at restart,
+    // because the restart lands well inside that slack.
+    const expired = recorded.find(
+      (entry) =>
+        entry.event === "lease.expired" &&
+        (entry.payload as { leaseId?: string }).leaseId === grant.lease.id,
+    );
+    expect(expired?.timestamp).toBeGreaterThanOrEqual(persistedDeadline);
+    expect(expired?.timestamp).toBeLessThan(persistedDeadline + 3_000);
   });
 
   it("survives a graceful daemon stop and can be renewed from a later invocation", async () => {
