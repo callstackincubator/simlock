@@ -88,17 +88,19 @@ async function createHarness(
   options: {
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
+    /** The state directory of an earlier harness: loading it again is a daemon restart. */
+    readonly filesystem?: MemoryFilesystem;
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
     readonly limits?: CapacityLimits;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
-  const filesystem = new MemoryFilesystem();
+  const filesystem = options.filesystem ?? new MemoryFilesystem();
   const bus = new EventBus(clock);
   const driver =
     options.driver ?? new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  let nextId = 1;
+  let nextId = options.filesystem === undefined ? 1 : 1_000;
   const registry = await Registry.load({
     clock,
     eventBus: bus,
@@ -135,7 +137,7 @@ async function createHarness(
     }),
   });
 
-  return { bus, clock, driver, engine, registry };
+  return { bus, clock, driver, engine, filesystem, registry };
 }
 
 async function seedReady(
@@ -1769,5 +1771,59 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       { id: restarted.device.id, state: "deleted" },
     ]);
     expect(restarted.operationsSinceStart()).toEqual(["destroy"]);
+  });
+});
+
+describe("LeaseEngine restart recovery of stored lease requests", () => {
+  /** Leaves `agent`'s request queued behind the one device, then restarts on the same state. */
+  async function restartWithAgentQueued(idempotencyKey?: string) {
+    const before = await createHarness();
+    await before.engine.request(request, { ownerId: "holder", requesterId: "holder" });
+    void before.engine
+      .request(request, {
+        ownerId: "agent",
+        requesterId: "agent",
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      })
+      .catch(() => undefined);
+    await expect
+      .poll(() => before.registry.leaseRequests().find((record) => record.requesterId === "agent"))
+      .toMatchObject({ state: "open" });
+
+    const after = await createHarness({ filesystem: before.filesystem });
+    await after.engine.convergeRunningCapacity();
+    return after;
+  }
+
+  it("settles a request still open at a restart as failed and says the daemon restarted", async () => {
+    const after = await restartWithAgentQueued("key-1");
+
+    expect(
+      after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
+    ).toMatchObject({
+      failure: { code: "INTERNAL", message: expect.stringContaining("daemon restarted") },
+      state: "failed",
+    });
+    expect(
+      after.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload),
+    ).toEqual([{ reason: "daemon-restarted", requestSpec: request }]);
+    await expect(
+      after.engine.request(request, {
+        idempotencyKey: "key-1",
+        ownerId: "agent",
+        requesterId: "agent",
+      }),
+    ).rejects.toMatchObject({ message: expect.stringContaining("daemon restarted") });
+  });
+
+  it("settles a request that carried no idempotency key at a restart too", async () => {
+    const after = await restartWithAgentQueued();
+
+    expect(
+      after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
+    ).toMatchObject({ state: "failed" });
   });
 });

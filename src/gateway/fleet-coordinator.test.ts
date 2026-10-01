@@ -176,6 +176,45 @@ function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["req
   };
 }
 
+describe("FleetLeaseCoordinator stored requests", () => {
+  it("answers a repeat under the same key with the first grant, forwarding nothing a second time", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    const keyed = requestOptions({ idempotencyKey: "key-1" });
+
+    const first = await coordinator.request(REQUEST, keyed);
+    const repeat = await coordinator.request(REQUEST, keyed);
+
+    expect(repeat.lease.id).toBe(first.lease.id);
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+  });
+
+  it("reads a request back through its in-memory book once the fleet grants it", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    let requestId: string | undefined;
+
+    const grant = await coordinator.request(
+      REQUEST,
+      requestOptions({ onAdmitted: (id) => (requestId = id) }),
+    );
+    await tick();
+
+    if (requestId === undefined) throw new Error("expected the request to be admitted");
+    expect(coordinator.requests.get(requestId)?.record).toMatchObject({
+      grant: { lease: { id: grant.lease.id } },
+      state: "granted",
+    });
+    expect(coordinator.requests.requestIdForLease(grant.lease.id)).toBe(requestId);
+  });
+});
+
 describe("FleetLeaseCoordinator dispatch", () => {
   it("grants a queued request from whichever worker frees first -- never dispatching to the one routing did not prefer", async () => {
     const { coordinator, directory, workers } = harness();

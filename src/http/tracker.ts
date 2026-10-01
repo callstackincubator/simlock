@@ -271,8 +271,9 @@ export class LeaseRequestTracker {
   /**
    * Cancels a pending request via `dispatch("lease.cancel", ...)` -- the exact operation the
    * socket path's `lease.cancel` uses, authorize hook included (ADR: "cancels this principal's
-   * pending request by requester id"). On `cancelled` it waits for the daemon to store the
-   * cancellation before answering, so a `GET` right after the `204` already reads `cancelled`.
+   * pending request by requester id"). The request book reports a cancelled wait as cancelled
+   * from the moment it is rejected, before the record is written, so a `GET` right after the
+   * `204` already reads `cancelled`.
    */
   async cancel(id: string, identity: TokenIdentity): Promise<CancelOutcome> {
     const before = this.get(id);
@@ -287,10 +288,7 @@ export class LeaseRequestTracker {
       { requesterId: before.requesterId },
       session,
     );
-    if (result === "cancelled") {
-      await this.#nextChange(id);
-      return { kind: "cancelled" };
-    }
+    if (result === "cancelled") return { kind: "cancelled" };
     // Settled between the check above and this call (e.g. granted in the interim) -- report
     // the now-current state rather than a stale answer.
     const after = this.get(id)?.state;
@@ -300,19 +298,6 @@ export class LeaseRequestTracker {
 
   requestIdForLease(leaseId: string): string | undefined {
     return this.options.requests.requestIdForLease(leaseId);
-  }
-
-  /** Resolves on the request's next change, or at once when nothing is open under `id`. A
-   * cancelled wait reports nothing further but its settlement, so this cannot outwait it. */
-  #nextChange(id: string): Promise<void> {
-    return new Promise((resolve) => {
-      let unsubscribe: (() => void) | undefined;
-      unsubscribe = this.options.requests.watch(id, () => {
-        unsubscribe?.();
-        resolve();
-      });
-      if (unsubscribe === undefined) resolve();
-    });
   }
 }
 

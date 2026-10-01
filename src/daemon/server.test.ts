@@ -38,6 +38,7 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
+import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
 import { AdminSecretManager } from "./admin-secret.js";
@@ -1229,6 +1230,111 @@ describe("DaemonServer startup readiness", () => {
  * also waits on convergence), so a test that connects while convergence is deliberately
  * held open must poll for the listener rather than assume it exists synchronously.
  */
+describe("DaemonServer stored lease requests", () => {
+  const iPhone = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
+
+  /** `holder` takes the one device; `waiter` queues behind it under `key-1`. */
+  async function queueBehindHolder(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const holder = await createClient(harness.socketPath);
+    const waiter = await createClient(harness.socketPath);
+    await Promise.all([hello(holder), hello(waiter)]);
+    await holder.request("lease.request", { ...iPhone, requesterId: "holder" });
+    void waiter.request("lease.request", {
+      ...iPhone,
+      idempotencyKey: "key-1",
+      requesterId: "waiter",
+    });
+    await expect
+      .poll(() => harness.eventBus.replay().some((event) => event.event === "lease.queued"))
+      .toBe(true);
+    return { holder, waiter };
+  }
+
+  it("ends only the caller's wait on a disconnect, writing no result for the request", async () => {
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      logger: new JsonLinesLogger({ clock: new FakeClock(1_000), level: "debug", sink }),
+    });
+    const { waiter } = await queueBehindHolder(harness);
+
+    await waiter.close();
+    await expect
+      .poll(() => sink.records.some((record) => record.message === "Connection closed"))
+      .toBe(true);
+
+    expect(
+      harness.registry.leaseRequests().find((record) => record.requesterId === "waiter"),
+    ).toMatchObject({ state: "open" });
+    expect(harness.engine.queueDepth).toBe(1);
+  });
+
+  it("gives a client that reconnects after a disconnect its result when it repeats the request", async () => {
+    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
+    const { waiter } = await queueBehindHolder(harness);
+    await waiter.close();
+
+    const reconnected = await createClient(harness.socketPath);
+    await hello(reconnected);
+    const repeat = reconnected.request("lease.request", {
+      ...iPhone,
+      idempotencyKey: "key-1",
+      requesterId: "waiter",
+    });
+    harness.clock.advance(40);
+
+    await expect(repeat).resolves.toMatchObject({
+      ok: true,
+      payload: { lease: { requesterId: "waiter" } },
+    });
+    expect(harness.registry.snapshot.leases.map((lease) => lease.requesterId)).toEqual(["waiter"]);
+  });
+
+  it("answers IDEMPOTENCY_CONFLICT on the wire when a key is reused for a different device", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    await client.request("lease.request", { ...iPhone, idempotencyKey: "key-1" });
+
+    await expect(
+      client.request("lease.request", { ...iPhone, idempotencyKey: "key-1", model: "iPhone 17" }),
+    ).resolves.toMatchObject({ error: { code: "IDEMPOTENCY_CONFLICT" }, ok: false });
+  });
+
+  it("answers FORBIDDEN on the wire to a repeat from a different principal", async () => {
+    const harness = await createHarness();
+    const owner = await createClient(harness.socketPath);
+    const other = await createClient(harness.socketPath);
+    await helloAs(owner, "alice");
+    await helloAs(other, "mallory");
+    await owner.request("lease.request", {
+      ...iPhone,
+      idempotencyKey: "key-1",
+      requesterId: "agent",
+    });
+
+    await expect(
+      other.request("lease.request", { ...iPhone, idempotencyKey: "key-1", requesterId: "agent" }),
+    ).resolves.toMatchObject({ error: { code: "FORBIDDEN" }, ok: false });
+  });
+
+  it("replays a stored failure with the code it failed with", async () => {
+    const harness = await createHarness();
+    const holder = await createClient(harness.socketPath);
+    const client = await createClient(harness.socketPath);
+    await Promise.all([hello(holder), hello(client)]);
+    await holder.request("lease.request", { ...iPhone, requesterId: "holder" });
+    const noWait = { ...iPhone, idempotencyKey: "key-1", noWait: true, requesterId: "agent" };
+    await expect(client.request("lease.request", noWait)).resolves.toMatchObject({
+      error: { code: "NO_CAPACITY" },
+    });
+
+    await expect(client.request("lease.request", noWait)).resolves.toMatchObject({
+      error: { code: "NO_CAPACITY" },
+      ok: false,
+    });
+  });
+});
+
 async function createClientRetrying(socketPath: string, timeoutMs = 2_000): Promise<Client> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -2686,6 +2792,7 @@ async function createHarness(
   const engine = new LeaseEngine({
     clock,
     config,
+    describeFailure: describeLeaseRequestFailure,
     drivers: [driver],
     eventBus,
     idGenerator: sequence(),

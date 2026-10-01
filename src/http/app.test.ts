@@ -9,10 +9,13 @@ import {
   UnknownLeaseError,
 } from "../core/index.js";
 import { DispatchError, DoctorUnavailableError } from "../daemon/dispatcher.js";
-import { StartupFailedError } from "../daemon/error-code.js";
+import { describeLeaseRequestFailure, StartupFailedError } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
+import { LeaseRequestBook } from "../core/lease-request-book.js";
+import { Registry } from "../core/registry.js";
+import { SerializedDecision } from "../core/serialized-decision.js";
 import { RequestCancelledError } from "../core/wait-queue.js";
-import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
   FakeDispatcher,
@@ -26,7 +29,12 @@ import {
   waitForDispatch,
 } from "./test-fakes.js";
 
-function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] } = {}) {
+function buildHarness(
+  overrides: {
+    readonly config?: HttpGatewayDeps["config"];
+    readonly leaseRequests?: HttpGatewayDeps["leaseRequests"];
+  } = {},
+) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const dispatcher = new FakeDispatcher(clock);
@@ -56,7 +64,7 @@ function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] }
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     eventBus,
     idGenerator: sequenceIdGenerator("gw"),
-    leaseRequests: dispatcher.requests,
+    leaseRequests: overrides.leaseRequests ?? dispatcher.requests,
     logger,
     ownerRoutedFacts,
     registry,
@@ -513,6 +521,56 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     expect(frames.map((frame) => frame.event)).toEqual(["queued", "provisioning", "granted"]);
     const last = frames.at(-1)?.data as { lease: { id: string } };
     expect(last.lease.id).toBe("lse_sse");
+  });
+});
+
+describe("GET /v1/lease-requests/:id across a daemon restart", () => {
+  it("answers from the core record a previous daemon process stored", async () => {
+    const clock = new FakeClock(1_000);
+    const filesystem = new MemoryFilesystem();
+    const load = () =>
+      Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem,
+        idGenerator: sequenceIdGenerator("stored"),
+        statePath: "/home/agent/.simlock/state.json",
+      });
+    const before = await load();
+    const stored = await before.createLeaseRequest({
+      ownerId: "tok_agent",
+      request: { model: "iPhone 17 Pro", platform: "ios" },
+      requesterId: "tok_agent",
+    });
+    await before.settleLeaseRequest(stored.id, {
+      grant: makeGrant({ lease: { id: "lse_before_restart" } }),
+      state: "granted",
+    });
+
+    // A new process: a fresh registry read from disk, and a request book nothing was ever
+    // submitted through.
+    const after = await load();
+    const { app } = buildHarness({
+      leaseRequests: new LeaseRequestBook({
+        decisions: new SerializedDecision(),
+        describeFailure: describeLeaseRequestFailure,
+        store: after,
+      }),
+    });
+    const response = await app.request(`/v1/lease-requests/${stored.id}`, {
+      headers: agentAuth,
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      (await response.json()) as { request: { state: string; lease: { id: string } } },
+    ).toMatchObject({
+      request: {
+        id: stored.id,
+        lease: { id: "lse_before_restart", requestId: stored.id },
+        state: "granted",
+      },
+    });
   });
 });
 
