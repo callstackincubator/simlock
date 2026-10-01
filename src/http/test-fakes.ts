@@ -218,21 +218,18 @@ export class FakeDispatcher {
     const options = fakeRequestOptions(input, session);
     const replay = this.requests.replay(request, options);
     if (replay !== undefined) return replay;
-    const { promise } = await this.requests.admit(
-      request,
-      options,
-      (_id, onProgress) =>
-        new Promise<LeaseGrant>((resolve, reject) => {
-          this.calls.push({
-            input,
-            operation: "lease.request",
-            reject,
-            resolve: resolve as (value: unknown) => void,
-            session: { ...session, onProgress },
-          });
-        }),
-    );
-    return promise;
+    const { started } = await this.requests.admit(request, options, (_id, onProgress) => ({
+      promise: new Promise<LeaseGrant>((resolve, reject) => {
+        this.calls.push({
+          input,
+          operation: "lease.request",
+          reject,
+          resolve: resolve as (value: unknown) => void,
+          session: { ...session, onProgress },
+        });
+      }),
+    }));
+    return started.promise;
   }
 }
 

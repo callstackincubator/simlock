@@ -257,7 +257,14 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
           send({ data: serializeRequest({ ...current, state }), event: state.stage });
           if (isTerminalStage(state)) end();
         });
-        return unsubscribe ?? (() => {});
+        // Nothing in this process is driving the request -- one a restarted daemon has not
+        // settled yet -- so no change will ever arrive on this stream: end it rather than
+        // hold it open. The client reconnects and reads the settled state.
+        if (unsubscribe === undefined) {
+          end();
+          return () => {};
+        }
+        return unsubscribe;
       },
     });
   });

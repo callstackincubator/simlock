@@ -574,6 +574,43 @@ describe("GET /v1/lease-requests/:id across a daemon restart", () => {
   });
 });
 
+describe("GET /v1/lease-requests/:id/events for a request nothing is driving", () => {
+  it("ends the stream after the current state when the request has no live wait to report on", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: sequenceIdGenerator("stored"),
+      statePath: "/home/agent/.simlock/state.json",
+    });
+    // Stored open by a previous process; this one has not settled it yet.
+    const stored = await registry.createLeaseRequest({
+      ownerId: "tok_agent",
+      request: { model: "iPhone 17 Pro", platform: "ios" },
+      requesterId: "tok_agent",
+    });
+    const { app } = buildHarness({
+      leaseRequests: new LeaseRequestBook({
+        decisions: new SerializedDecision(),
+        describeFailure: describeLeaseRequestFailure,
+        store: registry,
+      }),
+    });
+
+    const response = await app.request(`/v1/lease-requests/${stored.id}/events`, {
+      headers: agentAuth,
+    });
+    const body = await Promise.race([
+      response.text(),
+      new Promise<string>((resolve) => setTimeout(() => resolve("STILL OPEN"), 1_000)),
+    ]);
+
+    expect(body).not.toBe("STILL OPEN");
+    expect(body).toContain("event: queued");
+  });
+});
+
 describe("lease-request ownership", () => {
   /** A request sent over another frontend under `tok_agent`'s requester id, by `tok_other`. */
   async function requestOwnedByOther(dispatcher: FakeDispatcher): Promise<string> {

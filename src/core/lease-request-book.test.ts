@@ -254,6 +254,8 @@ async function settled(): Promise<void> {
 
 const keyed = { idempotencyKey: "key-1", ownerId: "agent", requesterId: "agent" } as const;
 
+const granted = (id: string) => ({ promise: Promise.resolve({ lease: { id } }) });
+
 describe("LeaseRequestBook", () => {
   it.each([
     ["a different osVersion", { ...request, osVersion: "18.0" }],
@@ -261,7 +263,7 @@ describe("LeaseRequestBook", () => {
     ["full where none was asked", { ...request, full: true }],
   ])("refuses a repeat naming %s as an idempotency conflict", async (_label, different) => {
     const book = bookOver(memoryStore());
-    await book.admit(request, keyed, () => Promise.resolve({ lease: { id: "lse_1" } }));
+    await book.admit(request, keyed, () => granted("lse_1"));
     await settled();
 
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
@@ -269,7 +271,7 @@ describe("LeaseRequestBook", () => {
 
   it("treats full: false and an omitted full as the same request", async () => {
     const book = bookOver(memoryStore());
-    await book.admit(request, keyed, () => Promise.resolve({ lease: { id: "lse_1" } }));
+    await book.admit(request, keyed, () => granted("lse_1"));
     await settled();
 
     await expect(book.replay({ ...request, full: false }, keyed)).resolves.toEqual({
@@ -279,25 +281,28 @@ describe("LeaseRequestBook", () => {
 
   it("replays a cancelled request as cancelled", async () => {
     const book = bookOver(memoryStore());
-    const { id, promise } = await book.admit(request, keyed, () =>
-      Promise.reject(new RequestCancelledError("req_0")),
-    );
-    await promise.catch(() => undefined);
+    const { id, started } = await book.admit(request, keyed, () => ({
+      promise: Promise.reject(new RequestCancelledError("req_0")),
+    }));
+    await started.promise.catch(() => undefined);
     await settled();
 
     expect(book.get(id)?.record.state).toBe("cancelled");
     await expect(book.replay(request, keyed)).rejects.toBeInstanceOf(RequestCancelledError);
   });
 
-  it("stores a request whose start throws as failed, so a repeat gets that failure", async () => {
-    const book = bookOver(memoryStore());
-    const { id, promise } = await book.admit(request, keyed, () => {
-      throw new Error("the queue refused it");
-    });
-    await expect(promise).rejects.toThrow("the queue refused it");
+  it("stores a request whose start throws as failed, rethrows, and gives a repeat that failure", async () => {
+    const store = memoryStore();
+    const book = bookOver(store);
+
+    await expect(
+      book.admit(request, keyed, () => {
+        throw new Error("the queue refused it");
+      }),
+    ).rejects.toThrow("the queue refused it");
     await settled();
 
-    expect(book.get(id)?.record).toMatchObject({
+    expect(store.leaseRequests()[0]).toMatchObject({
       failure: { message: "the queue refused it" },
       state: "failed",
     });
@@ -307,7 +312,40 @@ describe("LeaseRequestBook", () => {
     });
   });
 
-  it("keeps answering a repeat from the settled wait when its result cannot be written", async () => {
+  it("refuses to replay a stored open request that nothing in this process is driving", async () => {
+    const store = memoryStore();
+    await store.createLeaseRequest({ ...keyed, request });
+
+    expect(() => bookOver(store).replay(request, keyed)).toThrow("nothing is driving it");
+  });
+
+  it("stops telling callers and watchers about progress once the wait has settled", async () => {
+    const book = bookOver(memoryStore());
+    const heard: unknown[] = [];
+    let report: ((progress: { stage: "queued"; queuePosition: number }) => void) | undefined;
+    let finish: ((grant: Grant) => void) | undefined;
+    const { id } = await book.admit(
+      request,
+      { ...keyed, onProgress: (progress) => heard.push(progress) },
+      (_id, onProgress) => {
+        report = onProgress;
+        return { promise: new Promise<Grant>((resolve) => (finish = resolve)) };
+      },
+    );
+    let watched = 0;
+    book.watch(id, () => (watched += 1));
+    finish?.({ lease: { id: "lse_1" } });
+    await settled();
+    const watchedAtSettlement = watched;
+
+    report?.({ queuePosition: 1, stage: "queued" });
+
+    expect(heard).toEqual([]);
+    expect(watched).toBe(watchedAtSettlement);
+    expect(book.get(id)?.progress).toBeUndefined();
+  });
+
+  it("keeps answering a repeat from the settled wait when its result cannot be written, and takes no new watchers", async () => {
     const inner = memoryStore();
     const store: LeaseRequestStore<Grant> = {
       createLeaseRequest: (input) => inner.createLeaseRequest(input),
@@ -315,13 +353,12 @@ describe("LeaseRequestBook", () => {
       settleLeaseRequest: () => Promise.reject(new Error("disk full")),
     };
     const book = bookOver(store);
-    const { id } = await book.admit(request, keyed, () =>
-      Promise.resolve({ lease: { id: "lse_1" } }),
-    );
+    const { id } = await book.admit(request, keyed, () => granted("lse_1"));
     await settled();
 
     expect(inner.leaseRequests()[0]?.state).toBe("open");
     await expect(book.replay(request, keyed)).resolves.toEqual({ lease: { id: "lse_1" } });
     expect(book.get(id)?.record.state).toBe("granted");
+    expect(book.watch(id, () => undefined)).toBeUndefined();
   });
 });

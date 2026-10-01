@@ -179,11 +179,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           );
           throw new RequesterAlreadyLeasedError(options.requesterId, activeLease?.id);
         }
-        let accepted: AcquisitionWaiter | undefined;
-        const { id } = await this.options.requests.admit(request, options, (id, onProgress) => {
-          accepted = this.#newWaiter(request, { ...options, onProgress }, id);
-          return accepted.promise;
-        });
+        const { id, started: accepted } = await this.options.requests.admit(
+          request,
+          options,
+          (id, onProgress) => this.#newWaiter(request, { ...options, onProgress }, id),
+        );
         this.options.eventBus.emit(
           "lease.requested",
           {
@@ -194,7 +194,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
           },
           "lease-acquisition-coordinator",
         );
-        if (accepted === undefined) throw new Error(`Lease request ${id} has no waiter`);
         return { waiter: accepted };
       });
     } catch (error: unknown) {

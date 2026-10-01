@@ -76,14 +76,6 @@ describe("LeaseRequestTracker.submit", () => {
     }
   });
 
-  it("drops a fast-rejected request from tracking -- it never becomes a gettable resource", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    const outcomePromise = tracker.submit(identity, body);
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    call.reject(new Error("boom"));
-    await outcomePromise;
-  });
-
   it("answers 'created' immediately for an instant grant that never calls onProgress", async () => {
     const { dispatcher, tracker } = buildTracker();
     const outcomePromise = tracker.submit(identity, body);
@@ -426,5 +418,26 @@ describe("LeaseRequestTracker.submit when the stored record cannot be read", () 
     if (settled.kind === "created") {
       expect(settled.view.state).toMatchObject({ lease: { id: "lse_pruned" }, stage: "granted" });
     }
+  });
+});
+
+describe("LeaseRequestTracker.submit with a dispatch that never names its request", () => {
+  it("fails the POST rather than waiting forever when a grant arrives unnamed", async () => {
+    const tracker = new LeaseRequestTracker({
+      clock: new FakeClock(1_000),
+      dispatch: (() => Promise.resolve(makeGrant())) as never,
+      requests: {
+        get: () => undefined,
+        requestIdForLease: () => undefined,
+        watch: () => undefined,
+      },
+    });
+
+    const outcome = await tracker.submit(identity, body);
+
+    expect(outcome).toMatchObject({
+      error: { message: "lease.request granted without naming its request" },
+      kind: "rejected",
+    });
   });
 });

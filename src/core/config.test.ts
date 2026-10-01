@@ -379,6 +379,32 @@ describe("loadConfig", () => {
     },
   );
 
+  it("reads lease.requestRetentionMs and lease.maxRequestRecords", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { maxRequestRecords: 50, requestRetentionMs: 30_000 } }),
+    );
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(config.lease).toMatchObject({ maxRequestRecords: 50, requestRetentionMs: 30_000 });
+  });
+
+  it.each([
+    [{ lease: { requestRetentionMs: 0 } }, "lease.requestRetentionMs"],
+    [{ lease: { maxRequestRecords: 1.5 } }, "lease.maxRequestRecords"],
+  ])("rejects an invalid lease-request limit, naming the key (%#)", async (contents, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
   it("reads lease.identity per platform and leaves the unset platform reusable", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");

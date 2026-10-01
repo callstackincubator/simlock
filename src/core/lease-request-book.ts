@@ -284,16 +284,16 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
 
   /**
    * Stores a new request, then calls `start` with its id and the progress sink its wait must
-   * report through, and writes the result once the promise `start` returns settles. Call it
-   * inside the owner's serialized admission section, after the owner's own admission checks.
-   * A `start` that throws settles the stored request as failed with that error, so no record is
-   * ever left open with nothing driving it.
+   * report through, and writes the result once the wait `start` returns settles. Call it inside
+   * the owner's serialized admission section, after the owner's own admission checks. A `start`
+   * that throws settles the stored request as failed with that error and rethrows it, so no
+   * record is ever left open with nothing driving it.
    */
-  async admit(
+  async admit<Started extends { readonly promise: Promise<Grant> }>(
     request: DeviceRequest,
     options: LeaseRequestOptions,
-    start: (id: string, onProgress: (progress: LeaseProgress) => void) => Promise<Grant>,
-  ): Promise<{ readonly id: string; readonly promise: Promise<Grant> }> {
+    start: (id: string, onProgress: (progress: LeaseProgress) => void) => Started,
+  ): Promise<{ readonly id: string; readonly started: Started }> {
     const record = await this.options.store.createLeaseRequest({
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
       ownerId: options.ownerId,
@@ -310,19 +310,24 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       watchers: new Set(),
     };
     this.#open.set(record.id, open);
-    let promise: Promise<Grant>;
+    let started: Started;
     try {
-      promise = start(record.id, (progress) => this.#report(open, progress));
+      started = start(record.id, (progress) => this.#report(open, progress));
     } catch (error: unknown) {
-      promise = Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      this.#track(record.id, open, Promise.reject(error));
+      throw error;
     }
+    this.#track(record.id, open, started.promise);
+    options.onAdmitted?.(record.id, false);
+    return { id: record.id, started };
+  }
+
+  #track(id: string, open: OpenRequest<Grant>, promise: Promise<Grant>): void {
     open.promise = promise;
     promise.then(
-      (grant) => this.#settle(record.id, open, { grant, state: "granted" }),
-      (error: unknown) => this.#settle(record.id, open, this.#outcomeOf(error)),
+      (grant) => this.#settle(id, open, { grant, state: "granted" }),
+      (error: unknown) => this.#settle(id, open, this.#outcomeOf(error)),
     );
-    options.onAdmitted?.(record.id, false);
-    return { id: record.id, promise };
   }
 
   /** A stored request and its live progress, or `undefined` once it is unknown or pruned. */
@@ -341,7 +346,6 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
    * Calls `listener` on every change to an open request -- each progress report, and its
    * settlement once the result is stored. `undefined` when nothing is open under `id`.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through the HTTP request resource's `LeaseRequestReader` port.
   watch(id: string, listener: () => void): (() => void) | undefined {
     const open = this.#open.get(id);
     if (open === undefined || open.phase === "settled") return undefined;
@@ -387,7 +391,6 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
   ): Promise<void> {
     open.phase = "settling";
     open.outcome = outcome;
-    open.callers.clear();
     try {
       await this.options.decisions.run(() => this.options.store.settleLeaseRequest(id, outcome));
       this.#open.delete(id);

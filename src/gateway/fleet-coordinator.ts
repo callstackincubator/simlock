@@ -196,12 +196,11 @@ export class FleetLeaseCoordinator {
       const replay = this.requests.replay(deviceRequest, options);
       if (replay !== undefined) return { replay };
       this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId);
-      let created: FleetWaiter | undefined;
-      const { id } = await this.requests.admit(deviceRequest, options, (id, onProgress) => {
-        created = this.#queue.create(deviceRequest, { ...options, onProgress }, id);
-        return created.promise;
-      });
-      if (created === undefined) throw new Error(`Lease request ${id} has no waiter`);
+      const { id, started: created } = await this.requests.admit(
+        deviceRequest,
+        options,
+        (id, onProgress) => this.#queue.create(deviceRequest, { ...options, onProgress }, id),
+      );
       this.#createdAt.set(created, this.options.clock.now());
       this.#emit("lease.requested", {
         requestId: id,
