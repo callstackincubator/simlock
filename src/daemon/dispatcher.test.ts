@@ -10,9 +10,9 @@ import {
   PassthroughRefusedError,
   Registry,
   type Config,
-  type DeviceMode,
 } from "../core/index.js";
 import { OPERATIONS } from "../contract/index.js";
+import type { FakeDriverOptions } from "../core/fake-driver.js";
 import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
@@ -68,6 +68,8 @@ function resolveEventHistoryOverride(
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
+    /** Extra fake driver options, such as `knownModels` for a catalog that lists a model. */
+    readonly driverOptions?: Partial<FakeDriverOptions>;
     readonly awaitReady?: () => Promise<void>;
     /** Overrides the `catalog` dependency -- used only to force `#parseOutput`'s failure path
      * (see "Dispatcher: #parseOutput") with a fake that returns a payload violating the
@@ -102,9 +104,6 @@ async function buildDispatcher(
     readonly passthroughOverride?: PassthroughResolver;
     /** Stands in for the event history, so `events.replay` can be checked against it. */
     readonly eventHistory?: Pick<EventHistory, "replay">;
-    /** The mode the fake driver reports after every boot; unset, it reports none, as every
-     * driver but iOS does. */
-    readonly driverMode?: DeviceMode | undefined;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -121,7 +120,7 @@ async function buildDispatcher(
     availableOsVersions: ["26.5"],
     clock,
     platform: "ios",
-    mode: overrides.driverMode,
+    ...overrides.driverOptions,
     ...(overrides.passthroughTool === undefined
       ? {}
       : {
@@ -764,7 +763,7 @@ describe("Dispatcher: device mode on every surface", () => {
   ] as const)(
     "a lease grant's device carries mode: %s when the driver reported %s",
     async (expected, _reported, driverMode) => {
-      const { dispatcher } = await buildDispatcher(driverMode === undefined ? {} : { driverMode });
+      const { dispatcher } = await buildDispatcher({ driverOptions: { mode: driverMode } });
 
       const grant = await dispatcher.dispatch("lease.request", request, session());
 
@@ -773,7 +772,7 @@ describe("Dispatcher: device mode on every surface", () => {
   );
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
-    const { dispatcher, registry } = await buildDispatcher({ driverMode: "slim" });
+    const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
     const granted = await dispatcher.dispatch("lease.request", request, session());
     const provisioning = await registry.registerDevice({
       driverData: {},
@@ -800,7 +799,7 @@ describe("Dispatcher: device mode on every surface", () => {
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {
-    const { dispatcher } = await buildDispatcher({ driverMode: "slim" });
+    const { dispatcher } = await buildDispatcher({ driverOptions: { mode: "slim" } });
 
     const responses = [
       await dispatcher.dispatch("lease.request", request, session()),
@@ -888,6 +887,28 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     );
     const resolveCalls = driver.calls.filter((call) => call.operation === "resolveSpec");
     expect(resolveCalls.at(-1)?.arguments[1]).toMatchObject({ allowDownload: false });
+  });
+
+  it("catalog.get does not list an uninstalled runtime under downloads.policy 'always'", async () => {
+    // The fake driver has only 26.5 installed; under 'always' any other version is a download
+    // away, and the catalog still lists only what is on the machine.
+    const { dispatcher, driver } = await buildDispatcher({
+      downloadsPolicy: "always",
+      driverOptions: { knownModels: ["iPhone 17 Pro"] },
+    });
+
+    const catalog = await dispatcher.dispatch("catalog.get", {}, session());
+
+    expect(catalog.platforms).toEqual([
+      expect.objectContaining({
+        modelRuntimes: { "iPhone 17 Pro": ["26.5"] },
+        platform: "ios",
+        runtimes: ["26.5"],
+      }),
+    ]);
+    // The policy never reaches the driver, so nothing it could download can leak into the list.
+    const listCalls = driver.calls.filter((call) => call.operation === "listCatalog");
+    expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
   });
 
   it("leaves allowDownload:true untouched when downloads.policy is 'on-request'", async () => {

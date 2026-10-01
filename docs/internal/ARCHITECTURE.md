@@ -164,7 +164,8 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   carrying a `workerId`, the gateway's own queue depth — plus a `workers`
   array of views and `daemon.mode: "gateway"`. `catalog.get` is the union of
   the connected workers' catalogs, each model and runtime annotated with the
-  workers that have it. Worker events are republished on the gateway's bus
+  workers that have it, and `modelRuntimes` per model the union of each
+  worker's own pairings (ADR 0008 §4). Worker events are republished on the gateway's bus
   with `workerId` added, so `simlock events --follow` against a gateway shows
   the fleet.
 - **What a gateway does not do.** It starts no drivers, validates no device
@@ -223,16 +224,17 @@ applies to HTTP automatically because there is only one code path to fix.
 
 **Protocol versions are negotiated as `{min, max}` ranges** and honestly:
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
-Three changes have moved it since. ADR 0004 removed `lease.heartbeat` and
+Four changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
-path kept, taking it to 5; ADR 0007 makes every device report its device mode as a
-required `mode`, taking it to 6. So the range both
-sides advertise is `{min: 6, max: 6}`, an older client and a current daemon simply
+path kept, taking it to 5; ADR 0008 makes the catalog's `modelRuntimes`
+required, taking it to 6; ADR 0007 makes every device report its device mode
+as a required `mode`, taking it to 7. So the range both sides advertise is
+`{min: 7, max: 7}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
-worker older than ADR 0005 shows up in a gateway's views as `incompatible`
+worker older than ADR 0007 shows up in a gateway's views as `incompatible`
 rather than as a mystery (see [Gateway and worker
 modes](#gateway-and-worker-modes-adr-0005)). `daemon.stop` stays the frozen
 exception, accepted at any version the daemon has ever spoken, so the upgrade
@@ -539,15 +541,27 @@ local agents.
 Routing is a pure function over the current worker views, in one module with
 one entry point selected by `gateway.routing`, the same shape as
 `CapacityStrategy`. Nothing else in the gateway knows how a worker is chosen.
-The v1 policy (`warm-then-free`), in order:
 
-1. drop workers that are disconnected, drained, incompatible, or lacking the
-   requested platform, model, or runtime — a download counts as available
-   only on a worker whose own `downloads.policy` would allow it;
-2. prefer a worker with an unleased `ready` device matching the request — a
-   **warm hit**, and a sub-second grant;
-3. otherwise the worker with the **most free running capacity** for that
-   platform.
+A policy is an ordered list of **stages** (ADR 0009 §1), each a pure function
+over worker views. A **filter** drops workers. A **rank** scores them: when
+its best score is zero or less it abstains and changes nothing; otherwise it
+decides and keeps its best scorers. A rank may **settle**, ending the walk
+when it decides. The pick is the first remaining worker in ascending worker
+id, provided at least one rank decided. The deciding stage — the last rank
+that removed a worker, or the last that decided when none removed any — is
+reported on `request.dispatched`. `gateway.routing` names a whole list; the
+lists are code, and no config key lists or orders stages.
+
+The v1 policy (`warm-then-free`) is three stages:
+
+1. `eligible` (filter): drop workers that are disconnected, drained,
+   incompatible, or lacking the requested platform, model, or runtime — a
+   download counts as available only on a worker whose own `downloads.policy`
+   would allow it;
+2. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
+   matching the request — a **warm hit**, and a sub-second grant;
+3. `free-capacity` (rank): otherwise the worker with the **most free running
+   capacity** for that platform.
 
 There is no other placement rule in v1: no requester affinity, no label
 selectors, no per-worker platform exclusions. Each of those is a future
@@ -663,7 +677,18 @@ summed across connected workers, every gateway-issued and local lease, every
 device, the gateway queue's depth — plus an additive `workers` array of
 views, and `workerId` on every device and lease in the aggregate.
 `catalog.get` is the union of the worker catalogs, each model and runtime
-annotated with the workers that have it.
+annotated with the workers that have it. A model's `modelRuntimes` is the
+union of what each connected worker pairs it with, never the cross product
+of fleet models and fleet runtimes: one worker with the model and another
+with the runtime is not a leasable pair. Routing still reads only `models`
+and `runtimes`.
+
+Within a worker, each driver decides which installed runtimes pair with a
+model in one function that `listCatalog` and `resolveSpec` both call
+(ADR 0008 §3): on iOS, available runtimes that list the device type in
+`supportedDeviceTypes` and fall in its version range; on Android, every
+installed API level, foreign-ABI images included. So a listed pair always
+resolves.
 
 Worker business events are republished on the gateway's bus with `workerId`
 added to the payload and land in the gateway's own ring buffer and event
@@ -701,13 +726,15 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   while the gateway is down expires on the worker, like any other unrenewed
   lease.
 - **Version skew.** `hello` over the uplink negotiates the protocol range
-  exactly as over the socket (ADR 0003 §6). ADR 0005 moved the wire to
-  protocol 5 and ADR 0007 to `{min: 6, max: 6}`, each with no compatibility
-  shim — `device.exec` and its `output` push family are new frames, a device's
-  `mode` is a new required field, and the honesty rule says a range widens
-  only where a compatibility path is actually kept — so **every worker older
-  than ADR 0007 is `incompatible` by range**, by construction rather
-  than by accident. That is the ordinary upgrade path, not a failure mode:
+  exactly as over the socket (ADR 0003 §6). ADR 0005 moves the wire to
+  protocol `{min: 5, max: 5}` with no compatibility shim — `device.exec` and
+  its `output` push family are new frames, and the honesty rule says a range
+  widens only where a compatibility path is actually kept — so **every worker
+  older than ADR 0005 is `incompatible` by range**, by construction rather
+  than by accident. ADR 0008 moves it again, to `{min: 6, max: 6}`, because
+  the catalog's `modelRuntimes` is required, and ADR 0007 to
+  `{min: 7, max: 7}`, because a device's `mode` is required; a worker on an
+  older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
   hidden either — that is the machine an operator has to go and upgrade, and
@@ -1385,20 +1412,59 @@ state (`reclaiming` included), so a separate aggregate would duplicate
 information already visible per-device rather than add any.
 
 Operational logging is a separate concern from the event bus (ADR 0006): two
-records, and no fact is copied from one into the other. The `Logger` port
-writes durable, structured JSON lines — one per record — for startup, socket
-claim/recovery, driver discovery, connection lifecycle, shutdown, and
-unexpected/handled errors. `startDaemon` builds the production `Logger`
-(`JsonLinesLogger` over a `NodeFileLogSink`) from `config.log` right after
-config loads, then hands module-scoped children (`logger.child("server")`,
-`.child("connection-host")`, `.child("driver-discovery")`) to each component
-so every line is attributable. The sink tracks bytes written and rotates
-`daemon.log` to `daemon.log.1` (replacing any previous generation) once
-`config.log.rotateBytes` is exceeded, so growth is bounded and `simlock daemon
-logs` reads the rotated generation before the current file. The one exception
-is the fatal top-level handler: it cannot depend on `config.log` having loaded
-successfully, so it builds its own logger straight from the default log path
-at a fixed level, falling back to `console.error` only if that itself fails.
+records, and no fact is copied from one into the other. `simlock events`
+carries business facts (lease granted, device cleaned up, …), while the
+`Logger` port writes structured JSON lines saying what the daemon was asked to
+do and what went wrong. The log records:
+
+- **One `operation` line per dispatched call**, built in exactly one place:
+  `runDispatch` (`src/daemon/dispatch.ts`), through the `observe` hook both
+  dispatchers pass (`logger.child("dispatch")`). It names the operation,
+  `principal`, `role`, `durationMs`, `leaseId`/`requesterId` from the
+  validated input when present (nothing else from the input, nothing from the
+  output), and on failure `code`, plus `message` once the input has passed
+  its schema (before that the message quotes raw wire input). Level follows the operation's
+  contract `effect`: a `write` success is `info`, a `read` success `debug`, a
+  failure `info`, an `INTERNAL` failure `error`. A call refused before its
+  handler (`UNKNOWN_REQUEST`, `BAD_REQUEST`, `FORBIDDEN`) gets the line too.
+  `codeOf` is injected (`classifyError`) so `dispatch.ts` stays free of
+  `src/core`. The HTTP app's own `request` line stays as the transport's
+  record; `daemon.stop` and `hello` are answered by the socket server and keep
+  their own lines.
+- **One line per handled background failure** — a boot, an eviction, a
+  quarantine retry, a warm-pool disposition, a scheduled cleanup run, a lease
+  expiry — from the core module that caught it (`logger.child("<module>")`,
+  `NoopLogger` by default), with `deviceId`, `step`, `error`, and the lease or
+  requester where the site knows one. A failure whose error already travels on
+  an event (`device.purge-failed`, `device.recovery-failed`,
+  `device.quarantine-stranded`) is not logged again.
+- **At `log.level: debug`, one `process` line per device command**:
+  `LoggingProcessRunner` wraps the daemon's one `ProcessRunner` and logs the
+  command, arguments, exit code and duration when it settles — never `env`,
+  `input`, or output. Below `debug` the runner is not wrapped at all.
+- **A failing event subscriber**, through `logger.child("bus")`, as one JSON
+  line with the event, `seq`, message and stack.
+- Startup, socket claim/recovery, driver discovery, connection lifecycle,
+  shutdown, and unexpected errors with their stacks.
+
+`startDaemon` builds the production `Logger` (`JsonLinesLogger` over a
+`NodeFileLogSink`) from `config.log` right after config loads, then hands
+module-scoped children (`logger.child("server")`, `.child("connection-host")`,
+`.child("driver-discovery")`) to each component so every line is attributable.
+The sink tracks bytes written and rotates `daemon.log` to `daemon.log.1`
+(replacing any previous generation) once `config.log.rotateBytes` is exceeded,
+so growth is bounded and `simlock daemon logs` reads the rotated generation
+before the current file. `daemon logs --follow` (`src/cli/follow-log.ts`) polls
+through the `Filesystem` and `Clock` ports every 250 ms, reading from a byte
+offset (`readFileFrom`). It detects a rotation from `daemon.log.1` changing
+identity (`FileStat.identity`), not from the current file shrinking, because a
+fresh file can outgrow the old offset within one poll; it then prints the rest
+of the rotated file and restarts at offset 0. Two rotations inside one poll lose
+the middle generation, which the sink has already deleted. The one exception
+is the fatal top-level handler: it
+cannot depend on `config.log` having loaded successfully, so it builds its own
+logger straight from the default log path at a fixed level, falling back to
+`console.error` only if that itself fails.
 
 Business facts live in the bus's two records. The ring buffer
 (`eventBuffer.capacity`) holds recent events in memory and resets on restart.

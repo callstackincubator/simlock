@@ -281,6 +281,8 @@ function buildDispatcher(
     clock: options.clock,
     config: options.config,
     ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
+    // The `operation` log line's error code: the same classifier this server answers with.
+    errorCode: classifyError,
     eventHistory: options.eventHistory,
     health: hooks.health,
     leases: options.leases,
@@ -779,14 +781,13 @@ export class DaemonServer {
       await writeFrame(connection.socket, { id: frame.id, ok: true, payload });
     } catch (error: unknown) {
       const code = errorCode(error);
+      // A handled error is already on the dispatcher's `operation` line; this one adds the stack.
       if (code === "INTERNAL") {
         this.#logger.error("Unhandled request error", {
           message: errorMessage(error),
           stack: errorStack(error),
           type: frame.type,
         });
-      } else {
-        this.#logger.debug("Handled request error", { code, type: frame.type });
       }
       // ADR 0003 §7's typed `details` travel with the code when the thrown error carries any
       // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`),

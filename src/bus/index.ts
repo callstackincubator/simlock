@@ -259,6 +259,8 @@ export interface EventMap {
     readonly platform: string;
     readonly model: string;
     readonly reason: "warm-hit" | "free-capacity";
+    /** The routing stage that decided the pick (ADR 0009 §8). */
+    readonly stage: string;
     readonly queuedMs: number;
   };
   /** Payloads owned by the driver module that refused the root; see `DriverRejection`. */

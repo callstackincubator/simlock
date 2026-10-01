@@ -121,11 +121,16 @@ export type DriverEstimate =
  * side effects: resolvable device models plus installed runtimes / system
  * images, and which installed runtime `resolveSpec` would pick by default
  * (the newest). `defaultRuntime` is `undefined` when no runtime is installed.
+ *
+ * `modelRuntimes` has an entry for every name in `models`: the installed runtimes that model
+ * pairs with, decided by the same function `resolveSpec` uses, so every listed pair resolves
+ * (ADR 0008 §3). An empty list means no installed runtime pairs with that model.
  */
 export interface DriverCatalogEntry {
   readonly models: readonly string[];
   readonly runtimes: readonly string[];
   readonly defaultRuntime: string | undefined;
+  readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
 }
 
 /**

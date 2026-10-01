@@ -1,6 +1,6 @@
 # 0006. Events and the daemon log are two records
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-01
 - **Issue:** [#168](https://github.com/callstackincubator/simlock/issues/168),
   [#169](https://github.com/callstackincubator/simlock/issues/169)

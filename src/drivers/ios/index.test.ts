@@ -53,6 +53,47 @@ const pairingFixture = readFileSync(
   new URL("./fixtures/simctl-list-pairing.json", import.meta.url),
   "utf8",
 );
+// Every way a model and an installed runtime can fail to pair: a runtime that is not available,
+// one whose `supportedDeviceTypes` leaves the model out, one outside the model's range, and a
+// model nothing pairs with. Two builds share 26.0, and only the second supports the iPad mini.
+const modelRuntimesFixture = JSON.stringify({
+  devicetypes: [
+    deviceType("iPhone-16", "iPhone 16"),
+    deviceType("iPhone-XS", "iPhone XS", 0x120600),
+    deviceType("iPad-Pro", "iPad Pro"),
+    deviceType("iPad-mini", "iPad mini"),
+    deviceType("iPhone-8", "iPhone 8"),
+  ],
+  runtimes: [
+    runtime("17.5", "21F79", false, ["iPhone-16", "iPhone-XS", "iPad-Pro", "iPad-mini"]),
+    runtime("18.4", "22E238", true, ["iPhone-16", "iPhone-XS"]),
+    runtime("26.0", "23A339", true, ["iPhone-16", "iPhone-XS", "iPad-Pro"]),
+    runtime("26.0", "23A343", true, ["iPhone-16", "iPad-mini"]),
+  ],
+});
+
+function deviceType(id: string, name: string, maxRuntimeVersion = 0xffffff) {
+  return {
+    identifier: `com.apple.CoreSimulator.SimDeviceType.${id}`,
+    maxRuntimeVersion,
+    minRuntimeVersion: 0,
+    name,
+  };
+}
+
+function runtime(version: string, build: string, isAvailable: boolean, supports: string[]) {
+  return {
+    buildversion: build,
+    identifier: `com.apple.CoreSimulator.SimRuntime.iOS-${version.replace(".", "-")}-${build}`,
+    isAvailable,
+    name: `iOS ${version}`,
+    supportedDeviceTypes: supports.map((id) => ({
+      identifier: `com.apple.CoreSimulator.SimDeviceType.${id}`,
+    })),
+    version,
+  };
+}
+
 // Same catalog as `listFixture`, plus an iOS 18.6 runtime that has just finished downloading --
 // stands in for the re-scanned catalog `resolveSpec` reads after a successful `xcodebuild` call.
 const listFixtureAfterDownload = JSON.stringify({
@@ -463,6 +504,7 @@ describe("IosSimctlDriver", () => {
 
       await expect(driver.listCatalog()).resolves.toEqual({
         defaultRuntime: undefined,
+        modelRuntimes: { "iPhone 16": [] },
         models: ["iPhone 16"],
         runtimes: [],
       });
@@ -1043,8 +1085,134 @@ describe("IosSimctlDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "26.5",
+      modelRuntimes: {
+        "iPhone 15 Pro": ["18.4", "26.5"],
+        "iPhone 16": ["18.4", "26.5"],
+        "iPhone 17 Pro": ["18.4", "26.5"],
+      },
       models: ["iPhone 17 Pro", "iPhone 16", "iPhone 15 Pro"],
       runtimes: ["18.4", "26.5"],
+    });
+  });
+
+  describe("model and runtime pairing", () => {
+    function pairingRunner(calls = 1): ScriptedProcessRunner {
+      return new ScriptedProcessRunner(
+        Array.from({ length: calls }, () => ({
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: modelRuntimesFixture },
+        })),
+      );
+    }
+
+    it("lists for each model exactly the installed runtimes that support its device type and fall in its version range", async () => {
+      const driver = await createDriver(pairingRunner());
+
+      const catalog = await driver.listCatalog();
+
+      expect(catalog.runtimes).toEqual(["18.4", "26.0", "26.0"]);
+      expect(catalog.modelRuntimes).toEqual({
+        // 17.5 supports every model but is not available.
+        "iPhone 16": ["18.4", "26.0"],
+        // 26.0 lists the XS as supported, but 26.0 is above the XS's 18.6 range cap.
+        "iPhone XS": ["18.4"],
+        // Only 26.0 lists the iPad Pro as supported.
+        "iPad Pro": ["26.0"],
+        // Only the second 26.0 build supports the iPad mini.
+        "iPad mini": ["26.0"],
+        "iPhone 8": [],
+      });
+    });
+
+    it("lists a model no installed runtime pairs with, with an empty list", async () => {
+      const driver = await createDriver(pairingRunner());
+
+      const catalog = await driver.listCatalog();
+
+      expect(catalog.models).toContain("iPhone 8");
+      expect(catalog.modelRuntimes["iPhone 8"]).toEqual([]);
+    });
+
+    it("resolveSpec accepts every listed pair and refuses every unlisted pair of a listed model and an installed runtime", async () => {
+      const models = ["iPhone 16", "iPhone XS", "iPad Pro", "iPad mini", "iPhone 8"];
+      const installed = ["18.4", "26.0"];
+      const driver = await createDriver(pairingRunner(1 + models.length * installed.length));
+      const catalog = await driver.listCatalog();
+      expect(catalog.models).toEqual(models);
+
+      let accepted = 0;
+      let refused = 0;
+      for (const model of models) {
+        for (const osVersion of installed) {
+          const resolution = driver.resolveSpec(
+            { model, osVersion, platform: "ios" },
+            { allowDownload: false },
+          );
+          if (catalog.modelRuntimes[model]?.includes(osVersion) === true) {
+            await expect(resolution).resolves.toEqual({ model, osVersion, platform: "ios" });
+            accepted += 1;
+          } else {
+            // Every runtime here is installed, so the refusal is the range or the pairing
+            // check -- never a missing runtime, and never a download.
+            await expect(resolution).rejects.toThrow(
+              /is out of range|is installed but does not support/,
+            );
+            refused += 1;
+          }
+        }
+      }
+      expect({ accepted, refused }).toEqual({ accepted: 5, refused: 5 });
+    });
+
+    it("resolves an exact version when any installed build of that version pairs with the model", async () => {
+      const driver = await createDriver(pairingRunner());
+
+      // The first 26.0 build does not support the iPad mini; the second does.
+      await expect(
+        driver.resolveSpec(
+          { model: "iPad mini", osVersion: "26.0", platform: "ios" },
+          { allowDownload: false },
+        ),
+      ).resolves.toEqual({ model: "iPad mini", osVersion: "26.0", platform: "ios" });
+    });
+
+    it("pairs two device types that differ only in letter case through the first, as resolveSpec matches them", async () => {
+      // Only the first type's identifier is supported, so the lower-cased duplicate pairs with
+      // nothing in its own right.
+      const fixture = JSON.stringify({
+        devicetypes: [
+          deviceType("iPhone-16", "iPhone 16"),
+          deviceType("iphone-16-dup", "iphone 16"),
+        ],
+        runtimes: [runtime("26.0", "23A339", true, ["iPhone-16"])],
+      });
+      const runner = new ScriptedProcessRunner(
+        Array.from({ length: 2 }, () => ({
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: fixture },
+        })),
+      );
+      const driver = await createDriver(runner);
+
+      const catalog = await driver.listCatalog();
+
+      expect(catalog.models).toEqual(["iPhone 16", "iphone 16"]);
+      expect(catalog.modelRuntimes).toEqual({ "iPhone 16": ["26.0"], "iphone 16": ["26.0"] });
+      await expect(
+        driver.resolveSpec(
+          { model: "iphone 16", osVersion: "26.0", platform: "ios" },
+          { allowDownload: false },
+        ),
+      ).resolves.toEqual({ model: "iPhone 16", osVersion: "26.0", platform: "ios" });
+    });
+
+    it("still shells out to simctl exactly once per listCatalog call", async () => {
+      const runner = pairingRunner();
+      const driver = await createDriver(runner);
+
+      await driver.listCatalog();
+
+      expect(runner.calls).toEqual([{ ...listInvocation, options: { timeoutMs: 30_000 } }]);
     });
   });
 

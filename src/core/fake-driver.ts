@@ -56,6 +56,11 @@ export interface FakeDriverOptions {
    */
   readonly mode?: DeviceMode | undefined;
   readonly knownModels?: readonly string[];
+  /**
+   * What `listCatalog` reports a model pairs with. A model left out pairs with every available
+   * version, which is also the default for every model.
+   */
+  readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
@@ -112,6 +117,7 @@ export class FakeDriver implements Driver {
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
   readonly #knownModels: Set<string> | undefined;
+  readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
   readonly passthroughTool: string | undefined;
@@ -136,6 +142,7 @@ export class FakeDriver implements Driver {
     this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
+    this.#modelRuntimes = options.modelRuntimes;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
     this.#legacyDevices = new Map(Object.entries(options.legacyDevices ?? {}));
@@ -292,9 +299,13 @@ export class FakeDriver implements Driver {
   async listCatalog(): Promise<DriverCatalogEntry> {
     await this.#beforeCall("listCatalog");
     const runtimes = [...this.#availableOsVersions].sort(compareVersions);
+    const models = this.#knownModels === undefined ? [] : [...this.#knownModels];
     return {
       defaultRuntime: newestVersion(this.#availableOsVersions),
-      models: this.#knownModels === undefined ? [] : [...this.#knownModels],
+      modelRuntimes: Object.fromEntries(
+        models.map((model) => [model, [...(this.#modelRuntimes?.[model] ?? runtimes)]]),
+      ),
+      models,
       runtimes,
     };
   }

@@ -1620,6 +1620,85 @@ describe("CLI: token operations never write tokens.json directly", () => {
   });
 });
 
+describe("CLI: catalog", () => {
+  it("prints a model named after an Object.prototype member with no paired runtime", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                { modelRuntimes: {}, models: ["constructor"], platform: "ios", runtimes: [] },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toContain("    constructor: (no paired runtime)\n");
+  });
+
+  it("prints (none) for a platform with no models", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [{ modelRuntimes: {}, models: [], platform: "android", runtimes: ["35"] }],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      ["Platform: android", "  Runtimes: 35 (default: (none))", "  Models: (none)", ""].join("\n"),
+    );
+  });
+
+  it("prints each model with the runtimes it pairs with", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  defaultRuntime: "26.0",
+                  modelRuntimes: {
+                    "iPhone 16": ["18.4", "26.0"],
+                    "iPhone 8": [],
+                    "iPhone XS": ["18.4"],
+                  },
+                  models: ["iPhone 16", "iPhone XS", "iPhone 8"],
+                  platform: "ios",
+                  runtimes: ["18.4", "26.0"],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: ios",
+        "  Runtimes: 18.4, 26.0 (default: 26.0)",
+        "  Models:",
+        "    iPhone 16: 18.4, 26.0",
+        "    iPhone XS: 18.4",
+        "    iPhone 8: (no paired runtime)",
+        "",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
   const connectedWorker = {
     capacity: {
@@ -2979,6 +3058,127 @@ describe("CLI: daemon logs (ADR 0003 §11 -- must work when the daemon is dead)"
     expect(exitCode).toBe(0);
     expect(connected).toBe(false);
     expect(JSON.parse(output.stdout)).toEqual({ logs: "only line" });
+  });
+});
+
+describe("CLI: daemon logs --follow", () => {
+  /** Runs `daemon logs --follow` against an in-memory log, driven by a fake clock and a fake
+   * signal source. `tick` advances one poll interval and lets the poll's reads settle. */
+  async function follow(filesystem: MemoryFilesystem) {
+    const clock = new FakeClock(0);
+    const signals = new EventEmitter();
+    const ports = {
+      ...realCliEnvironmentPorts(filesystem),
+      clock,
+      signals: signals as unknown as NonNullable<CliEnvironmentPorts["signals"]>,
+    };
+    const output = outputCapture(ports);
+    const exit = runCli(["daemon", "logs", "--follow"], output.environmentWith());
+    const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+    await settle();
+    return {
+      clock,
+      exit,
+      output,
+      signals,
+      settle,
+      tick: async () => {
+        clock.advance(250);
+        await settle();
+      },
+    };
+  }
+
+  const LOG = "/simlock/daemon.log";
+
+  it("daemon logs --follow prints the existing tail, then a line appended later", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(LOG, "old one\nold two\n");
+    const run = await follow(filesystem);
+
+    expect(run.output.stdout).toBe("old one\nold two\n");
+    await filesystem.writeFileAtomic(LOG, "old one\nold two\nnew three\n");
+    await run.tick();
+
+    expect(run.output.stdout).toBe("old one\nold two\nnew three\n");
+    run.signals.emit("SIGINT");
+    await expect(run.exit).resolves.toBe(0);
+  });
+
+  it("it prints lines written after a rotation, when the new file is already larger than the old offset at the next poll", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(LOG, "a\n");
+    const run = await follow(filesystem);
+
+    // Between two polls: one more line in the old file, a rotation, and a new file already
+    // longer than everything the follower had read of the old one.
+    await filesystem.writeFileAtomic(LOG, "a\nb\n");
+    await filesystem.rename(LOG, `${LOG}.1`);
+    await filesystem.writeFileAtomic(LOG, "after rotation 1\nafter rotation 2\n");
+    await run.tick();
+
+    expect(run.output.stdout).toBe("a\nb\nafter rotation 1\nafter rotation 2\n");
+    run.signals.emit("SIGTERM");
+    await expect(run.exit).resolves.toBe(0);
+  });
+
+  it("it waits while the log file is missing and prints lines once it appears", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    const run = await follow(filesystem);
+    await run.tick();
+    expect(run.output.stdout).toBe("");
+    expect(run.output.stderr).toBe("");
+
+    await filesystem.writeFileAtomic(LOG, "first line\n");
+    await run.tick();
+
+    expect(run.output.stdout).toBe("first line\n");
+    run.signals.emit("SIGINT");
+    await expect(run.exit).resolves.toBe(0);
+  });
+
+  it("daemon logs --follow --json fails with USAGE, exit 2", async () => {
+    const output = outputCapture();
+
+    await expect(
+      runCli(["daemon", "logs", "--follow", "--json"], output.environmentWith()),
+    ).resolves.toBe(2);
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+      error: { code: "USAGE", message: expect.stringContaining("--follow") },
+    });
+  });
+
+  it("--follow on any daemon subcommand but logs fails with USAGE, exit 2", async () => {
+    for (const command of ["start", "stop", "status"]) {
+      const output = outputCapture();
+      await expect(runCli(["daemon", command, "--follow"], output.environmentWith())).resolves.toBe(
+        2,
+      );
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("--follow") },
+      });
+    }
+  });
+
+  it("an interrupt ends the follow with exit 0 and leaves no timer armed", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(LOG, "line\n");
+    const run = await follow(filesystem);
+    expect(run.clock.pendingTimerCount).toBe(1);
+
+    run.signals.emit("SIGINT");
+
+    await expect(run.exit).resolves.toBe(0);
+    expect(run.clock.pendingTimerCount).toBe(0);
+    expect(run.signals.listenerCount("SIGINT")).toBe(0);
+    expect(run.signals.listenerCount("SIGTERM")).toBe(0);
+    await filesystem.writeFileAtomic(LOG, "line\nafter exit\n");
+    await run.tick();
+    expect(run.output.stdout).toBe("line\n");
   });
 });
 

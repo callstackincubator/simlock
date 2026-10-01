@@ -1,10 +1,17 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, Filesystem, TimerHandle } from "../ports/index.js";
+import {
+  type Clock,
+  type Filesystem,
+  type Logger,
+  NoopLogger,
+  type TimerHandle,
+} from "../ports/index.js";
 import type { Config } from "./config.js";
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
 import { automaticCleanupRules } from "./cleanup/rules.js";
 import type { CleanupRule, Proposal, RegistryView } from "./cleanup/types.js";
 import type { Registry } from "./registry.js";
+import { stableError } from "./stable-error.js";
 
 export interface CleanupReaperOptions {
   readonly clock: Clock;
@@ -12,6 +19,7 @@ export interface CleanupReaperOptions {
   readonly eventBus: EventBus;
   readonly executor: CleanupActionExecutor;
   readonly filesystem: Filesystem;
+  readonly logger?: Logger;
   readonly registry: Registry;
   readonly rules?: readonly CleanupRule[];
   readonly diskPath?: string;
@@ -36,8 +44,11 @@ export class CleanupReaper {
   // Tracks the previous tick's pressure state so disk.pressure-detected fires
   // only on the crossing edge, not once per tick while pressure persists.
   #underPressure = false;
+  readonly #logger: Logger;
+  readonly #loggedRuns = new WeakSet<Promise<readonly Proposal[]>>();
 
   constructor(private readonly options: CleanupReaperOptions) {
+    this.#logger = options.logger?.child("reaper") ?? new NoopLogger();
     this.#automaticRules = options.rules ?? automaticCleanupRules;
     this.#unsubscribe = [
       options.eventBus.subscribe("lease.released", () => this.#trigger()),
@@ -97,7 +108,26 @@ export class CleanupReaper {
     if (this.#disposed) {
       return;
     }
-    void this.#scheduleRun().catch(() => undefined);
+    void this.#scheduleRunLogged();
+  }
+
+  /**
+   * A run nobody awaits: its failure has no caller to reach, so it is logged here. Triggers that
+   * arrive while a run is in flight share its promise, so a run is logged once, not once per
+   * trigger that joined it.
+   */
+  async #scheduleRunLogged(): Promise<void> {
+    const run = this.#scheduleRun();
+    try {
+      await run;
+    } catch (error: unknown) {
+      if (this.#loggedRuns.has(run)) return;
+      this.#loggedRuns.add(run);
+      this.#logger.error("scheduled cleanup run failed", {
+        step: "cleanup",
+        error: stableError(error),
+      });
+    }
   }
 
   #scheduleRun(): Promise<readonly Proposal[]> {
@@ -138,10 +168,7 @@ export class CleanupReaper {
     }
     this.#tickTimer = this.options.clock.setTimer(this.options.tickMs ?? 60_000, () => {
       this.#tickTimer = undefined;
-      void this.#scheduleRun().then(
-        () => this.#armTick(),
-        () => this.#armTick(),
-      );
+      void this.#scheduleRunLogged().then(() => this.#armTick());
     });
   }
 

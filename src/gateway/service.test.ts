@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus, type EventEnvelope } from "../bus/index.js";
-import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
+import { negotiateProtocolVersion, PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import {
   FakeClock,
   MemoryUplinkTransport,
@@ -331,6 +331,45 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("shows a pairing that changes on a worker on its view after the next refresh tick", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.catalog = catalogFixture([
+      {
+        modelRuntimes: { "iPhone 17": ["26.0"] },
+        models: ["iPhone 17"],
+        platform: "ios",
+        runtimes: ["25.4", "26.0"],
+      },
+    ]);
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+        "iPhone 17": ["26.0"],
+      }),
+    );
+    // Same models and runtimes; only the pairing moved, as when a runtime gains support.
+    worker.catalog = catalogFixture([
+      {
+        modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
+        models: ["iPhone 17"],
+        platform: "ios",
+        runtimes: ["25.4", "26.0"],
+      },
+    ]);
+
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
+        "iPhone 17": ["25.4", "26.0"],
+      }),
+    );
+
+    await harness.service.stop();
+  });
+
   describe("warning on a worker's lower lease.maxTtlMs (ADR 0005 §15)", () => {
     it("warns once the joining worker's own config.get reports a lower cap", async () => {
       const logger = new RecordingLogger();
@@ -398,6 +437,29 @@ describe("GatewayService", () => {
 
       await harness.service.stop();
     });
+  });
+
+  it("marks a worker that speaks only the previous protocol version incompatible with both ranges, and asks it nothing else", async () => {
+    // Protocol 5 is the version before ADR 0008 made `modelRuntimes` required.
+    const previous = { min: 5, max: 5 };
+    expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.failWith = protocolMismatchError(previous);
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("incompatible"),
+    );
+
+    expect(harness.service.workers.view("wrk_1")).toMatchObject({
+      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: previous },
+    });
+    expect(worker.calls).toEqual(["status.get"]);
+    expect(worker.subscribed).toBe(false);
+
+    await harness.service.stop();
   });
 
   it("marks a worker incompatible when hello finds no overlapping range, and asks it nothing else", async () => {

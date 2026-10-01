@@ -43,6 +43,7 @@ describe("AdminSecretManager", () => {
     const calls: Array<{ readonly path: string; readonly mode: number | undefined }> = [];
     const filesystem: Filesystem = {
       readFile: () => Promise.reject(new Error("unused by this test")),
+      readFileFrom: () => Promise.reject(new Error("unused by this test")),
       writeFileAtomic: async (path, _contents, options) => {
         calls.push({ path, mode: options?.mode });
       },
@@ -108,6 +109,9 @@ describe("AdminSecretManager", () => {
   it("verify() never touches the filesystem, even before persist() has ever run", () => {
     const throwingFilesystem: Filesystem = {
       readFile: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      readFileFrom: () => {
         throw new Error("verify() must not touch the filesystem");
       },
       writeFileAtomic: () => {
@@ -178,6 +182,9 @@ describe("AdminSecretManager", () => {
   it("does not touch the filesystem at construction time either -- only persist()/remove() do", () => {
     const throwingFilesystem: Filesystem = {
       readFile: () => {
+        throw new Error("must not touch the filesystem");
+      },
+      readFileFrom: () => {
         throw new Error("must not touch the filesystem");
       },
       writeFileAtomic: () => {

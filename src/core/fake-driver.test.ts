@@ -200,8 +200,24 @@ describe("FakeDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "26.5",
+      modelRuntimes: { "iPhone 16": ["18.4", "26.5"], "iPhone 17 Pro": ["18.4", "26.5"] },
       models: ["iPhone 16", "iPhone 17 Pro"],
       runtimes: ["18.4", "26.5"],
+    });
+  });
+
+  it("pairs a model with only the runtimes its modelRuntimes option names", async () => {
+    const driver = new FakeDriver({
+      availableOsVersions: ["18.4", "26.5"],
+      clock: new FakeClock(),
+      knownModels: ["iPhone 16", "iPhone XS"],
+      modelRuntimes: { "iPhone XS": ["18.4"] },
+      platform: "ios",
+    });
+
+    expect((await driver.listCatalog()).modelRuntimes).toEqual({
+      "iPhone 16": ["18.4", "26.5"],
+      "iPhone XS": ["18.4"],
     });
   });
 });

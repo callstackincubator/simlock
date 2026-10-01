@@ -8,7 +8,12 @@ import type { WorkerDirectory, WorkerDispatchTarget } from "./fleet-ports.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import { FleetLeaseIndex } from "./lease-index.js";
 import { RequesterAlreadyLeasedError } from "./queue.js";
-import { createRoutingPolicy, type RoutingPolicy } from "./routing.js";
+import {
+  composeRoutingPolicy,
+  createRoutingPolicy,
+  eligible,
+  type RoutingPolicy,
+} from "./routing.js";
 import {
   catalogFixture,
   deviceFixture,
@@ -742,6 +747,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
         reason: "free-capacity",
         requestId: expect.any(String) as string,
         requesterId: "agent-1",
+        stage: "free-capacity",
         workerId: "wrk_a",
       },
     ]);
@@ -779,6 +785,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
         reason: "free-capacity",
         requestId: expect.any(String) as string,
         requesterId: "agent-1",
+        stage: "free-capacity",
         workerId: "wrk_a",
       },
     ]);
@@ -805,6 +812,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
         reason: "free-capacity",
         requestId: expect.any(String) as string,
         requesterId: "agent-1",
+        stage: "free-capacity",
         workerId: "wrk_a",
       },
     ]);
@@ -844,8 +852,33 @@ describe("FleetLeaseCoordinator dispatch", () => {
         reason: "warm-hit",
         requestId: expect.any(String) as string,
         requesterId: "agent-1",
+        stage: "warm-hit",
         workerId: "wrk_a",
       },
+    ]);
+  });
+
+  it("request.dispatched carries the deciding stage's name", async () => {
+    // A rank no shipped policy has, so the payload's `stage` can only have come from the stage
+    // that decided -- `reason` stays `free-capacity` for any stage other than `warm-hit`.
+    const { coordinator, directory, eventBus, workers } = harness({
+      routing: () =>
+        composeRoutingPolicy([
+          eligible,
+          { kind: "rank", name: "test-rank", score: () => 1, settles: false },
+        ]),
+    });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const dispatched: unknown[] = [];
+    eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
+
+    await coordinator.request(REQUEST, requestOptions());
+
+    expect(dispatched).toEqual([
+      expect.objectContaining({ reason: "free-capacity", stage: "test-rank", workerId: "wrk_a" }),
     ]);
   });
 

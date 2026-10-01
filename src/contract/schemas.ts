@@ -286,6 +286,13 @@ export const platformCatalogSchema = z.object({
   runtimes: z.array(z.string()),
   defaultRuntime: z.string().optional(),
   /**
+   * ADR 0008 §1: for each name in `models`, the installed runtimes it pairs with -- every pair
+   * listed here can be leased. An empty list means no installed runtime pairs with that model.
+   * On a gateway this is the union of each connected worker's own list for the model, never
+   * the cross product of fleet models and fleet runtimes.
+   */
+  modelRuntimes: z.record(z.string(), z.array(z.string())),
+  /**
    * ADR 0005 §21: on a gateway, `models`/`runtimes` are the *union* over the fleet, and these
    * two maps say which workers each entry came from (`{"iPhone 16": ["wrk_a", "wrk_b"]}`).
    * Additive and gateway-only: a worker's own catalog needs no attribution, and a renderer

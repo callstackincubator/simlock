@@ -331,11 +331,17 @@ export class OutOfProcessFakeDriver implements Driver {
 
   async listCatalog(): Promise<DriverCatalogEntry> {
     const script = await this.#beforeCall("listCatalog", []);
-    const runtimes = [...(script.availableOsVersions ?? DEFAULT_SCRIPT.availableOsVersions ?? [])];
+    const runtimes = [
+      ...(script.availableOsVersions ?? DEFAULT_SCRIPT.availableOsVersions ?? []),
+    ].sort(compareVersions);
+    const models = script.knownModels === undefined ? [] : [...script.knownModels];
     return {
       defaultRuntime: newestVersion(runtimes),
-      models: script.knownModels === undefined ? [] : [...script.knownModels],
-      runtimes: [...runtimes].sort(compareVersions),
+      modelRuntimes: Object.fromEntries(
+        models.map((model) => [model, [...(script.modelRuntimes?.[model] ?? runtimes)]]),
+      ),
+      models,
+      runtimes,
     };
   }
 

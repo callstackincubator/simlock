@@ -1,5 +1,6 @@
-import type { Clock, TimerHandle } from "../ports/index.js";
+import { type Clock, type Logger, NoopLogger, type TimerHandle } from "../ports/index.js";
 import type { LeaseRecord } from "./domain.js";
+import { stableError } from "./stable-error.js";
 
 export type LeaseExpiryHandler = (
   leaseId: string,
@@ -10,11 +11,15 @@ export type LeaseExpiryHandler = (
 export class LeaseExpiryScheduler {
   readonly #timers = new Map<string, TimerHandle>();
   #disposed = false;
+  readonly #logger: Logger;
 
   constructor(
     private readonly clock: Clock,
     private readonly onExpiry: LeaseExpiryHandler,
-  ) {}
+    logger?: Logger,
+  ) {
+    this.#logger = logger?.child("lease-expiry-scheduler") ?? new NoopLogger();
+  }
 
   arm(lease: LeaseRecord): void {
     if (this.#disposed) return;
@@ -63,7 +68,13 @@ export class LeaseExpiryScheduler {
   }
 
   #deliverExpiry(leaseId: string, expectedDeadline: number): void {
-    void this.#expire(leaseId, expectedDeadline).catch(() => undefined);
+    void this.#expire(leaseId, expectedDeadline).catch((error: unknown) => {
+      this.#logger.error("lease expiry failed", {
+        leaseId,
+        step: "expire",
+        error: stableError(error),
+      });
+    });
   }
 
   async #expire(leaseId: string, expectedDeadline: number): Promise<void> {

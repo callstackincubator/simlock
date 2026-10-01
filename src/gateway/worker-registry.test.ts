@@ -117,13 +117,25 @@ describe("WorkerRegistry", () => {
     const { workers } = registry();
     workers.connected("wrk_1", undefined, "0.3.0");
     workers.refresh("wrk_1", {
-      catalog: [{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }],
+      catalog: [
+        {
+          modelRuntimes: { "iPhone 17": ["26.0"] },
+          models: ["iPhone 17"],
+          platform: "ios",
+          runtimes: ["26.0"],
+        },
+      ],
     });
 
     workers.refresh("wrk_1", { queueDepth: 1 });
 
     expect(workers.view("wrk_1")?.catalog).toEqual([
-      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+      {
+        modelRuntimes: { "iPhone 17": ["26.0"] },
+        models: ["iPhone 17"],
+        platform: "ios",
+        runtimes: ["26.0"],
+      },
     ]);
   });
 

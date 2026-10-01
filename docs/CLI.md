@@ -622,7 +622,12 @@ Releasing a single lease by id is unchanged.
 
 **`simlock catalog`** is the union of the workers' catalogs, each model and
 runtime annotated with the workers that have it — so a `--device` the
-catalog lists is leasable *somewhere*, not necessarily everywhere.
+catalog lists is leasable *somewhere*, not necessarily everywhere. A model is
+paired with a runtime when at least one connected worker pairs them itself;
+one worker having the model and another having the runtime does not make a
+pair. `simlock worker list --json` shows each worker's own pairings. The
+gateway does not yet pick a worker by its pairings, so a listed pair can
+still be sent to a worker that cannot pair them.
 
 **`simlock events`** shows the fleet: every worker's business events are
 republished on the gateway's bus with `workerId` added to the payload,
@@ -726,7 +731,7 @@ simlock worker remove <worker-id>
 
 ```json
 {"workers":[{"id":"3f81a2c4","label":"mac-studio-2","state":"connected","drained":false,
-  "daemonVersion":"0.4.0","protocol":{"min":6,"max":6},
+  "daemonVersion":"0.4.0","protocol":{"min":7,"max":7},
   "connectedAt":1735689600000,"lastSeenAt":1735689930000,
   "capacity":{"ios":{"running":2,"limit":4},"android":{"running":0,"limit":2}},
   "downloads":{"policy":"on-request"},
@@ -737,7 +742,7 @@ simlock worker remove <worker-id>
 `config.get` when its uplink connects — routing needs it to know whether a
 machine may install a missing runtime before sending it a request that needs
 one. `protocol` is the range that worker negotiated; the wire moves
-to `{min: 6, max: 6}` with no shim, so a worker older than it does not
+to `{min: 7, max: 7}` with no shim, so a worker older than it does not
 overlap and shows as `incompatible`. Worker ids are UUIDs — the examples here
 abbreviate them to their first segment.
 
@@ -934,17 +939,34 @@ configuration, and a gateway runs no reaper.
 Lists what can actually be leased, so an agent can pick a valid `--device`
 and `--os` without a failed round trip through `lease`. For each available
 platform: the resolvable device models, the runtimes / system images already
-installed, and which installed runtime is the default (the newest). A
+installed, which installed runtime is the default (the newest), and for each
+model the installed runtimes it pairs with (`modelRuntimes`). A model and a
+runtime that are both listed can still fail to pair — on iOS, a runtime can
+drop an older model — so pick a pair from `modelRuntimes`. A model with an
+empty list pairs with nothing installed. On Android every model pairs with
+every installed API level. A
 platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
 non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
 command. `--platform` narrows to one platform. Read-only: this never
-downloads a runtime or system image.
+downloads a runtime or system image, and lists only what is installed,
+whatever `downloads.policy` says.
 
-Human-oriented by default (platform/model/runtime lines); `--json` for the
-structured equivalent:
+Human-oriented by default, one line per model with the runtimes it pairs
+with:
+
+```text
+Platform: ios
+  Runtimes: 18.4, 26.5 (default: 26.5)
+  Models:
+    iPhone 17 Pro: 26.5
+    iPhone XS: 18.4
+```
+
+`--json` for the structured equivalent:
 
 ```json
-{"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone 16"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5"}]}
+{"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone XS"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5",
+  "modelRuntimes":{"iPhone 17 Pro":["26.5"],"iPhone XS":["18.4"]}}]}
 ```
 
 ## `simlock cleanup [--dry-run] [--rule <name>]`
@@ -1074,7 +1096,7 @@ own `events.jsonl` along with its own, so `--since` reaches back across a
 gateway restart. It holds only what arrived while the gateway was up — a
 worker's events from before its uplink connected are not backfilled.
 
-## `simlock daemon <start|stop|status|logs>`
+## `simlock daemon <start|stop|status|logs [--follow]>`
 
 Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
@@ -1086,8 +1108,12 @@ stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease
 that is still granted; renew it from a later invocation once the daemon is
 back. A lease whose deadline passed while no daemon was running expires as soon
-as one is. `logs` tails daemon logs and works even when the daemon is dead — it
-reads the log file directly, no connection attempted. `status` never
+as one is. `logs` prints the last 100 lines of the daemon log and works even when
+the daemon is dead — it reads the log file directly, no connection attempted.
+`logs --follow` then keeps printing each new line as it is written, until you
+press Ctrl-C (exit 0). It keeps following when the log rotates, and if no
+daemon has written a log yet it waits for one. `--follow` cannot be combined
+with `--json` (exit 2). `status` never
 auto-starts the daemon and distinguishes two failure shapes:
 `{"status":"stopped"}` when nothing is listening on the socket at all, versus
 `{"status":"handshake-refused","error":{"code":...}}` (exit 1) when a daemon
@@ -1107,11 +1133,28 @@ about the config, because nothing ever answered — the reason is in `simlock
 daemon logs`, which reads the log file directly and so works even though the
 daemon never came up.
 
-The daemon writes one structured JSON line per record to `~/.simlock/daemon.log`
-(timestamp, level, module, message, and any fields) covering startup (version,
-protocol version, socket path, effective config), socket claim/stale-endpoint
-recovery, driver discovery, connection open/close, shutdown, and unexpected or
-handled errors. Growth is bounded: once the file passes `log.rotateBytes` it is
+The daemon writes one JSON line per record to `~/.simlock/daemon.log`
+(timestamp, level, module, message, and any fields). The log says what the
+daemon was asked to do and what went wrong; what happened to leases and
+devices is in `simlock events`, not here. It records:
+
+- **Startup and shutdown**: version, protocol version, socket path, effective
+  config, socket claim, driver discovery, and why a driver was skipped.
+- **Every request that changes something**, on every frontend (CLI, MCP,
+  HTTP, and a gateway's dispatch): one `operation` line when it finishes,
+  with the operation, who asked (`principal`, and `requesterId` or `leaseId`
+  when the request named one), how long it took, and the error code if it
+  failed. A request that only reads is logged at `debug`, unless it fails.
+- **Background failures** that Simlock handled by retrying, waiting, or
+  destroying a device: the device, the lease when there is one, the step that
+  failed, and the error text.
+- **At `log.level: debug`**, every device command (`simctl`, `adb`,
+  `sdkmanager`, …): the command, its arguments, its exit code, and how long it
+  took. Never its environment, its input, or its output.
+- Connection open and close, and errors nobody expected.
+
+The wording and fields of a line can change in any release; don't parse them
+as a contract. Growth is bounded: once the file passes `log.rotateBytes` it is
 rotated to `daemon.log.1` (replacing any previous generation), so `logs` always
 shows the current file with the immediately preceding one prepended.
 

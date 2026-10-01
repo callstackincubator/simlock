@@ -46,6 +46,7 @@ import {
   startLeaseRenewal,
   type LeaseRenewal,
 } from "../lease-policy/index.js";
+import { followLog, type Signals } from "./follow-log.js";
 import { spawnPassthrough } from "./passthrough.js";
 import { ERROR_TABLE } from "../contract/index.js";
 
@@ -103,11 +104,6 @@ interface Output {
   write(value: string): unknown;
 }
 
-interface Signals {
-  on(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
-  off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
-}
-
 type McpStdioRunner = () => Promise<void>;
 
 /**
@@ -163,6 +159,8 @@ export interface CliEnvironment {
    * `writeConfigFile` is ever called. Throws (any error) for an invalid merged config. */
   readonly validateConfig: (merged: Record<string, unknown>) => Promise<void>;
   readonly readLogFile?: () => Promise<string>;
+  /** `daemon logs --follow`: prints the log's tail, then each new line, until interrupted. */
+  readonly followLogFile?: () => Promise<void>;
   /** The event file's history newer than `sinceTs`, for `events --since` with no daemon running. */
   readonly readEventFile: (sinceTs: number) => Promise<readonly EventEnvelope[]>;
   /** Loads the MCP frontend only when the `mcp` command is dispatched. */
@@ -455,6 +453,14 @@ export function buildCliEnvironment(
       if (unknownKeyWarnings.length > 0) throw new Error(unknownKeyWarnings.join("; "));
     },
     readLogFile: async () => readLogFile(filesystem, logPath),
+    followLogFile: () =>
+      followLog({
+        clock,
+        filesystem,
+        path: logPath,
+        signals: ports.signals ?? process,
+        write: (text) => (ports.stdout ?? process.stdout).write(text),
+      }),
     readEventFile: (sinceTs) =>
       readEventFile(filesystem, join(dataDirectory, EVENT_FILE_NAME), { sinceTs }),
     signals: ports.signals ?? process,
@@ -1509,14 +1515,16 @@ async function runDaemon(
 ): Promise<number> {
   const command = argv[0];
   const values = commandArgs(argv.slice(1), {
+    follow: { type: "boolean" },
     help: { type: "boolean", short: "h" },
     json: { type: "boolean" },
   });
   if (command === undefined || isHelp(command) || values.help) {
-    environment.stdout.write("Usage: simlock daemon <start|stop|status|logs>\n");
+    environment.stdout.write("Usage: simlock daemon <start|stop|status|logs [--follow]>\n");
     return 0;
   }
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
+  if (values.follow && command !== "logs") throw new UsageError("--follow applies only to logs");
   if (command === "start") {
     const client = await connectDaemonClient(environment, token, { launch: true });
     try {
@@ -1576,6 +1584,14 @@ async function runDaemon(
       else environment.stdout.write("Daemon stopped\n");
       return 0;
     }
+  }
+  if (command === "logs" && values.follow) {
+    if (values.json) throw new UsageError("--follow cannot be combined with --json");
+    if (environment.followLogFile === undefined) {
+      throw new Error("Daemon log reader is unavailable");
+    }
+    await environment.followLogFile();
+    return 0;
   }
   if (command === "logs") {
     if (environment.readLogFile === undefined) throw new Error("Daemon log reader is unavailable");
@@ -2013,10 +2029,19 @@ function formatCatalog(response: CatalogGetOutput): string {
   return response.platforms
     .map((entry) => {
       const defaultRuntime = entry.defaultRuntime ?? "(none)";
+      // Each model with the runtimes it pairs with: a model and a runtime both listed for the
+      // platform are not necessarily leasable together.
+      const models = entry.models.map((model) => {
+        const paired =
+          (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ??
+          [];
+        return `    ${model}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`;
+      });
       return [
         `Platform: ${entry.platform}`,
-        `  Models: ${entry.models.length > 0 ? entry.models.join(", ") : "(none)"}`,
         `  Runtimes: ${entry.runtimes.length > 0 ? entry.runtimes.join(", ") : "(none)"} (default: ${defaultRuntime})`,
+        models.length > 0 ? "  Models:" : "  Models: (none)",
+        ...models,
       ].join("\n");
     })
     .join("\n");

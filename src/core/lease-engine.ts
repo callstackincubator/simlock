@@ -121,11 +121,16 @@ export class LeaseEngine {
       clock: options.clock,
       decisions: this.#decisions,
       lifecycle: this.#deviceLifecycle,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
     });
-    this.#expiry = new LeaseExpiryScheduler(options.clock, async (leaseId, expectedDeadline) => {
-      await this.#releaseCoordinator.expire(leaseId, expectedDeadline);
-    });
+    this.#expiry = new LeaseExpiryScheduler(
+      options.clock,
+      async (leaseId, expectedDeadline) => {
+        await this.#releaseCoordinator.expire(leaseId, expectedDeadline);
+      },
+      options.logger,
+    );
     this.#leases = new LeaseLifecycle({
       clock: options.clock,
       eventBus: options.eventBus,
@@ -160,6 +165,7 @@ export class LeaseEngine {
       planner: this.#planner,
       provisioner: this.#provisioner,
       queue: this.#queue,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
       requests: this.requests,
     });
@@ -170,6 +176,7 @@ export class LeaseEngine {
       drivers: this.#drivers,
       eventBus: options.eventBus,
       notifyAvailability: () => this.#acquisition.kick(),
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
     });
     this.#warmPool = new WarmPoolCoordinator({
@@ -184,6 +191,7 @@ export class LeaseEngine {
         const spec = this.#acquisition.queueHeadSpec;
         return spec === undefined ? undefined : { spec };
       },
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       registry: options.registry,
     });
     this.#releaseCoordinator = new LeaseReleaseCoordinator({

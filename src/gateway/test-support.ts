@@ -83,8 +83,22 @@ export function deviceFixture(
   };
 }
 
-export function catalogFixture(entries: readonly PlatformCatalog[]): CatalogOutput {
-  return { platforms: [...entries] };
+/**
+ * A worker's catalog. An entry without `modelRuntimes` pairs each of its models with every one of
+ * its runtimes -- a single worker's answer, so this is never the fleet cross product.
+ */
+export function catalogFixture(
+  entries: readonly (Omit<PlatformCatalog, "modelRuntimes"> &
+    Partial<Pick<PlatformCatalog, "modelRuntimes">>)[],
+): CatalogOutput {
+  return {
+    platforms: entries.map((entry) => ({
+      ...entry,
+      modelRuntimes:
+        entry.modelRuntimes ??
+        Object.fromEntries(entry.models.map((model) => [model, [...entry.runtimes]])),
+    })),
+  };
 }
 
 export function grantFixture(overrides: Partial<LeaseGrant> = {}): LeaseGrant {

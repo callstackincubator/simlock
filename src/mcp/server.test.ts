@@ -24,6 +24,7 @@ describe("MCP server (smoke)", () => {
         platforms: [
           {
             defaultRuntime: "26.5",
+            modelRuntimes: { "iPhone 17 Pro": ["26.5"] },
             models: ["iPhone 17 Pro"],
             platform: "ios",
             runtimes: ["26.5"],
@@ -79,6 +80,7 @@ describe("MCP server (smoke)", () => {
         platforms: [
           {
             defaultRuntime: "26.5",
+            modelRuntimes: { "iPhone 17 Pro": ["26.5"] },
             models: ["iPhone 17 Pro"],
             platform: "ios",
             runtimes: ["26.5"],
