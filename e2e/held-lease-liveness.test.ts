@@ -114,7 +114,7 @@ describe("lease liveness & restart", () => {
       "flow5-restart",
     ]);
     const grant = JSON.parse(await holder.firstStdoutLine()) as {
-      lease: { id: string; ttlDeadline: number };
+      lease: { id: string };
       device: { driverDeviceId: string };
     };
     await waitForLeaseCount(env, 1);
@@ -126,8 +126,16 @@ describe("lease liveness & restart", () => {
     await env.killDaemon("SIGKILL");
     await env.startDaemon();
 
-    const afterRestart = (await env.cli(["list", "--leases"])).json as { id: string }[];
+    const afterRestart = (await env.cli(["list", "--leases"])).json as {
+      id: string;
+      ttlDeadline: number;
+    }[];
     expect(afterRestart.map((lease) => lease.id)).toContain(grant.lease.id);
+    // Read here, not from the grant: the holder renews every third of the TTL until the kill,
+    // so the grant's deadline can be stale. Nothing renews it after this -- the holder never
+    // reconnects -- so this is the deadline the restored timer has to honour.
+    const persistedDeadline =
+      afterRestart.find((lease) => lease.id === grant.lease.id)?.ttlDeadline ?? Number.NaN;
 
     // The holder itself does not survive the restart -- the CLI never reconnects (ADR 0003
     // §10) -- so it writes one DAEMON_CONNECTION_LOST line naming the still-standing lease
@@ -145,15 +153,16 @@ describe("lease liveness & restart", () => {
     await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
     const recorded = await env.expectEvents(["lease.expired"]);
     // On that deadline, not merely eventually: the wait above has slack for a slow machine, so
-    // without this a timer restored from the wrong deadline (a fresh TTL from restart, say)
-    // would still pass. The upper bound is scheduling slack, far below the TTL itself.
+    // without this a restored timer that fires seconds late would still pass. The upper bound is
+    // scheduling slack. It cannot tell the persisted deadline from a fresh TTL armed at restart,
+    // because the restart lands well inside that slack.
     const expired = recorded.find(
       (entry) =>
         entry.event === "lease.expired" &&
         (entry.payload as { leaseId?: string }).leaseId === grant.lease.id,
     );
-    expect(expired?.timestamp).toBeGreaterThanOrEqual(grant.lease.ttlDeadline);
-    expect(expired?.timestamp).toBeLessThan(grant.lease.ttlDeadline + 3_000);
+    expect(expired?.timestamp).toBeGreaterThanOrEqual(persistedDeadline);
+    expect(expired?.timestamp).toBeLessThan(persistedDeadline + 3_000);
   });
 
   it("survives a graceful daemon stop and can be renewed from a later invocation", async () => {
