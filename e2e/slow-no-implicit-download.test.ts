@@ -75,10 +75,11 @@ describe.skipIf(process.platform !== "darwin")(
 
           await env.cli(["doctor"]);
           await env.cli(["cleanup", "--dry-run"]);
-          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
         } finally {
-          // No cleanup beyond nuke above: this flow must never touch anything besides
-          // what simlock itself created and already destroyed.
+          // nuke is the last step of the cycle and the only cleanup: this flow must never
+          // touch anything besides what simlock itself created. It runs here so a failed
+          // lease or release above still destroys the device it left behind.
+          await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
         }
 
         const iosRuntimesAfter = await simctlRuntimeNames();
