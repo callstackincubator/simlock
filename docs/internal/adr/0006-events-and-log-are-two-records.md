@@ -1,6 +1,6 @@
 # 0006. Events and the daemon log are two records
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-01
 - **Issue:** [#168](https://github.com/callstackincubator/simlock/issues/168),
   [#169](https://github.com/callstackincubator/simlock/issues/169)
@@ -126,8 +126,9 @@ lease operation.
   not the file.
 - `daemon.log` gains a line per operation on every transport, and a line per
   background failure (#169). It stops being low-volume.
-- Events rule 7 changes: an event is appended to the ring buffer and to the
-  event file.
+- The docs change with the implementation. Each feature's PR updates the docs
+  it makes true: #168 the event file, `--since` and events rule 7; #169 what
+  the log records and `daemon logs --follow`.
 
 ## Alternatives considered
 
