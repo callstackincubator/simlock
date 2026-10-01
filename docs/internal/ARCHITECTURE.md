@@ -147,10 +147,11 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   worker's own `instance.json` identity), label, connection state
   (`connected` / `disconnected` / `incompatible`), daemon health and version,
   capacity per platform, download policy, queue depth, leases, devices,
-  catalog, drain state, and a last-seen timestamp. It is rebuilt over the
-  uplink — `status.get`, `list.get`, `catalog.get`, `config.get` and
-  `events.subscribe` on connect, a refresh on every worker event about a lease
-  or a device, and a slow periodic tick as a backstop — and never persisted.
+  catalog, host facts, drain state, and a last-seen timestamp. It is rebuilt
+  over the uplink — `status.get`, `list.get`, `catalog.get`, `config.get` and
+  `events.subscribe` on connect, a refresh of status and devices on every
+  worker event about a lease or a device, and a slow periodic tick that also
+  re-reads the catalog and config — and never persisted.
   A gateway restart re-derives every view from the workers that reconnect.
 - **The uplink is the reachability signal**: no polling. A closed uplink flips
   the view to `disconnected` immediately and keeps its last-known state, so a
@@ -452,23 +453,35 @@ manually-advanced `Clock`, exactly as the core's tests script drivers.
 ### The worker view
 
 A **worker view** is what the gateway currently knows about one worker: its
-id, `label`, daemon health and version, negotiated protocol range, capacity
-per platform, queue depth, leases, devices, catalog, effective download
-policy, and drain state. On connect the gateway calls `status.get`,
-`list.get`, `catalog.get`, `config.get`, and `events.subscribe` on the worker
-and builds the view from the answers; it refreshes status and list on every
-worker event that changes capacity or leases, and on a slow periodic tick as
-a backstop.
+id, `label`, daemon health and version, negotiated protocol range (only when
+`incompatible`), capacity per platform, queue depth, leases, devices,
+catalog, host facts, effective download policy and `lease.maxTtlMs`, and
+drain state. On connect the gateway calls `status.get`, `list.get`,
+`catalog.get`, `config.get`, and `events.subscribe` on the worker and builds
+the view from the answers. It refreshes status and list on every worker event
+that changes capacity or leases. A slow periodic tick refreshes all four
+reads, catalog and config included, so a runtime installed on a worker
+reaches its view without a restart of either side.
 
-`config.get` is the one of those read **once per connect** rather than on the
-refresh path: config is daemon input, read at start, so a worker whose
-`downloads.policy` changed has already restarted and reconnected. It is an
-admin operation, which the uplink session is. The gateway keeps exactly one
-field out of it — the effective `downloads.policy` — because routing has to
-know whether a worker is even *allowed* to install a missing runtime before
-it sends that worker a request which depends on one. It is a routing input
-and never an override: the worker still clamps `allowDownload` through its
-own policy, whatever the view said.
+The **host facts** are the `host` block of the worker's `status.get`
+(ADR 0008 §5-§8): operating system, version, architecture from the host
+port, read once at the worker's start, and tool versions from each driver's
+`toolVersions()`, joined in `core/host-facts.ts`. The worker serves them from
+memory, so `status.get` stays a liveness probe that never starts a process;
+a stale value starts a background re-read after 60 s. They come over on every
+status refresh. An `incompatible` worker is asked nothing, so its view
+carries none. A gateway's own `status.get` reports the gateway's machine with
+no tools.
+
+From `config.get` the gateway keeps two fields. The effective
+`downloads.policy`, because routing has to know whether a worker is even
+*allowed* to install a missing runtime before it sends that worker a request
+which depends on one. It is a routing input and never an override: the
+worker still clamps `allowDownload` through its own policy, whatever the view
+said. And `lease.maxTtlMs`, compared against the gateway's own to warn when a
+worker's cap is lower. Config is daemon input, read at start, so these change
+only across a worker restart; re-reading them on the tick costs one call.
+`config.get` is an admin operation, which the uplink session is.
 
 The view is **rebuilt, never persisted**. A gateway restart loses nothing it
 cannot ask for again, and a worker stays the authority on its own state. Two
@@ -1338,6 +1351,7 @@ Filesystem   — read/write/delete/stat/disk-free
 ProcessRunner — spawn/exec/kill, capture stdout/stderr
 Clock        — now(), timers (no direct Date/setTimeout in logic)
 SystemStats  — cpu count, total/free RAM, disk free
+HostInfo     — operating system, its version, CPU architecture (`sw_vers` on macOS)
 IpcConnector / IpcListenerFactory — connect to and host daemon IPC endpoints
 DaemonLauncher — detached daemon startup with append-only combined logs
 Logger       — debug/info/warn/error(message, fields) plus child(module) scoping

@@ -181,6 +181,57 @@ describe("connectSimlock: handshake", () => {
     await expect(callPromise).rejects.toMatchObject({ code: "BAD_FRAME" });
   });
 
+  it("rejects status.get from a worker with an over-long host string by the gateway's schema", async () => {
+    // A gateway reads each worker through this client (`WorkerLink`), so this parse is where
+    // a worker's host facts are bounded before they reach its view.
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, principal: "gw:instance-1" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const status = {
+      capacity: {
+        android: {
+          limit: 1,
+          maxRunning: 1,
+          overLimit: false,
+          reserved: 0,
+          running: 0,
+          used: 0,
+          warm: 0,
+        },
+        global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+        ios: {
+          limit: 1,
+          maxRunning: 1,
+          overLimit: false,
+          reserved: 0,
+          running: 0,
+          used: 0,
+          warm: 0,
+        },
+      },
+      daemon: { health: "running", mode: "worker" },
+      devices: [],
+      host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+      leases: [],
+      queueDepth: 0,
+    };
+
+    const accepted = client.getStatus();
+    await flushMicrotasks();
+    connection.reply(connection.lastSentOf("status.get")!.id, status);
+    await expect(accepted).resolves.toMatchObject({ host: { os: "macOS" } });
+
+    const rejected = client.getStatus();
+    await flushMicrotasks();
+    connection.reply(connection.lastSentOf("status.get")!.id, {
+      ...status,
+      host: { ...status.host, osVersion: "1".repeat(129) },
+    });
+    await expect(rejected).rejects.toMatchObject({ code: "BAD_FRAME" });
+  });
+
   it("wraps an error code it does not recognize as UNKNOWN_DAEMON_ERROR", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });

@@ -359,6 +359,7 @@ export class WorkerLink {
       capacity: status.capacity,
       devices: viewDevicesSchema.parse(devices),
       health: status.daemon.health,
+      host: status.host,
       leases: status.leases,
       queueDepth: status.queueDepth,
       version: client.daemonVersion,

@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { connect, createServer, Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FakeDriver, OWNED_ROOT_MARKER_FILE, type OwnedRootError } from "../core/index.js";
+import {
+  type DriverToolVersion,
+  FakeDriver,
+  OWNED_ROOT_MARKER_FILE,
+  type OwnedRootError,
+} from "../core/index.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
 import { EventBus } from "../bus/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
@@ -12,6 +17,7 @@ import {
   CryptoIdGenerator,
   CryptoTokenSecrets,
   FakeClock,
+  FakeHostInfo,
   FakeProcessSupervisor,
   FakeTcpProbe,
   JsonLinesLogger,
@@ -91,6 +97,20 @@ class DisposableFakeDriver extends FakeDriver {
     if (this.failure !== undefined) {
       throw this.failure;
     }
+  }
+}
+
+/** A fake driver that reports tool versions, which `FakeDriver` does not. */
+class ToolsFakeDriver extends FakeDriver {
+  constructor(
+    options: ConstructorParameters<typeof FakeDriver>[0],
+    private readonly tools: () => Promise<readonly DriverToolVersion[]>,
+  ) {
+    super(options);
+  }
+
+  toolVersions(): Promise<readonly DriverToolVersion[]> {
+    return this.tools();
   }
 }
 
@@ -196,6 +216,59 @@ describe("startDaemon", () => {
         fields: expect.objectContaining({ platform: "android" }),
       }),
     );
+  });
+
+  it("starts, and reports the host and every tool read, while one driver's tool read never answers", async () => {
+    const clock = new FakeClock(1_000);
+    const { daemon } = await start({
+      drivers: [
+        new ToolsFakeDriver(
+          { availableOsVersions: ["26.5"], clock, platform: "ios" },
+          // What an iOS driver whose `xcodebuild` never answers looks like from here.
+          () => new Promise(() => undefined),
+        ),
+        new ToolsFakeDriver({ availableOsVersions: ["35"], clock, platform: "android" }, () =>
+          Promise.resolve([{ name: "emulator", version: "35.4.9" }]),
+        ),
+      ],
+      hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+    });
+
+    await expect
+      .poll(async () => {
+        const status = (await daemon.dispatch(
+          "status.get",
+          {},
+          {
+            manageEventSubscription: () => undefined,
+            principal: "agent",
+            role: "agent",
+          },
+        )) as { readonly host: unknown };
+        return status.host;
+      })
+      .toEqual({
+        arch: "arm64",
+        os: "macOS",
+        osVersion: "15.5",
+        tools: [{ name: "emulator", platform: "android", version: "35.4.9" }],
+      });
+  });
+
+  it("reads tool versions at start, before anything asks for status", async () => {
+    const clock = new FakeClock(1_000);
+    let reads = 0;
+    await start({
+      drivers: [
+        new ToolsFakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }, () => {
+          reads += 1;
+          return Promise.resolve([]);
+        }),
+      ],
+      hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+    });
+
+    expect(reads).toBe(1);
   });
 
   it("scopes child loggers under daemon.<module> so records are attributable", async () => {
@@ -570,6 +643,7 @@ describe("discoverDrivers", () => {
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
       filesystem,
+      hostArch: "arm64",
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: "instance-1",
@@ -781,6 +855,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
       filesystem,
+      hostArch: "arm64",
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: INSTANCE_ID,
@@ -849,6 +924,7 @@ function discoverIos(
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
     filesystem: overrides.filesystem ?? new MemoryFilesystem(),
+    hostArch: "arm64",
     hostPlatform: overrides.hostPlatform ?? "darwin",
     idGenerator: overrides.idGenerator ?? new CryptoIdGenerator(),
     instanceId: INSTANCE_ID,
@@ -1098,6 +1174,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
       filesystem: new MemoryFilesystem(),
+      hostArch: "arm64",
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: "instance-1",

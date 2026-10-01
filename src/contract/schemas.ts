@@ -280,6 +280,32 @@ export const statusCapacitySchema = z.object({
 
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
 
+/**
+ * ADR 0008 §5: what machine a daemon runs on. Every string and the `tools` list are bounded,
+ * because a gateway stores what each worker reports in that worker's view (safety rule 10).
+ */
+const hostStringSchema = z.string().min(1).max(128);
+
+export const hostFactsSchema = z.object({
+  /** Operating system product name (`macOS`), or the kernel name where there is none. */
+  os: hostStringSchema,
+  osVersion: hostStringSchema,
+  /** CPU architecture as Node names it (`arm64`, `x64`). */
+  arch: hostStringSchema,
+  /** The platform tools each driver uses, with the version installed. Empty on a gateway, which
+   * runs no drivers. */
+  tools: z
+    .array(
+      z.object({
+        platform: platformSchema,
+        name: hostStringSchema,
+        version: hostStringSchema,
+        build: hostStringSchema.optional(),
+      }),
+    )
+    .max(32),
+});
+
 export const platformCatalogSchema = z.object({
   platform: platformSchema,
   models: z.array(z.string()),
@@ -648,6 +674,9 @@ export const workerViewSchema = z.object({
   leases: z.array(leaseRecordSchema),
   devices: z.array(statusDeviceSchema),
   catalog: z.array(platformCatalogSchema),
+  /** ADR 0008 §8: the `host` block of the worker's last `status.get`. Absent for a worker the
+   * gateway has not read status from, and for an `incompatible` one. */
+  host: hostFactsSchema.optional(),
 });
 
 /**

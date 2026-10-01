@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { OPERATIONS } from "../contract/index.js";
 import { aggregateCatalog, aggregateStatus } from "./aggregate.js";
 import { FleetLeaseIndex } from "./lease-index.js";
-import { deviceFixture, leaseFixture } from "./test-support.js";
+import { deviceFixture, hostFixture, leaseFixture } from "./test-support.js";
 import type { WorkerView } from "./worker-registry.js";
 
 function capacity(running: number, limit: number) {
@@ -30,6 +30,8 @@ function capacity(running: number, limit: number) {
   };
 }
 
+const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] };
+
 function view(overrides: Partial<WorkerView> & { readonly id: string }): WorkerView {
   return {
     catalog: [],
@@ -44,13 +46,23 @@ function view(overrides: Partial<WorkerView> & { readonly id: string }): WorkerV
 
 describe("aggregateStatus", () => {
   it("returns the same shape a worker returns, with the gateway named in the daemon block", () => {
-    const status = aggregateStatus([], { health: "running", queueDepth: 0 });
+    const status = aggregateStatus([], { health: "running", host: GATEWAY_HOST, queueDepth: 0 });
 
     // The contract is the arbiter: a gateway's answer parses as `status.get`'s output or it is
     // not the same shape.
     expect(() => OPERATIONS["status.get"].output.parse(status)).not.toThrow();
     expect(status.daemon.mode).toBe("gateway");
     expect(status.workers).toEqual([]);
+  });
+
+  it("reports the gateway's own host with no tools, not any worker's", () => {
+    const status = aggregateStatus(
+      [view({ host: hostFixture({ os: "macOS", osVersion: "15.5" }), id: "wrk_a" })],
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+    );
+
+    expect(status.host).toEqual({ arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] });
+    expect(status.workers?.[0]?.host?.os).toBe("macOS");
   });
 
   // Round 6 review: `aggregateStatus`'s whole `leaseIndex` branch was deletable with a green
@@ -73,7 +85,7 @@ describe("aggregateStatus", () => {
 
     const status = aggregateStatus(
       [view({ id: "wrk_a", label: "mac-mini-1", leases: [leaseFixture("lease_1", "dev_1")] })],
-      { health: "running", leaseIndex, queueDepth: 0 },
+      { health: "running", host: GATEWAY_HOST, leaseIndex, queueDepth: 0 },
     );
 
     expect(status.leases).toEqual([
@@ -95,7 +107,7 @@ describe("aggregateStatus", () => {
 
     const status = aggregateStatus(
       [view({ id: "wrk_a", label: "mac-mini-1", leases: [leaseFixture("lease_1", "dev_1")] })],
-      { health: "running", leaseIndex, queueDepth: 0 },
+      { health: "running", host: GATEWAY_HOST, leaseIndex, queueDepth: 0 },
     );
 
     expect(status.leases).toEqual([
@@ -110,7 +122,7 @@ describe("aggregateStatus", () => {
         view({ capacity: capacity(1, 2), id: "wrk_a" }),
         view({ capacity: capacity(2, 4), id: "wrk_b" }),
       ],
-      { health: "running", queueDepth: 0 },
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity.ios).toMatchObject({ limit: 6, running: 3, used: 3, warm: 2 });
@@ -125,7 +137,7 @@ describe("aggregateStatus", () => {
         view({ capacity: capacity(1, 2), id: "wrk_a" }),
         view({ capacity: capacity(9, 9), connection: "disconnected", id: "wrk_b" }),
       ],
-      { health: "running", queueDepth: 0 },
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity.ios).toMatchObject({ limit: 2, running: 1 });
@@ -141,7 +153,7 @@ describe("aggregateStatus", () => {
           id: "wrk_b",
         }),
       ],
-      { health: "running", queueDepth: 0 },
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.capacity.ios.overLimit).toBe(true);
@@ -157,7 +169,7 @@ describe("aggregateStatus", () => {
         }),
         view({ devices: [deviceFixture("dev_2")], id: "wrk_b" }),
       ],
-      { health: "running", queueDepth: 0 },
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.devices).toEqual([
@@ -178,7 +190,7 @@ describe("aggregateStatus", () => {
           leases: [leaseFixture("lease_1", "dev_1")],
         }),
       ],
-      { health: "running", queueDepth: 0 },
+      { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
     );
 
     expect(status.leases).toEqual([expect.objectContaining({ id: "lease_1", workerId: "wrk_a" })]);
@@ -187,6 +199,7 @@ describe("aggregateStatus", () => {
   it("reports the gateway's own queue depth and health, not any worker's", () => {
     const status = aggregateStatus([view({ health: "failed", id: "wrk_a", queueDepth: 7 })], {
       health: "starting",
+      host: GATEWAY_HOST,
       queueDepth: 0,
     });
 

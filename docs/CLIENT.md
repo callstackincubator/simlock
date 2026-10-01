@@ -205,6 +205,27 @@ runtime. The gateway does not yet use the pairings to pick a worker, so a
 pair it lists can still go to a worker that has the model and the runtime
 but cannot pair them, and that request fails there.
 
+## What machine answered: `getStatus().host`
+
+`getStatus()` carries a `host` block beside `daemon`: the machine the daemon
+runs on, worked out from the machine itself.
+
+```ts
+const { host } = await client.getStatus();
+// { os: "macOS", osVersion: "15.5", arch: "arm64",
+//   tools: [{ platform: "ios", name: "xcode", version: "16.4", build: "16F6" },
+//           { platform: "android", name: "emulator", version: "35.4.9" }] }
+```
+
+- `tools` has one entry per platform tool the daemon's drivers use. A tool
+  that cannot be read is left out, and right after a daemon starts the list
+  can be empty for a moment: versions are read in the background, so
+  `getStatus` never waits for them. They are read again once a minute has
+  passed.
+- A gateway reports its own machine with no tools, since it runs no
+  drivers. Each worker's `host` is on its entry in `workers`, and on
+  `listWorkers()` from the admin client.
+
 ## One connection, no reconnect, no retry
 
 This is the one thing to internalize before building anything on top of this

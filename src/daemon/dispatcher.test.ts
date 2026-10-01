@@ -5,6 +5,8 @@ import {
   CleanupReaper,
   Doctor,
   FakeDriver,
+  type HostFacts,
+  HostFactsReader,
   LeaseEngine,
   Nuke,
   PassthroughRefusedError,
@@ -30,6 +32,7 @@ import type { DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 
 const gibibyte = 1024 ** 3;
+const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
 
 /**
  * ADR 0003 §12: "full contract coverage at the dispatcher: one suite ... against a fake driver
@@ -104,6 +107,8 @@ async function buildDispatcher(
     readonly passthroughOverride?: PassthroughResolver;
     /** Stands in for the event history, so `events.replay` can be checked against it. */
     readonly eventHistory?: Pick<EventHistory, "replay">;
+    /** `status.get`'s host block; a fixed machine with no tools by default. */
+    readonly hostFacts?: () => HostFacts;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -192,6 +197,7 @@ async function buildDispatcher(
     doctor,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
     health: () => "running",
+    hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
@@ -923,7 +929,65 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
   });
 });
 
+describe("Dispatcher: status.get host facts", () => {
+  it("reports operating system, version, architecture, and every driver's tool versions", async () => {
+    const hostFacts = new HostFactsReader({
+      clock: new FakeClock(0),
+      drivers: [
+        {
+          platform: "ios",
+          toolVersions: () => Promise.resolve([{ build: "16F6", name: "xcode", version: "16.4" }]),
+        },
+        {
+          platform: "android",
+          toolVersions: () => Promise.resolve([{ name: "emulator", version: "35.4.9" }]),
+        },
+      ],
+      system: HOST_SYSTEM,
+    });
+    await hostFacts.refresh();
+    const { dispatcher } = await buildDispatcher({ hostFacts: () => hostFacts.current() });
+
+    const status = (await dispatcher.dispatch("status.get", {}, session())) as {
+      readonly host: unknown;
+    };
+
+    expect(status.host).toEqual({
+      arch: "arm64",
+      os: "macOS",
+      osVersion: "15.5",
+      tools: [
+        { build: "16F6", name: "xcode", platform: "ios", version: "16.4" },
+        { name: "emulator", platform: "android", version: "35.4.9" },
+      ],
+    });
+  });
+});
+
 describe("Dispatcher: startup-readiness parking", () => {
+  it("answers status.get with host facts while other operations are parked on startup", async () => {
+    const { dispatcher } = await buildDispatcher({
+      awaitReady: () => new Promise<void>(() => undefined),
+      hostFacts: () => ({
+        ...HOST_SYSTEM,
+        tools: [{ name: "xcode", platform: "ios", version: "16.4" }],
+      }),
+    });
+
+    let parked = true;
+    void dispatcher.dispatch("catalog.get", {}, session()).then(() => {
+      parked = false;
+    });
+    const status = (await dispatcher.dispatch("status.get", {}, session())) as {
+      readonly host: { readonly os: string; readonly tools: readonly unknown[] };
+    };
+    await flush();
+
+    expect(parked).toBe(true);
+    expect(status.host.os).toBe("macOS");
+    expect(status.host.tools).toHaveLength(1);
+  });
+
   it("parks every operation but status.get on awaitReady", async () => {
     let releaseReady: () => void = () => {};
     const readyPromise = new Promise<void>((resolve) => {

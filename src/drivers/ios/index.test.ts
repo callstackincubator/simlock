@@ -2973,6 +2973,39 @@ describe("IosSimctlDriver", () => {
   });
 });
 
+describe("IosSimctlDriver toolVersions()", () => {
+  it("reports the Xcode version and build that xcodebuild -version prints", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["-version"], command: "xcodebuild" },
+        result: { code: 0, stderr: "", stdout: "Xcode 16.4\nBuild version 16F6\n" },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.toolVersions()).resolves.toEqual([
+      { build: "16F6", name: "xcode", version: "16.4" },
+    ]);
+    expect(runner.calls[0]?.options.timeoutMs).toBeGreaterThan(0);
+  });
+
+  it("reports no Xcode entry when xcodebuild fails", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["-version"], command: "xcodebuild" },
+        result: {
+          code: 1,
+          stderr: "xcode-select: error: tool 'xcodebuild' requires Xcode",
+          stdout: "",
+        },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.toolVersions()).resolves.toEqual([]);
+  });
+});
+
 function createDriver(
   runner: ScriptedProcessRunner,
   clock = new FakeClock(),

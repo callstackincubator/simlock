@@ -1749,6 +1749,38 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
     expect(output.stdout).toContain("1 lease(s)");
   });
 
+  it("prints each worker's operating system, architecture, and tool versions", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          listWorkers: () =>
+            Promise.resolve({
+              workers: [
+                {
+                  ...connectedWorker,
+                  host: {
+                    arch: "arm64",
+                    os: "macOS",
+                    osVersion: "15.5",
+                    tools: [
+                      { build: "16F6", name: "xcode", platform: "ios" as const, version: "16.4" },
+                      { name: "emulator", platform: "android" as const, version: "35.4.9" },
+                    ],
+                  },
+                },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toContain(
+      "1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9",
+    );
+  });
+
   it("says so plainly when no worker has ever connected", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({ connectAdmin: async () => fakeClient() });
@@ -1900,6 +1932,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         },
       },
       daemon: { health: "running" as const, mode: "gateway" as const },
+      host: { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] },
       devices: [
         {
           id: "dev_1",
@@ -1946,6 +1979,31 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("wrk_1: connected, drained");
     expect(output.stdout).toContain("Device dev_1 on wrk_1: leased, mode full");
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
+  });
+
+  it("prints the host line", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getStatus: () =>
+            Promise.resolve({
+              ...EMPTY_STATUS,
+              host: {
+                arch: "arm64",
+                os: "macOS",
+                osVersion: "15.5",
+                tools: [
+                  { build: "16F6", name: "xcode", platform: "ios" as const, version: "16.4" },
+                ],
+              },
+            }),
+        }),
+    });
+
+    await runCli(["status"], environment);
+
+    expect(output.stdout).toContain("Host: macOS 15.5 arm64; xcode 16.4 (16F6)\n");
   });
 
   it("says worker on a worker, and leaves its devices and leases unqualified", async () => {
@@ -3432,6 +3490,7 @@ function simlockError(code: AnySimlockError["code"]): AnySimlockError {
  * `mode` -- which is what the passthrough path branches on (ADR 0005 §19c). */
 const EMPTY_STATUS: StatusGetOutput = {
   devices: [],
+  host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
   leases: [],
   capacity: {
     ios: { limit: 1, running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0, used: 0 },
@@ -3658,6 +3717,7 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
       filesystem: new NodeFilesystem(),
       listenerFactory: new NodeIpcTransport(),
     }),
+    hostFacts: () => ({ arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] }),
     leases: engine,
     queue: engine,
     reaper,
@@ -3773,6 +3833,7 @@ async function startInMemoryDaemon(options: {
       filesystem,
       listenerFactory: ipcTransport,
     }),
+    hostFacts: () => ({ arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] }),
     leases: engine,
     queue: engine,
     reaper,

@@ -61,6 +61,12 @@ export interface FakeDriverPlatformScript {
    * version, which is also the default for every model.
    */
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
+  /** What `toolVersions` reports for `status.get`'s host facts. None by default. */
+  readonly toolVersions?: readonly {
+    readonly name: string;
+    readonly version: string;
+    readonly build?: string;
+  }[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
   readonly reclaimResult?: "ready" | "shutdown";

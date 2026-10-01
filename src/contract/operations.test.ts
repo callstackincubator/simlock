@@ -278,6 +278,12 @@ describe("operation input/output round trips", () => {
         global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
       },
       daemon: { health: "running", mode: "worker" },
+      host: {
+        os: "macOS",
+        osVersion: "15.5",
+        arch: "arm64",
+        tools: [{ platform: "ios", name: "xcode", version: "16.4", build: "16F6" }],
+      },
       queueDepth: 0,
     };
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
@@ -322,6 +328,7 @@ describe("operation input/output round trips", () => {
       leases: [lease],
       capacity,
       daemon: { health: "running", mode: "gateway" },
+      host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
       queueDepth: 0,
       workers: [
         {
@@ -333,6 +340,12 @@ describe("operation input/output round trips", () => {
           health: "running",
           version: "0.3.0",
           capacity,
+          host: {
+            os: "macOS",
+            osVersion: "15.5",
+            arch: "arm64",
+            tools: [{ platform: "android", name: "emulator", version: "35.4.9" }],
+          },
           queueDepth: 0,
           leases: [lease],
           devices: [],
@@ -358,6 +371,7 @@ describe("operation input/output round trips", () => {
       ],
     });
     expect(parsed.workers?.[1]?.protocol?.worker).toEqual({ min: 3, max: 3 });
+    expect(parsed.workers?.[0]?.host?.tools[0]?.name).toBe("emulator");
     expect(parsed.devices[0]?.workerId).toBe("wrk_1");
     expect(parsed.leases[0]?.workerId).toBe("wrk_1");
   });

@@ -79,6 +79,7 @@ describe("AndroidDriver", () => {
       },
       filesystem,
       homeDirectory: home,
+      hostAbi: "arm64-v8a",
       instanceId,
       processRunner: runner,
       processSupervisor: new FakeProcessSupervisor([adbServerPid]),
@@ -95,6 +96,7 @@ describe("AndroidDriver", () => {
         env: {},
         filesystem: new MemoryFilesystem(),
         homeDirectory: home,
+        hostAbi: "arm64-v8a",
         instanceId,
         processRunner: runner,
         processSupervisor: new FakeProcessSupervisor(),
@@ -2120,6 +2122,7 @@ describe("AndroidDriver.create", () => {
       env: { ANDROID_HOME: sdk },
       filesystem,
       homeDirectory: home,
+      hostAbi: "arm64-v8a",
       instanceId,
       processRunner: new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(),
@@ -2388,6 +2391,7 @@ describe("AndroidDriver.create", () => {
       env: { ANDROID_HOME: sdk },
       filesystem,
       homeDirectory: home,
+      hostAbi: "arm64-v8a",
       instanceId,
       processRunner: new ScriptedProcessRunner([
         {
@@ -2585,6 +2589,7 @@ live(
       env: process.env,
       filesystem: new NodeFilesystem(),
       homeDirectory: process.env.HOME ?? home,
+      hostAbi: "arm64-v8a",
       instanceId: `live-${process.pid}`,
       processRunner: new NodeProcessRunner(),
       processSupervisor: new NodeProcessSupervisor(),
@@ -2732,6 +2737,44 @@ async function provisionedHarness(
  * paths are covered against the supervisor itself in `adb-server.test.ts`, and end to end
  * in this file's own `AndroidDriver.create` block.
  */
+describe("AndroidDriver toolVersions()", () => {
+  it("reports emulator, platform-tools, and command-line tools revisions from each package's source.properties", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.writeFileAtomic(
+      `${sdk}/emulator/source.properties`,
+      "Pkg.Desc=Android Emulator\nPkg.Revision=35.4.9\n",
+    );
+    await filesystem.writeFileAtomic(
+      `${sdk}/platform-tools/source.properties`,
+      "Pkg.Revision=36.0.0\nPkg.Path=platform-tools\n",
+    );
+    await filesystem.writeFileAtomic(
+      `${sdk}/cmdline-tools/latest/source.properties`,
+      "Pkg.Revision=19.0\n",
+    );
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    await expect(driver.toolVersions()).resolves.toEqual([
+      { name: "emulator", version: "35.4.9" },
+      { name: "platform-tools", version: "36.0.0" },
+      { name: "cmdline-tools", version: "19.0" },
+    ]);
+  });
+
+  it("omits a tool whose source.properties cannot be read", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.writeFileAtomic(`${sdk}/emulator/source.properties`, "Pkg.Revision=35.4.9\n");
+    // platform-tools has no source.properties; cmdline-tools has one without a revision.
+    await filesystem.writeFileAtomic(
+      `${sdk}/cmdline-tools/latest/source.properties`,
+      "Pkg.Desc=Android SDK Command-line Tools\n",
+    );
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    await expect(driver.toolVersions()).resolves.toEqual([{ name: "emulator", version: "35.4.9" }]);
+  });
+});
+
 async function createDriver(
   filesystem: Filesystem,
   processRunner: ScriptedProcessRunner,

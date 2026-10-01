@@ -24,6 +24,17 @@ interface WorkerView {
     readonly models: readonly string[];
     readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
   }[];
+  readonly host?: {
+    readonly os: string;
+    readonly osVersion: string;
+    readonly arch: string;
+    readonly tools: readonly {
+      readonly platform: string;
+      readonly name: string;
+      readonly version: string;
+      readonly build?: string;
+    }[];
+  };
 }
 
 interface StatusView {
@@ -243,6 +254,7 @@ describe("gateway fleet", () => {
           availableOsVersions: installed,
           knownModels: ["iPhone 16"],
           modelRuntimes: { "iPhone 16": ["18.4"] },
+          toolVersions: [{ build: "16F6", name: "xcode", version: "16.4" }],
         },
       },
     });
@@ -253,6 +265,7 @@ describe("gateway fleet", () => {
           availableOsVersions: installed,
           knownModels: ["iPhone 16"],
           modelRuntimes: { "iPhone 16": ["26.0"] },
+          toolVersions: [{ build: "17A324", name: "xcode", version: "26.0" }],
         },
       },
     });
@@ -270,6 +283,38 @@ describe("gateway fleet", () => {
         ?.catalog.find((entry) => entry.platform === "ios")?.modelRuntimes;
     expect(pairingOf("worker-a")).toEqual({ "iPhone 16": ["18.4"] });
     expect(pairingOf("worker-b")).toEqual({ "iPhone 16": ["26.0"] });
+
+    // Each worker's host facts sit beside its catalog, tools included once the worker has read
+    // them; `GET /v1/workers` serves the same views.
+    const xcodeOf = (views: readonly WorkerView[], label: string) =>
+      views.find((view) => view.label === label)?.host?.tools.find((tool) => tool.name === "xcode");
+    const withTools = await waitForWorkers(
+      gateway,
+      (views) =>
+        xcodeOf(views, "worker-a") !== undefined && xcodeOf(views, "worker-b") !== undefined,
+      "both workers report their tool versions",
+    );
+    expect(xcodeOf(withTools, "worker-a")).toEqual({
+      build: "16F6",
+      name: "xcode",
+      platform: "ios",
+      version: "16.4",
+    });
+    expect(xcodeOf(withTools, "worker-b")).toMatchObject({ version: "26.0" });
+    for (const view of withTools) {
+      expect(view.host).toMatchObject({ arch: expect.any(String), os: expect.any(String) });
+    }
+    const operator = await gateway.cli(["token", "create", "--role", "operator"]);
+    const response = await fetch(`http://127.0.0.1:${port}/v1/workers`, {
+      headers: { authorization: `Bearer ${(operator.json as { secret: string }).secret}` },
+    });
+    expect(response.status).toBe(200);
+    const overHttp = ((await response.json()) as { workers: WorkerView[] }).workers;
+    expect(xcodeOf(overHttp, "worker-a")?.version).toBe("16.4");
+    expect(
+      overHttp.find((view) => view.label === "worker-b")?.catalog.find((e) => e.platform === "ios")
+        ?.modelRuntimes,
+    ).toEqual({ "iPhone 16": ["26.0"] });
 
     const catalog = await gateway.cli(["catalog", "--json"]);
     expect(catalog.code).toBe(0);
