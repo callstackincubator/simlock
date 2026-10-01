@@ -504,6 +504,7 @@ describe("IosSimctlDriver", () => {
 
       await expect(driver.listCatalog()).resolves.toEqual({
         defaultRuntime: undefined,
+        modelAliases: {},
         modelRuntimes: { "iPhone 16": [] },
         models: ["iPhone 16"],
         runtimes: [],
@@ -1085,6 +1086,7 @@ describe("IosSimctlDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "26.5",
+      modelAliases: {},
       modelRuntimes: {
         "iPhone 15 Pro": ["18.4", "26.5"],
         "iPhone 16": ["18.4", "26.5"],
@@ -1093,6 +1095,16 @@ describe("IosSimctlDriver", () => {
       models: ["iPhone 17 Pro", "iPhone 16", "iPhone 15 Pro"],
       runtimes: ["18.4", "26.5"],
     });
+  });
+
+  it("reports no other names and no images", async () => {
+    const driver = await createDriver(scriptedListRunner());
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models.length).toBeGreaterThan(0);
+    expect(catalog.modelAliases).toEqual({});
+    expect(catalog).not.toHaveProperty("images");
   });
 
   describe("model and runtime pairing", () => {

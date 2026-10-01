@@ -944,7 +944,18 @@ model the installed runtimes it pairs with (`modelRuntimes`). A model and a
 runtime that are both listed can still fail to pair — on iOS, a runtime can
 drop an older model — so pick a pair from `modelRuntimes`. A model with an
 empty list pairs with nothing installed. On Android every model pairs with
-every installed API level. A
+every installed API level.
+
+`modelAliases` lists, for a model, the other names `--device` accepts for it
+on that machine; a model with no other name has no entry. On Android a
+built-in profile answers to its AVD id as well as its display name, so
+`--device pixel_8` asks for `Pixel 8`. Any listed name works in any letter
+case. On iOS a device type answers to its name only, so iOS lists none.
+Android also lists `images`: every installed system image with its API
+level (`runtime`), tag, and ABI. An image whose ABI the host cannot run
+natively is listed too, with its ABI.
+
+A
 platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
 non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
 command. `--platform` narrows to one platform. Read-only: this never
@@ -952,22 +963,33 @@ downloads a runtime or system image, and lists only what is installed,
 whatever `downloads.policy` says.
 
 Human-oriented by default, one line per model with the runtimes it pairs
-with:
+with, its other names on the line below it, and then each image:
 
 ```text
-Platform: ios
-  Runtimes: 18.4, 26.5 (default: 26.5)
+Platform: android
+  Runtimes: 34, 35 (default: 35)
   Models:
-    iPhone 17 Pro: 26.5
-    iPhone XS: 18.4
+    My Tablet: 34, 35
+    Pixel 8: 34, 35
+      Other names: pixel_8
+  Images (runtime, tag, ABI):
+    34 default x86_64
+    35 google_apis arm64-v8a
 ```
 
 `--json` for the structured equivalent:
 
 ```json
-{"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone XS"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5",
-  "modelRuntimes":{"iPhone 17 Pro":["26.5"],"iPhone XS":["18.4"]}}]}
+{"platforms":[{"platform":"android","models":["My Tablet","Pixel 8"],"runtimes":["34","35"],"defaultRuntime":"35",
+  "modelRuntimes":{"My Tablet":["34","35"],"Pixel 8":["34","35"]},
+  "modelAliases":{"Pixel 8":["pixel_8"]},
+  "images":[{"runtime":"34","tag":"default","abi":"x86_64"},{"runtime":"35","tag":"google_apis","abi":"arm64-v8a"}]}]}
 ```
+
+Against a gateway, `modelAliases` is the union of each worker's other names
+for a model, and `images` the union of their images. The gateway does not
+yet route by another name, so ask a gateway for a model by its name in
+`models`.
 
 ## `simlock cleanup [--dry-run] [--rule <name>]`
 

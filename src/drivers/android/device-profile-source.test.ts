@@ -14,59 +14,47 @@ const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\
 const devicesXmlPath = "/home/simlock/.android/devices.xml";
 
 describe("BuiltinDeviceProfileSource", () => {
-  it("resolves by name or id, case-insensitively", async () => {
-    const runner = new ScriptedProcessRunner([
-      processResult(pixelDevices),
-      processResult(pixelDevices),
-      processResult(pixelDevices),
-    ]);
-    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
-
-    await expect(source.resolve("Pixel 8")).resolves.toEqual({
-      avdmanagerId: "pixel_8",
-      kind: "builtin",
-      name: "Pixel 8",
-    });
-    await expect(source.resolve("PIXEL_8")).resolves.toEqual({
-      avdmanagerId: "pixel_8",
-      kind: "builtin",
-      name: "Pixel 8",
-    });
-    await expect(source.resolve("Pixel Fold")).resolves.toBeUndefined();
-  });
-
-  it("lists resolvable model names", async () => {
+  it("lists each profile answering to its name and its avdmanager id", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
     const source = new BuiltinDeviceProfileSource(avdmanager, runner);
 
-    await expect(source.listModels()).resolves.toEqual(["Pixel 8"]);
+    await expect(source.profiles()).resolves.toEqual([
+      { avdmanagerId: "pixel_8", kind: "builtin", name: "Pixel 8", names: ["Pixel 8", "pixel_8"] },
+    ]);
+  });
+
+  it("lists the name once when the avdmanager id equals it ignoring case", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(`Available devices:\nid: 0 or "TV_1080p"\n    Name: tv_1080p\n`),
+    ]);
+    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
+
+    await expect(source.profiles()).resolves.toEqual([
+      { avdmanagerId: "TV_1080p", kind: "builtin", name: "tv_1080p", names: ["tv_1080p"] },
+    ]);
   });
 });
 
 describe("UserDeviceProfileSource", () => {
-  it("resolves a properties profile mapped from devices.xml hardware fields", async () => {
+  it("lists a properties profile mapped from devices.xml hardware fields, answering to its name only", async () => {
     const filesystem = await filesystemWithDevicesXml(devicesXml());
     const source = new UserDeviceProfileSource(devicesXmlPath, filesystem);
 
-    await expect(source.resolve("My Custom Phone")).resolves.toEqual({
-      hardwareProperties: {
-        "hw.device.manufacturer": "Acme",
-        "hw.device.name": "My Custom Phone",
-        "hw.lcd.density": "420",
-        "hw.lcd.height": "2400",
-        "hw.lcd.width": "1080",
-        "hw.ramSize": "6144",
+    await expect(source.profiles()).resolves.toEqual([
+      {
+        hardwareProperties: {
+          "hw.device.manufacturer": "Acme",
+          "hw.device.name": "My Custom Phone",
+          "hw.lcd.density": "420",
+          "hw.lcd.height": "2400",
+          "hw.lcd.width": "1080",
+          "hw.ramSize": "6144",
+        },
+        kind: "properties",
+        name: "My Custom Phone",
+        names: ["My Custom Phone"],
       },
-      kind: "properties",
-      name: "My Custom Phone",
-    });
-  });
-
-  it("resolves nothing for a model it does not have", async () => {
-    const filesystem = await filesystemWithDevicesXml(devicesXml());
-    const source = new UserDeviceProfileSource(devicesXmlPath, filesystem);
-
-    await expect(source.resolve("Pixel 8")).resolves.toBeUndefined();
+    ]);
   });
 
   it("treats an absent file as no profiles without a diagnostic", async () => {
@@ -76,7 +64,7 @@ describe("UserDeviceProfileSource", () => {
       diagnostics.push(diagnostic),
     );
 
-    await expect(source.listModels()).resolves.toEqual([]);
+    await expect(source.profiles()).resolves.toEqual([]);
     expect(diagnostics).toEqual([]);
   });
 
@@ -87,8 +75,8 @@ describe("UserDeviceProfileSource", () => {
       diagnostics.push(diagnostic),
     );
 
-    await expect(source.listModels()).resolves.toEqual([]);
-    await expect(source.resolve("anything")).resolves.toBeUndefined();
+    await expect(source.profiles()).resolves.toEqual([]);
+    await expect(source.profiles()).resolves.toEqual([]);
     expect(diagnostics).toHaveLength(2);
     expect(diagnostics[0]).toMatchObject({
       kind: "device-profile-source-unreadable",
@@ -112,9 +100,8 @@ describe("UserDeviceProfileSource", () => {
       diagnostics.push(diagnostic),
     );
 
-    await expect(source.listModels()).resolves.toEqual([]);
-    await expect(source.resolve("Evil\nPhone")).resolves.toBeUndefined();
-    expect(diagnostics).toHaveLength(2);
+    await expect(source.profiles()).resolves.toEqual([]);
+    expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]).toMatchObject({
       kind: "device-profile-source-unreadable",
       path: devicesXmlPath,
@@ -130,7 +117,7 @@ describe("UserDeviceProfileSource", () => {
       diagnostics.push(diagnostic),
     );
 
-    await expect(source.listModels()).resolves.toEqual([]);
+    await expect(source.profiles()).resolves.toEqual([]);
     expect(diagnostics).toEqual([]);
   });
 });
@@ -226,6 +213,7 @@ describe("DeviceProfileRegistry", () => {
       avdmanagerId: "pixel_8",
       kind: "builtin",
       name: "Pixel 8",
+      names: ["Pixel 8", "pixel_8"],
     });
   });
 
@@ -247,7 +235,23 @@ describe("DeviceProfileRegistry", () => {
       },
       kind: "properties",
       name: "My Custom Phone",
+      names: ["My Custom Phone"],
     });
+  });
+
+  it("resolves a model by any of its names, in any letter case", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(pixelDevices),
+      processResult(pixelDevices),
+      processResult(pixelDevices),
+    ]);
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(avdmanager, runner),
+    ]);
+
+    for (const model of ["pixel 8", "PIXEL_8", "Pixel_8"]) {
+      await expect(registry.resolve(model)).resolves.toMatchObject({ name: "Pixel 8" });
+    }
   });
 
   it("rejects an unresolvable model with UnknownModelError", async () => {
@@ -258,7 +262,7 @@ describe("DeviceProfileRegistry", () => {
     await expect(registry.resolve("Nope")).rejects.toMatchObject({ name: "UnknownModelError" });
   });
 
-  it("dedupes listModels by name, earliest source winning", async () => {
+  it("dedupes the catalog's models by name, earliest source winning", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
     const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
     const filesystem = await filesystemWithDevicesXml(
@@ -267,7 +271,41 @@ describe("DeviceProfileRegistry", () => {
     const user = new UserDeviceProfileSource(devicesXmlPath, filesystem);
     const registry = new DeviceProfileRegistry([builtin, user]);
 
-    await expect(registry.listModels()).resolves.toEqual(["Pixel 8"]);
+    await expect(registry.catalog()).resolves.toMatchObject({ models: ["Pixel 8"] });
+  });
+
+  it("lists a model's other names, only for models that have one", async () => {
+    const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
+    const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const user = new UserDeviceProfileSource(
+      devicesXmlPath,
+      await filesystemWithDevicesXml(devicesXml()),
+    );
+    const registry = new DeviceProfileRegistry([builtin, user]);
+
+    await expect(registry.catalog()).resolves.toEqual({
+      modelAliases: { "Pixel 8": ["pixel_8"] },
+      models: ["Pixel 8", "My Custom Phone"],
+    });
+  });
+
+  it("does not list another name that an earlier profile answers to", async () => {
+    // The second profile's id is the first's in other letter case, so a request for it resolves
+    // to the first; listing it under the second would name a model the worker never gives for it.
+    const runner = new ScriptedProcessRunner([
+      processResult(
+        `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n---------\n` +
+          `id: 1 or "PIXEL_8"\n    Name: Pixel 8 Copy\n`,
+      ),
+    ]);
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(avdmanager, runner),
+    ]);
+
+    await expect(registry.catalog()).resolves.toEqual({
+      modelAliases: { "Pixel 8": ["pixel_8"] },
+      models: ["Pixel 8", "Pixel 8 Copy"],
+    });
   });
 });
 

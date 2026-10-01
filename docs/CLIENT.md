@@ -184,7 +184,8 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 //    models: ["iPhone 16", "iPhone XS"],
 //    runtimes: ["18.4", "26.0"],
 //    defaultRuntime: "26.0",
-//    modelRuntimes: { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] } }]
+//    modelRuntimes: { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] },
+//    modelAliases: {} }]
 ```
 
 - `models` and `runtimes` are what is installed. A model and a runtime that
@@ -193,6 +194,13 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 - `modelRuntimes` has an entry for every model: the installed runtimes it
   pairs with. Any pair listed there resolves in `requestLease`. An empty
   list means nothing installed pairs with that model.
+- `modelAliases` maps a model to the other names `requestLease` accepts for
+  it, in any letter case. Only models with another name appear. On Android
+  a built-in profile's AVD id is one (`{ "Pixel 8": ["pixel_8"] }`); iOS
+  has none.
+- `images` is on Android entries only: every installed system image as
+  `{ runtime, tag, abi }`, where `runtime` is a value from `runtimes`. An
+  image whose ABI the host cannot run natively is listed too.
 - `defaultRuntime` is the newest installed runtime, and is absent when none
   is installed.
 - The catalog lists only what is installed. It never lists a runtime the
@@ -203,7 +211,9 @@ model is paired with a runtime when at least one worker pairs them, and
 `modelWorkers` and `runtimeWorkers` say which workers have each model and
 runtime. The gateway does not yet use the pairings to pick a worker, so a
 pair it lists can still go to a worker that has the model and the runtime
-but cannot pair them, and that request fails there.
+but cannot pair them, and that request fails there. `modelAliases` and
+`images` are the unions of each worker's own. The gateway does not yet route
+by another name, so ask it for a model by its name in `models`.
 
 ## One connection, no reconnect, no retry
 

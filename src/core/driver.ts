@@ -125,12 +125,28 @@ export type DriverEstimate =
  * `modelRuntimes` has an entry for every name in `models`: the installed runtimes that model
  * pairs with, decided by the same function `resolveSpec` uses, so every listed pair resolves
  * (ADR 0008 §3). An empty list means no installed runtime pairs with that model.
+ *
+ * `modelAliases` maps a name in `models` to the other names `resolveSpec` accepts for it, from
+ * the same matcher `resolveSpec` uses; a model with no other name has no entry. `images` is
+ * present only for a driver whose runtimes come as installed images, one entry per image.
  */
 export interface DriverCatalogEntry {
   readonly models: readonly string[];
   readonly runtimes: readonly string[];
   readonly defaultRuntime: string | undefined;
   readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
+  readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+  readonly images?: readonly DriverCatalogImage[];
+}
+
+/**
+ * One installed image. `runtime` is a value from the entry's `runtimes`; `tag` and `abi` are
+ * the driver's own words for the image's variant and instruction set, carried unread.
+ */
+export interface DriverCatalogImage {
+  readonly runtime: string;
+  readonly tag: string;
+  readonly abi: string;
 }
 
 /**

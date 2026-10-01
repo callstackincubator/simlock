@@ -119,6 +119,7 @@ describe("WorkerRegistry", () => {
     workers.refresh("wrk_1", {
       catalog: [
         {
+          modelAliases: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           models: ["iPhone 17"],
           platform: "ios",
@@ -131,6 +132,7 @@ describe("WorkerRegistry", () => {
 
     expect(workers.view("wrk_1")?.catalog).toEqual([
       {
+        modelAliases: {},
         modelRuntimes: { "iPhone 17": ["26.0"] },
         models: ["iPhone 17"],
         platform: "ios",

@@ -23,6 +23,12 @@ interface WorkerView {
     readonly platform: string;
     readonly models: readonly string[];
     readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
+    readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+    readonly images?: readonly {
+      readonly runtime: string;
+      readonly tag: string;
+      readonly abi: string;
+    }[];
   }[];
 }
 
@@ -224,7 +230,7 @@ describe("gateway fleet", () => {
     await workerB.cli(["daemon", "stop"]);
   });
 
-  it("shows each worker's own model pairing in the worker list and their union in the catalog", async () => {
+  it("shows each worker's own pairings, other names, and images in the worker list and their union in the catalog", async () => {
     const port = await freeLoopbackPort();
     const gateway = await withDaemon({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
@@ -234,14 +240,17 @@ describe("gateway fleet", () => {
     const { secret } = minted.json as { secret: string };
     const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
     // Both workers have the same model and the same two runtimes installed, and pair the model
-    // with a different one of them.
+    // with a different one of them. Each also accepts its own other name for it and reports its
+    // own image of one shared runtime.
     const installed = ["18.4", "26.0"];
     await withDaemon({
       configOverrides: { gateway: { ...uplink, label: "worker-a" } },
       driverScript: {
         ios: {
           availableOsVersions: installed,
+          images: [{ abi: "arm64", runtime: "26.0", tag: "default" }],
           knownModels: ["iPhone 16"],
+          modelAliases: { "iPhone 16": ["iphone-16-a"] },
           modelRuntimes: { "iPhone 16": ["18.4"] },
         },
       },
@@ -251,7 +260,12 @@ describe("gateway fleet", () => {
       driverScript: {
         ios: {
           availableOsVersions: installed,
+          images: [
+            { abi: "arm64", runtime: "26.0", tag: "default" },
+            { abi: "x86_64", runtime: "26.0", tag: "default" },
+          ],
           knownModels: ["iPhone 16"],
+          modelAliases: { "iPhone 16": ["iphone-16-b"] },
           modelRuntimes: { "iPhone 16": ["26.0"] },
         },
       },
@@ -264,21 +278,35 @@ describe("gateway fleet", () => {
         views.every((view) => view.connection === "connected" && view.catalog.length > 0),
       "both workers connected with their catalogs",
     );
-    const pairingOf = (label: string) =>
+    const entryOf = (label: string) =>
       workers
         .find((worker) => worker.label === label)
-        ?.catalog.find((entry) => entry.platform === "ios")?.modelRuntimes;
-    expect(pairingOf("worker-a")).toEqual({ "iPhone 16": ["18.4"] });
-    expect(pairingOf("worker-b")).toEqual({ "iPhone 16": ["26.0"] });
+        ?.catalog.find((entry) => entry.platform === "ios");
+    expect(entryOf("worker-a")).toMatchObject({
+      images: [{ abi: "arm64", runtime: "26.0", tag: "default" }],
+      modelAliases: { "iPhone 16": ["iphone-16-a"] },
+      modelRuntimes: { "iPhone 16": ["18.4"] },
+    });
+    expect(entryOf("worker-b")).toMatchObject({
+      images: [
+        { abi: "arm64", runtime: "26.0", tag: "default" },
+        { abi: "x86_64", runtime: "26.0", tag: "default" },
+      ],
+      modelAliases: { "iPhone 16": ["iphone-16-b"] },
+      modelRuntimes: { "iPhone 16": ["26.0"] },
+    });
 
     const catalog = await gateway.cli(["catalog", "--json"]);
     expect(catalog.code).toBe(0);
-    const ios = (
-      catalog.json as {
-        platforms: { platform: string; modelRuntimes: Record<string, string[]> }[];
-      }
-    ).platforms.find((entry) => entry.platform === "ios");
+    const ios = (catalog.json as { platforms: WorkerView["catalog"] }).platforms.find(
+      (entry) => entry.platform === "ios",
+    );
     expect(ios?.modelRuntimes).toEqual({ "iPhone 16": ["18.4", "26.0"] });
+    expect(ios?.modelAliases).toEqual({ "iPhone 16": ["iphone-16-a", "iphone-16-b"] });
+    expect(ios?.images).toEqual([
+      { abi: "arm64", runtime: "26.0", tag: "default" },
+      { abi: "x86_64", runtime: "26.0", tag: "default" },
+    ]);
   });
 
   it("refuses an uplink whose token is not a worker join token", async () => {

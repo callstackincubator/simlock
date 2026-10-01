@@ -230,6 +230,13 @@ those changes add, alongside the breaking changes above.
   first one. `simlock catalog` prints each model with its runtimes. On a
   gateway, `simlock worker list` shows each worker's own pairings and the
   catalog pairs a model with a runtime when at least one worker does.
+- **catalog:** each platform also carries `modelAliases`, the other names a
+  lease accepts for a model in any letter case — on Android a built-in
+  profile's AVD id, such as `pixel_8` for `Pixel 8` — and Android carries
+  `images`, every installed system image with its API level, tag, and ABI,
+  a foreign-ABI image included. `simlock catalog` prints both. On a gateway
+  each worker's view carries its own and the catalog lists their union; the
+  gateway does not yet route a request by another name.
 - **events:** every business event is also written to `~/.simlock/events.jsonl`,
   one JSON line each, so the history survives a daemon restart or crash.
   `simlock events --since` and `GET /v1/events?since=` read it, reaching past

@@ -2,25 +2,35 @@ import { DriverCrashError, UnknownModelError } from "../../core/driver.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
 
 /**
- * What `DeviceProfileSource#resolve` hands back for a model name. `builtin` is today's
+ * One device profile a `DeviceProfileSource` can create an AVD from. `builtin` is today's
  * `avdmanager -d <id>` path; `properties` is a hardware descriptor applied to `config.ini`
  * after `avdmanager create avd` (see `AndroidDriver#provision`) -- there is no `avdmanager`
  * device id for it because it never came from `avdmanager list device`. `name` is the
  * source's own canonical spelling of the model (case may differ from what the caller asked
  * for), which `AndroidDriver` needs so `DeviceSpec.model` and cache lookups stay stable.
+ *
+ * `names` is every name the profile answers to, `name` first, no two equal ignoring case.
+ * `DeviceProfileRegistry` matches a requested model against it and lists the rest as the
+ * model's other names, so the two can never disagree.
  */
-export type ResolvedDeviceProfile =
-  | { readonly kind: "builtin"; readonly name: string; readonly avdmanagerId: string }
+export type DeviceProfile =
+  | {
+      readonly kind: "builtin";
+      readonly name: string;
+      readonly names: readonly string[];
+      readonly avdmanagerId: string;
+    }
   | {
       readonly kind: "properties";
       readonly name: string;
+      readonly names: readonly string[];
       readonly hardwareProperties: Readonly<Record<string, string>>;
     };
 
 /**
- * Diagnostics a `DeviceProfileSource` can raise. Sources never throw out of `resolve` /
- * `listModels` for a data problem (an absent, unreadable, or malformed file is not the
- * caller's fault) -- this is the only channel for surfacing that something was ignored.
+ * Diagnostics a `DeviceProfileSource` can raise. Sources never throw out of `profiles` for a
+ * data problem (an absent, unreadable, or malformed file is not the caller's fault) -- this is
+ * the only channel for surfacing that something was ignored.
  */
 export interface DeviceProfileSourceDiagnostic {
   readonly kind: "device-profile-source-unreadable";
@@ -32,19 +42,27 @@ export interface DeviceProfileSourceDiagnostic {
  * A read-only place `AndroidDriver` can load device profiles from. Simlock never writes to
  * any of these locations -- see safety rule 1 -- sources only load. Implementations must
  * never throw for a missing or malformed backing store; report that through the
- * `onDiagnostic` callback they were constructed with instead, and resolve to "nothing here."
+ * `onDiagnostic` callback they were constructed with instead, and return no profiles.
  */
 export interface DeviceProfileSource {
-  /** Resolvable model names this source can currently answer for. */
-  listModels(): Promise<readonly string[]>;
-  /** `undefined` when this source has no profile for `model` -- never throws for a miss. */
-  resolve(model: string): Promise<ResolvedDeviceProfile | undefined>;
+  /** Every profile this source currently has, in its own order. Matching is not its job. */
+  profiles(): Promise<readonly DeviceProfile[]>;
+}
+
+/** The registry's answer for the catalog: listed models, and the other names each answers to. */
+export interface DeviceProfileCatalog {
+  readonly models: readonly string[];
+  /** Only models with another name appear, keyed by their spelling in `models`. */
+  readonly modelAliases: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
  * Ordered list of sources, first match wins. This is the whole extension point: a future
  * community/network source is a new `DeviceProfileSource` implementation plus one more entry
  * in the list a driver is constructed with -- nothing else in the driver changes.
+ *
+ * It owns the only matcher (`matchProfile`): `resolve` and the catalog's other names both go
+ * through it, so a listed name always resolves to the model it is listed under.
  */
 export class DeviceProfileRegistry {
   readonly #sources: readonly DeviceProfileSource[];
@@ -53,29 +71,58 @@ export class DeviceProfileRegistry {
     this.#sources = sources;
   }
 
-  /** Dedupes by name, case-insensitively; the earliest source in the list wins a collision. */
-  async listModels(): Promise<readonly string[]> {
-    const seen = new Map<string, string>();
-    for (const source of this.#sources) {
-      for (const name of await source.listModels()) {
-        const key = name.toLocaleLowerCase();
-        if (!seen.has(key)) {
-          seen.set(key, name);
-        }
+  /**
+   * `models` dedupes by name, case-insensitively, the earliest profile winning a collision. A
+   * profile whose name an earlier profile only answers to as another name stays listed, as it
+   * always has. A profile's other names are listed only where they resolve to that profile.
+   */
+  async catalog(): Promise<DeviceProfileCatalog> {
+    const profiles = await this.#profiles();
+    const listed = new Map<string, DeviceProfile>();
+    for (const profile of profiles) {
+      const key = profile.name.toLocaleLowerCase();
+      if (!listed.has(key)) {
+        listed.set(key, profile);
       }
     }
-    return [...seen.values()];
+    const modelAliases: Record<string, readonly string[]> = {};
+    for (const profile of listed.values()) {
+      const others = profile.names
+        .slice(1)
+        .filter((name) => matchProfile(profiles, name) === profile);
+      if (others.length > 0) {
+        modelAliases[profile.name] = others;
+      }
+    }
+    return { modelAliases, models: [...listed.values()].map((profile) => profile.name) };
   }
 
-  async resolve(model: string): Promise<ResolvedDeviceProfile> {
-    for (const source of this.#sources) {
-      const resolved = await source.resolve(model);
-      if (resolved !== undefined) {
-        return resolved;
-      }
+  async resolve(model: string): Promise<DeviceProfile> {
+    const profile = matchProfile(await this.#profiles(), model);
+    if (profile === undefined) {
+      throw new UnknownModelError("android", model);
     }
-    throw new UnknownModelError("android", model);
+    return profile;
   }
+
+  async #profiles(): Promise<readonly DeviceProfile[]> {
+    const profiles: DeviceProfile[] = [];
+    for (const source of this.#sources) {
+      profiles.push(...(await source.profiles()));
+    }
+    return profiles;
+  }
+}
+
+/** The first profile any of whose names is `model`, ignoring case. */
+function matchProfile(
+  profiles: readonly DeviceProfile[],
+  model: string,
+): DeviceProfile | undefined {
+  const normalized = model.toLocaleLowerCase();
+  return profiles.find((profile) =>
+    profile.names.some((name) => name.toLocaleLowerCase() === normalized),
+  );
 }
 
 /** Today's behavior, refactored behind `DeviceProfileSource`: resolves against `avdmanager list device`. */
@@ -99,24 +146,21 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
     this.#env = env;
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the DeviceProfileSource port by DeviceProfileRegistry.listModels.
-  async listModels(): Promise<readonly string[]> {
-    return (await this.#profiles()).map((profile) => profile.name);
+  /** Answers to its display name and, when it differs ignoring case, its avdmanager id. */
+  // fallow-ignore-next-line unused-class-member -- reached through the DeviceProfileSource port by DeviceProfileRegistry.
+  async profiles(): Promise<readonly DeviceProfile[]> {
+    return (await this.#avdmanagerProfiles()).map((profile) => ({
+      avdmanagerId: profile.id,
+      kind: "builtin",
+      name: profile.name,
+      names:
+        profile.id.toLocaleLowerCase() === profile.name.toLocaleLowerCase()
+          ? [profile.name]
+          : [profile.name, profile.id],
+    }));
   }
 
-  async resolve(model: string): Promise<ResolvedDeviceProfile | undefined> {
-    const normalized = model.toLocaleLowerCase();
-    const profile = (await this.#profiles()).find(
-      (candidate) =>
-        candidate.name.toLocaleLowerCase() === normalized ||
-        candidate.id.toLocaleLowerCase() === normalized,
-    );
-    return profile === undefined
-      ? undefined
-      : { avdmanagerId: profile.id, kind: "builtin", name: profile.name };
-  }
-
-  async #profiles(): Promise<readonly AvdmanagerDeviceProfile[]> {
+  async #avdmanagerProfiles(): Promise<readonly AvdmanagerDeviceProfile[]> {
     const result = await this.#processRunner.run(
       this.#avdmanager,
       ["list", "device"],
@@ -180,21 +224,17 @@ export class UserDeviceProfileSource implements DeviceProfileSource {
     this.#path = path;
   }
 
-  async listModels(): Promise<readonly string[]> {
-    return (await this.#profiles()).map((profile) => profile.name);
+  /** Each profile answers to its `<d:name>` only. */
+  async profiles(): Promise<readonly DeviceProfile[]> {
+    return (await this.#devicesXmlProfiles()).map((profile) => ({
+      hardwareProperties: profile.hardwareProperties,
+      kind: "properties",
+      name: profile.name,
+      names: [profile.name],
+    }));
   }
 
-  async resolve(model: string): Promise<ResolvedDeviceProfile | undefined> {
-    const normalized = model.toLocaleLowerCase();
-    const profile = (await this.#profiles()).find(
-      (candidate) => candidate.name.toLocaleLowerCase() === normalized,
-    );
-    return profile === undefined
-      ? undefined
-      : { hardwareProperties: profile.hardwareProperties, kind: "properties", name: profile.name };
-  }
-
-  async #profiles(): Promise<readonly DevicesXmlProfile[]> {
+  async #devicesXmlProfiles(): Promise<readonly DevicesXmlProfile[]> {
     if (!(await this.#filesystem.exists(this.#path))) {
       // Android Studio never having run, or never having any custom profiles, is the common
       // case, not a diagnostic-worthy one.
@@ -271,7 +311,7 @@ export function parseDevicesXml(contents: string): readonly DevicesXmlProfile[] 
     // (`AndroidDriver#applyHardwareProperties` -> `#mergeConfigIniLines`). A newline there would
     // inject an arbitrary extra `config.ini` key. Thrown rather than silently skipped or
     // sanitized: this routes through the same malformed-devices.xml diagnostic path the caller
-    // (`UserDeviceProfileSource#profiles`) already has for an unparseable file, so a poisoned
+    // (`UserDeviceProfileSource#devicesXmlProfiles`) already has for an unparseable file, so a poisoned
     // value is surfaced rather than quietly dropped.
     if (containsForbiddenCharacter(rawName)) {
       throw new Error(`devices.xml device name contains an embedded line break or NUL byte`);

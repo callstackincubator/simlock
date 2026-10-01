@@ -164,8 +164,9 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   carrying a `workerId`, the gateway's own queue depth — plus a `workers`
   array of views and `daemon.mode: "gateway"`. `catalog.get` is the union of
   the connected workers' catalogs, each model and runtime annotated with the
-  workers that have it, and `modelRuntimes` per model the union of each
-  worker's own pairings (ADR 0008 §4). Worker events are republished on the gateway's bus
+  workers that have it, `modelRuntimes` per model the union of each
+  worker's own pairings, `modelAliases` the union per model, and `images`
+  the union by runtime, tag, and ABI (ADR 0008 §4). Worker events are republished on the gateway's bus
   with `workerId` added, so `simlock events --follow` against a gateway shows
   the fleet.
 - **What a gateway does not do.** It starts no drivers, validates no device
@@ -229,7 +230,7 @@ Four changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
 path kept, taking it to 5; ADR 0008 makes the catalog's `modelRuntimes`
-required, taking it to 6; ADR 0007 makes every device report its device mode
+and `modelAliases` required, taking it to 6; ADR 0007 makes every device report its device mode
 as a required `mode`, taking it to 7. So the range both sides advertise is
 `{min: 7, max: 7}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
@@ -680,15 +681,21 @@ views, and `workerId` on every device and lease in the aggregate.
 annotated with the workers that have it. A model's `modelRuntimes` is the
 union of what each connected worker pairs it with, never the cross product
 of fleet models and fleet runtimes: one worker with the model and another
-with the runtime is not a leasable pair. Routing still reads only `models`
-and `runtimes`.
+with the runtime is not a leasable pair. `modelAliases` is the union per
+model, deduplicated ignoring case, and `images` the union by runtime, tag,
+and ABI, absent when no worker reports the field. Routing still reads only
+`models` and `runtimes`.
 
 Within a worker, each driver decides which installed runtimes pair with a
 model in one function that `listCatalog` and `resolveSpec` both call
 (ADR 0008 §3): on iOS, available runtimes that list the device type in
 `supportedDeviceTypes` and fall in its version range; on Android, every
 installed API level, foreign-ABI images included. So a listed pair always
-resolves.
+resolves. The same holds for names: the Android driver's
+`DeviceProfileRegistry` owns the only matcher (first profile, in source
+order, any of whose names equals the request ignoring case), and the
+catalog's `modelAliases` are a profile's other names that the matcher sends
+back to that profile. The iOS driver matches a device type's name only.
 
 Worker business events are republished on the gateway's bus with `workerId`
 added to the payload and land in the gateway's own ring buffer and event
@@ -732,7 +739,7 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   widens only where a compatibility path is actually kept — so **every worker
   older than ADR 0005 is `incompatible` by range**, by construction rather
   than by accident. ADR 0008 moves it again, to `{min: 6, max: 6}`, because
-  the catalog's `modelRuntimes` is required, and ADR 0007 to
+  the catalog's `modelRuntimes` and `modelAliases` are required, and ADR 0007 to
   `{min: 7, max: 7}`, because a device's `mode` is required; a worker on an
   older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its

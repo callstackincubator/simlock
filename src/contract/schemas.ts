@@ -280,6 +280,23 @@ export const statusCapacitySchema = z.object({
 
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
 
+/**
+ * Limits on the catalog's other names and images. A worker's catalog is a claim the gateway
+ * parses off the wire, so every string and list in these fields has a bound well above any
+ * real host (an SDK ships some 70 device profiles and a few dozen images).
+ */
+const CATALOG_NAME_MAX = 256;
+const CATALOG_ALIASES_PER_MODEL_MAX = 32;
+const CATALOG_ALIASED_MODELS_MAX = 4096;
+const CATALOG_IMAGE_FIELD_MAX = 128;
+const CATALOG_IMAGES_MAX = 1024;
+
+const catalogImageSchema = z.object({
+  runtime: z.string().max(CATALOG_IMAGE_FIELD_MAX),
+  tag: z.string().max(CATALOG_IMAGE_FIELD_MAX),
+  abi: z.string().max(CATALOG_IMAGE_FIELD_MAX),
+});
+
 export const platformCatalogSchema = z.object({
   platform: platformSchema,
   models: z.array(z.string()),
@@ -292,6 +309,25 @@ export const platformCatalogSchema = z.object({
    * the cross product of fleet models and fleet runtimes.
    */
   modelRuntimes: z.record(z.string(), z.array(z.string())),
+  /**
+   * ADR 0008 §1: for a name in `models`, the other names a lease request may use for it, in any
+   * letter case -- the AVD id beside an Android display name. Only models that have another
+   * name appear. On a gateway it is the union per model of what each worker lists.
+   */
+  modelAliases: z
+    .record(
+      z.string().max(CATALOG_NAME_MAX),
+      z.array(z.string().max(CATALOG_NAME_MAX)).max(CATALOG_ALIASES_PER_MODEL_MAX),
+    )
+    .refine((aliases) => Object.keys(aliases).length <= CATALOG_ALIASED_MODELS_MAX, {
+      message: `modelAliases lists more than ${CATALOG_ALIASED_MODELS_MAX} models`,
+    }),
+  /**
+   * ADR 0008 §1: every installed image, present only for a platform whose driver has images
+   * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run
+   * natively is listed too. On a gateway it is the union by runtime, tag, and ABI.
+   */
+  images: z.array(catalogImageSchema).max(CATALOG_IMAGES_MAX).optional(),
   /**
    * ADR 0005 §21: on a gateway, `models`/`runtimes` are the *union* over the fleet, and these
    * two maps say which workers each entry came from (`{"iPhone 16": ["wrk_a", "wrk_b"]}`).

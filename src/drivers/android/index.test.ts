@@ -925,6 +925,12 @@ describe("AndroidDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "35",
+      images: [
+        { abi: "x86_64", runtime: "34", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+        { abi: "x86_64", runtime: "35", tag: "google_apis" },
+      ],
+      modelAliases: { "Pixel 8": ["pixel_8"] },
       modelRuntimes: { "Pixel 8": ["34", "35"] },
       models: ["Pixel 8"],
       runtimes: ["34", "35"],
@@ -985,6 +991,8 @@ describe("AndroidDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: undefined,
+      images: [],
+      modelAliases: { "Pixel 8": ["pixel_8"] },
       modelRuntimes: { "Pixel 8": [] },
       models: ["Pixel 8"],
       runtimes: [],
@@ -1000,6 +1008,141 @@ describe("AndroidDriver", () => {
 
     await driver.listCatalog();
 
+    expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
+  });
+
+  it("lists a built-in profile's avdmanager id as another name for its model", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+    ]);
+    const driver = await createDriver(await androidFilesystem(), runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] });
+  });
+
+  it("lists no other name when the id equals the display name ignoring case", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(
+        binaries.avdmanager,
+        ["list", "device"],
+        `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n---------\n` +
+          `id: 1 or "Automotive_1024p"\n    Name: automotive_1024p\n`,
+      ),
+    ]);
+    const driver = await createDriver(await androidFilesystem(), runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "automotive_1024p"]);
+    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"] });
+  });
+
+  it("resolves every listed name of every listed model, in upper and lower case, to that model", async () => {
+    const filesystem = await androidFilesystem();
+    await writeDevicesXml(filesystem, customDeviceXml("My Tablet", 4096));
+    const runner = new ScriptedProcessRunner(
+      Array.from({ length: 11 }, () =>
+        processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+      ),
+    );
+    const driver = await createDriver(filesystem, runner);
+    const catalog = await driver.listCatalog();
+    const names = catalog.models.flatMap((model) => [
+      { model, name: model },
+      ...(catalog.modelAliases[model] ?? []).map((name) => ({ model, name })),
+    ]);
+    expect(names).toHaveLength(5);
+
+    for (const { model, name } of names) {
+      for (const spelling of [name.toUpperCase(), name.toLowerCase()]) {
+        await expect(
+          driver.resolveSpec({ model: spelling, platform: "android" }, { allowDownload: false }),
+        ).resolves.toEqual({ model, osVersion: "34", platform: "android" });
+      }
+    }
+  });
+
+  it("lists the same models as before other names were listed, for the same profiles", async () => {
+    // A devices.xml profile named after a built-in id stays listed, and one whose name repeats a
+    // built-in name in other letter case does not: both exactly as before this catalog listed
+    // other names.
+    const filesystem = await androidFilesystem();
+    await writeDevicesXml(
+      filesystem,
+      customDeviceXml("pixel_8", 4096) +
+        customDeviceXml("PIXEL 9", 4096) +
+        customDeviceXml("My Tablet", 4096),
+    );
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "Pixel 9", "pixel_8", "My Tablet"]);
+    expect(Object.keys(catalog.modelRuntimes)).toEqual(catalog.models);
+  });
+
+  it("lists models with one avdmanager run", async () => {
+    // A second answer is scripted, so a second run would be served and counted, not refused.
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+    ]);
+    const driver = await createDriver(await androidFilesystem(), runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "Pixel 9"]);
+    expect(catalog.modelAliases).toEqual({ "Pixel 8": ["pixel_8"], "Pixel 9": ["pixel_9"] });
+    expect(runner.calls.filter((call) => call.command === binaries.avdmanager)).toHaveLength(1);
+  });
+
+  it("lists every installed system image with its API level, tag, and ABI, a foreign-ABI image included", async () => {
+    // The host is arm64-v8a; the API 33 image is x86_64 only.
+    const filesystem = await androidFilesystem({
+      images: [
+        ["35", "google_apis_playstore", "arm64-v8a"],
+        ["33", "default", "x86_64"],
+        ["35", "google_apis", "arm64-v8a"],
+      ],
+    });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.images).toEqual([
+      { abi: "x86_64", runtime: "33", tag: "default" },
+      { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+      { abi: "arm64-v8a", runtime: "35", tag: "google_apis_playstore" },
+    ]);
+    expect(catalog.runtimes).toEqual(["33", "35"]);
+  });
+
+  it("does not list an image that is not installed, whatever the download policy", async () => {
+    // Only API 34 is installed. An API 35 image is one `sdkmanager` run away, and the driver
+    // would install it for a lease that allows downloads; the catalog takes no policy, never asks
+    // `sdkmanager`, and lists the image on disk only.
+    const filesystem = await androidFilesystem({ images: [["34", "google_apis", "arm64-v8a"]] });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      processResult(
+        binaries.sdkmanager,
+        ["--list"],
+        "Available Packages:\n  system-images;android-35;google_apis;arm64-v8a | 1 | Google APIs\n",
+      ),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.images).toEqual([{ abi: "arm64-v8a", runtime: "34", tag: "google_apis" }]);
     expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
   });
 
@@ -1484,21 +1627,18 @@ describe("AndroidDriver", () => {
         ]),
       ]);
       const maliciousSource = {
-        async listModels() {
-          return ["Evil Phone"];
-        },
-        async resolve(model: string) {
-          if (model.toLocaleLowerCase() !== "evil phone") {
-            return undefined;
-          }
-          return {
-            hardwareProperties: {
-              "hw.device.manufacturer": "Acme\ndisk.dataPartition.path=/evil",
-              "hw.device.name": "Evil Phone",
+        async profiles() {
+          return [
+            {
+              hardwareProperties: {
+                "hw.device.manufacturer": "Acme\ndisk.dataPartition.path=/evil",
+                "hw.device.name": "Evil Phone",
+              },
+              kind: "properties" as const,
+              name: "Evil Phone",
+              names: ["Evil Phone"],
             },
-            kind: "properties" as const,
-            name: "Evil Phone",
-          };
+          ];
         },
       };
       await recordRunningAdbServer(filesystem, adbServerPort);

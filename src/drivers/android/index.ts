@@ -7,6 +7,7 @@ import {
   DiskSpaceGuard,
   type Driver,
   type DriverCatalogEntry,
+  type DriverCatalogImage,
   type DriverDevice,
   DriverCrashError,
   type DriverEstimate,
@@ -49,7 +50,7 @@ import {
   UserDeviceProfileSource,
   type DeviceProfileSource,
   type DeviceProfileSourceDiagnostic,
-  type ResolvedDeviceProfile,
+  type DeviceProfile,
 } from "./device-profile-source.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
@@ -446,7 +447,7 @@ export class AndroidDriver implements Driver {
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
   readonly #processRunner: ProcessRunner;
-  readonly #resolvedProfiles = new Map<string, ResolvedDeviceProfile>();
+  readonly #resolvedProfiles = new Map<string, DeviceProfile>();
   readonly #readinessTimeoutMs: number;
   readonly #registrar: AdbRegistrar;
   readonly #rootOptions: EnsureOwnedRootOptions;
@@ -1093,13 +1094,18 @@ export class AndroidDriver implements Driver {
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
-    const [models, images] = await Promise.all([
-      this.#deviceProfiles.listModels(),
+    const [{ modelAliases, models }, images] = await Promise.all([
+      this.#deviceProfiles.catalog(),
       this.#installedImages(),
     ]);
     const runtimes = installedApiLevels(images);
     return {
       defaultRuntime: runtimes.at(-1),
+      // Installed only, a foreign ABI included: the same images `installedApiLevels` reads.
+      images: images
+        .map((image) => ({ abi: image.abi, runtime: image.apiLevel, tag: image.tag }))
+        .sort(compareCatalogImages),
+      modelAliases,
       modelRuntimes: Object.fromEntries(models.map((model) => [model, [...runtimes]])),
       models: [...models],
       runtimes,
@@ -1123,7 +1129,7 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async #profileFor(model: string): Promise<ResolvedDeviceProfile> {
+  async #profileFor(model: string): Promise<DeviceProfile> {
     return (
       this.#resolvedProfiles.get(model.toLocaleLowerCase()) ?? this.#deviceProfiles.resolve(model)
     );
@@ -1947,6 +1953,14 @@ function compareCommandLineToolVersions(left: string, right: string): number {
  */
 function installedApiLevels(images: readonly SystemImage[]): string[] {
   return [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels);
+}
+
+function compareCatalogImages(left: DriverCatalogImage, right: DriverCatalogImage): number {
+  return (
+    compareApiLevels(left.runtime, right.runtime) ||
+    left.tag.localeCompare(right.tag) ||
+    left.abi.localeCompare(right.abi)
+  );
 }
 
 function compareApiLevels(left: string, right: string): number {
