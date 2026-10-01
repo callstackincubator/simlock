@@ -210,4 +210,29 @@ describe("runDispatch's operation line", () => {
     });
     expect(sink.records[2]?.fields).not.toHaveProperty("leaseId");
   });
+
+  it("a request refused by its input schema logs its code and nothing the input said", async () => {
+    const { pipeline, sink } = harness({
+      "lease.request": () => {
+        throw new Error("never reached: the input is refused first");
+      },
+    });
+
+    await expect(
+      runDispatch(
+        "lease.request",
+        { model: "iPhone 17", platform: "hunter2-wire-value", "s3cret-key-name": 1 },
+        session(),
+        pipeline,
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "info",
+        fields: expect.objectContaining({ operation: "lease.request", code: "BAD_REQUEST" }),
+      }),
+    ]);
+    expect(JSON.stringify(sink.records)).not.toMatch(/hunter2|s3cret/);
+  });
 });

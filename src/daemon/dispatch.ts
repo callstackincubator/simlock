@@ -222,7 +222,8 @@ interface ObservedCall {
  * The one place an `operation` line is built (architecture rule 10). It names the operation,
  * who asked, how long it took and how it ended -- the request, never what it changed (ADR
  * 0006 §3). From the input only `leaseId` and `requesterId`, as claimed: nothing else in an
- * input is safe to assume free of secrets, and nothing from the output is logged at all.
+ * input is safe to assume free of secrets, and nothing from the output is logged at all. A
+ * failure's `message` is logged only once the input has been validated (see below).
  */
 function logOperation(
   observe: DispatchObserver,
@@ -247,10 +248,14 @@ function logOperation(
   }
   const { error } = outcome;
   const code = observe.codeOf(error);
+  // Until the input has passed its schema, the error describes the raw wire input -- a schema
+  // issue quotes the rejected value and unknown key names -- so only the code is logged.
   const failed = {
     ...fields,
     code,
-    message: error instanceof Error ? error.message : String(error),
+    ...(call.input === undefined
+      ? {}
+      : { message: error instanceof Error ? error.message : String(error) }),
   };
   if (code === "INTERNAL") observe.logger.error("operation", failed);
   else observe.logger.info("operation", failed);
@@ -316,7 +321,8 @@ function checkAccess(
       `Operation ${operation} requires role ${requiredRole}, session is ${session.role}`,
     );
   }
-  if (definition.authorize?.(input, authorizeContext(session, pipeline)) === false) {
+  const authorize = definition.authorize;
+  if (authorize !== undefined && !authorize(input, authorizeContext(session, pipeline))) {
     throw new DispatchError("FORBIDDEN", `Not authorized for ${operation}`);
   }
 }

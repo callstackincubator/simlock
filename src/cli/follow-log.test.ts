@@ -92,6 +92,20 @@ describe("followLog", () => {
     await run.done;
   });
 
+  it("a line still being written is printed once, when it is complete", async () => {
+    const filesystem = new MemoryFilesystem();
+    await seed(filesystem, "a\npart");
+    const run = await start(filesystem);
+    expect(run.output()).toBe("a\n");
+
+    await filesystem.writeFileAtomic(LOG, "a\npartial\n");
+    await run.tick();
+
+    expect(run.output()).toBe("a\npartial\n");
+    run.signals.emit("SIGINT");
+    await run.done;
+  });
+
   it("the unfinished last line of a rotated file is printed, ending in a newline", async () => {
     const filesystem = new MemoryFilesystem();
     await seed(filesystem, "a\n");

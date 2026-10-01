@@ -1383,7 +1383,8 @@ the end of this section predates ADR 0006. The log records:
   dispatchers pass (`logger.child("dispatch")`). It names the operation,
   `principal`, `role`, `durationMs`, `leaseId`/`requesterId` from the
   validated input when present (nothing else from the input, nothing from the
-  output), and on failure `code` and `message`. Level follows the operation's
+  output), and on failure `code`, plus `message` once the input has passed
+  its schema (before that the message quotes raw wire input). Level follows the operation's
   contract `effect`: a `write` success is `info`, a `read` success `debug`, a
   failure `info`, an `INTERNAL` failure `error`. A call refused before its
   handler (`UNKNOWN_REQUEST`, `BAD_REQUEST`, `FORBIDDEN`) gets the line too.

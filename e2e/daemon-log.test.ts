@@ -282,15 +282,21 @@ describe("daemon.log", () => {
     // Each cycle writes about 1 kB, so five of them rotate the log several times. A cycle waits
     // for the follower before the next one: only one rotated generation is kept, so a second
     // rotation inside one poll would delete lines before any reader could see them.
+    let lastLeaseId = "";
     for (let cycle = 0; cycle < 5; cycle += 1) {
       const leaseId = await leaseDetached(env);
+      lastLeaseId = leaseId;
       expect((await env.cli(["release", leaseId])).code).toBe(0);
       await waitFor(() => follower.stdoutSoFar().includes(`"leaseId":"${leaseId}"`), {
         label: () => `release line ${cycle}, follower printed:\n${follower.stdoutSoFar()}`,
       });
     }
 
+    // The log has rotated, and the last release line -- already printed above -- sits in the
+    // file started by a rotation, so it was written after one.
     await expect(readFile(`${env.logPath}.1`, "utf8")).resolves.not.toBe("");
+    const current = await readFile(env.logPath, "utf8");
+    expect(current).toContain(`"leaseId":"${lastLeaseId}"`);
     follower.kill("SIGINT");
     expect((await follower.waitForExit(10_000)).code).toBe(0);
   });

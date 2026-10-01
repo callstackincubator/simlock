@@ -1460,6 +1460,7 @@ async function runDaemon(
     return 0;
   }
   if (values.positionals.length > 0) throw new UsageError("daemon accepts exactly one subcommand");
+  if (values.follow && command !== "logs") throw new UsageError("--follow applies only to logs");
   if (command === "start") {
     const client = await connectDaemonClient(environment, token, { launch: true });
     try {

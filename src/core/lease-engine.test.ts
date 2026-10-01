@@ -142,7 +142,7 @@ async function createHarness(
     }),
   });
 
-  return { bus, clock, driver, engine, registry };
+  return { bus, clock, driver, engine, filesystem, registry };
 }
 
 async function seedReady(
@@ -435,9 +435,12 @@ describe("LeaseEngine", () => {
         },
       },
     ]);
-    // At `debug`, so a line at any level would be caught.
+    // At `debug`, so a line at any level would be caught: nothing names the device or the error.
     expect(
-      sink.records.filter((record) => JSON.stringify(record).includes("purge exploded")),
+      sink.records.filter((record) => {
+        const line = JSON.stringify(record);
+        return line.includes("purge exploded") || line.includes(first.device.id);
+      }),
     ).toEqual([]);
   });
 
@@ -1810,5 +1813,162 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       { id: restarted.device.id, state: "deleted" },
     ]);
     expect(restarted.operationsSinceStart()).toEqual(["destroy"]);
+  });
+});
+
+describe("LeaseEngine logger wiring", () => {
+  function debugLogger(): { readonly logger: Logger; readonly sink: MemoryLogSink } {
+    const sink = new MemoryLogSink();
+    return { logger: new JsonLinesLogger({ clock: new FakeClock(0), level: "debug", sink }), sink };
+  }
+
+  it("LeaseEngine hands its logger to the quarantine coordinator: a failed retry is logged", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("reclaim", 2, new DriverCrashError("retry exploded"));
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({ driver, logger });
+    const first = await harness.engine.request(request, {
+      ownerId: "first",
+      requesterId: "first",
+    });
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("quarantined");
+
+    harness.clock.advance(config().warmPool.quarantine.retryBackoffMs);
+    await flush();
+
+    expect(
+      sink.records.filter((record) => record.message === "quarantine reclaim retry failed"),
+    ).toMatchObject([
+      {
+        level: "warn",
+        module: "daemon.quarantine-coordinator",
+        fields: {
+          attempts: 1,
+          deviceId: first.device.id,
+          error: "DriverCrashError: retry exploded",
+          step: "reclaim",
+        },
+      },
+    ]);
+  });
+
+  it("LeaseEngine hands its logger to the device provisioner: a new device that fails to boot is logged", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("makeReady", 1, new DriverCrashError("first boot exploded"));
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({ driver, logger });
+
+    await expect(
+      harness.engine.request(request, { ownerId: "first", requesterId: "first" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(
+      sink.records.filter((record) => record.message === "new device failed to become ready"),
+    ).toMatchObject([
+      {
+        level: "warn",
+        module: "daemon.device-provisioner",
+        fields: { error: "DriverCrashError: first boot exploded", step: "boot" },
+      },
+    ]);
+  });
+
+  it("LeaseEngine hands its logger to the lease expiry scheduler: an expiry that fails is logged", async () => {
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({ lease: { defaultTtlMs: 10 }, logger });
+    const granted = await harness.engine.request(request, {
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+    });
+    // The expiry's release has to commit to the state file; a disk that refuses the write
+    // makes the expiry throw out of the scheduler's timer.
+    harness.filesystem.defineFailure(statePath, "EIO");
+
+    harness.clock.advance(10);
+    await flush();
+
+    expect(sink.records.filter((record) => record.message === "lease expiry failed")).toMatchObject(
+      [
+        {
+          level: "error",
+          module: "daemon.lease-expiry-scheduler",
+          fields: { leaseId: granted.lease.id, step: "expire" },
+        },
+      ],
+    );
+  });
+
+  it("LeaseEngine hands its logger to the acquisition coordinator: a failed eviction is logged", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("shutdown", 1, new DriverCrashError("cannot stop victim"));
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 1 },
+        maxRunning: 1,
+      },
+      logger,
+    });
+    const victim = await seedReady(harness);
+
+    await expect(
+      harness.engine.request(
+        { ...request, model: "iPhone SE" },
+        { noWait: true, ownerId: "new-spec", requesterId: "new-spec" },
+      ),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(
+      sink.records.filter((record) => record.message === "shutting down an eviction target failed"),
+    ).toMatchObject([
+      {
+        level: "warn",
+        module: "daemon.lease-acquisition-coordinator",
+        fields: { deviceId: victim.id, requesterId: "new-spec", step: "shutdown" },
+      },
+    ]);
+  });
+
+  it("LeaseEngine hands its logger to the warm-pool coordinator: a failed post-purge boot is logged", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      platform: "ios",
+      reclaimResult: "shutdown",
+    });
+    driver.failOn("makeReady", 2, new Error("not ready"));
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({ driver, logger });
+    const first = await harness.engine.request(request, {
+      ownerId: "first",
+      requesterId: "first",
+    });
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+
+    expect(
+      sink.records.filter((record) => record.message === "making a reclaimed device ready failed"),
+    ).toMatchObject([
+      {
+        level: "warn",
+        module: "daemon.warm-pool-coordinator",
+        fields: {
+          deviceId: first.device.id,
+          error: "Error: not ready",
+          leaseId: first.lease.id,
+          step: "make-ready",
+        },
+      },
+    ]);
   });
 });

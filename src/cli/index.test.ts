@@ -2856,6 +2856,18 @@ describe("CLI: daemon logs --follow", () => {
     });
   });
 
+  it("--follow on any daemon subcommand but logs fails with USAGE, exit 2", async () => {
+    for (const command of ["start", "stop", "status"]) {
+      const output = outputCapture();
+      await expect(runCli(["daemon", command, "--follow"], output.environmentWith())).resolves.toBe(
+        2,
+      );
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("--follow") },
+      });
+    }
+  });
+
   it("an interrupt ends the follow with exit 0 and leaves no timer armed", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/simlock");

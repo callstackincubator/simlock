@@ -1340,3 +1340,63 @@ async function readFileRetrying(
     }
   }
 }
+
+/** A disk whose free-space query fails, as `statfs` does on a data directory gone unreadable. */
+class UnmeasurableDiskFilesystem extends MemoryFilesystem {
+  async diskFree(_path: string): Promise<number> {
+    throw Object.assign(new Error("statfs failed"), { code: "EIO" });
+  }
+}
+
+describe("startDaemon logger wiring", () => {
+  it("startDaemon hands its logger to the cleanup reaper: a scheduled cleanup run that fails is logged", async () => {
+    const { sink } = await start({ filesystem: new UnmeasurableDiskFilesystem() });
+
+    // `daemon.started` triggers a run nobody awaits; its failure has no caller to reach.
+    await pollUntil(() =>
+      sink.records.some((record) => record.message === "scheduled cleanup run failed"),
+    );
+    expect(
+      sink.records.filter((record) => record.message === "scheduled cleanup run failed"),
+    ).toMatchObject([
+      {
+        level: "error",
+        module: "daemon.reaper",
+        fields: { step: "cleanup", error: expect.stringContaining("statfs failed") },
+      },
+    ]);
+  });
+
+  it("startDaemon hands the gateway dispatcher its error classifier: a typed refusal is logged with its code at info, not as INTERNAL at error", async () => {
+    const { daemon, sink } = await start({ configOverrides: { mode: "gateway" } });
+
+    await expect(
+      daemon.dispatch(
+        "worker.drain",
+        { workerId: "wrk_ghost" },
+        { manageEventSubscription: () => undefined, principal: "test-operator", role: "admin" },
+      ),
+    ).rejects.toMatchObject({ code: "UNKNOWN_WORKER" });
+
+    expect(
+      sink.records.filter(
+        (record) => record.message === "operation" && record.fields?.operation === "worker.drain",
+      ),
+    ).toMatchObject([
+      {
+        level: "info",
+        module: "daemon.gateway.dispatch",
+        fields: { code: "UNKNOWN_WORKER", principal: "test-operator" },
+      },
+    ]);
+  });
+});
+
+/** Polls until `condition` holds or the time runs out, without failing: the caller's own
+ * assertion afterwards is what names a miss. */
+async function pollUntil(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
