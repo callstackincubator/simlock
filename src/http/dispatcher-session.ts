@@ -46,7 +46,7 @@ export function buildHttpSession(
     readonly onProgress?: (progress: LeaseProgress) => void;
     /** The lease-request route's own override: the stored request's id, the moment the daemon
      * admits the request (or finds the stored one a repeat names). Inert for every other route. */
-    readonly onRequestAdmitted?: (requestId: string) => void;
+    readonly onRequestAdmitted?: (requestId: string, replayed: boolean) => void;
     /** ADR 0005 §19a: the `POST /v1/leases/{id}/exec` route's own override -- each chunk
      * becomes one SSE `output` event on that request's response. Same per-call shape as
      * `onProgress`, and inert for every other route for the same reason.

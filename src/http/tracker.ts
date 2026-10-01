@@ -147,8 +147,9 @@ export class LeaseRequestTracker {
    * Answers `created` once the daemon has stored the request and either reported progress, or
    * granted it, or -- for `allowDownload`, whose spec resolution can run for minutes before any
    * progress -- as soon as it is stored. A rejection that lands before any of those fails the
-   * `POST` itself, so a client is not made to poll a resource just to learn it was refused; the
-   * stored failure still answers a repeat of the request.
+   * `POST` itself, so a client is not made to poll a resource just to learn it was refused. A
+   * repeat of a stored request answers `created` at once with that request, whatever its state:
+   * the resource exists, and its state is the stored result.
    */
   submit(
     identity: TokenIdentity,
@@ -171,9 +172,10 @@ export class LeaseRequestTracker {
 
       const session = buildHttpSession(identity, {
         onProgress: () => settleCreated(),
-        onRequestAdmitted: (id) => {
+        onRequestAdmitted: (id, replayed) => {
           requestId = id;
-          if (body.allowDownload === true) settleCreated();
+          // A repeat names a request that already exists: answer with it, whatever its state.
+          if (replayed || body.allowDownload === true) settleCreated();
         },
       });
 

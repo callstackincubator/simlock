@@ -24,8 +24,9 @@ export interface LeaseRequestOptions {
    * `requesterId`; both are the caller's own claims, so a replay is authorized on `ownerId`.
    */
   readonly idempotencyKey?: string;
-  /** Called with the stored request's id once it is admitted, or once a repeat finds it. */
-  readonly onAdmitted?: (requestId: string) => void;
+  /** Called with the stored request's id once it is admitted (`replayed` false), or once a
+   * repeat finds it (`replayed` true). */
+  readonly onAdmitted?: (requestId: string, replayed: boolean) => void;
 }
 
 /** Request-scoped progress for the lease action currently being performed. */

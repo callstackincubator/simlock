@@ -72,9 +72,10 @@ export interface DispatchSession {
    * Ignored by every other operation. */
   readonly onProgress?: (progress: DispatchProgress) => void;
   /** Called with the stored request's id once this `lease.request` is admitted, or once a repeat
-   * of it finds the stored one -- how the HTTP request resource learns the id it is named by.
+   * of it finds the stored one (`replayed`) -- how the HTTP request resource learns the id it is
+   * named by, and that a repeat already has a resource to answer with.
    * Ignored by every other operation. */
-  readonly onRequestAdmitted?: (requestId: string) => void;
+  readonly onRequestAdmitted?: (requestId: string, replayed: boolean) => void;
   /**
    * Called for each chunk a `device.exec` command writes, as it writes it (ADR 0005 §19a's
    * `output` push family). Ignored by every other operation, and left unset by a transport

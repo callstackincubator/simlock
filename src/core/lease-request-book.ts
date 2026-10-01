@@ -249,14 +249,14 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
     if (record === undefined) return undefined;
     const open = this.#open.get(record.id);
     if (open?.promise !== undefined) {
-      options.onAdmitted?.(record.id);
+      options.onAdmitted?.(record.id, true);
       this.#attach(open, options.onProgress);
       return open.promise;
     }
     if (!isSettled(record)) {
       throw new Error(`Lease request ${record.id} is open but nothing is driving it`);
     }
-    options.onAdmitted?.(record.id);
+    options.onAdmitted?.(record.id, true);
     return storedResult(record);
   }
 
@@ -321,7 +321,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       (grant) => this.#settle(record.id, open, { grant, state: "granted" }),
       (error: unknown) => this.#settle(record.id, open, this.#outcomeOf(error)),
     );
-    options.onAdmitted?.(record.id);
+    options.onAdmitted?.(record.id, false);
     return { id: record.id, promise };
   }
 

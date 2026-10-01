@@ -344,20 +344,35 @@ describe("LeaseRequestTracker.waitForChange abort", () => {
 });
 
 describe("LeaseRequestTracker repeats of a stored request", () => {
-  it("answers a repeat of a request that failed before becoming visible with the stored failure, starting no second request", async () => {
+  it("answers a repeat of a request that failed before becoming visible with the stored, failed request, starting no second one", async () => {
     const { dispatcher, tracker } = buildTracker();
     const first = tracker.submit(identity, body, "key-1");
     const firstCall = await waitForDispatch(dispatcher, "lease.request");
     firstCall.reject(new RequesterAlreadyLeasedError("tok_agent"));
     expect((await first).kind).toBe("rejected");
-    await Promise.resolve();
 
     const second = await tracker.submit(identity, body, "key-1");
-    expect(second.kind).toBe("rejected");
-    if (second.kind === "rejected") {
-      expect(second.error).toMatchObject({ code: "REQUESTER_ALREADY_LEASED" });
+
+    expect(second.kind).toBe("created");
+    if (second.kind === "created") {
+      expect(second.view.state).toMatchObject({
+        error: { code: "REQUESTER_ALREADY_LEASED" },
+        stage: "failed",
+      });
     }
     expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
+  });
+
+  it("answers a repeat of a request still waiting with that request at once, before any new progress", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    void tracker.submit(identity, body, "key-1");
+    await waitForDispatch(dispatcher, "lease.request");
+
+    let answered: Awaited<ReturnType<LeaseRequestTracker["submit"]>> | undefined;
+    void tracker.submit(identity, body, "key-1").then((outcome) => (answered = outcome));
+    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+
+    expect(answered?.kind).toBe("created");
   });
 
   it("reads a granted request back from the stored record, not from anything the tracker kept", async () => {
