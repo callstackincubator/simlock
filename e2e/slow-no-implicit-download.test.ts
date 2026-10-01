@@ -68,8 +68,9 @@ describe.skipIf(process.platform !== "darwin")(
               { timeout: 120_000 },
             );
             expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
-            const grant = lease.json as { lease: string };
-            await env.cli(["release", grant.lease]);
+            const grant = lease.json as { lease: { id: string } };
+            const release = await env.cli(["release", grant.lease.id]);
+            expect(release.code, `release failed: ${release.stderr}`).toBe(0);
           }
 
           await env.cli(["doctor"]);

@@ -42,7 +42,7 @@ describe("reaching a leased device", () => {
       "--detach",
     ]);
     expect(lease.code).toBe(0);
-    const grant = lease.json as { lease: string; environment: Record<string, string> };
+    const grant = lease.json as { lease: { id: string }; environment: Record<string, string> };
     expect(grant.environment).toEqual(FAKE_LEASE_ENVIRONMENT.ios);
 
     // ... and the same values survive the shell round trip the wrappers exist for, including
@@ -65,7 +65,7 @@ describe("reaching a leased device", () => {
     ]);
     expect(evaluated.stdout).toBe(FAKE_LEASE_ENVIRONMENT.ios["SIMLOCK_FAKE_AWKWARD"]);
 
-    await env.cli(["release", grant.lease]);
+    expect((await env.cli(["release", grant.lease.id])).code).toBe(0);
   });
 
   it("carries the driver's environment on the grant, as JSON and as shell exports", async () => {
@@ -91,11 +91,11 @@ describe("reaching a leased device", () => {
       "--detach",
     ]);
     expect(lease.code).toBe(0);
-    const grant = lease.json as { lease: string; environment: Record<string, string> };
+    const grant = lease.json as { lease: { id: string }; environment: Record<string, string> };
     expect(grant.environment).toEqual({
       SIMLOCK_IOS_DEVICE_SET: "/Users/o'brien/My Sims/devices/ios",
     });
-    await env.cli(["release", grant.lease]);
+    expect((await env.cli(["release", grant.lease.id])).code).toBe(0);
 
     const exported = await env.cli([
       "lease",
