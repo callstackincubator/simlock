@@ -6,6 +6,7 @@ import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "..
 import {
   type Config,
   type ConfigOverrides,
+  type DeviceMode,
   type Driver,
   type DriverRejection,
   CleanupReaper,
@@ -198,7 +199,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           processSupervisor,
           simlockHome: dataDirectory,
           slim: config.ios.slim,
-          slimByDefault: config.ios.defaultMode === "slim",
+          slimByDefault: deviceModeWiring(config).slimByDefault,
           androidEmulator: config.android.emulator,
           tcpProbe,
         })
@@ -206,6 +207,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const leaseEngine = new LeaseEngine({
     clock,
     config,
+    defaultModes: deviceModeWiring(config).defaultModes,
     describeFailure: describeLeaseRequestFailure,
     drivers,
     eventBus,
@@ -1068,6 +1070,22 @@ export function emitComponentInstallDiagnostic(
         );
         return;
     }
+  };
+}
+
+/**
+ * What the config says about device modes, in the two shapes the composition root hands out
+ * (ADR 0007 §2, §14): the worker's default mode per platform for the lease engine, and whether
+ * the iOS default is slim for the iOS driver's advisory. Android has no key until Android slim
+ * lands, so it is left out and falls to the core's own `"full"`.
+ */
+export function deviceModeWiring(config: Pick<Config, "ios">): {
+  readonly defaultModes: Readonly<Partial<Record<"ios" | "android", DeviceMode>>>;
+  readonly slimByDefault: boolean;
+} {
+  return {
+    defaultModes: { ios: config.ios.defaultMode },
+    slimByDefault: config.ios.defaultMode === "slim",
   };
 }
 

@@ -296,6 +296,29 @@ describe("WarmPoolCoordinator", () => {
     expect(harness.registry.snapshot.devices[0]).toMatchObject({ mode: "slim" });
   });
 
+  it.each([
+    ["a slim spec", { ...spec, mode: "slim" as const }, "slim"],
+    ["a full spec", spec, "full"],
+  ] as const)(
+    "passes %s's mode to makeReady on a warm re-boot",
+    async (_label, deviceSpec, mode) => {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
+      const reclaiming = device(
+        "reclaiming",
+        "reclaiming",
+        (await driver.provision(deviceSpec)).deviceId,
+        deviceSpec,
+      );
+      const harness = await createHarness({ devices: [reclaiming], driver });
+
+      await harness.coordinator.reclaim(released(reclaiming));
+
+      const boot = driver.calls.filter((call) => call.operation === "makeReady").at(-1);
+      expect(boot?.arguments[1]).toEqual({ mode, purpose: "prepare" });
+    },
+  );
+
   it("stores full, replacing a stored slim, when a warm re-boot's makeReady reports no mode", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });

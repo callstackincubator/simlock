@@ -22,6 +22,7 @@ import {
 } from "../ports/index.js";
 import {
   bridgeAndroidDriverDiagnostic,
+  deviceModeWiring,
   discoverDrivers,
   emitComponentInstallDiagnostic,
   emitSlimDiagnostic,
@@ -871,6 +872,18 @@ function discoverIos(
     tcpProbe: new FakeTcpProbe(),
   });
 }
+
+describe("deviceModeWiring", () => {
+  it.each(["slim", "full"] as const)(
+    "hands the lease engine ios.defaultMode %s and tells the iOS driver whether it is slim",
+    (defaultMode) => {
+      expect(deviceModeWiring({ ios: { defaultMode, slim: { bootTimeoutMs: 1 } } })).toEqual({
+        defaultModes: { ios: defaultMode },
+        slimByDefault: defaultMode === "slim",
+      });
+    },
+  );
+});
 
 describe("component install diagnostic bridging", () => {
   it("emits component.install-started/-installed/-failed for the bridged platform", () => {

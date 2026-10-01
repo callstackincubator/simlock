@@ -203,6 +203,58 @@ describe("Registry lease requests", () => {
     expect(devices[1]?.[1]).toMatchObject({ mode: "slim" });
   });
 
+  it("drops a full key stored before ADR 0007 from a request and from its grant's device spec, and does not write it back", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" };
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [
+          {
+            createdAt: 1_000,
+            grant: {
+              device: {
+                driverDeviceId: "udid",
+                id: "dev_1",
+                mode: "full",
+                spec: { ...spec, full: true },
+              },
+              environment: {},
+              lease: { id: "lse_1" },
+              timing: {},
+            },
+            id: "req_legacy",
+            ownerId: "agent",
+            request: { ...request, full: true },
+            requesterId: "agent",
+            settledAt: 1_000,
+            state: "granted",
+          },
+        ],
+        leases: [],
+      }),
+    );
+
+    const { registry } = await loadRegistry({ filesystem });
+    const [loaded] = registry.leaseRequests();
+    expect(loaded?.request).toEqual(request);
+    expect(loaded?.grant?.device.spec).toEqual(spec);
+
+    await registry.createLeaseRequest(newRequest("other"));
+    const written = JSON.parse(await filesystem.readFile(statePath)) as {
+      readonly leaseRequests: readonly {
+        readonly id: string;
+        readonly request: unknown;
+        readonly grant?: { readonly device: { readonly spec: unknown } };
+      }[];
+    };
+    const stored = written.leaseRequests.find((record) => record.id === "req_legacy");
+    expect(stored?.request).toEqual(request);
+    expect(stored?.grant?.device.spec).toEqual(spec);
+  });
+
   it("settles every open record as failed, leaving settled ones alone", async () => {
     const { registry } = await loadRegistry();
     const open = await registry.createLeaseRequest(newRequest("open"));
