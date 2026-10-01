@@ -382,7 +382,7 @@ describe("LeaseRequestTracker repeats of a stored request", () => {
     expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
   });
 
-  it("reads a granted request back from the stored record, not from anything the tracker kept", async () => {
+  it("reads a granted request back through the request book, not from anything the tracker kept", async () => {
     const { dispatcher, tracker } = buildTracker();
     const outcome = tracker.submit(identity, body);
     const call = await waitForDispatch(dispatcher, "lease.request");

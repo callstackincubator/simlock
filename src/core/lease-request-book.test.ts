@@ -158,7 +158,7 @@ describe("Registry lease requests", () => {
     expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
   });
 
-  it("settles every open record as failed in one write, leaving settled ones alone", async () => {
+  it("settles every open record as failed, leaving settled ones alone", async () => {
     const { registry } = await loadRegistry();
     const open = await registry.createLeaseRequest(newRequest("open"));
     const done = await registry.createLeaseRequest(newRequest("done"));
@@ -208,7 +208,7 @@ describe("Registry lease-request load", () => {
     expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
   });
 
-  it("loads with no requests when the stored list is not a list, keeping every device", async () => {
+  it("loads with no requests, rather than failing the load, when the stored list is not a list", async () => {
     const { registry } = await loadWith({ not: "a list" });
 
     expect(registry.leaseRequests()).toEqual([]);
