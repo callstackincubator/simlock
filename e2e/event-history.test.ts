@@ -68,6 +68,26 @@ describe("event history", () => {
     expect(grantOf(parseLines(history.stdout), leaseId)).toEqual(before);
   });
 
+  it("writes every event file line as JSON carrying seq, timestamp, event, payload and module", async () => {
+    const env = await withDaemon();
+    await prepare(env);
+    const leaseId = await leaseDevice(env);
+    expect((await env.cli(["release", leaseId])).code).toBe(0);
+
+    const lines = (await readFile(join(env.home, "events.jsonl"), "utf8")).trimEnd().split("\n");
+
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(Object.keys(JSON.parse(line) as object).sort()).toEqual([
+        "event",
+        "module",
+        "payload",
+        "seq",
+        "timestamp",
+      ]);
+    }
+  });
+
   it("prints the history with the daemon stopped, and the daemon stays stopped", async () => {
     const env = await withDaemon();
     await prepare(env);

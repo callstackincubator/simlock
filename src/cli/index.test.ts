@@ -2823,6 +2823,43 @@ describe("CLI: events history", () => {
     expect(printed(output.stdout)).toEqual([envelope(1, 1), envelope(2, 2), push(3), push(4)]);
   });
 
+  it("events --since --follow prints the history once and then the live events", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const asked: unknown[] = [];
+    let listener: ((push: EventPush) => void) | undefined;
+    const push = (seq: number): EventPush => ({
+      subscriptionId: "sub_1",
+      event: envelope(seq, seq),
+    });
+    const runPromise = runCli(
+      ["events", "--since", "1h", "--follow"],
+      output.environmentWith({
+        clock: new FakeClock(2 * hour),
+        connectAdmin: async () =>
+          fakeClient({
+            subscribeEvents: async (onEvent) => {
+              listener = onEvent;
+              return async () => {};
+            },
+            replayEvents: async (input) => {
+              asked.push(input);
+              listener?.(push(2));
+              return [envelope(1, 1), envelope(2, 2)];
+            },
+          }),
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    listener?.(push(3));
+    signals.emit("SIGINT");
+
+    expect(await runPromise).toBe(0);
+    expect(asked).toEqual([{ sinceTs: hour }]);
+    expect(printed(output.stdout)).toEqual([envelope(1, 1), envelope(2, 2), push(3)]);
+  });
+
   it("events --follow without --since asks for no sinceTs", async () => {
     const output = outputCapture();
     const signals = new EventEmitter();
