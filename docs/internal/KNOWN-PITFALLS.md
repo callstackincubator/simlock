@@ -404,51 +404,86 @@ cost of an abandoned request should set `timeoutMs`/`--timeout` tightly
 rather than relying on abort to cut a request short once device work has
 started.
 
-## The HTTP tracker and notice buffer are the last frontend-held state (#72)
+## The HTTP notice buffer is the last frontend-held state
 
 ADR 0003 moved request handling into one shared, transport-independent
 dispatcher (`src/daemon/dispatcher.ts`) that both the unix socket and HTTP
-call — but two pieces of state still live in the HTTP frontend rather than
-the daemon's core:
+call, and #72 moved lease requests into the core registry. One piece of state
+still lives in the HTTP frontend:
 
-- **`LeaseRequestTracker`** (`src/http/tracker.ts`) — the in-memory registry
-  behind `POST /v1/lease-requests` and the resource it returns
-  (`GET`/`DELETE /v1/lease-requests/{id}`, its SSE stream, `Idempotency-Key`
-  replay). This is what lets HTTP offer an async-resource-shaped API
-  (`202`-then-poll) on top of the core's request/grant flow, which itself
-  has no notion of a durable, independently-addressable "request resource."
 - **`LeaseNoticeBuffer`** (`src/http/notices.ts`) — buffers owner-routed
   device-health facts (`device_unhealthy`, `device_recovered`) per lease so
   a polling-only HTTP client (no open connection to push to) can drain them
   on its next `renew` or SSE reconnect instead of missing them entirely.
 
-**The pitfall:** both reset on a daemon restart (in-memory, no persistence),
-and both are HTTP-specific reimplementations of "track something about a
-request/lease across calls". The socket frontends need neither, but not because
-a connection holds anything — under ADR 0004 it holds nothing. They need
-neither because a socket client is *there* when the fact happens: the daemon
-pushes a device-health fact to whatever connections own the lease at that
-moment, and a request's progress rides the call that made it. A polling HTTP
-client is absent between calls by construction, so something has to hold the
-fact until it comes back, and today that something lives in the frontend. A
-daemon restart loses in-flight lease-request tracking state and buffered
-notices the same way it always did pre-ADR 0003 — see [Lifecycle
-semantics](../HTTP-API.md#lifecycle-semantics) for the documented recovery loop
-(`404` → re-request → maybe `409` → `GET`), which exists specifically because
-the tracker does not survive a restart.
+**The pitfall:** it resets on a daemon restart (in-memory, no persistence).
+The socket frontends do not need it, but not because a connection holds
+anything — under ADR 0004 it holds nothing. They do not need it because a
+socket client is *there* when the fact happens: the daemon pushes a
+device-health fact to whatever connections own the lease at that moment. A
+polling HTTP client is absent between calls by construction, so something has
+to hold the fact until it comes back, and today that something lives in the
+frontend.
 
-**Status:** known, and explicitly called out as the ADR's own unfinished
-seam, not an oversight: "the HTTP tracker and notice buffer remain the known
-stateful leftovers in a frontend." The ADR's dispatcher work "prepares the
-seam... but does not do that work" of removing them.
+**Status:** known. #72 left it out on purpose: it is keyed by lease, not by
+request, and it solves absence between polls rather than replay of a lost
+answer. Its one fact nothing else can rebuild is why a lease ended, which
+nothing durable records today.
 
-**Planned fix:** [#72](https://github.com/callstackincubator/simlock/issues/72),
-re-scoped by this ADR to core durability and idempotency — moving durable,
-idempotent lease requests into the core registry itself, so a lease request
-becomes a first-class, restart-surviving core concept instead of a resource
-HTTP alone tracks. Once that lands, `LeaseRequestTracker` and
-`LeaseNoticeBuffer` should be able to shrink to thin views over core state
-rather than independent bookkeeping.
+**Planned fix:** none scheduled. It needs a durable record of why a lease
+ended before it can become a view over core state.
+
+## The HTTP lease-request tracker held its own copy of each request (resolved, #72)
+
+`LeaseRequestTracker` (`src/http/tracker.ts`) used to keep every lease request
+in its own in-memory maps, with its own `Idempotency-Key` cache and timers.
+Socket clients could not see it and it died with the process, which is why
+`docs/HTTP-API.md` once documented a `404` → re-request → `409` → `GET`
+recovery loop. The daemon now stores each request in `state.json` before it
+queues it (`LeaseRequestBook`, `Registry`), the tracker reads that record,
+and keeps only its SSE and long-poll plumbing.
+
+## A fleet request is stored only once a worker takes it
+
+A gateway persists nothing but its drained-worker list (ADR 0005, Decision
+3). Its lease requests live in `FleetLeaseCoordinator`'s in-memory request
+book — the same rules as a worker's (`LeaseRequestBook`), over
+`InMemoryLeaseRequestStore` instead of `state.json`.
+
+**The pitfall:** a gateway restart loses every request it held. Their ids
+answer `404`, and a repeat under the same `Idempotency-Key` is a new request
+to the gateway. The forwarded `lease.request` is stored on the worker that
+took it, but the gateway cannot find it again: it forwards no key, and no
+operation lists a worker's stored requests. What survives is the lease
+itself: the gateway rebuilds its lease index from the workers when they
+reconnect, so a client that repeats its request gets
+`REQUESTER_ALREADY_LEASED` naming the lease if one was granted.
+
+**Status:** known, and out of #72's scope by its own spec.
+
+**Planned fix:** needs its own ADR. One direction raised in review: keep the
+gateway's store in memory, and rebuild it at startup by asking every worker
+for the requests it holds for the gateway. That needs a worker operation that
+lists stored requests, and the gateway forwarding a key the worker can store
+the request under.
+
+## A restart between a grant and its record write reports the request as failed
+
+A request's result is written once its wait settles, a step after the lease
+itself is committed (`LeaseRequestBook#settle` runs after the grant resolves,
+not inside the same `state.json` write as `Registry.createLease`).
+
+**The pitfall:** a daemon that stops in that window leaves a lease on disk
+and its request still `open`. The next start settles the request as `failed`
+(daemon restarted), so a repeat under the same key answers with that failure
+even though the lease exists. Nothing is lost: the requester still holds the
+lease, and a request under a new key answers `REQUESTER_ALREADY_LEASED`
+naming it.
+
+**Status:** known; the window is one serialized registry write long.
+
+**Planned fix:** write the request's result in the same commit as the lease
+it was granted, by passing the request id into `Registry.createLease`.
 
 ## HTTP single-lease reads answer 404, not 403, for an unowned lease
 
@@ -491,9 +526,9 @@ only ever see them as `UNKNOWN_DAEMON_ERROR` with the real code buried in `detai
 | Code | Status | Meaning | Where thrown |
 |---|---|---|---|
 | `UNAUTHENTICATED` | 401 | Missing/invalid bearer token | `errors.ts:37` |
-| `UNKNOWN_LEASE_REQUEST` | 404 | No such lease-*request* resource (`POST /v1/lease-requests`'s HTTP-only envelope, ADR §11, kept until #72) | `errors.ts:59` |
+| `UNKNOWN_LEASE_REQUEST` | 404 | No such lease-*request* resource (the request is core state since #72, but no contract operation reads one by id, so its not-found stays HTTP-only) | `errors.ts:59` |
 | `REQUEST_NOT_CANCELLABLE` | 409 | `DELETE /v1/lease-requests/:id` on a request already granted or past cancellable state | `errors.ts:70` |
-| `REQUEST_CANCELLED` | 500 | Defensive-only: `RequestCancelledError` reaching `mapError` should never happen in practice (the tracker consumes it internally) | `errors.ts:123` |
+| `REQUEST_CANCELLED` | 500 | Defensive-only: `RequestCancelledError` reaching `mapError` should never happen in practice (a cancelled request is stored as `cancelled`, and its resource reads that state) | `errors.ts:123` |
 
 `UNKNOWN_LEASE_REQUEST` used to be minted as `UNKNOWN_REQUEST` — the same code the contract
 already declares, but for a different meaning at a different status: the contract's
@@ -789,16 +824,13 @@ agent. The uncertainty window is bounded by the uplink's reconnect backoff,
 and the lease itself is bounded by its TTL: an orphan from this race expires
 on the worker's own clock without anyone intervening.
 
-**Status:** accepted, with the recovery loop documented rather than
-automated. It is the same `409 → GET` shape the HTTP API already documents
-for a daemon restart, applied across an uplink gap: re-request, and if the
-answer is `REQUESTER_ALREADY_LEASED`, read the lease it names — that is your
-earlier grant, found again.
+**Status:** accepted, with the recovery documented rather than automated:
+re-request, and if the answer is `REQUESTER_ALREADY_LEASED`, read the lease it
+names — that is your earlier grant, found again.
 
-**Possible future fix:** durable, idempotent lease requests in the core
-([#72](https://github.com/callstackincubator/simlock/issues/72)) would let a
-retry be recognized as the same request rather than a new one, on a gateway
-and on a worker alike.
+**Possible future fix:** #72 made lease requests durable and repeatable on a
+worker, but not across the gateway's own hop — see "A fleet request is stored
+only once a worker takes it" above. Closing that gap closes this one too.
 
 ## A lease survives a gateway restart, but nothing can renew it until the gateway is back
 

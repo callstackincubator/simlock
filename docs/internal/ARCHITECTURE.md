@@ -684,10 +684,10 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   `WORKER_UNREACHABLE`. If the worker actually granted it, that lease exists
   on the worker and expires there on its TTL. A retry hits the fleet-wide
   one-lease rule only once the uplink is back and the index is rebuilt —
-  which is the `409 → GET` recovery loop the HTTP API already documents,
-  applied across the uplink gap.
-- **Gateway restart.** In-flight requests are lost, exactly as a worker
-  restart loses them today (durable requests arrive with #72, for both).
+  so the client re-requests, and a `409 REQUESTER_ALREADY_LEASED` names the
+  lease to read back.
+- **Gateway restart.** In-flight requests are lost: a gateway keeps its lease
+  requests in memory only, while a worker stores its own in `state.json` (#72).
   Leases survive on their workers; workers reconnect on their backoff and the
   gateway rebuilds every view and its lease index from them — picking its own
   leases out of each `lease.list` by the `gw:<its own instance id>:`
@@ -1071,6 +1071,12 @@ composition root and compatibility facade: it wires one shared
 `SerializedDecision`, `DeviceOperationClaims`, `DriverCatalog`, registry, and
 capacity coordinator into these direct transactional call chains:
 
+- `LeaseRequestBook` stores every lease request in the registry before the
+  queue sees it, answers a repeat under the same `(requesterId,
+  idempotencyKey)` with the stored result or the wait still open, and writes
+  the result once that wait settles. The HTTP request resource reads requests
+  through it; a gateway's `FleetLeaseCoordinator` runs the same book over an
+  in-memory store.
 - `WaitQueue` owns pending demand, FIFO order, request timeouts, and progress;
   `AcquisitionPlanner` makes read-only grant/provision/boot/eviction plans;
   `DeviceProvisioner` and `ManagedDeviceLifecycle` perform the resulting driver
@@ -1086,13 +1092,17 @@ capacity coordinator into these direct transactional call chains:
   `CleanupActionExecutor`; the executor revalidates registry ownership,
   lease/state safety, and delegates the driver operation to
   `ManagedDeviceLifecycle`.
-- `StartupConverger` runs TTL-timer restoration, interrupted-reclaim
+- `StartupConverger` settles every lease request the previous process left
+  open as failed, then runs TTL-timer restoration, interrupted-reclaim
   recovery, and running-capacity convergence in that order. `NukeService`
   coordinates lease release, pending-request cancellation, and
   registry-scoped reset operations.
 
 The serialized decision gate protects only short read-decide-commit sections.
-Driver work remains outside it. Component boundaries use direct calls for
+Driver work remains outside it. One `state.json` write does sit inside it: a
+new lease request is stored in the same section that checks it is unique, so
+two concurrent requests under one key cannot both pass. A file write costs
+nothing next to the device work a lease waits on. Component boundaries use direct calls for
 transactions; capacity-changing components notify the FIFO acquisition
 coordinator directly. The event bus remains only for post-commit facts and
 observers.

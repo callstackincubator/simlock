@@ -51,6 +51,29 @@ code, not something this client does for you. There is no heartbeat
 to declare and no connection-liveness mode to opt into: a renew arriving
 before the deadline is the whole mechanism.
 
+**Getting an answer back after a disconnect.** Pass `idempotencyKey` to
+make a request repeatable:
+
+```ts
+const grant = await client.requestLease({
+  platform: "ios",
+  model: "iPhone 17 Pro",
+  idempotencyKey: "build-4812",
+});
+```
+
+Simlock stores the request under that key and your requester id before it
+queues it. If your connection drops, or the daemon restarts, before you get
+the answer, connect again and send the same request with the same key. While
+the request is still waiting you join that wait, and once it has a result
+you get that result. Either way it never grants you a second lease. A result
+is never worked out again: a request that failed stays failed under its key,
+so use a new key to try again. Keys last for `lease.requestRetentionMs` after
+the request finishes. The same key with a different device is
+`IDEMPOTENCY_CONFLICT`, and the same key from a different connection
+principal is `FORBIDDEN`. A request still waiting when the daemon restarts
+ends as failed (`INTERNAL`, with a message saying so).
+
 `connectSimlockAdmin` additionally accepts `credential` — an operator token
 or the daemon's per-start `admin.token` secret (see
 [CLI.md](CLI.md#admin-credential-resolution) for how the CLI resolves one). A missing or wrong
