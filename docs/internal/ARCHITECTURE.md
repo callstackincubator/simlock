@@ -538,15 +538,27 @@ local agents.
 Routing is a pure function over the current worker views, in one module with
 one entry point selected by `gateway.routing`, the same shape as
 `CapacityStrategy`. Nothing else in the gateway knows how a worker is chosen.
-The v1 policy (`warm-then-free`), in order:
 
-1. drop workers that are disconnected, drained, incompatible, or lacking the
-   requested platform, model, or runtime — a download counts as available
-   only on a worker whose own `downloads.policy` would allow it;
-2. prefer a worker with an unleased `ready` device matching the request — a
-   **warm hit**, and a sub-second grant;
-3. otherwise the worker with the **most free running capacity** for that
-   platform.
+A policy is an ordered list of **stages** (ADR 0009 §1), each a pure function
+over worker views. A **filter** drops workers. A **rank** scores them: when
+its best score is zero or less it abstains and changes nothing; otherwise it
+decides and keeps its best scorers. A rank may **settle**, ending the walk
+when it decides. The pick is the first remaining worker in ascending worker
+id, provided at least one rank decided. The deciding stage — the last rank
+that removed a worker, or the last that decided when none removed any — is
+reported on `request.dispatched`. `gateway.routing` names a whole list; the
+lists are code, and no config key lists or orders stages.
+
+The v1 policy (`warm-then-free`) is three stages:
+
+1. `eligible` (filter): drop workers that are disconnected, drained,
+   incompatible, or lacking the requested platform, model, or runtime — a
+   download counts as available only on a worker whose own `downloads.policy`
+   would allow it;
+2. `warm-hit` (rank, settles): prefer a worker with an unleased `ready` device
+   matching the request — a **warm hit**, and a sub-second grant;
+3. `free-capacity` (rank): otherwise the worker with the **most free running
+   capacity** for that platform.
 
 There is no other placement rule in v1: no requester affinity, no label
 selectors, no per-worker platform exclusions. Each of those is a future

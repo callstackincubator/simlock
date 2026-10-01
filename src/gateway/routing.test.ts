@@ -53,6 +53,7 @@ describe("warm-then-free policy", () => {
 
     expect(policy.select(REQUEST, [cold, warm])).toEqual({
       reason: "warm-hit",
+      stage: "warm-hit",
       workerId: "wrk_warm",
     });
   });
@@ -83,6 +84,7 @@ describe("warm-then-free policy", () => {
 
     expect(policy.select(REQUEST, [tight, roomy])).toEqual({
       reason: "free-capacity",
+      stage: "free-capacity",
       workerId: "wrk_roomy",
     });
   });
@@ -130,6 +132,7 @@ describe("warm-then-free policy", () => {
     expect(policy.select(REQUEST, [noModel])).toBeUndefined();
     expect(policy.select({ ...REQUEST, allowDownload: true }, [noModel])).toEqual({
       reason: "free-capacity",
+      stage: "free-capacity",
       workerId: "wrk_1",
     });
 

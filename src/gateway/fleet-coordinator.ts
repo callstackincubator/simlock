@@ -731,6 +731,7 @@ export class FleetLeaseCoordinator {
    * unrelated to capacity (any other worker-side code) may still be exactly the worker a different
    * queued waiter needs, and nothing else would ever schedule that second look.
    */
+  // fallow-ignore-next-line complexity -- one attempt, every exit of which is named in the doc comment above.
   async #attempt(waiter: FleetWaiter, decision: RoutingDecision): Promise<void> {
     const workerId = decision.workerId;
     const target = this.options.directory.target(workerId);
@@ -757,6 +758,7 @@ export class FleetLeaseCoordinator {
         reason: decision.reason,
         requestId: waiter.id,
         requesterId: waiter.options.requesterId,
+        stage: decision.stage,
         workerId,
       });
     };
