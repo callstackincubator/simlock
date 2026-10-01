@@ -32,7 +32,8 @@ const deviceStateSchema = z.enum([
   "deleted",
 ]);
 
-const featureProfileSchema = z.enum(["full", "reduced"]);
+/** The mode a device actually has (ADR 0007 §9) -- the same two words on every surface. */
+const deviceModeSchema = z.enum(["slim", "full"]);
 
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
 
@@ -61,7 +62,7 @@ export const deviceRecordSchema = z.object({
   quarantineAttempts: z.number().optional(),
   quarantineNextRetryAt: z.number().optional(),
   address: z.string().optional(),
-  featureProfile: featureProfileSchema.optional(),
+  mode: deviceModeSchema,
   leaseIdentity: leaseIdentitySchema.optional(),
   /** Decoration added by `status.get`/`list.get`; absent for a device not mid-transition. */
   transitionAgeMs: z.number().optional(),
@@ -96,13 +97,16 @@ export const deviceRecordSchema = z.object({
  * reads), `recoveringSince`/`recoveryAttempts` (crash-recovery bookkeeping -- `safety.md` rule
  * 2 scopes that privilege narrowly, and broadcasting its progress to every agent is not part of
  * that scope), `quarantinedAt` (superseded by `quarantineAttempts`/`quarantineNextRetryAt` for
- * what a caller needs), and `address`/`featureProfile` (only meaningful to whoever is driving
- * the device, i.e. the lease holder, who gets them on the grant).
+ * what a caller needs), and `address` (only meaningful to whoever is driving the device, i.e.
+ * the lease holder, who gets it on the grant). `mode` stays: which kind of device it is matters
+ * to anyone reading the fleet.
  */
 export const statusDeviceSchema = z.object({
   id: z.string(),
   spec: deviceSpecSchema,
   state: deviceStateSchema,
+  /** The device mode (see `DeviceRecord.mode`) -- not the daemon's own `worker`/`gateway` mode. */
+  mode: deviceModeSchema,
   foreignStateDetectedAt: z.number().optional(),
   foreignProvenanceDetectedAt: z.number().optional(),
   quarantineAttempts: z.number().optional(),
@@ -126,7 +130,7 @@ export const statusDeviceSchema = z.object({
  *
  * - `id`: the lease-facing device identity (what `lease.list`/`lease.renew` correlate against).
  * - `driverDeviceId`: the driver address a caller actually drives (simctl UDID / adb serial).
- * - `spec`, `address`, `featureProfile`: same meanings as on `DeviceRecord` (src/core/domain.ts).
+ * - `spec`, `address`, `mode`: same meanings as on `DeviceRecord` (src/core/domain.ts).
  *
  * Everything else on `DeviceRecord` -- `driverData` (opaque driver-private blob), `state`,
  * `createdAt`, every `quarantine*`/`foreign*`/`recovering*` field, and the `status`/`list`
@@ -149,13 +153,8 @@ export const grantedDeviceSchema = z.object({
    * ever guesses at a value it wasn't told.
    */
   address: z.string().optional(),
-  /**
-   * Mirrors `DriverDevice.featureProfile` (see `driver.ts`), current as of this device's last
-   * `ready` transition. Undefined for a device still `provisioning` (never made ready yet)
-   * and for any driver that does not reduce anything -- today's behaviour, and every non-iOS
-   * driver.
-   */
-  featureProfile: featureProfileSchema.optional(),
+  /** The mode the device actually has (see `DeviceRecord.mode`). */
+  mode: deviceModeSchema,
 });
 
 /**
@@ -313,7 +312,7 @@ const driverDeviceSchema = z.object({
   deviceId: z.string(),
   driverData: z.unknown(),
   address: z.string(),
-  featureProfile: featureProfileSchema.optional(),
+  mode: deviceModeSchema.optional(),
 });
 
 /** Mirrors the `DoctorFinding` discriminated union (src/core/doctor.ts) field for field. */

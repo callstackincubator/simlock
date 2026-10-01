@@ -19,6 +19,7 @@ function sampleGrant(
       driverDeviceId: "sim-1",
       id: deviceId,
       spec: { model: "iPhone 17", osVersion: "18.0", platform: "ios" },
+      mode: "full",
     },
     environment: {},
     lease: {

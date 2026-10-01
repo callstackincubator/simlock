@@ -91,6 +91,7 @@ export function makeDevice(overrides: Partial<DeviceRecord> = {}): DeviceRecord 
     driverDeviceId: "ABCD-1234",
     id: "dev_1",
     spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    mode: "full",
     state: "leased",
     ...overrides,
   };

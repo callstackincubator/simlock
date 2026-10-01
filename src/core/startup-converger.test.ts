@@ -19,6 +19,7 @@ function device(
     id,
     lastLeaseEndedAt,
     spec: { model: "test", osVersion: "1", platform },
+    mode: "full",
     state,
   };
 }

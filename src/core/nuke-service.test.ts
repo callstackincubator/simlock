@@ -9,6 +9,7 @@ const device = (id: string, state: DeviceRecord["state"]): DeviceRecord => ({
   driverDeviceId: `driver_${id}`,
   id,
   spec: { model: "Phone", osVersion: "1", platform: "ios" },
+  mode: "full",
   state,
 });
 

@@ -1,5 +1,5 @@
 import type { Clock } from "../ports/index.js";
-import type { DeviceSpec, Platform } from "./domain.js";
+import type { DeviceMode, DeviceSpec, Platform } from "./domain.js";
 import {
   type DeviceRequest,
   type Driver,
@@ -50,12 +50,11 @@ export interface FakeDriverOptions {
    */
   readonly fullCleanReclaimEstimateMs?: number;
   /**
-   * The `DriverDevice.featureProfile` `makeReady` reports for every boot -- undefined by
-   * default (this fake, like every real driver except iOS, does not reduce anything), settable
-   * by a test that needs to exercise the core's `featureProfile` persistence without a real
-   * iOS driver.
+   * The `DriverDevice.mode` `makeReady` reports for every boot -- undefined by default (this
+   * fake, like every real driver except iOS, does not slim anything), settable by a test that
+   * needs to exercise the core's `mode` persistence without a real iOS driver.
    */
-  readonly featureProfile?: "full" | "reduced";
+  readonly mode?: DeviceMode | undefined;
   readonly knownModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
@@ -108,7 +107,7 @@ export class FakeDriver implements Driver {
   readonly #calls: FakeDriverCall[] = [];
   readonly #clock: Clock;
   readonly #estimateMs: FakeDriverOptions["estimateMs"];
-  readonly #featureProfile: "full" | "reduced" | undefined;
+  readonly #mode: DeviceMode | undefined;
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
@@ -133,7 +132,7 @@ export class FakeDriver implements Driver {
     this.#availableOsVersions = new Set(options.availableOsVersions ?? ["latest"]);
     this.#clock = options.clock;
     this.#estimateMs = options.estimateMs;
-    this.#featureProfile = options.featureProfile;
+    this.#mode = options.mode;
     this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
@@ -237,7 +236,7 @@ export class FakeDriver implements Driver {
       address: addressFor(device.deviceId, bootCount),
       deviceId: device.deviceId,
       driverData: device.driverData,
-      ...(this.#featureProfile === undefined ? {} : { featureProfile: this.#featureProfile }),
+      ...(this.#mode === undefined ? {} : { mode: this.#mode }),
     };
   }
 

@@ -14,12 +14,11 @@ interface SimctlDevice {
   readonly state: string;
 }
 
+/** The fields of a `simlock lease --detach` grant this lane reads, flattened. */
 interface LeaseGrant {
   readonly lease: string;
   readonly udid: string;
-  readonly slim: boolean;
-  readonly device: string;
-  readonly os: string;
+  readonly mode: "slim" | "full";
 }
 
 interface DoctorReport {
@@ -124,7 +123,11 @@ async function leaseDetached(
     { timeout: 600_000 },
   );
   expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
-  return lease.json as LeaseGrant;
+  const grant = lease.json as {
+    device: { driverDeviceId: string; mode: "slim" | "full" };
+    lease: { id: string };
+  };
+  return { lease: grant.lease.id, mode: grant.device.mode, udid: grant.device.driverDeviceId };
 }
 
 const ALL_LABELS = new Set(labelsFor(SLIM_CATEGORIES));
@@ -145,9 +148,7 @@ describe.skipIf(process.platform !== "darwin")(
           const { model, os } = await catalogModelAndOs(env);
           const grant = await leaseDetached(env, model, os, "slim-off-default");
 
-          expect(grant.slim, "grant.slim must be false when ios.slim is not configured").toBe(
-            false,
-          );
+          expect(grant.mode, "a lease must be full when ios.slim is not configured").toBe("full");
 
           const disabled = await printDisabled(grant.udid);
           const overlap = [...ALL_LABELS].filter((label) => disabled.has(label));
@@ -188,7 +189,7 @@ describe.skipIf(process.platform !== "darwin")(
           const fullStart = Date.now();
           const fullGrant = await leaseDetached(env, model, os, "slim-full-opt-out", ["--full"]);
           const fullDurationMs = Date.now() - fullStart;
-          expect(fullGrant.slim, "a --full lease must never be slim").toBe(false);
+          expect(fullGrant.mode, "a --full lease's grant must carry mode: full").toBe("full");
           const fullDisabled = await printDisabled(fullGrant.udid);
           const fullOverlap = [...ALL_LABELS].filter((label) => fullDisabled.has(label));
           expect(
@@ -216,7 +217,7 @@ describe.skipIf(process.platform !== "darwin")(
           const slimGrant = await leaseDetached(env, model, os, "slim-cold");
           const slimDurationMs = Date.now() - slimStart;
 
-          expect(slimGrant.slim, "a plain lease under ios.slim.enabled must be slim").toBe(true);
+          expect(slimGrant.mode, "a slim lease's grant must carry mode: slim").toBe("slim");
           expect(slimGrant.udid).not.toBe(fullGrant.udid);
 
           const slimDisabled = await printDisabled(slimGrant.udid);
@@ -290,7 +291,7 @@ describe.skipIf(process.platform !== "darwin")(
 
           const relet = await leaseDetached(env, model, os, "slim-cold");
           expect(relet.udid, "expected the warm-pooled device to be reused").toBe(slimGrant.udid);
-          expect(relet.slim, "re-leased device must still report slim: true").toBe(true);
+          expect(relet.mode, "re-leased device must still report mode: slim").toBe("slim");
 
           const eventsAfterRelease = await env.expectEvents(["device.slimmed", "device.slimmed"], {
             since: "1h",
@@ -336,7 +337,7 @@ describe.skipIf(process.platform !== "darwin")(
 
           // --- scenario 5 ---
           const grant = await leaseDetached(env, model, os, "slim-subset");
-          expect(grant.slim).toBe(true);
+          expect(grant.mode).toBe("slim");
           const disabled = await printDisabled(grant.udid);
 
           const missingSiri = [...siriLabels].filter((label) => !disabled.has(label));
@@ -363,7 +364,7 @@ describe.skipIf(process.platform !== "darwin")(
             { ios: { slim: { enabled: true, categories: ["siri", "no-such-category"] } } },
             async () => {
               const grant2 = await leaseDetached(env, model, os, "slim-unknown-category");
-              expect(grant2.slim, "lease must still succeed and be slim").toBe(true);
+              expect(grant2.mode, "lease must still succeed and be slim").toBe("slim");
               const disabled2 = await printDisabled(grant2.udid);
               const missingSiri2 = [...siriLabels].filter((label) => !disabled2.has(label));
               expect(missingSiri2, "expected every siri label disabled").toEqual([]);
@@ -391,7 +392,7 @@ describe.skipIf(process.platform !== "darwin")(
         try {
           const { model, os } = await catalogModelAndOs(env);
           const grant = await leaseDetached(env, model, os, "slim-recovery", []);
-          expect(grant.slim).toBe(true);
+          expect(grant.mode).toBe("slim");
           const disabledBefore = await printDisabled(grant.udid);
           expect([...ALL_LABELS].filter((label) => !disabledBefore.has(label)).length).toBe(0);
 
@@ -435,7 +436,7 @@ describe.skipIf(process.platform !== "darwin")(
       },
     );
 
-    it("scenario 9: MCP carries the slim flag both ways", { timeout: 600_000 }, async () => {
+    it("scenario 9: MCP carries the device mode both ways", { timeout: 600_000 }, async () => {
       const env = await withDaemon({
         driver: "real",
         configOverrides: { ios: { slim: { enabled: true } } },
@@ -458,13 +459,10 @@ describe.skipIf(process.platform !== "darwin")(
             leaseCallOptions,
           );
           const fullLeased = fullResult.structuredContent as {
-            device: { featureProfile?: "full" | "reduced" };
+            device: { mode: "slim" | "full" };
             lease: { id: string };
           };
-          expect(
-            fullLeased.device.featureProfile,
-            "MCP full:true lease must report a full feature profile",
-          ).toBe("full");
+          expect(fullLeased.device.mode, "MCP full:true lease must report mode: full").toBe("full");
 
           await mcp.client.callTool({
             name: "release_simulator",
@@ -480,13 +478,13 @@ describe.skipIf(process.platform !== "darwin")(
             leaseCallOptions,
           );
           const slimLeased = slimResult.structuredContent as {
-            device: { featureProfile?: "full" | "reduced" };
+            device: { mode: "slim" | "full" };
             lease: { id: string };
           };
           expect(
-            slimLeased.device.featureProfile,
-            "MCP plain lease under ios.slim.enabled must report a reduced feature profile",
-          ).toBe("reduced");
+            slimLeased.device.mode,
+            "MCP plain lease under ios.slim.enabled must report mode: slim",
+          ).toBe("slim");
 
           await mcp.client.callTool({
             name: "release_simulator",
@@ -503,7 +501,7 @@ describe.skipIf(process.platform !== "darwin")(
 
       // HTTP is skipped here: it needs a real reserved port plus its own auth-token setup
       // (see http-api.test.ts) on top of another real cold iOS lease, which -- given MCP
-      // already exercises the same `grant.slim` plumbing through a second transport -- was
+      // already exercises the same `grant.device.mode` plumbing through a second transport -- was
       // judged not worth a third real boot cycle in this already-expensive slow lane.
     });
 

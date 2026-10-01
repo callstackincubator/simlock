@@ -38,6 +38,13 @@ await client.releaseLease({ leaseId: grant.lease.id });
 await client.close();
 ```
 
+`grant.device.mode` is the device mode the granted device actually has:
+`"slim"` when its driver reduced its feature set (iOS slim mode), `"full"`
+otherwise. A slim device lacks some system features — push notifications,
+Spotlight, StoreKit sheets, universal links, system pickers — so check it
+before treating such a failure as a bug. Every device in `getStatus()` and in
+an admin's `list({ kind: "devices" })` carries the same `mode`.
+
 **Keeping the lease alive is yours to do.** Every lease is TTL-bound: it expires at
 `grant.lease.ttlDeadline` unless a `renewLease` call lands first, and the
 daemon does nothing on its own to keep it. `requestLease` takes an optional
@@ -346,7 +353,8 @@ gateway implementing the same contract: nothing in this module knows the
 difference, and neither does code written against it.
 
 **The one way to tell is `mode` in `getStatus()`'s daemon block**
-(`"worker" | "gateway"`). Everything else you might reach for is a leaky
+(`"worker" | "gateway"`) — not each device's own `mode`, which is the device
+mode (`"slim" | "full"`). Everything else you might reach for is a leaky
 inference rather than an answer: a lease from a gateway carries an additive
 `worker: { id, label }` block, but so might a future single-machine daemon's;
 a lease id from a gateway names its worker, but ids are opaque and parsing

@@ -104,7 +104,15 @@ class FakeRegistry implements QuarantineRegistry {
 }
 
 function device(id: string, driverDeviceId: string): DeviceRecord {
-  return { createdAt: 1, driverData: {}, driverDeviceId, id, spec, state: "quarantined" };
+  return {
+    createdAt: 1,
+    driverData: {},
+    driverDeviceId,
+    id,
+    mode: "full",
+    spec,
+    state: "quarantined",
+  };
 }
 
 async function createHarness(

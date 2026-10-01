@@ -9,6 +9,7 @@ export {
   loadConfig,
 } from "./config.js";
 export {
+  type DeviceMode,
   type DeviceRecord,
   type DeviceSpec,
   type LeaseRecord,

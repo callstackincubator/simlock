@@ -70,6 +70,7 @@ function view(now: number): RegistryView {
         id: "dev_1",
         lastLeaseEndedAt: 0,
         spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        mode: "full",
         state: "ready",
       },
     ],

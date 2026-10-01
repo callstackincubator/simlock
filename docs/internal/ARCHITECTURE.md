@@ -223,12 +223,13 @@ applies to HTTP automatically because there is only one code path to fix.
 
 **Protocol versions are negotiated as `{min, max}` ranges** and honestly:
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
-Two changes have moved it since. ADR 0004 removed `lease.heartbeat` and
+Three changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
-path kept, taking it to 5. So the range both sides
-advertise is `{min: 5, max: 5}`, an older client and a current daemon simply
+path kept, taking it to 5; ADR 0007 makes every device report its device mode as a
+required `mode`, taking it to 6. So the range both
+sides advertise is `{min: 6, max: 6}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
 worker older than ADR 0005 shows up in a gateway's views as `incompatible`
@@ -700,11 +701,12 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   while the gateway is down expires on the worker, like any other unrenewed
   lease.
 - **Version skew.** `hello` over the uplink negotiates the protocol range
-  exactly as over the socket (ADR 0003 §6). ADR 0005 moves the wire to
-  protocol `{min: 5, max: 5}` with no compatibility shim — `device.exec` and
-  its `output` push family are new frames, and the honesty rule says a range
-  widens only where a compatibility path is actually kept — so **every worker
-  older than ADR 0005 is `incompatible` by range**, by construction rather
+  exactly as over the socket (ADR 0003 §6). ADR 0005 moved the wire to
+  protocol 5 and ADR 0007 to `{min: 6, max: 6}`, each with no compatibility
+  shim — `device.exec` and its `output` push family are new frames, a device's
+  `mode` is a new required field, and the honesty rule says a range widens
+  only where a compatibility path is actually kept — so **every worker older
+  than ADR 0007 is `incompatible` by range**, by construction rather
   than by accident. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not

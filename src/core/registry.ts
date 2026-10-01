@@ -6,6 +6,7 @@ import {
   DEFAULT_LEASE_TTL_MS,
 } from "./config.js";
 import {
+  type DeviceMode,
   type DeviceRecord,
   type DeviceSpec,
   type DeviceState,
@@ -174,6 +175,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       driverDeviceId,
       id: `dev_${this.options.idGenerator.generate()}`,
       leaseIdentity: this.options.leaseIdentity[spec.platform],
+      mode: "full",
       spec: { ...spec },
       state: "provisioning",
     };
@@ -664,7 +666,10 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     this.#unknownState = unknownFields(parsed, ["devices", "leases", "leaseRequests"]);
     this.#devices = parsed.devices.map((device) => {
       const record = parseDevice(device);
-      this.#unknownDeviceFields.set(record.id, unknownFields(device, deviceRecordKeys));
+      this.#unknownDeviceFields.set(
+        record.id,
+        unknownFields(device, [...deviceRecordKeys, ...retiredDeviceRecordKeys]),
+      );
       return record;
     });
     this.#leases = parsed.leases.map((lease) => {
@@ -732,9 +737,15 @@ const deviceRecordKeys = [
   "quarantineAttempts",
   "quarantineNextRetryAt",
   "address",
-  "featureProfile",
+  "mode",
   "leaseIdentity",
 ] as const;
+/**
+ * Fields a device record written before ADR 0007 carries that this daemon neither reads nor
+ * keeps. `featureProfile` is stripped on load, not preserved as an unknown field, and no mode is
+ * derived from it (ADR 0007 §11).
+ */
+const retiredDeviceRecordKeys = ["featureProfile"] as const;
 const leaseRecordKeys = [
   "id",
   "deviceId",
@@ -838,7 +849,7 @@ function parseDevice(value: unknown): DeviceRecord {
     throw new RegistryLoadError("Invalid device record in registry state");
   }
 
-  const { address, createdAt, driverData, driverDeviceId, featureProfile, id, spec, state } = value;
+  const { address, createdAt, driverData, driverDeviceId, id, spec, state } = value;
   if (
     typeof id !== "string" ||
     typeof driverDeviceId !== "string" ||
@@ -857,12 +868,12 @@ function parseDevice(value: unknown): DeviceRecord {
   return {
     ...parseOptionalDeviceNumbers(value),
     ...(address === undefined ? {} : { address }),
-    ...(isFeatureProfile(featureProfile) ? { featureProfile } : {}),
     createdAt,
     driverData,
     driverDeviceId,
     id,
     leaseIdentity: parseLeaseIdentity(value.leaseIdentity),
+    mode: parseDeviceMode(value.mode),
     spec,
     state: state === "warm" ? "reclaiming" : state,
   };
@@ -870,8 +881,8 @@ function parseDevice(value: unknown): DeviceRecord {
 
 /**
  * A record written before `leaseIdentity` existed was created under the only policy there was,
- * so it loads as `reusable`. Unlike `featureProfile`, a present-but-unknown value fails the
- * load: guessing `reusable` for it could hand a fresh identity out for a second lease.
+ * so it loads as `reusable`. A present-but-unknown value fails the load: guessing `reusable` for
+ * it could hand a fresh identity out for a second lease.
  */
 function parseLeaseIdentity(value: unknown): LeaseIdentity {
   if (value === undefined) return "reusable";
@@ -880,12 +891,14 @@ function parseLeaseIdentity(value: unknown): LeaseIdentity {
 }
 
 /**
- * Unlike `address`, a garbage `featureProfile` is dropped rather than failing the whole record --
- * it is a derived, re-derivable-on-next-boot hint (see `domain.ts`), not load-bearing identity, so
- * a corrupt value should not stop the registry (and every other device in it) from loading.
+ * A record written before `mode` existed loads as `full` (ADR 0007 §11). A present-but-unknown
+ * value fails the load rather than being guessed at: a wrong `full` would let a slimmed device
+ * be granted as a full one.
  */
-function isFeatureProfile(value: unknown): value is "full" | "reduced" {
-  return value === "full" || value === "reduced";
+function parseDeviceMode(value: unknown): DeviceMode {
+  if (value === undefined) return "full";
+  if (value === "slim" || value === "full") return value;
+  throw new RegistryLoadError("Invalid device record in registry state");
 }
 
 /**
@@ -927,8 +940,7 @@ function hasValidLeaseCore(value: Record<string, unknown>): value is Record<stri
  * only until the first renewal moves the deadline), so each takes its documented default
  * rather than a guess dressed up as arithmetic. A value that is present but unusable takes the
  * same default: it is one field of one record, and refusing to load the whole registry over it
- * would cost an operator every device Simlock knows about (the same trade `featureProfile`
- * already makes).
+ * would cost an operator every device Simlock knows about.
  *
  * They are validated separately because they are different kinds of number. A timestamp only
  * has to be a finite number -- any point on the clock is a legitimate answer to "when was this

@@ -95,9 +95,9 @@ that machine.
 ## Endpoints
 
 All routes are under `/v1`, JSON bodies both ways, additive evolution only —
-new fields, never removed or repurposed ones. That rule was broken once,
-as a deliberate 0.x-only exception, and each break is called out where
-it applies below:
+new fields, never removed or repurposed ones. That rule has been broken
+twice, each time as a deliberate 0.x-only exception, and each break is
+called out where it applies below:
 
 - **`mode` is gone** from the lease record the operator routes serialize
   (`GET /v1/status`, `GET /v1/leases`), and **`lastRenewedAt` and the stored
@@ -107,6 +107,9 @@ it applies below:
   be accepted.
 - **The `ttlMs` a lease reports is the lease's own width**, not a value the
   HTTP frontend remembered per request.
+- **The lease's `slim` boolean is gone; it carries `mode` instead** —
+  `"slim"` or `"full"`, the device mode of the granted device. Every device in
+  `GET /v1/status` carries the same `mode`.
 
 Routes, status codes, and every other field are unchanged.
 
@@ -125,8 +128,8 @@ Unauthenticated liveness for tunnels/load balancers. → `200 {"ok":true}`.
 ### `GET /v1/status`
 
 Role: `agent`. The same view `simlock status --json` reads: a `daemon` block,
-managed/running capacity per platform, active leases, managed devices, queue
-depth.
+managed/running capacity per platform, active leases, managed devices (each
+with its device mode, `mode`: `"slim"` or `"full"`), queue depth.
 
 The daemon block carries `health` (`starting`/`running`) and **`mode`**
 (`"worker" | "gateway"`), the one field that tells a client which kind of
@@ -277,7 +280,7 @@ without the `workerId` and `worker` fields:
     "workerId": "3f81a2c4", "worker": { "id": "3f81a2c4", "label": "mac-studio-2" },
     "createdAt": "2026-09-01T09:14:07Z",
     "expiresAt": "2026-09-01T09:29:07Z", "ttlMs": 900000,
-    "dataPlane": null, "slim": true
+    "dataPlane": null, "mode": "slim"
 } }
 ```
 
@@ -304,9 +307,10 @@ implemented](#not-implemented) below. It is in the schema now so its arrival
 is additive rather than a breaking shape change. Running a *command* on the
 device is not part of it and does not wait for it: that is `exec`, below.
 
-`slim` is `true` when the granted device had its feature set reduced (iOS
-slim mode applied and the request did not carry `full: true`), `false`
-otherwise — always `false` for Android. It lets a client explain a
+`mode` is the device mode the granted device actually has: `"slim"` when its
+feature set was reduced (iOS slim mode applied and the request did not carry
+`full: true`), `"full"` otherwise — always `"full"` for Android. It lets a
+client explain a
 feature-loss failure (missing push notification, Spotlight result,
 StoreKit sheet, universal link, or system picker) instead of misreading it
 as a bug.
@@ -566,7 +570,7 @@ workers of its own and does not implement the underlying operations at all.
 { "workers": [ {
     "id": "3f81a2c4", "label": "mac-studio-2",
     "state": "connected", "drained": false,
-    "daemonVersion": "0.4.0", "protocol": { "min": 5, "max": 5 },
+    "daemonVersion": "0.4.0", "protocol": { "min": 6, "max": 6 },
     "connectedAt": "2026-09-01T09:00:00Z", "lastSeenAt": "2026-09-01T09:14:30Z",
     "capacity": { "ios": { "running": 2, "limit": 4 }, "android": { "running": 0, "limit": 2 } },
     "downloads": { "policy": "on-request" },
@@ -581,7 +585,7 @@ depends on one; it is never an override, since the worker clamps
 `allowDownload` through the same policy regardless.
 
 `protocol` is the range that worker negotiated. The wire moves to
-`{min: 5, max: 5}` with no compatibility shim, so a worker from before it
+`{min: 6, max: 6}` with no compatibility shim, so a worker from before it
 does not overlap and shows as `incompatible` — the ordinary upgrade path, not
 a fault.
 

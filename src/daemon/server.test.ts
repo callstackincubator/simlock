@@ -16,7 +16,7 @@ import {
   Registry,
   RuntimeMissingError,
 } from "../core/index.js";
-import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
+import { PROTOCOL_VERSION_RANGE, type ProtocolRange } from "../contract/index.js";
 import { AndroidLicenseNotAcceptedError } from "../drivers/android/index.js";
 import {
   createConnectionPair,
@@ -2679,6 +2679,29 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       details: { client: { min: 99, max: 99 }, daemon: PROTOCOL_VERSION_RANGE },
     });
   });
+  it("refuses a gateway on the current protocol when this worker advertises the previous one (ADR 0007 §12)", async () => {
+    const previous = { min: PROTOCOL_VERSION_RANGE.min - 1, max: PROTOCOL_VERSION_RANGE.max - 1 };
+    const harness = await createHarness({
+      protocolVersion: previous,
+      resolveRole: { resolve: () => "admin" },
+    });
+    const [workerEnd, gatewayEnd] = createConnectionPair();
+    harness.daemon.acceptUplink(workerEnd);
+    const gateway = driveConnection(gatewayEnd);
+
+    const reply = await gateway.request("hello", {
+      clientVersion: "gateway",
+      protocolRange: PROTOCOL_VERSION_RANGE,
+    });
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: {
+        code: "PROTOCOL_VERSION_UNSUPPORTED",
+        details: { client: PROTOCOL_VERSION_RANGE, daemon: previous },
+      },
+    });
+  });
 });
 
 /** Drives an in-memory `IpcConnection` the way `createClient` drives a real socket -- enough to
@@ -2768,6 +2791,8 @@ async function createHarness(
     readonly processRunner?: ProcessRunner;
     /** Replaces the real socket host, for a test that has to control a frame's write. */
     readonly host?: ConnectionHost;
+    /** Overrides the protocol range this daemon advertises, to stand in for an older worker. */
+    readonly protocolVersion?: ProtocolRange;
   } = {},
 ) {
   const directory =
@@ -2851,6 +2876,7 @@ async function createHarness(
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     passthrough: engine,
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
+    ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     queue: engine,
     reaper,
     registry,

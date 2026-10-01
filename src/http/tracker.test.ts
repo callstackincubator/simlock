@@ -289,27 +289,21 @@ describe("LeaseRequestTracker.submit with full", () => {
 });
 
 describe("LeaseRequestTracker granted lease payload", () => {
-  it("reports slim: false when the granted device's featureProfile is absent", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    const { view, callIndex } = await createTracked(tracker, dispatcher);
-    dispatcher.calls[callIndex]?.resolve(makeGrant());
-    await Promise.resolve();
-    await Promise.resolve();
-    const state = tracker.get(view.id)?.state;
-    if (state?.stage !== "granted") throw new Error("expected granted");
-    expect(state.lease.slim).toBe(false);
-  });
-
-  it("reports slim: true when the granted device's featureProfile is reduced", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    const { view, callIndex } = await createTracked(tracker, dispatcher);
-    dispatcher.calls[callIndex]?.resolve(makeGrant({ device: { featureProfile: "reduced" } }));
-    await Promise.resolve();
-    await Promise.resolve();
-    const state = tracker.get(view.id)?.state;
-    if (state?.stage !== "granted") throw new Error("expected granted");
-    expect(state.lease.slim).toBe(true);
-  });
+  it.each(["slim", "full"] as const)(
+    "reports the granted device's mode (%s) as the lease's mode, with no slim flag",
+    async (mode) => {
+      const { dispatcher, tracker } = buildTracker();
+      const { view, callIndex } = await createTracked(tracker, dispatcher);
+      dispatcher.calls[callIndex]?.resolve(makeGrant({ device: { mode } }));
+      await Promise.resolve();
+      await Promise.resolve();
+      const state = tracker.get(view.id)?.state;
+      if (state?.stage !== "granted") throw new Error("expected granted");
+      expect(state.lease.mode).toBe(mode);
+      expect(state.lease).not.toHaveProperty("slim");
+      expect(state.lease).not.toHaveProperty("featureProfile");
+    },
+  );
 });
 
 describe("LeaseRequestTracker.waitForChange abort", () => {

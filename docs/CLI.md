@@ -189,7 +189,7 @@ granted.
   force a re-provision of one already running, even while slim devices sit
   idle in the warm pool.
 - `--detach` — print the lease result (the same JSON shape as the grant line
-  below, including `device.featureProfile`) and exit instead of staying
+  below, including `device.mode`) and exit instead of staying
   alive. Nothing then renews the lease on your behalf: keep it with
   `simlock lease renew` before `ttlDeadline`, and end it with
   `simlock release`. From an invocation other than the one granted the
@@ -226,7 +226,7 @@ default, so a bare `simctl` or `adb` will not find them. See
 The full line, with every field the contract defines:
 
 ```json
-{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","featureProfile":"reduced"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","grantedAt":1735689600000,"ttlMs":900000,"lastRenewedAt":1735689600000,"ttlDeadline":1735690500000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
+{"device":{"id":"dev_1a2b","driverDeviceId":"ABCD-...","spec":{"platform":"ios","model":"iPhone 17 Pro","osVersion":"26.5"},"address":"...","mode":"slim"},"lease":{"id":"lse_9f2c","deviceId":"dev_1a2b","requesterId":"agent-1","ownerId":"agent-1","grantedAt":1735689600000,"ttlMs":900000,"lastRenewedAt":1735689600000,"ttlDeadline":1735690500000},"timing":{"estimatedProvisionMs":0,"estimatedBootMs":0,"estimatedReclaimMs":0,"estimatedReadyMs":0},"role":"agent"}
 ```
 
 `lease.ttlDeadline` is the moment the daemon will expire this lease if
@@ -275,15 +275,15 @@ daemon ended the lease while the connection was alive, which is a different
 thing to have to handle.
 
 `device` is a **projection** of the registry's device record — `id`,
-`driverDeviceId`, `spec`, `address?`, `featureProfile?` — not the full
+`driverDeviceId`, `spec`, `address?`, `mode` — not the full
 record `status.get`/`list.get` return to an admin caller. Internal
 bookkeeping fields (`driverData`, `quarantine*`, `foreign*`, `recovering*`,
 the derived `transitionAgeMs`) never appear on a grant; a caller that wants
 those needs the admin-role `list.get`/`status.get`, not `lease.request`'s
-output. `device.featureProfile` is `"reduced"` when the granted device had
-its feature set reduced (iOS slim mode applied and this request did not pass
-`--full`), and `"full"` or absent otherwise — always absent for Android. It
-lets an agent explain a feature-loss failure (missing push notification,
+output. `device.mode` is the device mode the granted device actually has:
+`"slim"` when its feature set was reduced (iOS slim mode applied and this
+request did not pass `--full`), and `"full"` otherwise — always `"full"` for
+Android. It lets an agent explain a feature-loss failure (missing push notification,
 Spotlight result, StoreKit sheet, universal link, or system picker) instead
 of misreading it as a bug. See `src/contract/schemas.ts`
 (`deviceRecordSchema`, `leaseRecordSchema`, `leaseGrantSchema`) for the full
@@ -726,7 +726,7 @@ simlock worker remove <worker-id>
 
 ```json
 {"workers":[{"id":"3f81a2c4","label":"mac-studio-2","state":"connected","drained":false,
-  "daemonVersion":"0.4.0","protocol":{"min":5,"max":5},
+  "daemonVersion":"0.4.0","protocol":{"min":6,"max":6},
   "connectedAt":1735689600000,"lastSeenAt":1735689930000,
   "capacity":{"ios":{"running":2,"limit":4},"android":{"running":0,"limit":2}},
   "downloads":{"policy":"on-request"},
@@ -737,7 +737,7 @@ simlock worker remove <worker-id>
 `config.get` when its uplink connects — routing needs it to know whether a
 machine may install a missing runtime before sending it a request that needs
 one. `protocol` is the range that worker negotiated; the wire moves
-to `{min: 5, max: 5}` with no shim, so a worker older than it does not
+to `{min: 6, max: 6}` with no shim, so a worker older than it does not
 overlap and shows as `incompatible`. Worker ids are UUIDs — the examples here
 abbreviate them to their first segment.
 
@@ -855,12 +855,11 @@ caller:
   small" unless you know to check the unit. Update every caller's timeout
   field name *and* multiply its value by 1000.
 - **The top-level `slim: boolean` on a grant is gone; it's now
-  `device.featureProfile`** (`"full" | "reduced" | undefined`, undefined
-  meaning "not applicable" — always undefined for Android). A caller
-  checking `result.slim === true` now silently never sees a feature-loss
-  signal at all — `result.slim` is simply `undefined` on every response,
-  which is falsy, not an error. Check `result.device.featureProfile ===
-  "reduced"` instead.
+  `device.mode`** (`"slim"` or `"full"`, always `"full"` for Android). A
+  caller checking `result.slim === true` now silently never sees a
+  feature-loss signal at all — `result.slim` is simply `undefined` on every
+  response, which is falsy, not an error. Check `result.device.mode ===
+  "slim"` instead.
 
 Every other field keeps the contract's own camelCase names it already had
 under the pre-0.3.0 hand-written schemas (`leaseId`, `deviceId`,
@@ -887,7 +886,8 @@ and `list --devices` well before it crosses the threshold that would make
 
 Human-oriented overview: daemon health *and mode*, managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
-platform), every managed device with its state, current leases (who — the agent
+platform), every managed device with its state and device mode
+(`Device dev_7: ready, mode slim`), current leases (who — the agent
 id, see [Agent identity](#agent-identity) — since when, and when each was last
 renewed), and queue depth. `--json` for the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
@@ -897,12 +897,13 @@ Against a **gateway** (`config.mode: "gateway"`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads
 `running (gateway)`, capacity is summed across the connected workers, one line
 per worker precedes the devices, and every device and lease names the worker it
-lives on (`Device dev_7 on wrk_a: leased`). `--json` gains a `workers` array of
+lives on (`Device dev_7 on wrk_a: leased, mode full`). `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each
 device and lease; `daemon.mode` says which kind of daemon answered.
 
 The daemon block carries `mode` (`"worker"` or `"gateway"`) — the one field
-that tells a client which kind of daemon answered. Against a **gateway** the
+that tells a client which kind of daemon answered. Do not confuse it with each
+device's own `mode`, the device mode (`"slim"` or `"full"`). Against a **gateway** the
 same view is the fleet's: capacity summed over the connected workers, every
 lease and device tagged with the `workerId` it lives on, the gateway queue's
 depth, plus a `workers` array of worker views (the same records
@@ -918,7 +919,8 @@ nothing at all: cleanup rules run where the devices and the reaper are, and a
 gateway has neither. Each lease record's `requesterId` is the
 agent id (see [Agent identity](#agent-identity)) that holds it, and its
 `lastRenewedAt` is when the lease was last renewed (set at grant, then on
-every renew) — the same field `status` renders as "last renewed".
+every renew) — the same field `status` renders as "last renewed". Each device
+record carries its device mode, `mode`: `"slim"` or `"full"`.
 
 Against a gateway, `--devices` and `--leases` list the whole fleet with a
 `workerId` on every row. The device rows are the narrower shape `status`
