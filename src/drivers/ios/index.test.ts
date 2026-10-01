@@ -1153,7 +1153,11 @@ describe("IosSimctlDriver", () => {
             await expect(resolution).resolves.toEqual({ model, osVersion, platform: "ios" });
             accepted += 1;
           } else {
-            await expect(resolution).rejects.toThrow();
+            // Every runtime here is installed, so the refusal is the range or the pairing
+            // check -- never a missing runtime, and never a download.
+            await expect(resolution).rejects.toThrow(
+              /is out of range|is installed but does not support/,
+            );
             refused += 1;
           }
         }
@@ -1171,6 +1175,36 @@ describe("IosSimctlDriver", () => {
           { allowDownload: false },
         ),
       ).resolves.toEqual({ model: "iPad mini", osVersion: "26.0", platform: "ios" });
+    });
+
+    it("pairs two device types that differ only in letter case through the first, as resolveSpec matches them", async () => {
+      // Only the first type's identifier is supported, so the lower-cased duplicate pairs with
+      // nothing in its own right.
+      const fixture = JSON.stringify({
+        devicetypes: [
+          deviceType("iPhone-16", "iPhone 16"),
+          deviceType("iphone-16-dup", "iphone 16"),
+        ],
+        runtimes: [runtime("26.0", "23A339", true, ["iPhone-16"])],
+      });
+      const runner = new ScriptedProcessRunner(
+        Array.from({ length: 2 }, () => ({
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: fixture },
+        })),
+      );
+      const driver = await createDriver(runner);
+
+      const catalog = await driver.listCatalog();
+
+      expect(catalog.models).toEqual(["iPhone 16", "iphone 16"]);
+      expect(catalog.modelRuntimes).toEqual({ "iPhone 16": ["26.0"], "iphone 16": ["26.0"] });
+      await expect(
+        driver.resolveSpec(
+          { model: "iphone 16", osVersion: "26.0", platform: "ios" },
+          { allowDownload: false },
+        ),
+      ).resolves.toEqual({ model: "iPhone 16", osVersion: "26.0", platform: "ios" });
     });
 
     it("still shells out to simctl exactly once per listCatalog call", async () => {

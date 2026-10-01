@@ -625,7 +625,9 @@ runtime annotated with the workers that have it — so a `--device` the
 catalog lists is leasable *somewhere*, not necessarily everywhere. A model is
 paired with a runtime when at least one connected worker pairs them itself;
 one worker having the model and another having the runtime does not make a
-pair. `simlock worker list --json` shows each worker's own pairings.
+pair. `simlock worker list --json` shows each worker's own pairings. The
+gateway does not yet pick a worker by its pairings, so a listed pair can
+still be sent to a worker that cannot pair them.
 
 **`simlock events`** shows the fleet: every worker's business events are
 republished on the gateway's bus with `workerId` added to the payload,
@@ -740,7 +742,7 @@ simlock worker remove <worker-id>
 `config.get` when its uplink connects — routing needs it to know whether a
 machine may install a missing runtime before sending it a request that needs
 one. `protocol` is the range that worker negotiated; the wire moves
-to `{min: 5, max: 5}` with no shim, so a worker older than it does not
+to `{min: 6, max: 6}` with no shim, so a worker older than it does not
 overlap and shows as `incompatible`. Worker ids are UUIDs — the examples here
 abbreviate them to their first segment.
 

@@ -2032,7 +2032,9 @@ function formatCatalog(response: CatalogGetOutput): string {
       // Each model with the runtimes it pairs with: a model and a runtime both listed for the
       // platform are not necessarily leasable together.
       const models = entry.models.map((model) => {
-        const paired = entry.modelRuntimes[model] ?? [];
+        const paired =
+          (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ??
+          [];
         return `    ${model}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`;
       });
       return [

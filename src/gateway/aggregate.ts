@@ -193,7 +193,9 @@ function addCatalogEntry(
   for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
   for (const model of entry.models) {
     const paired = bucket.modelRuntimes.get(model) ?? new Set<string>();
-    for (const runtime of entry.modelRuntimes[model] ?? []) paired.add(runtime);
+    // Own keys only: a model a worker names `constructor` must not read Object.prototype's.
+    const own = Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined;
+    for (const runtime of own ?? []) paired.add(runtime);
     bucket.modelRuntimes.set(model, paired);
   }
   bucket.defaults.add(entry.defaultRuntime);

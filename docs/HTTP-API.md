@@ -163,7 +163,9 @@ Each platform entry carries `modelRuntimes`: for every name in `models`, the
 installed runtimes that model pairs with. A pair listed there can be leased;
 a model and a runtime that are each listed but not paired cannot. An empty
 list means nothing installed pairs with that model. On a gateway a model is
-paired with a runtime when at least one connected worker pairs them.
+paired with a runtime when at least one connected worker pairs them; the
+gateway does not yet pick a worker by its pairings, so such a request can
+still go to a worker that cannot pair them and fail there.
 
 ```json
 { "platforms": [ {
@@ -598,7 +600,7 @@ depends on one; it is never an override, since the worker clamps
 `allowDownload` through the same policy regardless.
 
 `protocol` is the range that worker negotiated. The wire moves to
-`{min: 5, max: 5}` with no compatibility shim, so a worker from before it
+`{min: 6, max: 6}` with no compatibility shim, so a worker from before it
 does not overlap and shows as `incompatible` — the ordinary upgrade path, not
 a fault.
 

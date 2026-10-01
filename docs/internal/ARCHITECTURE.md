@@ -228,11 +228,12 @@ Two changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
-path kept, taking it to 5. So the range both sides
-advertise is `{min: 5, max: 5}`, an older client and a current daemon simply
+path kept, taking it to 5; ADR 0008 makes the catalog's `modelRuntimes`
+required, taking it to 6. So the range both sides
+advertise is `{min: 6, max: 6}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
-worker older than ADR 0005 shows up in a gateway's views as `incompatible`
+worker older than ADR 0008 shows up in a gateway's views as `incompatible`
 rather than as a mystery (see [Gateway and worker
 modes](#gateway-and-worker-modes-adr-0005)). `daemon.stop` stays the frozen
 exception, accepted at any version the daemon has ever spoken, so the upgrade

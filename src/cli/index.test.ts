@@ -1620,6 +1620,25 @@ describe("CLI: token operations never write tokens.json directly", () => {
 });
 
 describe("CLI: catalog", () => {
+  it("prints (none) for a platform with no models", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [{ modelRuntimes: {}, models: [], platform: "android", runtimes: ["35"] }],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      ["Platform: android", "  Runtimes: 35 (default: (none))", "  Models: (none)", ""].join("\n"),
+    );
+  });
+
   it("prints each model with the runtimes it pairs with", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({

@@ -194,7 +194,9 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 Against a gateway the catalog is the union of the connected workers'. A
 model is paired with a runtime when at least one worker pairs them, and
 `modelWorkers` and `runtimeWorkers` say which workers have each model and
-runtime.
+runtime. The gateway does not yet use the pairings to pick a worker, so a
+pair it lists can still go to a worker that has the model and the runtime
+but cannot pair them, and that request fails there.
 
 ## One connection, no reconnect, no retry
 

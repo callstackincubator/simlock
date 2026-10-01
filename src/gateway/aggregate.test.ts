@@ -323,6 +323,18 @@ describe("aggregateCatalog", () => {
     expect(platform?.modelRuntimes["iPhone XS"]).toEqual([]);
   });
 
+  it("treats a model a worker names after an Object.prototype member like any other", () => {
+    // Wire input: a worker that lists `constructor` without pairing it must not make the fleet
+    // catalog read the inherited function.
+    const odd = OPERATIONS["catalog.get"].output.parse({
+      platforms: [{ modelRuntimes: {}, models: ["constructor"], platform: "ios", runtimes: [] }],
+    }).platforms;
+
+    const catalog = aggregateCatalog([view({ catalog: odd, id: "wrk_a" })]);
+
+    expect(catalog.platforms[0]?.modelRuntimes).toEqual({ constructor: [] });
+  });
+
   it("filters to one platform when asked", () => {
     const catalog = aggregateCatalog(
       [
