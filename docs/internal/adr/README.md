@@ -39,3 +39,4 @@ the status is stale.
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted |
 | [0007](0007-a-lease-request-chooses-the-device-mode.md) | A lease request chooses the device mode | Accepted — not yet implemented |
 | [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted — not yet implemented |
+| [0009](0009-gateway-routing-is-a-list-of-stages.md) | Gateway routing is a list of stages, and a request that cannot be served fails at once | Accepted — not yet implemented |
