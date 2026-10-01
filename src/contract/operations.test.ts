@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
-import { defineOperation, OPERATIONS, type OperationName } from "./operations.js";
+import { defineOperation, OPERATIONS, type Effect, type OperationName } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
 import { ROLES, type Role } from "./roles.js";
 
@@ -10,6 +10,7 @@ describe("defineOperation", () => {
     const echo = defineOperation({
       name: "test.echo",
       role: "agent",
+      effect: "read",
       input: z.object({ value: z.string() }),
       output: z.object({ value: z.string() }),
     });
@@ -81,6 +82,78 @@ describe("operation role matrix", () => {
     const roleFn = operation.role as Role | ((input: unknown) => Role);
     const resolved = typeof roleFn === "function" ? roleFn(input) : roleFn;
     expect(resolved).toBe(role);
+  });
+});
+
+/** Which calls change state: the daemon log records a `write` at its default level and a
+ * `read` only at `debug`. Rows keyed like `ROLE_MATRIX`, input-dependent ones twice. */
+const EFFECT_MATRIX: ReadonlyArray<{
+  readonly name: OperationName;
+  readonly input: unknown;
+  readonly effect: Effect;
+}> = [
+  { name: "catalog.get", input: {}, effect: "read" },
+  { name: "status.get", input: {}, effect: "read" },
+  { name: "lease.request", input: { model: "iPhone 17", platform: "ios" }, effect: "write" },
+  { name: "lease.cancel", input: {}, effect: "write" },
+  { name: "lease.renew", input: { leaseId: "lease_1" }, effect: "write" },
+  { name: "lease.release", input: { leaseId: "lease_1" }, effect: "write" },
+  { name: "lease.list", input: {}, effect: "read" },
+  { name: "doctor.run", input: {}, effect: "read" },
+  { name: "doctor.run", input: { fix: false }, effect: "read" },
+  { name: "doctor.run", input: { fix: true }, effect: "write" },
+  { name: "doctor.run", input: { purgeOrphans: true }, effect: "write" },
+  { name: "lease.release-all", input: {}, effect: "write" },
+  { name: "list.get", input: {}, effect: "read" },
+  { name: "cleanup.run", input: {}, effect: "write" },
+  { name: "cleanup.run", input: { dryRun: false }, effect: "write" },
+  { name: "cleanup.run", input: { dryRun: true }, effect: "read" },
+  { name: "nuke.run", input: {}, effect: "write" },
+  { name: "config.get", input: {}, effect: "read" },
+  { name: "daemon.stop", input: {}, effect: "write" },
+  { name: "events.replay", input: {}, effect: "read" },
+  { name: "events.subscribe", input: {}, effect: "read" },
+  { name: "events.unsubscribe", input: {}, effect: "read" },
+  { name: "token.create", input: { role: "agent" }, effect: "write" },
+  { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, effect: "read" },
+  {
+    name: "device.exec",
+    input: { args: ["devices"], leaseId: "lease_1", tool: "adb" },
+    effect: "write",
+  },
+  { name: "token.list", input: {}, effect: "read" },
+  { name: "token.revoke", input: { id: "tok_1" }, effect: "write" },
+  { name: "worker.list", input: {}, effect: "read" },
+  { name: "worker.drain", input: { workerId: "wrk_1" }, effect: "write" },
+  { name: "worker.undrain", input: { workerId: "wrk_1" }, effect: "write" },
+  { name: "worker.remove", input: { workerId: "wrk_1" }, effect: "write" },
+];
+
+function resolvedEffect(name: OperationName, input: unknown): unknown {
+  const effect = OPERATIONS[name].effect as Effect | ((input: unknown) => Effect) | undefined;
+  return typeof effect === "function" ? effect(OPERATIONS[name].input.parse(input)) : effect;
+}
+
+describe("operation effects", () => {
+  it("every operation declares an effect", () => {
+    for (const name of Object.keys(OPERATIONS) as OperationName[]) {
+      expect(["read", "write"], name).toContain(
+        resolvedEffect(name, EFFECT_MATRIX.find((row) => row.name === name)?.input),
+      );
+    }
+    expect(new Set(EFFECT_MATRIX.map((row) => row.name))).toEqual(new Set(Object.keys(OPERATIONS)));
+  });
+
+  it("doctor.run is a write only with fix or purgeOrphans, and cleanup.run is a read only with dryRun", () => {
+    expect(resolvedEffect("doctor.run", {})).toBe("read");
+    expect(resolvedEffect("doctor.run", { fix: true })).toBe("write");
+    expect(resolvedEffect("doctor.run", { purgeOrphans: true })).toBe("write");
+    expect(resolvedEffect("cleanup.run", {})).toBe("write");
+    expect(resolvedEffect("cleanup.run", { dryRun: true })).toBe("read");
+  });
+
+  it.each(EFFECT_MATRIX)("$name with $input is a $effect", ({ name, input, effect }) => {
+    expect(resolvedEffect(name, input)).toBe(effect);
   });
 });
 

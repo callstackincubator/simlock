@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeSystemStats,
+  JsonLinesLogger,
+  type Logger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import type { CapacityLimits, ResourceStrategyOptions } from "./capacity/index.js";
 import {
   BootTimeoutError,
@@ -89,6 +96,7 @@ async function createHarness(
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
     readonly limits?: CapacityLimits;
+    readonly logger?: Logger;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -125,6 +133,7 @@ async function createHarness(
     drivers: options.drivers ?? [driver],
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
     systemStats: new FakeSystemStats({
       cpuCount: 8,
@@ -396,6 +405,39 @@ describe("LeaseEngine", () => {
       "deleted",
     );
     expect(harness.driver.calls.map((call) => call.operation)).toContain("destroy");
+  });
+
+  it("A purge failure logs nothing, because device.purge-failed carries the error.", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      driver,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+    });
+    const first = await harness.engine.request(request, {
+      ownerId: "first",
+      requesterId: "first",
+    });
+
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+
+    expect(
+      harness.bus.replay().filter((event) => event.event === "device.purge-failed"),
+    ).toMatchObject([
+      {
+        payload: {
+          deviceId: first.device.id,
+          error: "DriverCrashError: purge exploded",
+          leaseId: first.lease.id,
+        },
+      },
+    ]);
+    expect(
+      sink.records.filter((record) => record.level === "warn" || record.level === "error"),
+    ).toEqual([]);
   });
 
   it("quarantines a release-time purge failure instead of keeping the device eligible", async () => {

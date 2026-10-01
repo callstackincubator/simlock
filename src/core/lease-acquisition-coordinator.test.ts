@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeSystemStats,
+  JsonLinesLogger,
+  type Logger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
 import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
 import type { Config } from "./config.js";
@@ -75,7 +82,11 @@ function config(maxDevices = 1): Config {
 }
 
 async function createHarness(
-  options: { readonly drivers?: readonly FakeDriver[]; readonly maxDevices?: number } = {},
+  options: {
+    readonly drivers?: readonly FakeDriver[];
+    readonly logger?: Logger;
+    readonly maxDevices?: number;
+  } = {},
 ) {
   const clock = new FakeClock(1_000);
   const bus = new EventBus(clock);
@@ -130,6 +141,7 @@ async function createHarness(
     eventBus: bus,
     leases,
     lifecycle,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     planner: new AcquisitionPlanner(capacity, claims),
     provisioner,
     queue,
@@ -158,6 +170,32 @@ async function seedReady(
 
 async function flush(): Promise<void> {
   for (let count = 0; count < 20; count += 1) await Promise.resolve();
+}
+
+/** Lets fire-and-forget device work that crosses several registry writes run to rest. */
+async function settle(): Promise<void> {
+  for (let count = 0; count < 20; count += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+function capturingLogger(): { readonly logger: Logger; readonly sink: MemoryLogSink } {
+  const sink = new MemoryLogSink();
+  return { logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }), sink };
+}
+
+async function seedShutdown(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  spec: DeviceSpec = request,
+) {
+  const ready = await seedReady(harness, spec);
+  await harness.driver.shutdown({
+    address: ready.address ?? "",
+    deviceId: ready.driverDeviceId,
+    driverData: ready.driverData,
+  });
+  return harness.registry.transitionDevice(ready.id, "shutdown", {
+    event: "device.shutdown",
+    payload: { deviceId: ready.id, initiator: "test" },
+  });
 }
 
 describe("LeaseAcquisitionCoordinator", () => {
@@ -596,5 +634,98 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     expect(fullRequest.device.spec).not.toHaveProperty("full");
     expect(fullRequest.device.spec).toEqual(request);
+  });
+
+  it("A failed eviction shutdown logs the device id and the error, and the waiter is deferred as before.", async () => {
+    const { logger, sink } = capturingLogger();
+    // Two devices allowed but only one running: a running device of another spec is
+    // evicted by shutdown (not deleted) to make room for the request.
+    const harness = await createHarness({ logger, maxDevices: 2 });
+    const victim = await seedReady(harness, { ...request, model: "iPhone SE" });
+    harness.driver.failOn("shutdown", 1, new DriverCrashError("shutdown wedged"));
+
+    let settled = false;
+    const acquisition = harness.coordinator.request(request, {
+      ownerId: "evictor",
+      requesterId: "evictor",
+    });
+    void acquisition.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await settle();
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        module: "daemon.lease-acquisition-coordinator",
+        fields: {
+          deviceId: victim.id,
+          error: "DriverCrashError: shutdown wedged",
+          requesterId: "evictor",
+          step: "shutdown",
+        },
+      }),
+    ]);
+    // Deferred: back in the queue, still pending, and the victim untouched.
+    expect(settled).toBe(false);
+    expect(harness.coordinator.queueDepth).toBe(1);
+    expect(harness.registry.snapshot.devices.find((device) => device.id === victim.id)?.state).toBe(
+      "ready",
+    );
+    await harness.coordinator.cancelPending("evictor");
+    await expect(acquisition).rejects.toMatchObject({ name: "RequestCancelledError" });
+  });
+
+  it("A failed eviction delete logs the device id and the error.", async () => {
+    const { logger, sink } = capturingLogger();
+    // One device allowed: a managed device of another spec is deleted to make room.
+    const harness = await createHarness({ logger, maxDevices: 1 });
+    const victim = await seedShutdown(harness, { ...request, model: "iPhone SE" });
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simctl delete refused"));
+
+    const acquisition = harness.coordinator.request(request, {
+      ownerId: "evictor",
+      requesterId: "evictor",
+    });
+    await settle();
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: {
+          deviceId: victim.id,
+          error: "DriverCrashError: simctl delete refused",
+          requesterId: "evictor",
+          step: "delete",
+        },
+      }),
+    ]);
+    await harness.coordinator.cancelPending("evictor");
+    await expect(acquisition).rejects.toMatchObject({ name: "RequestCancelledError" });
+  });
+
+  it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
+    const { logger, sink } = capturingLogger();
+    const harness = await createHarness({ logger });
+    const shutdown = await seedShutdown(harness);
+    // Call 1 is seedReady's own boot; call 2 is the waiter's.
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(sink.records.filter((record) => record.fields?.["step"] === "boot")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: {
+          deviceId: shutdown.id,
+          error: "DriverCrashError: simulator never booted",
+          requesterId: "booter",
+          step: "boot",
+        },
+      }),
+    ]);
   });
 });

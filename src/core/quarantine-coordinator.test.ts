@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus, type EventEnvelope } from "../bus/index.js";
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, type Logger, MemoryLogSink } from "../ports/index.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import type { DeviceRecord, DeviceSpec } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -112,6 +112,7 @@ async function createHarness(
     readonly clock?: FakeClock;
     readonly config?: QuarantineRetryConfig;
     readonly driver?: FakeDriver;
+    readonly logger?: Logger;
     readonly target?: Pick<DeviceRecord, "lastLeaseEndedAt" | "leaseIdentity">;
   } = {},
 ) {
@@ -128,6 +129,7 @@ async function createHarness(
     decisions: new SerializedDecision(),
     drivers: new DriverCatalog([driver]),
     eventBus: bus,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     notifyAvailability,
     registry,
   });
@@ -369,6 +371,76 @@ describe("QuarantineCoordinator", () => {
       state: "quarantined",
     });
     expect(harness.driver.calls.map((call) => call.operation)).not.toContain("reclaim");
+  });
+
+  it("A failed quarantine reclaim retry logs the error and the attempt number.", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.failOn("reclaim", 1, new Error("erase still stuck"));
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      clock,
+      driver,
+      logger: new JsonLinesLogger({ clock, sink }),
+    });
+    await harness.coordinator.enter({
+      attemptedStrategy: "wipe",
+      deviceId: harness.target.id,
+      duration: 0,
+      error: "boom",
+      leaseId: "lease-1",
+    });
+
+    harness.clock.advance(retryConfig.retryBackoffMs);
+    await flush();
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        module: "daemon.quarantine-coordinator",
+        fields: {
+          attempts: 1,
+          deviceId: harness.target.id,
+          error: "Error: erase still stuck",
+          step: "reclaim",
+        },
+      }),
+    ]);
+  });
+
+  it("A failed quarantine delete retry logs the error and the attempt number.", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.failOn("destroy", 1, new Error("delete still stuck"));
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      clock,
+      driver,
+      logger: new JsonLinesLogger({ clock, sink }),
+      target: { lastLeaseEndedAt: 900, leaseIdentity: "fresh" },
+    });
+    await harness.coordinator.enter({
+      attemptedStrategy: "delete",
+      deviceId: harness.target.id,
+      duration: 0,
+      error: "boom",
+      leaseId: "lease-1",
+    });
+
+    harness.clock.advance(retryConfig.retryBackoffMs);
+    await flush();
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: {
+          attempts: 1,
+          deviceId: harness.target.id,
+          error: "Error: delete still stuck",
+          step: "delete",
+        },
+      }),
+    ]);
   });
 
   it("never touches a device that left quarantine before its retry timer fires", async () => {

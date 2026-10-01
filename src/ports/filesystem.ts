@@ -2,6 +2,7 @@ import {
   chmod,
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   realpath,
@@ -21,6 +22,10 @@ export interface FileStat {
    * caller's needs -- only relevant for callers verifying a file's permissions after creation
    * (e.g. the daemon's per-start admin secret, ADR 0003 §5). */
   readonly mode?: number;
+  /** Which file this is, stable across a rename and different for a new file at the same path
+   * (device and inode). Lets a reader that follows a rotating log tell a rotation apart from
+   * the same file growing. */
+  readonly identity: string;
 }
 
 export interface WriteFileAtomicOptions {
@@ -45,6 +50,9 @@ export interface PathDetails {
 
 export interface Filesystem {
   readFile(path: string): Promise<string>;
+  /** The file's contents from byte `offset` to its current end; empty past the end. `offset`
+   * must fall on a character boundary, as a line boundary always does. */
+  readFileFrom(path: string, offset: number): Promise<string>;
   writeFileAtomic(path: string, contents: string, options?: WriteFileAtomicOptions): Promise<void>;
   /**
    * Writes a file only when nothing is there, failing `EEXIST` otherwise. The kernel
@@ -79,6 +87,19 @@ export interface Filesystem {
 export class NodeFilesystem implements Filesystem {
   async readFile(path: string): Promise<string> {
     return readFile(path, "utf8");
+  }
+
+  async readFileFrom(path: string, offset: number): Promise<string> {
+    const handle = await open(path, "r");
+    try {
+      const { size } = await handle.stat();
+      if (size <= offset) return "";
+      const buffer = Buffer.alloc(size - offset);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
   }
 
   async writeFileAtomic(
@@ -129,6 +150,7 @@ export class NodeFilesystem implements Filesystem {
       size: details.size,
       modifiedAtMs: details.mtimeMs,
       mode: details.mode & 0o777,
+      identity: `${details.dev}:${details.ino}`,
     };
   }
 
@@ -182,6 +204,8 @@ export class NodeFilesystem implements Filesystem {
 
 /** Attributes every in-memory entry carries, so callers can read them without a `kind` check. */
 interface MemoryAttributes {
+  /** Stands in for an inode: assigned on creation, carried by `rename`. */
+  readonly identity: number;
   modifiedAtMs: number;
   uid: number;
   mode: number;
@@ -210,6 +234,7 @@ const DEFAULT_FILE_MODE = 0o644;
 export class MemoryFilesystem implements Filesystem {
   readonly #entries = new Map<string, MemoryEntry>();
   readonly #failures = new Map<string, string>();
+  #nextIdentity = 1;
 
   constructor(
     private readonly freeDiskBytes = Number.MAX_SAFE_INTEGER,
@@ -227,6 +252,12 @@ export class MemoryFilesystem implements Filesystem {
     }
 
     return entry.contents;
+  }
+
+  async readFileFrom(path: string, offset: number): Promise<string> {
+    return Buffer.from(await this.readFile(path), "utf8")
+      .subarray(offset)
+      .toString("utf8");
   }
 
   async writeFileAtomic(
@@ -335,6 +366,7 @@ export class MemoryFilesystem implements Filesystem {
       size: entry.kind === "file" ? Buffer.byteLength(entry.contents) : 0,
       modifiedAtMs: entry.modifiedAtMs,
       mode: entry.kind === "file" ? entry.mode : 0o755,
+      identity: String(entry.identity),
     };
   }
 
@@ -425,7 +457,6 @@ export class MemoryFilesystem implements Filesystem {
    * Test-only: makes every operation on `path` fail with `code`, which is the only way to
    * reach the branches that turn an unexpected filesystem failure into a typed rejection.
    */
-  // fallow-ignore-next-line unused-class-member -- test-only state the port itself cannot create.
   defineFailure(path: string, code: string): void {
     this.#failures.set(path, code);
   }
@@ -460,7 +491,13 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   #newEntry(kind: MemoryEntryKind): MemoryEntry {
-    return { ...kind, modifiedAtMs: 0, mode: DEFAULT_MEMORY_MODE, uid: this.uid };
+    return {
+      ...kind,
+      identity: this.#nextIdentity++,
+      modifiedAtMs: 0,
+      mode: DEFAULT_MEMORY_MODE,
+      uid: this.uid,
+    };
   }
 
   /** The entry a following call (`stat`, `readFile`) sees: symlinks resolved. */

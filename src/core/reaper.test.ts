@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import {
+  FakeClock,
+  FakeSystemStats,
+  JsonLinesLogger,
+  type Logger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import {
   type CleanupRule,
   type Config,
@@ -99,6 +106,7 @@ async function createHarness(
   options: {
     readonly cleanupConfig?: Config;
     readonly filesystem?: MemoryFilesystem;
+    readonly logger?: Logger;
     readonly tickMs?: number;
     readonly useLeaseEngineExecutor?: boolean;
   } = {},
@@ -156,6 +164,7 @@ async function createHarness(
     eventBus,
     filesystem,
     executor,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
     rules,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
@@ -368,6 +377,37 @@ describe("CleanupReaper", () => {
 
     expect(evaluate).toHaveBeenCalledTimes(2);
     expect(harness.driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+    harness.reaper.dispose();
+  });
+
+  it("A cleanup run that throws logs at error.", async () => {
+    const sink = new MemoryLogSink();
+    const rule: CleanupRule = {
+      evaluate: () => {
+        throw new Error("rule exploded");
+      },
+      name: "exploding-rule",
+    };
+    const harness = await createHarness(
+      [rule],
+      {},
+      { logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }), tickMs: 10_000 },
+    );
+    const expected = expect.objectContaining({
+      level: "error",
+      module: "daemon.reaper",
+      fields: { error: "Error: rule exploded", step: "cleanup" },
+    });
+
+    // An event-triggered run nobody awaits...
+    harness.eventBus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await flush();
+    expect(sink.records).toEqual([expected]);
+
+    // ...and a periodic tick's run.
+    harness.clock.advance(10_000);
+    await flush();
+    expect(sink.records).toEqual([expected, expected]);
     harness.reaper.dispose();
   });
 

@@ -33,6 +33,8 @@ import {
   workerViewSchema,
 } from "./schemas.js";
 
+export type Effect = "read" | "write";
+
 export interface OperationDefinition<
   Name extends string = string,
   InputSchema extends z.ZodTypeAny = z.ZodTypeAny,
@@ -40,6 +42,10 @@ export interface OperationDefinition<
 > {
   readonly name: Name;
   readonly role: Role | ((input: z.infer<InputSchema>) => Role);
+  /** Whether a call changes state. The daemon log records every `write` at its default level
+   * and a `read` only at `debug`. Never sent on the wire. Like `role`, it may depend on the
+   * already-validated input. */
+  readonly effect: Effect | ((input: z.infer<InputSchema>) => Effect);
   readonly input: InputSchema;
   readonly output: OutputSchema;
   /** Ownership/ownership-adjacent gating a session-aware dispatcher would run after the role
@@ -64,6 +70,7 @@ export function defineOperation<
 export const catalogGet = defineOperation({
   name: "catalog.get",
   role: "agent",
+  effect: "read",
   input: z.object({ platform: platformSchema.optional() }),
   output: z.object({ platforms: z.array(platformCatalogSchema) }),
 });
@@ -74,6 +81,7 @@ export const catalogGet = defineOperation({
 export const statusGet = defineOperation({
   name: "status.get",
   role: "agent",
+  effect: "read",
   input: z.object({}),
   output: z.object({
     // Agent-role, no ownership check (ADR §3) -- every device in the registry, not just ones
@@ -148,6 +156,7 @@ const leaseRequestInputSchema = z
 export const leaseRequest = defineOperation({
   name: "lease.request",
   role: "agent",
+  effect: "write",
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
   /**
@@ -176,6 +185,7 @@ export const leaseRequest = defineOperation({
 export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
+  effect: "write",
   input: z.object({ requesterId: z.string().optional() }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
@@ -213,6 +223,7 @@ export const leaseCancel = defineOperation({
 export const leaseRenew = defineOperation({
   name: "lease.renew",
   role: "agent",
+  effect: "write",
   input: z.object({ leaseId: z.string(), ttlMs: z.number().finite().positive().optional() }),
   output: leaseRecordSchema,
   authorize: ownsLease((input) => input.leaseId),
@@ -223,6 +234,7 @@ export const leaseRenew = defineOperation({
 export const leaseRelease = defineOperation({
   name: "lease.release",
   role: "agent",
+  effect: "write",
   input: z.object({ leaseId: z.string() }),
   output: z.object({ leaseId: z.string() }),
   authorize: ownsLease((input) => input.leaseId),
@@ -246,6 +258,7 @@ export const leaseRelease = defineOperation({
 export const driverPassthrough = defineOperation({
   name: "driver.passthrough",
   role: "agent",
+  effect: "read",
   input: z.object({ args: z.array(z.string()), tool: z.string().min(1) }),
   output: passthroughCommandSchema,
 });
@@ -290,6 +303,7 @@ export const driverPassthrough = defineOperation({
 export const deviceExec = defineOperation({
   name: "device.exec",
   role: "agent",
+  effect: "write",
   input: z
     .object({
       leaseId: z.string(),
@@ -366,6 +380,7 @@ export const deviceExec = defineOperation({
 export const leaseList = defineOperation({
   name: "lease.list",
   role: "agent",
+  effect: "read",
   input: z.object({}),
   output: z.object({ leases: z.array(statusLeaseSchema) }),
 });
@@ -400,6 +415,8 @@ export const doctorRun = defineOperation({
    */
   role: (input: z.infer<typeof doctorRunInputSchema>): Role =>
     input.fix || input.purgeOrphans ? "admin" : "agent",
+  effect: (input: z.infer<typeof doctorRunInputSchema>): Effect =>
+    input.fix || input.purgeOrphans ? "write" : "read",
   input: doctorRunInputSchema,
   output: doctorReportSchema,
 });
@@ -410,6 +427,7 @@ export const doctorRun = defineOperation({
 export const leaseReleaseAll = defineOperation({
   name: "lease.release-all",
   role: "admin",
+  effect: "write",
   input: z.object({}),
   output: z.object({ leaseIds: z.array(z.string()) }),
 });
@@ -434,6 +452,7 @@ export const leaseReleaseAll = defineOperation({
 export const listGet = defineOperation({
   name: "list.get",
   role: "admin",
+  effect: "read",
   input: z.object({ kind: z.enum(["devices", "leases", "rules"]).optional() }),
   output: z.union([
     z.array(deviceRecordSchema),
@@ -449,6 +468,7 @@ export const listGet = defineOperation({
 export const cleanupRun = defineOperation({
   name: "cleanup.run",
   role: "admin",
+  effect: (input: { dryRun?: boolean | undefined }): Effect => (input.dryRun ? "read" : "write"),
   input: z.object({ dryRun: z.boolean().optional(), rule: z.string().optional() }),
   output: z.array(proposalSchema),
 });
@@ -459,6 +479,7 @@ export const cleanupRun = defineOperation({
 export const nukeRun = defineOperation({
   name: "nuke.run",
   role: "admin",
+  effect: "write",
   input: z.object({ deleteDevices: z.boolean().optional() }),
   output: nukeReportSchema,
 });
@@ -469,6 +490,7 @@ export const nukeRun = defineOperation({
 export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
+  effect: "read",
   input: z.object({}),
   output: configSchema,
 });
@@ -484,6 +506,7 @@ export const configGet = defineOperation({
 export const daemonStop = defineOperation({
   name: "daemon.stop",
   role: "admin",
+  effect: "write",
   input: z.object({}),
   output: z.object({ stopping: z.literal(true) }),
 });
@@ -494,6 +517,7 @@ export const daemonStop = defineOperation({
 export const eventsReplay = defineOperation({
   name: "events.replay",
   role: "admin",
+  effect: "read",
   input: z.object({ sinceTs: z.number().optional() }),
   output: z.array(eventEnvelopeSchema),
 });
@@ -504,6 +528,7 @@ export const eventsReplay = defineOperation({
 export const eventsSubscribe = defineOperation({
   name: "events.subscribe",
   role: "admin",
+  effect: "read",
   input: z.object({}),
   output: z.object({ subscribed: z.literal(true), subscriptionId: z.string() }),
 });
@@ -514,6 +539,7 @@ export const eventsSubscribe = defineOperation({
 export const eventsUnsubscribe = defineOperation({
   name: "events.unsubscribe",
   role: "admin",
+  effect: "read",
   input: z.object({}),
   output: z.object({ subscribed: z.literal(false) }),
 });
@@ -531,6 +557,7 @@ export const eventsUnsubscribe = defineOperation({
 export const tokenCreate = defineOperation({
   name: "token.create",
   role: "admin",
+  effect: "write",
   input: z.object({ role: tokenRoleSchema, label: z.string().optional() }),
   output: z.object({ secret: z.string(), token: tokenRecordSchema }),
 });
@@ -539,6 +566,7 @@ export const tokenCreate = defineOperation({
 export const tokenList = defineOperation({
   name: "token.list",
   role: "admin",
+  effect: "read",
   input: z.object({}),
   output: z.object({ tokens: z.array(tokenRecordSchema) }),
 });
@@ -547,6 +575,7 @@ export const tokenList = defineOperation({
 export const tokenRevoke = defineOperation({
   name: "token.revoke",
   role: "admin",
+  effect: "write",
   input: z.object({ id: z.string() }),
   output: z.object({ revoked: z.boolean() }),
 });
@@ -567,6 +596,7 @@ export const tokenRevoke = defineOperation({
 export const workerList = defineOperation({
   name: "worker.list",
   role: "admin",
+  effect: "read",
   input: z.object({}),
   output: z.object({ workers: z.array(workerViewSchema) }),
 });
@@ -586,6 +616,7 @@ export const workerList = defineOperation({
 export const workerDrain = defineOperation({
   name: "worker.drain",
   role: "admin",
+  effect: "write",
   input: z.object({ workerId: z.string().min(1) }),
   output: z.object({ workerId: z.string(), drained: z.literal(true) }),
 });
@@ -594,6 +625,7 @@ export const workerDrain = defineOperation({
 export const workerUndrain = defineOperation({
   name: "worker.undrain",
   role: "admin",
+  effect: "write",
   input: z.object({ workerId: z.string().min(1) }),
   output: z.object({ workerId: z.string(), drained: z.literal(false) }),
 });
@@ -612,6 +644,7 @@ export const workerUndrain = defineOperation({
 export const workerRemove = defineOperation({
   name: "worker.remove",
   role: "admin",
+  effect: "write",
   input: z.object({ workerId: z.string().min(1) }),
   output: z.object({ workerId: z.string(), removed: z.boolean() }),
 });

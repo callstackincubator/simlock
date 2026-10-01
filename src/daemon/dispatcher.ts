@@ -85,6 +85,9 @@ export interface DispatcherOptions {
   readonly eventBus: EventBus;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
+  /** Classifies a thrown error for the `operation` log line (`classifyError` in production).
+   * Injected because `error-code.ts` imports this module. Unset or `undefined`: `INTERNAL`. */
+  readonly errorCode?: (error: unknown) => string | undefined;
   readonly nuke?: Nuke;
   /**
    * Builds the scoped command behind `simlock simctl` / `simlock adb` (ADR 0001, decision 7).
@@ -162,6 +165,7 @@ type WorkerOperationName = Exclude<OperationName, "daemon.stop" | GatewayOnlyOpe
  */
 export class Dispatcher {
   readonly #logger: Logger;
+  readonly #dispatchLogger: Logger;
   /**
    * Total over every operation but `daemon.stop` and the gateway-only ones. Deliberately *not*
    * a partial map: a declared operation whose handler was never written is otherwise invisible
@@ -180,6 +184,7 @@ export class Dispatcher {
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#dispatchLogger = this.#logger.child("dispatch");
     this.#handlers = {
       "catalog.get": this.#catalogGet,
       "status.get": this.#statusGet,
@@ -230,6 +235,11 @@ export class Dispatcher {
           operation: operationName,
           issues,
         });
+      },
+      observe: {
+        clock: this.options.clock,
+        logger: this.#dispatchLogger,
+        codeOf: (error) => this.options.errorCode?.(error) ?? "INTERNAL",
       },
     });
   }

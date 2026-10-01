@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect, createServer, Server } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver, OWNED_ROOT_MARKER_FILE, type OwnedRootError } from "../core/index.js";
 import { IosSimctlDriver } from "../drivers/ios/index.js";
@@ -25,6 +25,7 @@ import {
   discoverDrivers,
   emitComponentInstallDiagnostic,
   emitSlimDiagnostic,
+  processRunnerFor,
   startDaemon,
   wireComponentInstallLogging,
   type DriverDiscoveryContext,
@@ -954,6 +955,34 @@ describe("slim diagnostic bridging", () => {
   });
 });
 
+describe("processRunnerFor", () => {
+  async function runOnce(level: "debug" | "info") {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+    const inner = new ScriptedProcessRunner([
+      { match: { args: ["devices"], command: "adb" }, result: { code: 0, stderr: "", stdout: "" } },
+    ]);
+
+    await processRunnerFor(level, inner, logger, clock).run("adb", ["devices"]);
+    return sink.records.filter((record) => record.message === "process");
+  }
+
+  it("at log.level: info no process line is written", async () => {
+    expect(await runOnce("info")).toEqual([]);
+  });
+
+  it("at log.level: debug each command leaves one process line under daemon.process", async () => {
+    expect(await runOnce("debug")).toEqual([
+      expect.objectContaining({
+        level: "debug",
+        module: "daemon.process",
+        fields: expect.objectContaining({ command: "adb", args: ["devices"], code: 0 }),
+      }),
+    ]);
+  });
+});
+
 describe("wireComponentInstallLogging", () => {
   it('writes a durable structured log line under logger.child("components") when component.installed fires', () => {
     const clock = new FakeClock(1_000);
@@ -1149,6 +1178,39 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       expect((globalThis as Record<string, unknown>)[key]).toEqual(emulator);
     } finally {
       delete (globalThis as Record<string, unknown>)[key];
+    }
+  });
+
+  it("a throwing event subscriber writes one JSON line through the logger and nothing through console.error", async () => {
+    // The drivers module is the one seam that reaches the daemon's own bus from outside.
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers(context) {
+         context.eventBus.subscribe("daemon.started", () => {
+           throw new Error("subscriber broke");
+         });
+         return [];
+       }`,
+    );
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const { sink } = await start({ drivers: undefined });
+
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(sink.records.filter((record) => record.message === "Event handler failed")).toEqual([
+        expect.objectContaining({
+          level: "error",
+          module: "daemon.bus",
+          fields: expect.objectContaining({
+            event: "daemon.started",
+            seq: expect.any(Number),
+            message: "subscriber broke",
+            stack: expect.stringContaining("subscriber broke"),
+          }),
+        }),
+      ]);
+    } finally {
+      consoleError.mockRestore();
     }
   });
 

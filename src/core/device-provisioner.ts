@@ -1,4 +1,5 @@
-import type { Clock } from "../ports/index.js";
+import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
+import { stableError } from "./stable-error.js";
 import type { CapacityReservation } from "./capacity/index.js";
 import type { DeviceRecord, DeviceSpec } from "./domain.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
@@ -27,6 +28,7 @@ export interface DeviceProvisionerOptions {
   readonly decisions: SerializedDecision;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "destroy" | "readyProvisionedForLease">;
   readonly registry: DeviceProvisionerRegistry;
+  readonly logger?: Logger;
 }
 
 export interface ProvisionDeviceOptions {
@@ -36,7 +38,11 @@ export interface ProvisionDeviceOptions {
 
 /** Provisions a new driver device, registers it, and makes it ready. */
 export class DeviceProvisioner {
-  constructor(private readonly options: DeviceProvisionerOptions) {}
+  readonly #logger: Logger;
+
+  constructor(private readonly options: DeviceProvisionerOptions) {
+    this.#logger = options.logger?.child("device-provisioner") ?? new NoopLogger();
+  }
 
   async provision(spec: DeviceSpec, options: ProvisionDeviceOptions): Promise<ReadyDeviceHandoff> {
     const driver = this.options.catalog.get(spec.platform);
@@ -77,11 +83,22 @@ export class DeviceProvisioner {
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);
       return ready;
-    } catch {
+    } catch (error: unknown) {
+      // The caller only ever sees `BootTimeoutError`; the driver's own reason is kept here.
+      this.#logger.warn("new device failed to become ready", {
+        deviceId: device.id,
+        step: "boot",
+        error: stableError(error),
+      });
       try {
         await this.options.lifecycle.destroy(device, "lease-engine", "boot");
-      } catch {
+      } catch (destroyError: unknown) {
         // The registered record remains for reconcile when the driver cannot destroy it.
+        this.#logger.warn("destroying a device that failed to boot failed", {
+          deviceId: device.id,
+          step: "destroy",
+          error: stableError(destroyError),
+        });
       }
       throw new BootTimeoutError(device.id);
     } finally {

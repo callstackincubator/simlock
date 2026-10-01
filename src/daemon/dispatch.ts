@@ -10,15 +10,18 @@
  * it without importing `src/core` through the back door -- which is exactly what importing
  * `dispatcher.ts` would do (see `src/gateway/boundary.test.ts`).
  *
- * Nothing here imports from `src/core`, `src/drivers`, or `src/http`; the contract module and
- * its zod-inferred types are the whole dependency surface.
+ * Nothing here imports from `src/core`, `src/drivers`, or `src/http`; the contract module, its
+ * zod-inferred types, and the `Clock`/`Logger` port types are the whole dependency surface.
  */
 import type { z } from "zod";
 
+import type { Clock } from "../ports/clock.js";
+import type { Logger } from "../ports/logger.js";
 import {
   describeSchemaIssues,
   OPERATIONS,
   type AuthorizeContext,
+  type Effect,
   type OperationDefinition,
   type OperationName,
   type Role,
@@ -159,6 +162,21 @@ export interface DispatchPipeline {
   /** Called when a handler's result fails its contract output schema -- always a daemon-side
    * bug, so both implementations log it before the caller sees a generic `INTERNAL`. */
   readonly onOutputMismatch?: (operation: string, issues: readonly unknown[]) => void;
+  /** Writes the one `operation` line per call to the daemon log. Omitted, nothing is logged.
+   * A success is `info` for a `write` and `debug` for a `read`; a failure, including one
+   * refused before its handler, is `info`, or `error` when its code is `INTERNAL`. */
+  readonly observe?: DispatchObserver;
+}
+
+/**
+ * What `runDispatch` needs to write a call's `operation` line. `codeOf` is the transport's own
+ * error classifier, injected so this module never imports `src/core` (see the module comment).
+ */
+export interface DispatchObserver {
+  readonly clock: Clock;
+  readonly logger: Logger;
+  /** The error's code; `INTERNAL` for anything it does not recognize. */
+  codeOf(error: unknown): string;
 }
 
 /**
@@ -177,6 +195,80 @@ export async function runDispatch<Op extends OperationName>(
   session: DispatchSession,
   pipeline: DispatchPipeline,
 ): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
+  const observe = pipeline.observe;
+  if (observe === undefined) return dispatchSteps(operation, rawInput, session, pipeline, {});
+  const startedAt = observe.clock.now();
+  const call: ObservedCall = {};
+  try {
+    const output = await dispatchSteps(operation, rawInput, session, pipeline, call);
+    logOperation(observe, operation, session, call, observe.clock.now() - startedAt, { ok: true });
+    return output;
+  } catch (error) {
+    logOperation(observe, operation, session, call, observe.clock.now() - startedAt, {
+      ok: false,
+      error,
+    });
+    throw error;
+  }
+}
+
+/** What `dispatchSteps` learned about a call that its `operation` line reports. */
+interface ObservedCall {
+  input?: unknown;
+  effect?: Effect;
+}
+
+/**
+ * The one place an `operation` line is built (architecture rule 10). It names the operation,
+ * who asked, how long it took and how it ended -- the request, never what it changed (ADR
+ * 0006 §3). From the input only `leaseId` and `requesterId`, as claimed: nothing else in an
+ * input is safe to assume free of secrets, and nothing from the output is logged at all.
+ */
+function logOperation(
+  observe: DispatchObserver,
+  operation: string,
+  session: DispatchSession,
+  call: ObservedCall,
+  durationMs: number,
+  outcome: { readonly ok: true } | { readonly ok: false; readonly error: unknown },
+): void {
+  const fields: Record<string, unknown> = {
+    operation,
+    principal: session.principal,
+    role: session.role,
+    durationMs,
+    ...pickString(call.input, "leaseId"),
+    ...pickString(call.input, "requesterId"),
+  };
+  if (outcome.ok) {
+    if (call.effect === "write") observe.logger.info("operation", fields);
+    else observe.logger.debug("operation", fields);
+    return;
+  }
+  const { error } = outcome;
+  const code = observe.codeOf(error);
+  const failed = {
+    ...fields,
+    code,
+    message: error instanceof Error ? error.message : String(error),
+  };
+  if (code === "INTERNAL") observe.logger.error("operation", failed);
+  else observe.logger.info("operation", failed);
+}
+
+function pickString(input: unknown, key: string): Record<string, string> {
+  if (typeof input !== "object" || input === null) return {};
+  const value = (input as Record<string, unknown>)[key];
+  return typeof value === "string" ? { [key]: value } : {};
+}
+
+async function dispatchSteps<Op extends OperationName>(
+  operation: Op,
+  rawInput: unknown,
+  session: DispatchSession,
+  pipeline: DispatchPipeline,
+  call: ObservedCall,
+): Promise<z.infer<(typeof OPERATIONS)[Op]["output"]>> {
   // "Generic-over-a-closed-union" cast: `OPERATIONS[operation]` for a generic `Op` collapses to
   // a union across every operation, and TypeScript refuses to call a union of functions
   // (`.role`, `.authorize`) with a generically-typed argument even though each concrete
@@ -190,26 +282,10 @@ export async function runDispatch<Op extends OperationName>(
   }
 
   const input = parseDispatchInput(definition.input, rawInput ?? {});
-  const requiredRole: Role =
-    typeof definition.role === "function" ? definition.role(input) : definition.role;
-  if (!roleSatisfies(session.role, requiredRole)) {
-    throw new DispatchError(
-      "FORBIDDEN",
-      `Operation ${operation} requires role ${requiredRole}, session is ${session.role}`,
-    );
-  }
-  if (definition.authorize !== undefined) {
-    const context: AuthorizeContext = {
-      leaseRequesterId: pipeline.authorizeLookups?.leaseRequesterId ?? (() => undefined),
-      ownerId: pipeline.authorizeLookups?.ownerId ?? (() => undefined),
-      pendingRequestOwner: pipeline.authorizeLookups?.pendingRequestOwner ?? (() => undefined),
-      principal: session.principal,
-      role: session.role,
-    };
-    if (!definition.authorize(input, context)) {
-      throw new DispatchError("FORBIDDEN", `Not authorized for ${operation}`);
-    }
-  }
+  call.input = input;
+  call.effect =
+    typeof definition.effect === "function" ? definition.effect(input) : definition.effect;
+  checkAccess(operation, definition, input, session, pipeline);
 
   if (operation !== "status.get") {
     await pipeline.awaitReady?.();
@@ -222,6 +298,41 @@ export async function runDispatch<Op extends OperationName>(
     operation,
     pipeline.onOutputMismatch,
   ) as z.infer<(typeof OPERATIONS)[Op]["output"]>;
+}
+
+/** ADR 0003 §2's role check, then the operation's `authorize` hook. Throws `FORBIDDEN`. */
+function checkAccess(
+  operation: string,
+  definition: OperationDefinition,
+  input: unknown,
+  session: DispatchSession,
+  pipeline: DispatchPipeline,
+): void {
+  const requiredRole: Role =
+    typeof definition.role === "function" ? definition.role(input) : definition.role;
+  if (!roleSatisfies(session.role, requiredRole)) {
+    throw new DispatchError(
+      "FORBIDDEN",
+      `Operation ${operation} requires role ${requiredRole}, session is ${session.role}`,
+    );
+  }
+  if (definition.authorize?.(input, authorizeContext(session, pipeline)) === false) {
+    throw new DispatchError("FORBIDDEN", `Not authorized for ${operation}`);
+  }
+}
+
+/** An absent lookup answers `undefined`, which every hook treats as authorized on purpose (see
+ * `DispatchPipeline.authorizeLookups`). */
+function authorizeContext(session: DispatchSession, pipeline: DispatchPipeline): AuthorizeContext {
+  const none = (): undefined => undefined;
+  const lookups = pipeline.authorizeLookups;
+  return {
+    leaseRequesterId: lookups?.leaseRequesterId ?? none,
+    ownerId: lookups?.ownerId ?? none,
+    pendingRequestOwner: lookups?.pendingRequestOwner ?? none,
+    principal: session.principal,
+    role: session.role,
+  };
 }
 
 function roleSatisfies(sessionRole: Role, required: Role): boolean {

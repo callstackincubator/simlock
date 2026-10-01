@@ -1864,7 +1864,7 @@ describe("DaemonServer decorations", () => {
     // which `errorCode()` had no choice but to map to `INTERNAL` -- logged at error level
     // indistinguishably from a real bug. `DoctorUnavailableError`/`NukeUnavailableError` (ADR
     // 0003 §7: "one error class, closed codes") give this its own typed code, so it is now a
-    // *handled*, debug-level error like any other expected domain refusal.
+    // handled error like any other expected domain refusal: an info-level `operation` line.
     it("logs an unconfigured doctor as a handled DOCTOR_UNAVAILABLE, not an unhandled error", async () => {
       const { logger: log, sink } = logger();
       const harness = await createHarness({ logger: log });
@@ -1875,9 +1875,9 @@ describe("DaemonServer decorations", () => {
 
       expect(sink.records).toContainEqual(
         expect.objectContaining({
-          level: "debug",
-          message: "Handled request error",
-          fields: { code: "DOCTOR_UNAVAILABLE", type: "doctor.run" },
+          level: "info",
+          message: "operation",
+          fields: expect.objectContaining({ code: "DOCTOR_UNAVAILABLE", operation: "doctor.run" }),
         }),
       );
       expect(sink.records).not.toContainEqual(
@@ -1896,9 +1896,9 @@ describe("DaemonServer decorations", () => {
 
       expect(sink.records).toContainEqual(
         expect.objectContaining({
-          level: "debug",
-          message: "Handled request error",
-          fields: { code: "UNKNOWN_LEASE", type: "lease.release" },
+          level: "info",
+          message: "operation",
+          fields: expect.objectContaining({ code: "UNKNOWN_LEASE", operation: "lease.release" }),
         }),
       );
       expect(sink.records).not.toContainEqual(

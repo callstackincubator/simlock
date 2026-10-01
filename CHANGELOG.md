@@ -216,6 +216,13 @@ those changes add, alongside the breaking changes above.
   `EXEC_TIMEOUT` error code (CLI exit `10`, the code the other "ran out of
   time" outcome already uses, and HTTP `504`) rather than reporting the exit
   code the kill produced.
+- **daemon:** `daemon.log` records every request that changes state, on every
+  frontend, with who asked, how long it took and its error code; every
+  background failure Simlock handled by retrying or destroying a device, with
+  the device and the error; and at `log.level: debug`, read requests and every
+  device command with its exit code. A failing event subscriber is logged as a
+  JSON line. `simlock daemon logs --follow` prints new lines as they are
+  written, across rotations.
 
 ### ADR 0005: gateway and worker modes
 
