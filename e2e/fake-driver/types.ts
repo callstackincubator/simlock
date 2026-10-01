@@ -67,6 +67,14 @@ export interface FakeDriverPlatformScript {
    * version, which is also the default for every model.
    */
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as other names per model; none unless set. */
+  readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as installed images; the field is absent unless set. */
+  readonly images?: readonly {
+    readonly runtime: string;
+    readonly tag: string;
+    readonly abi: string;
+  }[];
   /** What `toolVersions` reports for `status.get`'s host facts. None by default. */
   readonly toolVersions?: readonly {
     readonly name: string;

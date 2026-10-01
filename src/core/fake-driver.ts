@@ -4,6 +4,7 @@ import {
   type DeviceRequest,
   type Driver,
   type DriverCatalogEntry,
+  type DriverCatalogImage,
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
@@ -67,6 +68,10 @@ export interface FakeDriverOptions {
    * version, which is also the default for every model.
    */
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as other names per model; none unless a test says otherwise. */
+  readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as installed images; the field is absent unless set. */
+  readonly images?: readonly DriverCatalogImage[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
@@ -117,6 +122,8 @@ export class FakeDriver implements Driver {
   #hangMakeReady = false;
   readonly #knownModels: Set<string> | undefined;
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
+  readonly #modelAliases: FakeDriverOptions["modelAliases"];
+  readonly #images: FakeDriverOptions["images"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
   readonly passthroughTool: string | undefined;
@@ -143,6 +150,8 @@ export class FakeDriver implements Driver {
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
     this.#modelRuntimes = options.modelRuntimes;
+    this.#modelAliases = options.modelAliases;
+    this.#images = options.images;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
     this.#legacyDevices = new Map(Object.entries(options.legacyDevices ?? {}));
@@ -313,6 +322,8 @@ export class FakeDriver implements Driver {
     const models = this.#knownModels === undefined ? [] : [...this.#knownModels];
     return {
       defaultRuntime: newestVersion(this.#availableOsVersions),
+      ...(this.#images === undefined ? {} : { images: [...this.#images] }),
+      modelAliases: { ...this.#modelAliases },
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, [...(this.#modelRuntimes?.[model] ?? runtimes)]]),
       ),

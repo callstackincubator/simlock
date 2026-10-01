@@ -364,6 +364,7 @@ describe("operation input/output round trips", () => {
               platform: "ios",
               models: ["iPhone 17"],
               runtimes: ["26.0"],
+              modelAliases: {},
               modelRuntimes: { "iPhone 17": ["26.0"] },
             },
           ],
@@ -393,6 +394,7 @@ describe("operation input/output round trips", () => {
           platform: "ios",
           models: ["iPhone 17"],
           runtimes: ["26.0"],
+          modelAliases: {},
           modelRuntimes: { "iPhone 17": ["26.0"] },
           modelWorkers: { "iPhone 17": ["wrk_1", "wrk_2"] },
           runtimeWorkers: { "26.0": ["wrk_1"] },
@@ -403,7 +405,7 @@ describe("operation input/output round trips", () => {
   });
 
   it("catalog.get rejects a platform entry without modelRuntimes", () => {
-    const entry = { platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"] };
+    const entry = { platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"], modelAliases: {} };
     expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
       /modelRuntimes/,
     );
@@ -412,6 +414,79 @@ describe("operation input/output round trips", () => {
         platforms: [{ ...entry, modelRuntimes: { "iPhone 17": ["26.0"] } }],
       }),
     ).not.toThrow();
+  });
+
+  it("catalog.get rejects a platform entry without modelAliases, and takes images as optional", () => {
+    const entry = {
+      platform: "android",
+      models: ["Pixel 8"],
+      runtimes: ["35"],
+      modelRuntimes: { "Pixel 8": ["35"] },
+    };
+    expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
+      /modelAliases/,
+    );
+    const parsed = OPERATIONS["catalog.get"].output.parse({
+      platforms: [
+        {
+          ...entry,
+          modelAliases: { "Pixel 8": ["pixel_8"] },
+          images: [{ runtime: "35", tag: "google_apis", abi: "arm64-v8a" }],
+        },
+      ],
+    });
+    expect(parsed.platforms[0]?.images).toEqual([
+      { runtime: "35", tag: "google_apis", abi: "arm64-v8a" },
+    ]);
+  });
+
+  it("catalog.get bounds every string and list in modelAliases and images", () => {
+    const base = {
+      platform: "android",
+      models: ["Pixel 8"],
+      runtimes: ["35"],
+      modelRuntimes: { "Pixel 8": ["35"] },
+      modelAliases: {},
+    };
+    const image = { runtime: "35", tag: "google_apis", abi: "arm64-v8a" };
+    const names = (count: number) => Array.from({ length: count }, (_, index) => `p${index}`);
+    const aliasedModels = (count: number) =>
+      Object.fromEntries(names(count).map((name) => [name, ["a"]]));
+    // Each pair is the largest value accepted and the smallest one refused.
+    const bounds = [
+      [
+        { modelAliases: { ["x".repeat(256)]: ["a"] } },
+        { modelAliases: { ["x".repeat(257)]: ["a"] } },
+      ],
+      [
+        { modelAliases: { "Pixel 8": ["x".repeat(256)] } },
+        { modelAliases: { "Pixel 8": ["x".repeat(257)] } },
+      ],
+      [{ modelAliases: { "Pixel 8": names(32) } }, { modelAliases: { "Pixel 8": names(33) } }],
+      [{ modelAliases: aliasedModels(4096) }, { modelAliases: aliasedModels(4097) }],
+      [
+        { images: [{ ...image, runtime: "x".repeat(128) }] },
+        { images: [{ ...image, runtime: "x".repeat(129) }] },
+      ],
+      [
+        { images: [{ ...image, tag: "x".repeat(128) }] },
+        { images: [{ ...image, tag: "x".repeat(129) }] },
+      ],
+      [
+        { images: [{ ...image, abi: "x".repeat(128) }] },
+        { images: [{ ...image, abi: "x".repeat(129) }] },
+      ],
+      [
+        { images: Array.from({ length: 1024 }, () => image) },
+        { images: Array.from({ length: 1025 }, () => image) },
+      ],
+    ] as const;
+    for (const [accepted, refused] of bounds) {
+      const parse = (extra: object) =>
+        OPERATIONS["catalog.get"].output.parse({ platforms: [{ ...base, ...extra }] });
+      expect(() => parse(accepted)).not.toThrow();
+      expect(() => parse(refused)).toThrow();
+    }
   });
 
   it("worker.remove reports whether there was a view to forget; drain never lies", () => {

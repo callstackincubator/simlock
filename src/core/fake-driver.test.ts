@@ -223,6 +223,7 @@ describe("FakeDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "26.5",
+      modelAliases: {},
       modelRuntimes: { "iPhone 16": ["18.4", "26.5"], "iPhone 17 Pro": ["18.4", "26.5"] },
       models: ["iPhone 16", "iPhone 17 Pro"],
       runtimes: ["18.4", "26.5"],
@@ -242,6 +243,26 @@ describe("FakeDriver", () => {
       "iPhone 16": ["18.4", "26.5"],
       "iPhone XS": ["18.4"],
     });
+  });
+
+  it("reports the other names and images its options name, and no images field without them", async () => {
+    const options = {
+      availableOsVersions: ["35"],
+      clock: new FakeClock(),
+      knownModels: ["Pixel 8"],
+      platform: "android" as const,
+    };
+    const scripted = new FakeDriver({
+      ...options,
+      images: [{ abi: "x86_64", runtime: "35", tag: "default" }],
+      modelAliases: { "Pixel 8": ["pixel_8"] },
+    });
+
+    await expect(scripted.listCatalog()).resolves.toMatchObject({
+      images: [{ abi: "x86_64", runtime: "35", tag: "default" }],
+      modelAliases: { "Pixel 8": ["pixel_8"] },
+    });
+    expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("images");
   });
 });
 

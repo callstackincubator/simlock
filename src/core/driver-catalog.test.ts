@@ -53,6 +53,7 @@ describe("DriverCatalog", () => {
     await expect(catalog.listCatalog()).resolves.toEqual([
       {
         defaultRuntime: "26.5",
+        modelAliases: {},
         modelRuntimes: { "iPhone 16": ["18.4", "26.5"] },
         models: ["iPhone 16"],
         platform: "ios",
@@ -60,6 +61,7 @@ describe("DriverCatalog", () => {
       },
       {
         defaultRuntime: "34",
+        modelAliases: {},
         modelRuntimes: { "Pixel 8": ["34"] },
         models: ["Pixel 8"],
         platform: "android",
@@ -77,6 +79,7 @@ describe("DriverCatalog", () => {
     await expect(catalog.listCatalog("ios")).resolves.toEqual([
       {
         defaultRuntime: "26.5",
+        modelAliases: {},
         modelRuntimes: {},
         models: [],
         platform: "ios",

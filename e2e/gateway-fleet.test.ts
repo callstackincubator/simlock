@@ -23,6 +23,12 @@ interface WorkerView {
     readonly platform: string;
     readonly models: readonly string[];
     readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
+    readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+    readonly images?: readonly {
+      readonly runtime: string;
+      readonly tag: string;
+      readonly abi: string;
+    }[];
   }[];
   readonly host?: {
     readonly os: string;
@@ -87,6 +93,33 @@ function connectionOf(workers: readonly WorkerView[], label: string): string | u
 function iosModels(json: unknown): readonly string[] {
   const platforms = (json as { platforms: { platform: string; models?: string[] }[] }).platforms;
   return platforms.find((entry) => entry.platform === "ios")?.models ?? [];
+}
+
+/** A worker's iOS catalog entry, by the worker's label. */
+function iosEntryOf(views: readonly WorkerView[], label: string) {
+  return views
+    .find((view) => view.label === label)
+    ?.catalog.find((entry) => entry.platform === "ios");
+}
+
+/** The Xcode entry in a worker's host facts, by the worker's label. */
+function xcodeOf(views: readonly WorkerView[], label: string) {
+  return views
+    .find((view) => view.label === label)
+    ?.host?.tools.find((tool) => tool.name === "xcode");
+}
+
+/** The worker named `label` has the same host facts and catalog in both lists. */
+function expectSameView(
+  actual: readonly WorkerView[],
+  expected: readonly WorkerView[],
+  label: string,
+): void {
+  const view = actual.find((candidate) => candidate.label === label);
+  const reference = expected.find((candidate) => candidate.label === label);
+  expect(view?.host).toBeDefined();
+  expect(view?.host).toEqual(reference?.host);
+  expect(view?.catalog).toEqual(reference?.catalog);
 }
 
 describe("gateway fleet", () => {
@@ -235,7 +268,7 @@ describe("gateway fleet", () => {
     await workerB.cli(["daemon", "stop"]);
   });
 
-  it("shows each worker's own model pairing in the worker list and their union in the catalog", async () => {
+  it("shows each worker's own pairings, other names, and images in the worker list and their union in the catalog", async () => {
     const port = await freeLoopbackPort();
     const gateway = await withDaemon({
       configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
@@ -245,14 +278,17 @@ describe("gateway fleet", () => {
     const { secret } = minted.json as { secret: string };
     const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
     // Both workers have the same model and the same two runtimes installed, and pair the model
-    // with a different one of them.
+    // with a different one of them. Each also accepts its own other name for it and reports its
+    // own image of one shared runtime.
     const installed = ["18.4", "26.0"];
     await withDaemon({
       configOverrides: { gateway: { ...uplink, label: "worker-a" } },
       driverScript: {
         ios: {
           availableOsVersions: installed,
+          images: [{ abi: "arm64", runtime: "26.0", tag: "default" }],
           knownModels: ["iPhone 16"],
+          modelAliases: { "iPhone 16": ["iphone-16-a"] },
           modelRuntimes: { "iPhone 16": ["18.4"] },
           toolVersions: [{ build: "16F6", name: "xcode", version: "16.4" }],
         },
@@ -263,7 +299,12 @@ describe("gateway fleet", () => {
       driverScript: {
         ios: {
           availableOsVersions: installed,
+          images: [
+            { abi: "arm64", runtime: "26.0", tag: "default" },
+            { abi: "x86_64", runtime: "26.0", tag: "default" },
+          ],
           knownModels: ["iPhone 16"],
+          modelAliases: { "iPhone 16": ["iphone-16-b"] },
           modelRuntimes: { "iPhone 16": ["26.0"] },
           toolVersions: [{ build: "17A324", name: "xcode", version: "26.0" }],
         },
@@ -277,17 +318,23 @@ describe("gateway fleet", () => {
         views.every((view) => view.connection === "connected" && view.catalog.length > 0),
       "both workers connected with their catalogs",
     );
-    const pairingOf = (label: string) =>
-      workers
-        .find((worker) => worker.label === label)
-        ?.catalog.find((entry) => entry.platform === "ios")?.modelRuntimes;
-    expect(pairingOf("worker-a")).toEqual({ "iPhone 16": ["18.4"] });
-    expect(pairingOf("worker-b")).toEqual({ "iPhone 16": ["26.0"] });
+    const entryOf = (label: string) => iosEntryOf(workers, label);
+    expect(entryOf("worker-a")).toMatchObject({
+      images: [{ abi: "arm64", runtime: "26.0", tag: "default" }],
+      modelAliases: { "iPhone 16": ["iphone-16-a"] },
+      modelRuntimes: { "iPhone 16": ["18.4"] },
+    });
+    expect(entryOf("worker-b")).toMatchObject({
+      images: [
+        { abi: "arm64", runtime: "26.0", tag: "default" },
+        { abi: "x86_64", runtime: "26.0", tag: "default" },
+      ],
+      modelAliases: { "iPhone 16": ["iphone-16-b"] },
+      modelRuntimes: { "iPhone 16": ["26.0"] },
+    });
 
     // Each worker's host facts sit beside its catalog, tools included once the worker has read
     // them; `GET /v1/workers` serves the same views.
-    const xcodeOf = (views: readonly WorkerView[], label: string) =>
-      views.find((view) => view.label === label)?.host?.tools.find((tool) => tool.name === "xcode");
     const withTools = await waitForWorkers(
       gateway,
       (views) =>
@@ -310,24 +357,21 @@ describe("gateway fleet", () => {
     });
     expect(response.status).toBe(200);
     const overHttp = ((await response.json()) as { workers: WorkerView[] }).workers;
-    for (const label of ["worker-a", "worker-b"]) {
-      const view = overHttp.find((candidate) => candidate.label === label);
-      const fromCli = withTools.find((candidate) => candidate.label === label);
-      expect(view?.host).toBeDefined();
-      expect(view?.host).toEqual(fromCli?.host);
-      expect(view?.catalog).toEqual(fromCli?.catalog);
-    }
+    for (const label of ["worker-a", "worker-b"]) expectSameView(overHttp, withTools, label);
     expect(xcodeOf(overHttp, "worker-a")?.version).toBe("16.4");
     expect(xcodeOf(overHttp, "worker-b")?.version).toBe("26.0");
 
     const catalog = await gateway.cli(["catalog", "--json"]);
     expect(catalog.code).toBe(0);
-    const ios = (
-      catalog.json as {
-        platforms: { platform: string; modelRuntimes: Record<string, string[]> }[];
-      }
-    ).platforms.find((entry) => entry.platform === "ios");
+    const ios = (catalog.json as { platforms: WorkerView["catalog"] }).platforms.find(
+      (entry) => entry.platform === "ios",
+    );
     expect(ios?.modelRuntimes).toEqual({ "iPhone 16": ["18.4", "26.0"] });
+    expect(ios?.modelAliases).toEqual({ "iPhone 16": ["iphone-16-a", "iphone-16-b"] });
+    expect(ios?.images).toEqual([
+      { abi: "arm64", runtime: "26.0", tag: "default" },
+      { abi: "x86_64", runtime: "26.0", tag: "default" },
+    ]);
   });
 
   it("gives a request with a mode that mode on either worker, and a request with none the default of the worker it landed on", async () => {

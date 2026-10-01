@@ -39,6 +39,50 @@ async function avdManagerList(): Promise<string[]> {
   return [...stdout.matchAll(/Name:\s*(\S+)/g)].map((match) => match[1] as string);
 }
 
+interface AndroidCatalogOutput {
+  readonly platforms: readonly {
+    readonly platform: string;
+    readonly models: readonly string[];
+    readonly runtimes: readonly string[];
+    readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+    readonly images?: readonly { runtime: string; tag: string; abi: string }[];
+  }[];
+}
+
+/**
+ * Checks the Android entry against the SDK on disk -- every listed image is installed, under a
+ * runtime the catalog lists -- and returns the AVD id a built-in profile is listed with as
+ * another name.
+ */
+function avdIdFromCatalog(output: AndroidCatalogOutput): string {
+  const android = output.platforms.find((platform) => platform.platform === "android");
+  if (android === undefined) {
+    throw new Error("simlock catalog reported no android platform -- SDK discovery failed");
+  }
+  expect(android.models.length).toBeGreaterThan(0);
+
+  const images = android.images ?? [];
+  expect(images.length, "expected the installed system images to be listed").toBeGreaterThan(0);
+  for (const image of images) {
+    expect(android.runtimes).toContain(image.runtime);
+    const path = join(
+      ANDROID_HOME,
+      "system-images",
+      `android-${image.runtime}`,
+      image.tag,
+      image.abi,
+    );
+    expect(existsSync(path), `listed image ${JSON.stringify(image)} is not installed`).toBe(true);
+  }
+
+  const aliases = android.models.flatMap((name) => android.modelAliases[name] ?? []);
+  expect(
+    aliases.length,
+    "expected a built-in profile with its AVD id as another name",
+  ).toBeGreaterThan(0);
+  return aliases[0] as string;
+}
+
 // Real emulator boots are slow and this SDK layout is host-specific, so this lane is
 // gated on an actually-discoverable Android SDK rather than just `process.platform`.
 describe.skipIf(!hasAndroidSdk)(
@@ -46,7 +90,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "catalog agrees with the SDK, a cold lease boots a real emulator, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
+      "catalog agrees with the SDK and lists an AVD id and an installed image, a cold lease by that AVD id boots a real emulator, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
         const env = await withDaemon({
@@ -60,16 +104,8 @@ describe.skipIf(!hasAndroidSdk)(
         try {
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
-          const platforms = (
-            catalog.json as { platforms: { platform: string; models: string[] }[] }
-          ).platforms;
-          const androidCatalog = platforms.find((platform) => platform.platform === "android");
-          expect(
-            androidCatalog,
-            "simlock catalog reported no android platform -- SDK discovery failed",
-          ).toBeDefined();
-          expect(androidCatalog?.models.length ?? 0).toBeGreaterThan(0);
-          const model = androidCatalog?.models[0] as string;
+          // The lease below asks by an AVD id the catalog lists as another name.
+          const model = avdIdFromCatalog(catalog.json as AndroidCatalogOutput);
 
           const lease = await env.cli(
             [

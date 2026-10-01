@@ -34,6 +34,7 @@ interface CatalogPlatform {
   readonly platform: string;
   readonly models: readonly string[];
   readonly runtimes: readonly string[];
+  readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
 }
 
 async function simctlDevices(): Promise<SimctlDevice[]> {
@@ -92,10 +93,12 @@ async function catalogModelAndOs(env: TestEnv): Promise<{ model: string; os: str
   const platforms = (catalog.json as { platforms: CatalogPlatform[] }).platforms;
   const iosCatalog = platforms.find((platform) => platform.platform === "ios");
   expect(iosCatalog, "simlock catalog reported no iOS platform").toBeDefined();
-  const model = iosCatalog?.models[0];
-  const os = iosCatalog?.runtimes[0];
-  expect(model, "simlock catalog reported no iOS models").toBeDefined();
-  expect(os, "simlock catalog reported no iOS runtimes").toBeDefined();
+  // A listed model and a listed runtime need not pair, so take a pair the catalog lists.
+  const model = iosCatalog?.models.find(
+    (name) => (iosCatalog.modelRuntimes[name]?.length ?? 0) > 0,
+  );
+  expect(model, "simlock catalog paired no iOS model with an installed runtime").toBeDefined();
+  const os = iosCatalog?.modelRuntimes[model as string]?.[0];
   return { model: model as string, os: os as string };
 }
 
