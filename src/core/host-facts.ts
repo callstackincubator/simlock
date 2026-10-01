@@ -14,6 +14,15 @@ import type { Platform } from "./domain.js";
 /** Fixed, not configured (ADR 0008 §9): tool versions change only when someone installs one. */
 export const HOST_FACTS_MAX_AGE_MS = 60_000;
 
+/**
+ * The bounds `status.get`'s `host` schema enforces (`hostFactsSchema` in the contract, which this
+ * module cannot import). A value past them would fail the daemon's own output check and take
+ * `status.get` down with it, so it is kept out here instead: a tool that does not fit is left
+ * out like one that cannot be read, and a host string that does not fit is cut to length.
+ */
+const MAX_HOST_STRING_LENGTH = 128;
+const MAX_HOST_TOOLS = 32;
+
 export interface HostToolVersion extends DriverToolVersion {
   readonly platform: Platform;
 }
@@ -44,7 +53,11 @@ export class HostFactsReader {
     this.#clock = options.clock;
     this.#drivers = options.drivers;
     this.#logger = options.logger ?? new NoopLogger();
-    this.#system = options.system;
+    this.#system = {
+      arch: options.system.arch.slice(0, MAX_HOST_STRING_LENGTH),
+      os: options.system.os.slice(0, MAX_HOST_STRING_LENGTH),
+      osVersion: options.system.osVersion.slice(0, MAX_HOST_STRING_LENGTH),
+    };
   }
 
   /**
@@ -59,7 +72,8 @@ export class HostFactsReader {
       ...this.#system,
       tools: [...this.#toolsByDriver.keys()]
         .sort((left, right) => left - right)
-        .flatMap((index) => this.#toolsByDriver.get(index) ?? []),
+        .flatMap((index) => this.#toolsByDriver.get(index) ?? [])
+        .slice(0, MAX_HOST_TOOLS),
     };
   }
 
@@ -79,7 +93,7 @@ export class HostFactsReader {
           const tools = await driver.toolVersions();
           this.#toolsByDriver.set(
             index,
-            tools.map((tool) => ({ ...tool, platform: driver.platform })),
+            tools.filter(fitsBounds).map((tool) => ({ ...tool, platform: driver.platform })),
           );
         } catch (error: unknown) {
           // The contract says a driver does not throw here. One that does keeps the tools it
@@ -93,4 +107,10 @@ export class HostFactsReader {
     );
     this.#readAt = this.#clock.now();
   }
+}
+
+function fitsBounds(tool: DriverToolVersion): boolean {
+  return [tool.name, tool.version, ...(tool.build === undefined ? [] : [tool.build])].every(
+    (value) => value.length > 0 && value.length <= MAX_HOST_STRING_LENGTH,
+  );
 }

@@ -827,6 +827,42 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
+  it("hands the Android driver the ABI of the host architecture it was given", async () => {
+    const filesystem = await androidSdk();
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+    // The profile list answers; the install that follows is refused once its argv is recorded.
+    const processRunner = new ScriptedProcessRunner([
+      {
+        match: { args: ["list", "device"], command: /avdmanager$/ },
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: 'Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n',
+        },
+      },
+    ]);
+
+    const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+      hostArch: "x64",
+      processRunner,
+    });
+    await drivers
+      .find((driver) => driver.platform === "android")
+      ?.resolveSpec(
+        { model: "Pixel 8", osVersion: "35", platform: "android" },
+        { allowDownload: true },
+      )
+      .catch(() => undefined);
+
+    expect(processRunner.calls.flatMap((call) => call.args)).toContain(
+      "system-images;android-35;google_apis;x86_64",
+    );
+  });
+
   /** The minimum layout `discoverSdk` accepts, in memory. */
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
@@ -847,15 +883,17 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     filesystem: MemoryFilesystem,
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
-    overrides: Partial<Pick<DriverDiscoveryContext, "androidEmulator" | "processRunner">> = {},
+    overrides: Partial<
+      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "processRunner">
+    > = {},
   ) {
     return discoverDrivers({
-      ...overrides,
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
       filesystem,
       hostArch: "arm64",
+      ...overrides,
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: INSTANCE_ID,

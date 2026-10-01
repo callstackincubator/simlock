@@ -1746,7 +1746,8 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     expect(output.stdout).toContain("wrk_1 (mac-mini-1): connected");
     expect(output.stdout).toContain("ios 1/2");
-    expect(output.stdout).toContain("1 lease(s)");
+    // No host facts on this view yet, so the line ends at the lease count.
+    expect(output.stdout).toContain("1 lease(s)\n");
   });
 
   it("prints each worker's operating system, architecture, and tool versions", async () => {
@@ -1976,6 +1977,8 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     await runCli(["status"], environment);
 
     expect(output.stdout).toContain("Daemon: running (gateway)");
+    // A gateway runs no drivers: its host line names the machine and nothing after it.
+    expect(output.stdout).toContain("Host: Linux 6.8.0 x64\n");
     expect(output.stdout).toContain("wrk_1: connected, drained");
     expect(output.stdout).toContain("Device dev_1 on wrk_1: leased, mode full");
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");

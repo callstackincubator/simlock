@@ -1100,14 +1100,19 @@ export class AndroidDriver implements Driver {
 
   /**
    * Revisions of the SDK packages this driver runs: the emulator, platform-tools (adb), and the
-   * command-line tools whose `sdkmanager` it uses. Read from each package's `source.properties`,
+   * command-line tools (or legacy SDK tools) whose `sdkmanager` it uses. Read from each package's `source.properties`,
    * so no tool is started; a package whose file cannot be read is left out.
    */
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
     const packages = [
       { name: "emulator", path: dirname(this.#sdk.emulator) },
       { name: "platform-tools", path: dirname(this.#sdk.adb) },
-      { name: "cmdline-tools", path: dirname(dirname(this.#sdk.sdkmanager)) },
+      // `<sdk>/cmdline-tools/<version>/bin/sdkmanager`, or the obsolete `<sdk>/tools/bin/` one
+      // this driver falls back to, which is a different package and is named as such.
+      {
+        name: this.#sdk.sdkmanager.includes("/cmdline-tools/") ? "cmdline-tools" : "tools",
+        path: dirname(dirname(this.#sdk.sdkmanager)),
+      },
     ];
     const versions = await Promise.all(
       packages.map(async ({ name, path }) => {

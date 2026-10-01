@@ -2989,14 +2989,27 @@ describe("IosSimctlDriver toolVersions()", () => {
     expect(runner.calls[0]?.options.timeoutMs).toBeGreaterThan(0);
   });
 
+  it("reports the Xcode version without a build when xcodebuild prints none", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["-version"], command: "xcodebuild" },
+        result: { code: 0, stderr: "", stdout: "Xcode 16.4\n" },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.toolVersions()).resolves.toEqual([{ name: "xcode", version: "16.4" }]);
+  });
+
   it("reports no Xcode entry when xcodebuild fails", async () => {
     const runner = new ScriptedProcessRunner([
       {
         match: { args: ["-version"], command: "xcodebuild" },
+        // Output that would parse, so only the exit code can be what turns it away.
         result: {
           code: 1,
-          stderr: "xcode-select: error: tool 'xcodebuild' requires Xcode",
-          stdout: "",
+          stderr: "xcodebuild: error: timed out",
+          stdout: "Xcode 16.4\nBuild version 16F6\n",
         },
       },
     ]);

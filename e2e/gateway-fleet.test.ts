@@ -310,11 +310,15 @@ describe("gateway fleet", () => {
     });
     expect(response.status).toBe(200);
     const overHttp = ((await response.json()) as { workers: WorkerView[] }).workers;
+    for (const label of ["worker-a", "worker-b"]) {
+      const view = overHttp.find((candidate) => candidate.label === label);
+      const fromCli = withTools.find((candidate) => candidate.label === label);
+      expect(view?.host).toBeDefined();
+      expect(view?.host).toEqual(fromCli?.host);
+      expect(view?.catalog).toEqual(fromCli?.catalog);
+    }
     expect(xcodeOf(overHttp, "worker-a")?.version).toBe("16.4");
-    expect(
-      overHttp.find((view) => view.label === "worker-b")?.catalog.find((e) => e.platform === "ios")
-        ?.modelRuntimes,
-    ).toEqual({ "iPhone 16": ["26.0"] });
+    expect(xcodeOf(overHttp, "worker-b")?.version).toBe("26.0");
 
     const catalog = await gateway.cli(["catalog", "--json"]);
     expect(catalog.code).toBe(0);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { OPERATIONS } from "../contract/index.js";
 import { FakeClock } from "../ports/index.js";
 import type { DriverToolVersion } from "./driver.js";
 import { HOST_FACTS_MAX_AGE_MS, HostFactsReader } from "./host-facts.js";
@@ -78,5 +79,53 @@ describe("HostFactsReader", () => {
       { name: "xcode", platform: "ios", version: "16.4" },
       { name: "emulator", platform: "android", version: "36.1.0" },
     ]);
+  });
+
+  it("leaves out a tool whose strings do not fit status.get's bounds, and cuts an over-long host string", async () => {
+    const reader = new HostFactsReader({
+      clock: new FakeClock(0),
+      drivers: [
+        {
+          platform: "android",
+          toolVersions: () =>
+            Promise.resolve([
+              { name: "emulator", version: "9".repeat(129) },
+              { name: "platform-tools", version: "36.0.0" },
+              { name: "cmdline-tools", version: "" },
+            ]),
+        },
+      ],
+      system: { ...SYSTEM, osVersion: "1".repeat(200) },
+    });
+
+    await reader.refresh();
+    const facts = reader.current();
+
+    expect(facts.tools).toEqual([
+      { name: "platform-tools", platform: "android", version: "36.0.0" },
+    ]);
+    expect(facts.osVersion).toHaveLength(128);
+    expect(() => OPERATIONS["status.get"].output.shape.host.parse(facts)).not.toThrow();
+  });
+
+  it("reports at most as many tools as status.get's bounds allow", async () => {
+    const reader = new HostFactsReader({
+      clock: new FakeClock(0),
+      drivers: [
+        {
+          platform: "android",
+          toolVersions: () =>
+            Promise.resolve(
+              Array.from({ length: 40 }, (_, index) => ({ name: `tool-${index}`, version: "1" })),
+            ),
+        },
+      ],
+      system: SYSTEM,
+    });
+
+    await reader.refresh();
+
+    expect(() => OPERATIONS["status.get"].output.shape.host.parse(reader.current())).not.toThrow();
+    expect(reader.current().tools).toHaveLength(32);
   });
 });

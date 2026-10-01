@@ -805,7 +805,7 @@ each platform tool its drivers use (`xcode` with its build; the Android
 `emulator`, `platform-tools` and `cmdline-tools`). A tool the worker cannot
 read is left out. `protocol` appears only on an `incompatible` worker and
 names both ranges, the worker's and the gateway's, so you can see which side
-to upgrade. Worker ids are UUIDs; the human listing below abbreviates them.
+to upgrade. Worker ids are UUIDs; the console example below shortens them to fit.
 
 `connection` is `connected`, `disconnected`, or `incompatible`. A **disconnected**
 worker keeps its last-known view (nothing is dispatched to it) until an

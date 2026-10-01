@@ -1,4 +1,4 @@
-import { release, type } from "node:os";
+import { arch, release, type } from "node:os";
 
 import { describe, expect, it } from "vitest";
 
@@ -17,7 +17,7 @@ describe("NodeHostInfo", () => {
 
     const system = await new NodeHostInfo({ platform: "darwin", processRunner }).read();
 
-    expect(system).toMatchObject({ os: "macOS", osVersion: "15.5" });
+    expect(system).toEqual({ arch: arch(), os: "macOS", osVersion: "15.5" });
     expect(processRunner.calls[0]?.options.timeoutMs).toBeGreaterThan(0);
   });
 
@@ -25,7 +25,8 @@ describe("NodeHostInfo", () => {
     const processRunner = new ScriptedProcessRunner([
       {
         match: { args: [], command: "sw_vers" },
-        result: { code: 1, stderr: "boom", stdout: "" },
+        // Output that would parse, so only the exit code can be what turns it away.
+        result: { code: 1, stderr: "boom", stdout: SW_VERS_OUTPUT },
       },
     ]);
 

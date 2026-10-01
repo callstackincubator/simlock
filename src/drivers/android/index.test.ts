@@ -2761,13 +2761,26 @@ describe("AndroidDriver toolVersions()", () => {
     ]);
   });
 
+  it("names the legacy SDK tools package as tools when its sdkmanager is the one in use", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.rm(`${sdk}/cmdline-tools`);
+    const legacyTools = `${sdk}/tools/bin`;
+    await filesystem.mkdirp(legacyTools);
+    await filesystem.writeFileAtomic(`${legacyTools}/avdmanager`, "binary");
+    await filesystem.writeFileAtomic(`${legacyTools}/sdkmanager`, "binary");
+    await filesystem.writeFileAtomic(`${sdk}/tools/source.properties`, "Pkg.Revision=26.1.1\n");
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    await expect(driver.toolVersions()).resolves.toEqual([{ name: "tools", version: "26.1.1" }]);
+  });
+
   it("omits a tool whose source.properties cannot be read", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.writeFileAtomic(`${sdk}/emulator/source.properties`, "Pkg.Revision=35.4.9\n");
-    // platform-tools has no source.properties; cmdline-tools has one without a revision.
+    // platform-tools has no source.properties; cmdline-tools has one with an empty revision.
     await filesystem.writeFileAtomic(
       `${sdk}/cmdline-tools/latest/source.properties`,
-      "Pkg.Desc=Android SDK Command-line Tools\n",
+      "Pkg.Desc=Android SDK Command-line Tools\nPkg.Revision=\n",
     );
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
