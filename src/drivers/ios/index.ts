@@ -53,6 +53,15 @@ const IOS_DOWNLOAD_FLOOR: readonly [number, number, number] = [16, 0, 0];
 // with headroom) -- checked before `xcodebuild -downloadPlatform` ever starts, so a full disk
 // fails fast instead of filling up mid-download.
 const IOS_RUNTIME_MIN_FREE_BYTES = 8 * 1024 ** 3;
+// Where macOS's own asset daemon keeps every simulator runtime it has ever downloaded, one
+// `<uuid>.asset` bundle per build. `simctl runtime delete` only unregisters a runtime from
+// CoreSimulator; the bundle it was mounted from stays here, marked never-collected, spending
+// the same free space `IOS_RUNTIME_MIN_FREE_BYTES` measures. Nothing Simlock may do can
+// reclaim it (issue #79), so the driver only ever reads this path.
+const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
+// Observed size of one downloaded runtime bundle, for an advisory that must not stat the
+// store: a `du` over three bundles is tens of gigabytes of directory walking per doctor run.
+const IOS_RUNTIME_ASSET_APPROX_SIZE = "roughly 7-8 GiB";
 // A cold `simctl boot` to `bootstatus` measures roughly 30s on a fast, idle machine and up to
 // a minute on a loaded or slower one. The upper end is the estimate, deliberately: this number
 // is what a waiting requester is quoted, and quoting 30s to someone who then waits 60s is the
@@ -262,9 +271,23 @@ interface Runtime {
   readonly identifier: string;
   readonly name: string;
   readonly version: string;
+  /**
+   * The exact build simctl reports for this runtime (`buildversion`), when it reports one.
+   * Two runtimes can share a marketing `version`, so this is what identifies which download
+   * a runtime is mounted from -- and it is optional because an older simctl omits the key.
+   */
+  readonly build?: string;
   readonly isAvailable: boolean;
   /** Device type identifiers this runtime pairs with -- authoritative once the runtime is installed. */
   readonly supportedDeviceTypeIds: ReadonlySet<string>;
+}
+
+/** One downloaded runtime bundle in the OS asset store, identified by its own metadata. */
+interface RuntimeAsset {
+  /** `MobileAssetProperties.SimulatorVersion` -- the marketing version, for the operator. */
+  readonly version: string;
+  /** `MobileAssetProperties.Build` -- what says which runtime this bundle actually holds. */
+  readonly build: string;
 }
 
 interface SimctlCatalog {
@@ -1186,6 +1209,106 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
+   * Everything only this driver can see about a standing condition of the machine it runs on:
+   * the slim-mode runtime gate, and downloaded runtimes whose disk nothing can reclaim. Both
+   * are read-only -- at most a `simctl list` runs, no boot, no download, no mutation --
+   * matching `listCatalog`'s own contract.
+   */
+  async advisories(): Promise<readonly DriverAdvisory[]> {
+    return [...(await this.#unreclaimableCacheAdvisories()), ...(await this.#slimAdvisories())];
+  }
+
+  /**
+   * Issue #79: a runtime download outlives the runtime. `simctl runtime delete` unregisters
+   * the runtime and leaves its ~7.5 GiB bundle in the OS asset store, from which CoreSimulator
+   * can re-register it later -- so an operator running `downloads.policy` on a long-lived host
+   * loses disk to bundles no Simlock command, and no `simctl` verb, can reclaim, while the
+   * download preflight silently measures the space they already spent. Reports one
+   * `runtime-cache-unreclaimable` advisory naming every downloaded runtime the catalog no
+   * longer installs, and points at the one supported way to reclaim them.
+   *
+   * Read-only, and quiet on anything it cannot read: the store belongs to macOS, is absent on
+   * a machine that never downloaded a runtime, and is a system directory this driver has no
+   * business failing `doctor` over. It reads each bundle's own metadata and never its size --
+   * measuring the store means walking tens of gigabytes on every `doctor` run.
+   */
+  async #unreclaimableCacheAdvisories(): Promise<readonly DriverAdvisory[]> {
+    const assets = await this.#downloadedRuntimeAssets();
+
+    if (assets.length === 0) {
+      return [];
+    }
+
+    const installed = (await this.#loadCatalog()).runtimes.filter((runtime) => runtime.isAvailable);
+    const orphans = assets.filter(
+      (asset) => !installed.some((runtime) => runtimeMountsAsset(runtime, asset)),
+    );
+
+    if (orphans.length === 0) {
+      return [];
+    }
+
+    // Oldest first, by version and then by build, so a store that has been collecting for
+    // months reads in the order the downloads happened rather than as a lexicographic jumble.
+    const described = [
+      ...new Map(
+        orphans.map((asset) => [`${asset.version} (${asset.build})`, asset] as const),
+      ).entries(),
+    ]
+      .sort(
+        ([, left], [, right]) =>
+          compareVersions(left.version, right.version) || left.build.localeCompare(right.build),
+      )
+      .map(([label]) => label);
+    const plural = described.length > 1;
+    return [
+      {
+        code: "runtime-cache-unreclaimable",
+        message:
+          `iOS ${described.join(", ")} ${plural ? "are" : "is"} no longer installed, but ` +
+          `${plural ? "their downloads" : "its download"} (${IOS_RUNTIME_ASSET_APPROX_SIZE} each) ` +
+          `still ${plural ? "occupy" : "occupies"} ${IOS_RUNTIME_ASSET_ROOT}; ` +
+          "`simctl runtime delete` does not reclaim that space and neither can Simlock -- " +
+          "remove the platform in Xcode's Settings -> Platforms to get it back",
+      },
+    ];
+  }
+
+  /**
+   * Every `*.asset` bundle in the store whose metadata says which runtime build it holds.
+   * A bundle whose `Info.plist` is missing, unreadable, or shaped differently than the ones
+   * this parses is left out rather than guessed at: an advisory that names a runtime the
+   * operator still has installed is worse than one that names one bundle too few.
+   */
+  async #downloadedRuntimeAssets(): Promise<readonly RuntimeAsset[]> {
+    let bundles: readonly string[];
+    try {
+      bundles = await this.#filesystem.readdir(IOS_RUNTIME_ASSET_ROOT);
+    } catch {
+      return [];
+    }
+
+    const assets: RuntimeAsset[] = [];
+    for (const bundle of bundles.filter((name) => name.endsWith(".asset"))) {
+      let contents: string;
+      try {
+        contents = await this.#filesystem.readFile(
+          join(IOS_RUNTIME_ASSET_ROOT, bundle, "Info.plist"),
+        );
+      } catch {
+        continue;
+      }
+
+      const asset = parseRuntimeAsset(contents);
+      if (asset !== undefined) {
+        assets.push(asset);
+      }
+    }
+
+    return assets;
+  }
+
+  /**
    * ADR point 4 (issue #87): slim mode is silent about the runtime gate everywhere except
    * `makeReady`'s per-boot `SlimSkippedFact` -- an operator who never leases a device on an
    * old runtime would otherwise have no way to learn slimming is doing nothing for it. Reports
@@ -1200,7 +1323,7 @@ export class IosSimctlDriver implements Driver {
    * runtime qualifies. Read-only: only `#loadCatalog` (a `simctl list`) runs, no boot, no
    * download, no mutation -- matching `listCatalog`'s own contract.
    */
-  async advisories(): Promise<readonly DriverAdvisory[]> {
+  async #slimAdvisories(): Promise<readonly DriverAdvisory[]> {
     if (this.#slim === undefined || !this.#slim.enabled) {
       return [];
     }
@@ -1750,6 +1873,7 @@ function parseRuntime(value: unknown): readonly Runtime[] {
 
   return [
     {
+      ...(typeof value.buildversion === "string" ? { build: value.buildversion } : {}),
       identifier: value.identifier,
       isAvailable: value.isAvailable,
       name: value.name,
@@ -1757,6 +1881,36 @@ function parseRuntime(value: unknown): readonly Runtime[] {
       version: value.version,
     },
   ];
+}
+
+/**
+ * Whether an installed runtime is the one this downloaded bundle holds -- the test for
+ * "deleting this bundle would delete a runtime the operator still has". Builds decide it
+ * whenever simctl reports one, because two runtimes can share a marketing version and a
+ * version match would then call an orphaned bundle installed. Marketing version is the
+ * fallback for a simctl that reports no build at all: it can only over-match, which costs an
+ * advisory that is not shown, never one that names a runtime still in use.
+ */
+function runtimeMountsAsset(runtime: Runtime, asset: RuntimeAsset): boolean {
+  return runtime.build === undefined
+    ? runtime.version === asset.version
+    : runtime.build === asset.build;
+}
+
+/**
+ * The build and marketing version out of an asset bundle's `Info.plist`. Read as text rather
+ * than through a plist parser: these are two flat string values in a file this driver must
+ * never write, and shelling out to `plutil` once per bundle would make a `doctor` run pay for
+ * every runtime ever downloaded. Both keys are read from `MobileAssetProperties` onwards, so a
+ * same-named key in the surrounding envelope cannot be mistaken for the asset's own.
+ */
+function parseRuntimeAsset(plist: string): RuntimeAsset | undefined {
+  const propertiesAt = plist.indexOf("<key>MobileAssetProperties</key>");
+  const properties = propertiesAt === -1 ? plist : plist.slice(propertiesAt);
+  const build = /<key>Build<\/key>\s*<string>([^<]+)<\/string>/.exec(properties)?.[1];
+  const version = /<key>SimulatorVersion<\/key>\s*<string>([^<]+)<\/string>/.exec(properties)?.[1];
+
+  return build === undefined || version === undefined ? undefined : { build, version };
 }
 
 function versionIntOr(value: unknown, fallback: number): number {

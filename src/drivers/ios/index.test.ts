@@ -2648,6 +2648,159 @@ describe("IosSimctlDriver", () => {
 
         await expect(driver.advisories()).resolves.toEqual([]);
       });
+
+      it("reports downloaded runtime assets whose runtime is not in the catalog, and only those (#79)", async () => {
+        // `simctl runtime delete` only unregisters a runtime from CoreSimulator: its ~7.5 GiB
+        // asset bundle stays in mobileassetd's store, tagged `NeverCollected`, on the same
+        // volume the download preflight measures. So the bytes stay spent and CoreSimulator can
+        // re-register the runtime from them later. The catalog here installs 18.4 and 26.5 while
+        // the store still holds two builds nobody deleted the assets for.
+        const filesystem = new MemoryFilesystem();
+        for (const [bundle, simulatorVersion, build] of [
+          ["a1.asset", "18.4", "22E238"],
+          ["b2.asset", "26.5", "23F79"],
+          ["c3.asset", "18.6", "22G86"],
+          ["d4.asset", "26.3", "23D60"],
+        ] as const) {
+          await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/${bundle}`);
+          await filesystem.writeFileAtomic(
+            `${IOS_RUNTIME_ASSET_ROOT}/${bundle}/Info.plist`,
+            assetInfoPlist(simulatorVersion, build),
+          );
+        }
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        // The advisory code and message shape are a proposal (see the triage report), so this
+        // pins only what any fix must do: name both orphan builds, name neither installed one.
+        const advisories = await driver.advisories();
+        const text = advisories.map((advisory) => advisory.message).join("\n");
+        expect(advisories.map((advisory) => advisory.code)).toContain(
+          "runtime-cache-unreclaimable",
+        );
+        expect(text).toContain("18.6");
+        expect(text).toContain("26.3");
+        expect(text).not.toContain("18.4");
+        expect(text).not.toContain("26.5");
+      });
+
+      it("tells two downloads of one marketing version apart by build, and reports only the uninstalled one (#79)", async () => {
+        // simctl reports `buildversion`, and a version match alone would call this bundle
+        // installed: 18.4 is in the catalog, but not from this download. Deleting the runtime
+        // and re-downloading the same version leaves exactly this -- a stale build nobody can
+        // reclaim, sitting behind an installed runtime of the same name.
+        const catalog = JSON.parse(listFixture) as {
+          devicetypes: unknown;
+          runtimes: { version: string }[];
+        };
+        const withBuilds = JSON.stringify({
+          devicetypes: catalog.devicetypes,
+          runtimes: catalog.runtimes.map((runtime) => ({
+            ...runtime,
+            buildversion: runtime.version === "18.4" ? "22E238" : "23F79",
+          })),
+        });
+        const filesystem = new MemoryFilesystem();
+        for (const [bundle, build] of [
+          ["a1.asset", "22E238"],
+          ["stale.asset", "22E247"],
+        ] as const) {
+          await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/${bundle}`);
+          await filesystem.writeFileAtomic(
+            `${IOS_RUNTIME_ASSET_ROOT}/${bundle}/Info.plist`,
+            assetInfoPlist("18.4", build),
+          );
+        }
+        const runner = new ScriptedProcessRunner([
+          { match: listInvocation, result: { code: 0, stderr: "", stdout: withBuilds } },
+        ]);
+        const driver = await createDriver(runner, new FakeClock(), filesystem);
+
+        const advisories = await driver.advisories();
+
+        expect(advisories).toEqual([
+          {
+            code: "runtime-cache-unreclaimable",
+            message: expect.stringContaining("22E247"),
+          },
+        ]);
+        expect(advisories[0]?.message).not.toContain("22E238");
+      });
+
+      it("names orphaned runtimes oldest first, not in string order (#79)", async () => {
+        // A store that has been collecting for months is read by a human deciding what to
+        // reclaim; "iOS 9.3, iOS 18.6" is that list, and a plain string sort inverts it.
+        const filesystem = new MemoryFilesystem();
+        for (const [bundle, simulatorVersion, build] of [
+          ["new.asset", "18.6", "22G86"],
+          ["old.asset", "9.3", "13E233"],
+        ] as const) {
+          await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/${bundle}`);
+          await filesystem.writeFileAtomic(
+            `${IOS_RUNTIME_ASSET_ROOT}/${bundle}/Info.plist`,
+            assetInfoPlist(simulatorVersion, build),
+          );
+        }
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        const message = (await driver.advisories())[0]?.message ?? "";
+
+        expect(message.indexOf("9.3")).toBeLessThan(message.indexOf("18.6"));
+      });
+
+      it("reports nothing when every downloaded asset belongs to an installed runtime (#79)", async () => {
+        const filesystem = new MemoryFilesystem();
+        await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/a1.asset`);
+        await filesystem.writeFileAtomic(
+          `${IOS_RUNTIME_ASSET_ROOT}/a1.asset/Info.plist`,
+          assetInfoPlist("18.4", "22E238"),
+        );
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        await expect(driver.advisories()).resolves.toEqual([]);
+      });
+
+      it("stays quiet, and asks simctl nothing, when the asset store cannot be read (#79)", async () => {
+        // The store is macOS's, not Simlock's: absent on a machine that never downloaded a
+        // runtime, and readable only to whoever the OS says. Neither is a `doctor` failure --
+        // and with nothing to report, the `simctl list` that would classify the bundles is
+        // never worth running, which is why the runner below scripts no invocation at all.
+        const filesystem = new MemoryFilesystem();
+        filesystem.defineFailure(IOS_RUNTIME_ASSET_ROOT, "EACCES");
+        const runner = new ScriptedProcessRunner([]);
+        const driver = await createDriver(runner, new FakeClock(), filesystem);
+
+        await expect(driver.advisories()).resolves.toEqual([]);
+        expect(runner.calls).toEqual([]);
+      });
+
+      it("skips an asset bundle it cannot identify by build rather than naming it (#79)", async () => {
+        // The build is what decides whether a bundle's runtime is installed, so a bundle
+        // without one cannot be classified -- and guessing would send the operator to delete
+        // a runtime they are still using. `missing-build.asset` below names iOS 19.9 and
+        // nothing else; the store around it is still reported.
+        const filesystem = new MemoryFilesystem();
+        await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/missing-build.asset`);
+        await filesystem.writeFileAtomic(
+          `${IOS_RUNTIME_ASSET_ROOT}/missing-build.asset/Info.plist`,
+          assetInfoPlist("19.9", "22H1").replace("<key>Build</key><string>22H1</string>", ""),
+        );
+        await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/orphan.asset`);
+        await filesystem.writeFileAtomic(
+          `${IOS_RUNTIME_ASSET_ROOT}/orphan.asset/Info.plist`,
+          assetInfoPlist("18.6", "22G86"),
+        );
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        const advisories = await driver.advisories();
+
+        expect(advisories).toEqual([
+          {
+            code: "runtime-cache-unreclaimable",
+            message: expect.stringContaining("18.6"),
+          },
+        ]);
+        expect(advisories[0]?.message).not.toContain("19.9");
+      });
     });
   });
 });
@@ -2789,4 +2942,33 @@ function scriptedListRunner(): ScriptedProcessRunner {
       result: { code: 0, stderr: "", stdout: listFixture },
     },
   ]);
+}
+
+/**
+ * Where macOS keeps the simulator runtimes `xcodebuild -downloadPlatform` fetches. Spelled out
+ * here rather than imported: no driver code knows about this path yet, and a test that failed to
+ * compile would prove nothing (#79).
+ */
+const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
+
+/**
+ * mobileassetd's own metadata for one downloaded simulator runtime, cut down to the keys that
+ * identify it. `NeverCollected` is verbatim from a real bundle on macOS 26.6.1 / Xcode 27: the
+ * store is told not to reclaim these, which is why deleting the runtime does not shrink it.
+ */
+function assetInfoPlist(simulatorVersion: string, build: string): string {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<plist version="1.0">',
+    "<dict>",
+    "  <key>MobileAssetProperties</key>",
+    "  <dict>",
+    "    <key>__AssetDefaultGarbageCollectionBehavior</key><string>NeverCollected</string>",
+    `    <key>Build</key><string>${build}</string>`,
+    `    <key>SimulatorVersion</key><string>${simulatorVersion}</string>`,
+    "  </dict>",
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
 }
