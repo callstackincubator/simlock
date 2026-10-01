@@ -239,9 +239,9 @@ export class FakeDispatcher {
 /** What the dispatcher's `lease.request` handler hands the coordinator for this input. */
 function fakeRequestOptions(
   input: {
-    readonly owner?: string;
-    readonly requesterId?: string;
-    readonly idempotencyKey?: string;
+    readonly owner?: string | undefined;
+    readonly requesterId?: string | undefined;
+    readonly idempotencyKey?: string | undefined;
   },
   session: DispatchSession,
 ): LeaseRequestOptions {
