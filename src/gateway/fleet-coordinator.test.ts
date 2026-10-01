@@ -192,8 +192,8 @@ describe("FleetLeaseCoordinator stored requests", () => {
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 
-  it("reads a request back through its in-memory book once the fleet grants it", async () => {
-    const { coordinator, directory, workers } = harness();
+  it("reads a request back through its in-memory book once the fleet grants it, and names it on lease.requested", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
@@ -212,6 +212,12 @@ describe("FleetLeaseCoordinator stored requests", () => {
       state: "granted",
     });
     expect(coordinator.requests.requestIdForLease(grant.lease.id)).toBe(requestId);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.requested")
+        .map((event) => event.payload),
+    ).toMatchObject([{ requestId }]);
   });
 });
 

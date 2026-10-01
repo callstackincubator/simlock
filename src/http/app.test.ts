@@ -574,6 +574,50 @@ describe("GET /v1/lease-requests/:id across a daemon restart", () => {
   });
 });
 
+describe("lease-request ownership", () => {
+  /** A request sent over another frontend under `tok_agent`'s requester id, by `tok_other`. */
+  async function requestOwnedByOther(dispatcher: FakeDispatcher): Promise<string> {
+    let id: string | undefined;
+    void dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", platform: "ios", requesterId: "tok_agent" },
+      {
+        manageEventSubscription: () => undefined,
+        onRequestAdmitted: (admitted) => (id = admitted),
+        principal: "tok_other",
+        role: "agent",
+      },
+    );
+    await waitForDispatch(dispatcher, "lease.request");
+    if (id === undefined) throw new Error("expected the request to be stored");
+    return id;
+  }
+
+  it("answers 403 to a GET from the token named as requester, and 200 to the token that sent it", async () => {
+    const { app, dispatcher } = buildHarness();
+    const id = await requestOwnedByOther(dispatcher);
+
+    const named = await app.request(`/v1/lease-requests/${id}`, { headers: agentAuth });
+    const sender = await app.request(`/v1/lease-requests/${id}`, { headers: otherAgentAuth });
+
+    expect(named.status).toBe(403);
+    expect(sender.status).toBe(200);
+  });
+
+  it("answers 403 to a DELETE from a token that did not send the request", async () => {
+    const { app, dispatcher } = buildHarness();
+    const id = await requestOwnedByOther(dispatcher);
+    dispatcher.handlers["lease.cancel"] = () => ({ result: "not-cancellable" });
+
+    const response = await app.request(`/v1/lease-requests/${id}`, {
+      headers: agentAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(403);
+  });
+});
+
 describe("DELETE /v1/lease-requests/:id", () => {
   it("404s an unknown request id", async () => {
     const { app } = buildHarness();

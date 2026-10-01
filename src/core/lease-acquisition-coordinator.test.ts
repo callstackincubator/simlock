@@ -783,7 +783,7 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     expect(second.lease.id).toBe(first.lease.id);
   });
 
-  it("stores a request that carries no idempotency key", async () => {
+  it("stores a request that carries no idempotency key, and names it on lease.requested", async () => {
     const harness = await createHarness();
 
     await harness.coordinator.request(request, { ownerId: "agent", requesterId: "agent" });
@@ -792,6 +792,13 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     expect(harness.registry.leaseRequests()).toMatchObject([
       { requesterId: "agent", state: "granted" },
     ]);
+    const [stored] = harness.registry.leaseRequests();
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.requested")
+        .map((event) => event.payload),
+    ).toMatchObject([{ requestId: stored?.id, requester: "agent" }]);
     expect(harness.registry.leaseRequests()[0]).not.toHaveProperty("idempotencyKey");
   });
 });

@@ -70,8 +70,9 @@ you get that result. Either way it never grants you a second lease. A result
 is never worked out again: a request that failed stays failed under its key,
 so use a new key to try again. Keys last for `lease.requestRetentionMs` after
 the request finishes. The same key with a different device is
-`IDEMPOTENCY_CONFLICT`, and the same key from a different connection
-principal is `FORBIDDEN`. A request still waiting when the daemon restarts
+`IDEMPOTENCY_CONFLICT`. Keys belong to a requester id, and a repeat must come
+from the same connection principal that sent the request: the same key and
+requester id from a different principal is `FORBIDDEN`. A request still waiting when the daemon restarts
 ends as failed (`INTERNAL`, with a message saying so).
 
 `connectSimlockAdmin` additionally accepts `credential` — an operator token

@@ -154,6 +154,7 @@ const leaseRequestInputSchema = z
   })
   .strict();
 
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseRequest = defineOperation({
   name: "lease.request",
   role: "agent",

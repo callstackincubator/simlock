@@ -863,28 +863,6 @@ describe("LeaseEngine", () => {
     expect(callbackFailure.driver.calls.map((call) => call.operation)).toContain("makeReady");
   });
 
-  it("detaches progress from a queued request without cancelling its lease", async () => {
-    const harness = await createHarness();
-    const holder = await harness.engine.request(request, {
-      ownerId: "holder",
-      requesterId: "holder",
-    });
-    const progress: string[] = [];
-    const queued = harness.engine.request(request, {
-      onProgress: (update) => progress.push(update.stage),
-      requesterId: "queued",
-      ownerId: "queued",
-    });
-    await flush();
-
-    await harness.engine.detachQueuedProgress("queued");
-    await harness.engine.release(holder.lease.id, "explicit");
-    await expect(queued).resolves.toMatchObject({
-      lease: { ownerId: "queued", requesterId: "queued" },
-    });
-    expect(progress).toEqual(["queued"]);
-  });
-
   it("cancels a queued request through the QueueControl facade and frees the requester for a later grant", async () => {
     const harness = await createHarness();
     const holder = await harness.engine.request(request, {

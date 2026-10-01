@@ -162,12 +162,34 @@ export class LeaseRequestTracker {
     return new Promise((resolve) => {
       let requestId: string | undefined;
       let settled = false;
-      const settleCreated = (state?: RequestSnapshot): void => {
+      const settleCreated = (): void => {
         if (settled || requestId === undefined) return;
         const view = this.get(requestId);
         if (view === undefined) return;
         settled = true;
-        resolve({ kind: "created", view: state === undefined ? view : { ...view, state } });
+        resolve({ kind: "created", view });
+      };
+      // The grant is the answer whatever the record says, so this one always settles: from
+      // the stored record when it is there to read, from the request itself when it is not
+      // (pruned already, or never named).
+      const settleGranted = (state: RequestSnapshot): void => {
+        if (settled) return;
+        settled = true;
+        if (requestId === undefined) {
+          resolve({
+            error: new Error("lease.request granted without naming its request"),
+            kind: "rejected",
+          });
+          return;
+        }
+        const view = this.get(requestId) ?? {
+          createdAt: new Date(this.options.clock.now()).toISOString(),
+          id: requestId,
+          ownerId: identity.requesterId,
+          requesterId: identity.requesterId,
+          state,
+        };
+        resolve({ kind: "created", view: { ...view, state } });
       };
 
       const session = buildHttpSession(identity, {
@@ -205,7 +227,7 @@ export class LeaseRequestTracker {
           // The grant answers before its record is written (the daemon stores the result
           // once the wait settles), so the `201` is built from the grant itself.
           (grant) =>
-            settleCreated({
+            settleGranted({
               lease: buildLeasePayload(
                 grant.device,
                 grant.lease,

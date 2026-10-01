@@ -693,6 +693,39 @@ describe("GatewayDispatcher", () => {
       expect((grant as { lease: { ownerId: string } }).lease.ownerId).toBe("agent-7");
       expect(leaseIndex.ownerId(gatewayLeaseId)).toBe("agent-7");
     });
+
+    it("lease.request: names the stored request to the session and replays it under the same idempotency key, forwarding nothing twice", async () => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const admitted: [string, boolean][] = [];
+      const input = { idempotencyKey: "key-1", model: "iPhone 17", platform: "ios" } as const;
+      const track = session({
+        onRequestAdmitted: (id, replayed) => admitted.push([id, replayed]),
+        principal: "agent-1",
+        role: "agent",
+      });
+
+      const first = await dispatcher.dispatch("lease.request", input, track);
+      const repeat = await dispatcher.dispatch("lease.request", input, track);
+
+      expect((repeat as { lease: { id: string } }).lease.id).toBe(
+        (first as { lease: { id: string } }).lease.id,
+      );
+      expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+      expect(admitted).toEqual([
+        [expect.stringMatching(/^req_/), false],
+        [admitted[0]?.[0], true],
+      ]);
+    });
   });
 
   it("has an answer for every operation the contract declares", async () => {

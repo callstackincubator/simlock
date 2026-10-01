@@ -3,13 +3,15 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../bus/index.js";
 import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import {
+  IdempotencyConflictError,
   InMemoryLeaseRequestStore,
   LeaseRequestBook,
   type LeaseRequestLimits,
+  type LeaseRequestStore,
 } from "./lease-request-book.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import type { LeaseProgress } from "./wait-queue.js";
+import { RequestCancelledError } from "./wait-queue.js";
 
 const statePath = "/home/agent/.simlock/state.json";
 const request = { model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
@@ -173,36 +175,153 @@ describe("Registry lease requests", () => {
   });
 });
 
-describe("LeaseRequestBook callers", () => {
-  it("stops reporting progress to a requester's callers once they are detached, and keeps telling the record's watchers", async () => {
-    const clock = new FakeClock(1_000);
-    const book = new LeaseRequestBook<{ readonly lease: { readonly id: string } }>({
-      decisions: new SerializedDecision(),
-      describeFailure: () => failure,
-      store: new InMemoryLeaseRequestStore({
-        clock,
-        idGenerator: { generate: () => "1" },
-        limits: { maxRecords: 10, retentionMs: 60_000 },
-      }),
-    });
-    const heard: LeaseProgress[] = [];
-    let report: ((progress: LeaseProgress) => void) | undefined;
-    const { id } = await book.admit(
-      request,
-      { onProgress: (progress) => heard.push(progress), ownerId: "agent", requesterId: "agent" },
-      (_id, onProgress) => {
-        report = onProgress;
-        return new Promise(() => undefined);
-      },
+describe("Registry lease-request load", () => {
+  const valid = {
+    createdAt: 1_000,
+    id: "req_valid",
+    ownerId: "agent",
+    request,
+    requesterId: "agent",
+    state: "open",
+  };
+
+  async function loadWith(leaseRequests: unknown) {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({ devices: [], leaseRequests, leases: [] }),
     );
-    let watched = 0;
-    book.watch(id, () => (watched += 1));
+    return loadRegistry({ filesystem });
+  }
 
-    book.detachCallers("agent");
-    report?.({ queuePosition: 1, stage: "queued" });
+  it.each([
+    ["a failed record whose failure has no code", { failure: { message: "x" }, state: "failed" }],
+    ["a settled record without its settlement time", { settledAt: undefined, state: "cancelled" }],
+    ["a request whose full is not a boolean", { request: { ...request, full: "yes" } }],
+  ])("drops %s and loads the rest", async (_label, broken) => {
+    const { registry } = await loadWith([
+      { ...valid, id: "req_broken", settledAt: 1_000, ...broken },
+      valid,
+    ]);
 
-    expect(heard).toEqual([]);
-    expect(watched).toBe(1);
-    expect(book.get(id)?.progress).toEqual({ queuePosition: 1, stage: "queued" });
+    expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
+  });
+
+  it("loads with no requests when the stored list is not a list, keeping every device", async () => {
+    const { registry } = await loadWith({ not: "a list" });
+
+    expect(registry.leaseRequests()).toEqual([]);
+  });
+
+  it("writes back a field it does not know on a stored request", async () => {
+    const { filesystem, registry } = await loadWith([{ ...valid, fromANewerDaemon: 7 }]);
+
+    await registry.createLeaseRequest(newRequest("other"));
+
+    const state = JSON.parse(await filesystem.readFile(statePath)) as {
+      readonly leaseRequests: readonly Record<string, unknown>[];
+    };
+    expect(state.leaseRequests[0]).toMatchObject({ fromANewerDaemon: 7, id: "req_valid" });
+  });
+});
+
+type Grant = { readonly lease: { readonly id: string } };
+
+function bookOver(store: LeaseRequestStore<Grant>) {
+  return new LeaseRequestBook<Grant>({
+    decisions: new SerializedDecision(),
+    describeFailure: (error) => ({
+      code: "INTERNAL",
+      message: error instanceof Error ? error.message : String(error),
+    }),
+    store,
+  });
+}
+
+function memoryStore(): InMemoryLeaseRequestStore<Grant> {
+  let next = 0;
+  return new InMemoryLeaseRequestStore({
+    clock: new FakeClock(1_000),
+    idGenerator: { generate: () => `${next++}` },
+    limits: { maxRecords: 100, retentionMs: 60_000 },
+  });
+}
+
+async function settled(): Promise<void> {
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+}
+
+const keyed = { idempotencyKey: "key-1", ownerId: "agent", requesterId: "agent" } as const;
+
+describe("LeaseRequestBook", () => {
+  it.each([
+    ["a different osVersion", { ...request, osVersion: "18.0" }],
+    ["no osVersion where one was named", { model: request.model, platform: request.platform }],
+    ["full where none was asked", { ...request, full: true }],
+  ])("refuses a repeat naming %s as an idempotency conflict", async (_label, different) => {
+    const book = bookOver(memoryStore());
+    await book.admit(request, keyed, () => Promise.resolve({ lease: { id: "lse_1" } }));
+    await settled();
+
+    expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
+  });
+
+  it("treats full: false and an omitted full as the same request", async () => {
+    const book = bookOver(memoryStore());
+    await book.admit(request, keyed, () => Promise.resolve({ lease: { id: "lse_1" } }));
+    await settled();
+
+    await expect(book.replay({ ...request, full: false }, keyed)).resolves.toEqual({
+      lease: { id: "lse_1" },
+    });
+  });
+
+  it("replays a cancelled request as cancelled", async () => {
+    const book = bookOver(memoryStore());
+    const { id, promise } = await book.admit(request, keyed, () =>
+      Promise.reject(new RequestCancelledError("req_0")),
+    );
+    await promise.catch(() => undefined);
+    await settled();
+
+    expect(book.get(id)?.record.state).toBe("cancelled");
+    await expect(book.replay(request, keyed)).rejects.toBeInstanceOf(RequestCancelledError);
+  });
+
+  it("stores a request whose start throws as failed, so a repeat gets that failure", async () => {
+    const book = bookOver(memoryStore());
+    const { id, promise } = await book.admit(request, keyed, () => {
+      throw new Error("the queue refused it");
+    });
+    await expect(promise).rejects.toThrow("the queue refused it");
+    await settled();
+
+    expect(book.get(id)?.record).toMatchObject({
+      failure: { message: "the queue refused it" },
+      state: "failed",
+    });
+    await expect(book.replay(request, keyed)).rejects.toMatchObject({
+      message: "the queue refused it",
+      name: "ReplayedLeaseRequestError",
+    });
+  });
+
+  it("keeps answering a repeat from the settled wait when its result cannot be written", async () => {
+    const inner = memoryStore();
+    const store: LeaseRequestStore<Grant> = {
+      createLeaseRequest: (input) => inner.createLeaseRequest(input),
+      leaseRequests: () => inner.leaseRequests(),
+      settleLeaseRequest: () => Promise.reject(new Error("disk full")),
+    };
+    const book = bookOver(store);
+    const { id } = await book.admit(request, keyed, () =>
+      Promise.resolve({ lease: { id: "lse_1" } }),
+    );
+    await settled();
+
+    expect(inner.leaseRequests()[0]?.state).toBe("open");
+    await expect(book.replay(request, keyed)).resolves.toEqual({ lease: { id: "lse_1" } });
+    expect(book.get(id)?.record.state).toBe("granted");
   });
 });

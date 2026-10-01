@@ -92,7 +92,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly queue: AcquisitionQueue;
   readonly registry: LeaseAcquisitionRegistry;
   /** Stores each request before it is queued and answers repeats of it (`LeaseRequestBook`). */
-  readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "detachCallers" | "replay">;
+  readonly requests: Pick<LeaseRequestBook<LeaseGrant>, "admit" | "replay">;
 }
 
 interface AcquisitionWaiter extends Waiter {
@@ -279,13 +279,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
 
     await this.#drive(waiter);
-  }
-
-  /** The requester's connection went away: stop reporting to it. Its request keeps going. */
-  async detachQueuedProgress(requesterId: string): Promise<void> {
-    await this.options.decisions.run(async () => {
-      this.options.requests.detachCallers(requesterId);
-    });
   }
 
   /**

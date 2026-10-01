@@ -343,14 +343,8 @@ export class LeaseEngine {
     await this.#startup.converge();
   }
 
-  /** Stops client feedback for a queued request without affecting its lease outcome. */
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by the dispatcher (same as the sibling queueDepth).
-  async detachQueuedProgress(requesterId: string): Promise<void> {
-    await this.#acquisition.detachQueuedProgress(requesterId);
-  }
-
   /** Cancels a single pending request by requester id, for the HTTP lease-request delete route. */
-  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling detachQueuedProgress).
+  // fallow-ignore-next-line unused-class-member -- reached through the QueueControl port by DaemonServer (same as the sibling queueDepth).
   async cancelPending(requesterId: string): Promise<"cancelled" | "not-found" | "not-cancellable"> {
     return this.#acquisition.cancelPending(requesterId);
   }

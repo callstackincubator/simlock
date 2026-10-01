@@ -254,6 +254,22 @@ describe("Dispatcher: parsing", () => {
     ).resolves.toMatchObject({ lease: { ttlMs: 1_000 } });
   });
 
+  it("names the stored request to the session on lease.request, and replays it under the same idempotency key", async () => {
+    const { dispatcher } = await buildDispatcher();
+    const admitted: [string, boolean][] = [];
+    const input = { idempotencyKey: "key-1", model: "iPhone 17 Pro", platform: "ios" } as const;
+    const track = session({ onRequestAdmitted: (id, replayed) => admitted.push([id, replayed]) });
+
+    const first = await dispatcher.dispatch("lease.request", input, track);
+    const repeat = await dispatcher.dispatch("lease.request", input, track);
+
+    expect(repeat.lease.id).toBe(first.lease.id);
+    expect(admitted).toEqual([
+      [expect.stringMatching(/^req_/), false],
+      [admitted[0]?.[0], true],
+    ]);
+  });
+
   it("rejects an operation this dispatcher has no handler for with UNKNOWN_REQUEST", async () => {
     const { dispatcher } = await buildDispatcher();
     // "daemon.stop" is ADR §6's frozen exception -- `DaemonServer#dispatchLine` intercepts it

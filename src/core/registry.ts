@@ -680,15 +680,12 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
 
   /**
    * A state file written before lease requests were stored has no `leaseRequests` key and loads
-   * with none. A record that does not parse is dropped rather than failing the load: a request
+   * with none, and so does one whose key is not a list. A record that does not parse is dropped rather than failing the load: a request
    * is not worth every device Simlock knows about, and a client repeating a dropped request
    * simply starts a new one.
    */
   #restoreLeaseRequests(value: unknown): LeaseRequestRecord[] {
-    if (value === undefined) return [];
-    if (!Array.isArray(value)) {
-      throw new RegistryLoadError(`Invalid registry state: ${this.options.statePath}`);
-    }
+    if (!Array.isArray(value)) return [];
     const records: LeaseRequestRecord[] = [];
     for (const candidate of value) {
       const record = parseLeaseRequest(candidate);

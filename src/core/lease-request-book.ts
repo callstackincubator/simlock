@@ -203,7 +203,7 @@ interface OpenRequest<Grant> {
   readonly requesterId: string;
   promise: Promise<Grant> | undefined;
   progress: LeaseProgress | undefined;
-  /** The callers waiting on this request; a disconnect clears them and nothing else. */
+  /** The callers waiting on this request. A caller that goes away silences its own callback. */
   readonly callers: Set<(progress: LeaseProgress) => void>;
   /** Readers of the stored record (the HTTP resource), told on every progress and on settlement. */
   readonly watchers: Set<() => void>;
@@ -326,7 +326,6 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
   }
 
   /** A stored request and its live progress, or `undefined` once it is unknown or pruned. */
-  // fallow-ignore-next-line unused-class-member -- reached through the HTTP request resource's `LeaseRequestReader` port.
   get(id: string): LeaseRequestView<Grant> | undefined {
     const stored = this.options.store.leaseRequests().find((candidate) => candidate.id === id);
     if (stored === undefined) return undefined;
@@ -351,19 +350,10 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
   }
 
   /** The id of the stored request that was granted `leaseId`, while that record is retained. */
-  // fallow-ignore-next-line unused-class-member -- reached through the HTTP request resource's `LeaseRequestReader` port.
   requestIdForLease(leaseId: string): string | undefined {
     return this.options.store
       .leaseRequests()
       .find((record) => record.grant !== undefined && record.grant.lease.id === leaseId)?.id;
-  }
-
-  /** A caller went away: stop reporting progress to it. The request itself is untouched. */
-  // fallow-ignore-next-line unused-class-member -- reached through `LeaseAcquisitionCoordinator`'s `requests` port.
-  detachCallers(requesterId: string): void {
-    for (const open of this.#open.values()) {
-      if (open.requesterId === requesterId) open.callers.clear();
-    }
   }
 
   /** A repeat joins mid-wait: it hears where the wait stands now, not only what comes next. */

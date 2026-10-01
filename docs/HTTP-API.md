@@ -203,8 +203,9 @@ changed since — a request that failed with `NO_CAPACITY` stays failed. To
 try again, use a new key. Repeating works across a daemon restart, for
 `lease.requestRetentionMs` after the request finished (see
 [CONFIGURATION.md](CONFIGURATION.md)). The same key with a different
-`platform`, `device`, `os`, or `full` is `409 IDEMPOTENCY_CONFLICT`. The same
-key from a different token is `403 FORBIDDEN`.
+`platform`, `device`, `os`, or `full` is `409 IDEMPOTENCY_CONFLICT`. Keys
+belong to your token: another token sending the same key starts a request of
+its own.
 
 With `allowDownload: true` the `201` is returned as soon as the request is
 stored — resolving a downloadable runtime can take minutes, so progress and
@@ -659,7 +660,7 @@ Every failure is the same shape the daemon protocol uses:
 |---|---|
 | 400 | `BAD_REQUEST` (malformed body, bad query param, validation) |
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
-| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent, including a `POST` repeating another token's `Idempotency-Key`; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease) |
+| 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease) |
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |

@@ -401,3 +401,30 @@ describe("LeaseRequestTracker repeats of a stored request", () => {
     expect(state.lease.id).toBe("lse_stored");
   });
 });
+
+describe("LeaseRequestTracker.submit when the stored record cannot be read", () => {
+  it("still answers created with the grant when the record is gone by the time the grant lands", async () => {
+    const clock = new FakeClock(1_000);
+    const dispatcher = new FakeDispatcher(clock);
+    const tracker = new LeaseRequestTracker({
+      clock,
+      dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
+      // A reader that has already lost every record: pruned, or evicted at the cap.
+      requests: {
+        get: () => undefined,
+        requestIdForLease: () => undefined,
+        watch: () => undefined,
+      },
+    });
+    const outcome = tracker.submit(identity, body);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+
+    call.resolve(makeGrant({ lease: { id: "lse_pruned" } }));
+
+    const settled = await outcome;
+    expect(settled.kind).toBe("created");
+    if (settled.kind === "created") {
+      expect(settled.view.state).toMatchObject({ lease: { id: "lse_pruned" }, stage: "granted" });
+    }
+  });
+});
