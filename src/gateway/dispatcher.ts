@@ -39,7 +39,7 @@ import {
 } from "../daemon/dispatch.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import { aggregateCatalog, aggregateStatus } from "./aggregate.js";
+import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
@@ -105,6 +105,8 @@ export interface GatewayDispatcherOptions {
   readonly errorCode?: (error: unknown) => string | undefined;
   /** The gateway's own health, for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
+  /** The gateway's own machine, for `status.get` (ADR 0008 §8): read once at start, no tools. */
+  readonly host: AggregateStatusOptions["host"];
   readonly awaitReady: () => Promise<void>;
   /**
    * #118: admission, dispatch, and lease/exec forwarding. Every lease-lifecycle handler and
@@ -208,6 +210,7 @@ export class GatewayDispatcher {
   #statusGet: Handler<"status.get"> = () =>
     aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
+      host: this.options.host,
       // ADR 0005 §20: the gateway's own fleet queue depth.
       queueDepth: this.options.coordinator.queueDepth,
       leaseIndex: this.options.leaseIndex,

@@ -1852,9 +1852,19 @@ function formatWorkers(workers: WorkerView[]): string {
           ? ""
           : ` protocol ${worker.protocol.worker.min}-${worker.protocol.worker.max}` +
             ` vs gateway ${worker.protocol.gateway.min}-${worker.protocol.gateway.max}`;
-      return `${label}: ${state} -- ${capacity}, ${String(worker.leases.length)} lease(s)${skew}`;
+      const host = worker.host === undefined ? "" : ` -- ${formatHost(worker.host)}`;
+      return `${label}: ${state} -- ${capacity}, ${String(worker.leases.length)} lease(s)${skew}${host}`;
     })
     .join("\n");
+}
+
+/** `macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9` -- the machine, then each tool. */
+function formatHost(host: StatusGetOutput["host"]): string {
+  const system = `${host.os} ${host.osVersion} ${host.arch}`;
+  const tools = host.tools.map(
+    (tool) => `${tool.name} ${tool.version}${tool.build === undefined ? "" : ` (${tool.build})`}`,
+  );
+  return tools.length === 0 ? system : `${system}; ${tools.join(", ")}`;
 }
 
 function commandArgs(
@@ -1975,7 +1985,7 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput): string {
-  const { capacity, daemon, devices, leases, queueDepth, workers } = status;
+  const { capacity, daemon, devices, host, leases, queueDepth, workers } = status;
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
@@ -2007,6 +2017,7 @@ function formatStatus(status: StatusGetOutput): string {
   );
   return [
     `Daemon: ${daemon.health} (${daemon.mode})`,
+    `Host: ${formatHost(host)}`,
     globalLine,
     ...capacityLines,
     ...workerLines,

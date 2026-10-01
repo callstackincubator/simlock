@@ -166,23 +166,24 @@ describe.skipIf(process.platform !== "darwin")(
           );
           expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
           const grant = lease.json as {
-            lease: string;
-            udid: string;
-            device: string;
+            device: { driverDeviceId: string };
             environment: Record<string, string>;
+            lease: { id: string };
           };
+          // On iOS the driver's device id is the simulator's UDID.
+          const udid = grant.device.driverDeviceId;
 
           // The grant has to say how to reach the device, because nothing else does: the
           // UDID below resolves to nothing without this path (ADR 0001, decision 7).
           expect(grant.environment).toEqual({ SIMLOCK_IOS_DEVICE_SET: deviceSet });
 
-          await expectSimctlPassthrough(env, grant.udid);
+          await expectSimctlPassthrough(env, udid);
 
           const booted = await setDevices(deviceSet);
-          const bootedDevice = booted.find((device) => device.udid === grant.udid);
+          const bootedDevice = booted.find((device) => device.udid === udid);
           expect(
             bootedDevice,
-            `simctl --set ${deviceSet} does not know about udid ${grant.udid}`,
+            `simctl --set ${deviceSet} does not know about udid ${udid}`,
           ).toBeDefined();
           expect(bootedDevice?.state).toBe("Booted");
           // The naming is a label with no authority behind it (safety rule 8) -- what
@@ -193,7 +194,7 @@ describe.skipIf(process.platform !== "darwin")(
             "device name must carry the simlock- prefix",
           ).toBe(true);
           expect(
-            (await defaultSetDevices()).some((device) => device.udid === grant.udid),
+            (await defaultSetDevices()).some((device) => device.udid === udid),
             "a Simlock simulator must be invisible in the machine's default device set",
           ).toBe(false);
 
@@ -209,7 +210,7 @@ describe.skipIf(process.platform !== "darwin")(
             id: string;
             driverDeviceId: string;
           }[];
-          const registryId = devices.find((device) => device.driverDeviceId === grant.udid)?.id;
+          const registryId = devices.find((device) => device.driverDeviceId === udid)?.id;
           expect(
             findings.some(
               (finding) =>
@@ -222,8 +223,8 @@ describe.skipIf(process.platform !== "darwin")(
             "the iOS driver must have started, with a root it owns",
           ).toBe(false);
 
-          const release = await env.cli(["release", grant.lease]);
-          expect(release.code).toBe(0);
+          const release = await env.cli(["release", grant.lease.id]);
+          expect(release.code, `release failed: ${release.stderr}`).toBe(0);
 
           // Still Booted: the warm pool only demotes after idle.shutdownAfterMs,
           // which defaults far longer than this test.
@@ -233,12 +234,12 @@ describe.skipIf(process.platform !== "darwin")(
                 driverDeviceId: string;
                 state: string;
               }[];
-              return rows.some((row) => row.driverDeviceId === grant.udid && row.state === "ready");
+              return rows.some((row) => row.driverDeviceId === udid && row.state === "ready");
             },
             { timeout: 60_000, label: "device returns to ready after release" },
           );
           const stillBooted = await setDevices(deviceSet);
-          expect(stillBooted.find((device) => device.udid === grant.udid)?.state).toBe("Booted");
+          expect(stillBooted.find((device) => device.udid === udid)?.state).toBe("Booted");
 
           const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
           expect(nuke.code).toBe(0);

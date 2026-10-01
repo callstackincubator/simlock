@@ -12,6 +12,7 @@ import {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type DriverToolVersion,
   type ObservedMark,
   type ObservedRunState,
   type PassthroughCommand,
@@ -338,6 +339,12 @@ export class OutOfProcessFakeDriver implements Driver {
       })),
       processes: [],
     };
+  }
+
+  /** Read straight from the script, not through `#beforeCall`: the daemon asks for these on
+   * its own schedule, and a test's call log should hold only what the test caused. */
+  async toolVersions(): Promise<readonly DriverToolVersion[]> {
+    return (await this.#readScript()).toolVersions ?? [];
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {

@@ -29,12 +29,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/index.js";
 import type { Filesystem } from "../ports/index.js";
-import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import { FakeHostInfo, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
 
 const GATEWAY_PORT = 48173;
+const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0" };
 const GATEWAY_URL = `ws://127.0.0.1:${GATEWAY_PORT}`;
 /** Distinct from `GATEWAY_PORT` above so this file's second `it` never races the first one's
  * own listener through TIME_WAIT on the same port (H3, round 1 review: both are `it`s in this
@@ -103,6 +104,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       },
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
+      hostInfo: new FakeHostInfo(GATEWAY_HOST),
       logger: new NoopLogger(),
       statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
@@ -234,6 +236,10 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       expect(workerServes(workers, "Pixel-A")).toBe(true);
       expect(workerServes(workers, "Pixel-B")).toBe(true);
     });
+
+    // The gateway's own host: the machine it runs on, and no tools, since it runs no drivers.
+    const status = await gateway.dispatch("status.get", {}, agentSession());
+    expect(status.host).toEqual({ ...GATEWAY_HOST, tools: [] });
 
     const grant = await gateway.dispatch(
       "lease.request",

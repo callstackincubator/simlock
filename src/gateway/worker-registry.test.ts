@@ -4,7 +4,7 @@ import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
 import { FakeClock, type Logger } from "../ports/index.js";
 import { MemoryDrainStore } from "./drain-store.js";
-import { leaseFixture } from "./test-support.js";
+import { hostFixture, leaseFixture } from "./test-support.js";
 import { WorkerRegistry } from "./worker-registry.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
@@ -242,6 +242,25 @@ describe("WorkerRegistry", () => {
     // connected, and not `worker.rejected` either -- that uplink authenticated. The view is
     // the fact.
     expect(events).toEqual([]);
+  });
+
+  it("carries no host facts on an incompatible worker's view, even after a compatible session", () => {
+    const { workers } = registry();
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.refresh("wrk_1", { host: hostFixture() });
+    expect(workers.view("wrk_1")?.host).toEqual(hostFixture());
+
+    // The same machine comes back downgraded: it is never asked for status, so the host facts
+    // its earlier session reported are no longer known.
+    const view = workers.incompatible(
+      "wrk_1",
+      undefined,
+      { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
+      "0.2.0",
+    );
+
+    expect(view.host).toBeUndefined();
+    expect(workers.view("wrk_1")?.host).toBeUndefined();
   });
 
   it("clears the protocol ranges when an upgraded worker reconnects", () => {

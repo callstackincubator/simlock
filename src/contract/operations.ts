@@ -18,6 +18,7 @@ import {
   deviceRecordSchema,
   doctorReportSchema,
   eventEnvelopeSchema,
+  hostFactsSchema,
   leaseGrantSchema,
   leaseRecordSchema,
   nukeReportSchema,
@@ -101,6 +102,11 @@ export const statusGet = defineOperation({
      * same protocol bump that added `mode`.
      */
     daemon: z.object({ health: daemonHealthSchema, mode: daemonModeSchema }),
+    /**
+     * ADR 0008 §5: the machine, beside `daemon`, the process. Served from memory, so reading it
+     * never makes `status.get` wait.
+     */
+    host: hostFactsSchema,
     queueDepth: z.number(),
     /**
      * ADR 0005 §20: one entry per worker view, additive and gateway-only. Absent (not empty)

@@ -139,6 +139,24 @@ daemon answered:
 { "daemon": { "health": "running", "mode": "worker" } }
 ```
 
+Beside it, **`host`** says what machine the daemon runs on: the operating
+system, its version, the CPU architecture, and the version of each platform
+tool its drivers use:
+
+```json
+"host": { "os": "macOS", "osVersion": "15.5", "arch": "arm64",
+  "tools": [ { "platform": "ios", "name": "xcode", "version": "16.4", "build": "16F6" },
+             { "platform": "android", "name": "emulator", "version": "35.4.9" },
+             { "platform": "android", "name": "platform-tools", "version": "36.0.0" },
+             { "platform": "android", "name": "cmdline-tools", "version": "19.0" } ] }
+```
+
+The daemon works these out from the machine; no config key changes them. Tool
+versions are read at start and again in the background once a minute has
+passed, so this endpoint never waits for them. Right after a start, or for a
+tool that is not installed, `tools` has no entry for it; if a later read
+fails, the last version read stays.
+
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers, every gateway-issued and local lease, every device, the gateway
 queue's depth — every lease and device carries the **`workerId`** it lives
@@ -147,10 +165,13 @@ on, and an additive **`workers`** array carries one
 
 ```json
 { "daemon": { "health": "running", "mode": "gateway" },
-  "workers": [ { "id": "3f81a2c4", "label": "mac-studio-2", "state": "connected", "drained": false } ] }
+  "host": { "os": "Linux", "osVersion": "6.8.0", "arch": "x64", "tools": [] },
+  "workers": [ { "id": "3f81a2c4", "label": "mac-studio-2", "connection": "connected", "drained": false } ] }
 ```
 
-On a worker, `workers` is absent and `workerId` never appears. A client that
+A gateway's own `host` is the gateway's machine and has no tools, since it
+runs no drivers; each worker's is on its worker view. On a worker, `workers`
+is absent and `workerId` never appears. A client that
 reads neither cannot tell the difference, which is the point.
 
 ### `GET /v1/catalog?platform=ios|android`
@@ -591,30 +612,90 @@ workers of its own and does not implement the underlying operations at all.
 - `DELETE /v1/workers/{id}/drain` — undrain it, putting it back in rotation.
 - `DELETE /v1/workers/{id}` — forget a worker's view.
 
+`GET /v1/workers`, a real answer from a test fleet whose drivers are
+simulated (hence the thin Android catalog), trimmed to one worker:
+
 ```json
-{ "workers": [ {
-    "id": "3f81a2c4", "label": "mac-studio-2",
-    "state": "connected", "drained": false,
-    "daemonVersion": "0.4.0", "protocol": { "min": 7, "max": 7 },
-    "connectedAt": "2026-09-01T09:00:00Z", "lastSeenAt": "2026-09-01T09:14:30Z",
-    "capacity": { "ios": { "running": 2, "limit": 4 }, "android": { "running": 0, "limit": 2 } },
-    "downloads": { "policy": "on-request" },
-    "queueDepth": 0, "leases": 3, "devices": 5
-} ] }
+{
+  "workers": [
+    {
+      "id": "2b026432-7743-4a08-98fc-ce494d11866f",
+      "label": "worker-a",
+      "connection": "connected",
+      "drained": false,
+      "lastSeenAt": 1790864080506,
+      "health": "running",
+      "version": "1.0.0",
+      "capacity": {
+        "ios": {
+          "running": 0,
+          "maxRunning": 8,
+          "reserved": 0,
+          "overLimit": false,
+          "limit": 8,
+          "warm": 0,
+          "used": 0
+        },
+        "android": {
+          "running": 0,
+          "maxRunning": 8,
+          "reserved": 0,
+          "overLimit": false,
+          "limit": 8,
+          "warm": 0,
+          "used": 0
+        },
+        "global": {"running": 0, "maxRunning": 8, "reserved": 0, "overLimit": false, "warm": 0}
+      },
+      "downloads": {"policy": "on-request"},
+      "lease": {"maxTtlMs": 14400000},
+      "queueDepth": 0,
+      "leases": [],
+      "devices": [],
+      "catalog": [
+        {
+          "platform": "ios",
+          "models": ["iPhone 16"],
+          "runtimes": ["18.4", "26.0"],
+          "defaultRuntime": "26.0",
+          "modelRuntimes": {"iPhone 16": ["18.4"]}
+        },
+        {
+          "platform": "android",
+          "models": [],
+          "runtimes": ["18.0"],
+          "defaultRuntime": "18.0",
+          "modelRuntimes": {}
+        }
+      ],
+      "host": {
+        "os": "macOS",
+        "osVersion": "26.6.1",
+        "arch": "arm64",
+        "tools": [{"platform": "ios", "name": "xcode", "version": "16.4", "build": "16F6"}]
+      }
+    }
+  ]
+}
 ```
 
-`downloads.policy` is that worker's own effective policy, read once with
-`config.get` when its uplink connects. Routing needs it to know whether a
-worker may install a missing runtime at all before sending it a request that
-depends on one; it is never an override, since the worker clamps
+`downloads.policy` is that worker's own effective policy, read when its
+uplink connects and again on every periodic refresh. Routing needs it to know
+whether a worker may install a missing runtime at all before sending it a
+request that depends on one; it is never an override, since the worker clamps
 `allowDownload` through the same policy regardless.
 
-`protocol` is the range that worker negotiated. The wire moves to
-`{min: 7, max: 7}` with no compatibility shim, so a worker from before it
-does not overlap and shows as `incompatible` — the ordinary upgrade path, not
-a fault.
+`catalog` is what that worker can lease, each model with the runtimes it
+pairs with. `host` is the worker's machine, the same block its own
+`GET /v1/status` reports, as of the gateway's last refresh: a tool installed
+or upgraded on the worker shows here without a restart of either side.
 
-`state` is `connected`, `disconnected`, or `incompatible`. A worker view is
+`protocol` appears only on an `incompatible` worker: it names both ranges,
+the worker's and the gateway's, so you can see which side to upgrade. A worker
+too old to overlap is the ordinary upgrade path, not a fault, and its view
+carries no `host`, since the gateway asks it nothing.
+
+`connection` is `connected`, `disconnected`, or `incompatible`. A worker view is
 rebuilt over the uplink and never persisted, so these are current facts, not
 a registry: a worker appears by connecting, and there is deliberately no
 route that *adds* one.

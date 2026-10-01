@@ -474,36 +474,201 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(0);
   });
 
-  it("leaves a request queued after a stale-view NO_CAPACITY even when the caller asked noWait: true, and refreshes that worker's view", async () => {
+  it("leaves a request queued after NO_CAPACITY, refreshes that worker's view, and tries it once more when a refresh changes its capacity", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
     client.requestLeaseQueue.push({ error: noCapacityError(), kind: "error" });
 
-    const grantPromise = coordinator.request(REQUEST, requestOptions({ noWait: true }));
-    let settled = false;
-    void grantPromise.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-
+    const grantPromise = coordinator.request(REQUEST, requestOptions());
     await tick();
 
-    expect(settled).toBe(false);
     expect(coordinator.queueDepth).toBe(1);
     expect(directory.refreshCalls).toEqual(["wrk_a"]);
 
     // The refreshed view now has capacity, and this time the worker grants it.
+    const capacity = statusFixture().capacity;
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-    workers.refresh("wrk_a", {}); // any refresh re-runs dispatch, exactly as a real one would
+    workers.refresh("wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 3 } },
+    });
 
     const grant = await grantPromise;
     expect(grant.lease.worker?.id).toBe("wrk_a");
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(2);
+  });
+
+  it("sends a worker that keeps answering NO_CAPACITY with an unchanged view one lease.request for that request", async () => {
+    const { clock, coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+
+    void coordinator.request(REQUEST, requestOptions());
+    await tick();
+    for (let refresh = 0; refresh < 3; refresh += 1) {
+      clock.advance(1_000); // a new lastSeenAt on every refresh, as a real one has
+      workers.refresh("wrk_a", { capacity: statusFixture().capacity });
+      await tick();
+    }
+
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    expect(coordinator.queueDepth).toBe(1);
+  });
+
+  it("tries another eligible worker in the pass that follows a refusal", async () => {
+    const { coordinator, directory, workers } = harness();
+    const preferred = new ScriptedWorkerClient();
+    const other = new ScriptedWorkerClient();
+    directory.add("wrk_a", preferred);
+    directory.add("wrk_b", other);
+    const capacity = statusFixture().capacity;
+    // wrk_a has more free slots, so free-capacity picks it first.
+    connectWorker(workers, "wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    connectWorker(workers, "wrk_b");
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grantPromise = coordinator.request(REQUEST, requestOptions());
+    await tick();
+    expect(other.calls.filter((call) => call.startsWith("lease.request"))).toEqual([]);
+
+    // A refresh of wrk_a that changes nothing load-bearing runs the next pass.
+    workers.refresh("wrk_a", {});
+
+    const grant = await grantPromise;
+    expect(grant.lease.worker?.id).toBe("wrk_b");
+    expect(preferred.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+  });
+
+  it("does not exclude a worker for another request because it refused one", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+
+    void coordinator.request(REQUEST, requestOptions());
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const grant = await coordinator.request(
+      REQUEST,
+      requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
+    );
+
+    expect(grant.lease.worker?.id).toBe("wrk_a");
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toEqual([
+      `lease.request:${GATEWAY_PREFIX}agent-1`,
+      `lease.request:${GATEWAY_PREFIX}agent-2`,
+    ]);
+    expect(coordinator.queueDepth).toBe(1);
+  });
+
+  it("leaves a request queued when the worker that refused it left the views before the refusal arrived", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    // The worker goes away between routing and its answer: its view is gone by the time the
+    // NO_CAPACITY lands, so there is no view left to remember the refusal against.
+    const target = directory.target.bind(directory);
+    directory.target = (workerId) => {
+      const found = target(workerId);
+      if (found === undefined) return undefined;
+      return {
+        ...found,
+        client: () => {
+          workers.disconnected(workerId);
+          void workers.remove(workerId);
+          return found.client();
+        },
+      };
+    };
+
+    void coordinator.request(REQUEST, requestOptions());
+    await tick();
+
+    expect(workers.views()).toEqual([]);
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    expect(coordinator.queueDepth).toBe(1);
+  });
+
+  it("rejects a noWait request refused by its only worker with NO_CAPACITY, reports lease.rejected no-wait, and refreshes that worker's view", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    const rejected: unknown[] = [];
+    eventBus.subscribe("lease.rejected", (envelope) => rejected.push(envelope.payload));
+
+    await expect(
+      coordinator.request(REQUEST, requestOptions({ noWait: true })),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+
+    expect(rejected).toEqual([expect.objectContaining({ reason: "no-wait" })]);
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    expect(coordinator.queueDepth).toBe(0);
+  });
+
+  it("sends a queued noWait request refused by one worker to only one other worker in the next walk", async () => {
+    // The refused waiter is already in the queue (it first met a worker with no client yet), so
+    // the walk must not offer it twice: once in its queue position and once as the candidate.
+    const { coordinator, directory, workers } = harness();
+    const first = new ScriptedWorkerClient();
+    const second = new ScriptedWorkerClient();
+    const third = new ScriptedWorkerClient();
+    directory.add("wrk_a", first);
+    directory.add("wrk_b", second);
+    directory.add("wrk_c", third);
+    const capacity = statusFixture().capacity;
+    connectWorker(workers, "wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 6 } },
+    });
+    connectWorker(workers, "wrk_b", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    connectWorker(workers, "wrk_c", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    directory.reachableButNoClient.add("wrk_a");
+    second.requestLeaseQueue.push({ kind: "hang" });
+    third.requestLeaseQueue.push({ kind: "hang" });
+
+    void coordinator.request(REQUEST, requestOptions({ noWait: true }));
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    directory.reachableButNoClient.delete("wrk_a");
+    workers.refresh("wrk_a", {});
+    await tick();
+
+    const leaseRequests = (client: ScriptedWorkerClient) =>
+      client.calls.filter((call) => call.startsWith("lease.request")).length;
+    expect(leaseRequests(first)).toBe(1);
+    expect(leaseRequests(second) + leaseRequests(third)).toBe(1);
+  });
+
+  it("grants a noWait request refused by one worker from another in the next walk", async () => {
+    const { coordinator, directory, workers } = harness();
+    const preferred = new ScriptedWorkerClient();
+    const other = new ScriptedWorkerClient();
+    directory.add("wrk_a", preferred);
+    directory.add("wrk_b", other);
+    const capacity = statusFixture().capacity;
+    connectWorker(workers, "wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    connectWorker(workers, "wrk_b");
+    other.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+    const grant = await coordinator.request(REQUEST, requestOptions({ noWait: true }));
+
+    expect(grant.lease.worker?.id).toBe("wrk_b");
+    expect(preferred.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 
   it("terminally rejects, rather than re-queuing, a NO_CAPACITY that arrives after progress already fired (P1, round 2 review)", async () => {
@@ -920,7 +1085,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     const dispatched: unknown[] = [];
     eventBus.subscribe("request.dispatched", (envelope) => dispatched.push(envelope.payload));
 
-    void coordinator.request(REQUEST, requestOptions({ noWait: true }));
+    void coordinator.request(REQUEST, requestOptions());
     await tick();
 
     expect(dispatched).toEqual([]);
@@ -1090,17 +1255,16 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
   });
 
-  it("a noWait request bounced back by a stale view stays queued even with other requests queued -- §11's exception does not depend on queue depth", async () => {
-    // §11: "an immediate NO_CAPACITY is the only answer that leaves it queued", and `#staleView`
-    // applies that unconditionally, "even for a caller that asked noWait: true". Deciding on
-    // `waiter.state === "queued"` could not tell "never attempted" from "attempted and bounced
-    // back inside the same pass", so the answer flipped with unrelated queue depth.
+  it("a noWait request refused by its only worker is rejected even with other requests queued -- the answer does not depend on queue depth", async () => {
+    // Deciding on `waiter.state === "queued"` could not tell "never attempted" from "attempted
+    // and refused inside the same pass", so the answer used to flip with unrelated queue depth.
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
     connectWorker(workers, "wrk_a");
     client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     await coordinator.request(REQUEST, requestOptions());
+    // Refused by wrk_a and left queued, so the queue is non-empty.
     void coordinator.request(
       REQUEST,
       requestOptions({ ownerId: "agent-2", requesterId: "agent-2" }),
@@ -1108,25 +1272,15 @@ describe("FleetLeaseCoordinator dispatch", () => {
     await tick();
     expect(coordinator.queueDepth).toBe(1);
 
-    // A second worker the views advertise but the directory cannot resolve: routing picks it,
-    // `#attempt` finds no client, and `#staleView` bounces the waiter straight back -- all
-    // synchronously, inside the admission's own pass.
-    connectWorker(workers, "wrk_b");
-
-    let settled = "pending";
-    void coordinator
-      .request(
+    await expect(
+      coordinator.request(
         REQUEST,
         requestOptions({ noWait: true, ownerId: "agent-3", requesterId: "agent-3" }),
-      )
-      .then(
-        () => (settled = "granted"),
-        () => (settled = "rejected"),
-      );
-    await tick();
+      ),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
 
-    expect(settled).toBe("pending");
-    expect(coordinator.queueDepth).toBe(2);
+    expect(client.calls).toContain(`lease.request:${GATEWAY_PREFIX}agent-3`);
+    expect(coordinator.queueDepth).toBe(1);
   });
 
   it("relays the worker's own started push for a silent, long-running command -- no output, no answer, still a 200 through a gateway (ADR §19a/§19b/§19e)", async () => {
