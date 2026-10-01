@@ -1322,16 +1322,25 @@ describe("DaemonServer stored lease requests", () => {
     const holder = await createClient(harness.socketPath);
     const client = await createClient(harness.socketPath);
     await Promise.all([hello(holder), hello(client)]);
-    await holder.request("lease.request", { ...iPhone, requesterId: "holder" });
+    const held = (await holder.request("lease.request", { ...iPhone, requesterId: "holder" })) as {
+      readonly payload: { readonly lease: { readonly id: string } };
+    };
     const noWait = { ...iPhone, idempotencyKey: "key-1", noWait: true, requesterId: "agent" };
     await expect(client.request("lease.request", noWait)).resolves.toMatchObject({
       error: { code: "NO_CAPACITY" },
     });
 
+    // Capacity frees up: a fresh evaluation would now grant the device.
+    await holder.request("lease.release", { leaseId: held.payload.lease.id });
+    await expect
+      .poll(() => harness.registry.snapshot.devices.map((device) => device.state))
+      .toEqual(["ready"]);
+
     await expect(client.request("lease.request", noWait)).resolves.toMatchObject({
       error: { code: "NO_CAPACITY" },
       ok: false,
     });
+    expect(harness.registry.snapshot.leases).toEqual([]);
   });
 });
 

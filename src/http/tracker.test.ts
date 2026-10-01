@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { RequesterAlreadyLeasedError } from "../core/index.js";
+import { NoCapacityError, RequesterAlreadyLeasedError } from "../core/index.js";
 import { RequestCancelledError } from "../core/wait-queue.js";
 import { FakeClock } from "../ports/index.js";
 import { FakeDispatcher, makeGrant, waitForDispatch } from "./test-fakes.js";
@@ -346,19 +346,17 @@ describe("LeaseRequestTracker.waitForChange abort", () => {
 describe("LeaseRequestTracker repeats of a stored request", () => {
   it("answers a repeat of a request that failed before becoming visible with the stored, failed request, starting no second one", async () => {
     const { dispatcher, tracker } = buildTracker();
-    const first = tracker.submit(identity, body, "key-1");
+    const first = tracker.submit(identity, { ...body, noWait: true }, "key-1");
     const firstCall = await waitForDispatch(dispatcher, "lease.request");
-    firstCall.reject(new RequesterAlreadyLeasedError("tok_agent"));
+    // How a stored `noWait` request fails with no capacity: before any progress is reported.
+    firstCall.reject(new NoCapacityError());
     expect((await first).kind).toBe("rejected");
 
-    const second = await tracker.submit(identity, body, "key-1");
+    const second = await tracker.submit(identity, { ...body, noWait: true }, "key-1");
 
     expect(second.kind).toBe("created");
     if (second.kind === "created") {
-      expect(second.view.state).toMatchObject({
-        error: { code: "REQUESTER_ALREADY_LEASED" },
-        stage: "failed",
-      });
+      expect(second.view.state).toMatchObject({ error: { code: "NO_CAPACITY" }, stage: "failed" });
     }
     expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
   });
@@ -373,6 +371,15 @@ describe("LeaseRequestTracker repeats of a stored request", () => {
     for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
 
     expect(answered?.kind).toBe("created");
+    if (answered?.kind === "created") {
+      // The one request the first submission stored, answered with no new progress.
+      expect(dispatcher.requests.get(answered.view.id)?.record).toMatchObject({
+        idempotencyKey: "key-1",
+        state: "open",
+      });
+      expect(answered.view.state).toEqual({ queuePosition: 1, stage: "queued" });
+    }
+    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
   });
 
   it("reads a granted request back from the stored record, not from anything the tracker kept", async () => {
