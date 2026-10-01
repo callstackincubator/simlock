@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { grantedDeviceSchema, leaseGrantSchema, statusDeviceSchema } from "./schemas.js";
+import {
+  deviceRecordSchema,
+  grantedDeviceSchema,
+  leaseGrantSchema,
+  statusDeviceSchema,
+} from "./schemas.js";
 
 /**
  * Regression coverage for the defect fixed alongside ADR 0003 §1: a lease grant's device must
@@ -187,5 +192,29 @@ describe("statusDeviceSchema's device projection", () => {
 
   it("rejects a device object that is missing the fields status.get must keep", () => {
     expect(() => statusDeviceSchema.parse({ id: "device-1" })).toThrow();
+  });
+
+  it("rejects a status device without a mode, or with a mode other than slim or full", () => {
+    const device = {
+      id: "device-1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      state: "ready",
+    };
+    expect(() => statusDeviceSchema.parse(device)).toThrow();
+    expect(() => statusDeviceSchema.parse({ ...device, mode: "reduced" })).toThrow();
+  });
+
+  it("rejects a list.get device record without a mode, or with a mode other than slim or full", () => {
+    const record = {
+      id: "device-1",
+      driverDeviceId: "SIM-1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      state: "ready",
+      driverData: {},
+      createdAt: 0,
+    };
+    expect(deviceRecordSchema.parse({ ...record, mode: "full" })).toMatchObject({ mode: "full" });
+    expect(() => deviceRecordSchema.parse(record)).toThrow();
+    expect(() => deviceRecordSchema.parse({ ...record, mode: "reduced" })).toThrow();
   });
 });

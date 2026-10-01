@@ -799,6 +799,14 @@ on the same timers as any other idle device, since neither rule cares what a
 device's spec matches. Until those timers fire, though, it occupies a pool
 slot doing nothing.
 
+**A device slimmed before the upgrade to `mode` reports `full`.** A device
+record written before devices carried a `mode` loads as `full`, and nothing
+is derived from its old feature-profile field (ADR 0007 §11). A worker that
+ran with `ios.slim.enabled` on therefore holds slimmed devices that report
+`mode: "full"` on grants, `status`, and `list` until their next boot rewrites
+the mode. Empty such a worker with `simlock nuke --delete-devices` before
+upgrading it.
+
 ## A dispatched request whose uplink drops may have granted a lease anyway
 
 The gateway dispatches a queued request to a worker with `noWait: true` and
