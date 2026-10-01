@@ -408,6 +408,42 @@ describe("QuarantineCoordinator", () => {
     ]);
   });
 
+  it("a quarantine retry that itself throws logs at error with the device id", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.failOn("reclaim", 1, new Error("erase still stuck"));
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      clock,
+      driver,
+      logger: new JsonLinesLogger({ clock, sink }),
+    });
+    await harness.coordinator.enter({
+      attemptedStrategy: "wipe",
+      deviceId: harness.target.id,
+      duration: 0,
+      error: "boom",
+      leaseId: "lease-1",
+    });
+    vi.spyOn(harness.registry, "recordQuarantineRetryFailure").mockRejectedValue(
+      new Error("state.json unwritable"),
+    );
+
+    harness.clock.advance(retryConfig.retryBackoffMs);
+    await flush();
+
+    expect(sink.records.filter((record) => record.level === "error")).toEqual([
+      expect.objectContaining({
+        module: "daemon.quarantine-coordinator",
+        fields: {
+          deviceId: harness.target.id,
+          error: "Error: state.json unwritable",
+          step: "retry",
+        },
+      }),
+    ]);
+  });
+
   it("A failed quarantine delete retry logs the error and the attempt number.", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });

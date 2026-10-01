@@ -47,6 +47,33 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     ]);
   });
 
+  it("reads a file from a byte offset, and nothing past its end", async () => {
+    const filesystem = create();
+    const file = `${temporaryDirectory}/daemon.log`;
+    await filesystem.mkdirp(temporaryDirectory);
+    await filesystem.writeFileAtomic(file, "é line one\nline two\n");
+
+    // "é" is two bytes: the offset counts bytes, not characters.
+    await expect(filesystem.readFileFrom(file, 12)).resolves.toBe("line two\n");
+    await expect(filesystem.readFileFrom(file, 0)).resolves.toBe("é line one\nline two\n");
+    await expect(filesystem.readFileFrom(file, 21)).resolves.toBe("");
+    await expect(filesystem.readFileFrom(file, 500)).resolves.toBe("");
+  });
+
+  it("keeps a file's identity across a rename and gives a new file at the same path another", async () => {
+    const filesystem = create();
+    const file = `${temporaryDirectory}/daemon.log`;
+    await filesystem.mkdirp(temporaryDirectory);
+    await filesystem.writeFileAtomic(file, "old\n");
+    const original = (await filesystem.stat(file)).identity;
+
+    await filesystem.rename(file, `${file}.1`);
+    await filesystem.writeFileAtomic(file, "new\n");
+
+    expect((await filesystem.stat(`${file}.1`)).identity).toBe(original);
+    expect((await filesystem.stat(file)).identity).not.toBe(original);
+  });
+
   it("creates nested directories idempotently", async () => {
     const filesystem = create();
     const directory = `${temporaryDirectory}/devices/ready`;

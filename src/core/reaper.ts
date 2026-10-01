@@ -45,6 +45,7 @@ export class CleanupReaper {
   // only on the crossing edge, not once per tick while pressure persists.
   #underPressure = false;
   readonly #logger: Logger;
+  readonly #loggedRuns = new WeakSet<Promise<readonly Proposal[]>>();
 
   constructor(private readonly options: CleanupReaperOptions) {
     this.#logger = options.logger?.child("reaper") ?? new NoopLogger();
@@ -110,11 +111,18 @@ export class CleanupReaper {
     void this.#scheduleRunLogged();
   }
 
-  /** A run nobody awaits: its failure has no caller to reach, so it is logged here. */
+  /**
+   * A run nobody awaits: its failure has no caller to reach, so it is logged here. Triggers that
+   * arrive while a run is in flight share its promise, so a run is logged once, not once per
+   * trigger that joined it.
+   */
   async #scheduleRunLogged(): Promise<void> {
+    const run = this.#scheduleRun();
     try {
-      await this.#scheduleRun();
+      await run;
     } catch (error: unknown) {
+      if (this.#loggedRuns.has(run)) return;
+      this.#loggedRuns.add(run);
       this.#logger.error("scheduled cleanup run failed", {
         step: "cleanup",
         error: stableError(error),

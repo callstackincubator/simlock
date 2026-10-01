@@ -411,6 +411,28 @@ describe("CleanupReaper", () => {
     harness.reaper.dispose();
   });
 
+  it("a cleanup run that throws is logged once, however many triggers joined it", async () => {
+    const sink = new MemoryLogSink();
+    const rule: CleanupRule = {
+      evaluate: () => {
+        throw new Error("rule exploded");
+      },
+      name: "exploding-rule",
+    };
+    const harness = await createHarness(
+      [rule],
+      {},
+      { logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }), tickMs: 10_000 },
+    );
+
+    harness.eventBus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    harness.eventBus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await flush();
+
+    expect(sink.records.map((record) => record.message)).toEqual(["scheduled cleanup run failed"]);
+    harness.reaper.dispose();
+  });
+
   it("shuts down after T1 and destroys after T2 on periodic ticks following a release", async () => {
     const harness = await createHarness(automaticCleanupRules, {}, { tickMs: 10_000 });
     const grant = await harness.engine.request(spec, {

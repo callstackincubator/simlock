@@ -435,8 +435,9 @@ describe("LeaseEngine", () => {
         },
       },
     ]);
+    // At `debug`, so a line at any level would be caught.
     expect(
-      sink.records.filter((record) => record.level === "warn" || record.level === "error"),
+      sink.records.filter((record) => JSON.stringify(record).includes("purge exploded")),
     ).toEqual([]);
   });
 

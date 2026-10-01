@@ -78,6 +78,28 @@ describe("LoggingProcessRunner", () => {
     ]);
   });
 
+  it("a spawn that cannot start logs the error and rethrows it", () => {
+    const failure = new Error("spawn EACCES");
+    const { runner, sink } = wrap({
+      run: () => Promise.reject(new Error("unused")),
+      spawn: () => {
+        throw failure;
+      },
+      spawnStreaming: () => {
+        throw new Error("unused");
+      },
+    });
+
+    expect(() => runner.spawn("emulator", ["-avd", "a"])).toThrow(failure);
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        message: "process",
+        fields: { command: "emulator", args: ["-avd", "a"], error: "spawn EACCES", durationMs: 0 },
+      }),
+    ]);
+  });
+
   it("spawn logs once, when the process exits", async () => {
     const inner = new ScriptedProcessRunner([
       { hangs: true, match: { args: ["-avd", "a"], command: "emulator" } },

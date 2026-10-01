@@ -705,6 +705,30 @@ describe("LeaseAcquisitionCoordinator", () => {
     await expect(acquisition).rejects.toMatchObject({ name: "RequestCancelledError" });
   });
 
+  it("A failed destroy after a shut-down device fails to boot for a waiter logs the device id and the error.", async () => {
+    const { logger, sink } = capturingLogger();
+    const harness = await createHarness({ logger });
+    const shutdown = await seedShutdown(harness);
+    harness.driver.failOn("makeReady", 2, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
+
+    await expect(
+      harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
+    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+
+    expect(sink.records.filter((record) => record.fields?.["step"] === "destroy")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        fields: {
+          deviceId: shutdown.id,
+          error: "DriverCrashError: simulator would not die",
+          requesterId: "booter",
+          step: "destroy",
+        },
+      }),
+    ]);
+  });
+
   it("A shut-down device that fails to boot for a waiter logs the driver's error.", async () => {
     const { logger, sink } = capturingLogger();
     const harness = await createHarness({ logger });

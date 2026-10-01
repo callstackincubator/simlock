@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { OPERATIONS, type OperationName } from "../contract/index.js";
-import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
+import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
@@ -184,34 +184,38 @@ const EVERY_OPERATION = (Object.keys(OPERATIONS) as OperationName[]).filter(
 );
 
 describe("GatewayDispatcher", () => {
-  it("logs the same operation line a worker's dispatcher does, through runDispatch", async () => {
-    const { dispatcher, logSink, workers } = harness();
+  it("The gateway dispatcher logs the same line for the same operation", async () => {
+    const { clock, dispatcher, logSink, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    // The line `runDispatch` writes for the same call through any other dispatcher, a worker's
+    // included: only the module differs.
+    const otherSink = new MemoryLogSink();
+    const other = (role: "admin" | "agent") =>
+      runDispatch("worker.drain", { workerId: "wrk_1" }, session({ role }), {
+        handlers: { "worker.drain": () => ({ drained: true, workerId: "wrk_1" }) },
+        observe: {
+          clock,
+          codeOf: (error) => (error instanceof DispatchError ? error.code : "INTERNAL"),
+          logger: new JsonLinesLogger({ clock, module: "other.dispatch", sink: otherSink }),
+        },
+      });
 
     await dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session());
+    await other("admin");
     await expect(
       dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session({ role: "agent" })),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(other("agent")).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-    expect(logSink.records.filter((record) => record.message === "operation")).toEqual([
-      {
-        timestamp: 1_000,
-        level: "info",
-        module: "gateway.dispatch",
-        message: "operation",
-        fields: {
-          operation: "worker.drain",
-          principal: "operator-1",
-          role: "admin",
-          durationMs: 0,
-        },
-      },
-      expect.objectContaining({
-        level: "info",
-        module: "gateway.dispatch",
-        fields: expect.objectContaining({ operation: "worker.drain", code: "FORBIDDEN" }),
-      }),
+    const gatewayLines = logSink.records.filter((record) => record.message === "operation");
+    expect(gatewayLines.map((record) => record.module)).toEqual([
+      "gateway.dispatch",
+      "gateway.dispatch",
     ]);
+    expect(gatewayLines.map(({ module: _module, ...rest }) => rest)).toEqual(
+      otherSink.records.map(({ module: _module, ...rest }) => rest),
+    );
+    expect(gatewayLines[1]?.fields).toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("answers status.get from the fleet", async () => {

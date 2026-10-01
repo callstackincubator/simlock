@@ -1374,8 +1374,9 @@ information already visible per-device rather than add any.
 Operational logging is a separate concern from the event bus (ADR 0006):
 `simlock events` carries business facts (lease granted, device cleaned up, …),
 while the `Logger` port writes structured JSON lines saying what the daemon
-was asked to do and what went wrong. No fact is copied into the log and no log
-line becomes an event. The log records:
+was asked to do and what went wrong. No log line becomes an event, and nothing
+below copies a fact into the log; the `component.installed` copy described at
+the end of this section predates ADR 0006. The log records:
 
 - **One `operation` line per dispatched call**, built in exactly one place:
   `runDispatch` (`src/daemon/dispatch.ts`), through the `observe` hook both
