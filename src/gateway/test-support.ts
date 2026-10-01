@@ -42,6 +42,19 @@ const emptyPlatformCapacity = {
   warm: 0,
 };
 
+/** A worker's `host` block (ADR 0008 §5): one Mac with Xcode installed. */
+export function hostFixture(
+  overrides: Partial<StatusGetOutput["host"]> = {},
+): StatusGetOutput["host"] {
+  return {
+    arch: "arm64",
+    os: "macOS",
+    osVersion: "15.5",
+    tools: [{ build: "16F6", name: "xcode", platform: "ios", version: "16.4" }],
+    ...overrides,
+  };
+}
+
 export function statusFixture(overrides: Partial<StatusGetOutput> = {}): StatusGetOutput {
   return {
     capacity: {
@@ -51,6 +64,7 @@ export function statusFixture(overrides: Partial<StatusGetOutput> = {}): StatusG
     },
     daemon: { health: "running", mode: "worker" },
     devices: [],
+    host: hostFixture(),
     leases: [],
     queueDepth: 0,
     ...overrides,

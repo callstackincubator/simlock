@@ -14,6 +14,7 @@ import { GatewayService, REJECTION_COALESCE_WINDOW_MS } from "./service.js";
 import {
   catalogFixture,
   deviceFixture,
+  hostFixture,
   leaseFixture,
   protocolMismatchError,
   ScriptedWorkerClient,
@@ -365,6 +366,46 @@ describe("GatewayService", () => {
       expect(harness.service.workers.view("wrk_1")?.catalog[0]?.modelRuntimes).toEqual({
         "iPhone 17": ["25.4", "26.0"],
       }),
+    );
+
+    await harness.service.stop();
+  });
+
+  it("carries the host facts its worker last reported on the view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.status = statusFixture({ host: hostFixture({ arch: "x64", osVersion: "14.7" }) });
+
+    await harness.join("wrk_1", worker);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.host).toEqual(
+        hostFixture({ arch: "x64", osVersion: "14.7" }),
+      ),
+    );
+
+    await harness.service.stop();
+  });
+
+  it("shows a changed tool version on the view after the next refresh", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.host?.tools[0]?.version).toBe("16.4"),
+    );
+    worker.status = statusFixture({
+      host: hostFixture({
+        tools: [{ build: "17A324", name: "xcode", platform: "ios", version: "26.0" }],
+      }),
+    });
+
+    harness.clock.advance(REFRESH_MS);
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.host?.tools[0]?.version).toBe("26.0"),
     );
 
     await harness.service.stop();

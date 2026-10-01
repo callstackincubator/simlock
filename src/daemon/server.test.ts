@@ -2872,6 +2872,7 @@ async function createHarness(
         filesystem: new NodeFilesystem(),
         listenerFactory: new NodeIpcTransport(),
       }),
+    hostFacts: () => ({ arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] }),
     leases: engine,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     passthrough: engine,

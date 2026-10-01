@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
+import { fitHostFacts } from "../contract/index.js";
 import {
   type Config,
   type ConfigOverrides,
@@ -11,6 +12,7 @@ import {
   CleanupReaper,
   DiskSpaceGuard,
   Doctor,
+  HostFactsReader,
   LeaseEngine,
   loadConfig,
   loadInstanceId,
@@ -22,6 +24,7 @@ import {
   AdbServerUnavailableError,
   AndroidDriver,
   ANDROID_PASSTHROUGH_TOOL,
+  hostAbiFor,
   SdkMissingError,
   type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
@@ -39,12 +42,15 @@ import {
   NodeFileLogSink,
   type Clock,
   type Filesystem,
+  type HostInfo,
+  type HostSystem,
   type IdGenerator,
   type IpcConnector,
   type IpcListenerFactory,
   type Logger,
   type LogLevel,
   NodeFilesystem,
+  NodeHostInfo,
   NodeIpcTransport,
   NodeProcessRunner,
   NodeProcessSupervisor,
@@ -89,6 +95,7 @@ export interface StartDaemonOptions {
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
   readonly filesystem?: Filesystem;
+  readonly hostInfo?: HostInfo;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
@@ -133,6 +140,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       }),
     });
   const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
+  // ADR 0008 §6: the machine is read once, here. Bounded and never throwing, so a slow or
+  // missing `sw_vers` costs a fallback value, not the daemon.
+  const hostSystem = await (
+    options.hostInfo ?? new NodeHostInfo({ platform: process.platform, processRunner })
+  ).read();
   const eventBus = new EventBus(clock, config.eventBuffer.capacity, eventBusLogger(logger));
   const eventHistory = openEventHistory({ config, dataDirectory, eventBus, filesystem, logger });
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
@@ -147,6 +159,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       eventBus,
       eventHistory,
       filesystem,
+      hostSystem,
       idGenerator,
       ipc,
       logger,
@@ -190,6 +203,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           driversConfig: config.drivers,
           eventBus,
           filesystem,
+          hostArch: hostSystem.arch,
           hostPlatform: process.platform,
           idGenerator,
           instanceId,
@@ -202,6 +216,15 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           tcpProbe,
         })
       : { drivers: options.drivers, rejections: [] };
+  // ADR 0008 §7: read at startup in the background, served from memory, re-read when stale.
+  // Nothing waits on the first read; `status.get` reports no tools until it lands.
+  const hostFacts = new HostFactsReader({
+    clock,
+    drivers,
+    logger: logger.child("host-facts"),
+    system: hostSystem,
+  });
+  void hostFacts.refresh();
   const leaseEngine = new LeaseEngine({
     clock,
     config,
@@ -317,6 +340,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     eventHistory,
     healthMonitor: leaseEngine.healthMonitor,
+    hostFacts: () => fitHostFacts(hostFacts.current()),
     host: new DaemonEndpointHost({
       connector: ipc,
       endpoint: socketPath,
@@ -490,6 +514,8 @@ interface GatewayDaemonOptions {
   readonly eventBus: EventBus;
   readonly eventHistory: EventHistory;
   readonly filesystem: Filesystem;
+  /** The gateway's own machine. It runs no drivers, so its host facts carry no tools. */
+  readonly hostSystem: HostSystem;
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
@@ -636,6 +662,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       coordinator: fleetCoordinator,
       eventHistory,
       health: () => daemon.health,
+      host: fitHostFacts({ ...options.hostSystem, tools: [] }),
       leaseIndex,
       logger: logger.child("gateway"),
       tokens,
@@ -769,6 +796,8 @@ export interface DriverDiscoveryContext {
    * Mac, and so is untestable everywhere Simlock's own CI runs.
    */
   readonly hostPlatform: NodeJS.Platform;
+  /** The host port's architecture; the Android driver prefers images of the ABI it runs. */
+  readonly hostArch: string;
   readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly logger: Logger;
@@ -903,6 +932,7 @@ async function discoverAndroidDriver(
       env: process.env,
       filesystem: options.filesystem,
       homeDirectory: homedir(),
+      hostAbi: hostAbiFor(options.hostArch),
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       onDiagnostic: bridgeAndroidDriverDiagnostic(options.eventBus),
