@@ -2513,7 +2513,7 @@ describe("IosSimctlDriver", () => {
       );
     });
 
-    it("treats a total apply failure as a skip: single boot, no reboot, no marker, no event", async () => {
+    it("treats a total apply failure as a skip whose detail carries simctl's exit and stderr: single boot, no reboot, no marker, no event", async () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       const runner = new ScriptedProcessRunner([
@@ -2556,7 +2556,11 @@ describe("IosSimctlDriver", () => {
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
+        expect.objectContaining({
+          deviceId: slim18_5.udid,
+          detail: "all 1 chunk(s) failed to run; last: exit 1: boom",
+          reason: "apply-failed",
+        }),
       );
     });
 
