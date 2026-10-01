@@ -240,7 +240,8 @@ export interface EventMap {
    * ADR 0005 §11/§22 (#118): the gateway's own dispatch sent a queued request to a worker and
    * the worker took it (a grant, or the first `progress` push, whichever came first -- device
    * work having started means the request is that worker's now). A `NO_CAPACITY` refusal is a
-   * stale view, not a dispatch, and emits nothing -- the request stays queued.
+   * stale view, not a dispatch, and emits nothing -- the request stays queued, or a `noWait`
+   * request gets one more walk without that worker (ADR 0009 §5).
    *
    * C2 (round 2 review): widened back to what `docs/internal/EVENTS.md` always specified for this row --
    * `requesterId`/`platform`/`model` so the fact is self-contained (events rule 6) rather than

@@ -538,6 +538,35 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
   });
 
+  it("leaves a request queued when the worker that refused it left the views before the refusal arrived", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    // The worker goes away between routing and its answer: its view is gone by the time the
+    // NO_CAPACITY lands, so there is no view left to remember the refusal against.
+    const target = directory.target.bind(directory);
+    directory.target = (workerId) => {
+      const found = target(workerId);
+      if (found === undefined) return undefined;
+      return {
+        ...found,
+        client: () => {
+          workers.disconnected(workerId);
+          void workers.remove(workerId);
+          return found.client();
+        },
+      };
+    };
+
+    void coordinator.request(REQUEST, requestOptions());
+    await tick();
+
+    expect(workers.views()).toEqual([]);
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+    expect(coordinator.queueDepth).toBe(1);
+  });
+
   it("rejects a noWait request refused by its only worker with NO_CAPACITY, reports lease.rejected no-wait, and refreshes that worker's view", async () => {
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();

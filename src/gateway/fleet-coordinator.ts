@@ -725,7 +725,9 @@ export class FleetLeaseCoordinator {
 
   /**
    * Every exit from this method leaves `waiter` either terminal (`resolve`/`reject`, inside
-   * `#settleGrant`/the catch below) or back in `queued` (`#staleView`'s `#enqueue`) -- never
+   * `#settleGrant`/the catch below), back in `queued` (`#staleView`'s `#enqueue`), or -- a
+   * `noWait` waiter refused with `NO_CAPACITY` -- handed back to `#admit`, which leaves it
+   * terminal or `processing` in a new attempt that these same rules govern -- never
    * stuck `processing` with nothing left to drive it, and never in two places disagreeing about
    * which. C1 (round 2 review): the first early return used to skip straight to `#staleView`
    * without first clearing a separate `#dispatchTargets` mark this method used to set -- the mark
