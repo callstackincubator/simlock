@@ -823,6 +823,21 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     expect(resolveCalls.at(-1)?.arguments[1]).toMatchObject({ allowDownload: false });
   });
 
+  it("catalog.get does not list an uninstalled runtime under downloads.policy 'always'", async () => {
+    // The fake driver has only 26.5 installed; under 'always' any other version is a download
+    // away, and the catalog still lists only what is on the machine.
+    const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "always" });
+
+    const catalog = await dispatcher.dispatch("catalog.get", {}, session());
+
+    expect(catalog.platforms).toEqual([
+      expect.objectContaining({ modelRuntimes: {}, platform: "ios", runtimes: ["26.5"] }),
+    ]);
+    // The policy never reaches the driver, so nothing it could download can leak into the list.
+    const listCalls = driver.calls.filter((call) => call.operation === "listCatalog");
+    expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
+  });
+
   it("leaves allowDownload:true untouched when downloads.policy is 'on-request'", async () => {
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "on-request" });
     await dispatcher.dispatch(

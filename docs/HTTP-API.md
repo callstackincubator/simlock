@@ -153,10 +153,27 @@ reads neither cannot tell the difference, which is the point.
 ### `GET /v1/catalog?platform=ios|android`
 
 Role: `agent`. Exactly `simlock catalog --json`. Read-only; never triggers a
-download. On a **gateway** it is the union of the connected workers'
-catalogs, each model and runtime annotated with the workers that have it — so
-a model the catalog lists is leasable *somewhere* in the fleet, not
-necessarily on every machine in it.
+download, and lists only what is installed, whatever the download policy. On
+a **gateway** it is the union of the connected workers' catalogs, each model
+and runtime annotated with the workers that have it — so a model the catalog
+lists is leasable *somewhere* in the fleet, not necessarily on every machine
+in it.
+
+Each platform entry carries `modelRuntimes`: for every name in `models`, the
+installed runtimes that model pairs with. A pair listed there can be leased;
+a model and a runtime that are each listed but not paired cannot. An empty
+list means nothing installed pairs with that model. On a gateway a model is
+paired with a runtime when at least one connected worker pairs them.
+
+```json
+{ "platforms": [ {
+    "platform": "ios",
+    "models": ["iPhone 16", "iPhone XS"],
+    "runtimes": ["18.4", "26.0"],
+    "defaultRuntime": "26.0",
+    "modelRuntimes": { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] }
+} ] }
+```
 
 ### `POST /v1/lease-requests`
 
@@ -566,7 +583,7 @@ workers of its own and does not implement the underlying operations at all.
 { "workers": [ {
     "id": "3f81a2c4", "label": "mac-studio-2",
     "state": "connected", "drained": false,
-    "daemonVersion": "0.4.0", "protocol": { "min": 5, "max": 5 },
+    "daemonVersion": "0.4.0", "protocol": { "min": 6, "max": 6 },
     "connectedAt": "2026-09-01T09:00:00Z", "lastSeenAt": "2026-09-01T09:14:30Z",
     "capacity": { "ios": { "running": 2, "limit": 4 }, "android": { "running": 0, "limit": 2 } },
     "downloads": { "policy": "on-request" },

@@ -132,6 +132,10 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
  * `defaultRuntime` survives only when every worker offering that platform names the same one.
  * A fleet whose machines default differently has no single default, and picking one at random
  * would make `simlock lease` non-deterministic across an unchanged fleet.
+ *
+ * `modelRuntimes` pairs a model with a runtime only when one worker pairs them itself (ADR 0008
+ * §4). It is never built from the fleet's `models` and `runtimes`: one worker having a model and
+ * another having a runtime does not make the pair leasable anywhere.
  */
 export function aggregateCatalog(views: readonly WorkerView[], platform?: Platform): CatalogOutput {
   const byPlatform = indexCatalogs(views, platform);
@@ -151,6 +155,8 @@ export function aggregateCatalog(views: readonly WorkerView[], platform?: Platfo
 interface CatalogBucket {
   readonly models: Map<string, string[]>;
   readonly runtimes: Map<string, string[]>;
+  /** Each model's runtimes, as the union of what each worker pairs it with itself. */
+  readonly modelRuntimes: Map<string, Set<string>>;
   readonly defaults: Set<string | undefined>;
 }
 
@@ -178,22 +184,35 @@ function addCatalogEntry(
 ): void {
   const bucket = byPlatform.get(entry.platform) ?? {
     defaults: new Set<string | undefined>(),
+    modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
   };
   byPlatform.set(entry.platform, bucket);
   for (const model of entry.models) annotate(bucket.models, model, workerId);
   for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
+  for (const model of entry.models) {
+    const paired = bucket.modelRuntimes.get(model) ?? new Set<string>();
+    for (const runtime of entry.modelRuntimes[model] ?? []) paired.add(runtime);
+    bucket.modelRuntimes.set(model, paired);
+  }
   bucket.defaults.add(entry.defaultRuntime);
 }
 
 function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCatalog {
   const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
+  const runtimes = [...bucket.runtimes.keys()].sort();
   return {
+    modelRuntimes: Object.fromEntries(
+      [...bucket.modelRuntimes].map(([model, paired]) => [
+        model,
+        runtimes.filter((runtime) => paired.has(runtime)),
+      ]),
+    ),
     models: [...bucket.models.keys()].sort(),
     modelWorkers: Object.fromEntries(bucket.models),
     platform,
-    runtimes: [...bucket.runtimes.keys()].sort(),
+    runtimes,
     runtimeWorkers: Object.fromEntries(bucket.runtimes),
     ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
   };

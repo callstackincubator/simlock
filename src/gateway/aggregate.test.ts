@@ -198,12 +198,15 @@ describe("aggregateStatus", () => {
 describe("aggregateCatalog", () => {
   const iosOnA = {
     defaultRuntime: "26.0",
+    modelRuntimes: { "iPhone 17": ["26.0"] },
     models: ["iPhone 17"],
     platform: "ios" as const,
     runtimes: ["26.0"],
   };
+  // B has 25.4 installed, but only the iPad pairs with it there.
   const iosOnB = {
     defaultRuntime: "26.0",
+    modelRuntimes: { "iPad Pro": ["25.4", "26.0"], "iPhone 17": ["26.0"] },
     models: ["iPhone 17", "iPad Pro"],
     platform: "ios" as const,
     runtimes: ["26.0", "25.4"],
@@ -256,11 +259,83 @@ describe("aggregateCatalog", () => {
     expect(catalog.platforms[0]?.models).toEqual(["iPhone 17"]);
   });
 
+  it("pairs a model with a runtime when at least one connected worker pairs them", () => {
+    const iosOnC = {
+      modelRuntimes: { "iPhone 17": ["25.4"] },
+      models: ["iPhone 17"],
+      platform: "ios" as const,
+      runtimes: ["25.4"],
+    };
+    const catalog = aggregateCatalog([
+      view({ catalog: [iosOnA], id: "wrk_a" }),
+      view({ catalog: [iosOnC], id: "wrk_c" }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelRuntimes).toEqual({ "iPhone 17": ["25.4", "26.0"] });
+  });
+
+  it("does not pair a model with a runtime that only another model has", () => {
+    const catalog = aggregateCatalog([
+      view({ catalog: [iosOnA], id: "wrk_a" }),
+      view({ catalog: [iosOnB], id: "wrk_b" }),
+    ]);
+
+    // 25.4 is in the fleet's runtimes, and iPhone 17 is in its models, but no worker pairs them.
+    expect(catalog.platforms[0]?.runtimes).toContain("25.4");
+    expect(catalog.platforms[0]?.modelRuntimes).toEqual({
+      "iPad Pro": ["25.4", "26.0"],
+      "iPhone 17": ["26.0"],
+    });
+  });
+
+  it("ignores the pairings of disconnected and incompatible workers", () => {
+    const pairsOld = {
+      modelRuntimes: { "iPhone 17": ["25.4"] },
+      models: ["iPhone 17"],
+      platform: "ios" as const,
+      runtimes: ["25.4"],
+    };
+    const catalog = aggregateCatalog([
+      view({ catalog: [iosOnA], id: "wrk_a" }),
+      view({ catalog: [pairsOld], connection: "disconnected", id: "wrk_gone" }),
+      view({ catalog: [pairsOld], connection: "incompatible", id: "wrk_old" }),
+    ]);
+
+    expect(catalog.platforms[0]?.modelRuntimes).toEqual({ "iPhone 17": ["26.0"] });
+  });
+
+  it("gives every model in the fleet catalog a modelRuntimes entry, empty when nothing pairs", () => {
+    const unpaired = {
+      modelRuntimes: { "iPhone XS": [] },
+      models: ["iPhone XS"],
+      platform: "ios" as const,
+      runtimes: ["26.0"],
+    };
+    const catalog = aggregateCatalog([
+      view({ catalog: [iosOnB], id: "wrk_b" }),
+      view({ catalog: [unpaired], id: "wrk_x" }),
+    ]);
+
+    const platform = catalog.platforms[0];
+    expect(Object.keys(platform?.modelRuntimes ?? {}).sort()).toEqual(
+      [...(platform?.models ?? [])].sort(),
+    );
+    expect(platform?.modelRuntimes["iPhone XS"]).toEqual([]);
+  });
+
   it("filters to one platform when asked", () => {
     const catalog = aggregateCatalog(
       [
         view({
-          catalog: [iosOnA, { models: ["Pixel 9"], platform: "android", runtimes: ["35"] }],
+          catalog: [
+            iosOnA,
+            {
+              modelRuntimes: { "Pixel 9": ["35"] },
+              models: ["Pixel 9"],
+              platform: "android",
+              runtimes: ["35"],
+            },
+          ],
           id: "wrk_a",
         }),
       ],

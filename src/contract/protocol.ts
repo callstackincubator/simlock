@@ -14,12 +14,14 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /**
- * The range this contract's daemon speaks. Both ends are 5, and every move that got it there
+ * The range this contract's daemon speaks. Both ends are 6, and every move that got it there
  * was breaking with no shim kept behind them, which is exactly when ADR 0003 §6's honesty
  * rule says a range must *not* widen: ADR 0004 removed `lease.heartbeat` and `mode` from the
  * wire (taking it to 4), and ADR 0005 adds `device.exec` and its `output` push family, a
  * `mode` field `status.get` now always carries, and the gateway surface -- `worker.*`,
- * `workerId`, the `worker` token role -- on top (taking it to 5). It only ever widens once a
+ * `workerId`, the `worker` token role -- on top (taking it to 5). ADR 0008 makes the catalog
+ * carry a required `modelRuntimes` per platform (taking it to 6), which a gateway reading a
+ * worker's catalog depends on. It only ever widens once a
  * second version is actually kept alive side by side with the first, which nothing here does.
  *
  * A client from before any of those changes simply does not overlap this daemon, and `hello`
@@ -31,8 +33,9 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  *
  * The consequence ADR 0005 §31 names: a pre-0005 worker's uplink negotiates nothing, so its
  * gateway marks it `incompatible` -- with both ranges on the view -- and never dispatches to it.
+ * A worker on 5 is marked `incompatible` the same way (ADR 0008 §10).
  */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 5, max: 5 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 6, max: 6 };
 
 /**
  * The one protocol version that ever existed before ranges did. Used only to build the

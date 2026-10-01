@@ -334,7 +334,14 @@ describe("operation input/output round trips", () => {
           queueDepth: 0,
           leases: [lease],
           devices: [],
-          catalog: [{ platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"] }],
+          catalog: [
+            {
+              platform: "ios",
+              models: ["iPhone 17"],
+              runtimes: ["26.0"],
+              modelRuntimes: { "iPhone 17": ["26.0"] },
+            },
+          ],
         },
         {
           id: "wrk_2",
@@ -360,12 +367,25 @@ describe("operation input/output round trips", () => {
           platform: "ios",
           models: ["iPhone 17"],
           runtimes: ["26.0"],
+          modelRuntimes: { "iPhone 17": ["26.0"] },
           modelWorkers: { "iPhone 17": ["wrk_1", "wrk_2"] },
           runtimeWorkers: { "26.0": ["wrk_1"] },
         },
       ],
     });
     expect(parsed.platforms[0]?.modelWorkers).toEqual({ "iPhone 17": ["wrk_1", "wrk_2"] });
+  });
+
+  it("catalog.get rejects a platform entry without modelRuntimes", () => {
+    const entry = { platform: "ios", models: ["iPhone 17"], runtimes: ["26.0"] };
+    expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).toThrow(
+      /modelRuntimes/,
+    );
+    expect(() =>
+      OPERATIONS["catalog.get"].output.parse({
+        platforms: [{ ...entry, modelRuntimes: { "iPhone 17": ["26.0"] } }],
+      }),
+    ).not.toThrow();
   });
 
   it("worker.remove reports whether there was a view to forget; drain never lies", () => {

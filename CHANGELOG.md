@@ -40,6 +40,11 @@ specification those changes are written against.
 
 ### ⚠ BREAKING CHANGES
 
+- **The daemon protocol is now 6**, `{min: 6, max: 6}`, with no compatibility
+  shim. ADR 0008 makes the catalog's `modelRuntimes` required, so a gateway
+  marks a worker on 5 `incompatible` with both ranges shown and sends it
+  nothing; upgrade the worker. A client built against 5 gets
+  `PROTOCOL_VERSION_UNSUPPORTED` from `hello`, as with every earlier bump.
 - **The daemon protocol is now 5**, `{min: 5, max: 5}`, with no compatibility
   shim — the same no-shim rule that took it to 4. ADR 0005 adds `device.exec`
   and its `output` push family, and moves `status.get`'s `health` into a
@@ -216,6 +221,15 @@ those changes add, alongside the breaking changes above.
   `EXEC_TIMEOUT` error code (CLI exit `10`, the code the other "ran out of
   time" outcome already uses, and HTTP `504`) rather than reporting the exit
   code the kill produced.
+- **catalog:** each platform in `simlock catalog`, `GET /v1/catalog`, the MCP
+  `list_devices` tool, and `getCatalog` carries `modelRuntimes`: for every
+  model, the installed runtimes it pairs with. A listed pair can be leased; on
+  iOS a model and a runtime that are each installed can still fail to pair,
+  and are not listed together. An iOS lease for an exact version now succeeds
+  when any installed build of that version pairs with the model, not only the
+  first one. `simlock catalog` prints each model with its runtimes. On a
+  gateway, `simlock worker list` shows each worker's own pairings and the
+  catalog pairs a model with a runtime when at least one worker does.
 - **events:** every business event is also written to `~/.simlock/events.jsonl`,
   one JSON line each, so the history survives a daemon restart or crash.
   `simlock events --since` and `GET /v1/events?since=` read it, reaching past

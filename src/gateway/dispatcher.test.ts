@@ -261,7 +261,14 @@ describe("GatewayDispatcher", () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
     workers.refresh("wrk_1", {
-      catalog: [{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }],
+      catalog: [
+        {
+          modelRuntimes: { "iPhone 17": ["26.0"] },
+          models: ["iPhone 17"],
+          platform: "ios",
+          runtimes: ["26.0"],
+        },
+      ],
     });
 
     const catalog = await dispatcher.dispatch("catalog.get", {}, session());

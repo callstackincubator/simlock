@@ -60,6 +60,9 @@ const binaries = {
   sdkmanager: `${sdk}/cmdline-tools/latest/bin/sdkmanager`,
 } as const;
 const pixelDevices = `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
+const twoPixelDevices =
+  `Available devices:\nid: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n` +
+  `---------\nid: 1 or "pixel_9"\n    Name: Pixel 9\n    OEM : Google\n`;
 
 describe("AndroidDriver", () => {
   it("discovers ANDROID_HOME before the other SDK locations and rejects a missing SDK", async () => {
@@ -922,9 +925,55 @@ describe("AndroidDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: "35",
+      modelRuntimes: { "Pixel 8": ["34", "35"] },
       models: ["Pixel 8"],
       runtimes: ["34", "35"],
     });
+  });
+
+  it("pairs every model with every installed API level, including one whose only image has a foreign ABI", async () => {
+    // The host is arm64-v8a; API 33 is installed only as x86_64.
+    const filesystem = await androidFilesystem({
+      images: [
+        ["33", "google_apis", "x86_64"],
+        ["35", "google_apis", "arm64-v8a"],
+      ],
+    });
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "Pixel 9"]);
+    expect(catalog.modelRuntimes).toEqual({ "Pixel 8": ["33", "35"], "Pixel 9": ["33", "35"] });
+  });
+
+  it("resolves every pair listCatalog lists", async () => {
+    const filesystem = await androidFilesystem({
+      images: [
+        ["33", "google_apis", "x86_64"],
+        ["35", "google_apis", "arm64-v8a"],
+      ],
+    });
+    const runner = new ScriptedProcessRunner(
+      Array.from({ length: 5 }, () =>
+        processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+      ),
+    );
+    const driver = await createDriver(filesystem, runner);
+    const catalog = await driver.listCatalog();
+    const pairs = Object.entries(catalog.modelRuntimes).flatMap(([model, runtimes]) =>
+      runtimes.map((osVersion) => ({ model, osVersion })),
+    );
+    expect(pairs).toHaveLength(4);
+
+    for (const { model, osVersion } of pairs) {
+      await expect(
+        driver.resolveSpec({ model, osVersion, platform: "android" }, { allowDownload: false }),
+      ).resolves.toEqual({ model, osVersion, platform: "android" });
+    }
   });
 
   it("reports no default runtime and no installed API levels without system images", async () => {
@@ -936,6 +985,7 @@ describe("AndroidDriver", () => {
 
     await expect(driver.listCatalog()).resolves.toEqual({
       defaultRuntime: undefined,
+      modelRuntimes: { "Pixel 8": [] },
       models: ["Pixel 8"],
       runtimes: [],
     });

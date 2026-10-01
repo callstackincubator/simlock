@@ -1619,6 +1619,47 @@ describe("CLI: token operations never write tokens.json directly", () => {
   });
 });
 
+describe("CLI: catalog", () => {
+  it("prints each model with the runtimes it pairs with", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  defaultRuntime: "26.0",
+                  modelRuntimes: {
+                    "iPhone 16": ["18.4", "26.0"],
+                    "iPhone 8": [],
+                    "iPhone XS": ["18.4"],
+                  },
+                  models: ["iPhone 16", "iPhone XS", "iPhone 8"],
+                  platform: "ios",
+                  runtimes: ["18.4", "26.0"],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: ios",
+        "  Runtimes: 18.4, 26.0 (default: 26.0)",
+        "  Models:",
+        "    iPhone 16: 18.4, 26.0",
+        "    iPhone XS: 18.4",
+        "    iPhone 8: (no paired runtime)",
+        "",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
   const connectedWorker = {
     capacity: {

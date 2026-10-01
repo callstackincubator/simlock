@@ -53,11 +53,18 @@ describe("DriverCatalog", () => {
     await expect(catalog.listCatalog()).resolves.toEqual([
       {
         defaultRuntime: "26.5",
+        modelRuntimes: { "iPhone 16": ["18.4", "26.5"] },
         models: ["iPhone 16"],
         platform: "ios",
         runtimes: ["18.4", "26.5"],
       },
-      { defaultRuntime: "34", models: ["Pixel 8"], platform: "android", runtimes: ["34"] },
+      {
+        defaultRuntime: "34",
+        modelRuntimes: { "Pixel 8": ["34"] },
+        models: ["Pixel 8"],
+        platform: "android",
+        runtimes: ["34"],
+      },
     ]);
   });
 
@@ -68,7 +75,13 @@ describe("DriverCatalog", () => {
     const catalog = new DriverCatalog([ios, android]);
 
     await expect(catalog.listCatalog("ios")).resolves.toEqual([
-      { defaultRuntime: "26.5", models: [], platform: "ios", runtimes: ["26.5"] },
+      {
+        defaultRuntime: "26.5",
+        modelRuntimes: {},
+        models: [],
+        platform: "ios",
+        runtimes: ["26.5"],
+      },
     ]);
     expect(android.calls).toEqual([]);
   });

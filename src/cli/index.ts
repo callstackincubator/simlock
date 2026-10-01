@@ -2029,10 +2029,17 @@ function formatCatalog(response: CatalogGetOutput): string {
   return response.platforms
     .map((entry) => {
       const defaultRuntime = entry.defaultRuntime ?? "(none)";
+      // Each model with the runtimes it pairs with: a model and a runtime both listed for the
+      // platform are not necessarily leasable together.
+      const models = entry.models.map((model) => {
+        const paired = entry.modelRuntimes[model] ?? [];
+        return `    ${model}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`;
+      });
       return [
         `Platform: ${entry.platform}`,
-        `  Models: ${entry.models.length > 0 ? entry.models.join(", ") : "(none)"}`,
         `  Runtimes: ${entry.runtimes.length > 0 ? entry.runtimes.join(", ") : "(none)"} (default: ${defaultRuntime})`,
+        models.length > 0 ? "  Models:" : "  Models: (none)",
+        ...models,
       ].join("\n");
     })
     .join("\n");
