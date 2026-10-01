@@ -66,9 +66,9 @@ A background failure whose error text already travels on an event
 
 One exception: the daemon's own lifecycle. Start, stop, and a driver skipped
 at discovery are logged where they happen, although `daemon.started`,
-`daemon.stopping` and `driver.root-rejected` report them too. The log has to
-explain a daemon that never came up, and no event is emitted until startup
-has finished.
+`daemon.stopping`, `driver.root-rejected` and `driver.adb-server-rejected`
+report them too. The log has to explain a daemon that never came up, and the
+event file cannot be relied on for that.
 
 ### 4. A log line never becomes an event
 
