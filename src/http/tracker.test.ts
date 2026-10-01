@@ -1,17 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { RequesterAlreadyLeasedError } from "../core/index.js";
+import { NoCapacityError, RequesterAlreadyLeasedError } from "../core/index.js";
+import { RequestCancelledError } from "../core/wait-queue.js";
 import { FakeClock } from "../ports/index.js";
-import { FakeDispatcher, makeGrant, sequenceIdGenerator, waitForDispatch } from "./test-fakes.js";
+import { FakeDispatcher, makeGrant, waitForDispatch } from "./test-fakes.js";
 import { isTerminalStage, LeaseRequestTracker, type TrackedRequestView } from "./tracker.js";
 
 function buildTracker() {
   const clock = new FakeClock(1_000);
-  const dispatcher = new FakeDispatcher();
+  const dispatcher = new FakeDispatcher(clock);
   const tracker = new LeaseRequestTracker({
     clock,
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
-    idGenerator: sequenceIdGenerator("req"),
+    requests: dispatcher.requests,
   });
   return { clock, dispatcher, tracker };
 }
@@ -73,14 +74,6 @@ describe("LeaseRequestTracker.submit", () => {
     if (outcome.kind === "rejected") {
       expect(outcome.error).toBeInstanceOf(RequesterAlreadyLeasedError);
     }
-  });
-
-  it("drops a fast-rejected request from tracking -- it never becomes a gettable resource", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    const outcomePromise = tracker.submit(identity, body);
-    const call = await waitForDispatch(dispatcher, "lease.request");
-    call.reject(new Error("boom"));
-    await outcomePromise;
   });
 
   it("answers 'created' immediately for an instant grant that never calls onProgress", async () => {
@@ -168,9 +161,13 @@ describe("LeaseRequestTracker.cancel", () => {
 
   it("cancels a still-queued request and settles it as 'cancelled'", async () => {
     const { dispatcher, tracker } = buildTracker();
-    const { view } = await createTracked(tracker, dispatcher);
+    const { view, callIndex } = await createTracked(tracker, dispatcher);
 
-    dispatcher.handlers["lease.cancel"] = () => ({ result: "cancelled" });
+    // What the daemon's `lease.cancel` does to a queued wait: rejects it as cancelled.
+    dispatcher.handlers["lease.cancel"] = () => {
+      dispatcher.calls[callIndex]?.reject(new RequestCancelledError(view.id));
+      return { result: "cancelled" };
+    };
     const result = await tracker.cancel(view.id, identity);
     expect(result).toEqual({ kind: "cancelled" });
     expect(tracker.get(view.id)?.state).toEqual({ stage: "cancelled" });
@@ -338,20 +335,109 @@ describe("LeaseRequestTracker.waitForChange abort", () => {
   });
 });
 
-describe("LeaseRequestTracker idempotency cleanup", () => {
-  it("drops the mapping when a submission is rejected before becoming visible -- a replay creates a fresh request", async () => {
+describe("LeaseRequestTracker repeats of a stored request", () => {
+  it("answers a repeat of a request that failed before becoming visible with the stored, failed request, starting no second one", async () => {
     const { dispatcher, tracker } = buildTracker();
-    const first = tracker.submit(identity, body, "key-1");
+    const first = tracker.submit(identity, { ...body, noWait: true }, "key-1");
     const firstCall = await waitForDispatch(dispatcher, "lease.request");
-    firstCall.reject(new RequesterAlreadyLeasedError("tok_agent"));
-    const firstOutcome = await first;
-    expect(firstOutcome.kind).toBe("rejected");
+    // How a stored `noWait` request fails with no capacity: before any progress is reported.
+    firstCall.reject(new NoCapacityError());
+    expect((await first).kind).toBe("rejected");
 
-    const second = tracker.submit(identity, body, "key-1");
-    const secondCall = await waitForDispatch(dispatcher, "lease.request", 1);
-    secondCall.session.onProgress?.({ queuePosition: 1, stage: "queued" });
-    const secondOutcome = await second;
-    expect(secondOutcome.kind).toBe("created");
-    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(2);
+    const second = await tracker.submit(identity, { ...body, noWait: true }, "key-1");
+
+    expect(second.kind).toBe("created");
+    if (second.kind === "created") {
+      expect(second.view.state).toMatchObject({ error: { code: "NO_CAPACITY" }, stage: "failed" });
+    }
+    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
+  });
+
+  it("answers a repeat of a request still waiting with that request at once, before any new progress", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    void tracker.submit(identity, body, "key-1");
+    await waitForDispatch(dispatcher, "lease.request");
+
+    let answered: Awaited<ReturnType<LeaseRequestTracker["submit"]>> | undefined;
+    void tracker.submit(identity, body, "key-1").then((outcome) => (answered = outcome));
+    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+
+    expect(answered?.kind).toBe("created");
+    if (answered?.kind === "created") {
+      // The one request the first submission stored, answered with no new progress.
+      expect(dispatcher.requests.get(answered.view.id)?.record).toMatchObject({
+        idempotencyKey: "key-1",
+        state: "open",
+      });
+      expect(answered.view.state).toEqual({ queuePosition: 1, stage: "queued" });
+    }
+    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
+  });
+
+  it("reads a granted request back through the request book, not from anything the tracker kept", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    const outcome = tracker.submit(identity, body);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.resolve(makeGrant({ lease: { id: "lse_stored" } }));
+    const created = await outcome;
+    if (created.kind !== "created") throw new Error("expected created");
+
+    // A second tracker over the same store: it was never handed this request.
+    const fresh = new LeaseRequestTracker({
+      clock: new FakeClock(1_000),
+      dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
+      requests: dispatcher.requests,
+    });
+    const state = fresh.get(created.view.id)?.state;
+    if (state?.stage !== "granted") throw new Error("expected granted");
+    expect(state.lease.id).toBe("lse_stored");
+  });
+});
+
+describe("LeaseRequestTracker.submit when the stored record cannot be read", () => {
+  it("still answers created with the grant when the record is gone by the time the grant lands", async () => {
+    const clock = new FakeClock(1_000);
+    const dispatcher = new FakeDispatcher(clock);
+    const tracker = new LeaseRequestTracker({
+      clock,
+      dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
+      // A reader that has already lost every record: pruned, or evicted at the cap.
+      requests: {
+        get: () => undefined,
+        requestIdForLease: () => undefined,
+        watch: () => undefined,
+      },
+    });
+    const outcome = tracker.submit(identity, body);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+
+    call.resolve(makeGrant({ lease: { id: "lse_pruned" } }));
+
+    const settled = await outcome;
+    expect(settled.kind).toBe("created");
+    if (settled.kind === "created") {
+      expect(settled.view.state).toMatchObject({ lease: { id: "lse_pruned" }, stage: "granted" });
+    }
+  });
+});
+
+describe("LeaseRequestTracker.submit with a dispatch that never names its request", () => {
+  it("fails the POST rather than waiting forever when a grant arrives unnamed", async () => {
+    const tracker = new LeaseRequestTracker({
+      clock: new FakeClock(1_000),
+      dispatch: (() => Promise.resolve(makeGrant())) as never,
+      requests: {
+        get: () => undefined,
+        requestIdForLease: () => undefined,
+        watch: () => undefined,
+      },
+    });
+
+    const outcome = await tracker.submit(identity, body);
+
+    expect(outcome).toMatchObject({
+      error: { message: "lease.request granted without naming its request" },
+      kind: "rejected",
+    });
   });
 });

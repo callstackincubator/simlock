@@ -55,7 +55,8 @@ export function badRequest(message: string): HttpApiError {
 }
 
 /** Gateway-local code for "no such lease-*request* resource" (`POST /v1/lease-requests`, ADR
- * §11's HTTP-only envelope kept until #72). Deliberately **not** `UNKNOWN_REQUEST` -- that code
+ * §11). The request itself is core state since #72, but no contract operation reads one by id,
+ * so its not-found answer stays HTTP's own. Deliberately **not** `UNKNOWN_REQUEST` -- that code
  * is the contract's (`src/contract/errors.ts`), meaning "unknown operation name" at 400
  * (`DispatchError` in `dispatcher.ts`, thrown for a request naming an operation the dispatcher
  * has no handler for). Reusing it here for a different resource at a different status (404)

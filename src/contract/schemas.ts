@@ -221,6 +221,29 @@ export const leaseGrantSchema = z.object({
 });
 
 /**
+ * One stored lease request (`LeaseRequestRecord`, src/core/domain.ts): the shape a frontend reads
+ * a request back in, whichever frontend sent it. `grant` is the grant the request was answered
+ * with, stored as granted -- a later renew does not move its `ttlDeadline`.
+ */
+export const leaseRequestRecordSchema = z.object({
+  id: z.string(),
+  requesterId: z.string(),
+  ownerId: z.string(),
+  idempotencyKey: z.string().optional(),
+  request: z.object({
+    platform: platformSchema,
+    model: z.string(),
+    osVersion: z.string().optional(),
+    full: z.boolean().optional(),
+  }),
+  createdAt: z.number(),
+  state: z.enum(["open", "granted", "failed", "cancelled"]),
+  settledAt: z.number().optional(),
+  grant: leaseGrantSchema.optional(),
+  failure: z.object({ code: z.string(), message: z.string() }).optional(),
+});
+
+/**
  * The scoped command `simlock simctl` / `simlock adb` runs on the caller's behalf. The command
  * is spawned as-is, so the shape is validated at the boundary like every other output: an
  * argument list that is not entirely strings would otherwise stringify into whatever the tool
@@ -440,6 +463,8 @@ export const configSchema = z.object({
       ios: leaseIdentitySchema,
       android: leaseIdentitySchema,
     }),
+    requestRetentionMs: z.number(),
+    maxRequestRecords: z.number(),
   }),
   exec: z.object({ timeoutMs: z.number() }),
   diskPressure: z.object({ freeBytesThreshold: z.number() }),

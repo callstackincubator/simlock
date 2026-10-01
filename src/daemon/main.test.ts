@@ -65,7 +65,7 @@ async function start(
     ...overrides,
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
-  return { daemon, sink };
+  return { daemon, directory, sink };
 }
 
 /** A driver whose disposal is observable, which `FakeDriver` deliberately is not. */
@@ -103,6 +103,38 @@ describe("startDaemon", () => {
     );
     const record = sink.records.find((entry) => entry.message === "Daemon started");
     expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
+  });
+
+  it("stores lease requests under the configured limits, with failures classified by contract code", async () => {
+    const filesystem = new MemoryFilesystem();
+    const { daemon, directory } = await start({
+      configOverrides: { lease: { maxRequestRecords: 1 } },
+      filesystem,
+    });
+    const statePath = join(directory, "state.json");
+    const missingRuntime = { model: "iPhone 16", osVersion: "99.0", platform: "ios" } as const;
+    const session = {
+      manageEventSubscription: () => undefined,
+      principal: "agent",
+      role: "agent",
+    } as const;
+
+    for (const requesterId of ["first", "second"]) {
+      await daemon
+        .dispatch("lease.request", { ...missingRuntime, requesterId }, session)
+        .catch(() => undefined);
+    }
+
+    // With the default cap both failures stay stored; with an unclassified failure the code
+    // would be INTERNAL.
+    await expect
+      .poll(async () => {
+        const state = JSON.parse(await filesystem.readFile(statePath)) as {
+          readonly leaseRequests: readonly unknown[];
+        };
+        return state.leaseRequests;
+      })
+      .toMatchObject([{ failure: { code: "RUNTIME_MISSING" }, requesterId: "second" }]);
   });
 
   it("establishes the instance identity once, and reuses it on the next start", async () => {

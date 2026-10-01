@@ -74,6 +74,7 @@ import {
 import { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import { AdminSecretManager } from "./admin-secret.js";
+import { describeLeaseRequestFailure } from "./error-code.js";
 import { GatewayUplink } from "./gateway-uplink.js";
 import { createCredentialRoleResolver } from "./session.js";
 
@@ -161,6 +162,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     filesystem,
     idGenerator,
     leaseIdentity: config.lease.identity,
+    leaseRequestLimits: {
+      maxRecords: config.lease.maxRequestRecords,
+      retentionMs: config.lease.requestRetentionMs,
+    },
     statePath,
   });
   // Before discovery, because every root a driver validates is checked against it, and it
@@ -198,6 +203,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const leaseEngine = new LeaseEngine({
     clock,
     config,
+    describeFailure: describeLeaseRequestFailure,
     drivers,
     eventBus,
     idGenerator,
@@ -421,6 +427,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
       eventBus,
       idGenerator,
+      leaseRequests: leaseEngine.requests,
       logger: httpLogger,
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
@@ -583,6 +590,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // P2 (round 2 review): bounds a forwarded `lease.request`, the one uplink call that used to
     // have no timeout of its own.
     leaseRequestTimeoutMs: config.gateway.leaseRequestTimeoutMs,
+    describeFailure: describeLeaseRequestFailure,
+    leaseRequestLimits: {
+      maxRecords: config.lease.maxRequestRecords,
+      retentionMs: config.lease.requestRetentionMs,
+    },
     logger: logger.child("gateway"),
     routing,
     views: gatewayService.workers,
@@ -674,6 +686,8 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       dispatch: (operation, input, session) => daemon.dispatch(operation, input, session),
       eventBus,
       idGenerator,
+      // The fleet coordinator's in-memory request book: a gateway stores nothing on disk.
+      leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).

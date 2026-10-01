@@ -98,6 +98,11 @@ function harness(
   const coordinator = new FleetLeaseCoordinator({
     clock,
     directory,
+    describeFailure: (error) => ({
+      code: "INTERNAL",
+      message: error instanceof Error ? error.message : String(error),
+    }),
+    leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
     eventBus,
     // Deliberately large by default -- P5's own test overrides this to something the FakeClock
     // can advance past inside the test, without every other test in this file needing to know
@@ -155,7 +160,7 @@ function connectWorker(
  * forget dispatch attempt's own synchronous-until-the-RPC portion to have run, without waiting on
  * a real timer -- everything in this module is driven by `FakeClock` and in-memory promises, so
  * there is nothing a real clock tick would advance that this does not already cover. */
-async function tick(times = 8): Promise<void> {
+async function tick(times = 16): Promise<void> {
   for (let iteration = 0; iteration < times; iteration += 1) await Promise.resolve();
 }
 
@@ -170,6 +175,51 @@ function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["req
     ...overrides,
   };
 }
+
+describe("FleetLeaseCoordinator stored requests", () => {
+  it("answers a repeat under the same key with the first grant, forwarding nothing a second time", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    const keyed = requestOptions({ idempotencyKey: "key-1" });
+
+    const first = await coordinator.request(REQUEST, keyed);
+    const repeat = await coordinator.request(REQUEST, keyed);
+
+    expect(repeat.lease.id).toBe(first.lease.id);
+    expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
+  });
+
+  it("reads a request back through its in-memory book once the fleet grants it, and names it on lease.requested", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    let requestId: string | undefined;
+
+    const grant = await coordinator.request(
+      REQUEST,
+      requestOptions({ onAdmitted: (id) => (requestId = id) }),
+    );
+    await tick();
+
+    if (requestId === undefined) throw new Error("expected the request to be admitted");
+    expect(coordinator.requests.get(requestId)?.record).toMatchObject({
+      grant: { lease: { id: grant.lease.id } },
+      state: "granted",
+    });
+    expect(coordinator.requests.requestIdForLease(grant.lease.id)).toBe(requestId);
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "lease.requested")
+        .map((event) => event.payload),
+    ).toMatchObject([{ requestId }]);
+  });
+});
 
 describe("FleetLeaseCoordinator dispatch", () => {
   it("grants a queued request from whichever worker frees first -- never dispatching to the one routing did not prefer", async () => {

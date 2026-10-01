@@ -113,8 +113,8 @@ export class FleetQueue {
     return asFleet(this.#queue.findPendingWaiter(requesterId));
   }
 
-  create(request: DeviceRequest, options: LeaseRequestOptions): FleetWaiter {
-    return asFleet(this.#queue.create(request, options));
+  create(request: DeviceRequest, options: LeaseRequestOptions, id?: string): FleetWaiter {
+    return asFleet(this.#queue.create(request, options, id));
   }
 
   enqueue(waiter: FleetWaiter): boolean {

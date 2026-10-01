@@ -46,7 +46,13 @@ import type { EventBus, EventMap } from "../bus/index.js";
 import type { LeaseGrant, LeaseRecord, SimlockAdminClient } from "../admin/index.js";
 import { isSimlockError, type AnySimlockError, type Platform } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
+import type { LeaseRequestFailure } from "../core/domain.js";
 import type { DeviceRequest } from "../core/driver.js";
+import {
+  InMemoryLeaseRequestStore,
+  LeaseRequestBook,
+  type LeaseRequestLimits,
+} from "../core/lease-request-book.js";
 import { SerializedDecision } from "../core/serialized-decision.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
@@ -89,6 +95,14 @@ export interface FleetLeaseCoordinatorOptions {
    * the one uplink call that used to have no timeout of its own. See
    * `#withLeaseRequestTimeout`'s own doc comment. */
   readonly leaseRequestTimeoutMs: number;
+  /**
+   * `lease.requestRetentionMs`/`lease.maxRequestRecords`. A gateway keeps its lease requests in
+   * memory only: a gateway restart loses every one it held, the same as before requests were
+   * stored, while what it had already routed is stored on the worker that took it.
+   */
+  readonly leaseRequestLimits: LeaseRequestLimits;
+  /** The same failure description a worker stores, so a replay answers with the same code. */
+  readonly describeFailure: (error: unknown) => LeaseRequestFailure;
   readonly logger?: Logger;
 }
 
@@ -97,6 +111,8 @@ type FleetEventName = "lease.requested" | "lease.queued" | "lease.rejected" | "r
 export class FleetLeaseCoordinator {
   readonly #queue: FleetQueue;
   readonly #decisions = new SerializedDecision();
+  /** The gateway's lease requests, by the same rules a worker's are (`LeaseRequestBook`). */
+  readonly requests: LeaseRequestBook<FleetLeaseGrant>;
   readonly #logger: Logger;
   #knownWorkerIds = new Set<string>();
   /** C1 (round 2 review): the `view.leases` array reference this coordinator last reconciled
@@ -135,6 +151,15 @@ export class FleetLeaseCoordinator {
       onTimeout: (waiter) =>
         this.#emit("lease.rejected", { requestSpec: waiter.request, reason: "timeout" }),
     });
+    this.requests = new LeaseRequestBook({
+      decisions: this.#decisions,
+      describeFailure: options.describeFailure,
+      store: new InMemoryLeaseRequestStore({
+        clock: options.clock,
+        idGenerator: options.idGenerator,
+        limits: options.leaseRequestLimits,
+      }),
+    });
     this.#unsubscribeViews = options.views.onViewsChanged(() => this.#onViewsChanged());
   }
 
@@ -167,23 +192,36 @@ export class FleetLeaseCoordinator {
     deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
   ): Promise<FleetLeaseGrant> {
-    const waiter = await this.#decisions.run(async () => {
-      const existingLeaseId = this.options.leaseIndex.existingLeaseId(options.requesterId);
-      if (existingLeaseId !== undefined || this.#queue.hasPendingRequester(options.requesterId)) {
-        this.#emit("lease.rejected", { requestSpec: deviceRequest, reason: "already-leased" });
-        throw new RequesterAlreadyLeasedError(options.requesterId, existingLeaseId);
-      }
-      const created = this.#queue.create(deviceRequest, options);
+    const admitted = await this.#decisions.run(async () => {
+      const replay = this.requests.replay(deviceRequest, options);
+      if (replay !== undefined) return { replay };
+      this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId);
+      const { id, started: created } = await this.requests.admit(
+        deviceRequest,
+        options,
+        (id, onProgress) => this.#queue.create(deviceRequest, { ...options, onProgress }, id),
+      );
       this.#createdAt.set(created, this.options.clock.now());
       this.#emit("lease.requested", {
+        requestId: id,
         requestSpec: deviceRequest,
         requester: options.requesterId,
         waitPolicy: options.noWait === true ? "no-wait" : "wait",
       });
-      return created;
+      return { waiter: created };
     });
-    this.#admit(waiter);
-    return waiter.promise;
+    if ("replay" in admitted) return admitted.replay;
+    this.#admit(admitted.waiter);
+    return admitted.waiter.promise;
+  }
+
+  /** One lease or pending request per requester, fleet-wide (§14). */
+  #refuseIfAlreadyLeased(deviceRequest: DeviceRequest, requesterId: string): void {
+    const existingLeaseId = this.options.leaseIndex.existingLeaseId(requesterId);
+    if (existingLeaseId !== undefined || this.#queue.hasPendingRequester(requesterId)) {
+      this.#emit("lease.rejected", { requestSpec: deviceRequest, reason: "already-leased" });
+      throw new RequesterAlreadyLeasedError(requesterId, existingLeaseId);
+    }
   }
 
   // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option (`#leaseCancel`); the audit cannot follow a call through a structural type.

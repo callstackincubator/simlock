@@ -13,11 +13,16 @@ import type { DeviceSpec } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
+import {
+  IdempotencyConflictError,
+  LeaseRequestBook,
+  LeaseRequestForbiddenError,
+} from "./lease-request-book.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import { QueueTimeoutError, WaitQueue } from "./wait-queue.js";
+import { QueueTimeoutError, RequesterAlreadyLeasedError, WaitQueue } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
@@ -50,7 +55,13 @@ function config(maxDevices = 1): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
+    lease: {
+      defaultTtlMs: 100,
+      maxTtlMs: 100,
+      identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
+    },
     capacity: {
       strategy: "resource",
       config: {
@@ -84,10 +95,11 @@ async function createHarness(
     new FakeDriver({ clock, platform: "ios", availableOsVersions: ["26.5"] });
   const drivers = options.drivers ?? [driver];
   let nextId = 0;
+  const filesystem = new MemoryFilesystem();
   const registry = await Registry.load({
     clock,
     eventBus: bus,
-    filesystem: new MemoryFilesystem(),
+    filesystem,
     idGenerator: { generate: () => `${nextId++}` },
     statePath,
   });
@@ -134,8 +146,17 @@ async function createHarness(
     provisioner,
     queue,
     registry,
+    requests: new LeaseRequestBook({
+      decisions,
+      // The daemon's classifier, cut down to the codes these tests read back.
+      describeFailure: (error) => ({
+        code: error instanceof NoCapacityError ? "NO_CAPACITY" : "INTERNAL",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+      store: registry,
+    }),
   });
-  return { bus, clock, coordinator, driver, registry };
+  return { bus, clock, coordinator, driver, filesystem, queue, registry };
 }
 
 async function seedReady(
@@ -596,5 +617,188 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     expect(fullRequest.device.spec).not.toHaveProperty("full");
     expect(fullRequest.device.spec).toEqual(request);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator stored requests", () => {
+  const keyed = { idempotencyKey: "key-1", ownerId: "agent", requesterId: "agent" } as const;
+
+  /** Grants the one device capacity allows to `holder`, then frees it again on demand. */
+  async function holdTheOnlyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const held = await harness.coordinator.request(request, {
+      ownerId: "holder",
+      requesterId: "holder",
+    });
+    return async () => {
+      await harness.registry.beginRelease(held.lease.id);
+      await harness.registry.transitionDevice(held.device.id, "ready", {
+        event: "device.reclaimed",
+        payload: { deviceId: held.device.id, duration: 0, strategy: "wipe" },
+      });
+      harness.coordinator.kick();
+      await flush();
+    };
+  }
+
+  it("returns the first result to a repeated request under the same key and grants no second lease", async () => {
+    const harness = await createHarness();
+    const first = await harness.coordinator.request(request, keyed);
+
+    const second = await harness.coordinator.request(request, keyed);
+
+    expect(second.lease.id).toBe(first.lease.id);
+    expect(harness.registry.snapshot.leases).toHaveLength(1);
+  });
+
+  it("attaches a repeat of an open request to the existing wait instead of starting a second one", async () => {
+    const harness = await createHarness();
+    const free = await holdTheOnlyDevice(harness);
+    const first = harness.coordinator.request(request, keyed);
+    await flush();
+    expect(harness.coordinator.queueDepth).toBe(1);
+
+    const repeat = harness.coordinator.request(request, keyed);
+    await flush();
+    expect(harness.coordinator.queueDepth).toBe(1);
+    expect(
+      harness.registry.leaseRequests().filter((record) => record.requesterId === "agent"),
+    ).toHaveLength(1);
+
+    await free();
+    const [granted, repeated] = await Promise.all([first, repeat]);
+    expect(repeated.lease.id).toBe(granted.lease.id);
+  });
+
+  it("tells a repeat joining an open wait where that wait stands now", async () => {
+    const harness = await createHarness();
+    await holdTheOnlyDevice(harness);
+    void harness.coordinator.request(request, keyed).catch(() => undefined);
+    await flush();
+
+    const heard: unknown[] = [];
+    void harness.coordinator
+      .request(request, { ...keyed, onProgress: (progress) => heard.push(progress) })
+      .catch(() => undefined);
+    await flush();
+
+    expect(heard).toEqual([{ queuePosition: 1, stage: "queued" }]);
+  });
+
+  it("writes a request to disk before the wait queue sees it", async () => {
+    const harness = await createHarness();
+    const order: string[] = [];
+    const write = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
+    harness.filesystem.writeFileAtomic = async (path, contents) => {
+      await write(path, contents);
+      const stored = (JSON.parse(contents) as { leaseRequests?: { requesterId: string }[] })
+        .leaseRequests;
+      if (stored?.some((record) => record.requesterId === "agent")) order.push("on disk");
+    };
+    const create = harness.queue.create.bind(harness.queue);
+    harness.queue.create = (...args) => {
+      order.push("queued");
+      return create(...args);
+    };
+
+    await harness.coordinator.request(request, keyed);
+
+    expect(order.slice(0, 2)).toEqual(["on disk", "queued"]);
+  });
+
+  it("keeps a capacity failure terminal under the same key after capacity frees up", async () => {
+    const harness = await createHarness();
+    const free = await holdTheOnlyDevice(harness);
+    await expect(
+      harness.coordinator.request(request, { ...keyed, noWait: true }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+    await free();
+
+    await expect(
+      harness.coordinator.request(request, { ...keyed, noWait: true }),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY", name: "ReplayedLeaseRequestError" });
+    expect(harness.registry.snapshot.leases).toHaveLength(0);
+  });
+
+  it("starts a fresh request for a new key once the prior one is terminal", async () => {
+    const harness = await createHarness();
+    const free = await holdTheOnlyDevice(harness);
+    await expect(
+      harness.coordinator.request(request, { ...keyed, noWait: true }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+    await free();
+
+    const granted = await harness.coordinator.request(request, {
+      ...keyed,
+      idempotencyKey: "key-2",
+    });
+
+    expect(granted.lease.requesterId).toBe("agent");
+    // The result is written once the wait settles, a step behind the grant itself.
+    await flush();
+    expect(harness.registry.leaseRequests().map((record) => record.state)).toEqual([
+      "granted",
+      "failed",
+      "granted",
+    ]);
+  });
+
+  it("answers REQUESTER_ALREADY_LEASED to a new key while the prior request is still open", async () => {
+    const harness = await createHarness();
+    await holdTheOnlyDevice(harness);
+    void harness.coordinator.request(request, keyed).catch(() => undefined);
+    await flush();
+
+    await expect(
+      harness.coordinator.request(request, { ...keyed, idempotencyKey: "key-2" }),
+    ).rejects.toBeInstanceOf(RequesterAlreadyLeasedError);
+  });
+
+  it("refuses the same key naming a different device as an idempotency conflict", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.request(request, keyed);
+
+    await expect(
+      harness.coordinator.request({ ...request, model: "iPhone 17" }, keyed),
+    ).rejects.toBeInstanceOf(IdempotencyConflictError);
+  });
+
+  it("refuses a repeat sent by a different principal", async () => {
+    const harness = await createHarness();
+    await harness.coordinator.request(request, keyed);
+
+    await expect(
+      harness.coordinator.request(request, { ...keyed, ownerId: "someone-else" }),
+    ).rejects.toBeInstanceOf(LeaseRequestForbiddenError);
+  });
+
+  it("stores one record for two concurrent requests under one key", async () => {
+    const harness = await createHarness();
+
+    const [first, second] = await Promise.all([
+      harness.coordinator.request(request, keyed),
+      harness.coordinator.request(request, keyed),
+    ]);
+
+    expect(harness.registry.leaseRequests()).toHaveLength(1);
+    expect(second.lease.id).toBe(first.lease.id);
+  });
+
+  it("stores a request that carries no idempotency key, and names it on lease.requested", async () => {
+    const harness = await createHarness();
+
+    await harness.coordinator.request(request, { ownerId: "agent", requesterId: "agent" });
+    await flush();
+
+    expect(harness.registry.leaseRequests()).toMatchObject([
+      { requesterId: "agent", state: "granted" },
+    ]);
+    const [stored] = harness.registry.leaseRequests();
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.requested")
+        .map((event) => event.payload),
+    ).toMatchObject([{ requestId: stored?.id, requester: "agent" }]);
+    expect(harness.registry.leaseRequests()[0]).not.toHaveProperty("idempotencyKey");
   });
 });

@@ -20,7 +20,9 @@
  * dispatcher, so it never reaches HTTP either) -- that stays local to `server.ts`.
  */
 import {
+  IdempotencyConflictError,
   InsufficientDiskSpaceError,
+  LeaseRequestForbiddenError,
   LicenseNotAcceptedError,
   NoCapacityError,
   NoDriverError,
@@ -31,9 +33,11 @@ import {
   UnknownLeaseError,
   UnknownModelError,
   UnknownPassthroughToolError,
+  ReplayedLeaseRequestError,
+  type LeaseRequestFailure,
 } from "../core/index.js";
 import { ExecOutputDeliveryStalledError } from "../ports/index.js";
-import type { SimlockErrorCode } from "../contract/index.js";
+import { ERROR_TABLE, type SimlockErrorCode } from "../contract/index.js";
 import { DispatchError, DoctorUnavailableError, NukeUnavailableError } from "./dispatcher.js";
 import { AdminAuthenticationFailedError } from "./session.js";
 
@@ -74,6 +78,17 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof AdminAuthenticationFailedError) {
     return "ADMIN_AUTHENTICATION_FAILED";
+  }
+  // A stored failure carries the code it was classified as when the request first failed. It is
+  // read back from `state.json`, so it is checked against the table rather than trusted.
+  if (error instanceof ReplayedLeaseRequestError) {
+    return isErrorCode(error.code) ? error.code : "INTERNAL";
+  }
+  if (error instanceof IdempotencyConflictError) {
+    return "IDEMPOTENCY_CONFLICT";
+  }
+  if (error instanceof LeaseRequestForbiddenError) {
+    return "FORBIDDEN";
   }
   // The gateway's own admission refusal (`FleetLeaseCoordinator#admit`) is a plain
   // `DispatchError("NO_CAPACITY", ...)`, not a distinct class -- caught by the `DispatchError`
@@ -134,4 +149,22 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
     return "INTERNAL";
   }
   return undefined;
+}
+
+function isErrorCode(code: string): code is SimlockErrorCode {
+  return Object.hasOwn(ERROR_TABLE, code);
+}
+
+/**
+ * What a failed lease request stores: the code `classifyError` gives the failure, and its
+ * message -- except for a failure nothing classifies, which stores `INTERNAL` with a generic
+ * message. A stored message is replayed to every frontend, the HTTP one included, which never
+ * shows an unclassified error's own text (see `mapError`), so it is never stored either.
+ */
+export function describeLeaseRequestFailure(error: unknown): LeaseRequestFailure {
+  const code = classifyError(error);
+  if (code === undefined || !(error instanceof Error)) {
+    return { code: "INTERNAL", message: "Internal error" };
+  }
+  return { code, message: error.message };
 }
