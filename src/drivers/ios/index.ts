@@ -1222,22 +1222,23 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
-   * The Xcode version and build `xcodebuild -version` prints. Anything else -- no Xcode, a
-   * failed or timed-out run, output in a shape this does not know -- reports no entry.
+   * The Xcode version and build `xcodebuild -version` prints. A Mac with only the command line
+   * tools has an `xcodebuild` that refuses to run without Xcode: that is no Xcode, and reports
+   * no entry. Any other failure -- a run that errors, times out, or prints a shape this does not
+   * know -- rejects, so the core keeps the version it last read.
    */
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
-    try {
-      const result = await this.#processRunner.run("xcodebuild", ["-version"], {
-        timeoutMs: XCODE_VERSION_TIMEOUT_MS,
-      });
-      if (result.code !== 0) return [];
-      const version = /^Xcode (\S+)$/m.exec(result.stdout)?.[1];
-      const build = /^Build version (\S+)$/m.exec(result.stdout)?.[1];
-      if (version === undefined) return [];
-      return [{ name: "xcode", version, ...(build === undefined ? {} : { build }) }];
-    } catch {
-      return [];
+    const result = await this.#processRunner.run("xcodebuild", ["-version"], {
+      timeoutMs: XCODE_VERSION_TIMEOUT_MS,
+    });
+    if (result.code !== 0) {
+      if (/requires Xcode/.test(result.stderr)) return [];
+      throw new Error(`xcodebuild -version exited with ${String(result.code)}`);
     }
+    const version = /^Xcode (\S+)$/m.exec(result.stdout)?.[1];
+    const build = /^Build version (\S+)$/m.exec(result.stdout)?.[1];
+    if (version === undefined) throw new Error("xcodebuild -version printed no Xcode version");
+    return [{ name: "xcode", version, ...(build === undefined ? {} : { build }) }];
   }
 
   /**

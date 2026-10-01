@@ -218,10 +218,10 @@ const { host } = await client.getStatus();
 ```
 
 - `tools` has one entry per platform tool the daemon's drivers use. A tool
-  that cannot be read is left out, and right after a daemon starts the list
-  can be empty for a moment: versions are read in the background, so
-  `getStatus` never waits for them. They are read again once a minute has
-  passed.
+  that is not installed is left out. Versions are read in the background, so
+  `getStatus` never waits for them, and right after a daemon starts the list
+  can be empty for a moment. They are read again once a minute has passed;
+  if a read fails, the version from the last good read stays.
 - A gateway reports its own machine with no tools, since it runs no
   drivers. Each worker's `host` is on its entry in `workers`, and on
   `listWorkers()` from the admin client.

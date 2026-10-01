@@ -154,7 +154,8 @@ tool its drivers use:
 The daemon works these out from the machine; no config key changes them. Tool
 versions are read at start and again in the background once a minute has
 passed, so this endpoint never waits for them. Right after a start, or for a
-tool that cannot be read, `tools` has no entry for it.
+tool that is not installed, `tools` has no entry for it; if a later read
+fails, the last version read stays.
 
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers, every gateway-issued and local lease, every device, the gateway
@@ -605,7 +606,8 @@ workers of its own and does not implement the underlying operations at all.
 - `DELETE /v1/workers/{id}/drain` — undrain it, putting it back in rotation.
 - `DELETE /v1/workers/{id}` — forget a worker's view.
 
-`GET /v1/workers`, a real answer trimmed to one worker:
+`GET /v1/workers`, a real answer from a test fleet whose drivers are
+simulated (hence the thin Android catalog), trimmed to one worker:
 
 ```json
 {

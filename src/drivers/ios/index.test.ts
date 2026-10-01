@@ -3001,21 +3001,42 @@ describe("IosSimctlDriver toolVersions()", () => {
     await expect(driver.toolVersions()).resolves.toEqual([{ name: "xcode", version: "16.4" }]);
   });
 
-  it("reports no Xcode entry when xcodebuild fails", async () => {
+  it("reports no Xcode entry when only the command line tools are installed", async () => {
     const runner = new ScriptedProcessRunner([
       {
         match: { args: ["-version"], command: "xcodebuild" },
-        // Output that would parse, so only the exit code can be what turns it away.
         result: {
           code: 1,
-          stderr: "xcodebuild: error: timed out",
-          stdout: "Xcode 16.4\nBuild version 16F6\n",
+          stderr:
+            "xcode-select: error: tool 'xcodebuild' requires Xcode, but active developer directory '/Library/Developer/CommandLineTools' is a command line tools instance",
+          stdout: "",
         },
       },
     ]);
     const driver = await createDriver(runner);
 
     await expect(driver.toolVersions()).resolves.toEqual([]);
+  });
+
+  it.each([
+    // Output that would parse, so only the exit code can be what turns it away.
+    ["exits non-zero", { code: 1, stderr: "error", stdout: "Xcode 16.4\nBuild version 16F6\n" }],
+    ["is killed by its timeout", { code: null, stderr: "", stdout: "" }],
+    ["prints no Xcode version", { code: 0, stderr: "", stdout: "something else\n" }],
+  ])("rejects when xcodebuild %s", async (_case, result) => {
+    const runner = new ScriptedProcessRunner([
+      { match: { args: ["-version"], command: "xcodebuild" }, result },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.toolVersions()).rejects.toThrow(/xcodebuild/);
+  });
+
+  it("rejects when xcodebuild cannot be started", async () => {
+    // No scripted invocation: the runner refuses to start it, as a spawn failure would.
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    await expect(driver.toolVersions()).rejects.toThrow();
   });
 });
 

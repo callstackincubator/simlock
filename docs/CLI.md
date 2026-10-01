@@ -728,8 +728,9 @@ simlock worker undrain <worker-id>
 simlock worker remove <worker-id>
 ```
 
-`list --json` prints one worker view per connected-or-remembered worker. A
-real answer, trimmed to one worker:
+`list --json` prints one worker view per connected-or-remembered worker. This
+one is a real answer from a test fleet whose drivers are simulated, which is
+why its Android catalog looks thin, trimmed to one worker:
 
 ```json
 {
@@ -802,8 +803,8 @@ runtime before sending it a request that needs one. `catalog` is what that
 worker can lease, each model with the runtimes it pairs with. `host` is the
 machine: operating system, its version, CPU architecture, and the version of
 each platform tool its drivers use (`xcode` with its build; the Android
-`emulator`, `platform-tools` and `cmdline-tools`). A tool the worker cannot
-read is left out. `protocol` appears only on an `incompatible` worker and
+`emulator`, `platform-tools` and `cmdline-tools`). A tool the worker does not
+have is left out. `protocol` appears only on an `incompatible` worker and
 names both ranges, the worker's and the gateway's, so you can see which side
 to upgrade. Worker ids are UUIDs; the console example below shortens them to fit.
 
@@ -974,8 +975,9 @@ what machine the daemon runs on: `os`, `osVersion`, `arch`, and `tools`, one
 entry per platform tool its drivers use with the `platform`, `name`,
 `version` and, for Xcode, `build`. Tool versions are read when the daemon
 starts and again in the background once a minute has passed, so `status`
-never waits for them; right after a start, or for a tool that cannot be read,
-`tools` has no entry. A gateway runs no drivers, so its own `host` has no
+never waits for them. Right after a start, or for a tool that is not
+installed, `tools` has no entry; if a later read fails, the last version read
+stays. A gateway runs no drivers, so its own `host` has no
 tools; each worker's is on its worker view. Do not confuse it with each
 device's own `mode`, the device mode (`"slim"` or `"full"`). Against a **gateway** the
 same view is the fleet's: capacity summed over the connected workers, every

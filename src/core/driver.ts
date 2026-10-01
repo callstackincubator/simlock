@@ -287,10 +287,12 @@ export interface Driver {
    */
   advisories?(): Promise<readonly DriverAdvisory[]>;
   /**
-   * The versions of the platform tools this driver uses, for `status.get`'s host facts. Same
-   * contract as `advisories`: read-only, never downloads, and never throws -- a tool that
-   * cannot be read is left out. Every process it starts is bounded. Optional: a driver with no
-   * tools to report omits it.
+   * The versions of the platform tools this driver uses, for `status.get`'s host facts.
+   * Read-only and never downloads, like `advisories`. A tool that is not installed is left out.
+   * A read that fails -- a tool that is there but errors, times out, or answers in a shape the
+   * driver does not know -- rejects, and the core keeps what this driver reported last
+   * (`HostFactsReader`). Every process it starts is bounded. Optional: a driver with no tools to
+   * report omits it.
    */
   toolVersions?(): Promise<readonly DriverToolVersion[]>;
 }

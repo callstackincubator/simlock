@@ -35,6 +35,16 @@ describe("NodeHostInfo", () => {
     expect(system).toMatchObject({ os: type(), osVersion: release() });
   });
 
+  it("falls back to the kernel name and release when sw_vers cannot be started", async () => {
+    // No scripted invocation: the runner refuses to start it, as a spawn failure would.
+    const system = await new NodeHostInfo({
+      platform: "darwin",
+      processRunner: new ScriptedProcessRunner([]),
+    }).read();
+
+    expect(system).toMatchObject({ os: type(), osVersion: release() });
+  });
+
   it("does not run sw_vers on another operating system", async () => {
     const processRunner = new ScriptedProcessRunner([]);
 

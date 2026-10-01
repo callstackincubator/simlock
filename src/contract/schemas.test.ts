@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   deviceRecordSchema,
+  fitHostFacts,
   grantedDeviceSchema,
+  hostFactsSchema,
   leaseGrantSchema,
   statusDeviceSchema,
 } from "./schemas.js";
@@ -216,5 +218,42 @@ describe("statusDeviceSchema's device projection", () => {
     expect(deviceRecordSchema.parse({ ...record, mode: "full" })).toMatchObject({ mode: "full" });
     expect(() => deviceRecordSchema.parse(record)).toThrow();
     expect(() => deviceRecordSchema.parse({ ...record, mode: "reduced" })).toThrow();
+  });
+});
+
+describe("fitHostFacts", () => {
+  it("cuts over-long host strings, leaves out tools that do not fit, and stops at the list's maximum", () => {
+    const fitted = fitHostFacts({
+      arch: "a".repeat(200),
+      os: "o".repeat(200),
+      osVersion: "1".repeat(200),
+      tools: [
+        { name: "emulator", platform: "android" as const, version: "9".repeat(129) },
+        { name: "cmdline-tools", platform: "android" as const, version: "" },
+        ...Array.from({ length: 40 }, (_, index) => ({
+          name: `tool-${index}`,
+          platform: "android" as const,
+          version: "1",
+        })),
+      ],
+    });
+
+    expect(fitted.arch).toHaveLength(128);
+    expect(fitted.os).toHaveLength(128);
+    expect(fitted.osVersion).toHaveLength(128);
+    expect(fitted.tools).toHaveLength(32);
+    expect(fitted.tools[0]?.name).toBe("tool-0");
+    expect(() => hostFactsSchema.parse(fitted)).not.toThrow();
+  });
+
+  it("leaves facts that already fit as they are", () => {
+    const host = {
+      arch: "arm64",
+      os: "macOS",
+      osVersion: "15.5",
+      tools: [{ build: "16F6", name: "xcode", platform: "ios" as const, version: "16.4" }],
+    };
+
+    expect(fitHostFacts(host)).toEqual(host);
   });
 });

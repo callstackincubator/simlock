@@ -100,6 +100,14 @@ class DisposableFakeDriver extends FakeDriver {
   }
 }
 
+async function agentStatus(daemon: DaemonServer) {
+  return (await daemon.dispatch(
+    "status.get",
+    {},
+    { manageEventSubscription: () => undefined, principal: "agent", role: "agent" },
+  )) as { readonly host: { readonly tools: readonly unknown[] } };
+}
+
 /** A fake driver that reports tool versions, which `FakeDriver` does not. */
 class ToolsFakeDriver extends FakeDriver {
   constructor(
@@ -218,14 +226,14 @@ describe("startDaemon", () => {
     );
   });
 
-  it("starts, and reports the host and every tool read, while one driver's tool read never answers", async () => {
+  it("starts and reports no entry for a driver whose tool read fails, and every other tool", async () => {
     const clock = new FakeClock(1_000);
     const { daemon } = await start({
       drivers: [
         new ToolsFakeDriver(
           { availableOsVersions: ["26.5"], clock, platform: "ios" },
-          // What an iOS driver whose `xcodebuild` never answers looks like from here.
-          () => new Promise(() => undefined),
+          // What an iOS driver whose `xcodebuild` fails looks like from here.
+          () => Promise.reject(new Error("xcodebuild -version exited with 1")),
         ),
         new ToolsFakeDriver({ availableOsVersions: ["35"], clock, platform: "android" }, () =>
           Promise.resolve([{ name: "emulator", version: "35.4.9" }]),
@@ -235,24 +243,32 @@ describe("startDaemon", () => {
     });
 
     await expect
-      .poll(async () => {
-        const status = (await daemon.dispatch(
-          "status.get",
-          {},
-          {
-            manageEventSubscription: () => undefined,
-            principal: "agent",
-            role: "agent",
-          },
-        )) as { readonly host: unknown };
-        return status.host;
-      })
+      .poll(async () => (await agentStatus(daemon)).host)
       .toEqual({
         arch: "arm64",
         os: "macOS",
         osVersion: "15.5",
         tools: [{ name: "emulator", platform: "android", version: "35.4.9" }],
       });
+  });
+
+  it("answers status.get when a driver reports a tool version past the contract's bounds", async () => {
+    const clock = new FakeClock(1_000);
+    const { daemon } = await start({
+      drivers: [
+        new ToolsFakeDriver({ availableOsVersions: ["35"], clock, platform: "android" }, () =>
+          Promise.resolve([
+            { name: "emulator", version: "9".repeat(500) },
+            { name: "platform-tools", version: "36.0.0" },
+          ]),
+        ),
+      ],
+      hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+    });
+
+    await expect
+      .poll(async () => (await agentStatus(daemon)).host.tools)
+      .toEqual([{ name: "platform-tools", platform: "android", version: "36.0.0" }]);
   });
 
   it("reads tool versions at start, before anything asks for status", async () => {

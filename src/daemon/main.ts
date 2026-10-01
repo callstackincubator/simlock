@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { EVENT_FILE_NAME, EventBus, EventHistory, type EventBusLogger } from "../bus/index.js";
+import { fitHostFacts } from "../contract/index.js";
 import {
   type Config,
   type ConfigOverrides,
@@ -339,7 +340,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     eventHistory,
     healthMonitor: leaseEngine.healthMonitor,
-    hostFacts: () => hostFacts.current(),
+    hostFacts: () => fitHostFacts(hostFacts.current()),
     host: new DaemonEndpointHost({
       connector: ipc,
       endpoint: socketPath,
@@ -661,7 +662,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       coordinator: fleetCoordinator,
       eventHistory,
       health: () => daemon.health,
-      host: { ...options.hostSystem, tools: [] },
+      host: fitHostFacts({ ...options.hostSystem, tools: [] }),
       leaseIndex,
       logger: logger.child("gateway"),
       tokens,

@@ -5,6 +5,8 @@
  *
  * `status.get` is the gateway's liveness probe, so it never waits here: facts are served from
  * memory, and a re-read starts in the background once they are older than `HOST_FACTS_MAX_AGE_MS`.
+ * Nothing here enforces `status.get`'s size bounds; the contract's `fitHostFacts` does, where the
+ * daemon serves these.
  */
 import type { Clock, HostSystem, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
@@ -15,13 +17,12 @@ import type { Platform } from "./domain.js";
 export const HOST_FACTS_MAX_AGE_MS = 60_000;
 
 /**
- * The bounds `status.get`'s `host` schema enforces (`hostFactsSchema` in the contract, which this
- * module cannot import). A value past them would fail the daemon's own output check and take
- * `status.get` down with it, so it is kept out here instead: a tool that does not fit is left
- * out like one that cannot be read, and a host string that does not fit is cut to length.
+ * The core's own bound on one driver's read (architecture rule 11). A driver bounds the
+ * processes it starts; this covers one that never settles anyway, which would otherwise hold
+ * the single in-flight read open and stop every other driver from being re-read. A read that
+ * runs out is a failed read: that driver keeps what it reported last.
  */
-const MAX_HOST_STRING_LENGTH = 128;
-const MAX_HOST_TOOLS = 32;
+const TOOL_READ_TIMEOUT_MS = 30_000;
 
 export interface HostToolVersion extends DriverToolVersion {
   readonly platform: Platform;
@@ -53,11 +54,7 @@ export class HostFactsReader {
     this.#clock = options.clock;
     this.#drivers = options.drivers;
     this.#logger = options.logger ?? new NoopLogger();
-    this.#system = {
-      arch: options.system.arch.slice(0, MAX_HOST_STRING_LENGTH),
-      os: options.system.os.slice(0, MAX_HOST_STRING_LENGTH),
-      osVersion: options.system.osVersion.slice(0, MAX_HOST_STRING_LENGTH),
-    };
+    this.#system = options.system;
   }
 
   /**
@@ -72,8 +69,7 @@ export class HostFactsReader {
       ...this.#system,
       tools: [...this.#toolsByDriver.keys()]
         .sort((left, right) => left - right)
-        .flatMap((index) => this.#toolsByDriver.get(index) ?? [])
-        .slice(0, MAX_HOST_TOOLS),
+        .flatMap((index) => this.#toolsByDriver.get(index) ?? []),
     };
   }
 
@@ -90,14 +86,14 @@ export class HostFactsReader {
       this.#drivers.map(async (driver, index) => {
         if (driver.toolVersions === undefined) return;
         try {
-          const tools = await driver.toolVersions();
+          const tools = await this.#bounded(driver.toolVersions());
           this.#toolsByDriver.set(
             index,
-            tools.filter(fitsBounds).map((tool) => ({ ...tool, platform: driver.platform })),
+            tools.map((tool) => ({ ...tool, platform: driver.platform })),
           );
         } catch (error: unknown) {
-          // The contract says a driver does not throw here. One that does keeps the tools it
-          // reported last, so a passing failure does not blank the host's status.
+          // A failed read, which a driver reports by rejecting: keep the tools it reported last,
+          // so a passing failure does not blank the host's status (architecture rule 12).
           this.#logger.warn("Tool version read failed", {
             platform: driver.platform,
             reason: error instanceof Error ? error.message : "unknown",
@@ -107,10 +103,23 @@ export class HostFactsReader {
     );
     this.#readAt = this.#clock.now();
   }
-}
 
-function fitsBounds(tool: DriverToolVersion): boolean {
-  return [tool.name, tool.version, ...(tool.build === undefined ? [] : [tool.build])].every(
-    (value) => value.length > 0 && value.length <= MAX_HOST_STRING_LENGTH,
-  );
+  /** Rejects once `TOOL_READ_TIMEOUT_MS` passes; the timer is cancelled when `read` settles. */
+  #bounded<Value>(read: Promise<Value>): Promise<Value> {
+    return new Promise<Value>((resolve, reject) => {
+      const timer = this.#clock.setTimer(TOOL_READ_TIMEOUT_MS, () => {
+        reject(new Error(`Tool version read did not finish within ${TOOL_READ_TIMEOUT_MS} ms`));
+      });
+      read.then(
+        (value) => {
+          this.#clock.cancel(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          this.#clock.cancel(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+  }
 }

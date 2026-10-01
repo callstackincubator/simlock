@@ -468,8 +468,11 @@ The **host facts** are the `host` block of the worker's `status.get`
 port, read once at the worker's start, and tool versions from each driver's
 `toolVersions()`, joined in `core/host-facts.ts`. The worker serves them from
 memory, so `status.get` stays a liveness probe that never starts a process;
-a stale value starts a background re-read after 60 s. They come over on every
-status refresh. An `incompatible` worker is asked nothing, so its view
+a stale value starts a background re-read after 60 s. A driver leaves out a
+tool that is not installed and rejects a read that fails; the core then keeps
+that driver's last answer, and gives up on a read after 30 s. The contract's
+`fitHostFacts` cuts what the daemon serves to the schema's bounds. They come
+over on every status refresh. An `incompatible` worker is asked nothing, so its view
 carries none. A gateway's own `status.get` reports the gateway's machine with
 no tools.
 

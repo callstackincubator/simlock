@@ -284,7 +284,9 @@ export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
  * ADR 0008 §5: what machine a daemon runs on. Every string and the `tools` list are bounded,
  * because a gateway stores what each worker reports in that worker's view (safety rule 10).
  */
-const hostStringSchema = z.string().min(1).max(128);
+const MAX_HOST_STRING_LENGTH = 128;
+const MAX_HOST_TOOLS = 32;
+const hostStringSchema = z.string().min(1).max(MAX_HOST_STRING_LENGTH);
 
 export const hostFactsSchema = z.object({
   /** Operating system product name (`macOS`), or the kernel name where there is none. */
@@ -303,8 +305,35 @@ export const hostFactsSchema = z.object({
         build: hostStringSchema.optional(),
       }),
     )
-    .max(32),
+    .max(MAX_HOST_TOOLS),
 });
+
+/** The shape `fitHostFacts` reads: the core's own host facts type and this schema's both fit. */
+interface HostFactsShape {
+  readonly arch: string;
+  readonly os: string;
+  readonly osVersion: string;
+  readonly tools: readonly unknown[];
+}
+
+/**
+ * Brings host facts a daemon read from its own machine within `hostFactsSchema`'s bounds, so an
+ * odd value cannot fail the daemon's own `status.get` output check and take its liveness probe
+ * down (ADR 0008 §7). A tool that does not fit is left out, like one that cannot be read; a host
+ * string that does not fit is cut to length; the list stops at its maximum. Lives beside the
+ * schema so the bounds are written once.
+ */
+export function fitHostFacts<Host extends HostFactsShape>(host: Host): Host {
+  const fit = (value: string) => value.slice(0, MAX_HOST_STRING_LENGTH);
+  const tool = hostFactsSchema.shape.tools.element;
+  return {
+    ...host,
+    arch: fit(host.arch),
+    os: fit(host.os),
+    osVersion: fit(host.osVersion),
+    tools: host.tools.filter((entry) => tool.safeParse(entry).success).slice(0, MAX_HOST_TOOLS),
+  };
+}
 
 export const platformCatalogSchema = z.object({
   platform: platformSchema,
