@@ -57,6 +57,12 @@ export interface FakeDriverPlatformScript {
   readonly knownModels?: readonly string[];
   readonly availableOsVersions?: readonly string[];
   /**
+   * The OS versions this fake can slim. A slim request on one of them resolves to a slim spec,
+   * and a prepare boot of a slim-spec device reports `mode: "slim"`. Absent: every request
+   * resolves to a full spec and no boot reports a mode, as a driver that does not slim.
+   */
+  readonly slimmableOsVersions?: readonly string[];
+  /**
    * What `listCatalog` reports a model pairs with. A model left out pairs with every available
    * version, which is also the default for every model.
    */

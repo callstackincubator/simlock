@@ -363,7 +363,8 @@ export class GatewayDispatcher {
         model: input.model,
         platform: input.platform,
         ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-        ...(input.full ? { full: true } : {}),
+        // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own.
+        ...(input.mode === undefined ? {} : { mode: input.mode }),
       },
       {
         allowDownload: input.allowDownload ?? false,

@@ -37,11 +37,12 @@ const deviceModeSchema = z.enum(["slim", "full"]);
 
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
 
+/** A device's spec as responses show it. The spec's planned mode is not shown (ADR 0007 §9): the
+ * device's `mode` is the one mode a response reports. */
 const deviceSpecSchema = z.object({
   platform: platformSchema,
   model: z.string(),
   osVersion: z.string(),
-  full: z.boolean().optional(),
 });
 
 /** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, plus the `status`/`list`
@@ -233,7 +234,7 @@ export const leaseRequestRecordSchema = z.object({
     platform: platformSchema,
     model: z.string(),
     osVersion: z.string().optional(),
-    full: z.boolean().optional(),
+    mode: deviceModeSchema.optional(),
   }),
   createdAt: z.number(),
   state: z.enum(["open", "granted", "failed", "cancelled"]),
@@ -495,8 +496,8 @@ export const configSchema = z.object({
     maxConcurrentRecoveries: z.number(),
   }),
   ios: z.object({
+    defaultMode: deviceModeSchema,
     slim: z.object({
-      enabled: z.boolean(),
       categories: z.array(z.string()).optional(),
       bootTimeoutMs: z.number(),
     }),

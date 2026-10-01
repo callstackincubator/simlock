@@ -11,7 +11,7 @@ import {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 import { resourceOptionValidators } from "./capacity/strategies/resource/index.js";
-import type { LeaseIdentity } from "./domain.js";
+import type { DeviceMode, LeaseIdentity } from "./domain.js";
 import {
   booleanValue,
   ConfigError,
@@ -196,12 +196,16 @@ export interface Config {
     readonly maxConcurrentRecoveries: number;
   };
   readonly ios: {
+    /**
+     * The device mode a lease request that names none gets on this worker (ADR 0007 §1).
+     * Default `"full"`. Every worker makes both kinds of device whatever this says.
+     */
+    readonly defaultMode: DeviceMode;
+    /** How a slim device is made, whatever the default mode is. */
     readonly slim: {
-      /** Opt-in; default false. */
-      readonly enabled: boolean;
       /** Which daemon categories to disable. Undefined means "every category the driver knows". */
       readonly categories?: readonly string[];
-      /** Boot deadline used while slim mode is on (slim adds a second boot; CI runners are slow). */
+      /** Boot deadline for a slim device (slim adds a second boot; CI runners are slow). */
       readonly bootTimeoutMs: number;
     };
   };
@@ -636,8 +640,8 @@ function defaultConfig(
       maxConcurrentRecoveries: 1,
     },
     ios: {
+      defaultMode: "full",
       slim: {
-        enabled: false,
         bootTimeoutMs: 600_000,
       },
     },
@@ -778,8 +782,8 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
       maxConcurrentRecoveries: positiveInteger,
     }),
     ios: objectValidator({
+      defaultMode: stringUnion(["slim", "full"]),
       slim: objectValidator({
-        enabled: booleanValue,
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
       }),

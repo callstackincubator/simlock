@@ -10,26 +10,27 @@ export interface DeviceSpec {
   readonly model: string;
   readonly osVersion: string;
   /**
-   * Set when this spec was resolved from a `--full` request (see `DeviceRequest.full`): a
-   * device with no driver-side resource reduction. Part of spec identity (`sameSpec`) so a
-   * `--full` request never matches, and never shares a pool key with, a slim device -- the
-   * ADR's "serve from a separate pool key". Never `false`; omitted for every request that did
-   * not ask for it, so specs stay byte-identical to before this field existed.
+   * The mode this device is planned to have: `"slim"` for a device its driver will slim, absent
+   * for a full one (ADR 0007 §6). Only a driver's `resolveSpec` sets it, and only for a slim
+   * request it will actually slim; `LeaseAcquisitionCoordinator` refuses it on any other request.
+   * Part of spec identity (`sameSpec`), so slim and full devices never share a pool, and fixed
+   * for as long as the device exists. The mode the device actually has is `DeviceRecord.mode`.
    */
-  readonly full?: boolean;
+  readonly mode?: "slim";
 }
 
-/**
- * Spec identity as every selection path means it: same platform, model, OS version, and
- * `full`-ness. `undefined` and `false` compare equal for `full` so registries written before
- * this field existed keep matching.
- */
+/** The mode a spec plans: `"slim"` when it says so, `"full"` otherwise. */
+export function specMode(spec: DeviceSpec): DeviceMode {
+  return spec.mode ?? "full";
+}
+
+/** Spec identity as every selection path means it: same platform, model, OS version, and mode. */
 export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
   return (
     left.platform === right.platform &&
     left.model === right.model &&
     left.osVersion === right.osVersion &&
-    (left.full ?? false) === (right.full ?? false)
+    specMode(left) === specMode(right)
   );
 }
 

@@ -62,20 +62,26 @@ type Env = AuthEnv;
 /** Upper bound on `?wait=` long-polls; bounds how long an abandoned poll can pin resources. */
 const MAX_LONG_POLL_SECONDS = 60;
 
-const leaseRequestBodySchema = z.object({
-  allowDownload: z.boolean().optional(),
-  device: z.string().min(1),
-  full: z.boolean().optional(),
-  noWait: z.boolean().optional(),
-  // ADR §27a (H7, round 2 review): declared and forwarded, not silently dropped -- the shared
-  // dispatcher's own `lease.request` handler is the one place that decides whether this token
-  // may set it (`FORBIDDEN` for non-admin), the same gate every other transport is held to.
-  owner: z.string().min(1).optional(),
-  os: z.string().min(1).optional(),
-  platform: z.enum(["ios", "android"]),
-  timeoutMs: z.number().int().positive().optional(),
-  ttlMs: z.number().int().positive().optional(),
-});
+/**
+ * Strict (ADR 0007 §10): a body carrying a key this route does not know, the retired `full`
+ * included, is `400 BAD_REQUEST` rather than having it silently dropped.
+ */
+const leaseRequestBodySchema = z
+  .object({
+    allowDownload: z.boolean().optional(),
+    device: z.string().min(1),
+    mode: z.enum(["slim", "full"]).optional(),
+    noWait: z.boolean().optional(),
+    // ADR §27a (H7, round 2 review): declared and forwarded, not silently dropped -- the shared
+    // dispatcher's own `lease.request` handler is the one place that decides whether this token
+    // may set it (`FORBIDDEN` for non-admin), the same gate every other transport is held to.
+    owner: z.string().min(1).optional(),
+    os: z.string().min(1).optional(),
+    platform: z.enum(["ios", "android"]),
+    timeoutMs: z.number().int().positive().optional(),
+    ttlMs: z.number().int().positive().optional(),
+  })
+  .strict();
 
 /**
  * `POST /v1/leases/{id}/exec`'s body: `device.exec`'s input minus `leaseId`, which the path
@@ -115,7 +121,7 @@ function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): Leas
     ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
     ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
-    ...(body.full === undefined ? {} : { full: body.full }),
+    ...(body.mode === undefined ? {} : { mode: body.mode }),
     ...(body.owner === undefined ? {} : { owner: body.owner }),
   };
 }

@@ -291,7 +291,7 @@ export class Dispatcher {
       model: input.model,
       platform: input.platform,
       ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-      ...(input.full ? { full: true } : {}),
+      ...(input.mode === undefined ? {} : { mode: input.mode }),
     };
     this.#requireTtlWithinCap(input.ttlMs);
     const requesterId = input.requesterId ?? session.principal;

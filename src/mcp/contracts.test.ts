@@ -27,14 +27,20 @@ describe("MCP contracts", () => {
     ).toThrow();
   });
 
-  it("rejects mode, which ADR 0004 removed from the contract entirely", () => {
-    expect(() =>
-      leaseSimulatorInputSchema.parse({
-        model: "iPhone 17 Pro",
-        platform: "ios",
-        mode: "detached",
-      }),
-    ).toThrow();
+  it("accepts a device mode", () => {
+    expect(
+      leaseSimulatorInputSchema.parse({ model: "iPhone 17 Pro", mode: "slim", platform: "ios" }),
+    ).toEqual({ model: "iPhone 17 Pro", mode: "slim", platform: "ios" });
+  });
+
+  it.each([
+    ["full", { full: true }],
+    ["a mode other than slim or full", { mode: "detached" }],
+  ])("rejects %s", (_label, extra) => {
+    expect(
+      leaseSimulatorInputSchema.safeParse({ model: "iPhone 17 Pro", platform: "ios", ...extra })
+        .success,
+    ).toBe(false);
   });
 
   it("accepts ttlMs, which ADR 0004 allows on every lease request", () => {

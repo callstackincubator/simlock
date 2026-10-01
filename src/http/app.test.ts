@@ -287,6 +287,25 @@ describe("POST /v1/lease-requests", () => {
     expect(dispatcher.calls).toHaveLength(0);
   });
 
+  it.each([
+    ["full", { full: true }],
+    ["a mode other than slim or full", { mode: "fast" }],
+    ["a key the route does not know", { colour: "blue" }],
+  ])("400s a body carrying %s as BAD_REQUEST before ever dispatching", async (_label, extra) => {
+    const { app, dispatcher } = buildHarness();
+    const response = await postLeaseRequest(app, { ...defaultBody, ...extra });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+    expect(dispatcher.calls).toHaveLength(0);
+  });
+
+  it("forwards a body's mode to the dispatched lease.request", async () => {
+    const { app, dispatcher } = buildHarness();
+    void postLeaseRequest(app, { ...defaultBody, mode: "slim" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ mode: "slim" });
+  });
+
   it("forwards a body's owner field to the dispatched lease.request rather than silently dropping it (ADR §27a, H7)", async () => {
     // Before this, `leaseRequestBodySchema` had no `owner` field at all, so a caller naming one
     // was answered as though it had named none -- the same anti-pattern this codebase's own

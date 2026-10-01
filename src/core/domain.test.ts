@@ -146,19 +146,13 @@ describe("sameSpec", () => {
     expect(sameSpec(spec, { ...spec })).toBe(true);
   });
 
-  it("treats undefined and false full as the same value", () => {
-    expect(sameSpec(spec, { ...spec, full: false })).toBe(true);
-    expect(sameSpec({ ...spec, full: false }, spec)).toBe(true);
+  it("keeps a slim spec apart from the full spec of the same model and runtime", () => {
+    expect(sameSpec({ ...spec, mode: "slim" }, spec)).toBe(false);
+    expect(sameSpec(spec, { ...spec, mode: "slim" })).toBe(false);
   });
 
-  it("fragments a --full spec from a slim (non-full) spec", () => {
-    expect(sameSpec({ ...spec, full: true }, spec)).toBe(false);
-    expect(sameSpec(spec, { ...spec, full: true })).toBe(false);
-    expect(sameSpec({ ...spec, full: true }, { ...spec, full: false })).toBe(false);
-  });
-
-  it("matches two full specs", () => {
-    expect(sameSpec({ ...spec, full: true }, { ...spec, full: true })).toBe(true);
+  it("matches two slim specs", () => {
+    expect(sameSpec({ ...spec, mode: "slim" }, { ...spec, mode: "slim" })).toBe(true);
   });
 
   it("still compares platform, model, and osVersion", () => {

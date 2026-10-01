@@ -4,7 +4,13 @@ import {
   type DeviceOperation,
   type DeviceOperationClaim,
 } from "./device-operation-claims.js";
-import type { DeviceRecord, DeviceState, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
+import {
+  type DeviceRecord,
+  type DeviceState,
+  type DeviceTransitionUpdate,
+  type LeaseRecord,
+  specMode,
+} from "./domain.js";
 import { readyTransitionUpdate, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { SerializedDecision } from "./serialized-decision.js";
@@ -138,8 +144,7 @@ export class ManagedDeviceLifecycle {
    * and emits no event, deliberately -- the caller (a `LeaseHealthMonitor`)
    * owns deciding what happened and telling the holder.
    *
-   * Calls `makeReady` with `{ purpose: "recover" }` (see `Driver.makeReady`), never the
-   * default: safety rule 2 permits this exception to reboot an already-provisioned device and
+   * Calls `makeReady` with `purpose: "recover"` (see `Driver.makeReady`), never `"prepare"`: safety rule 2 permits this exception to reboot an already-provisioned device and
    * nothing more, so a driver must not use this reboot to apply any configuration change (the
    * iOS driver's slim pass) it would otherwise make on a normal `"prepare"` boot -- that would
    * be a second, unannounced reboot and a configuration change under an active lease, which is
@@ -160,7 +165,10 @@ export class ManagedDeviceLifecycle {
       // still using the address from its original grant.
       await this.catalog
         .get(claimed.device.spec.platform)
-        .makeReady(toDriverDevice(claimed.device), { purpose: "recover" });
+        .makeReady(toDriverDevice(claimed.device), {
+          mode: specMode(claimed.device.spec),
+          purpose: "recover",
+        });
     } catch (error: unknown) {
       await this.#release(claimed);
       throw error;
@@ -228,7 +236,10 @@ export class ManagedDeviceLifecycle {
     try {
       ready = await this.catalog
         .get(claimed.device.spec.platform)
-        .makeReady(toDriverDevice(claimed.device));
+        .makeReady(toDriverDevice(claimed.device), {
+          mode: specMode(claimed.device.spec),
+          purpose: "prepare",
+        });
     } catch (error: unknown) {
       await this.#release(claimed);
       throw error;
@@ -258,7 +269,10 @@ export class ManagedDeviceLifecycle {
     try {
       ready = await this.catalog
         .get(claimed.device.spec.platform)
-        .makeReady(toDriverDevice(claimed.device));
+        .makeReady(toDriverDevice(claimed.device), {
+          mode: specMode(claimed.device.spec),
+          purpose: "prepare",
+        });
     } catch (error: unknown) {
       await this.#release(claimed);
       throw error;

@@ -731,11 +731,19 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     });
     const android = drivers.find((driver) => driver.platform === "android");
     await expect(
-      android?.makeReady({
-        address: "emulator-5586",
-        deviceId: "simlock_one",
-        driverData: { avdName: "simlock_one", configHash: "", port: 5586, serial: "emulator-5586" },
-      }),
+      android?.makeReady(
+        {
+          address: "emulator-5586",
+          deviceId: "simlock_one",
+          driverData: {
+            avdName: "simlock_one",
+            configHash: "",
+            port: 5586,
+            serial: "emulator-5586",
+          },
+        },
+        { mode: "full", purpose: "prepare" },
+      ),
     ).rejects.toThrow(/Unexpected process invocation/);
 
     expect(processRunner.calls.map((call) => call.args)).toEqual([

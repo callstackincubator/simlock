@@ -697,12 +697,14 @@ before.
 `dataPlane` (see [IDEAS.md](IDEAS.md#a-byte-heavy-data-plane)), not a
 follow-up to `device.exec`.
 
-## iOS slim mode: accepted costs and feature loss (#87)
+## iOS slim devices: accepted costs and feature loss (#87, #172)
 
-`ios.slim` (opt-in, default off) has the iOS driver disable ~170 launchd
-daemons across simulator daemon categories to cut RAM/CPU footprint (see
-[CONFIGURATION.md](../CONFIGURATION.md)). It carries four trade-offs worth
-knowing before turning it on.
+A slim iOS device -- one a lease asked for with `mode: "slim"`, or got by
+default on a worker whose `ios.defaultMode` is `slim` -- has the iOS driver
+disable ~170 launchd daemons across simulator daemon categories to cut
+RAM/CPU footprint (see [CONFIGURATION.md](../CONFIGURATION.md)). Every worker
+makes both slim and full devices (ADR 0007 §3), so these trade-offs apply to
+any worker that is ever asked for a slim one.
 
 **Every reclaim pays two boots, indefinitely.** `IosSimctlDriver.reclaim`
 always runs `simctl erase`, which wipes the simulator's data partition —
@@ -716,39 +718,49 @@ for this when nothing pre-provisioned was available. A non-erasing
 `standard` clean level, if one is added later, would let a reclaimed device
 stay slim and remove this cost; no such level exists today.
 
-**Runtimes older than iOS 18.5 silently get nothing.** `launchctl disable`
+**Runtimes older than iOS 18.5 get full devices.** `launchctl disable`
 overrides only persist across a reboot on iOS 18.5+; older runtimes accept
 the commands and drop them on the post-slim reboot, so slimming would cost a
-second boot for no effect. `planSlimBoot` (`src/drivers/ios/index.ts`) gates
-on this and skips the apply pass entirely rather than paying that cost —
-silently, from the requester's point of view: the lease still grants, just
-with `mode: "full"`. `simlock doctor`'s `driver-advisory` /
-`slim-runtime-unsupported` finding is what makes an unsupported runtime
-visible to an operator instead of it only ever showing up as an unexpectedly
-non-slim lease.
+second boot for no effect. The iOS driver's `resolveSpec` therefore resolves
+a slim request on such a runtime to the full spec (ADR 0007 §4): the request
+pools with full devices and is granted `mode: "full"`, never an error. Slim
+is best effort, so the requester only learns this from the grant's `mode`.
+`simlock doctor`'s `driver-advisory` / `slim-runtime-unsupported` finding
+names the unsupported runtimes, but only on a worker whose default mode is
+`slim` (ADR 0007 §14); a default-full worker stays quiet even when a request
+asked for slim explicitly.
 
 **Slim devices lose features that depend on the disabled daemons.** Expect
 push notifications, Spotlight/on-device search, StoreKit/App Store sheets,
 universal links, Siri/Apple Intelligence, iCloud sync, and some system
 pickers to not work on a slim device — the categories that back them are
-exactly the ones slimming disables. Mitigations: `simlock lease --full` (MCP
-`full: true`, HTTP `full: true`) opts a single lease out of slimming, and
-every lease response carries the device mode so a caller can tell a
+exactly the ones slimming disables. Mitigations: `simlock lease --mode full`
+(`mode: "full"` on MCP, HTTP, and the client) guarantees a full device for a
+single lease, and every lease response carries the device mode so a caller can tell a
 feature-loss failure apart from an actual bug instead of guessing —
 `device.mode === "slim"` on the CLI/MCP/client contract shape, and
 `lease.mode === "slim"` on HTTP (ADR 0007 §9: one word on every surface).
 
-**Mixing slim and full devices under one spec can make `--full` wait or
-re-provision.** `full` is part of spec identity (`DeviceSpec.full`, compared by `sameSpec`,
-see [ADR 0002](adr/0002-opt-in-slim-ios-simulators.md)), so a `--full`
-request never matches a slim device sitting warm in the pool — even when one is idle and a
-match on model/os alone would otherwise be instant. Depending on capacity,
-that means either queueing for a fresh device to provision or forcing a
-re-provision of a device already running. This is inherent to keeping pool
-matching from fragmenting on driver-level settings, not a bug to fix.
+**Mixing slim and full devices under one spec can make a request wait or
+re-provision.** The planned mode is part of spec identity (`DeviceSpec.mode`,
+compared by `sameSpec`, ADR 0007 §6), so a `full` request never matches a
+slim device sitting warm in the pool, and a `slim` request never matches a
+full one — even when one is idle and a match on model/os alone would
+otherwise be instant. Depending on capacity, that means either queueing for
+a fresh device to provision or forcing a re-provision of a device already
+running. This is what keeps `full` a guarantee, not a bug to fix.
+
+**A budget sized for slim devices overcommits when full devices are leased.**
+The capacity budget counts every device as one size, whatever its mode. An
+operator who sized `capacity` for slim devices (~0.9 GB each) on a worker
+that also serves `full` requests (~4 GB each) can end up with more full
+devices running than the machine has memory for. Until capacity counts by
+mode ([#174](https://github.com/callstackincubator/simlock/issues/174)),
+size the budget for the mode that is actually leased, or for full devices
+when both are.
 
 **A cold slim lease outlives a default MCP request timeout.** Measured on
-one machine: a `--full` cold lease took ~28s, a cold slim lease ~160s (two
+one machine: a full cold lease took ~28s, a cold slim lease ~160s (two
 real boots plus the disable pass). The MCP SDK's default per-request timeout
 is 60s, so an MCP client that does not reset its timeout on progress
 notifications gets `MCP error -32001: Request timed out` on the slim lease
@@ -787,25 +799,17 @@ would ever produce. Workaround: after narrowing the category list, reclaim
 (or destroy) every device already running under the old, wider set before
 relying on the change — a plain reboot is not enough.
 
-**Turning `ios.slim.enabled` off leaves orphaned `--full` devices sitting in
-the pool.** `full` only earns its own pool key while the driver might
-otherwise hand back a reduced device (`Driver.reducesFeatures`); once slim
-mode is off, no newly resolved spec ever carries `full: true` again. A device
-that was provisioned for a `--full` request while slim mode was on keeps
-`full: true` on its spec in the registry, so it can no longer match anything
-a resolver produces — it becomes unmatchable by any new request. This is not
-a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
-on the same timers as any other idle device, since neither rule cares what a
-device's spec matches. Until those timers fire, though, it occupies a pool
-slot doing nothing.
-
-**A device slimmed before the upgrade to `mode` reports `full`.** A device
-record written before devices carried a `mode` loads as `full`, and nothing
-is derived from its old feature-profile field (ADR 0007 §11). A worker that
-ran with `ios.slim.enabled` on therefore holds slimmed devices that report
-`mode: "full"` on grants, `status`, and `list` until their next boot rewrites
-the mode. Empty such a worker with `simlock nuke --delete-devices` before
-upgrading it.
+**A worker upgraded without being emptied can grant a slimmed device as
+full.** A device record written before devices carried a `mode` loads as
+`full`, and nothing is derived from its old feature-profile field or from
+the `full` flag an older daemon stored on its spec (ADR 0007 §11). A worker
+that had the old slim switch on therefore holds slimmed devices that load
+with a full spec: they report `mode: "full"` on grants, `status`, and `list`
+until their next boot rewrites the mode, and they sit in the full pool, so a
+`full` request can be granted one. This is the one case where the `full`
+guarantee does not hold, and it only covers devices made before the upgrade.
+Empty such a worker with `simlock nuke --delete-devices` before upgrading it;
+[CONFIGURATION.md](../CONFIGURATION.md) carries the same step.
 
 ## A dispatched request whose uplink drops may have granted a lease anyway
 

@@ -107,7 +107,7 @@ describe("FakeDriver", () => {
     driver.hangMakeReady();
 
     let ready = false;
-    const makeReady = driver.makeReady(device).then(() => {
+    const makeReady = driver.makeReady(device, prepare).then(() => {
       ready = true;
     });
 
@@ -133,7 +133,7 @@ describe("FakeDriver", () => {
     });
 
     let ready = false;
-    const makeReady = driver.makeReady(device).then(() => {
+    const makeReady = driver.makeReady(device, prepare).then(() => {
       ready = true;
     });
     clock.advance(49);
@@ -221,3 +221,5 @@ describe("FakeDriver", () => {
     });
   });
 });
+
+const prepare = { mode: "full", purpose: "prepare" } as const;

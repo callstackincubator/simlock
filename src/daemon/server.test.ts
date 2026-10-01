@@ -2148,46 +2148,44 @@ describe("DaemonServer download policy", () => {
   });
 });
 
-describe("DaemonServer full request flag", () => {
-  it("parses request.full: true into a spec stamped full: true", async () => {
-    // Stamping `full` is gated on the resolving driver declaring `reducesFeatures` -- without it
-    // there is nothing to opt out of, so the flag would (correctly) leave the spec untouched and
-    // this test would be asserting the wrong half of that contract.
-    const harness = await createHarness({ reducesFeatures: true });
+describe("DaemonServer lease request mode", () => {
+  it("grants a slim request on a runtime the driver can slim with mode slim", async () => {
+    const harness = await createHarness({ slimmableOsVersions: ["26.5"] });
     const client = await createClient(harness.socketPath);
     await hello(client);
 
     const grant = await client.request("lease.request", {
       requesterId: "agent-1",
-      full: true,
+      mode: "slim",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
     });
 
     expect(grant.ok).toBe(true);
-    expect(
-      (grant.payload as { device: { spec: Record<string, unknown> } }).device.spec,
-    ).toMatchObject({ full: true });
+    expect((grant.payload as { device: { mode: string } }).device.mode).toBe("slim");
     await client.close();
   });
 
-  it("omits full from the spec when the request does not ask for it", async () => {
+  it.each([
+    ["full", { full: true }],
+    ["a mode other than slim or full", { mode: "fast" }],
+    ["the lease mode ADR 0004 retired", { mode: "held" }],
+  ])("answers a lease.request carrying %s with BAD_REQUEST", async (_label, extra) => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
     await hello(client);
 
-    const grant = await client.request("lease.request", {
+    const response = await client.request("lease.request", {
       requesterId: "agent-1",
       model: "iPhone 16",
       osVersion: "26.5",
       platform: "ios",
+      ...extra,
     });
 
-    expect(grant.ok).toBe(true);
-    expect(
-      (grant.payload as { device: { spec: Record<string, unknown> } }).device.spec,
-    ).not.toHaveProperty("full");
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ code: "BAD_REQUEST" });
     await client.close();
   });
 });
@@ -2767,8 +2765,8 @@ async function createHarness(
     readonly driver?: FakeDriver;
     readonly driverRejections?: readonly DriverRejection[];
     readonly logger?: Logger;
-    /** Passed to the default `FakeDriver`; makes a `--full` request meaningful (see `Driver.reducesFeatures`). */
-    readonly reducesFeatures?: boolean;
+    /** Passed to the default `FakeDriver`: the OS versions it can slim. */
+    readonly slimmableOsVersions?: readonly string[];
     /** Overrides the default single-iOS-device capacity limit; a test that needs two
      * concurrent iOS leases granted (rather than one queued behind the other) sets this. */
     readonly iosMaxDevices?: number;
@@ -2819,9 +2817,9 @@ async function createHarness(
       ...(options.estimateMs === undefined ? {} : { estimateMs: options.estimateMs }),
       ...(options.latencyMs === undefined ? {} : { latencyMs: options.latencyMs }),
       platform: "ios",
-      ...(options.reducesFeatures === undefined
+      ...(options.slimmableOsVersions === undefined
         ? {}
-        : { reducesFeatures: options.reducesFeatures }),
+        : { slimmableOsVersions: options.slimmableOsVersions }),
     });
   const config = testConfig(options.lease, options.downloads, options.iosMaxDevices);
   const engine = new LeaseEngine({
@@ -3169,7 +3167,7 @@ function testConfig(
       ...downloadsOverrides,
     },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
+    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
     android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {

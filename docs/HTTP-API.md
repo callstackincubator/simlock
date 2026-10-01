@@ -193,20 +193,26 @@ Role: `agent`. Enqueues a device request.
   "timeoutMs": 300000,
   "noWait": false,
   "allowDownload": false,
-  "full": false
+  "mode": "slim"
 }
 ```
 
 `platform` and `device` are required; `os` defaults to the newest installed
 runtime; `ttlMs` defaults to `lease.defaultTtlMs` and is `400 BAD_REQUEST`
 above `lease.maxTtlMs`; `timeoutMs` (optional) is enforced daemon-side so a
-vanished client can't hold a queue slot forever. `full` (optional, default
-`false`) opts this request out of iOS slim mode — platform-neutral in shape,
-but only the iOS driver acts on it (as "do not slim"); Android ignores it. A
-`full: true` request never matches, and never shares a pool key with, a slim
-device, so it can wait for a fresh device to provision or force a re-provision
-of one already running, even while slim devices sit idle in the warm pool. See
-[CONFIGURATION.md](CONFIGURATION.md) for what slim mode disables.
+vanished client can't hold a queue slot forever. `mode` (optional, `"slim"`
+or `"full"`) is the device mode the request asks for; without it the request
+gets the default mode of the worker that serves it (`ios.defaultMode`, `full`
+unless configured). `full` is a guarantee: a `full` request never gets a slim
+device. `slim` is best effort: on a runtime that cannot be slimmed (an iOS
+runtime older than 18.5, or any Android device) the request is granted a full
+device. A request only reuses an idle device of the mode it resolved to, so it
+can wait for a fresh device even while devices of the other mode sit idle. See
+[CONFIGURATION.md](CONFIGURATION.md#device-mode-slim-and-full) for what a slim
+device leaves out.
+
+The body is strict: a key this route does not know, such as the removed
+`full`, or a `mode` other than `"slim"` or `"full"`, is `400 BAD_REQUEST`.
 
 `allowDownload` is now clamped through `config.downloads.policy` the same
 way the socket protocol always was (**bug fix, 0.3.0**): before this
@@ -225,7 +231,7 @@ changed since — a request that failed with `NO_CAPACITY` stays failed. To
 try again, use a new key. Repeating works across a daemon restart, for
 `lease.requestRetentionMs` after the request finished (see
 [CONFIGURATION.md](CONFIGURATION.md)). The same key with a different
-`platform`, `device`, `os`, or `full` is `409 IDEMPOTENCY_CONFLICT`. Keys
+`platform`, `device`, `os`, or `mode` is `409 IDEMPOTENCY_CONFLICT`. Keys
 belong to your token: another token sending the same key starts a request of
 its own.
 
@@ -327,9 +333,9 @@ is additive rather than a breaking shape change. Running a *command* on the
 device is not part of it and does not wait for it: that is `exec`, below.
 
 `mode` is the device mode the granted device actually has: `"slim"` when its
-feature set was reduced (iOS slim mode applied and the request did not carry
-`full: true`), `"full"` otherwise — always `"full"` for Android. It lets a
-client explain a
+feature set was reduced, `"full"` otherwise — always `"full"` for Android. A
+`"slim"` request can be granted `"full"` (slim is best effort); a `"full"`
+request is never granted `"slim"`. It lets a client explain a
 feature-loss failure (missing push notification, Spotlight result,
 StoreKit sheet, universal link, or system picker) instead of misreading it
 as a bug.

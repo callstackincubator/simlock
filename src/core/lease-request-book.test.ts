@@ -243,7 +243,7 @@ describe("Registry lease-request load", () => {
   it.each([
     ["a failed record whose failure has no code", { failure: { message: "x" }, state: "failed" }],
     ["a settled record without its settlement time", { settledAt: undefined, state: "cancelled" }],
-    ["a request whose full is not a boolean", { request: { ...request, full: "yes" } }],
+    ["a request whose mode is neither slim nor full", { request: { ...request, mode: "fast" } }],
   ])("drops %s and loads the rest", async (_label, broken) => {
     const { registry } = await loadWith([
       { ...valid, id: "req_broken", settledAt: 1_000, ...broken },
@@ -305,7 +305,7 @@ describe("LeaseRequestBook", () => {
   it.each([
     ["a different osVersion", { ...request, osVersion: "18.0" }],
     ["no osVersion where one was named", { model: request.model, platform: request.platform }],
-    ["full where none was asked", { ...request, full: true }],
+    ["a mode where none was named", { ...request, mode: "full" as const }],
   ])("refuses a repeat naming %s as an idempotency conflict", async (_label, different) => {
     const book = bookOver(memoryStore());
     await book.admit(request, keyed, () => granted("lse_1"));
@@ -314,12 +314,12 @@ describe("LeaseRequestBook", () => {
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
   });
 
-  it("treats full: false and an omitted full as the same request", async () => {
+  it("replays a repeat naming the same mode", async () => {
     const book = bookOver(memoryStore());
-    await book.admit(request, keyed, () => granted("lse_1"));
+    await book.admit({ ...request, mode: "slim" }, keyed, () => granted("lse_1"));
     await settled();
 
-    await expect(book.replay({ ...request, full: false }, keyed)).resolves.toEqual({
+    await expect(book.replay({ ...request, mode: "slim" }, keyed)).resolves.toEqual({
       lease: { id: "lse_1" },
     });
   });

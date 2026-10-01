@@ -147,8 +147,6 @@ interface IosDriverData {
   readonly name: string;
   readonly runtimeId: string;
   readonly udid: string;
-  /** Per-lease override (set by `provision` from the device spec): never slim this device. */
-  readonly full?: boolean;
   /** `slimSignature(...)` of the label set actually applied -- the idempotence marker. */
   readonly slimSignature?: string;
   /** The device's *erasable* provenance-mark token as read at the moment slimming was applied. */
@@ -222,14 +220,21 @@ export interface IosSimctlDriverOptions {
    * driver never depends on the bus directly (architecture rule 5). Mirrors `onDiagnostic`.
    */
   readonly onSlimmed?: (fact: SlimmedFact) => void;
-  /** Reports why a device slim didn't happen when slim mode is on. Mirrors `onDiagnostic`. */
+  /** Reports why a slim-spec device was not slimmed. Mirrors `onDiagnostic`. */
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
-  /** Slim mode; omitted or `enabled: false` means today's behaviour exactly. */
+  /**
+   * How a slim device is made (`ios.slim`). Omitted means this driver slims nothing: every slim
+   * request resolves to a full spec.
+   */
   readonly slim?: {
-    readonly enabled: boolean;
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
   };
+  /**
+   * True when the worker's default mode for iOS is `slim`, so `advisories()` reports runtimes
+   * that cannot be slimmed (ADR 0007 §14). The driver is told this, never the default itself.
+   */
+  readonly slimByDefault?: boolean;
 }
 
 type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
@@ -308,13 +313,6 @@ type ProcessOutcome =
 /** iOS simulator implementation. Its simctl details remain opaque to the core. */
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
-  /**
-   * `true` only when slim mode is actually enabled -- a `--full` request against this driver
-   * is only meaningful (and only earns its own, separate pool key -- see `Driver.reducesFeatures`)
-   * while this driver might otherwise hand back a reduced device. Static per driver instance:
-   * slim mode is process-wide configuration, not something that varies per request.
-   */
-  readonly reducesFeatures: boolean;
   readonly #clock: Clock;
   readonly #coreSimulatorRoot: string;
   readonly #diskSpaceGuard: DiskSpaceGuard;
@@ -330,6 +328,7 @@ export class IosSimctlDriver implements Driver {
   readonly #deviceRoot: string;
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #slim: SlimOptions | undefined;
+  readonly #slimByDefault: boolean;
 
   private constructor(
     options: IosSimctlDriverOptions,
@@ -349,7 +348,7 @@ export class IosSimctlDriver implements Driver {
     this.#deviceRoot = deviceRoot;
     this.#rootOptions = rootOptions;
     this.#slim = options.slim;
-    this.reducesFeatures = options.slim?.enabled === true;
+    this.#slimByDefault = options.slimByDefault === true;
   }
 
   /**
@@ -401,9 +400,25 @@ export class IosSimctlDriver implements Driver {
       throw new IosUnknownModelError(request.model);
     }
 
-    return request.osVersion === undefined
+    const spec = await (request.osVersion === undefined
       ? this.#resolveDefaultRuntime(deviceType, catalog, options)
-      : this.#resolveExactRuntime(deviceType, request.osVersion, catalog, options);
+      : this.#resolveExactRuntime(deviceType, request.osVersion, catalog, options));
+    // The resolution cache (`specKey`) ignores the mode, so the mode is applied here, outside it.
+    return request.mode === "slim" && this.#canSlim(spec) ? { ...spec, mode: "slim" } : spec;
+  }
+
+  /**
+   * Whether this driver will slim a device of this spec: slim is configured and the runtime is
+   * 18.5 or newer (ADR 0007 §4). Read from the runtime `resolveSpec` just committed, by the same
+   * `supportsPersistentSlim(iosRuntimeVersionFromId(...))` call `planSlimBoot` makes.
+   */
+  #canSlim(spec: DeviceSpec): boolean {
+    const runtime = this.#resolvedSpecs.get(specKey(spec))?.runtime;
+    return (
+      this.#slim !== undefined &&
+      runtime !== undefined &&
+      supportsPersistentSlim(iosRuntimeVersionFromId(runtime.identifier))
+    );
   }
 
   /**
@@ -730,18 +745,14 @@ export class IosSimctlDriver implements Driver {
         name,
         runtimeId: resolved.runtime.identifier,
         udid,
-        // Per-lease opt-out (`DeviceSpec.full`, ADR "serve from a separate pool key"): stamped
-        // onto driver data only when set, so a normal (non-`--full`) request's driver data stays
-        // byte-identical to a spec resolved before this field existed.
-        ...(spec.full === true ? { full: true } : {}),
       } satisfies IosDriverData,
     };
   }
 
   /**
    * The UDID never changes across a boot -- unlike Android's port, there is nothing to
-   * re-derive. When slim mode is on and this device qualifies (not `full`, runtime new enough --
-   * `#slimApplicable`), the boot deadline is widened *before* the first boot (that decision must
+   * re-derive. When the device's spec is slim (`options.mode`, ADR 0007 §7) and its runtime new
+   * enough, the boot deadline is widened *before* the first boot (that decision must
    * be made from `driverData` alone, ADR point 9) and, once booted, a slim pass may run: apply the
    * disable list, then reboot once more. A failed or skipped slim never fails the lease -- the
    * device is still returned, just not marked as slimmed.
@@ -749,17 +760,17 @@ export class IosSimctlDriver implements Driver {
    * `options.purpose === "recover"` (the one caller: `ManagedDeviceLifecycle.recoverLeased`,
    * safety rule 2's crash-recovery exception on an already-*leased* device) always takes the
    * `"off"` path below -- a single ordinary boot, no slim apply, no second reboot -- regardless
-   * of slim configuration or this device's own eligibility. Recovery may only get a leased
+   * of the device's spec mode. Recovery may only get a leased
    * device running again, never change what it's running; a "prepare"-shaped slim pass under an
    * active lease would silently strip push/Spotlight/StoreKit/universal-links mid-lease, which
    * is exactly the broader privilege safety rule 2 says this exception does not grant.
    */
   async makeReady(
     device: DriverDevice,
-    options?: { readonly purpose: "prepare" | "recover" },
+    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
-    const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim, options?.purpose);
+    const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim, options);
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
 
@@ -772,8 +783,8 @@ export class IosSimctlDriver implements Driver {
     }
 
     if (plan.kind !== "apply") {
-      // This boot slimmed nothing: slim mode is off, a per-device `full: true` opt-out, a
-      // `"recover"` boot, or a runtime-gate skip. The device is full.
+      // This boot slimmed nothing: a full spec, a `"recover"` boot, or a runtime-gate skip.
+      // The device is full.
       return this.#asIs(device, data, "full");
     }
 
@@ -1192,12 +1203,11 @@ export class IosSimctlDriver implements Driver {
       case "provision":
         return PROVISION_ESTIMATE_MS;
       case "boot":
-        // Slim mode pays for a second boot plus a launchctl-disable pass on top of the usual
+        // A slim device pays for a second boot plus a launchctl-disable pass on top of the usual
         // one -- quoting the plain cold-boot number here would make `doctor` flag every slim
-        // device as stalled. But a `full` spec never slims (`planSlimBoot`'s `data.full === true`
-        // branch), so quoting the slim number to a request that will never pay it would make
-        // `doctor` flag a perfectly on-time `full` boot as stalled instead.
-        return this.#slim?.enabled === true && spec.full !== true
+        // device as stalled. A full spec never slims, so quoting the slim number to it would
+        // make `doctor` flag a perfectly on-time full boot as stalled instead.
+        return this.#slim !== undefined && spec.mode === "slim"
           ? SLIM_BOOT_ESTIMATE_MS
           : COLD_BOOT_ESTIMATE_MS;
       case "reclaim":
@@ -1318,12 +1328,12 @@ export class IosSimctlDriver implements Driver {
    * drift from what `makeReady` will actually do: an identifier `iosRuntimeVersionFromId` can't
    * parse is `undefined`, and `supportsPersistentSlim(undefined)` is `false`, so an unparseable
    * runtime is reported unsupported here exactly as `makeReady` treats it as `"unknown-runtime"`.
-   * Nothing when slim mode is off (there is no gate to warn about) or when every installed
+   * Nothing unless the worker's default mode is slim (ADR 0007 §14), or when every installed
    * runtime qualifies. Read-only: only `#loadCatalog` (a `simctl list`) runs, no boot, no
    * download, no mutation -- matching `listCatalog`'s own contract.
    */
   async #slimAdvisories(): Promise<readonly DriverAdvisory[]> {
-    if (this.#slim === undefined || !this.#slim.enabled) {
+    if (this.#slim === undefined || !this.#slimByDefault) {
       return [];
     }
 
@@ -1346,9 +1356,9 @@ export class IosSimctlDriver implements Driver {
       {
         code: "slim-runtime-unsupported",
         message:
-          `Slim mode is enabled, but iOS ${unsupportedVersions.join(", ")} ${plural ? "are" : "is"} ` +
+          `The default device mode is slim, but iOS ${unsupportedVersions.join(", ")} ${plural ? "are" : "is"} ` +
           `below the 18.5 persistent-override floor; devices on ${plural ? "those runtimes" : "that runtime"} ` +
-          `are never slimmed -- \`launchctl disable\` overrides do not survive a reboot below iOS 18.5`,
+          `get full devices -- \`launchctl disable\` overrides do not survive a reboot below iOS 18.5`,
       },
     ];
   }
@@ -2057,10 +2067,10 @@ function iosDriverData(device: DriverDevice): IosDriverData {
     name: value.name,
     runtimeId: value.runtimeId,
     udid: value.udid,
-    // All three are optional and post-date `state.json` registries written before slim mode
+    // Both are optional and post-date `state.json` registries written before slim mode
     // shipped -- absent or wrong-typed is tolerated (ignored) rather than rejected, so an old
-    // registry keeps loading (compatibility requirement).
-    ...(typeof value.full === "boolean" ? { full: value.full } : {}),
+    // registry keeps loading (compatibility requirement). A `full` key an older daemon stamped
+    // here is not read: the spec's mode is the only record of it (ADR 0007 §7).
     ...(typeof value.slimSignature === "string" ? { slimSignature: value.slimSignature } : {}),
     ...(typeof value.slimMarkToken === "string" ? { slimMarkToken: value.slimMarkToken } : {}),
   };
@@ -2100,9 +2110,9 @@ export function supportsPersistentSlim(version: readonly [number, number] | unde
 }
 
 /**
- * What `makeReady` should do about slimming this boot -- decided from `driverData` and the slim
- * options alone, before any `simctl` call runs. `"off"` covers both slim mode being disabled
- * entirely and this device's per-lease `full: true` opt-out; `"skip"` is the runtime-gate
+ * What `makeReady` should do about slimming this boot -- decided from `driverData`, the slim
+ * options and the spec mode alone, before any `simctl` call runs. `"off"` covers a full spec,
+ * a driver with no slim options, and a recovery boot; `"skip"` is the runtime-gate
  * failure (too old / unparseable), carrying the `SlimSkippedFact` fields `makeReady` reports
  * as-is; `"apply"` carries the resolved `slim` options `#applySlimAndReboot` needs.
  */
@@ -2112,18 +2122,18 @@ type SlimPlan =
   | { readonly kind: "apply"; readonly slim: SlimOptions };
 
 /**
- * Pure decision step extracted from `makeReady`: given only this device's driver data and the
- * driver's slim options, decides what this boot should do and how long the initial `bootstatus`
- * wait may take. Slim mode off, this device's `full: true` opt-out, and a `"recover"`-purpose
- * call all read as `"off"` -- equivalent from here on (same as-is return, same ordinary boot
- * deadline). `purpose` defaults to `"prepare"`, matching `Driver.makeReady`'s own default.
+ * Pure decision step extracted from `makeReady`: given only this device's driver data, the
+ * driver's slim options, and the `makeReady` options, decides what this boot should do and how
+ * long the initial `bootstatus` wait may take. A full spec, no slim options, and a
+ * `"recover"`-purpose call all read as `"off"` -- equivalent from here on (same as-is return,
+ * same ordinary boot deadline).
  */
 function planSlimBoot(
   data: IosDriverData,
   slim: SlimOptions | undefined,
-  purpose: "prepare" | "recover" = "prepare",
+  options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
 ): { readonly plan: SlimPlan; readonly bootstatusTimeoutMs: number } {
-  if (purpose === "recover" || slim === undefined || !slim.enabled || data.full === true) {
+  if (options.purpose === "recover" || slim === undefined || options.mode !== "slim") {
     return { bootstatusTimeoutMs: BOOTSTATUS_TIMEOUT_MS, plan: { kind: "off" } };
   }
 

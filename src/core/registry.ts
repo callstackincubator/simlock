@@ -855,7 +855,7 @@ function parseDevice(value: unknown): DeviceRecord {
     typeof driverDeviceId !== "string" ||
     typeof createdAt !== "number" ||
     !(isDeviceState(state) || state === "warm") ||
-    !isDeviceSpec(spec) ||
+    !isObject(spec) ||
     !("driverData" in value) ||
     // Every other optional field is a number and is swept by
     // `parseOptionalDeviceNumbers`; `address` is the lone string. Missing is expected of a
@@ -874,7 +874,7 @@ function parseDevice(value: unknown): DeviceRecord {
     id,
     leaseIdentity: parseLeaseIdentity(value.leaseIdentity),
     mode: parseDeviceMode(value.mode),
-    spec,
+    spec: parseDeviceSpec(spec),
     state: state === "warm" ? "reclaiming" : state,
   };
 }
@@ -899,6 +899,20 @@ function parseDeviceMode(value: unknown): DeviceMode {
   if (value === undefined) return "full";
   if (value === "slim" || value === "full") return value;
   throw new RegistryLoadError("Invalid device record in registry state");
+}
+
+/**
+ * A spec's planned mode (ADR 0007 §6, §11). A spec written before it existed has none and loads
+ * as full; its retired `full` key is dropped, so it is not written back. A `mode` other than
+ * `"slim"` fails the load: no other value can be planned, and guessing could pool a slim device
+ * with full ones.
+ */
+function parseDeviceSpec(value: Record<string, unknown>): DeviceSpec {
+  const { full: _retired, ...spec } = value;
+  if (!isDeviceSpec(spec) || (spec.mode !== undefined && spec.mode !== "slim")) {
+    throw new RegistryLoadError("Invalid device record in registry state");
+  }
+  return spec;
 }
 
 /**
@@ -989,7 +1003,7 @@ function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
     id,
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     ownerId,
-    request,
+    request: withoutRetiredRequestKeys(request),
     requesterId,
     state,
     ...result,
@@ -1039,13 +1053,17 @@ function parseLeaseRequestResult(
 
 /**
  * A stored grant's device follows the device record's own load rule (ADR 0007 §11): no `mode`
- * loads as `full`, the retired keys are dropped, and an unknown `mode` makes the record
+ * loads as `full`, the retired keys (and the spec's `full`) are dropped, and an unknown `mode` makes the record
  * unusable, so it is skipped like any other inconsistent lease request.
  */
 function parseStoredGrant(grant: unknown): LeaseGrant | undefined {
   if (!isObject(grant) || !isObject(grant.device)) return undefined;
   const device: Record<string, unknown> = { ...grant.device };
   for (const key of retiredDeviceRecordKeys) delete device[key];
+  if (isObject(device.spec)) {
+    const { full: _retired, ...spec } = device.spec;
+    device.spec = spec;
+  }
   if (device.mode === undefined) device.mode = "full";
   if (device.mode !== "slim" && device.mode !== "full") return undefined;
   return { ...grant, device } as unknown as LeaseGrant;
@@ -1057,8 +1075,14 @@ function isDeviceRequest(value: unknown): value is DeviceRequest {
     isPlatform(value.platform) &&
     typeof value.model === "string" &&
     (value.osVersion === undefined || typeof value.osVersion === "string") &&
-    (value.full === undefined || typeof value.full === "boolean")
+    (value.mode === undefined || value.mode === "slim" || value.mode === "full")
   );
+}
+
+/** A stored request written before ADR 0007 may carry `full`; it is dropped, not written back. */
+function withoutRetiredRequestKeys(request: DeviceRequest): DeviceRequest {
+  const { full: _retired, ...current } = request as DeviceRequest & { readonly full?: unknown };
+  return current;
 }
 
 function isLeaseRequestState(value: unknown): value is LeaseRequestState {

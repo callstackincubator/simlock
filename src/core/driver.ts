@@ -8,12 +8,11 @@ export interface DeviceRequest {
   readonly model: string;
   readonly osVersion?: string;
   /**
-   * Platform-neutral request for a device with no driver-side resource reduction -- the
-   * iOS driver happens to implement this as "do not slim"; other drivers ignore it. Never
-   * read by the core beyond stamping it onto the resolved spec (see `DeviceSpec.full` and
-   * the comment where `LeaseAcquisitionCoordinator` does that stamping).
+   * The device mode the request asked for; absent when it named none (ADR 0007 §1). Transports
+   * carry it as it arrived. `LeaseAcquisitionCoordinator` is the one place an absent mode gets
+   * the worker's default, and a driver's `resolveSpec` always receives it resolved.
    */
-  readonly full?: boolean;
+  readonly mode?: DeviceMode;
 }
 
 export interface DriverDevice {
@@ -168,14 +167,11 @@ export interface Driver {
    */
   revalidateRoot(): Promise<void>;
   /**
-   * True when this driver may hand back devices with a reduced feature set (the iOS driver's
-   * slim mode, when actually enabled), so a caller's `full` request is meaningful and must not
-   * share a pool key with a normal one. Optional; a driver that never reduces anything -- the
-   * default, and every non-iOS driver -- omits it, equivalent to `false`. Read once per spec
-   * resolution by `LeaseAcquisitionCoordinator`, which is the only place `DeviceSpec.full` gets
-   * stamped onto a resolved spec.
+   * Resolves a request into the spec a device is planned on. `request.mode` is always set here,
+   * resolved by the core. A driver returns a spec with `mode: "slim"` only for a slim request it
+   * will actually slim; for any other request, and for a slim one it cannot slim, it returns a
+   * full spec (ADR 0007 §4). A driver that does not slim at all never sets the spec's mode.
    */
-  readonly reducesFeatures?: boolean;
   resolveSpec(
     request: DeviceRequest,
     options: {
@@ -198,7 +194,7 @@ export interface Driver {
    */
   makeReady(
     device: DriverDevice,
-    options?: {
+    options: {
       /**
        * What this readiness call is for. `"prepare"` (the default) may do work that changes
        * the device's configuration -- a fresh boot, a driver's own opt-in configuration pass
@@ -209,6 +205,12 @@ export interface Driver {
        * do not apply anything new".
        */
       readonly purpose: "prepare" | "recover";
+      /**
+       * The mode the device's spec plans (`specMode`). The registry is the only record of it
+       * (ADR 0007 §7): a driver keeps no copy and reads it from here on every boot. A
+       * `"recover"` boot still applies nothing new, whatever this says.
+       */
+      readonly mode: DeviceMode;
     },
   ): Promise<DriverDevice>;
   reclaim(

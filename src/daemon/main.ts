@@ -198,6 +198,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           processSupervisor,
           simlockHome: dataDirectory,
           slim: config.ios.slim,
+          slimByDefault: config.ios.defaultMode === "slim",
           androidEmulator: config.android.emulator,
           tcpProbe,
         })
@@ -777,15 +778,19 @@ export interface DriverDiscoveryContext {
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;
   /**
-   * The iOS driver's opt-in slim mode (`ios.slim` in config). Never threaded into the Android
-   * driver -- slim is iOS-only (ADR 0002, out of scope: Android equivalent). Omitted or
-   * undefined leaves the driver's own default (today's full-fat behaviour) untouched.
+   * How the iOS driver makes a slim device (`ios.slim` in config), whatever the default mode.
+   * Never threaded into the Android driver -- slim is iOS-only until Android slim lands. Omitted
+   * means the iOS driver slims nothing.
    */
   readonly slim?: {
-    readonly enabled: boolean;
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
   };
+  /**
+   * Whether `ios.defaultMode` is `slim`, so the iOS driver reports runtimes it cannot slim in
+   * `doctor` (ADR 0007 §14). The driver is told this boolean, never the default itself.
+   */
+  readonly slimByDefault?: boolean;
   /**
    * How the Android driver launches emulators (`android.emulator` in config). Handed over
    * unread; omitted or undefined leaves the driver's own default launch untouched.
@@ -859,6 +864,7 @@ async function discoverIosDriver(
       processRunner: options.processRunner,
       simlockHome: options.simlockHome,
       ...(options.slim === undefined ? {} : { slim: options.slim }),
+      ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),

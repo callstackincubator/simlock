@@ -158,6 +158,9 @@ export class LeaseEngine {
     this.#acquisition = new LeaseAcquisitionCoordinator({
       claims: this.#claims,
       decisions: this.#decisions,
+      // The worker's default device mode per platform (ADR 0007 §2). Android has no key until
+      // Android slim lands, so it falls to the coordinator's own `"full"`.
+      defaultModes: { ios: options.config.ios.defaultMode },
       drivers: this.#drivers,
       eventBus: options.eventBus,
       leases: this.#leases,

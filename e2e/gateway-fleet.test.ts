@@ -281,6 +281,83 @@ describe("gateway fleet", () => {
     expect(ios?.modelRuntimes).toEqual({ "iPhone 16": ["18.4", "26.0"] });
   });
 
+  it("gives a request with a mode that mode on either worker, and a request with none the default of the worker it landed on", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret } = minted.json as { secret: string };
+    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    // One model per worker, so the model alone decides where a request lands. Both workers can
+    // slim the one runtime they have.
+    await withDaemon({
+      configOverrides: {
+        gateway: { ...uplink, label: "default-full" },
+        ios: { defaultMode: "full" },
+      },
+      driverScript: {
+        ios: {
+          availableOsVersions: ["26.0"],
+          knownModels: ["iPhone 16"],
+          slimmableOsVersions: ["26.0"],
+        },
+      },
+    });
+    await withDaemon({
+      configOverrides: {
+        gateway: { ...uplink, label: "default-slim" },
+        ios: { defaultMode: "slim" },
+      },
+      driverScript: {
+        ios: {
+          availableOsVersions: ["26.0"],
+          knownModels: ["iPhone 17"],
+          slimmableOsVersions: ["26.0"],
+        },
+      },
+    });
+    await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 2 &&
+        views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+      "both workers connected with their catalogs",
+    );
+
+    const leaseMode = async (device: string, mode: readonly string[]) => {
+      const leased = await gateway.cli(
+        ["lease", "--platform", "ios", "--device", device, "--detach", ...mode],
+        { timeout: 30_000 },
+      );
+      expect(leased.code, leased.stderr).toBe(0);
+      const grant = leased.json as {
+        readonly device: { readonly mode: string };
+        readonly lease: { readonly id: string; readonly worker?: { readonly label?: string } };
+      };
+      expect((await gateway.cli(["release", grant.lease.id], { timeout: 30_000 })).code).toBe(0);
+      return { mode: grant.device.mode, worker: grant.lease.worker?.label };
+    };
+
+    await expect(leaseMode("iPhone 16", [])).resolves.toEqual({
+      mode: "full",
+      worker: "default-full",
+    });
+    await expect(leaseMode("iPhone 16", ["--mode", "slim"])).resolves.toEqual({
+      mode: "slim",
+      worker: "default-full",
+    });
+    await expect(leaseMode("iPhone 17", [])).resolves.toEqual({
+      mode: "slim",
+      worker: "default-slim",
+    });
+    await expect(leaseMode("iPhone 17", ["--mode", "full"])).resolves.toEqual({
+      mode: "full",
+      worker: "default-slim",
+    });
+  });
+
   it("refuses an uplink whose token is not a worker join token", async () => {
     const port = await freeLoopbackPort();
     const gateway = await withDaemon({

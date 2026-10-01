@@ -31,16 +31,24 @@ const client = await connectSimlock({
   principal: "agent-1",
 });
 
-const grant = await client.requestLease({ platform: "ios", model: "iPhone 17 Pro" });
+const grant = await client.requestLease({ platform: "ios", model: "iPhone 17 Pro", mode: "slim" });
 // grant: { device, lease, timing } — the contract's LeaseGrant, verbatim
 
 await client.releaseLease({ leaseId: grant.lease.id });
 await client.close();
 ```
 
+`requestLease` takes an optional `mode`, `"slim"` or `"full"`: the device
+mode the lease asks for. Without it the lease gets the default mode of the
+worker that serves it (`ios.defaultMode`, `full` unless configured). Any
+other value, or the removed `full: true`, is a `BAD_REQUEST`.
+
 `grant.device.mode` is the device mode the granted device actually has:
-`"slim"` when its driver reduced its feature set (iOS slim mode), `"full"`
-otherwise. A slim device lacks some system features — push notifications,
+`"slim"` when its driver reduced its feature set, `"full"` otherwise. `full`
+is a guarantee and `slim` is best effort: a `"slim"` request on a runtime
+that cannot be slimmed (an iOS runtime older than 18.5, or any Android
+device) is granted `"full"`, and a `"full"` request is never granted
+`"slim"`. A slim device lacks some system features — push notifications,
 Spotlight, StoreKit sheets, universal links, system pickers — so check it
 before treating such a failure as a bug. Every device in `getStatus()` and in
 an admin's `list({ kind: "devices" })` carries the same `mode`.

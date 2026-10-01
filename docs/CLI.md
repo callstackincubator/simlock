@@ -133,9 +133,9 @@ a timer and releasing it when it exits.
 
 ```
 simlock lease --platform <ios|android> --device <model> [--os <version>]
-              [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]
-              [--ttl <duration>] [--allow-download] [--full] [--export-env]
-              [--bind-pid <pid>]
+              [--mode <slim|full>] [--agent-id <id>] [--timeout <duration>]
+              [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
+              [--export-env] [--bind-pid <pid>]
 ```
 
 There is only one kind of lease: every lease has a
@@ -181,13 +181,16 @@ granted.
   `component.install-failed` on the event bus (`simlock events --follow`);
   see [EVENTS.md](EVENTS.md#components). The requester's own progress stream
   (below) does not yet reflect an in-flight download.
-- `--full` — opt this lease out of iOS slim mode (see
-  [CONFIGURATION.md](CONFIGURATION.md) for what slim mode disables). Only
-  meaningful when `ios.slim.enabled` is on; ignored otherwise, and ignored
-  for Android. A `--full` request never matches, and never shares a pool key
-  with, a slim device, so it can wait for a fresh device to provision or
-  force a re-provision of one already running, even while slim devices sit
-  idle in the warm pool.
+- `--mode <slim|full>` — the device mode this lease asks for. Without it, the
+  lease gets the default mode of the worker that serves it (`ios.defaultMode`,
+  `full` unless configured). `full` is a guarantee: a `full` lease never gets a
+  slim device. `slim` is best effort: on a runtime that cannot be slimmed (an
+  iOS runtime older than 18.5, or any Android device) the lease is granted a
+  full device. A lease only reuses an idle device of the mode it resolved to,
+  so it can wait for a fresh device even while devices of the other mode sit
+  idle. Any other value is a `BAD_REQUEST` (exit 2). See
+  [CONFIGURATION.md](CONFIGURATION.md#device-mode-slim-and-full) for what a
+  slim device leaves out.
 - `--detach` — print the lease result (the same JSON shape as the grant line
   below, including `device.mode`) and exit instead of staying
   alive. Nothing then renews the lease on your behalf: keep it with
@@ -281,9 +284,9 @@ bookkeeping fields (`driverData`, `quarantine*`, `foreign*`, `recovering*`,
 the derived `transitionAgeMs`) never appear on a grant; a caller that wants
 those needs the admin-role `list.get`/`status.get`, not `lease.request`'s
 output. `device.mode` is the device mode the granted device actually has:
-`"slim"` when its feature set was reduced (iOS slim mode applied and this
-request did not pass `--full`), and `"full"` otherwise — always `"full"` for
-Android. It lets an agent explain a feature-loss failure (missing push notification,
+`"slim"` when its feature set was reduced, and `"full"` otherwise — always
+`"full"` for Android. A `--mode slim` lease can report `"full"` (slim is best
+effort); a `--mode full` lease never reports `"slim"`. It lets an agent explain a feature-loss failure (missing push notification,
 Spotlight result, StoreKit sheet, universal link, or system picker) instead
 of misreading it as a bug. See `src/contract/schemas.ts`
 (`deviceRecordSchema`, `leaseRecordSchema`, `leaseGrantSchema`) for the full
@@ -731,7 +734,7 @@ simlock worker remove <worker-id>
 
 ```json
 {"workers":[{"id":"3f81a2c4","label":"mac-studio-2","state":"connected","drained":false,
-  "daemonVersion":"0.4.0","protocol":{"min":7,"max":7},
+  "daemonVersion":"0.4.0","protocol":{"min":8,"max":8},
   "connectedAt":1735689600000,"lastSeenAt":1735689930000,
   "capacity":{"ios":{"running":2,"limit":4},"android":{"running":0,"limit":2}},
   "downloads":{"policy":"on-request"},
@@ -1035,14 +1038,13 @@ enters `quarantined` (see [#21](https://github.com/callstackincubator/simlock/is
 rather than being re-driven, since it may be mid-erase. As with every other
 `--fix` correction, a leased device is never touched.
 
-When `ios.slim.enabled` is on, `doctor` also reports a `driver-advisory`
+When `ios.defaultMode` is `slim`, `doctor` also reports a `driver-advisory`
 finding (code `slim-runtime-unsupported`) for each installed iOS runtime
 older than 18.5 — the version floor `launchctl disable` overrides need to
-survive a reboot (see [CONFIGURATION.md](CONFIGURATION.md)). Slim mode
-silently does nothing on those runtimes otherwise; this finding is what
-makes that visible. It is advisory only — there is no `--fix` for it, since
-the fix is either upgrading the runtime or narrowing `ios.slim` to the
-runtimes that support it.
+survive a reboot (see [CONFIGURATION.md](CONFIGURATION.md#device-mode-slim-and-full)).
+A lease on those runtimes that asks for slim, or names no mode, gets a full
+device; this finding is what makes that visible. It is advisory only — there
+is no `--fix` for it, since the fix is upgrading the runtime.
 
 On macOS, `doctor` also reports a `driver-advisory` finding (code
 `runtime-cache-unreclaimable`) for each iOS runtime that was downloaded to

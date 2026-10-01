@@ -55,9 +55,9 @@ a warning. Inspect the effective, merged configuration at any time with
 | `drivers.ios.deviceRoot`          | The CoreSimulator device set Simlock owns and scopes every `simctl` call to. See [Device roots](#device-roots).                                                                                              | `${SIMLOCK_HOME}/devices/ios`                                    |
 | `drivers.android.deviceRoot`      | The AVD home Simlock owns; exported as `ANDROID_AVD_HOME` to every `avdmanager`/`emulator` call. See [Device roots](#device-roots).                                                                          | `${SIMLOCK_HOME}/devices/android`                                |
 | `drivers.android.adbServerPort`   | TCP port for Simlock's own adb server. Must not be the shared server's `5037`. Startup fails closed if it is occupied.                                                                                       | `5038`                                                            |
-| `ios.slim.enabled`                | Master switch for slim mode: disables iOS simulator daemon categories to cut RAM and CPU overhead per device.                                                                                                                | `false`                                                          |
-| `ios.slim.categories`             | Which daemon categories to disable when slim mode is on. Omitted means every category the driver knows.                                                                                                                      | every known category                                             |
-| `ios.slim.bootTimeoutMs`          | Boot deadline used while slim mode is on, in place of the normal boot timeout.                                                                                                                                                | `10 minutes`                                                     |
+| `ios.defaultMode`                 | The device mode an iOS lease request gets when it names none: `slim` or `full`. Every worker makes both kinds whatever this says. See [Device mode: slim and full](#device-mode-slim-and-full).                             | `full`                                                           |
+| `ios.slim.categories`             | Which daemon categories a slim iOS device has disabled. Omitted means every category the driver knows.                                                                                                                       | every known category                                             |
+| `ios.slim.bootTimeoutMs`          | Boot deadline for a slim iOS device, in place of the normal boot timeout.                                                                                                                                                    | `10 minutes`                                                     |
 | `android.emulator.headless`       | Launch emulators without a window (`-no-window`). Needed on a host with no display, such as a Linux CI runner. See [Android emulator launch options](#android-emulator-launch-options). | `false`                                                          |
 | `android.emulator.gpu`            | The emulator's GPU mode, passed as `-gpu <mode>` (for example `host`, `swiftshader_indirect`, `guest`). `auto` passes nothing and leaves the emulator's own choice.                                                        | `auto`                                                           |
 | `android.emulator.audio`          | `false` launches emulators without audio (`-no-audio`).                                                                                                                                                                      | `true`                                                           |
@@ -77,7 +77,7 @@ integer in `1`-`65535`.
 `gateway.label` are strings, and `gateway.disconnectedRetentionMs`,
 `gateway.execTimeoutMs`, and `gateway.leaseRequestTimeoutMs` positive
 numbers.
-`ios.slim.enabled` is a boolean, `ios.slim.categories` an array of
+`ios.defaultMode` is `slim` or `full`, `ios.slim.categories` an array of
 non-empty strings, and `ios.slim.bootTimeoutMs` a positive number.
 `android.emulator.headless`, `android.emulator.audio`, and
 `android.emulator.bootAnimation` are booleans, and `android.emulator.gpu` a
@@ -230,7 +230,7 @@ the mismatch changes on a later refresh) — loud enough to catch the
 misconfiguration without silently overriding it.
 
 Everything else — `capacity.*`, `idle.*`, `warmPool.*`, `health.*`,
-`stalledTransition.*`, `drivers.*`, `ios.slim.*`, `android.emulator.*`, `diskPressure.*`,
+`stalledTransition.*`, `drivers.*`, `ios.*`, `android.emulator.*`, `diskPressure.*`,
 `downloads.*`, and the worker-side `gateway.url`/`gateway.token`/
 `gateway.label`/`exec.timeoutMs` — is **ignored with a warning**, exactly as
 an unknown key is. That is deliberately the softer treatment: a gateway's
@@ -360,22 +360,58 @@ Running two Simlock instances on one machine now needs distinct
 `drivers.android.adbServerPort` values as well as distinct `SIMLOCK_HOME`
 values.
 
-Slim mode is opt-in and iOS-only: it disables simulator daemon categories
-that most agent workloads never touch, trading some simulator functionality
-for a leaner runtime footprint. The categories are widgets, Siri/Apple
-Intelligence, Spotlight/search, iCloud, App Store, mail/calendar (PIM),
-Safari/web, Family Sharing, Health, Photos, bundled apps (News/Weather/Maps/
-Tips/games), messaging, connectivity, telemetry, and a miscellaneous group
-(`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`,
-`health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`,
-`other` -- the valid `ios.slim.categories` strings, defined in
-`src/drivers/ios/slim-labels.ts`). Measured on one simulator: ~258 -> ~70
-processes, ~4.0 GB -> ~0.9 GB. It requires iOS 18.5 or newer, since the
-underlying daemon controls are not available on older runtimes. Turning it
-on costs an extra boot per device -- the daemons are disabled between a
-first boot and a second, slower one -- which is why
-`ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
-especially on slower CI runners.
+## Device mode: slim and full
+
+A lease request can ask for a `slim` or a `full` device (`simlock lease
+--mode`, `mode` on MCP, HTTP, and the client). A request that names no mode
+gets the default of the worker that serves it, set by `ios.defaultMode`
+(default `full`). Every worker makes both kinds of device whatever its
+default is, and keeps them apart: a request only ever reuses an idle device
+of the mode it resolved to.
+
+```json
+{
+  "ios": {
+    "defaultMode": "slim",
+    "slim": { "categories": ["widgets", "siri", "telemetry"] }
+  }
+}
+```
+
+A slim iOS device has simulator daemon categories disabled that most agent
+workloads never touch, trading some simulator functionality for a leaner
+runtime footprint. The categories are widgets, Siri/Apple Intelligence,
+Spotlight/search, iCloud, App Store, mail/calendar (PIM), Safari/web, Family
+Sharing, Health, Photos, bundled apps (News/Weather/Maps/Tips/games),
+messaging, connectivity, telemetry, and a miscellaneous group (`widgets`,
+`siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`,
+`photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `other` -- the
+valid `ios.slim.categories` strings). Measured on one simulator: ~258 -> ~70
+processes, ~4.0 GB -> ~0.9 GB. A slim device costs an extra boot -- the
+daemons are disabled between a first boot and a second, slower one -- which
+is why `ios.slim.bootTimeoutMs` defaults higher than the normal boot timeout,
+especially on slower CI runners. The `ios.slim.*` keys apply to every slim
+device the worker makes, whatever its default mode.
+
+**`full` is a guarantee; `slim` is best effort.** A `full` request never
+receives a slim device. A `slim` request on a runtime that cannot be slimmed
+-- an iOS runtime older than 18.5, or any Android device -- is granted a full
+device rather than failing. The lease reports the mode the device actually
+has as `mode`, so check it when it matters.
+
+On a worker whose default mode is `slim`, `simlock doctor` reports the
+installed iOS runtimes that cannot be slimmed.
+
+**Upgrading a worker that had slim switched on.** The old on/off switch under
+`ios.slim` is gone; a config that still sets it gets the usual unknown-key
+warning and the default mode `full`. Set `ios.defaultMode: "slim"` to keep slim as the
+default. Devices made before the upgrade load as full, including ones that
+were slimmed, so such a worker could hand a slimmed device to a `full`
+request. Empty it before upgrading:
+
+```bash
+simlock nuke --delete-devices
+```
 
 ## Android emulator launch options
 

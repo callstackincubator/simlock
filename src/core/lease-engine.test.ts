@@ -42,7 +42,7 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
+    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
     android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
     health: {
       enabled: true,
@@ -1718,7 +1718,10 @@ describe("LeaseEngine fresh lease identity (#75)", () => {
       leaseIdentity: freshIos,
       statePath,
     });
-    const driverDevice = await driver.makeReady(await driver.provision(request));
+    const driverDevice = await driver.makeReady(await driver.provision(request), {
+      mode: "full",
+      purpose: "prepare",
+    });
     const device = await crashed.registerDevice({
       driverData: driverDevice.driverData,
       driverDeviceId: driverDevice.deviceId,

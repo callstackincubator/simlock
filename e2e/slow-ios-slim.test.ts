@@ -140,32 +140,50 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "scenario 1: slim off (default) is byte-for-byte today's behaviour",
-      { timeout: 300_000 },
+      "scenario 1: on a default-full worker a request with no mode is full, and --mode slim is slim",
+      { timeout: 600_000 },
       async () => {
         const env = await withDaemon({ driver: "real" });
         try {
           const { model, os } = await catalogModelAndOs(env);
-          const grant = await leaseDetached(env, model, os, "slim-off-default");
+          const grant = await leaseDetached(env, model, os, "default-full");
 
-          expect(grant.mode, "a lease must be full when ios.slim is not configured").toBe("full");
+          expect(grant.mode, "a request with no mode must be full on a default-full worker").toBe(
+            "full",
+          );
 
           const disabled = await printDisabled(grant.udid);
           const overlap = [...ALL_LABELS].filter((label) => disabled.has(label));
           expect(
             overlap,
-            `expected none of the slim label set disabled on a non-slim device, found: ${overlap.join(", ")}`,
+            `expected none of the slim label set disabled on a full device, found: ${overlap.join(", ")}`,
           ).toEqual([]);
 
           const recorded = await env.events("1h");
           const slimmedEvents = recorded.filter((event) => event.event === "device.slimmed");
-          expect(slimmedEvents, "no device.slimmed event expected with slim off").toEqual([]);
+          expect(slimmedEvents, "no device.slimmed event expected for a full device").toEqual([]);
 
           const doctorReport = (await env.cli(["doctor"])).json as DoctorReport;
           const advisories = doctorReport.findings.filter(
             (finding) => finding.kind === "driver-advisory",
           );
-          expect(advisories, "no driver-advisory finding expected with slim off").toEqual([]);
+          expect(
+            advisories,
+            "no driver-advisory finding expected on a default-full worker",
+          ).toEqual([]);
+
+          expect((await env.cli(["release", grant.lease])).code).toBe(0);
+
+          const slimGrant = await leaseDetached(env, model, os, "default-full-asks-slim", [
+            "--mode",
+            "slim",
+          ]);
+          expect(slimGrant.mode, "--mode slim must be slim on a default-full worker").toBe("slim");
+          expect(slimGrant.udid, "a slim request must not reuse the idle full device").not.toBe(
+            grant.udid,
+          );
+          const slimDisabled = await printDisabled(slimGrant.udid);
+          expect([...ALL_LABELS].filter((label) => !slimDisabled.has(label))).toEqual([]);
 
           await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
         } finally {
@@ -175,50 +193,22 @@ describe.skipIf(process.platform !== "darwin")(
     );
 
     it(
-      "scenario 2/3/4/7: cold slim lease, idempotence across a reclaim, --full opt-out, and doctor advisory absence",
+      "scenario 2/3/4/7: on a default-slim worker, a cold slim lease, --mode full while a slim device sits idle, idempotence across a reclaim, and doctor advisory absence",
       { timeout: 900_000 },
       async () => {
         const env = await withDaemon({
           driver: "real",
-          configOverrides: { ios: { slim: { enabled: true } } },
+          configOverrides: { ios: { defaultMode: "slim" } },
         });
         try {
           const { model, os } = await catalogModelAndOs(env);
 
-          // --- scenario 4 half A + baseline process count: a --full lease is untouched. ---
-          const fullStart = Date.now();
-          const fullGrant = await leaseDetached(env, model, os, "slim-full-opt-out", ["--full"]);
-          const fullDurationMs = Date.now() - fullStart;
-          expect(fullGrant.mode, "a --full lease's grant must carry mode: full").toBe("full");
-          const fullDisabled = await printDisabled(fullGrant.udid);
-          const fullOverlap = [...ALL_LABELS].filter((label) => fullDisabled.has(label));
-          expect(
-            fullOverlap,
-            `--full device must have none of the slim labels disabled, found: ${fullOverlap.join(", ")}`,
-          ).toEqual([]);
-          const fullProcessCount = await processCount(fullGrant.udid);
-
-          const doctorAfterFull = (await env.cli(["doctor"])).json as DoctorReport;
-          const driftForFull = doctorAfterFull.findings.filter(
-            (finding) => finding.kind !== "driver-advisory" && finding.deviceId !== undefined,
-          );
-          expect(
-            driftForFull.filter((finding) => finding.deviceId === fullGrant.udid),
-            "doctor must report no drift for the --full device",
-          ).toEqual([]);
-
-          // --- scenario 2: a cold, non-full lease produces a slim device. ---
-          const eventsBeforeSlim = await env.events("1h");
-          const slimmedBefore = eventsBeforeSlim.filter(
-            (event) => event.event === "device.slimmed",
-          ).length;
-
+          // --- scenario 2: a cold lease naming no mode produces a slim device. ---
           const slimStart = Date.now();
           const slimGrant = await leaseDetached(env, model, os, "slim-cold");
           const slimDurationMs = Date.now() - slimStart;
 
           expect(slimGrant.mode, "a slim lease's grant must carry mode: slim").toBe("slim");
-          expect(slimGrant.udid).not.toBe(fullGrant.udid);
 
           const slimDisabled = await printDisabled(slimGrant.udid);
           const missing = [...ALL_LABELS].filter((label) => !slimDisabled.has(label));
@@ -229,8 +219,38 @@ describe.skipIf(process.platform !== "darwin")(
 
           const boot = await simctlDevices();
           expect(boot.find((device) => device.udid === slimGrant.udid)?.state).toBe("Booted");
-
           const slimProcessCount = await processCount(slimGrant.udid);
+
+          const eventsAfterSlim = await env.expectEvents(["device.slimmed"], { since: "1h" });
+          const slimmedEvents = eventsAfterSlim.filter((event) => event.event === "device.slimmed");
+          expect(slimmedEvents.length).toBe(1);
+
+          // --- scenario 4: with the slim device released and idle in the pool, --mode full gets
+          // a different, full device. ---
+          expect((await env.cli(["release", slimGrant.lease])).code).toBe(0);
+          await waitForDeviceState(env, slimGrant.udid, "ready", { timeout: 120_000 });
+
+          const fullStart = Date.now();
+          const fullGrant = await leaseDetached(env, model, os, "slim-full", ["--mode", "full"]);
+          const fullDurationMs = Date.now() - fullStart;
+          expect(fullGrant.mode, "a --mode full lease's grant must carry mode: full").toBe("full");
+          expect(fullGrant.udid, "--mode full must not receive the idle slim device").not.toBe(
+            slimGrant.udid,
+          );
+          const fullDisabled = await printDisabled(fullGrant.udid);
+          const fullOverlap = [...ALL_LABELS].filter((label) => fullDisabled.has(label));
+          expect(
+            fullOverlap,
+            `--mode full device must have none of the slim labels disabled, found: ${fullOverlap.join(", ")}`,
+          ).toEqual([]);
+          const fullProcessCount = await processCount(fullGrant.udid);
+
+          const doctorAfterFull = (await env.cli(["doctor"])).json as DoctorReport;
+          expect(
+            doctorAfterFull.findings.filter((finding) => finding.deviceId === fullGrant.udid),
+            "doctor must report no drift for the full device",
+          ).toEqual([]);
+
           const reduction = 1 - slimProcessCount / fullProcessCount;
           expect(
             reduction,
@@ -239,9 +259,6 @@ describe.skipIf(process.platform !== "darwin")(
               `${(reduction * 100).toFixed(1)}% reduction`,
           ).toBeGreaterThanOrEqual(0.3);
 
-          const eventsAfterSlim = await env.expectEvents(["device.slimmed"], { since: "1h" });
-          const slimmedEvents = eventsAfterSlim.filter((event) => event.event === "device.slimmed");
-          expect(slimmedEvents.length).toBe(slimmedBefore + 1);
           const slimmedFact = slimmedEvents.at(-1)?.payload as {
             deviceId: string;
             platform?: string;
@@ -280,15 +297,11 @@ describe.skipIf(process.platform !== "darwin")(
               "machine (26.4.1, 27.0) are >= 18.5",
           ).toEqual([]);
 
-          // --- scenario 3: release, then re-lease the same spec. Per docs/internal/KNOWN-PITFALLS.md
+          // --- scenario 3: re-lease the released slim spec. Per docs/internal/KNOWN-PITFALLS.md
           // ("Every reclaim pays two boots, indefinitely"), IosSimctlDriver.reclaim always runs
           // `simctl erase`, wiping the launchctl overrides -- so the documented behaviour is
           // that the warm-pooled device comes back stock and pays a SECOND device.slimmed, not
           // that it's skipped. We assert that documented behaviour here.
-          const releaseResult = await env.cli(["release", slimGrant.lease]);
-          expect(releaseResult.code).toBe(0);
-          await waitForDeviceState(env, slimGrant.udid, "ready", { timeout: 120_000 });
-
           const relet = await leaseDetached(env, model, os, "slim-cold");
           expect(relet.udid, "expected the warm-pooled device to be reused").toBe(slimGrant.udid);
           expect(relet.mode, "re-leased device must still report mode: slim").toBe("slim");
@@ -303,7 +316,7 @@ describe.skipIf(process.platform !== "darwin")(
             slimmedAfterRelease.length,
             "expected a SECOND device.slimmed for this udid after release+re-lease, per the " +
               "documented erase-on-reclaim cost (docs/internal/KNOWN-PITFALLS.md)",
-          ).toBe(slimmedBefore + 2);
+          ).toBe(2);
 
           await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
         } finally {
@@ -329,7 +342,7 @@ describe.skipIf(process.platform !== "darwin")(
         const env = await withDaemon({
           driver: "real",
           configOverrides: {
-            ios: { slim: { enabled: true, categories: ["siri", "telemetry"] } },
+            ios: { defaultMode: "slim", slim: { categories: ["siri", "telemetry"] } },
           },
         });
         try {
@@ -361,7 +374,7 @@ describe.skipIf(process.platform !== "darwin")(
 
           // --- scenario 6: an unknown category alongside a known one is not fatal. ---
           await env.withConfig(
-            { ios: { slim: { enabled: true, categories: ["siri", "no-such-category"] } } },
+            { ios: { defaultMode: "slim", slim: { categories: ["siri", "no-such-category"] } } },
             async () => {
               const grant2 = await leaseDetached(env, model, os, "slim-unknown-category");
               expect(grant2.mode, "lease must still succeed and be slim").toBe("slim");
@@ -385,7 +398,7 @@ describe.skipIf(process.platform !== "darwin")(
         const env = await withDaemon({
           driver: "real",
           configOverrides: {
-            ios: { slim: { enabled: true } },
+            ios: { defaultMode: "slim" },
             health: { probeIntervalMs: 2_000, recoveryBackoffMs: 1_000, stableObservations: 1 },
           },
         });
@@ -439,7 +452,7 @@ describe.skipIf(process.platform !== "darwin")(
     it("scenario 9: MCP carries the device mode both ways", { timeout: 600_000 }, async () => {
       const env = await withDaemon({
         driver: "real",
-        configOverrides: { ios: { slim: { enabled: true } } },
+        configOverrides: { ios: { defaultMode: "slim" } },
       });
       try {
         const { model, os } = await catalogModelAndOs(env);
@@ -453,7 +466,7 @@ describe.skipIf(process.platform !== "darwin")(
           const fullResult = await mcp.client.callTool(
             {
               name: "lease_simulator",
-              arguments: { full: true, model, osVersion: os, platform: "ios" },
+              arguments: { mode: "full", model, osVersion: os, platform: "ios" },
             },
             undefined,
             leaseCallOptions,
@@ -462,7 +475,9 @@ describe.skipIf(process.platform !== "darwin")(
             device: { mode: "slim" | "full" };
             lease: { id: string };
           };
-          expect(fullLeased.device.mode, "MCP full:true lease must report mode: full").toBe("full");
+          expect(fullLeased.device.mode, "MCP mode: full lease must report mode: full").toBe(
+            "full",
+          );
 
           await mcp.client.callTool({
             name: "release_simulator",
@@ -483,7 +498,7 @@ describe.skipIf(process.platform !== "darwin")(
           };
           expect(
             slimLeased.device.mode,
-            "MCP plain lease under ios.slim.enabled must report mode: slim",
+            "MCP lease naming no mode on a default-slim worker must report mode: slim",
           ).toBe("slim");
 
           await mcp.client.callTool({

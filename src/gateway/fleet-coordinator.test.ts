@@ -181,6 +181,35 @@ function requestOptions(overrides: Partial<Parameters<FleetLeaseCoordinator["req
   };
 }
 
+describe("FleetLeaseCoordinator device mode", () => {
+  it.each([
+    ["slim", { mode: "slim" as const }],
+    ["full", { mode: "full" as const }],
+  ])("forwards a request's mode %s to the worker unchanged", async (_label, mode) => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+
+    await coordinator.request({ ...REQUEST, ...mode }, requestOptions());
+
+    expect(client.lastRequestLeaseInput).toMatchObject(mode);
+  });
+
+  it("forwards no mode when the request named none, so the worker's default applies", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+
+    await coordinator.request(REQUEST, requestOptions());
+
+    expect(client.lastRequestLeaseInput).not.toHaveProperty("mode");
+  });
+});
+
 describe("FleetLeaseCoordinator stored requests", () => {
   it("answers a repeat under the same key with the first grant, forwarding nothing a second time", async () => {
     const { coordinator, directory, workers } = harness();

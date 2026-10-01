@@ -48,7 +48,7 @@ const gatewayConfig = {
   },
   http: { enabled: true, host: "127.0.0.1", port: 4700 },
   idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
-  ios: { slim: { bootTimeoutMs: 1, enabled: false } },
+  ios: { defaultMode: "full" as const, slim: { bootTimeoutMs: 1 } },
   android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
   lease: {
     defaultTtlMs: 900_000,
@@ -628,6 +628,32 @@ describe("GatewayDispatcher", () => {
           session({ principal: "mallory-principal", role: "agent" }),
         ),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it.each([
+      ["mode slim", { mode: "slim" as const }],
+      ["no mode", {}],
+    ])("forwards a lease.request with %s to the worker as it arrived", async (_label, mode) => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17", noWait: true, platform: "ios", ...mode },
+        session({ role: "agent" }),
+      );
+
+      if ("mode" in mode) expect(client.lastRequestLeaseInput).toMatchObject(mode);
+      else expect(client.lastRequestLeaseInput).not.toHaveProperty("mode");
     });
 
     it("forwards device.exec to the worker that holds the lease, gated on the caller owning it", async () => {
