@@ -208,6 +208,13 @@ describe("warm-then-free as a list of stages", () => {
     });
   });
 
+  it("free-capacity scores a worker whose capacity was never read as zero, so it abstains without eligible in front", () => {
+    const { capacity: _capacity, ...unread } = view("wrk_a");
+
+    expect(freeCapacity.score(unread, REQUEST)).toBe(0);
+    expect(composeRoutingPolicy([freeCapacity]).select(REQUEST, [unread])).toBeUndefined();
+  });
+
   it("adding a filter stage defined in the test drops the workers it rejects, with no other stage edited", () => {
     const rejectRoomy: FilterStage = {
       keeps: (worker) => worker.id !== "wrk_roomy",
