@@ -33,4 +33,4 @@ the status is stale.
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — not yet implemented |
 | [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — not yet implemented |
-| [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Proposed |
+| [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted — not yet implemented |
