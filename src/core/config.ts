@@ -17,6 +17,7 @@ import {
   ConfigError,
   integerInRange,
   invalidValue,
+  nonEmptyString,
   nonNegativeNumber,
   numberAtLeast,
   objectValidator,
@@ -183,6 +184,22 @@ export interface Config {
       readonly categories?: readonly string[];
       /** Boot deadline used while slim mode is on (slim adds a second boot; CI runners are slow). */
       readonly bootTimeoutMs: number;
+    };
+  };
+  /**
+   * How this machine's Android emulators are launched. Operator configuration of the Android
+   * driver, the same way `ios.slim` configures the iOS one: the core validates each value's
+   * type and hands the block to the driver without interpreting it, and no lease request can
+   * set it. Which emulator flag a key becomes is the driver's business. Applies at a device's
+   * next boot.
+   */
+  readonly android: {
+    readonly emulator: {
+      readonly headless: boolean;
+      /** An emulator GPU mode; `"auto"` leaves the emulator's own default. */
+      readonly gpu: string;
+      readonly audio: boolean;
+      readonly bootAnimation: boolean;
     };
   };
   /**
@@ -601,6 +618,14 @@ function defaultConfig(
         bootTimeoutMs: 600_000,
       },
     },
+    android: {
+      emulator: {
+        headless: false,
+        gpu: "auto",
+        audio: true,
+        bootAnimation: true,
+      },
+    },
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
@@ -731,6 +756,14 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
         enabled: booleanValue,
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
+      }),
+    }),
+    android: objectValidator({
+      emulator: objectValidator({
+        headless: booleanValue,
+        gpu: nonEmptyString,
+        audio: booleanValue,
+        bootAnimation: booleanValue,
       }),
     }),
     stalledTransition: objectValidator({

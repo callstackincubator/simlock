@@ -43,6 +43,7 @@ const gatewayConfig = {
   http: { enabled: true, host: "127.0.0.1", port: 4700 },
   idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
   ios: { slim: { bootTimeoutMs: 1, enabled: false } },
+  android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
   lease: {
     defaultTtlMs: 900_000,
     maxTtlMs: 3_600_000,

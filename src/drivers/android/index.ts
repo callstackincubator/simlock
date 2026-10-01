@@ -117,6 +117,31 @@ const CLEAN_BASELINE = "simlock_clean_baseline";
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
+/**
+ * How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
+ * reaches the driver at construction and never from a lease request. Only these four settings
+ * exist, each mapped to one fixed emulator flag by `emulatorLaunchFlags`, so config cannot add
+ * `-port`, a different AVD home, or any other argument that would break containment.
+ */
+export interface AndroidEmulatorLaunchOptions {
+  /** `true` adds `-no-window`. */
+  readonly headless: boolean;
+  /** Passed as `-gpu <mode>`; `"auto"` passes nothing. */
+  readonly gpu: string;
+  /** `false` adds `-no-audio`. */
+  readonly audio: boolean;
+  /** `false` adds `-no-boot-anim`. */
+  readonly bootAnimation: boolean;
+}
+
+/** Equal to `android.emulator`'s config defaults: the launch this driver always made. */
+const DEFAULT_EMULATOR_LAUNCH: AndroidEmulatorLaunchOptions = {
+  audio: true,
+  bootAnimation: true,
+  gpu: "auto",
+  headless: false,
+};
+
 export interface AndroidDriverOptions {
   /**
    * Explicit legal consent for Android SDK licenses (`downloads.acceptAndroidLicenses`),
@@ -160,6 +185,12 @@ export interface AndroidDriverOptions {
   readonly tcpProbe: TcpProbe;
   /** `process.getuid?.()`; `undefined` skips the root's ownership check. */
   readonly uid?: number;
+  /**
+   * Launch options applied at each emulator boot; a running emulator keeps the flags it
+   * started with. Omitted means `DEFAULT_EMULATOR_LAUNCH`, the same launch as before these
+   * options existed.
+   */
+  readonly emulator?: AndroidEmulatorLaunchOptions | undefined;
 }
 
 export type AndroidDriverDiagnostic =
@@ -406,6 +437,10 @@ export class AndroidDriver implements Driver {
   readonly #legacyAvdHome: string;
   readonly #diskSpaceGuard: DiskSpaceGuard;
   readonly #downloadTimeoutMs: number;
+  /** `android.emulator` as emulator flags, fixed for this driver's lifetime. */
+  readonly #emulatorFlags: readonly string[];
+  /** The part of `android.emulator` a clean baseline depends on; see `baselineLaunchInputs`. */
+  readonly #baselineLaunchInputs: readonly string[];
   readonly #installLocks = new Map<string, Promise<void>>();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
@@ -433,6 +468,8 @@ export class AndroidDriver implements Driver {
     this.#deviceRoot = deviceRoot;
     this.#diskSpaceGuard = options.diskSpaceGuard ?? new DiskSpaceGuard();
     this.#downloadTimeoutMs = options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
+    this.#baselineLaunchInputs = baselineLaunchInputs(options.emulator);
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi ?? hostAbiFor(process.arch);
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
@@ -782,8 +819,22 @@ export class AndroidDriver implements Driver {
     return { address: serialFor(port), deviceId: avdName, driverData };
   }
 
-  /** Returns the device with its address re-read: see `Driver.makeReady` for why it is read here. */
-  async makeReady(device: DriverDevice): Promise<DriverDevice> {
+  /**
+   * Returns the device with its address re-read: see `Driver.makeReady` for why it is read here.
+   *
+   * `options.purpose === "recover"` boots and nothing else. The clean-baseline check below can
+   * decide to wipe the device (a baseline hash that no longer matches: an emulator upgrade, a
+   * config.ini change, or a changed `android.emulator.headless`/`gpu`) or to capture a fresh
+   * baseline from whatever is on the device -- and either would run against a device that is
+   * still leased, whose data is the agent's. So a recovery boot skips the baseline logic
+   * entirely: a cold boot from disk, never a snapshot load and never a wipe. Whatever the
+   * baseline check would have decided is decided instead by the next `reclaim`, once the
+   * lease is over.
+   */
+  async makeReady(
+    device: DriverDevice,
+    options?: { readonly purpose: "prepare" | "recover" },
+  ): Promise<DriverDevice> {
     const data = this.#dataFor(device);
     return this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
@@ -797,30 +848,14 @@ export class AndroidDriver implements Driver {
         return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
-      const baselineHash = await this.#baselineHash(data.avdName);
-      if (!state.needsWipe && baselineHash !== undefined) {
-        const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
-        if (baselineHash === currentHash) {
-          state.baselineCaptured = true;
-          state.snapshotExpected = true;
-        } else {
-          await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
-          state.baselineCaptured = false;
-          state.needsWipe = true;
-          state.snapshotExpected = false;
-        }
+      if (options?.purpose === "recover") {
+        await this.#startEmulator(data, state, ["-no-snapshot-load"], false);
+        await this.#writeMark(data);
+        return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
-      await this.#startEmulator(
-        data,
-        state,
-        state.needsWipe
-          ? ["-wipe-data", "-no-snapshot-load"]
-          : state.snapshotExpected
-            ? ["-snapshot", CLEAN_BASELINE]
-            : ["-no-snapshot-load"],
-        state.snapshotExpected,
-      );
+      await this.#reconcileBaseline(data, state);
+      await this.#startEmulator(data, state, prepareLaunchArgs(state), state.snapshotExpected);
       state.needsWipe = false;
       state.snapshotExpected = false;
       if (!state.baselineCaptured) {
@@ -1304,19 +1339,20 @@ export class AndroidDriver implements Driver {
   }
 
   async #configHash(avdName: string, image: SystemImage): Promise<string> {
-    const [emulatorVersion, config] = await Promise.all([
-      this.#emulatorVersion(),
-      this.#avdConfig(avdName),
-    ]);
-    return stableHash([`${image.path}@${image.version}`, emulatorVersion, config]);
+    return this.#currentConfigHash(avdName, `${image.path}@${image.version}`);
   }
 
+  /**
+   * What a clean baseline snapshot depends on. A mismatch against the hash stored with the
+   * baseline rebuilds it on the next boot rather than loading a snapshot the emulator would
+   * refuse, which would degrade every later reclaim to a full wipe.
+   */
   async #currentConfigHash(avdName: string, imageIdentity: string): Promise<string> {
     const [emulatorVersion, config] = await Promise.all([
       this.#emulatorVersion(),
       this.#avdConfig(avdName),
     ]);
-    return stableHash([imageIdentity, emulatorVersion, config]);
+    return stableHash([imageIdentity, emulatorVersion, config, ...this.#baselineLaunchInputs]);
   }
 
   async #emulatorVersion(): Promise<string> {
@@ -1495,7 +1531,15 @@ export class AndroidDriver implements Driver {
     // long as any emulator ran.
     const handle = this.#processRunner.spawn(
       this.#sdk.emulator,
-      ["-avd", data.avdName, "-port", String(data.port), "-no-snapshot-save", ...launchArgs],
+      [
+        "-avd",
+        data.avdName,
+        "-port",
+        String(data.port),
+        "-no-snapshot-save",
+        ...this.#emulatorFlags,
+        ...launchArgs,
+      ],
       { env: this.#env(), stdio: "ignore" },
     );
     handle.unref();
@@ -1519,6 +1563,30 @@ export class AndroidDriver implements Driver {
     if (fromSnapshot && readyAfterMs > SNAPSHOT_BOOT_ESTIMATE_MS * 3) {
       this.#onDiagnostic?.({ avdName: data.avdName, kind: "snapshot-cold-boot", readyAfterMs });
     }
+  }
+
+  /**
+   * Decides, from the persisted baseline metadata, whether the coming boot can load the clean
+   * baseline or must wipe and rebuild it: a stored hash that still matches means load it; one
+   * that no longer matches (emulator upgrade, config.ini change, a changed
+   * `android.emulator.headless`/`gpu`) means the snapshot directory goes and the boot wipes.
+   * Never called on a recovery boot -- see `makeReady`.
+   */
+  async #reconcileBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
+    const baselineHash = await this.#baselineHash(data.avdName);
+    if (state.needsWipe || baselineHash === undefined) {
+      return;
+    }
+    const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
+    if (baselineHash === currentHash) {
+      state.baselineCaptured = true;
+      state.snapshotExpected = true;
+      return;
+    }
+    await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
+    state.baselineCaptured = false;
+    state.needsWipe = true;
+    state.snapshotExpected = false;
   }
 
   async #captureBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
@@ -1970,6 +2038,48 @@ function portsFromAdbDevices(output: string): number[] {
 /** See `#mergeConfigIniLines`'s defense-in-depth check. */
 function containsLineBreak(value: string): boolean {
   return /[\r\n]/.test(value);
+}
+
+/**
+ * The one place an `android.emulator` setting becomes an emulator flag. Every value maps to a
+ * fixed flag; `gpu` is the only one carrying a value, and it is always the argument of `-gpu`.
+ */
+function emulatorLaunchFlags(
+  launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
+): string[] {
+  return [
+    ...(launch.headless ? ["-no-window"] : []),
+    ...(launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu ? [] : ["-gpu", launch.gpu]),
+    ...(launch.audio ? [] : ["-no-audio"]),
+    ...(launch.bootAnimation ? [] : ["-no-boot-anim"]),
+  ];
+}
+
+/**
+ * The launch settings a baseline snapshot depends on: the window and the GPU mode change the
+ * emulator's graphics state, so a baseline taken under one does not load cleanly under the
+ * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
+ * their defaults, so a baseline captured before these settings existed keeps its hash and is
+ * not rebuilt (with a data wipe) on the first boot after an upgrade.
+ */
+function baselineLaunchInputs(
+  launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
+): string[] {
+  if (
+    launch.headless === DEFAULT_EMULATOR_LAUNCH.headless &&
+    launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu
+  ) {
+    return [];
+  }
+  return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
+}
+
+/** The boot a `prepare`-purpose `makeReady` runs, from what `#reconcileBaseline` decided. */
+function prepareLaunchArgs(state: DeviceState): readonly string[] {
+  if (state.needsWipe) {
+    return ["-wipe-data", "-no-snapshot-load"];
+  }
+  return state.snapshotExpected ? ["-snapshot", CLEAN_BASELINE] : ["-no-snapshot-load"];
 }
 
 function stableHash(parts: readonly string[]): string {

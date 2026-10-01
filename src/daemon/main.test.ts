@@ -27,6 +27,7 @@ import {
   emitSlimDiagnostic,
   startDaemon,
   wireComponentInstallLogging,
+  type DriverDiscoveryContext,
   type StartDaemonOptions,
 } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -41,7 +42,13 @@ afterEach(async () => {
   );
 });
 
-async function start(overrides: Partial<StartDaemonOptions> = {}) {
+/** `drivers: undefined` is spelled out by a caller that wants real (module-substituted)
+ * discovery rather than the fake driver below. */
+async function start(
+  overrides: Partial<Omit<StartDaemonOptions, "drivers">> & {
+    readonly drivers?: StartDaemonOptions["drivers"] | undefined;
+  } = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
   temporaryDirectories.push(directory);
   const sink = new MemoryLogSink();
@@ -667,6 +674,45 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     );
   });
 
+  it("launches the discovered Android driver's emulators with the android.emulator options it was handed", async () => {
+    const filesystem = await androidSdk();
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+    // No scripted process at all: the first one the driver starts is the emulator launch, which
+    // the runner records and then refuses, so the boot stops right after showing its argv.
+    const processRunner = new ScriptedProcessRunner([]);
+
+    const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+      androidEmulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
+      processRunner,
+    });
+    const android = drivers.find((driver) => driver.platform === "android");
+    await expect(
+      android?.makeReady({
+        address: "emulator-5586",
+        deviceId: "simlock_one",
+        driverData: { avdName: "simlock_one", configHash: "", port: 5586, serial: "emulator-5586" },
+      }),
+    ).rejects.toThrow(/Unexpected process invocation/);
+
+    expect(processRunner.calls.map((call) => call.args)).toEqual([
+      [
+        "-avd",
+        "simlock_one",
+        "-port",
+        "5586",
+        "-no-snapshot-save",
+        "-no-window",
+        "-gpu",
+        "host",
+        "-no-snapshot-load",
+      ],
+    ]);
+  });
+
   /** The minimum layout `discoverSdk` accepts, in memory. */
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
@@ -687,8 +733,10 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     filesystem: MemoryFilesystem,
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
+    overrides: Partial<Pick<DriverDiscoveryContext, "androidEmulator" | "processRunner">> = {},
   ) {
     return discoverDrivers({
+      ...overrides,
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -701,7 +749,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         level: "debug",
         sink: new MemoryLogSink(),
       }),
-      processRunner: new ScriptedProcessRunner([]),
+      processRunner: overrides.processRunner ?? new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(livePids),
       simlockHome: SIMLOCK_HOME,
       tcpProbe,
@@ -1083,6 +1131,25 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
         fields: expect.objectContaining({ count: 1 }),
       }),
     );
+  });
+
+  it("hands config's android.emulator block to driver discovery when the daemon starts", async () => {
+    const key = "__simlockDiscoveredAndroidEmulator";
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers(context) {
+         globalThis.${key} = context.androidEmulator;
+         return [];
+       }`,
+    );
+    const emulator = { audio: false, bootAnimation: false, gpu: "host", headless: true };
+
+    try {
+      await start({ configOverrides: { android: { emulator } }, drivers: undefined });
+
+      expect((globalThis as Record<string, unknown>)[key]).toEqual(emulator);
+    } finally {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
   });
 
   it("supports a synchronous createDrivers returning an array directly", async () => {

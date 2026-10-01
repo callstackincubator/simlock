@@ -30,6 +30,17 @@ describe("daemon lifecycle & recovery", () => {
     expect(countOccurrences(after, "Daemon started")).toBe(startedCountBefore);
   });
 
+  it("simlock config renders the android.emulator block with its defaults", async () => {
+    const env = await withDaemon({ mode: "running" });
+
+    const config = await env.cli(["config"]);
+
+    expect(config.code).toBe(0);
+    expect((config.json as { android?: unknown }).android).toEqual({
+      emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: false },
+    });
+  });
+
   it("recovers from a kill -9 that leaves a stale socket behind", async () => {
     const env = await withDaemon({ mode: "running" });
     expect(existsSync(env.socketPath)).toBe(true);
@@ -98,7 +109,12 @@ describe("daemon lifecycle & recovery", () => {
         timeout: 15_000,
         label: "daemon.log.1 created after low rotateBytes",
       });
-      expect(existsSync(env.logPath)).toBe(true);
+      // Rotation renames daemon.log away and then opens a fresh one; with a 200-byte cap
+      // nearly every startup line rotates, so a one-shot check can land in that gap.
+      await waitFor(() => existsSync(env.logPath), {
+        timeout: 15_000,
+        label: "a fresh daemon.log opened after rotation",
+      });
     });
   });
 

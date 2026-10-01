@@ -87,6 +87,14 @@ export function stringValue(value: unknown, path: string): string {
   return value;
 }
 
+export function nonEmptyString(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw invalidValue(path, "a non-empty string");
+  }
+
+  return value;
+}
+
 export function numberAtLeast(minimum: number): Validator {
   return (value: unknown, path: string) => {
     if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
