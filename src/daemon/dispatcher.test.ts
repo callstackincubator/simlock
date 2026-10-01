@@ -12,6 +12,7 @@ import {
   type Config,
 } from "../core/index.js";
 import { OPERATIONS } from "../contract/index.js";
+import type { FakeDriverOptions } from "../core/fake-driver.js";
 import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
   CryptoTokenSecrets,
@@ -67,6 +68,8 @@ function resolveEventHistoryOverride(
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
+    /** Extra fake driver options, such as `knownModels` for a catalog that lists a model. */
+    readonly driverOptions?: Partial<FakeDriverOptions>;
     readonly awaitReady?: () => Promise<void>;
     /** Overrides the `catalog` dependency -- used only to force `#parseOutput`'s failure path
      * (see "Dispatcher: #parseOutput") with a fake that returns a payload violating the
@@ -117,6 +120,7 @@ async function buildDispatcher(
     availableOsVersions: ["26.5"],
     clock,
     platform: "ios",
+    ...overrides.driverOptions,
     ...(overrides.passthroughTool === undefined
       ? {}
       : {
@@ -821,6 +825,28 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     );
     const resolveCalls = driver.calls.filter((call) => call.operation === "resolveSpec");
     expect(resolveCalls.at(-1)?.arguments[1]).toMatchObject({ allowDownload: false });
+  });
+
+  it("catalog.get does not list an uninstalled runtime under downloads.policy 'always'", async () => {
+    // The fake driver has only 26.5 installed; under 'always' any other version is a download
+    // away, and the catalog still lists only what is on the machine.
+    const { dispatcher, driver } = await buildDispatcher({
+      downloadsPolicy: "always",
+      driverOptions: { knownModels: ["iPhone 17 Pro"] },
+    });
+
+    const catalog = await dispatcher.dispatch("catalog.get", {}, session());
+
+    expect(catalog.platforms).toEqual([
+      expect.objectContaining({
+        modelRuntimes: { "iPhone 17 Pro": ["26.5"] },
+        platform: "ios",
+        runtimes: ["26.5"],
+      }),
+    ]);
+    // The policy never reaches the driver, so nothing it could download can leak into the list.
+    const listCalls = driver.calls.filter((call) => call.operation === "listCatalog");
+    expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
   });
 
   it("leaves allowDownload:true untouched when downloads.policy is 'on-request'", async () => {

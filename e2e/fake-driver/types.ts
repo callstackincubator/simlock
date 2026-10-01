@@ -56,6 +56,11 @@ export interface ScriptedManagedReality {
 export interface FakeDriverPlatformScript {
   readonly knownModels?: readonly string[];
   readonly availableOsVersions?: readonly string[];
+  /**
+   * What `listCatalog` reports a model pairs with. A model left out pairs with every available
+   * version, which is also the default for every model.
+   */
+  readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
   readonly reclaimResult?: "ready" | "shutdown";

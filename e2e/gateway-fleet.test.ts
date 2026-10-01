@@ -19,7 +19,11 @@ interface WorkerView {
   readonly connection: "connected" | "disconnected" | "incompatible";
   readonly drained: boolean;
   readonly capacity?: { readonly ios: { readonly limit: number } };
-  readonly catalog: readonly { readonly platform: string; readonly models: readonly string[] }[];
+  readonly catalog: readonly {
+    readonly platform: string;
+    readonly models: readonly string[];
+    readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
+  }[];
 }
 
 interface StatusView {
@@ -218,6 +222,63 @@ describe("gateway fleet", () => {
     await held.waitForExit(15_000);
 
     await workerB.cli(["daemon", "stop"]);
+  });
+
+  it("shows each worker's own model pairing in the worker list and their union in the catalog", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret } = minted.json as { secret: string };
+    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    // Both workers have the same model and the same two runtimes installed, and pair the model
+    // with a different one of them.
+    const installed = ["18.4", "26.0"];
+    await withDaemon({
+      configOverrides: { gateway: { ...uplink, label: "worker-a" } },
+      driverScript: {
+        ios: {
+          availableOsVersions: installed,
+          knownModels: ["iPhone 16"],
+          modelRuntimes: { "iPhone 16": ["18.4"] },
+        },
+      },
+    });
+    await withDaemon({
+      configOverrides: { gateway: { ...uplink, label: "worker-b" } },
+      driverScript: {
+        ios: {
+          availableOsVersions: installed,
+          knownModels: ["iPhone 16"],
+          modelRuntimes: { "iPhone 16": ["26.0"] },
+        },
+      },
+    });
+
+    const workers = await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 2 &&
+        views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+      "both workers connected with their catalogs",
+    );
+    const pairingOf = (label: string) =>
+      workers
+        .find((worker) => worker.label === label)
+        ?.catalog.find((entry) => entry.platform === "ios")?.modelRuntimes;
+    expect(pairingOf("worker-a")).toEqual({ "iPhone 16": ["18.4"] });
+    expect(pairingOf("worker-b")).toEqual({ "iPhone 16": ["26.0"] });
+
+    const catalog = await gateway.cli(["catalog", "--json"]);
+    expect(catalog.code).toBe(0);
+    const ios = (
+      catalog.json as {
+        platforms: { platform: string; modelRuntimes: Record<string, string[]> }[];
+      }
+    ).platforms.find((entry) => entry.platform === "ios");
+    expect(ios?.modelRuntimes).toEqual({ "iPhone 16": ["18.4", "26.0"] });
   });
 
   it("refuses an uplink whose token is not a worker join token", async () => {

@@ -745,13 +745,15 @@ export class AndroidDriver implements Driver {
     }
 
     const profile = await this.#deviceProfiles.resolve(request.model);
-    const images = await this.#installedImages();
-    const apiLevel = request.osVersion ?? newestApiLevel(images);
+    const installed = installedApiLevels(await this.#installedImages());
+    const apiLevel = request.osVersion ?? installed.at(-1);
     if (apiLevel === undefined) {
       throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
     }
 
-    if (this.#matchingImage(images, apiLevel) === undefined) {
+    // Every model pairs with every installed API level, whatever the image's ABI -- the same
+    // list `listCatalog` reports for each model (ADR 0008 §3).
+    if (!installed.includes(apiLevel)) {
       if (!options.allowDownload) {
         throw new RuntimeMissingError(this.platform, apiLevel);
       }
@@ -1095,10 +1097,12 @@ export class AndroidDriver implements Driver {
       this.#deviceProfiles.listModels(),
       this.#installedImages(),
     ]);
+    const runtimes = installedApiLevels(images);
     return {
-      defaultRuntime: newestApiLevel(images),
+      defaultRuntime: runtimes.at(-1),
+      modelRuntimes: Object.fromEntries(models.map((model) => [model, [...runtimes]])),
       models: [...models],
-      runtimes: [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels),
+      runtimes,
     };
   }
 
@@ -1937,8 +1941,12 @@ function compareCommandLineToolVersions(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
-function newestApiLevel(images: readonly SystemImage[]): string | undefined {
-  return [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels).at(-1);
+/**
+ * The installed API levels, oldest first, once each -- foreign-ABI images included. Every model
+ * pairs with every one of them; `resolveSpec` and `listCatalog` both read this list.
+ */
+function installedApiLevels(images: readonly SystemImage[]): string[] {
+  return [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels);
 }
 
 function compareApiLevels(left: string, right: string): number {

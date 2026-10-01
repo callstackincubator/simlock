@@ -124,7 +124,7 @@ export function createMcpServer(session: McpSession): McpServer {
     {
       title: "List devices",
       description:
-        "List resolvable device models and installed runtimes per available platform, marking each platform's default runtime (the newest installed). Read-only: never downloads a runtime or system image. Call this once to pick a valid device/os combination before lease_simulator, instead of guessing.",
+        "List resolvable device models and installed runtimes per available platform, marking each platform's default runtime (the newest installed). modelRuntimes gives, for each model, the installed runtimes it pairs with; pick a model and os from it, since a listed model and a listed runtime do not always pair. Read-only: never downloads a runtime or system image. Call this once to pick a valid device/os combination before lease_simulator, instead of guessing.",
       inputSchema: listDevicesInputSchema,
       outputSchema: listDevicesOutputSchema,
     },

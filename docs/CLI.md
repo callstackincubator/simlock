@@ -622,7 +622,12 @@ Releasing a single lease by id is unchanged.
 
 **`simlock catalog`** is the union of the workers' catalogs, each model and
 runtime annotated with the workers that have it — so a `--device` the
-catalog lists is leasable *somewhere*, not necessarily everywhere.
+catalog lists is leasable *somewhere*, not necessarily everywhere. A model is
+paired with a runtime when at least one connected worker pairs them itself;
+one worker having the model and another having the runtime does not make a
+pair. `simlock worker list --json` shows each worker's own pairings. The
+gateway does not yet pick a worker by its pairings, so a listed pair can
+still be sent to a worker that cannot pair them.
 
 **`simlock events`** shows the fleet: every worker's business events are
 republished on the gateway's bus with `workerId` added to the payload,
@@ -726,7 +731,7 @@ simlock worker remove <worker-id>
 
 ```json
 {"workers":[{"id":"3f81a2c4","label":"mac-studio-2","state":"connected","drained":false,
-  "daemonVersion":"0.4.0","protocol":{"min":5,"max":5},
+  "daemonVersion":"0.4.0","protocol":{"min":6,"max":6},
   "connectedAt":1735689600000,"lastSeenAt":1735689930000,
   "capacity":{"ios":{"running":2,"limit":4},"android":{"running":0,"limit":2}},
   "downloads":{"policy":"on-request"},
@@ -737,7 +742,7 @@ simlock worker remove <worker-id>
 `config.get` when its uplink connects — routing needs it to know whether a
 machine may install a missing runtime before sending it a request that needs
 one. `protocol` is the range that worker negotiated; the wire moves
-to `{min: 5, max: 5}` with no shim, so a worker older than it does not
+to `{min: 6, max: 6}` with no shim, so a worker older than it does not
 overlap and shows as `incompatible`. Worker ids are UUIDs — the examples here
 abbreviate them to their first segment.
 
@@ -932,17 +937,34 @@ configuration, and a gateway runs no reaper.
 Lists what can actually be leased, so an agent can pick a valid `--device`
 and `--os` without a failed round trip through `lease`. For each available
 platform: the resolvable device models, the runtimes / system images already
-installed, and which installed runtime is the default (the newest). A
+installed, which installed runtime is the default (the newest), and for each
+model the installed runtimes it pairs with (`modelRuntimes`). A model and a
+runtime that are both listed can still fail to pair — on iOS, a runtime can
+drop an older model — so pick a pair from `modelRuntimes`. A model with an
+empty list pairs with nothing installed. On Android every model pairs with
+every installed API level. A
 platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
 non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
 command. `--platform` narrows to one platform. Read-only: this never
-downloads a runtime or system image.
+downloads a runtime or system image, and lists only what is installed,
+whatever `downloads.policy` says.
 
-Human-oriented by default (platform/model/runtime lines); `--json` for the
-structured equivalent:
+Human-oriented by default, one line per model with the runtimes it pairs
+with:
+
+```text
+Platform: ios
+  Runtimes: 18.4, 26.5 (default: 26.5)
+  Models:
+    iPhone 17 Pro: 26.5
+    iPhone XS: 18.4
+```
+
+`--json` for the structured equivalent:
 
 ```json
-{"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone 16"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5"}]}
+{"platforms":[{"platform":"ios","models":["iPhone 17 Pro","iPhone XS"],"runtimes":["18.4","26.5"],"defaultRuntime":"26.5",
+  "modelRuntimes":{"iPhone 17 Pro":["26.5"],"iPhone XS":["18.4"]}}]}
 ```
 
 ## `simlock cleanup [--dry-run] [--rule <name>]`

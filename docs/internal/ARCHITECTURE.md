@@ -164,7 +164,8 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   carrying a `workerId`, the gateway's own queue depth — plus a `workers`
   array of views and `daemon.mode: "gateway"`. `catalog.get` is the union of
   the connected workers' catalogs, each model and runtime annotated with the
-  workers that have it. Worker events are republished on the gateway's bus
+  workers that have it, and `modelRuntimes` per model the union of each
+  worker's own pairings (ADR 0008 §4). Worker events are republished on the gateway's bus
   with `workerId` added, so `simlock events --follow` against a gateway shows
   the fleet.
 - **What a gateway does not do.** It starts no drivers, validates no device
@@ -227,11 +228,12 @@ Two changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
-path kept, taking it to 5. So the range both sides
-advertise is `{min: 5, max: 5}`, an older client and a current daemon simply
+path kept, taking it to 5; ADR 0008 makes the catalog's `modelRuntimes`
+required, taking it to 6. So the range both sides
+advertise is `{min: 6, max: 6}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
-worker older than ADR 0005 shows up in a gateway's views as `incompatible`
+worker older than ADR 0008 shows up in a gateway's views as `incompatible`
 rather than as a mystery (see [Gateway and worker
 modes](#gateway-and-worker-modes-adr-0005)). `daemon.stop` stays the frozen
 exception, accepted at any version the daemon has ever spoken, so the upgrade
@@ -674,7 +676,18 @@ summed across connected workers, every gateway-issued and local lease, every
 device, the gateway queue's depth — plus an additive `workers` array of
 views, and `workerId` on every device and lease in the aggregate.
 `catalog.get` is the union of the worker catalogs, each model and runtime
-annotated with the workers that have it.
+annotated with the workers that have it. A model's `modelRuntimes` is the
+union of what each connected worker pairs it with, never the cross product
+of fleet models and fleet runtimes: one worker with the model and another
+with the runtime is not a leasable pair. Routing still reads only `models`
+and `runtimes`.
+
+Within a worker, each driver decides which installed runtimes pair with a
+model in one function that `listCatalog` and `resolveSpec` both call
+(ADR 0008 §3): on iOS, available runtimes that list the device type in
+`supportedDeviceTypes` and fall in its version range; on Android, every
+installed API level, foreign-ABI images included. So a listed pair always
+resolves.
 
 Worker business events are republished on the gateway's bus with `workerId`
 added to the payload and land in the gateway's own ring buffer and event
@@ -717,7 +730,9 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   its `output` push family are new frames, and the honesty rule says a range
   widens only where a compatibility path is actually kept — so **every worker
   older than ADR 0005 is `incompatible` by range**, by construction rather
-  than by accident. That is the ordinary upgrade path, not a failure mode:
+  than by accident. ADR 0008 moves it again, to `{min: 6, max: 6}`, because
+  the catalog's `modelRuntimes` is required; a worker on 5 is `incompatible`
+  the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
   hidden either — that is the machine an operator has to go and upgrade, and

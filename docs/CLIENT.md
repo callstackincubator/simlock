@@ -167,6 +167,37 @@ Three limits worth knowing:
 Paths in `args` resolve on the daemon's filesystem, not yours. Getting an
 `.app` or an `.apk` there is out of scope for now.
 
+## Picking a device: `getCatalog`
+
+`getCatalog({ platform? })` returns what can be leased, per platform:
+
+```ts
+const { platforms } = await client.getCatalog({ platform: "ios" });
+// [{ platform: "ios",
+//    models: ["iPhone 16", "iPhone XS"],
+//    runtimes: ["18.4", "26.0"],
+//    defaultRuntime: "26.0",
+//    modelRuntimes: { "iPhone 16": ["18.4", "26.0"], "iPhone XS": ["18.4"] } }]
+```
+
+- `models` and `runtimes` are what is installed. A model and a runtime that
+  are each listed do not always pair: on iOS a newer runtime can drop an
+  older model.
+- `modelRuntimes` has an entry for every model: the installed runtimes it
+  pairs with. Any pair listed there resolves in `requestLease`. An empty
+  list means nothing installed pairs with that model.
+- `defaultRuntime` is the newest installed runtime, and is absent when none
+  is installed.
+- The catalog lists only what is installed. It never lists a runtime the
+  daemon could download, whatever the download policy.
+
+Against a gateway the catalog is the union of the connected workers'. A
+model is paired with a runtime when at least one worker pairs them, and
+`modelWorkers` and `runtimeWorkers` say which workers have each model and
+runtime. The gateway does not yet use the pairings to pick a worker, so a
+pair it lists can still go to a worker that has the model and the runtime
+but cannot pair them, and that request fails there.
+
 ## One connection, no reconnect, no retry
 
 This is the one thing to internalize before building anything on top of this

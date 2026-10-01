@@ -395,9 +395,7 @@ export class IosSimctlDriver implements Driver {
   ): Promise<DeviceSpec> {
     this.#requireIosPlatform(request.platform);
     const catalog = await this.#loadCatalog();
-    const deviceType = catalog.deviceTypes.find(
-      (candidate) => candidate.name.toLocaleLowerCase() === request.model.toLocaleLowerCase(),
-    );
+    const deviceType = findDeviceType(catalog, request.model);
 
     if (deviceType === undefined) {
       throw new IosUnknownModelError(request.model);
@@ -424,16 +422,18 @@ export class IosSimctlDriver implements Driver {
       throw new IosVersionOutOfRangeError(deviceType.name, osVersion, deviceType);
     }
 
-    const installed = findInstalledRuntime(catalog, osVersion);
-    if (installed !== undefined) {
-      // In the model's declared `[min, max]` range is necessary but not sufficient: a runtime
-      // can be installed and still not pair with this specific device type (`supportedDeviceTypeIds`
-      // is the authoritative source once a runtime is actually on disk -- the range above is
-      // only a static hint). Checked before committing, so a mismatch never reaches `simctl create`.
-      if (!installed.supportedDeviceTypeIds.has(deviceType.identifier)) {
-        throw new IosRuntimeUnpairedError(deviceType.name, osVersion);
-      }
-      return this.#commitResolution(deviceType, installed);
+    // Looked up among the runtimes the catalog lists for this model, so a listed pair always
+    // resolves and an unlisted one never does (ADR 0008 §3). Any installed build of the version
+    // that pairs will do: two builds can share a marketing version and pair differently.
+    const paired = findPairedRuntime(catalog, deviceType, osVersion);
+    if (paired !== undefined) {
+      return this.#commitResolution(deviceType, paired);
+    }
+    // Installed but not paired: in the model's declared `[min, max]` range is necessary but not
+    // sufficient, since `supportedDeviceTypeIds` is the authoritative source once a runtime is
+    // on disk. Refused before committing, so a mismatch never reaches `simctl create`.
+    if (findInstalledRuntime(catalog, osVersion) !== undefined) {
+      throw new IosRuntimeUnpairedError(deviceType.name, osVersion);
     }
 
     if (!options.allowDownload) {
@@ -458,8 +458,7 @@ export class IosSimctlDriver implements Driver {
     // with this device type -- is now present before reporting success. Either failure mode
     // reports `component-install-failed`, never `component-installed`.
     const refreshed = await this.#loadCatalog();
-    const runtime = findInstalledRuntime(refreshed, osVersion);
-    if (runtime === undefined) {
+    if (findInstalledRuntime(refreshed, osVersion) === undefined) {
       const message = `xcodebuild reported success but iOS ${osVersion} is still not installed`;
       this.#reportVerificationFailure(osVersion, startedAt, message, options.requesterId);
       throw new DriverCrashError(message);
@@ -467,7 +466,8 @@ export class IosSimctlDriver implements Driver {
     // A version match alone is not enough: the same pairing check that gates an
     // already-installed runtime above must also gate a freshly downloaded one -- a version can
     // be on disk and still not pair with this specific device type.
-    if (!runtime.supportedDeviceTypeIds.has(deviceType.identifier)) {
+    const runtime = findPairedRuntime(refreshed, deviceType, osVersion);
+    if (runtime === undefined) {
       this.#reportVerificationFailure(
         osVersion,
         startedAt,
@@ -497,7 +497,7 @@ export class IosSimctlDriver implements Driver {
     catalog: SimctlCatalog,
     options: { readonly allowDownload: boolean; readonly requesterId?: string },
   ): Promise<DeviceSpec> {
-    const paired = pairedInstalledRuntime(catalog, deviceType);
+    const paired = newestRuntime(pairedInstalledRuntimes(catalog, deviceType));
     if (paired !== undefined) {
       return this.#commitResolution(deviceType, paired);
     }
@@ -548,7 +548,7 @@ export class IosSimctlDriver implements Driver {
     // Same verified-fact requirement as the exact-version path: only report `component-installed`
     // once a paired runtime for this device type is actually present in a re-scanned catalog.
     const refreshed = await this.#loadCatalog();
-    const runtime = pairedInstalledRuntime(refreshed, deviceType);
+    const runtime = newestRuntime(pairedInstalledRuntimes(refreshed, deviceType));
     if (runtime === undefined) {
       const message =
         `xcodebuild reported success but no installed iOS runtime pairs with ` +
@@ -1181,9 +1181,15 @@ export class IosSimctlDriver implements Driver {
   async listCatalog(): Promise<DriverCatalogEntry> {
     const catalog = await this.#loadCatalog();
     const installedRuntimes = catalog.runtimes.filter((runtime) => runtime.isAvailable);
+    const models = catalog.deviceTypes.map((deviceType) => deviceType.name);
     return {
       defaultRuntime: newestRuntime(installedRuntimes)?.version,
-      models: catalog.deviceTypes.map((deviceType) => deviceType.name),
+      // Keyed by name and paired through the device type `resolveSpec` would pick for that name,
+      // so two device types that differ only in letter case both list the first one's runtimes.
+      modelRuntimes: Object.fromEntries(
+        models.map((model) => [model, pairedVersions(catalog, findDeviceType(catalog, model))]),
+      ),
+      models,
       runtimes: installedRuntimes.map((runtime) => runtime.version),
     };
   }
@@ -1932,18 +1938,45 @@ function findInstalledRuntime(catalog: SimctlCatalog, version: string): Runtime 
   return catalog.runtimes.find((runtime) => runtime.isAvailable && runtime.version === version);
 }
 
-/** Installed, in the model's range, and pairs with it -- the newest of those, or none. */
-function pairedInstalledRuntime(
+/** The device type a model name resolves to: first match by lower-cased name, as `resolveSpec` matches. */
+function findDeviceType(catalog: SimctlCatalog, model: string): DeviceType | undefined {
+  const wanted = model.toLocaleLowerCase();
+  return catalog.deviceTypes.find((candidate) => candidate.name.toLocaleLowerCase() === wanted);
+}
+
+/**
+ * The one place that decides which installed runtimes pair with a device type: available,
+ * listing it in `supportedDeviceTypes`, and inside its `[min, max]` range. `resolveSpec` and
+ * `listCatalog` both read it, so the catalog cannot list a pair `resolveSpec` refuses (ADR 0008 §3).
+ */
+function pairedInstalledRuntimes(
   catalog: SimctlCatalog,
   deviceType: DeviceType,
-): Runtime | undefined {
-  const candidates = catalog.runtimes.filter(
+): readonly Runtime[] {
+  return catalog.runtimes.filter(
     (runtime) =>
       runtime.isAvailable &&
       runtime.supportedDeviceTypeIds.has(deviceType.identifier) &&
       isVersionInRange(runtime.version, deviceType),
   );
-  return newestRuntime(candidates);
+}
+
+function findPairedRuntime(
+  catalog: SimctlCatalog,
+  deviceType: DeviceType,
+  version: string,
+): Runtime | undefined {
+  return pairedInstalledRuntimes(catalog, deviceType).find(
+    (runtime) => runtime.version === version,
+  );
+}
+
+/** The versions of `pairedInstalledRuntimes`, once each, in simctl's order like `runtimes`. */
+function pairedVersions(catalog: SimctlCatalog, deviceType: DeviceType | undefined): string[] {
+  if (deviceType === undefined) return [];
+  return [
+    ...new Set(pairedInstalledRuntimes(catalog, deviceType).map((runtime) => runtime.version)),
+  ];
 }
 
 /** `simctl`'s `0xAABBCC` encoding -> `[major, minor, patch]`. */
