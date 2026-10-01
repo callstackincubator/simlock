@@ -1,5 +1,13 @@
+import type { EventBus } from "../bus/index.js";
 import type { CleanupActionExecutor } from "./cleanup-executor.js";
-import { type DeviceRecord, type LeaseRecord, mayBeGranted, type Platform } from "./domain.js";
+import {
+  type DeviceRecord,
+  type LeaseRecord,
+  type LeaseRequestFailure,
+  type LeaseRequestRecord,
+  mayBeGranted,
+  type Platform,
+} from "./domain.js";
 import type { CapacityReader } from "./lease-ports.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { compareLeastRecentlyUsed } from "./warm-pool.js";
@@ -9,7 +17,18 @@ export interface StartupRegistry {
     readonly devices: readonly DeviceRecord[];
     readonly leases: readonly LeaseRecord[];
   };
+  failOpenLeaseRequests(failure: LeaseRequestFailure): Promise<readonly LeaseRequestRecord[]>;
 }
+
+/**
+ * What a request still open at a restart is settled with. `INTERNAL` rather than a transport
+ * code: the request is finished, and a client that retried a transport error under the same key
+ * would only ever get this answer back.
+ */
+const DAEMON_RESTARTED: LeaseRequestFailure = {
+  code: "INTERNAL",
+  message: "The daemon restarted before this lease request settled; send it again with a new key",
+};
 
 /** Restores every persisted lease's TTL timer before any startup device work begins. */
 export interface LeaseTimerRestorer {
@@ -47,6 +66,7 @@ export interface StartupConvergerOptions {
   readonly cleanup: CleanupActionExecutor;
   readonly decisions: SerializedDecision;
   readonly drivers: StartupDriverAvailability;
+  readonly eventBus: Pick<EventBus, "emit">;
   readonly interruptedReclaimRecovery: InterruptedReclaimRecovery;
   readonly quarantineRestore: QuarantineRestorer;
   readonly registry: StartupRegistry;
@@ -78,6 +98,10 @@ export class StartupConverger {
   constructor(private readonly options: StartupConvergerOptions) {}
 
   async converge(): Promise<void> {
+    // First, and before admission opens (the dispatcher parks every request until this
+    // resolves): no wait from the previous process survived it, so every request it left open
+    // is settled now rather than left open with nothing to drive it.
+    await this.#settleOpenLeaseRequests();
     // ADR 0004: every lease's timer is restored from its own persisted deadline, and nothing
     // is swept -- a restart does not prove a holder is dead, so no lease is released on the
     // strength of one. A lease whose deadline already passed while no daemon was running
@@ -104,6 +128,19 @@ export class StartupConverger {
         target: candidate.id,
       });
       if (!executed) refused.add(candidate.id);
+    }
+  }
+
+  async #settleOpenLeaseRequests(): Promise<void> {
+    const settled = await this.options.decisions.run(() =>
+      this.options.registry.failOpenLeaseRequests(DAEMON_RESTARTED),
+    );
+    for (const record of settled) {
+      this.options.eventBus.emit(
+        "lease.rejected",
+        { requestSpec: record.request, reason: "daemon-restarted" },
+        "startup-converger",
+      );
     }
   }
 

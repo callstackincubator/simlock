@@ -71,6 +71,10 @@ export interface DispatchSession {
   /** Called for each progress update while this specific `lease.request` call is in flight.
    * Ignored by every other operation. */
   readonly onProgress?: (progress: DispatchProgress) => void;
+  /** Called with the stored request's id once this `lease.request` is admitted, or once a repeat
+   * of it finds the stored one -- how the HTTP request resource learns the id it is named by.
+   * Ignored by every other operation. */
+  readonly onRequestAdmitted?: (requestId: string) => void;
   /**
    * Called for each chunk a `device.exec` command writes, as it writes it (ADR 0005 §19a's
    * `output` push family). Ignored by every other operation, and left unset by a transport

@@ -312,6 +312,10 @@ export class Dispatcher {
         ownerId,
         requesterId,
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
+        ...(session.onRequestAdmitted === undefined
+          ? {}
+          : { onAdmitted: session.onRequestAdmitted }),
+        ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.ttlMs === undefined ? {} : { ttlMs: input.ttlMs }),
       });

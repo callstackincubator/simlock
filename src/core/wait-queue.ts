@@ -1,6 +1,8 @@
 import type { Clock, IdGenerator, TimerHandle } from "../ports/index.js";
-import type { DeviceRecord, LeaseRecord } from "./domain.js";
+import type { LeaseGrant } from "./domain.js";
 import type { DeviceRequest } from "./driver.js";
+
+export type { LeaseGrant, LeaseTiming } from "./domain.js";
 
 export interface LeaseRequestOptions {
   readonly requesterId: string;
@@ -17,6 +19,13 @@ export interface LeaseRequestOptions {
    * `lease.defaultTtlMs`; the cap against `lease.maxTtlMs` is applied at the daemon boundary
    * before a request ever reaches here, so this type trusts what it is given. */
   readonly ttlMs?: number;
+  /**
+   * The caller's key for repeating this request (see `LeaseRequestBook`). Paired with
+   * `requesterId`; both are the caller's own claims, so a replay is authorized on `ownerId`.
+   */
+  readonly idempotencyKey?: string;
+  /** Called with the stored request's id once it is admitted, or once a repeat finds it. */
+  readonly onAdmitted?: (requestId: string) => void;
 }
 
 /** Request-scoped progress for the lease action currently being performed. */
@@ -25,25 +34,6 @@ export type LeaseProgress =
   | { readonly stage: "provisioning"; readonly etaMs: number }
   | { readonly stage: "booting"; readonly etaMs: number }
   | { readonly stage: "reclaiming"; readonly etaMs: number };
-
-export interface LeaseTiming {
-  readonly estimatedProvisionMs: number;
-  readonly estimatedBootMs: number;
-  readonly estimatedReclaimMs: number;
-  readonly estimatedReadyMs: number;
-}
-
-export interface LeaseGrant {
-  readonly device: DeviceRecord;
-  /**
-   * What the holder needs in its environment to reach this device at all -- the owning
-   * driver's own answer, forwarded verbatim. Empty is a legitimate answer; the core never
-   * reads a key here (architecture rule 2).
-   */
-  readonly environment: Readonly<Record<string, string>>;
-  readonly lease: LeaseRecord;
-  readonly timing: LeaseTiming;
-}
 
 export class QueueTimeoutError extends Error {
   constructor(readonly requestId: string) {
@@ -165,7 +155,11 @@ export class WaitQueue {
     return undefined;
   }
 
-  create(request: DeviceRequest, requestOptions: LeaseRequestOptions): Waiter {
+  /**
+   * `id` is the stored request's id when the caller stored one first (`LeaseRequestBook`), so
+   * the waiter and its record share one name; omitted, the queue mints its own.
+   */
+  create(request: DeviceRequest, requestOptions: LeaseRequestOptions, id?: string): Waiter {
     if (this.hasPendingRequester(requestOptions.requesterId)) {
       throw new RequesterAlreadyLeasedError(requestOptions.requesterId);
     }
@@ -178,7 +172,7 @@ export class WaitQueue {
     });
     const waiter: MutableWaiter = {
       deadlineAt: undefined,
-      id: `req_${this.options.idGenerator.generate()}`,
+      id: id ?? `req_${this.options.idGenerator.generate()}`,
       onProgress: requestOptions.onProgress,
       options: requestOptions,
       promise,

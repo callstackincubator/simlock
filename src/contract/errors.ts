@@ -42,6 +42,9 @@ export interface ErrorDetailsMap {
   NO_CAPACITY: Record<string, never>;
   QUEUE_TIMEOUT: { readonly requestId: string };
   REQUESTER_ALREADY_LEASED: { readonly requesterId: string; readonly existingLeaseId?: string };
+  /** `lease.request` repeated an `idempotencyKey` its requester already used for a different
+   * device. The stored request is untouched; a new request needs a new key. */
+  IDEMPOTENCY_CONFLICT: Record<string, never>;
   NO_DRIVER: { readonly platform: Platform };
   RUNTIME_MISSING: {
     readonly platform: Platform;
@@ -224,6 +227,14 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     code: "REQUESTER_ALREADY_LEASED",
     kind: "domain",
     cliExitCode: 13,
+    httpStatus: 409,
+  },
+  // 409 like `REQUESTER_ALREADY_LEASED`, its neighbour: the request contradicts one already
+  // stored. Exit 2, the "you asked the wrong thing" class -- retrying the same call never helps.
+  IDEMPOTENCY_CONFLICT: {
+    code: "IDEMPOTENCY_CONFLICT",
+    kind: "domain",
+    cliExitCode: 2,
     httpStatus: 409,
   },
   NO_DRIVER: { code: "NO_DRIVER", kind: "domain", cliExitCode: 12, httpStatus: 422 },

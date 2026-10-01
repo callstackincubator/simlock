@@ -1,16 +1,36 @@
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { Clock, Filesystem, IdGenerator } from "../ports/index.js";
-import { DEFAULT_LEASE_TTL_MS } from "./config.js";
+import {
+  DEFAULT_LEASE_MAX_REQUEST_RECORDS,
+  DEFAULT_LEASE_REQUEST_RETENTION_MS,
+  DEFAULT_LEASE_TTL_MS,
+} from "./config.js";
 import {
   type DeviceRecord,
   type DeviceSpec,
   type DeviceState,
   type DeviceTransitionUpdate,
+  isSettled,
+  type LeaseGrant,
   type LeaseIdentity,
   type LeaseRecord,
+  type LeaseRequestFailure,
+  type LeaseRequestRecord,
+  type LeaseRequestState,
   type Platform,
   transition,
 } from "./domain.js";
+import type { DeviceRequest } from "./driver.js";
+import {
+  type LeaseRequestLimits,
+  type LeaseRequestOutcome,
+  type LeaseRequestStore,
+  type NewLeaseRequest,
+  newLeaseRequestRecord,
+  retainedLeaseRequests,
+  withNewLeaseRequest,
+  withSettledLeaseRequest,
+} from "./lease-request-book.js";
 
 const DEFAULT_REGISTRY_PATH = "~/.simlock/state.json";
 
@@ -33,6 +53,11 @@ export interface RegistryOptions {
    * created under. Defaults to `reusable` for both platforms.
    */
   readonly leaseIdentity?: Readonly<Record<Platform, LeaseIdentity>>;
+  /**
+   * `lease.requestRetentionMs` and `lease.maxRequestRecords`: how long a settled lease request is
+   * kept and how many are kept at most. Defaults to the config defaults.
+   */
+  readonly leaseRequestLimits?: LeaseRequestLimits;
 }
 
 export interface RegistrySnapshot {
@@ -95,12 +120,19 @@ export class RegistryEventError extends Error {
   }
 }
 
-export class Registry {
+/**
+ * The third record type beside devices and leases: every lease request, stored before it is
+ * queued (see `LeaseRequestBook`). Written through the same `#commit` as the other two, so a
+ * request's record and the lease it was granted are never on disk in two separate files.
+ */
+export class Registry implements LeaseRequestStore<LeaseGrant> {
   #devices: DeviceRecord[] = [];
   #leases: LeaseRecord[] = [];
+  #leaseRequests: readonly LeaseRequestRecord[] = [];
   #unknownState: Record<string, unknown> = {};
   readonly #unknownDeviceFields = new Map<string, Record<string, unknown>>();
   readonly #unknownLeaseFields = new Map<string, Record<string, unknown>>();
+  readonly #unknownLeaseRequestFields = new Map<string, Record<string, unknown>>();
 
   private constructor(private readonly options: Required<RegistryOptions>) {}
 
@@ -109,6 +141,10 @@ export class Registry {
       ...options,
       defaultTtlMs: options.defaultTtlMs ?? DEFAULT_LEASE_TTL_MS,
       leaseIdentity: options.leaseIdentity ?? { android: "reusable", ios: "reusable" },
+      leaseRequestLimits: options.leaseRequestLimits ?? {
+        maxRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
+        retentionMs: DEFAULT_LEASE_REQUEST_RETENTION_MS,
+      },
       statePath: options.statePath ?? DEFAULT_REGISTRY_PATH,
     });
 
@@ -198,7 +234,6 @@ export class Registry {
    * at startup, or a spent fresh device's lease-end shutdown before its delete. The caller emits
    * whatever fact its own path owns.
    */
-  // fallow-ignore-next-line unused-class-member -- called through WarmPoolCoordinator's registry port.
   async completeReclaimWithoutPurge(deviceId: string): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.state !== "reclaiming") {
@@ -512,6 +547,67 @@ export class Registry {
     return cloneLease(renewed);
   }
 
+  leaseRequests(): readonly LeaseRequestRecord[] {
+    return retainedLeaseRequests(
+      this.#leaseRequests,
+      this.options.clock.now(),
+      this.options.leaseRequestLimits.retentionMs,
+    ).map(cloneLeaseRequest);
+  }
+
+  async createLeaseRequest(input: NewLeaseRequest): Promise<LeaseRequestRecord> {
+    const now = this.options.clock.now();
+    const record = newLeaseRequestRecord<LeaseGrant>(
+      `req_${this.options.idGenerator.generate()}`,
+      input,
+      now,
+    );
+    const leaseRequests = withNewLeaseRequest(
+      this.#leaseRequests,
+      record,
+      now,
+      this.options.leaseRequestLimits,
+    );
+    await this.#commit(this.#devices, this.#leases, leaseRequests);
+    return cloneLeaseRequest(record);
+  }
+
+  async settleLeaseRequest(
+    id: string,
+    outcome: LeaseRequestOutcome<LeaseGrant>,
+  ): Promise<LeaseRequestRecord | undefined> {
+    const { records, settled } = withSettledLeaseRequest(
+      this.#leaseRequests,
+      id,
+      outcome,
+      this.options.clock.now(),
+    );
+    if (settled === undefined) return undefined;
+    await this.#commit(this.#devices, this.#leases, records);
+    return cloneLeaseRequest(settled);
+  }
+
+  /**
+   * Settles every request still open as `failed`, in one write. Startup calls it before admission
+   * opens: nothing in a new process drives a wait the old one started, so an open record from
+   * before the restart would otherwise stay open with nothing to settle it.
+   */
+  // fallow-ignore-next-line unused-class-member -- called through StartupConverger's registry port.
+  async failOpenLeaseRequests(
+    failure: LeaseRequestFailure,
+  ): Promise<readonly LeaseRequestRecord[]> {
+    let records = this.#leaseRequests;
+    const settled: LeaseRequestRecord[] = [];
+    const now = this.options.clock.now();
+    for (const open of this.#leaseRequests.filter((record) => !isSettled(record))) {
+      const result = withSettledLeaseRequest(records, open.id, { failure, state: "failed" }, now);
+      records = result.records;
+      if (result.settled !== undefined) settled.push(result.settled);
+    }
+    if (settled.length > 0) await this.#commit(this.#devices, this.#leases, records);
+    return settled.map(cloneLeaseRequest);
+  }
+
   #requireDeviceRecord(deviceId: string): {
     readonly device: DeviceRecord;
     readonly index: number;
@@ -524,7 +620,11 @@ export class Registry {
     return { device, index };
   }
 
-  async #commit(devices: DeviceRecord[], leases: LeaseRecord[]): Promise<void> {
+  async #commit(
+    devices: DeviceRecord[],
+    leases: LeaseRecord[],
+    leaseRequests: readonly LeaseRequestRecord[] = this.#leaseRequests,
+  ): Promise<void> {
     await this.options.filesystem.mkdirp(parentDirectory(this.options.statePath));
     await this.options.filesystem.writeFileAtomic(
       this.options.statePath,
@@ -538,10 +638,15 @@ export class Registry {
           ...this.#unknownLeaseFields.get(lease.id),
           ...lease,
         })),
+        leaseRequests: leaseRequests.map((record) => ({
+          ...this.#unknownLeaseRequestFields.get(record.id),
+          ...record,
+        })),
       }),
     );
     this.#devices = devices;
     this.#leases = leases;
+    this.#leaseRequests = leaseRequests;
   }
 
   #restore(contents: string): void {
@@ -556,7 +661,7 @@ export class Registry {
       throw new RegistryLoadError(`Invalid registry state: ${this.options.statePath}`);
     }
 
-    this.#unknownState = unknownFields(parsed, ["devices", "leases"]);
+    this.#unknownState = unknownFields(parsed, ["devices", "leases", "leaseRequests"]);
     this.#devices = parsed.devices.map((device) => {
       const record = parseDevice(device);
       this.#unknownDeviceFields.set(record.id, unknownFields(device, deviceRecordKeys));
@@ -570,6 +675,31 @@ export class Registry {
       );
       return record;
     });
+    this.#leaseRequests = this.#restoreLeaseRequests(parsed.leaseRequests);
+  }
+
+  /**
+   * A state file written before lease requests were stored has no `leaseRequests` key and loads
+   * with none. A record that does not parse is dropped rather than failing the load: a request
+   * is not worth every device Simlock knows about, and a client repeating a dropped request
+   * simply starts a new one.
+   */
+  #restoreLeaseRequests(value: unknown): LeaseRequestRecord[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+      throw new RegistryLoadError(`Invalid registry state: ${this.options.statePath}`);
+    }
+    const records: LeaseRequestRecord[] = [];
+    for (const candidate of value) {
+      const record = parseLeaseRequest(candidate);
+      if (record === undefined) continue;
+      this.#unknownLeaseRequestFields.set(
+        record.id,
+        unknownFields(candidate as Record<string, unknown>, leaseRequestRecordKeys),
+      );
+      records.push(record);
+    }
+    return records;
   }
 
   #emitDeviceEvent(event: RegistryDeviceEvent): void {
@@ -618,6 +748,18 @@ const leaseRecordKeys = [
   "ttlDeadline",
   "lastRenewedAt",
 ] as const;
+const leaseRequestRecordKeys = [
+  "id",
+  "requesterId",
+  "ownerId",
+  "idempotencyKey",
+  "request",
+  "createdAt",
+  "state",
+  "settledAt",
+  "grant",
+  "failure",
+] as const;
 /**
  * Fields a lease record written before ADR 0004 carries that this daemon neither reads nor
  * keeps. Listed here so they are stripped on load rather than preserved through the
@@ -632,6 +774,10 @@ function cloneDevice(device: DeviceRecord): DeviceRecord {
 
 function cloneLease(lease: LeaseRecord): LeaseRecord {
   return { ...lease };
+}
+
+function cloneLeaseRequest(record: LeaseRequestRecord): LeaseRequestRecord {
+  return { ...record, request: { ...record.request } };
 }
 
 function parentDirectory(path: string): string {
@@ -818,6 +964,85 @@ function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
     ttlDeadline,
     ttlMs: positiveDurationOr(ttlMs, defaultTtlMs),
   };
+}
+
+/**
+ * `undefined` for anything that is not a whole, consistent record: every required field typed,
+ * and the result its state promises present (see `parseLeaseRequestResult`).
+ */
+function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
+  if (!hasLeaseRequestFields(value)) return undefined;
+  const { createdAt, id, idempotencyKey, ownerId, request, requesterId, state } = value;
+  const result = parseLeaseRequestResult(state, value);
+  if (result === undefined) return undefined;
+  return {
+    createdAt,
+    id,
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+    ownerId,
+    request,
+    requesterId,
+    state,
+    ...result,
+  };
+}
+
+/** The fields every lease-request record has, whatever its state. */
+function hasLeaseRequestFields(value: unknown): value is Record<string, unknown> & {
+  readonly createdAt: number;
+  readonly id: string;
+  readonly idempotencyKey?: string;
+  readonly ownerId: string;
+  readonly request: DeviceRequest;
+  readonly requesterId: string;
+  readonly state: LeaseRequestState;
+} {
+  return (
+    isObject(value) &&
+    typeof value.id === "string" &&
+    typeof value.requesterId === "string" &&
+    typeof value.ownerId === "string" &&
+    (value.idempotencyKey === undefined || typeof value.idempotencyKey === "string") &&
+    isDeviceRequest(value.request) &&
+    typeof value.createdAt === "number" &&
+    isLeaseRequestState(value.state)
+  );
+}
+
+/** A settled record's settlement time and the result its state promises: a `granted` record's
+ * grant, a `failed` one's failure. An open record has none of them. */
+function parseLeaseRequestResult(
+  state: LeaseRequestState,
+  value: Record<string, unknown>,
+): Pick<LeaseRequestRecord, "failure" | "grant" | "settledAt"> | undefined {
+  if (state === "open") return {};
+  const { failure, grant, settledAt } = value;
+  if (typeof settledAt !== "number") return undefined;
+  if (state === "granted") {
+    return isObject(grant) ? { grant: grant as unknown as LeaseGrant, settledAt } : undefined;
+  }
+  if (state === "failed") {
+    return isLeaseRequestFailure(failure) ? { failure, settledAt } : undefined;
+  }
+  return { settledAt };
+}
+
+function isDeviceRequest(value: unknown): value is DeviceRequest {
+  return (
+    isObject(value) &&
+    isPlatform(value.platform) &&
+    typeof value.model === "string" &&
+    (value.osVersion === undefined || typeof value.osVersion === "string") &&
+    (value.full === undefined || typeof value.full === "boolean")
+  );
+}
+
+function isLeaseRequestState(value: unknown): value is LeaseRequestState {
+  return value === "open" || value === "granted" || value === "failed" || value === "cancelled";
+}
+
+function isLeaseRequestFailure(value: unknown): value is LeaseRequestFailure {
+  return isObject(value) && typeof value.code === "string" && typeof value.message === "string";
 }
 
 function isDeviceSpec(value: unknown): value is DeviceSpec {

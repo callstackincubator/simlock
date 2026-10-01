@@ -1,17 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { RequesterAlreadyLeasedError } from "../core/index.js";
+import { RequestCancelledError } from "../core/wait-queue.js";
 import { FakeClock } from "../ports/index.js";
-import { FakeDispatcher, makeGrant, sequenceIdGenerator, waitForDispatch } from "./test-fakes.js";
+import { FakeDispatcher, makeGrant, waitForDispatch } from "./test-fakes.js";
 import { isTerminalStage, LeaseRequestTracker, type TrackedRequestView } from "./tracker.js";
 
 function buildTracker() {
   const clock = new FakeClock(1_000);
-  const dispatcher = new FakeDispatcher();
+  const dispatcher = new FakeDispatcher(clock);
   const tracker = new LeaseRequestTracker({
     clock,
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
-    idGenerator: sequenceIdGenerator("req"),
+    requests: dispatcher.requests,
   });
   return { clock, dispatcher, tracker };
 }
@@ -168,9 +169,13 @@ describe("LeaseRequestTracker.cancel", () => {
 
   it("cancels a still-queued request and settles it as 'cancelled'", async () => {
     const { dispatcher, tracker } = buildTracker();
-    const { view } = await createTracked(tracker, dispatcher);
+    const { view, callIndex } = await createTracked(tracker, dispatcher);
 
-    dispatcher.handlers["lease.cancel"] = () => ({ result: "cancelled" });
+    // What the daemon's `lease.cancel` does to a queued wait: rejects it as cancelled.
+    dispatcher.handlers["lease.cancel"] = () => {
+      dispatcher.calls[callIndex]?.reject(new RequestCancelledError(view.id));
+      return { result: "cancelled" };
+    };
     const result = await tracker.cancel(view.id, identity);
     expect(result).toEqual({ kind: "cancelled" });
     expect(tracker.get(view.id)?.state).toEqual({ stage: "cancelled" });
@@ -338,20 +343,39 @@ describe("LeaseRequestTracker.waitForChange abort", () => {
   });
 });
 
-describe("LeaseRequestTracker idempotency cleanup", () => {
-  it("drops the mapping when a submission is rejected before becoming visible -- a replay creates a fresh request", async () => {
+describe("LeaseRequestTracker repeats of a stored request", () => {
+  it("answers a repeat of a request that failed before becoming visible with the stored failure, starting no second request", async () => {
     const { dispatcher, tracker } = buildTracker();
     const first = tracker.submit(identity, body, "key-1");
     const firstCall = await waitForDispatch(dispatcher, "lease.request");
     firstCall.reject(new RequesterAlreadyLeasedError("tok_agent"));
-    const firstOutcome = await first;
-    expect(firstOutcome.kind).toBe("rejected");
+    expect((await first).kind).toBe("rejected");
+    await Promise.resolve();
 
-    const second = tracker.submit(identity, body, "key-1");
-    const secondCall = await waitForDispatch(dispatcher, "lease.request", 1);
-    secondCall.session.onProgress?.({ queuePosition: 1, stage: "queued" });
-    const secondOutcome = await second;
-    expect(secondOutcome.kind).toBe("created");
-    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(2);
+    const second = await tracker.submit(identity, body, "key-1");
+    expect(second.kind).toBe("rejected");
+    if (second.kind === "rejected") {
+      expect(second.error).toMatchObject({ code: "REQUESTER_ALREADY_LEASED" });
+    }
+    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
+  });
+
+  it("reads a granted request back from the stored record, not from anything the tracker kept", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    const outcome = tracker.submit(identity, body);
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    call.resolve(makeGrant({ lease: { id: "lse_stored" } }));
+    const created = await outcome;
+    if (created.kind !== "created") throw new Error("expected created");
+
+    // A second tracker over the same store: it was never handed this request.
+    const fresh = new LeaseRequestTracker({
+      clock: new FakeClock(1_000),
+      dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
+      requests: dispatcher.requests,
+    });
+    const state = fresh.get(created.view.id)?.state;
+    if (state?.stage !== "granted") throw new Error("expected granted");
+    expect(state.lease.id).toBe("lse_stored");
   });
 });

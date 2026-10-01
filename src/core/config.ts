@@ -44,6 +44,12 @@ export const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 /** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
+/** `lease.requestRetentionMs`'s default: how long a settled lease request still answers a replay. */
+export const DEFAULT_LEASE_REQUEST_RETENTION_MS = 10 * 60_000;
+
+/** `lease.maxRequestRecords`'s default: the most lease-request records the daemon keeps. */
+export const DEFAULT_LEASE_MAX_REQUEST_RECORDS = 10_000;
+
 /** `gateway.disconnectedRetentionMs`'s default (ADR 0005 §6): 24 hours. */
 const DEFAULT_DISCONNECTED_RETENTION_MS = 24 * 60 * 60_000;
 
@@ -153,6 +159,17 @@ export interface Config {
       readonly ios: LeaseIdentity;
       readonly android: LeaseIdentity;
     };
+    /**
+     * How long a settled lease request stays stored, counted from when it settled. Within this
+     * window a repeat of the request returns the stored result; after it, the record is pruned
+     * and the same key starts a new request.
+     */
+    readonly requestRetentionMs: number;
+    /**
+     * The most lease-request records kept at once. Reaching it evicts the oldest settled record;
+     * an open record is never evicted.
+     */
+    readonly maxRequestRecords: number;
   };
   /**
    * ADR 0005 §19e. Platform-agnostic on purpose: it bounds the *daemon's* willingness to wait
@@ -595,6 +612,8 @@ function defaultConfig(
       defaultTtlMs: DEFAULT_LEASE_TTL_MS,
       maxTtlMs: DEFAULT_LEASE_MAX_TTL_MS,
       identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: DEFAULT_LEASE_REQUEST_RETENTION_MS,
+      maxRequestRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
     },
     exec: { timeoutMs: DEFAULT_EXEC_TIMEOUT_MS },
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
@@ -733,6 +752,8 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
         ios: stringUnion(LEASE_IDENTITIES),
         android: stringUnion(LEASE_IDENTITIES),
       }),
+      requestRetentionMs: positiveNumber,
+      maxRequestRecords: positiveInteger,
     }),
     exec: objectValidator({ timeoutMs: positiveNumber }),
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),

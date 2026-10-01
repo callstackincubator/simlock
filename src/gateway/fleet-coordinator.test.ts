@@ -98,6 +98,11 @@ function harness(
   const coordinator = new FleetLeaseCoordinator({
     clock,
     directory,
+    describeFailure: (error) => ({
+      code: "INTERNAL",
+      message: error instanceof Error ? error.message : String(error),
+    }),
+    leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
     eventBus,
     // Deliberately large by default -- P5's own test overrides this to something the FakeClock
     // can advance past inside the test, without every other test in this file needing to know
@@ -155,7 +160,7 @@ function connectWorker(
  * forget dispatch attempt's own synchronous-until-the-RPC portion to have run, without waiting on
  * a real timer -- everything in this module is driven by `FakeClock` and in-memory promises, so
  * there is nothing a real clock tick would advance that this does not already cover. */
-async function tick(times = 8): Promise<void> {
+async function tick(times = 16): Promise<void> {
   for (let iteration = 0; iteration < times; iteration += 1) await Promise.resolve();
 }
 

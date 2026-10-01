@@ -11,6 +11,7 @@ import {
 import { DispatchError, DoctorUnavailableError } from "../daemon/dispatcher.js";
 import { StartupFailedError } from "../daemon/error-code.js";
 import { OwnerRoutedFactBus } from "../daemon/owner-routed-facts.js";
+import { RequestCancelledError } from "../core/wait-queue.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { createHttpApp, type HttpGatewayDeps } from "./app.js";
 import {
@@ -28,7 +29,7 @@ import {
 function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
-  const dispatcher = new FakeDispatcher();
+  const dispatcher = new FakeDispatcher(clock);
   const registry = new FakeRegistry();
   const ownerRoutedFacts = new OwnerRoutedFactBus(eventBus, registry);
   const tokens = new FakeTokenVerifier();
@@ -55,6 +56,7 @@ function buildHarness(overrides: { readonly config?: HttpGatewayDeps["config"] }
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     eventBus,
     idGenerator: sequenceIdGenerator("gw"),
+    leaseRequests: dispatcher.requests,
     logger,
     ownerRoutedFacts,
     registry,
@@ -410,31 +412,14 @@ describe("POST /v1/lease-requests", () => {
     expect(secondBody.request.id).toBe(firstId);
   });
 
-  it("refuses a ttlMs above lease.maxTtlMs with 400, before the request resource exists", async () => {
-    const { app, dispatcher } = buildHarness({
-      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
-    });
-
-    const response = await postLeaseRequest(app, { ...defaultBody, ttlMs: 120_001 });
-
-    expect(response.status).toBe(400);
-    expect((await response.json()) as { error: { code: string } }).toMatchObject({
-      error: { code: "BAD_REQUEST" },
-    });
-    expect(
-      dispatcher.calls.filter((call) => call.operation === "lease.request"),
-      "nothing was admitted, so there is no request resource to poll either",
-    ).toHaveLength(0);
-  });
-
-  it("refuses it the same way when allowDownload makes the 201 settle without waiting", async () => {
-    // The shape that made this route need its own cap check: with `allowDownload: true` the
-    // tracker answers `201 Created` as soon as the dispatch is *started*, so a rejection the
-    // dispatcher raises afterwards would land on the request resource instead of on this
-    // response -- a 201 for a TTL `docs/HTTP-API.md` promises is a 400.
-    const { app, dispatcher } = buildHarness({
-      config: testConfig({ defaultTtlMs: 60_000, maxTtlMs: 120_000 }),
-    });
+  it("answers a dispatcher refusal that lands before admission on the POST itself, even with allowDownload", async () => {
+    // `allowDownload: true` answers `201` once the request is stored, not before: a refusal the
+    // dispatcher raises ahead of admission -- a `ttlMs` above `lease.maxTtlMs` is one -- still
+    // fails the POST, so the route needs no cap check of its own.
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["lease.request"] = () => {
+      throw new DispatchError("BAD_REQUEST", "ttlMs 120001 exceeds lease.maxTtlMs (120000)");
+    };
 
     const response = await postLeaseRequest(app, {
       ...defaultBody,
@@ -446,7 +431,6 @@ describe("POST /v1/lease-requests", () => {
     expect((await response.json()) as { error: { code: string } }).toMatchObject({
       error: { code: "BAD_REQUEST" },
     });
-    expect(dispatcher.calls.filter((call) => call.operation === "lease.request")).toHaveLength(0);
   });
 
   it("passes a caller-supplied ttlMs straight onto the dispatch input -- no separate renew call (ADR §9)", async () => {
@@ -542,16 +526,24 @@ describe("DELETE /v1/lease-requests/:id", () => {
     expect(response.status).toBe(404);
   });
 
-  it("204s when the request was still queued and cancellable", async () => {
+  it("204s when the request was still queued and cancellable, and a GET right after reads cancelled", async () => {
     const { app, dispatcher } = buildHarness();
-    const { id } = await createLeaseRequest(app, dispatcher);
+    const { id, callIndex } = await createLeaseRequest(app, dispatcher);
 
-    dispatcher.handlers["lease.cancel"] = () => ({ result: "cancelled" });
+    // What the daemon's `lease.cancel` does to a queued wait: rejects it as cancelled.
+    dispatcher.handlers["lease.cancel"] = () => {
+      dispatcher.calls[callIndex]?.reject(new RequestCancelledError(id));
+      return { result: "cancelled" };
+    };
     const response = await app.request(`/v1/lease-requests/${id}`, {
       headers: agentAuth,
       method: "DELETE",
     });
     expect(response.status).toBe(204);
+    const after = await app.request(`/v1/lease-requests/${id}`, { headers: agentAuth });
+    expect(((await after.json()) as { request: { state: string } }).request.state).toBe(
+      "cancelled",
+    );
   });
 
   it("409s not-cancellable once device work is in flight", async () => {

@@ -51,6 +51,8 @@ function config(overrides: Partial<Config["lease"]> = {}): Config {
       defaultTtlMs: 100,
       maxTtlMs: 14_400_000,
       identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
       ...overrides,
     },
     capacity: {

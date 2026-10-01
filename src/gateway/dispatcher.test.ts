@@ -48,6 +48,8 @@ const gatewayConfig = {
     defaultTtlMs: 900_000,
     maxTtlMs: 3_600_000,
     identity: { ios: "reusable" as const, android: "reusable" as const },
+    requestRetentionMs: 600_000,
+    maxRequestRecords: 10_000,
   },
   log: { level: "info" as const, rotateBytes: 1 },
   mode: "gateway" as const,
@@ -124,6 +126,11 @@ function harness() {
   const coordinator = new FleetLeaseCoordinator({
     clock,
     directory,
+    describeFailure: (error) => ({
+      code: "INTERNAL",
+      message: error instanceof Error ? error.message : String(error),
+    }),
+    leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
     eventBus,
     execTimeoutMs: gatewayConfig.gateway.execTimeoutMs,
     leaseRequestTimeoutMs: gatewayConfig.gateway.leaseRequestTimeoutMs,

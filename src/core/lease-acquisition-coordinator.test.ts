@@ -13,6 +13,7 @@ import type { DeviceSpec } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
 import { LeaseExpiryScheduler } from "./lease-expiry-scheduler.js";
+import { LeaseRequestBook } from "./lease-request-book.js";
 import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry } from "./registry.js";
@@ -50,7 +51,13 @@ function config(maxDevices = 1): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    lease: { defaultTtlMs: 100, maxTtlMs: 100, identity: { ios: "reusable", android: "reusable" } },
+    lease: {
+      defaultTtlMs: 100,
+      maxTtlMs: 100,
+      identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
+    },
     capacity: {
       strategy: "resource",
       config: {
@@ -134,6 +141,14 @@ async function createHarness(
     provisioner,
     queue,
     registry,
+    requests: new LeaseRequestBook({
+      decisions,
+      describeFailure: (error) => ({
+        code: "INTERNAL",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+      store: registry,
+    }),
   });
   return { bus, clock, coordinator, driver, registry };
 }

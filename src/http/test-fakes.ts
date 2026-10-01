@@ -1,8 +1,12 @@
 import type { Config, DeviceRecord, LeaseRecord } from "../core/index.js";
-import type { LeaseGrant } from "../core/wait-queue.js";
-import type { OperationName } from "../contract/index.js";
+import { InMemoryLeaseRequestStore, LeaseRequestBook } from "../core/lease-request-book.js";
+import { SerializedDecision } from "../core/serialized-decision.js";
+import type { LeaseGrant, LeaseRequestOptions } from "../core/wait-queue.js";
+import { describeSchemaIssues, OPERATIONS, type OperationName } from "../contract/index.js";
+import { DispatchError } from "../daemon/dispatch.js";
 import type { DispatchSession } from "../daemon/dispatcher.js";
-import type { IdGenerator } from "../ports/index.js";
+import { describeLeaseRequestFailure } from "../daemon/error-code.js";
+import { type Clock, FakeClock, type IdGenerator } from "../ports/index.js";
 import type { TokenIdentity } from "./token-store.js";
 
 const gibibyte = 1024 * 1024 * 1024;
@@ -52,6 +56,8 @@ export function testConfig(
       defaultTtlMs: 900_000,
       maxTtlMs: 14_400_000,
       identity: { ios: "reusable", android: "reusable" },
+      requestRetentionMs: 600_000,
+      maxRequestRecords: 10_000,
       ...overrides,
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
@@ -154,8 +160,30 @@ export class FakeDispatcher {
   readonly handlers: Partial<
     Record<OperationName, (input: never, session: DispatchSession) => unknown>
   > = {};
+  /**
+   * The real request rules over an in-memory store, standing in for the daemon's: an unhandled
+   * `lease.request` is admitted (or replayed) through it exactly as the real coordinator does,
+   * and the call a test settles is the request's own wait. Doubles as the HTTP app's
+   * `leaseRequests` reader.
+   */
+  readonly requests: LeaseRequestBook<LeaseGrant>;
+
+  constructor(clock: Clock = new FakeClock(1_000)) {
+    this.requests = new LeaseRequestBook<LeaseGrant>({
+      decisions: new SerializedDecision(),
+      describeFailure: describeLeaseRequestFailure,
+      store: new InMemoryLeaseRequestStore({
+        clock,
+        idGenerator: sequenceIdGenerator("req"),
+        limits: { maxRecords: 10_000, retentionMs: 600_000 },
+      }),
+    });
+  }
 
   dispatch(operation: OperationName, input: unknown, session: DispatchSession): Promise<unknown> {
+    if (operation === "lease.request" && this.handlers[operation] === undefined) {
+      return this.#requestLease(input, session);
+    }
     const handler = this.handlers[operation];
     if (handler !== undefined) {
       const settled = Promise.resolve(handler(input as never, session));
@@ -172,6 +200,58 @@ export class FakeDispatcher {
       this.calls.push({ input, operation, reject, resolve, session });
     });
   }
+
+  /** The dispatcher's input parse and `lease.request` handler, and the coordinator's admission,
+   * minus the queue: the pushed call's `session.onProgress` is the request's own progress sink. */
+  async #requestLease(raw: unknown, session: DispatchSession): Promise<unknown> {
+    const parsed = OPERATIONS["lease.request"].input.safeParse(raw);
+    if (!parsed.success) {
+      throw new DispatchError("BAD_REQUEST", describeSchemaIssues(parsed.error.issues));
+    }
+    const input = parsed.data;
+    const request = {
+      model: input.model,
+      platform: input.platform,
+      ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
+      ...(input.full === true ? { full: true } : {}),
+    };
+    const options = fakeRequestOptions(input, session);
+    const replay = this.requests.replay(request, options);
+    if (replay !== undefined) return replay;
+    const { promise } = await this.requests.admit(
+      request,
+      options,
+      (_id, onProgress) =>
+        new Promise<LeaseGrant>((resolve, reject) => {
+          this.calls.push({
+            input,
+            operation: "lease.request",
+            reject,
+            resolve: resolve as (value: unknown) => void,
+            session: { ...session, onProgress },
+          });
+        }),
+    );
+    return promise;
+  }
+}
+
+/** What the dispatcher's `lease.request` handler hands the coordinator for this input. */
+function fakeRequestOptions(
+  input: {
+    readonly owner?: string;
+    readonly requesterId?: string;
+    readonly idempotencyKey?: string;
+  },
+  session: DispatchSession,
+): LeaseRequestOptions {
+  return {
+    ownerId: input.owner ?? session.principal,
+    requesterId: input.requesterId ?? session.principal,
+    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
+    ...(session.onRequestAdmitted === undefined ? {} : { onAdmitted: session.onRequestAdmitted }),
+  };
 }
 
 /**

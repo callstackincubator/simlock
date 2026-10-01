@@ -142,6 +142,15 @@ const leaseRequestInputSchema = z
      * owner is the calling connection -- so this is additive and no existing caller changes.
      */
     owner: z.string().optional(),
+    /**
+     * Makes this request repeatable: the daemon stores it under `(requesterId, idempotencyKey)`,
+     * and the same request sent again returns the stored result instead of a second lease --
+     * the way a client that lost its answer, to a disconnect or a daemon restart, gets it back.
+     * The same key naming a different device is `IDEMPOTENCY_CONFLICT`; a repeat from another
+     * principal is `FORBIDDEN`. Optional: a request without one is still stored, it just cannot
+     * be repeated. Bounded because the daemon stores it.
+     */
+    idempotencyKey: z.string().min(1).max(200).optional(),
   })
   .strict();
 

@@ -92,6 +92,8 @@ describe("loadConfig", () => {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,
         identity: { ios: "reusable", android: "reusable" },
+        requestRetentionMs: 600_000,
+        maxRequestRecords: 10_000,
       },
       capacity: {
         strategy: "resource",
@@ -456,7 +458,9 @@ describe("loadConfig", () => {
       expect(config.lease).toEqual({
         defaultTtlMs: 15 * 60_000,
         identity: { android: "reusable", ios: "reusable" },
+        maxRequestRecords: 10_000,
         maxTtlMs: 4 * 60 * 60_000,
+        requestRetentionMs: 10 * 60_000,
       });
     },
   );

@@ -1,8 +1,9 @@
-import { RequestCancelledError } from "../core/index.js";
-import type { Clock, IdGenerator, Logger, TimerHandle } from "../ports/index.js";
+import type { z } from "zod";
+
+import { leaseRequestRecordSchema } from "../contract/index.js";
+import type { Clock } from "../ports/index.js";
 import { buildHttpSession } from "./dispatcher-session.js";
 import type { HttpDispatch } from "./dispatcher-session.js";
-import { mapError } from "./errors.js";
 import type { TokenIdentity } from "./token-store.js";
 
 export interface LeaseRequestInput {
@@ -93,6 +94,8 @@ export function isTerminalStage(state: RequestSnapshot): boolean {
 export interface TrackedRequestView {
   readonly id: string;
   readonly requesterId: string;
+  /** The principal that sent the request -- what reading or cancelling it is authorized on. */
+  readonly ownerId: string;
   readonly createdAt: string;
   readonly state: RequestSnapshot;
 }
@@ -102,26 +105,19 @@ export type CancelOutcome =
   | { readonly kind: "not-found" }
   | { readonly kind: "not-cancellable"; readonly leaseId?: string };
 
-interface TrackedRequest {
-  readonly id: string;
-  readonly requesterId: string;
-  readonly createdAtIso: string;
-  state: RequestSnapshot;
-  readonly listeners: Set<(state: RequestSnapshot) => void>;
-}
-
-/** How long a terminal request resource answers `GET` after settling, per the issue spec. */
-const TERMINAL_RETENTION_MS = 5 * 60_000;
-/** How long an `Idempotency-Key` replay window stays open. */
-const IDEMPOTENCY_TTL_MS = 10 * 60_000;
 /**
- * Hard ceiling on live idempotency entries: an authenticated caller can mint a fresh key per
- * request without ever occupying its one queue slot, so without a cap this map (and its
- * expiry timers) grows without bound. FIFO eviction of the oldest entry only weakens replay
- * protection for whoever is flooding, and `RequesterAlreadyLeasedError` remains the backstop
- * against a double grant.
+ * The daemon's stored lease requests, as this resource reads them: a worker's `LeaseEngine`
+ * request book, or a gateway's fleet coordinator's. `record` is read through the contract's
+ * `leaseRequestRecordSchema` rather than trusted, because the two backends store different grant
+ * types and this module names neither.
  */
-const IDEMPOTENCY_MAX_ENTRIES = 10_000;
+export interface LeaseRequestReader {
+  get(
+    id: string,
+  ): { readonly record: unknown; readonly progress?: HttpLeaseProgress | undefined } | undefined;
+  watch(id: string, listener: () => void): (() => void) | undefined;
+  requestIdForLease(leaseId: string): string | undefined;
+}
 
 export interface LeaseRequestTrackerOptions {
   /**
@@ -133,35 +129,27 @@ export interface LeaseRequestTrackerOptions {
    * (`dispatch()` awaits startup readiness before running any handler but `status.get`).
    */
   readonly dispatch: HttpDispatch;
+  readonly requests: LeaseRequestReader;
   readonly clock: Clock;
-  readonly idGenerator: IdGenerator;
-  readonly logger?: Logger;
 }
 
 /**
- * Gateway-layer resource tracking for `POST /v1/lease-requests`. Calls `dispatch("lease.request",
- * ...)` with an `onProgress` session override and never awaits its returned promise directly --
- * `submit` returns as soon as the request resource exists, matching "acquisition is an async
- * resource, no long-blocking POST" from the issue's design principles. `GET`, long-poll, and SSE
- * all read the same in-memory state this class owns; no core changes were needed to observe it.
+ * `POST /v1/lease-requests` and the routes that read it back. The request itself is the daemon's
+ * stored record -- this class holds no request state of its own, so a request answers `GET`
+ * across a daemon restart and whichever frontend sent it. What lives here is the HTTP shape:
+ * deciding when a `POST` answers `201` rather than an error, and turning a stored record and
+ * its live progress into the resource's states.
  */
 export class LeaseRequestTracker {
-  readonly #requests = new Map<string, TrackedRequest>();
-  readonly #idempotency = new Map<string, { requestId: string; timer: TimerHandle }>();
-  readonly #leaseRequestId = new Map<string, string>();
-  /**
-   * The retention/idempotency-TTL timers `#setState`/`#registerIdempotency` arm below,
-   * tracked so `dispose()` can cancel whichever are still outstanding. Without this, a
-   * `Clock` backed by real timers (the daemon's `SystemClock`, unlike this class's own
-   * unit tests' `FakeClock`) would keep a real `setTimeout` alive for up to
-   * `TERMINAL_RETENTION_MS`/`IDEMPOTENCY_TTL_MS` after this instance is otherwise done
-   * with -- which, for a Node process, means `daemon stop` would not actually exit until
-   * that timer fires, minutes later.
-   */
-  readonly #activeTimers = new Set<TimerHandle>();
-
   constructor(private readonly options: LeaseRequestTrackerOptions) {}
 
+  /**
+   * Answers `created` once the daemon has stored the request and either reported progress, or
+   * granted it, or -- for `allowDownload`, whose spec resolution can run for minutes before any
+   * progress -- as soon as it is stored. A rejection that lands before any of those fails the
+   * `POST` itself, so a client is not made to poll a resource just to learn it was refused; the
+   * stored failure still answers a repeat of the request.
+   */
   submit(
     identity: TokenIdentity,
     body: LeaseRequestInput,
@@ -170,41 +158,22 @@ export class LeaseRequestTracker {
     | { readonly kind: "created"; readonly view: TrackedRequestView }
     | { readonly kind: "rejected"; readonly error: unknown }
   > {
-    const replay = this.#replayIdempotentSubmit(identity.requesterId, idempotencyKey);
-    if (replay !== undefined) return Promise.resolve({ kind: "created", view: replay });
-
-    const id = `req_${this.options.idGenerator.generate()}`;
-    const record: TrackedRequest = {
-      createdAtIso: new Date(this.options.clock.now()).toISOString(),
-      id,
-      listeners: new Set(),
-      requesterId: identity.requesterId,
-      // Best-effort placeholder until the first real `onProgress` call (fired before the POST
-      // response is even built in the common case) supersedes it.
-      state: { queuePosition: 1, stage: "queued" },
-    };
-    this.#requests.set(id, record);
-    this.#registerIdempotency(identity.requesterId, idempotencyKey, id);
-
-    // Races the grant/rejection against the request's *first* progress callback -- see the
-    // class doc. A rejection that lands before any progress call (already-leased, unresolvable
-    // model/runtime/driver, no-capacity-with-noWait) never reached anything the queue
-    // considers "in flight", so the POST itself can fail with the matching HTTP status instead
-    // of the caller polling a request resource just to learn that. Once a progress callback
-    // fires (or a grant lands without ever needing one), the request is a genuine async
-    // resource and always answers 201.
     return new Promise((resolve) => {
+      let requestId: string | undefined;
       let settled = false;
-      const settleCreated = () => {
-        if (settled) return;
+      const settleCreated = (state?: RequestSnapshot): void => {
+        if (settled || requestId === undefined) return;
+        const view = this.get(requestId);
+        if (view === undefined) return;
         settled = true;
-        resolve({ kind: "created", view: toView(record) });
+        resolve({ kind: "created", view: state === undefined ? view : { ...view, state } });
       };
 
       const session = buildHttpSession(identity, {
-        onProgress: (progress) => {
-          this.#applyProgress(record, progress);
-          settleCreated();
+        onProgress: () => settleCreated(),
+        onRequestAdmitted: (id) => {
+          requestId = id;
+          if (body.allowDownload === true) settleCreated();
         },
       });
 
@@ -226,49 +195,45 @@ export class LeaseRequestTracker {
             // ADR §27a (H7, round 2 review): forwarded as-is -- the shared dispatcher's own
             // `lease.request` handler is what rejects a non-admin token naming this.
             ...(body.owner === undefined ? {} : { owner: body.owner }),
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
           },
           session,
         )
-        .then((grant) => {
-          this.#applyGrant(record, grant);
-          settleCreated();
-        })
-        .catch((error: unknown) => {
-          this.#applyFailure(record, error);
-          if (settled) return;
-          settled = true;
-          // Never became visible to any client (the POST itself is about to fail), so it
-          // shouldn't answer a later GET/replay either -- including through the
-          // idempotency map, whose entry (and pending expiry timer) would otherwise
-          // outlive the record it points at.
-          this.#requests.delete(record.id);
-          if (idempotencyKey !== undefined) {
-            this.#dropIdempotency(idempotencyCacheKey(identity.requesterId, idempotencyKey));
-          }
-          resolve({ kind: "rejected", error });
-        });
-
-      // A download-permitted request can spend minutes inside the driver's `resolveSpec`
-      // (an Android `sdkmanager --install` runs there) before the first progress callback
-      // -- the one pre-progress stretch that legitimately runs long. Settle the POST now:
-      // the client polls the resource instead, and even an instant admission rejection
-      // (already-leased) then surfaces as the resource's terminal `failed` state rather
-      // than an HTTP error, because by the time it lands the resource is already visible.
-      if (body.allowDownload === true) settleCreated();
+        .then(
+          // The grant answers before its record is written (the daemon stores the result
+          // once the wait settles), so the `201` is built from the grant itself.
+          (grant) =>
+            settleCreated({
+              lease: buildLeasePayload(
+                grant.device,
+                grant.lease,
+                requestId === undefined ? {} : { requestId },
+              ),
+              stage: "granted",
+            }),
+          (error: unknown) => {
+            if (settled) return;
+            settled = true;
+            resolve({ kind: "rejected", error });
+          },
+        );
     });
   }
 
   get(id: string): TrackedRequestView | undefined {
-    const record = this.#requests.get(id);
-    return record === undefined ? undefined : toView(record);
+    const found = this.options.requests.get(id);
+    if (found === undefined) return undefined;
+    const parsed = leaseRequestRecordSchema.safeParse(found.record);
+    if (!parsed.success) return undefined;
+    return toView(parsed.data, found.progress);
   }
 
   /** Registers a listener for future state changes only -- it does not fire for the current state. */
   subscribe(id: string, listener: (state: RequestSnapshot) => void): (() => void) | undefined {
-    const record = this.#requests.get(id);
-    if (record === undefined) return undefined;
-    record.listeners.add(listener);
-    return () => record.listeners.delete(listener);
+    return this.options.requests.watch(id, () => {
+      const view = this.get(id);
+      if (view !== undefined) listener(view.state);
+    });
   }
 
   /**
@@ -282,9 +247,9 @@ export class LeaseRequestTracker {
     seconds: number,
     signal?: AbortSignal,
   ): Promise<TrackedRequestView | undefined> {
-    const record = this.#requests.get(id);
-    if (record === undefined) return Promise.resolve(undefined);
-    if (isTerminalStage(record.state)) return Promise.resolve(toView(record));
+    const initial = this.get(id);
+    if (initial === undefined) return Promise.resolve(undefined);
+    if (isTerminalStage(initial.state)) return Promise.resolve(initial);
 
     return new Promise((resolve) => {
       let settled = false;
@@ -294,7 +259,7 @@ export class LeaseRequestTracker {
         unsubscribe();
         signal?.removeEventListener("abort", finish);
         this.options.clock.cancel(timer);
-        resolve(toView(record));
+        resolve(this.get(id) ?? initial);
       };
       const unsubscribe = this.subscribe(id, finish) ?? (() => {});
       const timer = this.options.clock.setTimer(Math.max(0, seconds) * 1_000, finish);
@@ -306,145 +271,48 @@ export class LeaseRequestTracker {
   /**
    * Cancels a pending request via `dispatch("lease.cancel", ...)` -- the exact operation the
    * socket path's `lease.cancel` uses, authorize hook included (ADR: "cancels this principal's
-   * pending request by requester id"). The terminal state is applied here, synchronously with
-   * the dispatch's answer, rather than waiting for the rejected `lease.request` promise's
-   * `.catch` to run on a later microtask -- a caller awaiting `cancel()` must see the settled
-   * state immediately.
+   * pending request by requester id"). On `cancelled` it waits for the daemon to store the
+   * cancellation before answering, so a `GET` right after the `204` already reads `cancelled`.
    */
   async cancel(id: string, identity: TokenIdentity): Promise<CancelOutcome> {
-    const record = this.#requests.get(id);
-    if (record === undefined) return { kind: "not-found" };
-    const stateBefore = record.state;
-    if (stateBefore.stage === "granted")
-      return { kind: "not-cancellable", leaseId: stateBefore.lease.id };
-    if (isTerminalStage(stateBefore)) return { kind: "not-cancellable" };
+    const before = this.get(id);
+    if (before === undefined) return { kind: "not-found" };
+    if (before.state.stage === "granted")
+      return { kind: "not-cancellable", leaseId: before.state.lease.id };
+    if (isTerminalStage(before.state)) return { kind: "not-cancellable" };
 
     const session = buildHttpSession(identity);
     const { result } = await this.options.dispatch(
       "lease.cancel",
-      { requesterId: record.requesterId },
+      { requesterId: before.requesterId },
       session,
     );
     if (result === "cancelled") {
-      this.#setState(record, { stage: "cancelled" });
+      await this.#nextChange(id);
       return { kind: "cancelled" };
     }
     // Settled between the check above and this call (e.g. granted in the interim) -- report
     // the now-current state rather than a stale answer.
-    const stateAfter = record.state;
-    if (stateAfter.stage === "granted")
-      return { kind: "not-cancellable", leaseId: stateAfter.lease.id };
+    const after = this.get(id)?.state;
+    if (after?.stage === "granted") return { kind: "not-cancellable", leaseId: after.lease.id };
     return { kind: "not-cancellable" };
   }
 
   requestIdForLease(leaseId: string): string | undefined {
-    return this.#leaseRequestId.get(leaseId);
+    return this.options.requests.requestIdForLease(leaseId);
   }
 
-  /** Drops the request-id bookkeeping for a lease that just ended -- called from the HTTP app
-   * on the same owner-routed fact stream (`OwnerRoutedFacts`, `lease-lost`) `LeaseNoticeBuffer`
-   * consumes, not from a direct `eventBus.subscribe` on this class. ADR 0004 left this map
-   * alone but deleted the per-lease TTL one that used to sit beside it: the width is on the
-   * lease record now, so there is nothing gateway-side left to forget about it. */
-  forgetLease(leaseId: string): void {
-    this.#leaseRequestId.delete(leaseId);
-  }
-
-  dispose(): void {
-    for (const timer of this.#activeTimers) this.options.clock.cancel(timer);
-    this.#activeTimers.clear();
-  }
-
-  #replayIdempotentSubmit(
-    requesterId: string,
-    idempotencyKey: string | undefined,
-  ): TrackedRequestView | undefined {
-    if (idempotencyKey === undefined) return undefined;
-    const entry = this.#idempotency.get(idempotencyCacheKey(requesterId, idempotencyKey));
-    if (entry === undefined) return undefined;
-    const existing = this.#requests.get(entry.requestId);
-    return existing === undefined ? undefined : toView(existing);
-  }
-
-  #registerIdempotency(
-    requesterId: string,
-    idempotencyKey: string | undefined,
-    requestId: string,
-  ): void {
-    if (idempotencyKey === undefined) return;
-    if (this.#idempotency.size >= IDEMPOTENCY_MAX_ENTRIES) {
-      const oldest = this.#idempotency.keys().next().value;
-      if (oldest !== undefined) this.#dropIdempotency(oldest);
-    }
-    const cacheKey = idempotencyCacheKey(requesterId, idempotencyKey);
-    const timer = this.options.clock.setTimer(IDEMPOTENCY_TTL_MS, () => {
-      this.#activeTimers.delete(timer);
-      if (this.#idempotency.get(cacheKey)?.requestId === requestId) {
-        this.#idempotency.delete(cacheKey);
-      }
-    });
-    this.#activeTimers.add(timer);
-    this.#idempotency.set(cacheKey, { requestId, timer });
-  }
-
-  #dropIdempotency(cacheKey: string): void {
-    const entry = this.#idempotency.get(cacheKey);
-    if (entry === undefined) return;
-    this.options.clock.cancel(entry.timer);
-    this.#activeTimers.delete(entry.timer);
-    this.#idempotency.delete(cacheKey);
-  }
-
-  #applyProgress(record: TrackedRequest, progress: HttpLeaseProgress): void {
-    switch (progress.stage) {
-      case "queued":
-        this.#setState(record, { queuePosition: progress.queuePosition, stage: "queued" });
-        return;
-      case "provisioning":
-        this.#setState(record, { etaSeconds: toSeconds(progress.etaMs), stage: "provisioning" });
-        return;
-      case "booting":
-        this.#setState(record, { etaSeconds: toSeconds(progress.etaMs), stage: "booting" });
-        return;
-      case "reclaiming":
-        this.#setState(record, { etaSeconds: toSeconds(progress.etaMs), stage: "reclaiming" });
-        return;
-    }
-  }
-
-  #applyGrant(record: TrackedRequest, grant: HttpLeaseGrant): void {
-    this.#leaseRequestId.set(grant.lease.id, record.id);
-    this.#setState(record, {
-      lease: buildLeasePayload(grant.device, grant.lease, { requestId: record.id }),
-      stage: "granted",
-    });
-  }
-
-  #applyFailure(record: TrackedRequest, error: unknown): void {
-    if (error instanceof RequestCancelledError) {
-      this.#setState(record, { stage: "cancelled" });
-      return;
-    }
-    const mapped = mapError(error);
-    this.#setState(record, {
-      error: { code: mapped.code, message: mapped.message },
-      stage: "failed",
-    });
-  }
-
-  #setState(record: TrackedRequest, state: RequestSnapshot): void {
-    if (isTerminalStage(record.state)) return;
-    record.state = state;
-    // Snapshotted: a listener may synchronously subscribe/unsubscribe (e.g. an SSE stream
-    // ending itself), which would otherwise mutate `record.listeners` mid-iteration.
-    for (const listener of Array.from(record.listeners)) listener(state);
-    if (isTerminalStage(state)) {
-      const timer = this.options.clock.setTimer(TERMINAL_RETENTION_MS, () => {
-        this.#activeTimers.delete(timer);
-        this.#requests.delete(record.id);
+  /** Resolves on the request's next change, or at once when nothing is open under `id`. A
+   * cancelled wait reports nothing further but its settlement, so this cannot outwait it. */
+  #nextChange(id: string): Promise<void> {
+    return new Promise((resolve) => {
+      let unsubscribe: (() => void) | undefined;
+      unsubscribe = this.options.requests.watch(id, () => {
+        unsubscribe?.();
+        resolve();
       });
-      this.#activeTimers.add(timer);
-    }
+      if (unsubscribe === undefined) resolve();
+    });
   }
 }
 
@@ -478,22 +346,43 @@ interface HttpLeaseRecord {
   readonly ttlDeadline: number;
 }
 
-interface HttpLeaseGrant {
-  readonly device: HttpLeaseDevice;
-  readonly lease: HttpLeaseRecord;
-}
+type StoredRequest = z.infer<typeof leaseRequestRecordSchema>;
 
-function toView(record: TrackedRequest): TrackedRequestView {
+function toView(
+  record: StoredRequest,
+  progress: HttpLeaseProgress | undefined,
+): TrackedRequestView {
   return {
-    createdAt: record.createdAtIso,
+    createdAt: new Date(record.createdAt).toISOString(),
     id: record.id,
+    ownerId: record.ownerId,
     requesterId: record.requesterId,
-    state: record.state,
+    state: toSnapshot(record, progress),
   };
 }
 
-function idempotencyCacheKey(requesterId: string, key: string): string {
-  return `${requesterId} ${key}`;
+function toSnapshot(
+  record: StoredRequest,
+  progress: HttpLeaseProgress | undefined,
+): RequestSnapshot {
+  if (record.state === "granted" && record.grant !== undefined) {
+    return {
+      lease: buildLeasePayload(record.grant.device, record.grant.lease, { requestId: record.id }),
+      stage: "granted",
+    };
+  }
+  if (record.state === "cancelled") return { stage: "cancelled" };
+  if (record.state !== "open") {
+    return {
+      error: record.failure ?? { code: "INTERNAL", message: "Internal error" },
+      stage: "failed",
+    };
+  }
+  // Open with no progress reported yet: the request is admitted and about to queue.
+  if (progress === undefined) return { queuePosition: 1, stage: "queued" };
+  if (progress.stage === "queued")
+    return { queuePosition: progress.queuePosition, stage: "queued" };
+  return { etaSeconds: toSeconds(progress.etaMs), stage: progress.stage };
 }
 
 function toSeconds(ms: number): number {

@@ -26,6 +26,7 @@ import {
   buildLeasePayload,
   isTerminalStage,
   type LeaseRequestInput,
+  type LeaseRequestReader,
   LeaseRequestTracker,
   type TrackedRequestView,
 } from "./tracker.js";
@@ -44,6 +45,8 @@ export interface HttpGatewayDeps {
    * `dispatcher-session.ts`'s `HttpDispatch`. */
   readonly dispatch: HttpDispatch;
   readonly registry: HttpRegistryReader;
+  /** The daemon's stored lease requests: a worker's request book, or a gateway's. */
+  readonly leaseRequests: LeaseRequestReader;
   readonly eventBus: EventBus;
   /** ADR §8: fed to `LeaseNoticeBuffer` instead of it subscribing to `eventBus` itself. */
   readonly ownerRoutedFacts: OwnerRoutedFacts;
@@ -58,8 +61,6 @@ type Env = AuthEnv;
 
 /** Upper bound on `?wait=` long-polls; bounds how long an abandoned poll can pin resources. */
 const MAX_LONG_POLL_SECONDS = 60;
-/** Idempotency keys are map keys held for the replay window; unbounded length is a memory lever. */
-const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 
 const leaseRequestBodySchema = z.object({
   allowDownload: z.boolean().optional(),
@@ -119,28 +120,6 @@ function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): Leas
   };
 }
 
-/**
- * ADR 0004 §4's cap, for the one route that cannot wait for the dispatcher's answer. The
- * dispatcher enforces it for every transport, and every route that *awaits* its dispatch
- * inherits that answer -- but `POST /v1/lease-requests` is an async resource, and an
- * `allowDownload: true` request settles its `201` synchronously (a driver install can run for
- * minutes before the first progress callback, see `LeaseRequestTracker#submit`), so a
- * rejection landing afterwards would surface as a failed request resource rather than the
- * `400 BAD_REQUEST` `docs/HTTP-API.md` promises.
- *
- * Deliberately not used on `POST /v1/leases/{id}/renew`: that route awaits its dispatch, so
- * the shared cap already answers it -- and answers it *after* `ownsLease`, which is what keeps
- * another requester's lease a `403` instead of a `400` about a TTL that caller could never
- * have set anyway.
- */
-function requireTtlWithinCap(ttlMs: number | undefined, config: Config): void {
-  if (ttlMs !== undefined && ttlMs > config.lease.maxTtlMs) {
-    throw badRequest(
-      `ttlMs ${String(ttlMs)} exceeds lease.maxTtlMs (${String(config.lease.maxTtlMs)})`,
-    );
-  }
-}
-
 /** The gateway-owned subscriptions `createHttpApp` starts, attached to the returned app so a caller can dispose them on shutdown without this module exposing the tracker/notices instances themselves. */
 export interface HttpAppDisposable {
   readonly dispose: () => void;
@@ -153,7 +132,7 @@ export interface HttpAppDisposable {
  * `deps.dispatch(...)`, which runs the exact same input parsing, role check, `authorize` hook,
  * and startup-readiness parking the socket path gets -- this file no longer re-implements any
  * of those. What's left here: HTTP routing, request/response (de)serialization, and the
- * lease-request resource tracker/notice buffer ADR §11 keeps HTTP-specific until #72.
+ * lease-request resource's HTTP shape over the daemon's stored requests, and the notice buffer.
  */
 // fallow-ignore-next-line complexity -- route wiring for one focused resource surface; splitting it would scatter the shared closures (tracker, notices) across files for no clarity gain.
 export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposable {
@@ -162,18 +141,9 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   const tracker = new LeaseRequestTracker({
     clock: deps.clock,
     dispatch: deps.dispatch,
-    idGenerator: deps.idGenerator,
-    logger,
+    requests: deps.leaseRequests,
   });
   const notices = new LeaseNoticeBuffer(deps.ownerRoutedFacts);
-  // Replaces the tracker's own former direct `eventBus.subscribe("lease.released"/"lease.expired",
-  // ...)` -- ADR §8's "consumes the owner-routed facts" applies here too, not just to `notices`.
-  // `OwnerRoutedFactBus` already folds both events into a `lease-lost` fact carrying the lease
-  // id (`src/daemon/owner-routed-facts.ts`), so this is one subscription to that seam rather
-  // than two direct subscriptions to the raw bus.
-  const unsubscribeLeaseBookkeeping = deps.ownerRoutedFacts.subscribe((fact) => {
-    if (fact.type === "lease-lost") tracker.forgetLease(fact.leaseId);
-  });
 
   const agentAuth = requireAuth(deps.tokens);
 
@@ -236,15 +206,8 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     async (c) => {
       const identity = c.get("identity");
       const body = c.req.valid("json");
+      // Bounds and shape are `lease.request`'s own (`idempotencyKey`), checked by the dispatcher.
       const idempotencyKey = c.req.header("Idempotency-Key");
-      if (idempotencyKey !== undefined && idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
-        throw badRequest(
-          `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`,
-        );
-      }
-
-      requireTtlWithinCap(body.ttlMs, deps.config);
-
       const outcome = await tracker.submit(identity, toLeaseRequestInput(body), idempotencyKey);
       if (outcome.kind === "rejected") {
         return errorResponse(c, outcome.error);
@@ -258,7 +221,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const id = c.req.param("id");
     const initial = tracker.get(id);
     if (initial === undefined) throw unknownRequest(id);
-    requireOwnRequest(c.get("identity"), initial.requesterId);
+    requireOwnRequest(c.get("identity"), initial.ownerId);
 
     const waitParam = c.req.query("wait");
     if (waitParam !== undefined) {
@@ -280,7 +243,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const id = c.req.param("id");
     const initial = tracker.get(id);
     if (initial === undefined) throw unknownRequest(id);
-    requireOwnRequest(c.get("identity"), initial.requesterId);
+    requireOwnRequest(c.get("identity"), initial.ownerId);
 
     return pipeSse(c, deps.clock, {
       subscribe(send, end) {
@@ -303,7 +266,7 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     const id = c.req.param("id");
     const existing = tracker.get(id);
     if (existing === undefined) throw unknownRequest(id);
-    requireOwnRequest(c.get("identity"), existing.requesterId);
+    requireOwnRequest(c.get("identity"), existing.ownerId);
 
     const outcome = await tracker.cancel(id, c.get("identity"));
     if (outcome.kind === "cancelled") return c.body(null, 204);
@@ -586,25 +549,23 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
     });
   });
 
-  // `tracker`/`notices` both hold subscriptions for the app's lifetime -- exposed here rather
-  // than left to leak, so a caller composing this app into a longer-lived process (the daemon)
-  // can unsubscribe them on shutdown.
+  // `notices` holds a subscription for the app's lifetime -- exposed here rather than left to
+  // leak, so a caller composing this app into a longer-lived process (the daemon) can
+  // unsubscribe it on shutdown.
   return Object.assign(app, {
     dispose: () => {
-      unsubscribeLeaseBookkeeping();
-      tracker.dispose();
       notices.dispose();
     },
   });
 }
 
-/** HTTP-only guard for the lease-request tracker's resource (ADR §11: the envelope stays
- * HTTP-specific until #72, so there is no dispatcher `authorize` hook to reuse here the way
- * `lease.renew`/`lease.release`/`lease.cancel` do for core resources). Deliberately distinct
- * from the deleted general-purpose `requireOwnership` HTTP used to export from `auth.ts` --
- * every *core* resource's ownership now goes through the shared dispatcher instead. */
-function requireOwnRequest(identity: TokenIdentity, requesterId: string): void {
-  if (identity.role === "operator" || identity.requesterId === requesterId) return;
+/** Guard for the lease-request routes. The request is the daemon's stored record now, but there
+ * is still no dispatcher operation that reads one by id, so no `authorize` hook to reuse the way
+ * `lease.renew`/`lease.release`/`lease.cancel` do. Compared against the record's `ownerId` --
+ * the principal the daemon saw send it -- never its `requesterId`, which is the caller's claim.
+ * A token's principal is its `requesterId` (`buildHttpSession`). */
+function requireOwnRequest(identity: TokenIdentity, ownerId: string): void {
+  if (identity.role === "operator" || identity.requesterId === ownerId) return;
   throw forbidden("Not permitted to access another requester's resource");
 }
 

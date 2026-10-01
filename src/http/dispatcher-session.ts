@@ -44,6 +44,9 @@ export function buildHttpSession(
   identity: TokenIdentity,
   extra?: {
     readonly onProgress?: (progress: LeaseProgress) => void;
+    /** The lease-request route's own override: the stored request's id, the moment the daemon
+     * admits the request (or finds the stored one a repeat names). Inert for every other route. */
+    readonly onRequestAdmitted?: (requestId: string) => void;
     /** ADR 0005 §19a: the `POST /v1/leases/{id}/exec` route's own override -- each chunk
      * becomes one SSE `output` event on that request's response. Same per-call shape as
      * `onProgress`, and inert for every other route for the same reason.
@@ -67,6 +70,9 @@ export function buildHttpSession(
     principal: identity.requesterId,
     role: toRole(identity.role),
     ...(extra?.onProgress === undefined ? {} : { onProgress: extra.onProgress }),
+    ...(extra?.onRequestAdmitted === undefined
+      ? {}
+      : { onRequestAdmitted: extra.onRequestAdmitted }),
     ...(extra?.onOutput === undefined ? {} : { onOutput: extra.onOutput }),
     ...(extra?.onStarted === undefined ? {} : { onStarted: extra.onStarted }),
   };
