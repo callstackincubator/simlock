@@ -425,25 +425,43 @@ describe("operation input/output round trips", () => {
       modelAliases: {},
     };
     const image = { runtime: "35", tag: "google_apis", abi: "arm64-v8a" };
-    const long = "x".repeat(1025);
-    const rejected = [
-      { modelAliases: { [long]: ["pixel_8"] } },
-      { modelAliases: { "Pixel 8": [long] } },
-      { modelAliases: { "Pixel 8": Array.from({ length: 1025 }, (_, index) => `p${index}`) } },
-      {
-        modelAliases: Object.fromEntries(
-          Array.from({ length: 100_001 }, (_, index) => [`m${index}`, ["a"]]),
-        ),
-      },
-      { images: [{ ...image, runtime: long }] },
-      { images: [{ ...image, tag: long }] },
-      { images: [{ ...image, abi: long }] },
-      { images: Array.from({ length: 100_001 }, () => image) },
-    ];
-    for (const extra of rejected) {
-      expect(() =>
-        OPERATIONS["catalog.get"].output.parse({ platforms: [{ ...base, ...extra }] }),
-      ).toThrow();
+    const names = (count: number) => Array.from({ length: count }, (_, index) => `p${index}`);
+    const aliasedModels = (count: number) =>
+      Object.fromEntries(names(count).map((name) => [name, ["a"]]));
+    // Each pair is the largest value accepted and the smallest one refused.
+    const bounds = [
+      [
+        { modelAliases: { ["x".repeat(256)]: ["a"] } },
+        { modelAliases: { ["x".repeat(257)]: ["a"] } },
+      ],
+      [
+        { modelAliases: { "Pixel 8": ["x".repeat(256)] } },
+        { modelAliases: { "Pixel 8": ["x".repeat(257)] } },
+      ],
+      [{ modelAliases: { "Pixel 8": names(32) } }, { modelAliases: { "Pixel 8": names(33) } }],
+      [{ modelAliases: aliasedModels(4096) }, { modelAliases: aliasedModels(4097) }],
+      [
+        { images: [{ ...image, runtime: "x".repeat(128) }] },
+        { images: [{ ...image, runtime: "x".repeat(129) }] },
+      ],
+      [
+        { images: [{ ...image, tag: "x".repeat(128) }] },
+        { images: [{ ...image, tag: "x".repeat(129) }] },
+      ],
+      [
+        { images: [{ ...image, abi: "x".repeat(128) }] },
+        { images: [{ ...image, abi: "x".repeat(129) }] },
+      ],
+      [
+        { images: Array.from({ length: 1024 }, () => image) },
+        { images: Array.from({ length: 1025 }, () => image) },
+      ],
+    ] as const;
+    for (const [accepted, refused] of bounds) {
+      const parse = (extra: object) =>
+        OPERATIONS["catalog.get"].output.parse({ platforms: [{ ...base, ...extra }] });
+      expect(() => parse(accepted)).not.toThrow();
+      expect(() => parse(refused)).toThrow();
     }
   });
 

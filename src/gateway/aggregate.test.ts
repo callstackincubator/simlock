@@ -476,6 +476,69 @@ describe("aggregateCatalog", () => {
       expect(catalog.platforms[0]).not.toHaveProperty("images");
     });
 
+    it("does not list a model's own name, in any letter case, as another name for it", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [androidOn({ modelAliases: { "Pixel 8": ["PIXEL 8", "pixel_8"] } })],
+          id: "wrk_a",
+        }),
+      ]);
+
+      expect(catalog.platforms[0]?.modelAliases).toEqual({ "Pixel 8": ["pixel_8"] });
+    });
+
+    it("sorts the fleet's images whatever order the workers report them in", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [
+            androidOn({
+              images: [
+                { abi: "x86_64", runtime: "35", tag: "google_apis" },
+                { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+                { abi: "x86_64", runtime: "34", tag: "default" },
+              ],
+            }),
+          ],
+          id: "wrk_a",
+        }),
+      ]);
+
+      expect(catalog.platforms[0]?.images).toEqual([
+        { abi: "x86_64", runtime: "34", tag: "default" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+        { abi: "x86_64", runtime: "35", tag: "google_apis" },
+      ]);
+    });
+
+    it("keeps the fleet catalog inside the contract's bounds when the union of valid workers is not", () => {
+      const names = (prefix: string, count: number) =>
+        Array.from({ length: count }, (_, index) => `${prefix}${index}`);
+      const worker = (prefix: string) =>
+        androidOn({
+          images: names(prefix, 1024).map((tag) => ({ abi: "x86_64", runtime: "34", tag })),
+          modelAliases: {
+            ...Object.fromEntries(names(`${prefix}m`, 4095).map((model) => [model, ["x"]])),
+            "Pixel 8": names(prefix, 32),
+          },
+          models: ["Pixel 8", ...names(`${prefix}m`, 4095)],
+        });
+      const valid = [worker("a"), worker("b")];
+      for (const entry of valid) {
+        expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).not.toThrow();
+      }
+
+      const catalog = aggregateCatalog([
+        view({ catalog: [valid[0]!], id: "wrk_a" }),
+        view({ catalog: [valid[1]!], id: "wrk_b" }),
+      ]);
+
+      expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+      const platform = catalog.platforms[0];
+      expect(platform?.images).toHaveLength(1024);
+      expect(Object.keys(platform?.modelAliases ?? {})).toHaveLength(4096);
+      expect(platform?.modelAliases["Pixel 8"]).toHaveLength(32);
+    });
+
     it("drops an image whose runtime the reporting worker does not list", () => {
       const catalog = aggregateCatalog([
         view({

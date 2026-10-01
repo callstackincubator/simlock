@@ -41,7 +41,8 @@ specification those changes are written against.
 ### ⚠ BREAKING CHANGES
 
 - **The daemon protocol is now 6**, `{min: 6, max: 6}`, with no compatibility
-  shim. ADR 0008 makes the catalog's `modelRuntimes` required, so a gateway
+  shim. ADR 0008 makes the catalog's `modelRuntimes` and `modelAliases`
+  required, so a gateway
   marks a worker on 5 `incompatible` with both ranges shown and sends it
   nothing; upgrade the worker. A client built against 5 gets
   `PROTOCOL_VERSION_UNSUPPORTED` from `hello`, as with every earlier bump.

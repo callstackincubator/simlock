@@ -1125,10 +1125,40 @@ describe("AndroidDriver", () => {
     expect(catalog.runtimes).toEqual(["33", "35"]);
   });
 
-  it("does not list an image that is not installed, whatever the download policy", async () => {
+  it("lists images by API level, then tag, then ABI, whatever order the disk returns them in", async () => {
+    // Directory listings come back in reverse, so a list read straight off the disk would be in
+    // exactly the wrong order at every level.
+    const filesystem = await androidFilesystem(
+      {
+        images: [
+          ["9", "google_apis", "x86_64"],
+          ["10", "default", "x86_64"],
+          ["10", "google_apis", "arm64-v8a"],
+          ["10", "google_apis", "x86_64"],
+        ],
+      },
+      new ReversedReaddirFilesystem(),
+    );
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.images).toEqual([
+      { abi: "x86_64", runtime: "9", tag: "google_apis" },
+      { abi: "x86_64", runtime: "10", tag: "default" },
+      { abi: "arm64-v8a", runtime: "10", tag: "google_apis" },
+      { abi: "x86_64", runtime: "10", tag: "google_apis" },
+    ]);
+  });
+
+  it("does not list an image that is not installed, even one sdkmanager offers", async () => {
     // Only API 34 is installed. An API 35 image is one `sdkmanager` run away, and the driver
-    // would install it for a lease that allows downloads; the catalog takes no policy, never asks
-    // `sdkmanager`, and lists the image on disk only.
+    // would install it for a lease that allows downloads; the catalog never asks `sdkmanager`
+    // and lists the image on disk only. That no download policy reaches `listCatalog` is
+    // proved in the dispatcher's tests.
     const filesystem = await androidFilesystem({ images: [["34", "google_apis", "arm64-v8a"]] });
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
@@ -2987,6 +3017,13 @@ class ReadFailureFilesystem extends MemoryFilesystem {
       throw this.error;
     }
     return super.readFile(path);
+  }
+}
+
+/** Returns every directory listing in reverse, standing in for a disk with no listing order. */
+class ReversedReaddirFilesystem extends MemoryFilesystem {
+  override async readdir(path: string): Promise<string[]> {
+    return (await super.readdir(path)).reverse();
   }
 }
 

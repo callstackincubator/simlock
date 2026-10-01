@@ -1713,6 +1713,40 @@ describe("CLI: catalog", () => {
     );
   });
 
+  it("prints (none) for a platform that has images but none installed", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  images: [],
+                  modelAliases: {},
+                  modelRuntimes: {},
+                  models: [],
+                  platform: "android",
+                  runtimes: [],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: android",
+        "  Runtimes: (none) (default: (none))",
+        "  Models: (none)",
+        "  Images: (none)",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("prints a model's other names and each image", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({

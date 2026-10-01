@@ -683,7 +683,10 @@ union of what each connected worker pairs it with, never the cross product
 of fleet models and fleet runtimes: one worker with the model and another
 with the runtime is not a leasable pair. `modelAliases` is the union per
 model, deduplicated ignoring case, and `images` the union by runtime, tag,
-and ABI, absent when no worker reports the field. Routing still reads only
+and ABI, absent when no worker reports the field. Each worker's lists are
+within the contract's bounds but their union may not be, so the gateway
+cuts the sorted union to those bounds rather than answer with a catalog its
+own clients would refuse. Routing still reads only
 `models` and `runtimes`.
 
 Within a worker, each driver decides which installed runtimes pair with a

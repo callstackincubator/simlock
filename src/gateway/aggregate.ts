@@ -5,7 +5,7 @@
  */
 import type { z } from "zod";
 
-import { OPERATIONS, type Platform } from "../contract/index.js";
+import { CATALOG_LIST_LIMITS, OPERATIONS, type Platform } from "../contract/index.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
 
@@ -139,7 +139,9 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
  * another having a runtime does not make the pair leasable anywhere.
  *
  * `modelAliases` is the union per model, deduplicated ignoring case. `images` is the union by
- * runtime, tag, and ABI, and is absent when no worker reports the field at all.
+ * runtime, tag, and ABI, and is absent when no worker reports the field at all. Each worker's
+ * lists fit the contract's bounds but their union may not, so both are cut to those bounds after
+ * sorting: an answer its own clients refuse would lose the whole catalog, not a tail of it.
  */
 export function aggregateCatalog(views: readonly WorkerView[], platform?: Platform): CatalogOutput {
   const byPlatform = indexCatalogs(views, platform);
@@ -257,10 +259,17 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
       : {
           images: [...bucket.images]
             .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+            .slice(0, CATALOG_LIST_LIMITS.images)
             .map(([, image]) => image),
         }),
     modelAliases: Object.fromEntries(
-      [...bucket.modelAliases].map(([model, aliases]) => [model, [...aliases.values()].sort()]),
+      [...bucket.modelAliases]
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .slice(0, CATALOG_LIST_LIMITS.aliasedModels)
+        .map(([model, aliases]) => [
+          model,
+          [...aliases.values()].sort().slice(0, CATALOG_LIST_LIMITS.aliasesPerModel),
+        ]),
     ),
     modelRuntimes: Object.fromEntries(
       [...bucket.modelRuntimes].map(([model, paired]) => [model, [...paired].sort()]),

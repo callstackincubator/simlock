@@ -291,6 +291,16 @@ const CATALOG_ALIASED_MODELS_MAX = 4096;
 const CATALOG_IMAGE_FIELD_MAX = 128;
 const CATALOG_IMAGES_MAX = 1024;
 
+/**
+ * The list bounds above, for a producer that merges lists the schema checked one by one: a
+ * gateway's union of valid worker catalogs must itself fit, or its own clients refuse it.
+ */
+export const CATALOG_LIST_LIMITS = {
+  aliasedModels: CATALOG_ALIASED_MODELS_MAX,
+  aliasesPerModel: CATALOG_ALIASES_PER_MODEL_MAX,
+  images: CATALOG_IMAGES_MAX,
+} as const;
+
 const catalogImageSchema = z.object({
   runtime: z.string().max(CATALOG_IMAGE_FIELD_MAX),
   tag: z.string().max(CATALOG_IMAGE_FIELD_MAX),
