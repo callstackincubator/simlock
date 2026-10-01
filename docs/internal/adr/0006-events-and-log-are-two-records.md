@@ -1,10 +1,13 @@
 # 0006. Events and the daemon log are two records
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Proposed
 - **Date:** 2026-10-01
 - **Issue:** [#168](https://github.com/callstackincubator/simlock/issues/168),
   [#169](https://github.com/callstackincubator/simlock/issues/169)
-- **Supersedes:** nothing
+- **Supersedes:** nothing. Narrows [ADR
+  0003](0003-one-typed-daemon-contract-behind-every-frontend.md) §11:
+  `simlock events --since` joins `daemon logs` as a command that reads its
+  file directly when no daemon is running.
 
 ## Context
 
@@ -23,10 +26,10 @@ size. Their wording and fields carry no contract.
 
 Neither answers "what happened to this lease or device" after the fact. The
 ring is empty after a restart and overwritten within minutes on a busy
-gateway. `daemon.log` survives a restart, but the only lease or device facts
-in it are two events copied there by a bus subscriber (`component.installed`,
-`device.slimmed`). It records a socket request only when one fails, and it
-drops the error of most background failures.
+gateway. `daemon.log` survives a restart, but only two events are copied into
+it, by a bus subscriber (`component.installed`, `device.slimmed`). An HTTP
+request leaves a line there; a socket request leaves one only when it fails
+unexpectedly. Most background failures drop their error.
 
 The obvious repair is to merge the two: one stream, saved as `daemon.log`,
 with a filter deciding what `simlock events` shows. This record says why that
@@ -36,7 +39,9 @@ is not what Simlock does, and what it does instead.
 
 ### 1. Two records, two producers
 
-The event bus and the `Logger` stay separate. Neither is built on the other.
+The event bus and the `Logger` stay separate. They may share a file sink
+adapter, but no event goes through the `Logger` and no log line goes through
+the bus.
 An event is a fact about state Simlock owns. A log line is a diagnostic about
 what the daemon was asked to do and what went wrong while doing it.
 
@@ -56,9 +61,9 @@ No subscriber copies events into `daemon.log`. The two existing copies,
 `component.installed` and `device.slimmed`, are removed.
 
 The log may record that an operation was asked for and how it ended: its
-name, who asked, how long it took, its error code. That is a record of the
-request. The fact itself, which lease was granted on which device, is in the
-event file only.
+name, who asked, the lease it named, how long it took, its error code. That
+is a record of the request, not of what it changed. What changed, a lease
+granted on a device or a device reclaimed, is in the event file only.
 
 A background failure whose error text already travels on an event
 (`device.purge-failed`, `device.recovery-failed`,
@@ -89,14 +94,16 @@ contract. Its message and fields may change in any release.
 `simlock daemon logs` reads the log. Neither prints the other. Someone who
 needs both reads both and joins them by timestamp.
 
-Both files can be read with no daemon running. The CLI then reads the event
-file directly, the way `simlock daemon logs` already reads the log.
+Both files can be read with no daemon running. `simlock events --since` then
+reads the event file directly, the way `simlock daemon logs` already reads
+the log.
 
 ### 7. The event file is an observer
 
 The writer subscribes to the bus like any other observer. If the file cannot
-be opened or written, the daemon logs one error and carries on. A failed
-write never fails or delays a lease operation.
+be opened or written, the daemon logs one error, stops writing for the rest
+of the run, and carries on with the ring alone. A failed write never fails a
+lease operation.
 
 ## Consequences
 
@@ -114,12 +121,13 @@ write never fails or delays a lease operation.
 - An event payload is now written to disk. A secret in a payload is a defect
   in the event and is fixed where it is emitted
   ([#170](https://github.com/callstackincubator/simlock/issues/170)).
-- `daemon.log` gains request and failure lines (#169) and stops being
-  low-volume.
-- The docs change with the code, not ahead of it. Until #168 and #169 land,
-  the docs describe today's behaviour and this record is the only statement
-  of the target. Each feature's PR updates the docs it makes true, events
-  rule 7 among them.
+- The event file is readable by whoever can read the data directory, like
+  `daemon.log`. The admin role on `events.replay` guards the socket and HTTP,
+  not the file.
+- `daemon.log` gains a line per operation on every transport, and a line per
+  background failure (#169). It stops being low-volume.
+- Events rule 7 changes: an event is appended to the ring buffer and to the
+  event file.
 
 ## Alternatives considered
 
