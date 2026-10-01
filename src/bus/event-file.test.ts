@@ -219,25 +219,39 @@ describe("readEventFile", () => {
     expect(read.map((entry) => entry.seq)).toEqual([1, 2, 3, 4]);
   });
 
-  it("returns once a generation that shows up in both reads", async () => {
+  it("returns once a generation that shows up in both reads, and skips none", async () => {
     const filesystem = await filesystemWith({
-      "/data/events.jsonl": lines(envelope(1, 100), envelope(2, 200)),
+      "/data/events.jsonl": lines(envelope(2, 200), envelope(3, 300)),
+      "/data/events.jsonl.1": lines(envelope(1, 100)),
     });
-    // A rotation lands between the two reads: what was current is the rotated generation by
-    // the time it is read, and the new current file holds one later event.
+    // A rotation lands between the two reads, whichever file is read first: what was current
+    // becomes the rotated generation, and the new current file holds one later event.
     const read = filesystem.readFile.bind(filesystem);
+    let rotated = false;
     vi.spyOn(filesystem, "readFile").mockImplementation(async (path) => {
       const contents = await read(path);
-      if (path === "/data/events.jsonl") {
-        await filesystem.writeFileAtomic("/data/events.jsonl.1", contents);
-        await filesystem.writeFileAtomic("/data/events.jsonl", lines(envelope(3, 300)));
+      if (!rotated) {
+        rotated = true;
+        const current = await read("/data/events.jsonl");
+        await filesystem.writeFileAtomic("/data/events.jsonl.1", current);
+        await filesystem.writeFileAtomic("/data/events.jsonl", lines(envelope(4, 400)));
       }
       return contents;
     });
 
     const result = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
 
-    expect(result.map((entry) => entry.seq)).toEqual([1, 2]);
+    expect(result.map((entry) => entry.seq)).toEqual([2, 3]);
+  });
+
+  it("skips a JSON line that is not an envelope and returns the lines around it", async () => {
+    const filesystem = await filesystemWith({
+      "/data/events.jsonl": `${lines(envelope(1, 100))}null\n[]\n{"seq":"2"}\n${lines(envelope(3, 300))}`,
+    });
+
+    const read = await readEventFile(filesystem, "/data/events.jsonl", { sinceTs: 0 });
+
+    expect(read.map((entry) => entry.seq)).toEqual([1, 3]);
   });
 
   it("skips a line that is not JSON and returns the lines around it", async () => {

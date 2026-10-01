@@ -2759,6 +2759,31 @@ describe("CLI: events history", () => {
     expect(printed(output.stdout)).toEqual([envelope(2, hour + 500)]);
   });
 
+  it("events --since reports a daemon that refuses the handshake rather than reading the file", async () => {
+    const output = outputCapture();
+    let fileRead = false;
+    const exitCode = await runCli(
+      ["events", "--since", "1h"],
+      output.environmentWith({
+        connectExistingAdmin: async () => {
+          throw new SimlockError("PROTOCOL_VERSION_UNSUPPORTED", "protocol", "no overlap", {
+            client: { min: 5, max: 5 },
+            daemon: { min: 4, max: 4 },
+            daemonVersion: "0.9.0",
+          });
+        },
+        readEventFile: async () => {
+          fileRead = true;
+          return [];
+        },
+      }),
+    );
+
+    expect(exitCode).not.toBe(0);
+    expect(fileRead).toBe(false);
+    expect(output.stderr).toContain("PROTOCOL_VERSION_UNSUPPORTED");
+  });
+
   it("events --since with a daemon listening replays through the daemon", async () => {
     const output = outputCapture();
     const asked: unknown[] = [];

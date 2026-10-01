@@ -23,12 +23,18 @@ export async function readEventFile(
   for (const line of [...rotated, ...current]) {
     const envelope = parseEnvelope(line);
     if (envelope === undefined || envelope.timestamp <= sinceTs) continue;
-    const key = `${envelope.seq}:${envelope.timestamp}`;
+    const key = eventKey(envelope);
     if (seen.has(key)) continue;
     seen.add(key);
     envelopes.push(envelope);
   }
   return envelopes;
+}
+
+/** What identifies one event across the ring, the file and a live push: `seq` restarts with
+ * every daemon, so it is paired with the timestamp. */
+export function eventKey(event: { readonly seq: number; readonly timestamp: number }): string {
+  return `${event.seq}:${event.timestamp}`;
 }
 
 async function readLines(filesystem: Filesystem, path: string): Promise<string[]> {

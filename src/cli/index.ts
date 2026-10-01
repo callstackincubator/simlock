@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { EVENT_FILE_NAME, type EventEnvelope, readEventFile } from "../bus/index.js";
+import { EVENT_FILE_NAME, type EventEnvelope, eventKey, readEventFile } from "../bus/index.js";
 import { loadConfig, type ConfigOverrides } from "../core/index.js";
 import {
   IpcError,
@@ -1490,10 +1490,6 @@ async function followEvents(
   }
   await waitForTermination(environment.signals).settled;
   await unsubscribe();
-}
-
-function eventKey(event: { readonly seq: number; readonly timestamp: number }): string {
-  return `${event.seq}:${event.timestamp}`;
 }
 
 /**

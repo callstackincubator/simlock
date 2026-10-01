@@ -1053,8 +1053,8 @@ Print business events (see [EVENTS.md](EVENTS.md)) as JSON lines.
   in-memory limit, back to the oldest event the file still holds. The file
   is capped by `eventLog.rotateBytes` (see
   [CONFIGURATION.md](CONFIGURATION.md)); the oldest events go first.
-- `--since` with no daemon running reads the file directly and does not
-  start a daemon.
+- `--since` without `--follow`, with no daemon running, reads the file
+  directly and does not start a daemon. `--follow` starts one as usual.
 - `--follow` keeps streaming live events. With `--since`, it prints that
   history first and then streams, with no event missing or printed twice
   where the two meet.

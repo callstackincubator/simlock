@@ -220,7 +220,8 @@ those changes add, alongside the breaking changes above.
   one JSON line each, so the history survives a daemon restart or crash.
   `simlock events --since` and `GET /v1/events?since=` read it, reaching past
   a restart and past the 1000 events kept in memory; with no daemon running,
-  `simlock events --since` reads the file and starts none. `--since` with
+  `simlock events --since` (without `--follow`) reads the file and starts
+  none. `--since` with
   `--follow` prints that history, then streams, with nothing lost or repeated
   where they meet. The file is capped by the new `eventLog.rotateBytes`
   (default 5 MiB, one rotated generation). `daemon.log` no longer gets its own
