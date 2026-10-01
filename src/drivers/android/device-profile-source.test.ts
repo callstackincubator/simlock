@@ -239,6 +239,24 @@ describe("DeviceProfileRegistry", () => {
     });
   });
 
+  it("does not read a later source once an earlier one resolves the model", async () => {
+    const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
+    const diagnostics: DeviceProfileSourceDiagnostic[] = [];
+    const user = new UserDeviceProfileSource(
+      devicesXmlPath,
+      await filesystemWithDevicesXml("not even close to xml {{{"),
+      (diagnostic) => diagnostics.push(diagnostic),
+    );
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(avdmanager, runner),
+      user,
+    ]);
+
+    await expect(registry.resolve("pixel_8")).resolves.toMatchObject({ name: "Pixel 8" });
+    // A read of the malformed devices.xml would have reported it.
+    expect(diagnostics).toEqual([]);
+  });
+
   it("resolves a model by any of its names, in any letter case", async () => {
     const runner = new ScriptedProcessRunner([
       processResult(pixelDevices),

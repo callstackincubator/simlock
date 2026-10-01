@@ -527,16 +527,20 @@ describe("aggregateCatalog", () => {
         expect(() => OPERATIONS["catalog.get"].output.parse({ platforms: [entry] })).not.toThrow();
       }
 
+      // Worker b connects first, so what survives the cut is decided by sort order, not arrival.
       const catalog = aggregateCatalog([
-        view({ catalog: [valid[0]!], id: "wrk_a" }),
         view({ catalog: [valid[1]!], id: "wrk_b" }),
+        view({ catalog: [valid[0]!], id: "wrk_a" }),
       ]);
 
       expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
       const platform = catalog.platforms[0];
       expect(platform?.images).toHaveLength(1024);
-      expect(Object.keys(platform?.modelAliases ?? {})).toHaveLength(4096);
-      expect(platform?.modelAliases["Pixel 8"]).toHaveLength(32);
+      expect(platform?.images?.every((image) => image.tag.startsWith("a"))).toBe(true);
+      const aliasedModels = Object.keys(platform?.modelAliases ?? {});
+      expect(aliasedModels).toHaveLength(4096);
+      expect(aliasedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
+      expect(platform?.modelAliases["Pixel 8"]).toEqual(names("a", 32).sort());
     });
 
     it("drops an image whose runtime the reporting worker does not list", () => {

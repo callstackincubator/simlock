@@ -1154,6 +1154,20 @@ describe("AndroidDriver", () => {
     ]);
   });
 
+  it("does not list a dot entry under system-images as a tag or an ABI", async () => {
+    const filesystem = await androidFilesystem({ images: [["34", "google_apis", "arm64-v8a"]] });
+    await filesystem.writeFileAtomic(`${sdk}/system-images/android-34/.DS_Store`, "");
+    await filesystem.writeFileAtomic(`${sdk}/system-images/android-34/google_apis/.DS_Store`, "");
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.images).toEqual([{ abi: "arm64-v8a", runtime: "34", tag: "google_apis" }]);
+  });
+
   it("does not list an image that is not installed, even one sdkmanager offers", async () => {
     // Only API 34 is installed. An API 35 image is one `sdkmanager` run away, and the driver
     // would install it for a lease that allows downloads; the catalog never asks `sdkmanager`

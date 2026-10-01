@@ -321,7 +321,7 @@ export const platformCatalogSchema = z.object({
   modelRuntimes: z.record(z.string(), z.array(z.string())),
   /**
    * ADR 0008 §1: for a name in `models`, the other names a lease request may use for it, in any
-   * letter case -- the AVD id beside an Android display name. Only models that have another
+   * letter case -- a device id a driver accepts beside a display name. Only models that have another
    * name appear. On a gateway it is the union per model of what each worker lists.
    */
   modelAliases: z

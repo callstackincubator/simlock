@@ -1313,9 +1313,10 @@ export class AndroidDriver implements Driver {
         continue;
       }
       const apiPath = `${root}/${apiDirectory}`;
-      for (const tag of await this.#filesystem.readdir(apiPath)) {
+      // A dot entry (`.DS_Store`, an editor's swap file) is never a tag or an ABI.
+      for (const tag of (await this.#filesystem.readdir(apiPath)).filter(isVisibleEntry)) {
         const tagPath = `${apiPath}/${tag}`;
-        for (const abi of await this.#filesystem.readdir(tagPath)) {
+        for (const abi of (await this.#filesystem.readdir(tagPath)).filter(isVisibleEntry)) {
           const path = `${tagPath}/${abi}`;
           images.push({
             abi,
@@ -1953,6 +1954,10 @@ function compareCommandLineToolVersions(left: string, right: string): number {
  */
 function installedApiLevels(images: readonly SystemImage[]): string[] {
   return [...new Set(images.map((image) => image.apiLevel))].sort(compareApiLevels);
+}
+
+function isVisibleEntry(name: string): boolean {
+  return !name.startsWith(".");
 }
 
 function compareCatalogImages(left: DriverCatalogImage, right: DriverCatalogImage): number {

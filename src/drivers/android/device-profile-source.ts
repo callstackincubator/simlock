@@ -97,12 +97,19 @@ export class DeviceProfileRegistry {
     return { modelAliases, models: [...listed.values()].map((profile) => profile.name) };
   }
 
+  /**
+   * Reads sources in order and stops at the first one with a match, so a built-in model never
+   * opens devices.xml. The first match in the first source that has one is the first match in
+   * the whole list, so this agrees with `catalog`.
+   */
   async resolve(model: string): Promise<DeviceProfile> {
-    const profile = matchProfile(await this.#profiles(), model);
-    if (profile === undefined) {
-      throw new UnknownModelError("android", model);
+    for (const source of this.#sources) {
+      const profile = matchProfile(await source.profiles(), model);
+      if (profile !== undefined) {
+        return profile;
+      }
     }
-    return profile;
+    throw new UnknownModelError("android", model);
   }
 
   async #profiles(): Promise<readonly DeviceProfile[]> {

@@ -177,8 +177,8 @@ and iOS has none. An Android entry also carries `images`, every installed
 system image with its API level (`runtime`, a value from `runtimes`), `tag`,
 and `abi`, including an image whose ABI the host cannot run natively; an iOS
 entry has no `images`. On a gateway `modelAliases` is the union per model and
-`images` the union of each worker's images, absent when no worker reports
-any. The gateway does not yet route by another name: send it the name from
+`images` the union of each worker's images, absent when no worker's entry
+for that platform has an `images` field. The gateway does not yet route by another name: send it the name from
 `models`.
 
 ```json
