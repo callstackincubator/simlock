@@ -45,7 +45,7 @@ describe("viewLoadKey", () => {
     for (const other of changed) expect(viewLoadKey(other)).not.toBe(base);
   });
 
-  it("does not depend on the order fields were written in", () => {
+  it("does not depend on the order the capacity fields were written in", () => {
     const base = view();
     const capacity = Object.fromEntries(
       Object.entries(statusFixture().capacity).reverse(),

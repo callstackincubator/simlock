@@ -563,7 +563,9 @@ export class FleetLeaseCoordinator {
   /**
    * A brand-new waiter's admission. **Architecture rule 10: `noWait` is enforced in exactly one
    * place.** Every admission goes through `#dispatch`'s one ordered walk, carrying this waiter
-   * as its `candidate` -- there is no second, out-of-order look of its own.
+   * as its `candidate` -- there is no second, out-of-order look of its own. A `noWait` waiter
+   * whose worker answered `NO_CAPACITY` comes back through here too, for its one more walk
+   * (ADR 0009 §5), so that rejection is decided here as well.
    *
    * There used to be two paths here: a direct `routing.select` when the queue was empty, and an
    * enqueue-then-dispatch when it was not. They answered the same question and drifted, exactly
@@ -635,8 +637,8 @@ export class FleetLeaseCoordinator {
    * recursion -- the outer walk iterates a snapshot and has already claimed workers, so a waiter
    * freed mid-pass would never be reconsidered (round 4 review, finding 6).
    *
-   * `candidate` is a brand-new waiter with no queue membership yet; it walks last and the return
-   * value says whether it was attempted. See `#dispatchPass`.
+   * `candidate` is the waiter `#admit` is admitting; it walks last and the return value says
+   * whether it was attempted. See `#dispatchPass`.
    *
    * The deferred passes above deliberately carry **no** candidate, and that is not a dropped
    * one (round 5 review): a nested `#dispatch` can only be raised from inside a `#beginAttempt`,
@@ -673,14 +675,14 @@ export class FleetLeaseCoordinator {
   /**
    * One ordered, oldest-first walk -- the single place a waiter is matched to a worker.
    *
-   * `candidate` is a brand-new waiter that has no queue membership yet (`#admit`'s). It walks
+   * `candidate` is `#admit`'s waiter, usually brand new with no queue membership yet. It walks
    * **last**, because it is the newest: that is what keeps ADR §10's single fleet FIFO honest,
    * since an admission can never take a slot an already-queued waiter would have had. Returns
    * whether the candidate was attempted, which is what lets `#admit` tell "nothing could serve
    * it" from "it was attempted" -- the attempt, not `#admit`, settles a `noWait` caller whose
    * worker refuses it, and `waiter.state` alone cannot distinguish the two (round 4 review,
-   * finding 2). `candidate` may also be a waiter whose attempt was just refused (`#attempt`'s
-   * one more walk for a `noWait` caller); it is not walked twice if it is already queued.
+   * finding 2). `candidate` may also be a `noWait` waiter whose attempt was just refused, on its
+   * one more walk; if it is already queued it walks in its queue position only, never twice.
    *
    * A worker that refused a waiter is left out of that waiter's views while its view is
    * unchanged (`#refused`, ADR 0009 §5). This is the one place that exclusion is applied, the
@@ -694,7 +696,7 @@ export class FleetLeaseCoordinator {
         ? this.#queue.list()
         : [...this.#queue.list(), candidate];
     for (const waiter of waiters) {
-      // The candidate is not in the queue yet, so it has no `queued` state to check.
+      // The candidate is mid-admission, not `queued`, even when it holds a queue position.
       if (waiter !== candidate && waiter.state !== "queued") continue;
       const eligibleWorkers = this.options.views
         .views()
@@ -846,17 +848,9 @@ export class FleetLeaseCoordinator {
         if (waiter.options.noWait === true) {
           this.#refreshView(workerId);
           // ADR 0009 §5: one more walk, with this worker left out until its view changes. A
-          // `noWait` caller never asked to wait for that change.
-          if (!this.#dispatch(waiter)) {
-            this.#reject(
-              waiter,
-              new DispatchError(
-                "NO_CAPACITY",
-                "No worker in the fleet can currently serve this request",
-              ),
-              "no-wait",
-            );
-          }
+          // `noWait` caller never asked to wait for that change, so `#admit` rejects it if no
+          // worker is picked.
+          this.#admit(waiter);
           return;
         }
         this.#staleView(waiter, workerId);

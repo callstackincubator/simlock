@@ -538,7 +538,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(coordinator.queueDepth).toBe(1);
   });
 
-  it("rejects a noWait request refused by its only worker with NO_CAPACITY after one more walk, and reports lease.rejected no-wait", async () => {
+  it("rejects a noWait request refused by its only worker with NO_CAPACITY, reports lease.rejected no-wait, and refreshes that worker's view", async () => {
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_a", client);
@@ -551,8 +551,47 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ).rejects.toMatchObject({ code: "NO_CAPACITY" });
 
     expect(rejected).toEqual([expect.objectContaining({ reason: "no-wait" })]);
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
     expect(coordinator.queueDepth).toBe(0);
+  });
+
+  it("sends a queued noWait request refused by one worker to only one other worker in the next walk", async () => {
+    // The refused waiter is already in the queue (it first met a worker with no client yet), so
+    // the walk must not offer it twice: once in its queue position and once as the candidate.
+    const { coordinator, directory, workers } = harness();
+    const first = new ScriptedWorkerClient();
+    const second = new ScriptedWorkerClient();
+    const third = new ScriptedWorkerClient();
+    directory.add("wrk_a", first);
+    directory.add("wrk_b", second);
+    directory.add("wrk_c", third);
+    const capacity = statusFixture().capacity;
+    connectWorker(workers, "wrk_a", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 6 } },
+    });
+    connectWorker(workers, "wrk_b", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    connectWorker(workers, "wrk_c", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 4 } },
+    });
+    directory.reachableButNoClient.add("wrk_a");
+    second.requestLeaseQueue.push({ kind: "hang" });
+    third.requestLeaseQueue.push({ kind: "hang" });
+
+    void coordinator.request(REQUEST, requestOptions({ noWait: true }));
+    await tick();
+    expect(coordinator.queueDepth).toBe(1);
+
+    directory.reachableButNoClient.delete("wrk_a");
+    workers.refresh("wrk_a", {});
+    await tick();
+
+    const leaseRequests = (client: ScriptedWorkerClient) =>
+      client.calls.filter((call) => call.startsWith("lease.request")).length;
+    expect(leaseRequests(first)).toBe(1);
+    expect(leaseRequests(second) + leaseRequests(third)).toBe(1);
   });
 
   it("grants a noWait request refused by one worker from another in the next walk", async () => {
