@@ -113,9 +113,10 @@ describe("followLog", () => {
     const run = await start(filesystem);
 
     filesystem.defineFailure(LOG, "EACCES");
+    const rejected = expect(run.done).rejects.toMatchObject({ code: "EACCES" });
     await run.tick();
 
-    await expect(run.done).rejects.toMatchObject({ code: "EACCES" });
+    await rejected;
     expect(run.clock.pendingTimerCount).toBe(0);
     expect(run.signals.listenerCount("SIGINT")).toBe(0);
     expect(run.signals.listenerCount("SIGTERM")).toBe(0);
