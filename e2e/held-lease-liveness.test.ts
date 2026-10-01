@@ -114,7 +114,7 @@ describe("lease liveness & restart", () => {
       "flow5-restart",
     ]);
     const grant = JSON.parse(await holder.firstStdoutLine()) as {
-      lease: { id: string };
+      lease: { id: string; ttlDeadline: number };
       device: { driverDeviceId: string };
     };
     await waitForLeaseCount(env, 1);
@@ -143,7 +143,17 @@ describe("lease liveness & restart", () => {
     // deadline: the record persisted, and so did the deadline it carried.
     await waitForLeaseCount(env, 0, { timeout: 25_000 });
     await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
-    await env.expectEvents(["lease.expired"]);
+    const recorded = await env.expectEvents(["lease.expired"]);
+    // On that deadline, not merely eventually: the wait above has slack for a slow machine, so
+    // without this a timer restored from the wrong deadline (a fresh TTL from restart, say)
+    // would still pass. The upper bound is scheduling slack, far below the TTL itself.
+    const expired = recorded.find(
+      (entry) =>
+        entry.event === "lease.expired" &&
+        (entry.payload as { leaseId?: string }).leaseId === grant.lease.id,
+    );
+    expect(expired?.timestamp).toBeGreaterThanOrEqual(grant.lease.ttlDeadline);
+    expect(expired?.timestamp).toBeLessThan(grant.lease.ttlDeadline + 3_000);
   });
 
   it("survives a graceful daemon stop and can be renewed from a later invocation", async () => {
