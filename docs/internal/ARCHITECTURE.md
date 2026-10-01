@@ -224,16 +224,17 @@ applies to HTTP automatically because there is only one code path to fix.
 
 **Protocol versions are negotiated as `{min, max}` ranges** and honestly:
 a range widens only when a compatibility path is actually kept (ADR 0003 §6).
-Two changes have moved it since. ADR 0004 removed `lease.heartbeat` and
+Four changes have moved it since. ADR 0004 removed `lease.heartbeat` and
 `mode` from the contract with no shim behind them, taking the wire to
 protocol 4; ADR 0005 adds `device.exec`, its `output` push family, and a
 `mode` field `status.get` now always carries, again with no compatibility
 path kept, taking it to 5; ADR 0008 makes the catalog's `modelRuntimes`
-required, taking it to 6. So the range both sides
-advertise is `{min: 6, max: 6}`, an older client and a current daemon simply
+required, taking it to 6; ADR 0007 makes every device report its device mode
+as a required `mode`, taking it to 7. So the range both sides advertise is
+`{min: 7, max: 7}`, an older client and a current daemon simply
 do not overlap, and `hello` fails with `PROTOCOL_VERSION_UNSUPPORTED` naming
 both ranges. The same negotiation runs over a worker's uplink, which is why a
-worker older than ADR 0008 shows up in a gateway's views as `incompatible`
+worker older than ADR 0007 shows up in a gateway's views as `incompatible`
 rather than as a mystery (see [Gateway and worker
 modes](#gateway-and-worker-modes-adr-0005)). `daemon.stop` stays the frozen
 exception, accepted at any version the daemon has ever spoken, so the upgrade
@@ -731,8 +732,9 @@ emits its own facts — `worker.connected`, `worker.disconnected`,
   widens only where a compatibility path is actually kept — so **every worker
   older than ADR 0005 is `incompatible` by range**, by construction rather
   than by accident. ADR 0008 moves it again, to `{min: 6, max: 6}`, because
-  the catalog's `modelRuntimes` is required; a worker on 5 is `incompatible`
-  the same way. That is the ordinary upgrade path, not a failure mode:
+  the catalog's `modelRuntimes` is required, and ADR 0007 to
+  `{min: 7, max: 7}`, because a device's `mode` is required; a worker on an
+  older version is `incompatible` the same way. That is the ordinary upgrade path, not a failure mode:
   upgrade the worker. An incompatible worker is marked `incompatible` in its
   view with both ranges shown and is never dispatched to, and it is not
   hidden either — that is the machine an operator has to go and upgrade, and

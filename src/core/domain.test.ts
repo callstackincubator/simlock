@@ -9,6 +9,7 @@ const baseDevice: Omit<DeviceRecord, "state"> = {
   driverDeviceId: "driver_test",
   id: "dev_test",
   spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+  mode: "full",
 };
 
 describe("transition", () => {

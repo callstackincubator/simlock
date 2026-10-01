@@ -947,12 +947,11 @@ describe("IosSimctlDriver", () => {
         driverData,
       }),
     ).resolves.toEqual({
-      // No `featureProfile` here: slim mode isn't configured at all for this driver, and
-      // `DriverDevice.featureProfile`'s contract is that `undefined` means "this driver does
-      // not reduce anything" -- only true while slim mode is off (finding #7, issue #87 review).
       address: driverData.udid,
       deviceId: driverData.udid,
       driverData,
+      // Slim mode is off, so this boot slimmed nothing: the device is full.
+      mode: "full",
     });
     expect(runner.calls).toEqual([
       { ...simctl("boot", driverData.udid), options: { timeoutMs: 30_000 } },
@@ -1737,11 +1736,11 @@ describe("IosSimctlDriver", () => {
           driverData,
         }),
       ).resolves.toEqual({
-        // No `featureProfile`: slim mode is off entirely, so `undefined` is the correct
-        // "does not reduce anything" report (finding #7, issue #87 review).
         address: driverData.udid,
         deviceId: driverData.udid,
         driverData,
+        // Slim mode is off, so this boot slimmed nothing: the device is full.
+        mode: "full",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", driverData.udid),
@@ -1790,7 +1789,7 @@ describe("IosSimctlDriver", () => {
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
         driverData: { ...slim18_5, slimSignature: widgetsSignature },
-        featureProfile: "reduced",
+        mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -1820,13 +1819,13 @@ describe("IosSimctlDriver", () => {
       // CHANGED EXPECTATIONS (second adversarial review, finding #2): the previous version of
       // this test asserted that a failed `#shutdown` call meant "nothing was actually rebooted,
       // so the device is still healthy" and stopped right there, returning the device as-is with
-      // `featureProfile: "full"`. That inference doesn't hold -- `#shutdown` fails on a
+      // `mode: "full"`. That inference doesn't hold -- `#shutdown` fails on a
       // *non-zero exit* the same way it fails on a *timeout*, and a timeout is exactly the case
       // where the shutdown may actually be in progress or have already completed. The fix stops
       // guessing: it always runs a boot+bootstatus afterward regardless of how `#shutdown` came
       // back, so the device handed back is verified running, not assumed running. Because
       // whether the disable list survived is now genuinely unknown, the outcome is also
-      // downgraded from "full" to "reduced" -- the safe direction under uncertainty (see the
+      // downgraded from "full" to "slim" -- the safe direction under uncertainty (see the
       // comment on `#applySlimAndReboot`).
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
@@ -1869,7 +1868,7 @@ describe("IosSimctlDriver", () => {
         deviceId: slim18_5.udid,
         // Unchanged: no marker written, so the next `makeReady` retries the whole label set.
         driverData: slim18_5,
-        featureProfile: "reduced",
+        mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -1939,7 +1938,7 @@ describe("IosSimctlDriver", () => {
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
         driverData: slim18_5,
-        featureProfile: "reduced",
+        mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -2079,7 +2078,7 @@ describe("IosSimctlDriver", () => {
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
         driverData: slimmedData,
-        featureProfile: "reduced",
+        mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -2188,7 +2187,7 @@ describe("IosSimctlDriver", () => {
         address: slim18_4.udid,
         deviceId: slim18_4.udid,
         driverData: slim18_4,
-        featureProfile: "full",
+        mode: "full",
       });
       expect(runner.calls).toHaveLength(2);
       expect(onSlimSkipped).toHaveBeenCalledWith(
@@ -2338,7 +2337,7 @@ describe("IosSimctlDriver", () => {
         // The marker IS written this time -- no `slimMarkToken` because no mark file exists yet
         // in this test (mirrors "boots, applies the disable list..." above).
         driverData: { ...slim18_5, slimSignature: widgetsSignature },
-        featureProfile: "reduced",
+        mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -2390,7 +2389,7 @@ describe("IosSimctlDriver", () => {
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
         driverData: alreadySlimmedData,
-        featureProfile: "reduced",
+        mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -2410,7 +2409,7 @@ describe("IosSimctlDriver", () => {
       // write the idempotence marker: the device reboots (the labels that did apply are worth
       // keeping), but comes back exactly as it went in, so the very next `makeReady` sees no
       // stored `slimSignature` and re-applies the whole set again. CHANGED EXPECTATION
-      // (second-review finding #3): the outcome here is `"reduced"`, not `"full"` -- the labels
+      // (second-review finding #3): the outcome here is `"slim"`, not `"full"` -- the labels
       // that did apply really are gone, so "full" would be a lie in the dangerous direction.
       const allLabels = labelsFor(resolveSlimCategories(undefined).categories);
       const chunkSize = 50;
@@ -2483,7 +2482,7 @@ describe("IosSimctlDriver", () => {
         // Unchanged: no `slimSignature`/`slimMarkToken` written, so the next `makeReady` will
         // find `#checkAlreadySlimmed` false and re-apply the whole set.
         driverData: slim18_5,
-        featureProfile: "reduced",
+        mode: "slim",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -2536,7 +2535,7 @@ describe("IosSimctlDriver", () => {
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
         driverData: slim18_5,
-        featureProfile: "full",
+        mode: "full",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -2575,7 +2574,7 @@ describe("IosSimctlDriver", () => {
         address: fullData.udid,
         deviceId: fullData.udid,
         driverData: fullData,
-        featureProfile: "full",
+        mode: "full",
       });
       expect(runner.calls).toHaveLength(2);
       expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
@@ -2621,7 +2620,7 @@ describe("IosSimctlDriver", () => {
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
         driverData: slim18_5,
-        featureProfile: "full",
+        mode: "full",
       });
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
@@ -2652,10 +2651,11 @@ describe("IosSimctlDriver", () => {
           driverData,
         }),
       ).resolves.toEqual({
-        // No `featureProfile`: slim mode is off here too.
         address: driverData.udid,
         deviceId: driverData.udid,
         driverData,
+        // Slim mode is off, so this boot slimmed nothing: the device is full.
+        mode: "full",
       });
     });
 

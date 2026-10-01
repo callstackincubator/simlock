@@ -647,7 +647,7 @@ function registryDriftFindings(
   // `expectedRunState` ever commits. Without this guard a concurrent `doctor --fix` reads that
   // as foreign drift, "fixes" the record to `ready`, and the boot's own transition commit
   // afterwards finds the record changed underneath it and silently drops its
-  // `address`/`driverData`/`featureProfile`, dropping the waiter. The claim is held for the
+  // `address`/`driverData`/`mode`, dropping the waiter. The claim is held for the
   // whole boot, so it exactly brackets the window this needs to cover -- unlike
   // `stalledTransitionFinding`, this applies regardless of `device.state`, since the record can
   // be `shutdown`, `ready`, or `leased` while a claimed operation is in flight against it.

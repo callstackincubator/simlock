@@ -24,7 +24,7 @@ import {
   UnknownModelError,
 } from "../../core/index.js";
 import type { ObservedMark } from "../../core/driver.js";
-import type { DeviceSpec } from "../../core/index.js";
+import type { DeviceMode, DeviceSpec } from "../../core/index.js";
 import { stableError } from "../../core/stable-error.js";
 import type {
   Clock,
@@ -772,28 +772,21 @@ export class IosSimctlDriver implements Driver {
     }
 
     if (plan.kind !== "apply") {
-      // `undefined` (not "full") whenever slim mode isn't enabled at all -- `DriverDevice.
-      // featureProfile`'s contract is that `undefined` means "this driver does not reduce
-      // anything", which is only true while slim mode is off. Once slim mode is on, "full" is
-      // meaningful (this particular boot didn't reduce anything -- a per-device `full: true`
-      // opt-out, a `"recover"` boot, or a runtime-gate skip) and is reported as such.
-      return this.#asIs(device, data, this.#slim?.enabled === true ? "full" : undefined);
+      // This boot slimmed nothing: slim mode is off, a per-device `full: true` opt-out, a
+      // `"recover"` boot, or a runtime-gate skip. The device is full.
+      return this.#asIs(device, data, "full");
     }
 
     return this.#applySlimAndReboot(device, data, plan.slim, bootstatusTimeoutMs);
   }
 
-  /** The device's current `address`/`driverData`, unmodified, tagged with the feature profile. */
-  #asIs(
-    device: DriverDevice,
-    data: IosDriverData,
-    featureProfile: "full" | "reduced" | undefined,
-  ): DriverDevice {
+  /** The device's current `address`/`driverData`, unmodified, tagged with the mode it has. */
+  #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
     return {
       address: data.udid,
       deviceId: device.deviceId,
       driverData: device.driverData,
-      ...(featureProfile === undefined ? {} : { featureProfile }),
+      mode,
     };
   }
 
@@ -850,7 +843,7 @@ export class IosSimctlDriver implements Driver {
     const signature = slimSignature(resolved.categories);
     const idempotence = await this.#checkAlreadySlimmed(data, signature);
     if (idempotence.alreadySlimmed) {
-      return this.#asIs(device, data, "reduced");
+      return this.#asIs(device, data, "slim");
     }
 
     const labels = labelsFor(resolved.categories);
@@ -888,7 +881,7 @@ export class IosSimctlDriver implements Driver {
     if (shutdownError !== undefined) {
       // The shutdown call itself failed, so whether the labels' reboot actually took effect is
       // unknown -- this is an uncertain apply, not a confirmed one. Never write the idempotence
-      // marker on it (same reasoning as the partial-apply case below), and report "reduced" (not
+      // marker on it (same reasoning as the partial-apply case below), and report "slim" (not
       // "full") under that uncertainty: telling a caller a device is slim when it is not is
       // benign -- it just avoids features it could have used -- while telling it a device is full
       // when it is not makes push / Spotlight / StoreKit fail with no explanation, exactly the
@@ -897,7 +890,7 @@ export class IosSimctlDriver implements Driver {
         device,
         data,
         `slim shutdown failed: ${errorMessage(shutdownError)}`,
-        "reduced",
+        "slim",
       );
     }
 
@@ -910,13 +903,13 @@ export class IosSimctlDriver implements Driver {
       // never retry the labels that were never attempted, with no way back short of
       // `reclaim`/`erase`. So a partial apply deliberately costs a re-attempt of the *whole*
       // label set on the next `makeReady` instead -- applying an already-disabled label again is
-      // harmless (same comment on `#checkAlreadySlimmed`). "reduced" because the labels that did
+      // harmless (same comment on `#checkAlreadySlimmed`). "slim" because the labels that did
       // apply really are gone.
       return this.#skipApply(
         device,
         data,
         `${String(applyOutcome.unattemptedLabels.length)} of ${String(labels.length)} labels were never attempted (a chunk failed to run)`,
-        "reduced",
+        "slim",
       );
     }
 
@@ -943,10 +936,10 @@ export class IosSimctlDriver implements Driver {
     device: DriverDevice,
     data: IosDriverData,
     detail: string,
-    featureProfile: "full" | "reduced",
+    mode: DeviceMode,
   ): DriverDevice {
     this.#onSlimSkipped?.({ deviceId: device.deviceId, detail, reason: "apply-failed" });
-    return this.#asIs(device, data, featureProfile);
+    return this.#asIs(device, data, mode);
   }
 
   /**
@@ -1012,7 +1005,7 @@ export class IosSimctlDriver implements Driver {
       address: data.udid,
       deviceId: device.deviceId,
       driverData: newDriverData,
-      featureProfile: "reduced",
+      mode: "slim",
     };
   }
 

@@ -257,6 +257,29 @@ describe("GatewayDispatcher", () => {
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
   });
 
+  it("reports each worker device's mode on status.get and worker.list", async () => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.refresh("wrk_1", {
+      capacity: statusFixture().capacity,
+      devices: [deviceFixture("dev_slim", "leased", "slim"), deviceFixture("dev_full")],
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    const list = await dispatcher.dispatch("worker.list", {}, session());
+
+    const expected = [
+      { id: "dev_slim", mode: "slim" },
+      { id: "dev_full", mode: "full" },
+    ];
+    expect(status.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(status.workers?.[0]?.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect(list.workers[0]?.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+  });
+
   it("answers catalog.get as the union of the fleet's catalogs", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);

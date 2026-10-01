@@ -215,6 +215,7 @@ describe("operation input/output round trips", () => {
         id: "dev_1",
         driverDeviceId: "sim-1",
         spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "18.0" },
+        mode: "full",
         state: "leased",
         driverData: { udid: "abc" },
         createdAt: 1,
@@ -313,6 +314,7 @@ describe("operation input/output round trips", () => {
         {
           id: "dev_1",
           spec: { platform: "ios", model: "iPhone 17", osVersion: "26.0" },
+          mode: "full",
           state: "leased",
           workerId: "wrk_1",
         },

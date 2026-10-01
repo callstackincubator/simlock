@@ -14,8 +14,9 @@ describe("daemon protocol", () => {
     // the `worker` token role) all land on the wire with nothing kept behind them, exactly as
     // ADR 0004's removals took it to 4, so under ADR 0003 §6's honesty rule the range does not
     // widen to keep speaking 4. ADR 0008 then makes the catalog's `modelRuntimes` required,
-    // taking it to 6 the same way.
-    expect(DAEMON_PROTOCOL_VERSION).toBe(6);
+    // taking it to 6, and ADR 0007 makes a device's mode a required `mode`, taking it to 7, each
+    // the same way.
+    expect(DAEMON_PROTOCOL_VERSION).toBe(7);
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 

@@ -76,6 +76,7 @@ function device(
     driverDeviceId: `driver-${id}`,
     id,
     spec: deviceSpec,
+    mode: "full",
     state,
   };
 }

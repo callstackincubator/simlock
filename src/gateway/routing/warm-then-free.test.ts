@@ -105,6 +105,7 @@ function generateFleet(random: () => number): {
     ).platforms;
     const devices = Array.from({ length: Math.floor(random() * 3) }, (_, n) => ({
       id: `dev_${index}_${n}`,
+      mode: pick(["slim", "full"] as const),
       spec: { model: pick(MODELS), osVersion: pick(RUNTIMES), platform: pick(PLATFORMS) },
       state: pick(["ready", "leased"] as const),
     }));

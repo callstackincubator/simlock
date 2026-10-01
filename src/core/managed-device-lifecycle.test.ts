@@ -367,10 +367,10 @@ describe("ManagedDeviceLifecycle", () => {
     });
   });
 
-  it("persists a driver's featureProfile alongside address and driverData on boot (#makeReady path)", async () => {
+  it("persists a driver's reported mode on boot (#makeReady path)", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
-    const driver = new FakeDriver({ clock, featureProfile: "reduced", platform: "ios" });
+    const driver = new FakeDriver({ clock, mode: "slim", platform: "ios" });
     let nextId = 0;
     const registry = await Registry.load({
       clock,
@@ -400,13 +400,13 @@ describe("ManagedDeviceLifecycle", () => {
 
     const ready = await lifecycle.readyProvisioned(device);
 
-    expect(ready).toMatchObject({ featureProfile: "reduced" });
+    expect(ready).toMatchObject({ mode: "slim" });
   });
 
-  it("persists a driver's featureProfile via the bootForLease handoff path (#makeReadyForLease)", async () => {
+  it("persists a driver's reported mode via the bootForLease handoff path (#makeReadyForLease)", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
-    const driver = new FakeDriver({ clock, featureProfile: "reduced", platform: "ios" });
+    const driver = new FakeDriver({ clock, mode: "slim", platform: "ios" });
     let nextId = 0;
     const registry = await Registry.load({
       clock,
@@ -437,13 +437,12 @@ describe("ManagedDeviceLifecycle", () => {
 
     const handoff = await lifecycle.readyProvisionedForLease(device);
 
-    expect(handoff?.device).toMatchObject({ featureProfile: "reduced" });
+    expect(handoff?.device).toMatchObject({ mode: "slim" });
   });
 
-  it("boot clears a stale featureProfile when the driver now reports undefined (#makeReady, shutdown path)", async () => {
-    // Regression for the HIGH finding: a conditional spread that omitted `featureProfile`
-    // entirely whenever the driver returned `undefined` left a previously-stored "reduced" on
-    // the record, so a device slim mode no longer applies to kept reporting `slim: true`.
+  it("boot stores full, replacing a stored slim, when the driver reports no mode (#makeReady, shutdown path)", async () => {
+    // A driver that reports no mode must not leave a previously stored "slim" on the record,
+    // or a device that is no longer slim keeps reporting `mode: "slim"`.
     const harness = await createHarness();
     const ready = await harness.registry.transitionDevice(
       harness.device.id,
@@ -452,10 +451,10 @@ describe("ManagedDeviceLifecycle", () => {
       {
         address: harness.device.driverDeviceId,
         driverData: harness.device.driverData,
-        featureProfile: "reduced",
+        mode: "slim",
       },
     );
-    expect(ready.featureProfile).toBe("reduced");
+    expect(ready.mode).toBe("slim");
     await harness.driver.shutdown({
       address: ready.address ?? "",
       deviceId: ready.driverDeviceId,
@@ -465,16 +464,16 @@ describe("ManagedDeviceLifecycle", () => {
       event: "device.shutdown",
       payload: { deviceId: ready.id, initiator: "test" },
     });
-    expect(shutdown.featureProfile).toBe("reduced");
+    expect(shutdown.mode).toBe("slim");
 
-    // `harness.driver` (a plain `FakeDriver` with no `featureProfile` option) reports `undefined`
-    // on this boot -- the driver-side equivalent of slim mode having been switched off.
+    // `harness.driver` (a plain `FakeDriver` with no `mode` option) reports no mode on this
+    // boot -- the driver-side equivalent of a boot that did not slim.
     const booted = await harness.lifecycle.boot(shutdown);
 
-    expect(booted?.featureProfile).toBeUndefined();
+    expect(booted?.mode).toBe("full");
   });
 
-  it("bootForLease clears a stale featureProfile when the driver now reports undefined (#makeReadyForLease, shutdown path)", async () => {
+  it("bootForLease stores full, replacing a stored slim, when the driver reports no mode (#makeReadyForLease, shutdown path)", async () => {
     const harness = await createHarness();
     const ready = await harness.registry.transitionDevice(
       harness.device.id,
@@ -483,7 +482,7 @@ describe("ManagedDeviceLifecycle", () => {
       {
         address: harness.device.driverDeviceId,
         driverData: harness.device.driverData,
-        featureProfile: "reduced",
+        mode: "slim",
       },
     );
     await harness.driver.shutdown({
@@ -500,10 +499,10 @@ describe("ManagedDeviceLifecycle", () => {
 
     const handoff = await harness.lifecycle.bootForLease(shutdown, claim);
 
-    expect(handoff?.device.featureProfile).toBeUndefined();
+    expect(handoff?.device.mode).toBe("full");
   });
 
-  it("readyProvisioned clears a stale featureProfile when the driver now reports undefined (#makeReady, provisioning path)", async () => {
+  it("readyProvisioned stores full, replacing a stored slim, when the driver reports no mode (#makeReady, provisioning path)", async () => {
     // A device can't naturally re-enter "provisioning" once it leaves, so the persisted state is
     // seeded directly (as a restarted daemon would load it from disk) to exercise the same
     // provisioning-branch code path the "shutdown" tests above cover for the other branch.
@@ -525,7 +524,7 @@ describe("ManagedDeviceLifecycle", () => {
             createdAt: 0,
             driverData: driverDevice.driverData,
             driverDeviceId: driverDevice.deviceId,
-            featureProfile: "reduced",
+            mode: "slim",
             id: "dev_stale",
             spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
             state: "provisioning",
@@ -550,14 +549,14 @@ describe("ManagedDeviceLifecycle", () => {
     );
     const device = registry.snapshot.devices[0];
     if (device === undefined) throw new Error("expected seeded device");
-    expect(device.featureProfile).toBe("reduced");
+    expect(device.mode).toBe("slim");
 
     const readyDevice = await lifecycle.readyProvisioned(device);
 
-    expect(readyDevice?.featureProfile).toBeUndefined();
+    expect(readyDevice?.mode).toBe("full");
   });
 
-  it("readyProvisionedForLease clears a stale featureProfile when the driver now reports undefined (#makeReadyForLease, provisioning path)", async () => {
+  it("readyProvisionedForLease stores full, replacing a stored slim, when the driver reports no mode (#makeReadyForLease, provisioning path)", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -576,7 +575,7 @@ describe("ManagedDeviceLifecycle", () => {
             createdAt: 0,
             driverData: driverDevice.driverData,
             driverDeviceId: driverDevice.deviceId,
-            featureProfile: "reduced",
+            mode: "slim",
             id: "dev_stale_2",
             spec: { model: "iPhone 16", osVersion: "26.5", platform: "ios" },
             state: "provisioning",
@@ -604,6 +603,6 @@ describe("ManagedDeviceLifecycle", () => {
 
     const handoff = await lifecycle.readyProvisionedForLease(device);
 
-    expect(handoff?.device.featureProfile).toBeUndefined();
+    expect(handoff?.device.mode).toBe("full");
   });
 });

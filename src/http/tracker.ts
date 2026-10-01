@@ -38,8 +38,8 @@ export interface LeasePayload {
   readonly expiresAt: string;
   readonly ttlMs: number;
   readonly dataPlane: null;
-  /** Whether the granted device had its feature set reduced -- see `DeviceRecord.featureProfile`. */
-  readonly slim: boolean;
+  /** The mode the granted device actually has -- see `DeviceRecord.mode`. */
+  readonly mode: "slim" | "full";
 }
 
 /**
@@ -71,7 +71,7 @@ export function buildLeasePayload(
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
     ttlMs: lease.ttlMs,
     dataPlane: null,
-    slim: device.featureProfile === "reduced",
+    mode: device.mode,
   };
 }
 
@@ -345,7 +345,7 @@ interface HttpLeaseDevice {
   readonly id: string;
   readonly driverDeviceId: string;
   readonly spec: { readonly platform: string; readonly model: string; readonly osVersion: string };
-  readonly featureProfile?: "full" | "reduced" | undefined;
+  readonly mode: "slim" | "full";
 }
 
 interface HttpLeaseRecord {

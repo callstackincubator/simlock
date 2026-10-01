@@ -2,6 +2,9 @@ import type { DeviceRequest } from "./driver.js";
 
 export type Platform = "ios" | "android";
 
+/** The mode a device actually has: slimmed by its driver, or not. */
+export type DeviceMode = "slim" | "full";
+
 export interface DeviceSpec {
   readonly platform: Platform;
   readonly model: string;
@@ -74,12 +77,11 @@ export interface DeviceRecord {
    */
   readonly address?: string;
   /**
-   * Mirrors `DriverDevice.featureProfile` (see `driver.ts`), current as of this device's last
-   * `ready` transition. Undefined for a device still `provisioning` (never made ready yet)
-   * and for any driver that does not reduce anything -- today's behaviour, and every non-iOS
-   * driver.
+   * The mode the device actually has (see `DriverDevice.mode`), current as of its last `ready`
+   * transition. `registerDevice` writes `"full"` for a device that has not booted yet, and a
+   * record written before this field existed loads as `"full"`.
    */
-  readonly featureProfile?: "full" | "reduced";
+  readonly mode: DeviceMode;
   /**
    * The lease-identity policy this device was created under (see `LeaseIdentity`). The registry
    * stamps it on every device it registers and loads a record written before this field existed
@@ -230,7 +232,7 @@ export class IllegalTransition extends Error {
 export interface DeviceTransitionUpdate {
   readonly address?: string;
   readonly driverData?: unknown;
-  readonly featureProfile?: "full" | "reduced";
+  readonly mode?: DeviceMode;
 }
 
 export function transition(

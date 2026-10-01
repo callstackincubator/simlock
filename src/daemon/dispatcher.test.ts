@@ -754,6 +754,68 @@ describe("Dispatcher: nuke.run", () => {
   });
 });
 
+describe("Dispatcher: device mode on every surface", () => {
+  const request = { model: "iPhone 17 Pro", platform: "ios" } as const;
+
+  it.each([
+    ["slim", "a slim boot", "slim"],
+    ["full", "no mode", undefined],
+  ] as const)(
+    "a lease grant's device carries mode: %s when the driver reported %s",
+    async (expected, _reported, driverMode) => {
+      const { dispatcher } = await buildDispatcher({ driverOptions: { mode: driverMode } });
+
+      const grant = await dispatcher.dispatch("lease.request", request, session());
+
+      expect(grant.device.mode).toBe(expected);
+    },
+  );
+
+  it("status.get and list.get return mode for every device, including one still provisioning", async () => {
+    const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
+    const granted = await dispatcher.dispatch("lease.request", request, session());
+    const provisioning = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-provisioning",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    const list = await dispatcher.dispatch(
+      "list.get",
+      { kind: "devices" },
+      session({ role: "admin" }),
+    );
+
+    const expected = [
+      { id: granted.device.id, mode: "slim" },
+      { id: provisioning.id, mode: "full" },
+    ];
+    expect(status.devices.map(({ id, mode }) => ({ id, mode }))).toEqual(expected);
+    expect((list as { id: string; mode: string }[]).map(({ id, mode }) => ({ id, mode }))).toEqual(
+      expected,
+    );
+  });
+
+  it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {
+    const { dispatcher } = await buildDispatcher({ driverOptions: { mode: "slim" } });
+
+    const responses = [
+      await dispatcher.dispatch("lease.request", request, session()),
+      await dispatcher.dispatch("list.get", { kind: "devices" }, session({ role: "admin" })),
+      await dispatcher.dispatch("status.get", {}, session()),
+    ];
+
+    for (const response of responses) {
+      const json = JSON.stringify(response);
+      expect(json).toContain('"mode":"slim"');
+      expect(json).not.toContain('"featureProfile"');
+      expect(json).not.toContain('"slim":');
+    }
+  });
+});
+
 describe("Dispatcher: #parseOutput", () => {
   // ADR §1's central claim -- "the daemon maps its own records onto contract types in exactly
   // one place ... this is what keeps private types out of the public package surface" -- names

@@ -70,9 +70,14 @@ export function leaseFixture(id: string, deviceId: string) {
   };
 }
 
-export function deviceFixture(id: string, state: "ready" | "leased" = "ready") {
+export function deviceFixture(
+  id: string,
+  state: "ready" | "leased" = "ready",
+  mode: "slim" | "full" = "full",
+) {
   return {
     id,
+    mode,
     spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
     state,
   };
@@ -102,6 +107,7 @@ export function grantFixture(overrides: Partial<LeaseGrant> = {}): LeaseGrant {
       id: "dev_1",
       driverDeviceId: "udid-1",
       spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+      mode: "full",
     },
     environment: {},
     lease: leaseFixture("lse_1", "dev_1") as LeaseRecord,

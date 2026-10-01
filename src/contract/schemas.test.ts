@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { grantedDeviceSchema, leaseGrantSchema, statusDeviceSchema } from "./schemas.js";
+import {
+  deviceRecordSchema,
+  grantedDeviceSchema,
+  leaseGrantSchema,
+  statusDeviceSchema,
+} from "./schemas.js";
 
 /**
  * Regression coverage for the defect fixed alongside ADR 0003 §1: a lease grant's device must
@@ -51,7 +56,7 @@ describe("leaseGrantSchema's device projection", () => {
       quarantineAttempts: 3,
       quarantineNextRetryAt: 60,
       address: "127.0.0.1:1234",
-      featureProfile: "reduced",
+      mode: "slim",
       leaseIdentity: "fresh",
       transitionAgeMs: 70,
     };
@@ -87,7 +92,7 @@ describe("leaseGrantSchema's device projection", () => {
       driverDeviceId: "SIM-1",
       spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
       address: "127.0.0.1:1234",
-      featureProfile: "reduced",
+      mode: "slim",
     });
   });
 
@@ -95,17 +100,29 @@ describe("leaseGrantSchema's device projection", () => {
     expect(() => grantedDeviceSchema.parse({ id: "device-1" })).toThrow();
   });
 
-  it("keeps id, driverDeviceId, spec, and the optional address/featureProfile", () => {
+  it("keeps id, driverDeviceId, spec, and mode, with address optional", () => {
     const parsed = grantedDeviceSchema.parse({
       id: "device-1",
       driverDeviceId: "SIM-1",
+      mode: "full",
       spec: { platform: "android", model: "Pixel 8", osVersion: "34" },
     });
     expect(parsed).toEqual({
       id: "device-1",
       driverDeviceId: "SIM-1",
+      mode: "full",
       spec: { platform: "android", model: "Pixel 8", osVersion: "34" },
     });
+  });
+
+  it("rejects a granted device without a mode, or with a mode other than slim or full", () => {
+    const device = {
+      id: "device-1",
+      driverDeviceId: "SIM-1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+    };
+    expect(() => grantedDeviceSchema.parse(device)).toThrow();
+    expect(() => grantedDeviceSchema.parse({ ...device, mode: "reduced" })).toThrow();
   });
 });
 
@@ -138,7 +155,7 @@ describe("statusDeviceSchema's device projection", () => {
       quarantineAttempts: 3,
       quarantineNextRetryAt: 60,
       address: "127.0.0.1:1234",
-      featureProfile: "reduced",
+      mode: "slim",
       leaseIdentity: "fresh",
       transitionAgeMs: 70,
     };
@@ -156,7 +173,6 @@ describe("statusDeviceSchema's device projection", () => {
       "recoveryAttempts",
       "quarantinedAt",
       "address",
-      "featureProfile",
     ] as const) {
       expect(device).not.toHaveProperty(field);
     }
@@ -165,6 +181,7 @@ describe("statusDeviceSchema's device projection", () => {
       id: "device-1",
       spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
       state: "quarantined",
+      mode: "slim",
       foreignStateDetectedAt: 20,
       foreignProvenanceDetectedAt: 30,
       quarantineAttempts: 3,
@@ -175,5 +192,29 @@ describe("statusDeviceSchema's device projection", () => {
 
   it("rejects a device object that is missing the fields status.get must keep", () => {
     expect(() => statusDeviceSchema.parse({ id: "device-1" })).toThrow();
+  });
+
+  it("rejects a status device without a mode, or with a mode other than slim or full", () => {
+    const device = {
+      id: "device-1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      state: "ready",
+    };
+    expect(() => statusDeviceSchema.parse(device)).toThrow();
+    expect(() => statusDeviceSchema.parse({ ...device, mode: "reduced" })).toThrow();
+  });
+
+  it("rejects a list.get device record without a mode, or with a mode other than slim or full", () => {
+    const record = {
+      id: "device-1",
+      driverDeviceId: "SIM-1",
+      spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      state: "ready",
+      driverData: {},
+      createdAt: 0,
+    };
+    expect(deviceRecordSchema.parse({ ...record, mode: "full" })).toMatchObject({ mode: "full" });
+    expect(() => deviceRecordSchema.parse(record)).toThrow();
+    expect(() => deviceRecordSchema.parse({ ...record, mode: "reduced" })).toThrow();
   });
 });

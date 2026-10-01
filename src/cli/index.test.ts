@@ -71,6 +71,7 @@ const detachedGrant: LeaseGrant = {
     id: "device-1",
     driverDeviceId: "ABCD",
     spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    mode: "full",
   },
   environment: {},
   lease: {
@@ -1903,6 +1904,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         {
           id: "dev_1",
           spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
+          mode: "full" as const,
           state: "leased" as const,
           workerId: "wrk_1",
         },
@@ -1942,7 +1944,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
     expect(output.stdout).toContain("Daemon: running (gateway)");
     expect(output.stdout).toContain("wrk_1: connected, drained");
-    expect(output.stdout).toContain("Device dev_1 on wrk_1: leased");
+    expect(output.stdout).toContain("Device dev_1 on wrk_1: leased, mode full");
     expect(output.stdout).toContain("Lease lease_1: agent-1 on wrk_1");
   });
 
@@ -1954,6 +1956,26 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
     expect(output.stdout).toContain("Daemon: running (worker)");
     expect(output.stdout).not.toContain(" on wrk_");
+  });
+
+  it("prints each device's mode", async () => {
+    const output = outputCapture();
+    const spec = { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const };
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      devices: [
+        { id: "dev_slim", mode: "slim", spec, state: "ready" },
+        { id: "dev_full", mode: "full", spec, state: "leased" },
+      ],
+    };
+    const environment = output.environmentWith({
+      connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+    });
+
+    await runCli(["status"], environment);
+
+    expect(output.stdout).toContain("Device dev_slim: ready, mode slim");
+    expect(output.stdout).toContain("Device dev_full: leased, mode full");
   });
 });
 
@@ -2046,6 +2068,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             id: "dev_1",
             driverDeviceId: "dev_1",
             spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            mode: "full",
           },
           environment: {},
           lease: {
@@ -2100,6 +2123,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             id: "dev_1",
             driverDeviceId: "dev_1",
             spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            mode: "full",
           },
           environment: {},
           lease: {
@@ -2149,6 +2173,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
             id: "dev_1",
             driverDeviceId: "dev_1",
             spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            mode: "full",
           },
           environment: {},
           lease: {
@@ -2647,6 +2672,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
             id: "dev_1",
             driverDeviceId: "dev_1",
             spec: { platform: "ios", model: "x", osVersion: "26.5" },
+            mode: "full",
           },
           // A driver-supplied key that is not a shell identifier fails the command rather than
           // being silently dropped -- and that throw must not cost the device.
@@ -3436,6 +3462,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
       id: "dev_1",
       driverDeviceId: "dev_1",
       spec: { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+      mode: "full",
     },
     lease: {
       id: "lse_1",

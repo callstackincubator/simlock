@@ -202,6 +202,7 @@ export function sampleGrant(overrides: { readonly leaseId?: string } = {}): Leas
       driverDeviceId: "SIM-1",
       id: "device-1",
       spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      mode: "full",
     },
     environment: {},
     lease: {

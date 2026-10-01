@@ -22,6 +22,11 @@ import {
 import { MAX_CONSECUTIVE_REFRESH_TIMEOUTS, WORKER_CALL_TIMEOUT_MS } from "./worker-link.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
+/** A worker one protocol version behind this gateway (ADR 0007 §12: no shim, no widened range). */
+const previousProtocol = {
+  min: PROTOCOL_VERSION_RANGE.min - 1,
+  max: PROTOCOL_VERSION_RANGE.max - 1,
+};
 const REFRESH_MS = 30_000;
 /** Matches `core/config.ts`'s own default (ADR 0005 §15's own cap). */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
@@ -178,6 +183,28 @@ describe("GatewayService", () => {
     expect(device).toMatchObject({ id: "dev_1", state: "ready" });
     expect(device).not.toHaveProperty("driverData");
     expect(device).not.toHaveProperty("driverDeviceId");
+
+    await harness.service.stop();
+  });
+
+  it("keeps each worker device's mode in the view", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.devices = [
+      { ...deviceFixture("dev_slim", "ready", "slim"), createdAt: 1, driverData: {} },
+      { ...deviceFixture("dev_full", "ready", "full"), createdAt: 1, driverData: {} },
+    ];
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
+
+    expect(
+      harness.service.workers.view("wrk_1")?.devices.map(({ id, mode }) => ({ id, mode })),
+    ).toEqual([
+      { id: "dev_slim", mode: "slim" },
+      { id: "dev_full", mode: "full" },
+    ]);
 
     await harness.service.stop();
   });
@@ -441,7 +468,7 @@ describe("GatewayService", () => {
     const worker = new ScriptedWorkerClient();
     // What `connectSimlockAdmin`'s degraded client does after a failed negotiation: every call
     // rejects with the captured error, carrying both ranges.
-    worker.failWith = protocolMismatchError({ min: 4, max: 4 });
+    worker.failWith = protocolMismatchError(previousProtocol);
 
     await harness.join("wrk_1", worker);
     await vi.waitFor(() =>
@@ -449,7 +476,7 @@ describe("GatewayService", () => {
     );
 
     expect(harness.service.workers.view("wrk_1")).toMatchObject({
-      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: { min: 4, max: 4 } },
+      protocol: { gateway: PROTOCOL_VERSION_RANGE, worker: previousProtocol },
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);

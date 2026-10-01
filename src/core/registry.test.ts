@@ -60,6 +60,7 @@ describe("Registry", () => {
         id: "dev_test",
         leaseIdentity: "reusable",
         spec,
+        mode: "full",
         state: "provisioning",
       },
     ]);
@@ -595,6 +596,7 @@ describe("Registry", () => {
       lastLeaseEndedAt: 1_000,
       leaseIdentity: "reusable",
       spec,
+      mode: "full",
       state: "ready",
     });
     await expect(registry.recoverFromQuarantine(device.id, "ready")).rejects.toThrow(
@@ -788,7 +790,7 @@ describe("Registry", () => {
     ).rejects.toThrow("Invalid device record in registry state");
   });
 
-  it("survives a save/reload round-trip with featureProfile set", async () => {
+  it("survives a save/reload round-trip with mode set to slim", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
     const options = {
@@ -809,48 +811,91 @@ describe("Registry", () => {
       device.id,
       "ready",
       { event: "device.ready", payload: { bootDuration: 5, deviceId: device.id } },
-      { featureProfile: "reduced" },
+      { mode: "slim" },
     );
 
     const reloaded = await Registry.load(options);
 
     expect(reloaded.snapshot).toEqual(registry.snapshot);
-    expect(reloaded.snapshot.devices[0]).toMatchObject({ featureProfile: "reduced" });
+    expect(reloaded.snapshot.devices[0]).toMatchObject({ mode: "slim" });
   });
 
-  it("leaves featureProfile absent when the persisted record never set it", async () => {
+  it("registers a new device as full", async () => {
     const clock = new FakeClock(1_000);
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [
-          {
-            createdAt: 500,
-            driverData: {},
-            driverDeviceId: "driver_no_profile",
-            id: "dev_no_profile",
-            spec,
-            state: "ready",
-          },
-        ],
-        leases: [],
-      }),
-    );
-
     const registry = await Registry.load({
       clock,
       eventBus: new EventBus(clock),
-      filesystem,
-      idGenerator: { generate: () => "new" },
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
       statePath,
     });
 
-    expect(registry.snapshot.devices[0]).not.toHaveProperty("featureProfile");
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec,
+    });
+
+    expect(device.mode).toBe("full");
   });
 
-  it("drops a garbage featureProfile rather than failing the whole registry load", async () => {
+  // ADR 0007 §11: no mode is derived from the old key, whatever it said, and the old key is not
+  // carried forward as an unknown field either.
+  it.each([
+    ["no featureProfile", {}],
+    ['featureProfile "reduced"', { featureProfile: "reduced" }],
+    ['featureProfile "full"', { featureProfile: "full" }],
+  ])(
+    "loads a record written before mode existed as full (%s) and does not write featureProfile back",
+    async (_label, legacyFields) => {
+      const clock = new FakeClock(1_000);
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(
+        statePath,
+        JSON.stringify({
+          devices: [
+            {
+              createdAt: 500,
+              driverData: {},
+              driverDeviceId: "driver_legacy",
+              id: "dev_legacy",
+              spec,
+              state: "ready",
+              ...legacyFields,
+            },
+          ],
+          leases: [],
+        }),
+      );
+      const registry = await Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem,
+        idGenerator: { generate: () => "new" },
+        statePath,
+      });
+
+      expect(registry.snapshot.devices[0]?.mode).toBe("full");
+
+      // Any commit rewrites the whole file, legacy record included.
+      await registry.registerDevice({
+        driverData: {},
+        driverDeviceId: "driver_new",
+        provisionDuration: 0,
+        spec,
+      });
+      const written = JSON.parse(await filesystem.readFile(statePath)) as {
+        devices: Record<string, unknown>[];
+      };
+      const legacy = written.devices.find((device) => device.id === "dev_legacy");
+      expect(legacy).toMatchObject({ mode: "full" });
+      expect(legacy).not.toHaveProperty("featureProfile");
+    },
+  );
+
+  it("fails the load when a stored mode is neither slim nor full", async () => {
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
@@ -862,8 +907,8 @@ describe("Registry", () => {
             createdAt: 500,
             driverData: {},
             driverDeviceId: "driver_garbage",
-            featureProfile: "not-a-real-profile",
             id: "dev_garbage",
+            mode: "reduced",
             spec,
             state: "ready",
           },
@@ -872,15 +917,15 @@ describe("Registry", () => {
       }),
     );
 
-    const registry = await Registry.load({
-      clock,
-      eventBus: new EventBus(clock),
-      filesystem,
-      idGenerator: { generate: () => "new" },
-      statePath,
-    });
-
-    expect(registry.snapshot.devices[0]).not.toHaveProperty("featureProfile");
+    await expect(
+      Registry.load({
+        clock,
+        eventBus: new EventBus(clock),
+        filesystem,
+        idGenerator: { generate: () => "new" },
+        statePath,
+      }),
+    ).rejects.toThrow("Invalid device record in registry state");
   });
 
   it("clears recovery markers as part of the same commit that ends a lease", async () => {

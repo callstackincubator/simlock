@@ -195,7 +195,15 @@ function device(
   driverDeviceId: string,
   deviceSpec: DeviceSpec,
 ): DeviceRecord {
-  return { createdAt: 1, driverData: {}, driverDeviceId, id, spec: deviceSpec, state };
+  return {
+    createdAt: 1,
+    driverData: {},
+    driverDeviceId,
+    id,
+    mode: "full",
+    spec: deviceSpec,
+    state,
+  };
 }
 
 function released(device: DeviceRecord): ReleasedLease {
@@ -271,11 +279,11 @@ describe("WarmPoolCoordinator", () => {
     expect(harness.driver.calls.map((call) => call.operation)).toContain("makeReady");
   });
 
-  it("stores the driver's featureProfile when a warm re-boot slims the device", async () => {
+  it("stores the driver's mode when a warm re-boot slims the device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       clock,
-      featureProfile: "reduced",
+      mode: "slim",
       platform: "ios",
       reclaimResult: "shutdown",
     });
@@ -284,26 +292,23 @@ describe("WarmPoolCoordinator", () => {
     await harness.coordinator.reclaim(released(harness.reclaiming));
 
     expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-    expect(harness.registry.lastUpdate).toMatchObject({ featureProfile: "reduced" });
-    expect(harness.registry.snapshot.devices[0]).toMatchObject({ featureProfile: "reduced" });
+    expect(harness.registry.lastUpdate).toMatchObject({ mode: "slim" });
+    expect(harness.registry.snapshot.devices[0]).toMatchObject({ mode: "slim" });
   });
 
-  it("clears a stale featureProfile when a warm re-boot's makeReady reports no reduction", async () => {
+  it("stores full, replacing a stored slim, when a warm re-boot's makeReady reports no mode", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
     const staleReclaiming = {
       ...device("reclaiming", "reclaiming", (await driver.provision(spec)).deviceId, spec),
-      featureProfile: "reduced" as const,
+      mode: "slim" as const,
     };
     const harness = await createHarness({ devices: [staleReclaiming], driver });
 
     await harness.coordinator.reclaim(released(staleReclaiming));
 
-    // The update object carries the key with an explicit `undefined` value so the registry's
-    // spread actually clears the stale "reduced" rather than leaving it in place (see the
-    // comment in WarmPoolCoordinator#reclaim).
-    expect(harness.registry.lastUpdate).toHaveProperty("featureProfile", undefined);
-    expect(harness.registry.snapshot.devices[0]?.featureProfile).toBeUndefined();
+    expect(harness.registry.lastUpdate).toHaveProperty("mode", "full");
+    expect(harness.registry.snapshot.devices[0]?.mode).toBe("full");
   });
 
   it("hands a release-time purge failure to quarantine instead of readiness-checking the device back in", async () => {

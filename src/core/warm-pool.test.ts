@@ -13,6 +13,7 @@ const device = (
   driverDeviceId: id,
   id,
   lastLeaseEndedAt,
+  mode: "full" as const,
   spec: { model: id, osVersion: "1", platform },
   state,
 });

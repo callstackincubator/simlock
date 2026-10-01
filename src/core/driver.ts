@@ -1,7 +1,7 @@
 import type { EventMap } from "../bus/index.js";
 import type { Filesystem } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
-import type { DeviceSpec, DeviceTransitionUpdate, Platform } from "./domain.js";
+import type { DeviceMode, DeviceSpec, DeviceTransitionUpdate, Platform } from "./domain.js";
 
 export interface DeviceRequest {
   readonly platform: Platform;
@@ -27,39 +27,28 @@ export interface DriverDevice {
    */
   readonly address: string;
   /**
-   * What the driver actually produced for this device, as of its last `makeReady` --
-   * platform-neutral so the core can report feature loss without reading a driver's opaque
-   * `driverData`. `"reduced"` means the driver cut the device's feature set (the iOS driver's
-   * slim mode); `"full"` means it did not. `undefined` means the driver does not reduce
-   * anything at all -- today's behaviour, and every non-iOS driver.
+   * The mode the driver actually produced for this device, as of its last `makeReady` --
+   * platform-neutral so the core can report it without reading a driver's opaque
+   * `driverData`. `"slim"` means the driver cut the device's feature set (the iOS driver's
+   * slim pass); `"full"` means it did not. `undefined` means the driver does not slim at all
+   * -- every non-iOS driver -- and is stored as `"full"` (see `readyTransitionUpdate`).
    */
-  readonly featureProfile?: "full" | "reduced";
+  readonly mode?: DeviceMode;
 }
 
 /**
- * Builds a `DeviceTransitionUpdate` from a driver's freshly re-read device, always including
- * `featureProfile` -- even when the driver returned `undefined`. `transition`'s
- * `{...record, ...update}` spread only clears a stale value when the update object *has* the
- * key; omitting it (as a conditional spread like `...(fp === undefined ? {} : { featureProfile:
- * fp })` does) would let a previous `"reduced"` survive a re-boot where slimming wasn't applied
- * this time, reporting `slim: true` on a device that is actually full-fat.
- * `DeviceTransitionUpdate["featureProfile"]` itself can't say "present but undefined" under
- * `exactOptionalPropertyTypes`, so the object is built with the wider type and cast at the
- * boundary -- the explicit `undefined` here is a deliberate runtime value, not a type-checking
- * gap. Shared by every readiness path that commits a driver's post-`makeReady` result
- * (`ManagedDeviceLifecycle`, `WarmPoolCoordinator`) so they can't drift on this.
+ * Builds a `DeviceTransitionUpdate` from a driver's freshly re-read device. It always writes
+ * `mode`, defaulting a driver's `undefined` to `"full"` here and nowhere else, so a stale
+ * `"slim"` can never outlive a re-boot that did not slim. Shared by every readiness path that
+ * commits a driver's post-`makeReady` result (`ManagedDeviceLifecycle`, `WarmPoolCoordinator`)
+ * so they can't drift on this.
  */
 export function readyTransitionUpdate(readyDevice: DriverDevice): DeviceTransitionUpdate {
-  const update: {
-    readonly address: string;
-    readonly driverData: unknown;
-    readonly featureProfile: "full" | "reduced" | undefined;
-  } = {
+  return {
     address: readyDevice.address,
     driverData: readyDevice.driverData,
-    featureProfile: readyDevice.featureProfile,
+    mode: readyDevice.mode ?? "full",
   };
-  return update as DeviceTransitionUpdate;
 }
 
 /**

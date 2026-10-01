@@ -722,7 +722,7 @@ the commands and drop them on the post-slim reboot, so slimming would cost a
 second boot for no effect. `planSlimBoot` (`src/drivers/ios/index.ts`) gates
 on this and skips the apply pass entirely rather than paying that cost —
 silently, from the requester's point of view: the lease still grants, just
-with `slim: false`. `simlock doctor`'s `driver-advisory` /
+with `mode: "full"`. `simlock doctor`'s `driver-advisory` /
 `slim-runtime-unsupported` finding is what makes an unsupported runtime
 visible to an operator instead of it only ever showing up as an unexpectedly
 non-slim lease.
@@ -733,12 +733,10 @@ universal links, Siri/Apple Intelligence, iCloud sync, and some system
 pickers to not work on a slim device — the categories that back them are
 exactly the ones slimming disables. Mitigations: `simlock lease --full` (MCP
 `full: true`, HTTP `full: true`) opts a single lease out of slimming, and
-every lease response carries a feature-profile signal so a caller can tell a
+every lease response carries the device mode so a caller can tell a
 feature-loss failure apart from an actual bug instead of guessing —
-`device.featureProfile === "reduced"` on the CLI/MCP/client contract shape
-(`slim` as a top-level boolean grant field is gone as of 0.3.0, ADR 0003
-§11), or HTTP's own `lease.slim` boolean, which is still derived from the
-same underlying signal.
+`device.mode === "slim"` on the CLI/MCP/client contract shape, and
+`lease.mode === "slim"` on HTTP (ADR 0007 §9: one word on every surface).
 
 **Mixing slim and full devices under one spec can make `--full` wait or
 re-provision.** `full` is part of spec identity (`DeviceSpec.full`, compared by `sameSpec`,
@@ -779,7 +777,7 @@ gates re-applying the disable pass changes, so an existing device re-applies
 the now-narrower set on its next boot — but the `launchctl disable` overrides
 already written for the *removed* category are never undone. They live in the
 simulator's own launchd database and only disappear on `simctl erase`. The
-device keeps reporting `slim: true` and keeps missing that category's
+device keeps reporting `mode: "slim"` and keeps missing that category's
 functionality, with no error surfaced anywhere. The real consequence is
 stronger than the flag alone suggests: the device ends up slimmer than *any*
 configuration ever asked for — it carries both the newly-narrower disable set
@@ -800,6 +798,14 @@ a permanent orphan: the idle-shutdown and idle-destroy cleanup rules reap it
 on the same timers as any other idle device, since neither rule cares what a
 device's spec matches. Until those timers fire, though, it occupies a pool
 slot doing nothing.
+
+**A device slimmed before the upgrade to `mode` reports `full`.** A device
+record written before devices carried a `mode` loads as `full`, and nothing
+is derived from its old feature-profile field (ADR 0007 §11). A worker that
+ran with `ios.slim.enabled` on therefore holds slimmed devices that report
+`mode: "full"` on grants, `status`, and `list` until their next boot rewrites
+the mode. Empty such a worker with `simlock nuke --delete-devices` before
+upgrading it.
 
 ## A dispatched request whose uplink drops may have granted a lease anyway
 
