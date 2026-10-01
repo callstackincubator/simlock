@@ -8,7 +8,7 @@ export interface RecordedEvent {
   readonly module: string;
 }
 
-/** Replays the business-event ring buffer via `simlock events --since`, parsed. */
+/** Replays the business-event history via `simlock events --since`, parsed. */
 export async function events(env: NodeJS.ProcessEnv, since = "1h"): Promise<RecordedEvent[]> {
   const result = await cli(["events", "--since", since], env);
   if (result.code !== 0) {

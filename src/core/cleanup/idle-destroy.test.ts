@@ -58,6 +58,7 @@ const config: Config = {
     },
   },
   log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+  eventLog: { rotateBytes: 5 * 1024 * 1024 },
 };
 
 function view(

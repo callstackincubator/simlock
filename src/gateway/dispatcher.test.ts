@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import { OPERATIONS, type OperationName } from "../contract/index.js";
 import type { DispatchSession } from "../daemon/dispatch.js";
-import { FakeClock } from "../ports/index.js";
+import { FakeClock, MemoryFilesystem, NoopLogger } from "../ports/index.js";
 import { GatewayDispatcher, type GatewayTokenStore } from "./dispatcher.js";
 import { MemoryDrainStore } from "./drain-store.js";
 import { FleetLeaseCoordinator } from "./fleet-coordinator.js";
@@ -108,7 +108,7 @@ class FakeDirectory implements WorkerDirectory {
   }
 }
 
-function harness() {
+function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay"> } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const workers = new WorkerRegistry({
@@ -151,7 +151,14 @@ function harness() {
     },
     config: gatewayConfig,
     coordinator,
-    eventBus,
+    eventHistory:
+      options.eventHistory ??
+      new EventHistory({
+        bus: eventBus,
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        path: "/events.jsonl",
+      }),
     health: () => "running",
     leaseIndex,
     tokens,
@@ -385,6 +392,26 @@ describe("GatewayDispatcher", () => {
       subscribed: true,
       subscriptionId: "sub_1",
     });
+  });
+
+  it("events.replay with sinceTs returns what the event history returns", async () => {
+    const fromHistory: EventEnvelope[] = [
+      { seq: 7, timestamp: 50, event: "daemon.stopping", payload: { reason: "x" }, module: "d" },
+    ];
+    const asked: unknown[] = [];
+    const { dispatcher } = harness({
+      eventHistory: {
+        replay: async (input) => {
+          asked.push(input);
+          return fromHistory;
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch("events.replay", { sinceTs: 10 }, session())).resolves.toEqual(
+      fromHistory,
+    );
+    expect(asked).toEqual([{ sinceTs: 10 }]);
   });
 
   it("mints and revokes its own tokens, worker join tokens included", async () => {

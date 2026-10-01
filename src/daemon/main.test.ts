@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect, createServer, Server } from "node:net";
@@ -26,7 +26,6 @@ import {
   emitComponentInstallDiagnostic,
   emitSlimDiagnostic,
   startDaemon,
-  wireComponentInstallLogging,
   type DriverDiscoveryContext,
   type StartDaemonOptions,
 } from "./main.js";
@@ -66,6 +65,14 @@ async function start(
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
   return { daemon, directory, sink };
+}
+
+async function writeModule(contents: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "simlock-drivers-module-"));
+  temporaryDirectories.push(directory);
+  const modulePath = join(directory, "drivers.mjs");
+  await writeFile(modulePath, contents, "utf8");
+  return modulePath;
 }
 
 /** A driver whose disposal is observable, which `FakeDriver` deliberately is not. */
@@ -986,116 +993,61 @@ describe("slim diagnostic bridging", () => {
   });
 });
 
-describe("wireComponentInstallLogging", () => {
-  it('writes a durable structured log line under logger.child("components") when component.installed fires', () => {
-    const clock = new FakeClock(1_000);
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-    const eventBus = new EventBus(clock);
+describe("startDaemon event file", () => {
+  const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
 
-    wireComponentInstallLogging(eventBus, logger);
-    eventBus.emit(
-      "component.installed",
-      { componentId: "18.6", durationMs: 42_000, platform: "ios" },
-      "driver-diagnostics",
-    );
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "info",
-        message: "Component installed",
-        module: "daemon.components",
-        fields: { componentId: "18.6", durationMs: 42_000, platform: "ios" },
-      }),
-    );
+  afterEach(() => {
+    if (previousModule === undefined) {
+      delete process.env.SIMLOCK_DRIVERS_MODULE;
+    } else {
+      process.env.SIMLOCK_DRIVERS_MODULE = previousModule;
+    }
   });
 
-  it("includes requesterId in the durable log line when the event carries one", () => {
-    const clock = new FakeClock(1_000);
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-    const eventBus = new EventBus(clock);
+  it("starts a daemon whose event file cannot be opened, and logs one error line", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-event-file-"));
+    temporaryDirectories.push(directory);
+    await mkdir(join(directory, "events.jsonl"));
 
-    wireComponentInstallLogging(eventBus, logger);
-    eventBus.emit(
-      "component.installed",
-      { componentId: "18.6", durationMs: 42_000, platform: "ios", requesterId: "agent-1" },
-      "driver-diagnostics",
-    );
+    const { daemon, sink } = await start({ dataDirectory: directory });
 
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "info",
-        message: "Component installed",
-        module: "daemon.components",
-        fields: {
-          componentId: "18.6",
-          durationMs: 42_000,
-          platform: "ios",
-          requesterId: "agent-1",
-        },
-      }),
-    );
+    expect(daemon.health).toBe("running");
+    expect(
+      sink.records.filter(
+        (record) => record.level === "error" && record.module === "daemon.events",
+      ),
+    ).toHaveLength(1);
   });
 
-  it("does not log for component.install-started or component.install-failed", () => {
-    const clock = new FakeClock(1_000);
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-    const eventBus = new EventBus(clock);
-
-    wireComponentInstallLogging(eventBus, logger);
-    eventBus.emit(
-      "component.install-started",
-      { componentId: "18.6", platform: "ios" },
-      "driver-diagnostics",
-    );
-    eventBus.emit(
-      "component.install-failed",
-      { componentId: "18.6", durationMs: 1_000, error: "boom", platform: "ios" },
-      "driver-diagnostics",
+  it("writes no daemon log line for component.installed and device.slimmed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-event-file-"));
+    temporaryDirectories.push(directory);
+    // The daemon's own bus is reachable only through what it hands discovery.
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers({ eventBus }) {
+         eventBus.emit("component.installed", { componentId: "18.6", durationMs: 1, platform: "ios" }, "test");
+         eventBus.emit("device.slimmed", {
+           address: "a", categories: [], deviceId: "d", durationMs: 1, labelCount: 0,
+           platform: "ios", signature: "s", unknownLabels: [],
+         }, "test");
+         return [];
+       }`,
     );
 
-    expect(sink.records).toEqual([]);
-  });
+    const { sink } = await start({ dataDirectory: directory, drivers: undefined });
 
-  it('writes a durable structured log line under logger.child("slim") when device.slimmed fires', () => {
-    const clock = new FakeClock(1_000);
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-    const eventBus = new EventBus(clock);
-
-    wireComponentInstallLogging(eventBus, logger);
-    eventBus.emit(
-      "device.slimmed",
-      {
-        address: "simlock-ios-1-address",
-        categories: ["siri", "spotlight"],
-        deviceId: "simlock-ios-1",
-        durationMs: 12_000,
-        labelCount: 170,
-        platform: "ios",
-        signature: "sig-abc123",
-        unknownLabels: [],
-      },
-      "driver-diagnostics",
-    );
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "info",
-        message: "Device slimmed",
-        module: "daemon.slim",
-        fields: {
-          categories: ["siri", "spotlight"],
-          deviceId: "simlock-ios-1",
-          durationMs: 12_000,
-          labelCount: 170,
-          signature: "sig-abc123",
-          unknownLabels: [],
-        },
-      }),
-    );
+    const written = (await readFile(join(directory, "events.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as { event: string }).event);
+    expect(written).toEqual(expect.arrayContaining(["component.installed", "device.slimmed"]));
+    expect(
+      sink.records.filter((record) =>
+        JSON.stringify(record).match(
+          /component\.installed|device\.slimmed|Component installed|Device slimmed/,
+        ),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -1109,14 +1061,6 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       process.env.SIMLOCK_DRIVERS_MODULE = previousModule;
     }
   });
-
-  async function writeModule(contents: string): Promise<string> {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-drivers-module-"));
-    temporaryDirectories.push(directory);
-    const modulePath = join(directory, "drivers.mjs");
-    await writeFile(modulePath, contents, "utf8");
-    return modulePath;
-  }
 
   async function discover(sink: MemoryLogSink) {
     const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });

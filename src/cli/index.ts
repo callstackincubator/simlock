@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { EVENT_FILE_NAME, type EventEnvelope, eventKey, readEventFile } from "../bus/index.js";
 import { loadConfig, type ConfigOverrides } from "../core/index.js";
 import {
   IpcError,
@@ -29,7 +30,9 @@ import { connectSimlockAdmin } from "../admin/index.js";
 import {
   isSimlockError,
   type CatalogGetOutput,
+  type AnySimlockError,
   type DoctorReport,
+  type EventPush,
   type LeaseGrant,
   type SimlockAdminClient,
   type StatusGetOutput,
@@ -160,6 +163,8 @@ export interface CliEnvironment {
    * `writeConfigFile` is ever called. Throws (any error) for an invalid merged config. */
   readonly validateConfig: (merged: Record<string, unknown>) => Promise<void>;
   readonly readLogFile?: () => Promise<string>;
+  /** The event file's history newer than `sinceTs`, for `events --since` with no daemon running. */
+  readonly readEventFile: (sinceTs: number) => Promise<readonly EventEnvelope[]>;
   /** Loads the MCP frontend only when the `mcp` command is dispatched. */
   readonly loadMcpStdio?: () => Promise<McpStdioRunner>;
   readonly runMcpStdio?: () => Promise<void>;
@@ -450,6 +455,8 @@ export function buildCliEnvironment(
       if (unknownKeyWarnings.length > 0) throw new Error(unknownKeyWarnings.join("; "));
     },
     readLogFile: async () => readLogFile(filesystem, logPath),
+    readEventFile: (sinceTs) =>
+      readEventFile(filesystem, join(dataDirectory, EVENT_FILE_NAME), { sinceTs }),
     signals: ports.signals ?? process,
     stderr: ports.stderr ?? process.stderr,
     stdout: ports.stdout ?? process.stdout,
@@ -1417,24 +1424,81 @@ async function runEvents(
     environment.stdout.write("Usage: simlock events [--follow] [--since <duration>]\n");
     return 0;
   }
-  const client = await connectDaemonClient(environment, token);
+  const sinceTs =
+    typeof values.since === "string"
+      ? environment.clock.now() - parseDuration(values.since)
+      : undefined;
+  const follow = values.follow === true;
+  const client = await connectForEvents(environment, token, follow ? undefined : sinceTs);
+  if (client === undefined) return 0;
+  const replayInput = sinceTs === undefined ? {} : { sinceTs };
   try {
-    const sinceTs =
-      typeof values.since === "string"
-        ? environment.clock.now() - parseDuration(values.since)
-        : undefined;
-    for (const event of await client.replayEvents(sinceTs === undefined ? {} : { sinceTs })) {
-      writeResult(environment, event);
-    }
-    if (values.follow) {
-      const unsubscribe = await client.subscribeEvents((event) => writeResult(environment, event));
-      await waitForTermination(environment.signals).settled;
-      await unsubscribe();
+    if (follow) {
+      await followEvents(client, replayInput, environment);
+    } else {
+      for (const event of await client.replayEvents(replayInput)) writeResult(environment, event);
     }
     return 0;
   } finally {
     await client.close();
   }
+}
+
+/**
+ * Connects for `simlock events`. History alone (`--since` without `--follow`, passed as
+ * `historySinceTs`) needs no daemon: with nothing listening it prints the event file's history
+ * and resolves `undefined` rather than starting one.
+ */
+async function connectForEvents(
+  environment: CliEnvironment,
+  token: string | undefined,
+  historySinceTs: number | undefined,
+): Promise<SimlockAdminClient | undefined> {
+  if (historySinceTs === undefined) return connectDaemonClient(environment, token);
+  try {
+    return await connectDaemonClient(environment, token, { launch: false });
+  } catch (error: unknown) {
+    if (daemonRefusal(error) !== undefined) throw error;
+    for (const event of await environment.readEventFile(historySinceTs)) {
+      writeResult(environment, event);
+    }
+    return undefined;
+  }
+}
+
+/**
+ * Prints the replay, then streams until a termination signal. Subscribes before replaying, so
+ * nothing emitted in between is lost; a push the replay already holds is printed once.
+ */
+async function followEvents(
+  client: SimlockAdminClient,
+  replayInput: { readonly sinceTs?: number },
+  environment: CliEnvironment,
+): Promise<void> {
+  let buffered: EventPush[] | undefined = [];
+  const unsubscribe = await client.subscribeEvents((event) => {
+    if (buffered === undefined) writeResult(environment, event);
+    else buffered.push(event);
+  });
+  const replayed = await client.replayEvents(replayInput);
+  for (const event of replayed) writeResult(environment, event);
+  const printed = new Set(replayed.map(eventKey));
+  const pending = buffered;
+  buffered = undefined;
+  for (const push of pending) {
+    if (!printed.has(eventKey(push.event))) writeResult(environment, push);
+  }
+  await waitForTermination(environment.signals).settled;
+  await unsubscribe();
+}
+
+/**
+ * The refusal, when a failed connection reached a daemon that answered and refused it (a
+ * `SimlockError` of a kind other than `transport`); `undefined` when nothing is listening.
+ * `daemon status` reports the second as "stopped"; `events --since` reads the event file.
+ */
+function daemonRefusal(error: unknown): AnySimlockError | undefined {
+  return isSimlockError(error) && error.kind !== "transport" ? error : undefined;
 }
 
 // fallow-ignore-next-line complexity -- daemon subcommand parsing is a single CLI boundary.
@@ -1494,14 +1558,17 @@ async function runDaemon(
       // anything else (a raw `IpcError`, or a `transport`-kind `SimlockError` such as
       // `DAEMON_CONNECTION_LOST`) means nothing is listening -- the pre-existing "stopped"
       // outcome.
-      if (isSimlockError(error) && error.kind !== "transport") {
+      const refusal = daemonRefusal(error);
+      if (refusal !== undefined) {
         if (values.json) {
           writeResult(environment, {
             status: "handshake-refused",
-            error: { code: error.code, message: error.message },
+            error: { code: refusal.code, message: refusal.message },
           });
         } else {
-          environment.stdout.write(`Daemon handshake refused: ${error.code}: ${error.message}\n`);
+          environment.stdout.write(
+            `Daemon handshake refused: ${refusal.code}: ${refusal.message}\n`,
+          );
         }
         return 1;
       }

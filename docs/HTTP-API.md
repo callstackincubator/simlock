@@ -636,8 +636,12 @@ an all-or-nothing that leaves the operator guessing.
 - `GET /v1/leases` — every active lease (`simlock list --leases`).
 - `GET /v1/devices` — every managed device, with state and
   `transitionAgeMs` (`simlock list --devices`).
-- `GET /v1/events?since=<duration>` — replay from the in-memory business-event
-  ring buffer (`simlock events`).
+- `GET /v1/events?since=<duration>` — replay business events newer than
+  `since` (`simlock events --since`). They come from the daemon's event file,
+  so they include events from before a daemon restart and beyond the 1000
+  held in memory, back to the oldest event the file still holds
+  (`eventLog.rotateBytes`). Without `since`, the recent events held in
+  memory.
 - `GET /v1/events/stream` — Server-Sent Events follow of the event bus
   (`simlock events --follow`).
 

@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, EventHistory } from "../bus/index.js";
 import { type Config, CleanupReaper, FakeDriver, LeaseEngine, Registry } from "../core/index.js";
 import {
   CryptoTokenSecrets,
@@ -17,6 +17,7 @@ import {
   MemoryIpcTransport,
   NodeFilesystem,
   NodeIpcTransport,
+  NoopLogger,
   SocketPathTooLongError,
   type Filesystem,
   type IdGenerator,
@@ -33,6 +34,7 @@ import type {
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
   DoctorReport,
+  EventPush,
   LeaseGrant,
   LeaseListOutput,
   LeaseRecord,
@@ -2720,6 +2722,194 @@ describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
   });
 });
 
+describe("CLI: events history", () => {
+  const hour = 3_600_000;
+
+  function envelope(seq: number, timestamp: number) {
+    return { seq, timestamp, event: "lease.granted", payload: { seq }, module: "leases" };
+  }
+
+  function printed(stdout: string): unknown[] {
+    return stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
+  }
+
+  it("events --since with nothing listening prints the file's events and launches no daemon", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(
+      "/simlock/events.jsonl",
+      [envelope(1, 500), envelope(2, hour + 500)].map((entry) => JSON.stringify(entry)).join("\n"),
+    );
+    const launcher = new FakeDaemonLauncher(() => {
+      throw new Error("a daemon was launched");
+    });
+    const output = outputCapture({
+      ...realCliEnvironmentPorts(filesystem),
+      clock: new FakeClock(2 * hour),
+      launcher,
+    });
+
+    const exitCode = await runCli(["events", "--since", "1h"], output.environmentWith());
+
+    expect(launcher.launches).toBe(0);
+    expect(exitCode).toBe(0);
+    expect(printed(output.stdout)).toEqual([envelope(2, hour + 500)]);
+  });
+
+  it("events --since reports a daemon that refuses the handshake rather than reading the file", async () => {
+    const output = outputCapture();
+    let fileRead = false;
+    const exitCode = await runCli(
+      ["events", "--since", "1h"],
+      output.environmentWith({
+        connectExistingAdmin: async () => {
+          throw new SimlockError("PROTOCOL_VERSION_UNSUPPORTED", "protocol", "no overlap", {
+            client: { min: 5, max: 5 },
+            daemon: { min: 4, max: 4 },
+            daemonVersion: "0.9.0",
+          });
+        },
+        readEventFile: async () => {
+          fileRead = true;
+          return [];
+        },
+      }),
+    );
+
+    expect(exitCode).not.toBe(0);
+    expect(fileRead).toBe(false);
+    expect(output.stderr).toContain("PROTOCOL_VERSION_UNSUPPORTED");
+  });
+
+  it("events --since with a daemon listening replays through the daemon", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    let fileRead = false;
+    const exitCode = await runCli(
+      ["events", "--since", "1h"],
+      output.environmentWith({
+        clock: new FakeClock(2 * hour),
+        connectExistingAdmin: async () =>
+          fakeClient({
+            replayEvents: async (input) => {
+              asked.push(input);
+              return [envelope(7, hour + 1)];
+            },
+          }),
+        readEventFile: async () => {
+          fileRead = true;
+          return [];
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(asked).toEqual([{ sinceTs: hour }]);
+    expect(printed(output.stdout)).toEqual([envelope(7, hour + 1)]);
+    expect(fileRead).toBe(false);
+  });
+
+  it("events --follow prints an event emitted between the subscribe and the replay exactly once", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    let listener: ((push: EventPush) => void) | undefined;
+    const push = (seq: number): EventPush => ({
+      subscriptionId: "sub_1",
+      event: envelope(seq, seq),
+    });
+    const runPromise = runCli(
+      ["events", "--follow"],
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            subscribeEvents: async (onEvent) => {
+              listener = onEvent;
+              return async () => {};
+            },
+            replayEvents: async () => {
+              // Emitted after the subscribe and before the replay answers: the replay holds
+              // seq 2, and seq 3 lands just after its snapshot.
+              listener?.(push(2));
+              listener?.(push(3));
+              return [envelope(1, 1), envelope(2, 2)];
+            },
+          }),
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    listener?.(push(4));
+    signals.emit("SIGINT");
+
+    expect(await runPromise).toBe(0);
+    expect(printed(output.stdout)).toEqual([envelope(1, 1), envelope(2, 2), push(3), push(4)]);
+  });
+
+  it("events --since --follow prints the history once and then the live events", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const asked: unknown[] = [];
+    let listener: ((push: EventPush) => void) | undefined;
+    const push = (seq: number): EventPush => ({
+      subscriptionId: "sub_1",
+      event: envelope(seq, seq),
+    });
+    const runPromise = runCli(
+      ["events", "--since", "1h", "--follow"],
+      output.environmentWith({
+        clock: new FakeClock(2 * hour),
+        connectAdmin: async () =>
+          fakeClient({
+            subscribeEvents: async (onEvent) => {
+              listener = onEvent;
+              return async () => {};
+            },
+            replayEvents: async (input) => {
+              asked.push(input);
+              listener?.(push(2));
+              return [envelope(1, 1), envelope(2, 2)];
+            },
+          }),
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    listener?.(push(3));
+    signals.emit("SIGINT");
+
+    expect(await runPromise).toBe(0);
+    expect(asked).toEqual([{ sinceTs: hour }]);
+    expect(printed(output.stdout)).toEqual([envelope(1, 1), envelope(2, 2), push(3)]);
+  });
+
+  it("events --follow without --since asks for no sinceTs", async () => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const asked: unknown[] = [];
+    const runPromise = runCli(
+      ["events", "--follow"],
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            replayEvents: async (input) => {
+              asked.push(input);
+              return [];
+            },
+          }),
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    await settle();
+    signals.emit("SIGINT");
+
+    expect(await runPromise).toBe(0);
+    expect(asked).toEqual([{}]);
+  });
+});
+
 describe("CLI: daemon logs (ADR 0003 §11 -- must work when the daemon is dead)", () => {
   it("reads the log file without connecting to the daemon at all", async () => {
     const output = outputCapture();
@@ -3143,6 +3333,7 @@ function outputCapture(ports?: CliEnvironmentPorts): OutputCapture {
           writeConfigFile: async () => {},
           validateConfig: async () => {},
           readLogFile: async () => "",
+          readEventFile: async () => [],
           signals: new EventEmitter() as unknown as CliEnvironment["signals"],
           parentWatch: new FakeParentWatch(),
           stderr: stderrOut,
@@ -3228,6 +3419,12 @@ async function startTestDaemon(): Promise<{ socketPath: string; daemon: DaemonSe
     config,
     defaultRequesterId: "test-process",
     eventBus,
+    eventHistory: new EventHistory({
+      bus: eventBus,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      path: "/events.jsonl",
+    }),
     host: new DaemonEndpointHost({
       connector: new NodeIpcTransport(),
       endpoint: socketPath,
@@ -3337,6 +3534,12 @@ async function startInMemoryDaemon(options: {
     config,
     defaultRequesterId: "test-process",
     eventBus,
+    eventHistory: new EventHistory({
+      bus: eventBus,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      path: "/events.jsonl",
+    }),
     host: new DaemonEndpointHost({
       connector: ipcTransport,
       endpoint: socketPath,
@@ -3402,6 +3605,7 @@ function testConfig(): Config {
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
         maxRetries: 3,

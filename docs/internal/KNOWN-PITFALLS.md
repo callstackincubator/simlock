@@ -329,8 +329,9 @@ step, and `Driver.resolveSpec`'s signature carries no progress callback the
 way `provision`/`makeReady` do. A CLI or MCP caller waiting on a
 multi-minute install today sees nothing on the wire between its request and
 either the eventual grant or a timeout; the only visibility is the daemon's
-own `component.install-started` bus event (`simlock events --follow`) and log
-line, neither reaching the waiting connection itself. Threading a
+own `component.install-started` bus event (`simlock events --follow`, and
+the event file behind `simlock events --since`), which never reaches the
+waiting connection itself. There is no `daemon.log` line for it. Threading a
 `downloading` stage through would mean widening the `Driver` interface
 (`resolveSpec` gaining an `onProgress`-shaped option, both drivers
 implementing it), a new `LeaseProgress` variant, and CLI/MCP wire changes —

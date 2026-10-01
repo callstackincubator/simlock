@@ -180,6 +180,8 @@ export interface Config {
   readonly diskPressure: { readonly freeBytesThreshold: number };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
+  /** The event file (`events.jsonl`): its size before it rotates, one generation kept. */
+  readonly eventLog: { readonly rotateBytes: number };
   readonly http: {
     readonly enabled: boolean;
     readonly host: string;
@@ -402,6 +404,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "log",
   "lease",
   "eventBuffer",
+  "eventLog",
   "gateway",
 ];
 
@@ -619,6 +622,7 @@ function defaultConfig(
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
     // something every operator has to remember to switch on; a worker's HTTP gateway stays
     // opt-in exactly as before.
@@ -759,6 +763,7 @@ function configValidators(strategy: CapacityStrategyName): Record<string, Valida
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
+    eventLog: objectValidator({ rotateBytes: positiveInteger }),
     http: objectValidator({
       enabled: booleanValue,
       host: stringValue,

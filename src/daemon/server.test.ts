@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Socket, connect } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { EventBus } from "../bus/index.js";
+import { EventBus, EventHistory } from "../bus/index.js";
 import {
   type Config,
   type DriverRejection,
@@ -28,6 +28,7 @@ import {
   MemoryLogSink,
   NodeFilesystem,
   NodeIpcTransport,
+  NoopLogger,
   ScriptedProcessRunner,
   type IpcConnection,
   type Logger,
@@ -2832,6 +2833,12 @@ async function createHarness(
       : { driverRejections: options.driverRejections }),
     defaultRequesterId: "test-process",
     eventBus,
+    eventHistory: new EventHistory({
+      bus: eventBus,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      path: "/events.jsonl",
+    }),
     host:
       options.host ??
       new DaemonEndpointHost({
@@ -3159,6 +3166,7 @@ function testConfig(
       },
     },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
+    eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {
       quarantine: {
         maxRetries: 3,

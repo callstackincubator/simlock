@@ -628,7 +628,7 @@ catalog lists is leasable *somewhere*, not necessarily everywhere.
 republished on the gateway's bus with `workerId` added to the payload,
 alongside the gateway's own `worker.*` and `request.dispatched` facts (see
 [EVENTS.md](EVENTS.md)). `--follow` and `--since` work as always, over the
-gateway's own ring buffer.
+gateway's own event history.
 
 **`simlock simctl` and `simlock adb`** keep working, but not the same way
 underneath. Against a **worker** they behave exactly as documented above: the
@@ -1043,8 +1043,22 @@ offer.
 
 ## `simlock events [--follow] [--since <duration>]`
 
-Stream the business-event ring buffer (see [EVENTS.md](EVENTS.md)) as JSON
-lines. `--follow` keeps streaming; `--since 1h` replays recent history.
+Print business events (see [EVENTS.md](EVENTS.md)) as JSON lines.
+
+- With no flags, prints the recent events the daemon holds in memory
+  (`eventBuffer.capacity`, 1000 by default), which start empty after a
+  restart.
+- `--since 1h` reaches further back. Every event is also written to
+  `~/.simlock/events.jsonl`, which survives restarts and crashes, so
+  `--since` returns events from before the last restart and beyond the
+  in-memory limit, back to the oldest event the file still holds. The file
+  is capped by `eventLog.rotateBytes` (see
+  [CONFIGURATION.md](CONFIGURATION.md)); the oldest events go first.
+- `--since` without `--follow`, with no daemon running, reads the file
+  directly and does not start a daemon. `--follow` starts one as usual.
+- `--follow` keeps streaming live events. With `--since`, it prints that
+  history first and then streams, with no event missing or printed twice
+  where the two meet.
 
 Against a **gateway** this is the fleet's stream: every connected worker's
 business events, republished on the gateway's bus with `workerId` added to
@@ -1053,10 +1067,10 @@ the payload, interleaved with the gateway's own `worker.connected` /
 `worker.drain-started` / `worker.drain-ended` / `request.dispatched` facts.
 `worker.rejected` is how you find out why a machine never appeared in
 `simlock worker list` at all — it reports an uplink refused at the door,
-which nothing else records. It is one ring buffer like
-any other, so it resets when the gateway restarts and it holds only what
-arrived while the gateway was up — a worker's events from before its uplink
-connected are not backfilled.
+which nothing else records. The gateway writes these relayed events to its
+own `events.jsonl` along with its own, so `--since` reaches back across a
+gateway restart. It holds only what arrived while the gateway was up — a
+worker's events from before its uplink connected are not backfilled.
 
 ## `simlock daemon <start|stop|status|logs>`
 
@@ -1252,7 +1266,7 @@ fleet; `simlock worker remove` then forgets its view.
 ### `SIMLOCK_HOME`
 
 Overrides the data directory the CLI, MCP server, and daemon all use for
-`config.json`, `state.json`, `daemon.sock`, `daemon.log`, and — unless
+`config.json`, `state.json`, `daemon.sock`, `daemon.log`, `events.jsonl`, and — unless
 overridden — the device roots themselves under `devices/`. Defaults to
 `~/.simlock`. Because devices live under it, it needs a local volume with tens
 of gigabytes free. All three frontends resolve it through the same function

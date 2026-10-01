@@ -29,7 +29,7 @@
  */
 import type { z } from "zod";
 
-import type { EventBus } from "../bus/index.js";
+import type { EventHistory } from "../bus/index.js";
 import { OPERATIONS, type OperationName, type tokenRecordSchema } from "../contract/index.js";
 import {
   DispatchError,
@@ -83,7 +83,8 @@ export interface GatewayTokenStore {
 export interface GatewayDispatcherOptions {
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
-  readonly eventBus: EventBus;
+  /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
+  readonly eventHistory: Pick<EventHistory, "replay">;
   readonly workers: WorkerRegistry;
   readonly tokens?: GatewayTokenStore;
   /**
@@ -205,7 +206,7 @@ export class GatewayDispatcher {
   #configGet: Handler<"config.get"> = () => this.options.config;
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
-    this.options.eventBus.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+    this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);

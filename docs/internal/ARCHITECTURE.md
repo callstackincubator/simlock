@@ -169,8 +169,8 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   the fleet.
 - **What a gateway does not do.** It starts no drivers, validates no device
   roots, and runs no reaper, health monitor or capacity strategy; of the
-  config it reads only `mode`, `http.*`, `log.*`, `lease.*`, `eventBuffer.*`
-  and `gateway.*` (worker-only keys warn and are ignored). It always listens
+  config it reads only `mode`, `http.*`, `log.*`, `lease.*`, `eventBuffer.*`,
+  `eventLog.*` and `gateway.*` (worker-only keys warn and are ignored). It always listens
   on HTTP — that is how agents reach it and what the uplink upgrades from — so
   `http.enabled: false` in gateway mode fails the start rather than being
   silently overridden. `nuke.run`, `cleanup.run`, `doctor.run` and
@@ -665,8 +665,9 @@ views, and `workerId` on every device and lease in the aggregate.
 annotated with the workers that have it.
 
 Worker business events are republished on the gateway's bus with `workerId`
-added to the payload and land in the gateway's own ring buffer, so `simlock
-events --follow` against a gateway shows the whole fleet. The gateway also
+added to the payload and land in the gateway's own ring buffer and event
+file, so `simlock events --follow` against a gateway shows the whole fleet and
+`--since` reaches back across a gateway restart. The gateway also
 emits its own facts — `worker.connected`, `worker.disconnected`,
 `worker.rejected`, `worker.removed`, `worker.drain-started`,
 `worker.drain-ended`, and `request.dispatched`; see [EVENTS.md](EVENTS.md).
@@ -1381,32 +1382,38 @@ kicked off has settled — `simlock status` already reports each device's own
 state (`reclaiming` included), so a separate aggregate would duplicate
 information already visible per-device rather than add any.
 
-Operational logging is a separate concern from the event bus: `simlock events`
-carries business facts (lease granted, device cleaned up, …) in an in-memory
-ring buffer that resets on restart, while the `Logger` port writes durable,
-structured JSON lines — one per record — for startup, socket claim/recovery,
-driver discovery, connection lifecycle, shutdown, and unexpected/handled
-errors. `startDaemon` builds the production `Logger` (`JsonLinesLogger` over a
-`NodeFileLogSink`) from `config.log` right after config loads, then hands
-module-scoped children (`logger.child("server")`, `.child("connection-host")`,
-`.child("driver-discovery")`) to each component so every line is attributable.
-The sink tracks bytes written and rotates `daemon.log` to `daemon.log.1`
-(replacing any previous generation) once `config.log.rotateBytes` is exceeded,
-so growth is bounded and `simlock daemon logs` reads the rotated generation
-before the current file. The one exception is the fatal top-level handler: it
-cannot depend on `config.log` having loaded successfully, so it builds its own
-logger straight from the default log path at a fixed level, falling back to
-`console.error` only if that itself fails.
+Operational logging is a separate concern from the event bus (ADR 0006): two
+records, and no fact is copied from one into the other. The `Logger` port
+writes durable, structured JSON lines — one per record — for startup, socket
+claim/recovery, driver discovery, connection lifecycle, shutdown, and
+unexpected/handled errors. `startDaemon` builds the production `Logger`
+(`JsonLinesLogger` over a `NodeFileLogSink`) from `config.log` right after
+config loads, then hands module-scoped children (`logger.child("server")`,
+`.child("connection-host")`, `.child("driver-discovery")`) to each component
+so every line is attributable. The sink tracks bytes written and rotates
+`daemon.log` to `daemon.log.1` (replacing any previous generation) once
+`config.log.rotateBytes` is exceeded, so growth is bounded and `simlock daemon
+logs` reads the rotated generation before the current file. The one exception
+is the fatal top-level handler: it cannot depend on `config.log` having loaded
+successfully, so it builds its own logger straight from the default log path
+at a fixed level, falling back to `console.error` only if that itself fails.
 
-`startDaemon` also subscribes `logger.child("components")` to `component.installed`
-(`wireComponentInstallLogging` in `src/daemon/main.ts`) so a component simlock
-installed on an agent's behalf stays attributable in `daemon.log` after the
-event ring buffer resets on restart — the same durable-vs-ring-buffer split as
-everything else in this section, applied to component installs specifically
-because there is no registry entry or uninstall for them to be recovered from
-otherwise (see "Out of scope" in the #67 issue). The log line carries
-`requesterId` whenever the event payload has one, so the durable record names
-which agent's request caused the install, not just that one happened.
+Business facts live in the bus's two records. The ring buffer
+(`eventBuffer.capacity`) holds recent events in memory and resets on restart.
+`EventHistory` (`src/bus/event-file.ts`) subscribes to every event and writes
+each envelope as one JSON line to `events.jsonl` in the data directory,
+through a second `NodeFileLogSink` that `startDaemon` opens right after the
+bus with `config.eventLog.rotateBytes`. That file is the durable record and
+the audit trail: it survives restarts and crashes, rotates independently of
+`daemon.log`, and on a gateway holds the relayed fleet events too. A file
+that cannot be opened, or a write that fails, costs the history and never the
+daemon or the emitter: one error line, writing stops, and replay falls back
+to the ring. `events.replay` in both dispatchers asks `EventHistory`: without
+`sinceTs` it answers from the ring, with `sinceTs` from the file (current
+file, then its rotated generation, deduplicated by `seq` and `timestamp`).
+The CLI reads the file itself only for `simlock events --since` when no
+daemon answers; `--follow` subscribes first, replays, and drops replayed
+pushes, so the join neither loses nor repeats an event.
 
 ## Device requests
 
