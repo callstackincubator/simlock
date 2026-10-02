@@ -1860,17 +1860,19 @@ export class AndroidDriver implements Driver {
 
   async #waitForExit(handle: ProcessHandle, timeoutMs: number): Promise<boolean> {
     let timer: TimerHandle | undefined;
-    const exited = await Promise.race([
-      handle.wait().then(() => true),
-      new Promise<boolean>((resolve) => {
-        timer = this.#clock.setTimer(timeoutMs, () => resolve(false));
-      }),
-    ]);
-    // An armed timer holds the event loop open, so a stopped daemon would outlive it (#237).
-    if (timer !== undefined) {
-      this.#clock.cancel(timer);
+    try {
+      return await Promise.race([
+        handle.wait().then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = this.#clock.setTimer(timeoutMs, () => resolve(false));
+        }),
+      ]);
+    } finally {
+      // An armed timer holds the event loop open, so a stopped daemon would outlive it (#237).
+      if (timer !== undefined) {
+        this.#clock.cancel(timer);
+      }
     }
-    return exited;
   }
 
   async #runOrThrow(

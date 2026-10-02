@@ -491,18 +491,36 @@ describe("AndroidDriver", () => {
       (call) => call.command === binaries.emulator && call.args.includes("-avd"),
     );
     const running = harness.runner.handles[launch];
-    expect(running, "no running emulator").toBeDefined();
-    if (running === undefined) return;
+    if (running === undefined) throw new Error("no running emulator");
     const kill = vi.spyOn(running, "kill");
 
     // The emulator ignores `emu kill`: only the timeout can end the wait.
+    const armedBefore = harness.clock.pendingTimerCount;
     const shutdown = harness.driver.shutdown(harness.device);
-    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBe(1));
+    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
     expect(kill).not.toHaveBeenCalled();
     harness.clock.advance(2_000);
     await shutdown;
 
     expect(kill).toHaveBeenCalledWith("SIGKILL");
+    expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
+  });
+
+  it("leaves no timer armed when waiting for the emulator to exit fails", async () => {
+    const harness = await provisionedHarness({
+      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+    });
+    await harness.driver.makeReady(harness.device);
+    const launch = harness.runner.calls.findLastIndex(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    const running = harness.runner.handles[launch];
+    if (running === undefined) throw new Error("no running emulator");
+    // A child that emits `error` rejects its wait instead of resolving it.
+    vi.spyOn(running, "wait").mockRejectedValue(new Error("spawn error"));
+
+    await expect(harness.driver.shutdown(harness.device)).rejects.toThrow("spawn error");
+
     expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
   });
 
