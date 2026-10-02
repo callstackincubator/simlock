@@ -229,12 +229,34 @@ describe("parseDevicesXml", () => {
     ]);
   });
 
+  it("reads the unit with surrounding whitespace, which the schema's token type allows", () => {
+    expect(parseDevicesXml(devicesXmlWithRam('<d:ram unit=" GiB ">2</d:ram>'))).toEqual([
+      {
+        hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": "2048" },
+        name: "Ram Phone",
+      },
+    ]);
+  });
+
+  it("reads <d:ram> and not a <d:ram-size> element next to it", () => {
+    const ram = '<d:ram-size unit="MiB">6144</d:ram-size><d:ram unit="GiB">2</d:ram>';
+    expect(parseDevicesXml(devicesXmlWithRam(ram))).toEqual([
+      {
+        hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": "2048" },
+        name: "Ram Phone",
+      },
+    ]);
+  });
+
   it.each([
     ["an unknown unit", '<d:ram unit="GB">2</d:ram>'],
     ["a unit in the wrong case", '<d:ram unit="gib">2</d:ram>'],
     ["no unit", "<d:ram>2048</d:ram>"],
     ["a fractional value", '<d:ram unit="GiB">1.5</d:ram>'],
     ["an empty value", '<d:ram unit="GiB"></d:ram>'],
+    ["a zero value", '<d:ram unit="GiB">0</d:ram>'],
+    ["a value under half a MiB", '<d:ram unit="KiB">511</d:ram>'],
+    ["a value too large to count exactly in MiB", '<d:ram unit="TiB">1000000000000000</d:ram>'],
   ])("leaves hw.ramSize unset for ram with %s instead of guessing", (_case, ram) => {
     expect(parseDevicesXml(devicesXmlWithRam(ram))).toEqual([
       { hardwareProperties: { "hw.device.name": "Ram Phone" }, name: "Ram Phone" },

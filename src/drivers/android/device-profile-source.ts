@@ -490,8 +490,9 @@ const STORAGE_UNIT_BYTES: ReadonlyMap<string, number> = new Map([
 
 /**
  * The RAM in MiB, or undefined when it cannot be known: a missing or unknown unit (the schema
- * requires one), or a value that is not a positive integer. Undefined leaves `hw.ramSize`
- * unset rather than guessing a unit and writing a wrong size.
+ * requires one), a value that is not a positive integer, or one that comes to under half a MiB
+ * or past what a number counts exactly. Undefined leaves `hw.ramSize` unset rather than
+ * guessing and writing a wrong size.
  */
 function ramSizeToMebibytes(text: string, unit: string | undefined): number | undefined {
   const bytesPerUnit = unit === undefined ? undefined : STORAGE_UNIT_BYTES.get(unit.trim());
@@ -499,7 +500,7 @@ function ramSizeToMebibytes(text: string, unit: string | undefined): number | un
     return undefined;
   }
   const mebibytes = Math.round((Number(text) * bytesPerUnit) / MEBIBYTE);
-  return mebibytes > 0 ? mebibytes : undefined;
+  return mebibytes > 0 && Number.isSafeInteger(mebibytes) ? mebibytes : undefined;
 }
 
 /** All top-level `<(ns:)tag>...</(ns:)tag>` blocks' inner content, in document order. */
