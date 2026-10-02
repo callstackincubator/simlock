@@ -1,5 +1,5 @@
-import type { Driver } from "../../dist/core/driver.js";
-import { OutOfProcessFakeDriver, type FakeDriverClock } from "./fake-driver.js";
+import type { Driver, PrerequisiteCheck } from "../../dist/core/driver.js";
+import { OutOfProcessFakeDriver, readPlatformScript, type FakeDriverClock } from "./fake-driver.js";
 import { DEFAULT_LOG_ENV, DEFAULT_SCRIPT_ENV } from "./types.js";
 
 /**
@@ -17,3 +17,17 @@ export function createDrivers(context: { readonly clock: FakeDriverClock }): Dri
     new OutOfProcessFakeDriver({ clock: context.clock, logPath, platform: "android", scriptPath }),
   ];
 }
+
+/**
+ * Stands in for the real prerequisite checks: each platform reports its script's
+ * `missingPrerequisites`, read on every `doctor` run so a flow can stage one under a
+ * running daemon.
+ */
+export const prerequisiteChecks: readonly PrerequisiteCheck[] = (["ios", "android"] as const).map(
+  (platform) => ({
+    check: async () =>
+      (await readPlatformScript(process.env[DEFAULT_SCRIPT_ENV], platform)).missingPrerequisites ??
+      [],
+    platform,
+  }),
+);

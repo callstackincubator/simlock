@@ -496,18 +496,7 @@ export class OutOfProcessFakeDriver implements Driver {
   }
 
   async #readScript(): Promise<FakeDriverPlatformScript> {
-    if (this.#scriptPath === undefined) {
-      return DEFAULT_SCRIPT;
-    }
-    try {
-      const raw = await readFile(this.#scriptPath, "utf8");
-      const parsed = JSON.parse(raw) as FakeDriverScript;
-      return parsed[this.platform] ?? DEFAULT_SCRIPT;
-    } catch {
-      // Missing file, invalid JSON, or a race with a test rewriting it mid-flight:
-      // fall back to defaults rather than making the fake driver itself flaky.
-      return DEFAULT_SCRIPT;
-    }
+    return readPlatformScript(this.#scriptPath, this.platform);
   }
 
   async #appendLog(operation: FakeDriverOperation, arguments_: readonly unknown[]): Promise<void> {
@@ -526,6 +515,25 @@ export class OutOfProcessFakeDriver implements Driver {
       await mkdir(dirname(this.#logPath), { recursive: true });
       await appendFile(this.#logPath, line, "utf8");
     }
+  }
+}
+
+/** One platform's part of the script file, read fresh; the defaults when there is none. */
+export async function readPlatformScript(
+  scriptPath: string | undefined,
+  platform: Platform,
+): Promise<FakeDriverPlatformScript> {
+  if (scriptPath === undefined) {
+    return DEFAULT_SCRIPT;
+  }
+  try {
+    const raw = await readFile(scriptPath, "utf8");
+    const parsed = JSON.parse(raw) as FakeDriverScript;
+    return parsed[platform] ?? DEFAULT_SCRIPT;
+  } catch {
+    // Missing file, invalid JSON, or a race with a test rewriting it mid-flight:
+    // fall back to defaults rather than making the fake driver itself flaky.
+    return DEFAULT_SCRIPT;
   }
 }
 

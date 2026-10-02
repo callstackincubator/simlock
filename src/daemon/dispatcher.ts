@@ -554,6 +554,9 @@ export class Dispatcher {
     // destructive behaviour by upgrading (ADR 0001, decision 6).
     return this.options.doctor.reconcile({
       fix: input.fix ?? false,
+      // Only an operator's `doctor` looks at the machine's prerequisites; startup convergence
+      // runs no tool.
+      prerequisites: true,
       purgeOrphans: input.purgeOrphans ?? false,
     });
   };

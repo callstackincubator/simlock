@@ -5,9 +5,9 @@ import { FakeClock, MemoryFilesystem } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
-import { Doctor } from "./doctor.js";
+import { Doctor, type DoctorFinding, type DoctorReport } from "./doctor.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import type { DriverRejection } from "./driver.js";
+import type { DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseEngine } from "./lease-engine.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
@@ -1570,6 +1570,230 @@ describe("Doctor", () => {
       expect(payload.driftFindings.some((finding) => finding.kind === "driver-advisory")).toBe(
         false,
       );
+    });
+  });
+
+  describe("prerequisites", () => {
+    const EMULATOR = {
+      message: "The Android emulator package is not installed.",
+      prerequisite: "android-emulator",
+      remedy: "Run `sdkmanager --install emulator`.",
+    };
+    const RESTART = /restart the daemon/;
+
+    /** A check that reports `missing` and counts its runs. */
+    function prerequisiteCheck(
+      platform: "ios" | "android",
+      missing: readonly (typeof EMULATOR)[] = [],
+    ): PrerequisiteCheck & { runs: number } {
+      const check = {
+        check: () => {
+          check.runs += 1;
+          return Promise.resolve(missing);
+        },
+        platform,
+        runs: 0,
+      };
+      return check;
+    }
+
+    async function doctorWith(
+      options: Partial<ConstructorParameters<typeof Doctor>[0]> = {},
+    ): Promise<{ readonly doctor: Doctor; readonly eventBus: EventBus }> {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const registry = await loadRegistry(clock, eventBus);
+      const doctor = new Doctor({
+        clock,
+        config: config(),
+        drivers: [
+          new FakeDriver({ clock, platform: "ios" }),
+          new FakeDriver({ clock, platform: "android" }),
+        ],
+        eventBus,
+        registry,
+        ...options,
+      });
+      return { doctor, eventBus };
+    }
+
+    function prerequisiteFindings(report: DoctorReport) {
+      return report.findings.filter((finding) => finding.kind === "prerequisite-missing");
+    }
+
+    it("reports no prerequisite-missing finding with every prerequisite present and both platforms running", async () => {
+      const checks = [prerequisiteCheck("ios"), prerequisiteCheck("android")];
+      const { doctor } = await doctorWith({ prerequisiteChecks: checks });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(checks.map((check) => check.runs)).toEqual([1, 1]);
+      expect(prerequisiteFindings(report)).toEqual([]);
+    });
+
+    it("reports what a running platform's check finds missing, carrying the driver's text unread", async () => {
+      const { doctor } = await doctorWith({
+        prerequisiteChecks: [prerequisiteCheck("android", [EMULATOR])],
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(prerequisiteFindings(report)).toEqual([
+        { kind: "prerequisite-missing", platform: "android", ...EMULATOR },
+      ]);
+    });
+
+    it("yields no finding from a check that rejects, and does not fail the run", async () => {
+      const failing: PrerequisiteCheck = {
+        check: () => Promise.reject(new Error("xcodebuild timed out")),
+        platform: "ios",
+      };
+      const { doctor } = await doctorWith({
+        driverRejections: [rootRejection()],
+        prerequisiteChecks: [failing, prerequisiteCheck("android", [EMULATOR])],
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(prerequisiteFindings(report).map((finding) => finding.platform)).toEqual(["android"]);
+      expect(report.findings.map((finding) => finding.kind)).toContain("driver-unavailable");
+    });
+
+    it("gives a platform with nothing missing and no running driver one daemon-restart finding", async () => {
+      const { doctor } = await doctorWith({
+        prerequisiteChecks: [prerequisiteCheck("ios"), prerequisiteCheck("android")],
+        runningPlatforms: () => ["ios"],
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(prerequisiteFindings(report)).toEqual([
+        expect.objectContaining({
+          platform: "android",
+          prerequisite: "daemon-restart",
+          remedy: expect.stringMatching(RESTART) as unknown,
+        }),
+      ]);
+    });
+
+    it("gives a platform with a driver rejection no daemon-restart finding", async () => {
+      const { doctor } = await doctorWith({
+        driverRejections: [rootRejection()],
+        prerequisiteChecks: [prerequisiteCheck("ios"), prerequisiteCheck("android")],
+        runningPlatforms: () => ["android"],
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(prerequisiteFindings(report)).toEqual([]);
+    });
+
+    it("tells the operator to restart the daemon on a finding for a platform that is not running, and not on one that is", async () => {
+      const { doctor } = await doctorWith({
+        prerequisiteChecks: [
+          prerequisiteCheck("ios", [{ ...EMULATOR, prerequisite: "xcode" }]),
+          prerequisiteCheck("android", [EMULATOR]),
+        ],
+        runningPlatforms: () => ["ios"],
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+      const [ios, android] = prerequisiteFindings(report) as Extract<
+        DoctorFinding,
+        { readonly kind: "prerequisite-missing" }
+      >[];
+
+      expect(ios?.remedy).toBe(EMULATOR.remedy);
+      expect(android?.remedy.startsWith(EMULATOR.remedy)).toBe(true);
+      expect(android?.remedy).toMatch(RESTART);
+    });
+
+    it("reports the same prerequisite findings with fix: true and asks the driver for nothing but listManaged", async () => {
+      const clock = new FakeClock(10_000);
+      const eventBus = new EventBus(clock);
+      const android = new FakeDriver({ clock, platform: "android" });
+      const check = prerequisiteCheck("android", [EMULATOR]);
+      const doctor = new Doctor({
+        clock,
+        config: config(),
+        drivers: [android],
+        eventBus,
+        prerequisiteChecks: [check],
+        registry: await loadRegistry(clock, eventBus),
+      });
+
+      const plain = await doctor.reconcile({ prerequisites: true });
+      const fixed = await doctor.reconcile({ fix: true, prerequisites: true });
+
+      expect(prerequisiteFindings(fixed)).toEqual(prerequisiteFindings(plain));
+      expect(prerequisiteFindings(fixed)).toHaveLength(1);
+      // The driver saw only the two reconcile-time reads: no install, no provision, nothing.
+      expect(android.calls.map((call) => call.operation)).toEqual(["listManaged", "listManaged"]);
+      expect(check.runs).toBe(2);
+    });
+
+    it("applies --fix before any prerequisite check runs, so a slow check never delays a fix", async () => {
+      const { eventBus, registry } = await readyIosDevice();
+      const deviceId = registry.snapshot.devices[0]!.id;
+      await registry.createLease({
+        deviceId,
+        ownerId: "agent",
+        requesterId: "agent",
+        ttlDeadline: 9_000,
+        ttlMs: 60_000,
+      });
+      const order: string[] = [];
+      const doctor = new Doctor({
+        clock: new FakeClock(10_000),
+        config: config(),
+        drivers: [],
+        eventBus,
+        leaseExpirer: {
+          expire: (leaseId: string) => {
+            order.push(`expire ${leaseId}`);
+            return Promise.resolve();
+          },
+        },
+        prerequisiteChecks: [
+          {
+            check: () => {
+              order.push("check");
+              return Promise.resolve([]);
+            },
+            platform: "android",
+          },
+        ],
+        registry,
+      });
+
+      await doctor.reconcile({ fix: true, prerequisites: true });
+
+      expect(order).toEqual([`expire ${registry.snapshot.leases[0]!.id}`, "check"]);
+    });
+
+    it("runs no prerequisite check when reconcile is not asked to", async () => {
+      const check = prerequisiteCheck("android", [EMULATOR]);
+      const { doctor } = await doctorWith({ prerequisiteChecks: [check] });
+
+      const report = await doctor.reconcile();
+
+      expect(check.runs).toBe(0);
+      expect(prerequisiteFindings(report)).toEqual([]);
+    });
+
+    it("leaves prerequisite-missing findings out of doctor.reconciled", async () => {
+      const { doctor, eventBus } = await doctorWith({
+        prerequisiteChecks: [prerequisiteCheck("android", [EMULATOR])],
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(prerequisiteFindings(report)).toHaveLength(1);
+      const reconciled = eventBus.replay().find((event) => event.event === "doctor.reconciled");
+      const payload = reconciled!.payload as {
+        readonly driftFindings: readonly { readonly kind: string }[];
+      };
+      expect(payload.driftFindings).toEqual([]);
     });
   });
 });

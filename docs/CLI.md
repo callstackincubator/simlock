@@ -25,6 +25,33 @@ pointer to `simlock --help`, so a human hitting one from a terminal isn't
 stranded with only a JSON blob — the full command banner itself is no
 longer dumped to stderr on every failure, only on request via `--help`.
 
+## Prerequisites
+
+Simlock drives the platform tools already on the machine. It does not install
+any of them; install them yourself before starting the daemon. A platform
+whose prerequisites are missing is simply unavailable, and `simlock doctor`
+names what is missing and how to install it.
+
+iOS (macOS only):
+
+- Xcode, installed and selected (`sudo xcode-select -s /Applications/Xcode.app`).
+- The Xcode license accepted (`sudo xcodebuild -license accept`).
+- Xcode's first-launch setup done (`sudo xcodebuild -runFirstLaunch`).
+
+Android:
+
+- An Android SDK, found at `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or
+  `~/Library/Android/sdk`, in that order.
+- The SDK's command-line tools (`sdkmanager` and `avdmanager`), from Android
+  Studio or the [command-line tools download](https://developer.android.com/studio#command-line-tools-only).
+- The `emulator` package (`sdkmanager --install emulator`).
+- The `platform-tools` package (`sdkmanager --install platform-tools`).
+- A JDK the SDK tools can run on, with `JAVA_HOME` set.
+
+The daemon looks for a platform's tools once, when it starts. After installing
+a missing prerequisite, restart the daemon (`simlock daemon stop`, then any
+command starts it again) to bring the platform up.
+
 ## Global exit codes
 
 | Exit | Error code | Meaning |
@@ -1308,8 +1335,8 @@ reason. Driver discovery runs once, at daemon startup, so re-running `doctor`
 after repairing the root reports the same finding until the daemon is
 restarted; the finding says so.
 
-Nothing else is reported about a platform whose driver did not start. Its
-devices are unobservable, not missing, and `--fix` must never mark a registry
+Apart from its prerequisites (below), nothing else is reported about a
+platform whose driver did not start. Its devices are unobservable, not missing, and `--fix` must never mark a registry
 device deleted on the strength of a reality nobody could read.
 
 A `provisioning` or `reclaiming` device is normally in-flight work Simlock
@@ -1344,6 +1371,25 @@ enabled for a while, several of these can accumulate unnoticed. The finding
 names each one and the one supported way to get the space back: remove the
 platform in Xcode's Settings → Platforms. Advisory only, like the finding
 above — reclaiming this space is outside anything `--fix` may do.
+
+`doctor` also checks the [prerequisites](#prerequisites) of each platform
+this host can run (iOS only on macOS), every time it runs. Each one missing is
+a `prerequisite-missing` finding with `platform`, `prerequisite` (for example
+`xcode`, `android-emulator` or `android-cmdline-tools`), `message`, and
+`remedy` — the command or download page that installs it. With no Android SDK
+at any searched path, that is a single `android-sdk` finding listing the
+paths. Each finding is also printed to stderr as one line:
+
+```text
+Missing [android] android-emulator: The Android emulator package is not installed in /Users/me/Library/Android/sdk. Run `sdkmanager --install emulator`.
+```
+
+Installing a prerequisite clears its finding on the next `doctor` run. A
+platform that is not running needs a daemon restart as well, and its
+findings say so; once everything it needs is present, it gets one
+`daemon-restart` finding until the daemon is restarted. A check that cannot
+tell — a command that times out, say — reports nothing. These findings never
+change the exit code, and `--fix` never installs anything.
 
 ## `simlock nuke [--delete-devices] [--yes]`
 
@@ -1642,4 +1688,8 @@ which must return `Driver[]` (or a promise of it, matching
 without real hardware — can run the full daemon against a scripted driver
 instead of `simctl`/`adb`. It is not meant for production use: a module that
 fails to import, or does not export `createDrivers`, fails daemon startup
-loudly rather than silently falling back to real discovery.
+loudly rather than silently falling back to real discovery. The module may
+also export `prerequisiteChecks`, an array of `{ platform, check() }` objects
+whose `check()` resolves to the `{ prerequisite, message, remedy }` entries
+missing; `doctor` runs those in place of the real
+[prerequisite](#prerequisites) checks, and runs none when the export is absent.

@@ -167,6 +167,30 @@ export interface DriverAdvisory {
 }
 
 /**
+ * A tool Simlock needs and does not install, found missing by a `PrerequisiteCheck`. Every
+ * field is the driver module's own text; the core carries all three unread.
+ */
+export interface MissingPrerequisite {
+  /** Short kebab-case identifier the driver module owns. */
+  readonly prerequisite: string;
+  /** What is missing. */
+  readonly message: string;
+  /** The command or step that installs it. */
+  readonly remedy: string;
+}
+
+/**
+ * Looks for one platform's prerequisites on this machine. Deliberately not a `Driver` method:
+ * it has to answer exactly when the driver could not be built, because a prerequisite is
+ * missing. Read-only -- it never installs, downloads or writes -- and every process it starts
+ * is bounded. It rejects when it cannot tell, rather than reporting something missing.
+ */
+export interface PrerequisiteCheck {
+  readonly platform: Platform;
+  check(): Promise<readonly MissingPrerequisite[]>;
+}
+
+/**
  * One platform tool a driver uses and the version installed (ADR 0008 §6). `name` and the
  * version format are the driver's own; the core reports them and reads neither.
  */

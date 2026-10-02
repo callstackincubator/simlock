@@ -859,6 +859,26 @@ listManaged()        -> device/process reality inside this driver's owned root, 
 The litmus test for the boundary: adding a third driver (e.g. physical
 devices) must require **no core changes**. If it does, the interface leaked.
 
+### Prerequisite checks
+
+Simlock installs none of the platform tools it drives (Xcode; the Android SDK's
+`cmdline-tools`, `emulator`, `platform-tools`; a JDK). Each driver module also
+exports a `PrerequisiteCheck` (`src/drivers/ios/prerequisites.ts`,
+`src/drivers/android/prerequisites.ts`) that says which of them are missing and
+how to install each. The checks are deliberately not methods on the `Driver`:
+they matter most when the driver could not be built, because something it needs
+is missing. The composition root builds them beside discovery (iOS only on
+macOS, Android everywhere; a `SIMLOCK_DRIVERS_MODULE` supplies its own through
+an optional `prerequisiteChecks` export) and hands them to `Doctor`, which runs
+them on every `doctor.run` and never during startup convergence. The core
+carries `prerequisite`, `message` and `remedy` unread; the only text it adds is
+the restart sentence for a platform that is not running, since discovery runs
+once per daemon. A check is read-only, bounds every process it starts, and
+rejects rather than guessing when it cannot tell. The Android check locates
+each tool through the same functions discovery uses
+(`src/drivers/android/sdk-paths.ts`), so the two cannot disagree about where a
+tool is.
+
 ### Device roots
 
 Each driver owns a directory that Simlock created and marked, and scopes every

@@ -1373,6 +1373,7 @@ async function runDoctor(
   try {
     const response = await client.runDoctor({ fix: values.fix === true, purgeOrphans });
     writeDriverAdvisoryWarnings(environment, response);
+    writeMissingPrerequisites(environment, response);
     writeResult(environment, response);
     return 0;
   } finally {
@@ -1392,6 +1393,20 @@ function writeDriverAdvisoryWarnings(environment: CliEnvironment, report: Doctor
   for (const finding of report.findings) {
     if (finding.kind !== "driver-advisory") continue;
     environment.stderr.write(`Warning [${finding.platform}] ${finding.code}: ${finding.message}\n`);
+  }
+}
+
+/**
+ * `prerequisite-missing` findings, one stderr line each, for the same reason as the advisories
+ * above: a human sees what to install without reading the JSON, which stdout still carries whole.
+ * Not a failure either -- the exit code stays 0.
+ */
+function writeMissingPrerequisites(environment: CliEnvironment, report: DoctorReport): void {
+  for (const finding of report.findings) {
+    if (finding.kind !== "prerequisite-missing") continue;
+    environment.stderr.write(
+      `Missing [${finding.platform}] ${finding.prerequisite}: ${finding.message} ${finding.remedy}\n`,
+    );
   }
 }
 

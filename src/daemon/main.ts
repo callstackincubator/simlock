@@ -10,6 +10,7 @@ import {
   type DeviceMode,
   type Driver,
   type DriverRejection,
+  type PrerequisiteCheck,
   CleanupReaper,
   ComponentInstaller,
   DiskSpaceGuard,
@@ -32,7 +33,9 @@ import {
   SdkMissingError,
   type AndroidEmulatorLaunchOptions,
 } from "../drivers/android/index.js";
+import { androidPrerequisites } from "../drivers/android/prerequisites.js";
 import { IOS_PASSTHROUGH_TOOL, IosSimctlDriver, type SlimmedFact } from "../drivers/ios/index.js";
+import { iosPrerequisites } from "../drivers/ios/prerequisites.js";
 import { createHttpApp } from "../http/app.js";
 import { HttpGateway } from "../http/server.js";
 import { TokenStore } from "../http/token-store.js";
@@ -96,6 +99,8 @@ export interface StartDaemonOptions {
   readonly dataDirectory?: string;
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
+  /** With `drivers`: the prerequisite checks `doctor` runs in place of discovery's. None if omitted. */
+  readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
   readonly idGenerator?: IdGenerator;
@@ -192,7 +197,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     idGenerator,
     path: join(dataDirectory, "instance.json"),
   });
-  const { drivers, rejections } =
+  const { drivers, prerequisiteChecks, rejections } =
     options.drivers === undefined
       ? await discoverDrivers({
           acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
@@ -213,7 +218,11 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
           androidEmulator: config.android.emulator,
           tcpProbe,
         })
-      : { drivers: options.drivers, rejections: [] };
+      : {
+          drivers: options.drivers,
+          prerequisiteChecks: options.prerequisiteChecks ?? [],
+          rejections: [],
+        };
   // ADR 0008 §7: read at startup in the background, served from memory, re-read when stale.
   // Nothing waits on the first read; `status.get` reports no tools until it lands.
   const hostFacts = new HostFactsReader({
@@ -274,8 +283,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     leaseExpirer: leaseEngine,
     logger,
+    prerequisiteChecks,
     quarantine: leaseEngine,
     registry,
+    runningPlatforms: () => drivers.map((driver) => driver.platform),
   });
   const nuke = new Nuke({ executor: leaseEngine, registry });
   // Constructed unconditionally, not just when `config.http.enabled` -- ADR 0003 §5's operator
@@ -833,9 +844,13 @@ export interface DriverDiscoveryContext {
   readonly androidEmulator?: AndroidEmulatorLaunchOptions;
 }
 
-/** Drivers that started, and the platforms that refused to -- both are startup outcomes. */
+/**
+ * Drivers that started, and the platforms that refused to -- both are startup outcomes -- with
+ * the prerequisite checks for every platform this host could run, started or not.
+ */
 export interface DriverDiscovery {
   readonly drivers: readonly Driver[];
+  readonly prerequisiteChecks: readonly PrerequisiteCheck[];
   readonly rejections: readonly DriverRejection[];
 }
 
@@ -845,7 +860,7 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
   if (driversModule !== undefined) {
     // A substituted driver set owns whatever roots it wants, so there is nothing here to
     // refuse on its behalf.
-    return { drivers: await loadDriversModule(driversModule, options, logger), rejections: [] };
+    return { ...(await loadDriversModule(driversModule, options, logger)), rejections: [] };
   }
 
   const drivers: Driver[] = [];
@@ -858,7 +873,44 @@ export async function discoverDrivers(options: DriverDiscoveryContext): Promise<
   const android = await discoverAndroidDriver(options, logger);
   if (android.driver !== undefined) drivers.push(android.driver);
   if (android.rejection !== undefined) rejections.push(android.rejection);
-  return { drivers, rejections };
+  return {
+    drivers,
+    prerequisiteChecks: platformPrerequisiteChecks({
+      env: process.env,
+      filesystem: options.filesystem,
+      homeDirectory: homedir(),
+      hostPlatform: options.hostPlatform,
+      processRunner: options.processRunner,
+    }),
+    rejections,
+  };
+}
+
+/**
+ * The checks `doctor` runs for the platforms this host could run: iOS only on macOS, as
+ * discovery itself decides, and Android everywhere. Built whether or not the platform's
+ * driver started, because a driver that did not start is exactly when they are needed.
+ */
+export function platformPrerequisiteChecks(options: {
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly filesystem: Filesystem;
+  readonly homeDirectory: string;
+  readonly hostPlatform: NodeJS.Platform;
+  readonly processRunner: ProcessRunner;
+}): readonly PrerequisiteCheck[] {
+  const checks: PrerequisiteCheck[] = [];
+  if (options.hostPlatform === "darwin") {
+    checks.push(iosPrerequisites({ processRunner: options.processRunner }));
+  }
+  checks.push(
+    androidPrerequisites({
+      env: options.env,
+      filesystem: options.filesystem,
+      homeDirectory: options.homeDirectory,
+      processRunner: options.processRunner,
+    }),
+  );
+  return checks;
 }
 
 /**
@@ -1003,13 +1055,14 @@ function rootRejection(error: OwnedRootError, passthroughTool: string): DriverRe
  * imported -- this is how the e2e suite injects a scriptable fake driver without the
  * daemon ever knowing it isn't talking to real hardware. A missing module, an import
  * error, or a module without a `createDrivers` export fails daemon startup loudly
- * rather than silently falling back to real discovery.
+ * rather than silently falling back to real discovery. Its optional `prerequisiteChecks`
+ * export replaces the real checks too; without one, `doctor` runs none.
  */
 async function loadDriversModule(
   modulePath: string,
   context: DriverDiscoveryContext,
   logger: Logger,
-): Promise<readonly Driver[]> {
+): Promise<Omit<DriverDiscovery, "rejections">> {
   logger.info("Substituting driver discovery via SIMLOCK_DRIVERS_MODULE", {
     module: modulePath,
   });
@@ -1018,6 +1071,7 @@ async function loadDriversModule(
     createDrivers?: (
       context: DriverDiscoveryContext,
     ) => Promise<readonly Driver[]> | readonly Driver[];
+    prerequisiteChecks?: readonly PrerequisiteCheck[];
   };
   if (typeof imported.createDrivers !== "function") {
     throw new Error(
@@ -1030,7 +1084,7 @@ async function loadDriversModule(
     module: modulePath,
     platforms: drivers.map((driver) => driver.platform),
   });
-  return drivers;
+  return { drivers, prerequisiteChecks: imported.prerequisiteChecks ?? [] };
 }
 
 /**

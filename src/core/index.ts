@@ -46,6 +46,7 @@ export {
   type ObservedDevice,
   type ObservedRunState,
   type PassthroughCommand,
+  type PrerequisiteCheck,
   PassthroughRefusedError,
   RuntimeMissingError,
   sameReceipt,

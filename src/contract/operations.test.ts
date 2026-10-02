@@ -290,6 +290,21 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["doctor.run"].output.parse(report)).toBeDefined();
   });
 
+  it("doctor.run: round-trips a prerequisite-missing finding field for field", () => {
+    const finding = {
+      kind: "prerequisite-missing",
+      platform: "android",
+      prerequisite: "android-emulator",
+      message: "The Android emulator package is not installed.",
+      remedy: "Run `sdkmanager --install emulator`.",
+    };
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+      findings: [finding],
+    });
+    const { remedy: _remedy, ...withoutRemedy } = finding;
+    expect(() => OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy] })).toThrow();
+  });
+
   it("status.get: round-trips a representative status snapshot", () => {
     const status = {
       devices: [],

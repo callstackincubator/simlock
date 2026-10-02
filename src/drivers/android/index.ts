@@ -57,6 +57,7 @@ import {
   type DeviceProfileSourceDiagnostic,
   type DeviceProfile,
 } from "./device-profile-source.js";
+import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
 
@@ -210,14 +211,6 @@ export class AndroidLicenseNotAcceptedError extends LicenseNotAcceptedError {
       `\`sdkmanager --licenses\` manually.`;
     this.name = "AndroidLicenseNotAcceptedError";
   }
-}
-
-interface AndroidSdkPaths {
-  readonly adb: string;
-  readonly avdmanager: string;
-  readonly emulator: string;
-  readonly root: string;
-  readonly sdkmanager: string;
 }
 
 interface DeviceState {
@@ -1949,91 +1942,11 @@ function configuredAdbServerPort(options: AndroidDriverOptions): number {
 }
 
 async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPaths> {
-  const roots = [
-    options.env.ANDROID_HOME,
-    options.env.ANDROID_SDK_ROOT,
-    `${options.homeDirectory}/Library/Android/sdk`,
-  ].filter((root): root is string => root !== undefined && root !== "");
-  const searchedPaths: string[] = [];
-
-  for (const root of roots) {
-    const paths = await sdkPathsAt(root, options.filesystem);
-    searchedPaths.push(root);
-    if (paths !== undefined) {
-      return paths;
-    }
+  const location = await locateSdk(options.env, options.homeDirectory, options.filesystem);
+  if (location.kind === "complete") {
+    return location.paths;
   }
-  throw new SdkMissingError(searchedPaths);
-}
-
-async function sdkPathsAt(
-  root: string,
-  filesystem: Filesystem,
-): Promise<AndroidSdkPaths | undefined> {
-  const commandLineTools = await commandLineToolBins(root, filesystem);
-  const legacyTools = `${root}/tools/bin`;
-  const toolBins = [...commandLineTools, legacyTools];
-  const tools = await firstCompleteToolBin(filesystem, toolBins);
-  const emulator = `${root}/emulator/emulator`;
-  const adb = `${root}/platform-tools/adb`;
-  if (
-    tools === undefined ||
-    !(await filesystem.exists(emulator)) ||
-    !(await filesystem.exists(adb))
-  ) {
-    return undefined;
-  }
-  return { adb, emulator, root, ...tools };
-}
-
-async function commandLineToolBins(root: string, filesystem: Filesystem): Promise<string[]> {
-  const toolsRoot = `${root}/cmdline-tools`;
-  if (!(await filesystem.exists(toolsRoot))) {
-    return [];
-  }
-
-  const directories = await filesystem.readdir(toolsRoot);
-  return directories
-    .sort(compareCommandLineToolVersions)
-    .reverse()
-    .map((directory) => `${toolsRoot}/${directory}/bin`);
-}
-
-async function firstCompleteToolBin(
-  filesystem: Filesystem,
-  bins: readonly string[],
-): Promise<Pick<AndroidSdkPaths, "avdmanager" | "sdkmanager"> | undefined> {
-  for (const bin of bins) {
-    const avdmanager = `${bin}/avdmanager`;
-    const sdkmanager = `${bin}/sdkmanager`;
-    if ((await filesystem.exists(avdmanager)) && (await filesystem.exists(sdkmanager))) {
-      return { avdmanager, sdkmanager };
-    }
-  }
-  return undefined;
-}
-
-function compareCommandLineToolVersions(left: string, right: string): number {
-  if (left === "latest") {
-    return 1;
-  }
-  if (right === "latest") {
-    return -1;
-  }
-
-  const leftSegments = left.split(".").map(Number);
-  const rightSegments = right.split(".").map(Number);
-  if (leftSegments.every(Number.isFinite) && rightSegments.every(Number.isFinite)) {
-    const length = Math.max(leftSegments.length, rightSegments.length);
-    for (let index = 0; index < length; index += 1) {
-      const difference = (leftSegments[index] ?? 0) - (rightSegments[index] ?? 0);
-      if (difference !== 0) {
-        return difference;
-      }
-    }
-  }
-
-  return left.localeCompare(right);
+  throw new SdkMissingError(location.searched);
 }
 
 /**
