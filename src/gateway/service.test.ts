@@ -411,6 +411,154 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  describe("installs in progress on the view (ADR 0010 §7)", () => {
+    const install = {
+      component: "26.4",
+      platform: "ios" as const,
+      since: 500,
+      state: "downloading" as const,
+      waiters: 1,
+    };
+
+    async function joined(worker: ScriptedWorkerClient) {
+      const harness = fleet();
+      await harness.service.start();
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.downloads).toBeDefined(),
+      );
+      return harness;
+    }
+
+    it("shows a worker's install after component.install-started and drops it after component.installed, without waiting for the periodic refresh", async () => {
+      const worker = new ScriptedWorkerClient();
+      const harness = await joined(worker);
+      expect(harness.service.workers.view("wrk_1")?.installs).toEqual([]);
+
+      worker.status = statusFixture({ installs: [install] });
+      worker.pushEvent({ event: "component.install-started" });
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.installs).toEqual([install]),
+      );
+
+      worker.status = statusFixture({ installs: [] });
+      worker.pushEvent({ event: "component.installed" });
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.installs).toEqual([]));
+
+      await harness.service.stop();
+    });
+
+    it("drops a worker's install after component.install-failed, without waiting for the periodic refresh", async () => {
+      const worker = new ScriptedWorkerClient();
+      worker.status = statusFixture({ installs: [install] });
+      const harness = await joined(worker);
+      expect(harness.service.workers.view("wrk_1")?.installs).toEqual([install]);
+
+      worker.status = statusFixture({ installs: [] });
+      worker.pushEvent({ event: "component.install-failed" });
+
+      await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.installs).toEqual([]));
+      await harness.service.stop();
+    });
+
+    it("lists the new runtime in the view's catalog after component.installed, without waiting for the periodic refresh", async () => {
+      const worker = new ScriptedWorkerClient();
+      worker.catalog = catalogFixture([
+        { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+      ]);
+      const harness = await joined(worker);
+
+      worker.catalog = catalogFixture([
+        { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0", "26.4"] },
+      ]);
+      worker.pushEvent({ event: "component.installed" });
+
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+          "26.0",
+          "26.4",
+        ]),
+      );
+      await harness.service.stop();
+    });
+
+    it("re-reads the catalog for a component.installed that queues behind a refresh in flight, and keeps it when another event queues after it", async () => {
+      const worker = new ScriptedWorkerClient();
+      worker.catalog = catalogFixture([
+        { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+      ]);
+      const harness = await joined(worker);
+
+      worker.catalog = catalogFixture([
+        { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0", "26.4"] },
+      ]);
+      // The first starts a refresh without the catalog; the other two share the one queued
+      // behind it, and the last does not ask for the catalog.
+      worker.pushEvent({ event: "lease.granted" });
+      worker.pushEvent({ event: "component.installed" });
+      worker.pushEvent({ event: "lease.released" });
+
+      await vi.waitFor(() =>
+        expect(harness.service.workers.view("wrk_1")?.catalog[0]?.runtimes).toEqual([
+          "26.0",
+          "26.4",
+        ]),
+      );
+      await harness.service.stop();
+    });
+
+    it("yields a view with no installs, still connected, for a worker whose status has no installs field", async () => {
+      const worker = new ScriptedWorkerClient();
+      const { installs: _absent, ...withoutInstalls } = statusFixture();
+      worker.status = { ...withoutInstalls, queueDepth: 3 };
+
+      const harness = await joined(worker);
+
+      const view = harness.service.workers.view("wrk_1");
+      expect(view?.queueDepth).toBe(3);
+      expect(view?.installs).toEqual([]);
+      expect(view?.connection).toBe("connected");
+      await harness.service.stop();
+    });
+
+    it("truncates a worker's installs to 16 entries and an over-long component to 64 characters, rather than storing them as sent", async () => {
+      const worker = new ScriptedWorkerClient();
+      worker.status = statusFixture({
+        installs: Array.from({ length: 20 }, (_, index) => ({
+          ...install,
+          component: `${String(index).padStart(2, "0")}${"x".repeat(100)}`,
+          since: index,
+        })),
+      });
+
+      const harness = await joined(worker);
+
+      const installs = harness.service.workers.view("wrk_1")?.installs ?? [];
+      expect(installs).toHaveLength(16);
+      expect(installs.map((entry) => entry.component)).toEqual(
+        Array.from({ length: 16 }, (_, index) =>
+          `${String(index).padStart(2, "0")}${"x".repeat(100)}`.slice(0, 64),
+        ),
+      );
+      expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
+      await harness.service.stop();
+    });
+
+    it("carries the worker's own downloads.timeoutMs on the view", async () => {
+      const worker = new ScriptedWorkerClient();
+      worker.downloadTimeoutMs = 45 * 60_000;
+
+      const harness = await joined(worker);
+
+      expect(harness.service.workers.view("wrk_1")?.downloads).toEqual({
+        policy: "on-request",
+        timeoutMs: 45 * 60_000,
+      });
+      await harness.service.stop();
+    });
+  });
+
   describe("warning on a worker's lower lease.maxTtlMs (ADR 0005 §15)", () => {
     it("warns once the joining worker's own config.get reports a lower cap", async () => {
       const logger = new RecordingLogger();

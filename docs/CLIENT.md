@@ -245,6 +245,27 @@ const { host } = await client.getStatus();
   drivers. Each worker's `host` is on its entry in `workers`, and on
   `listWorkers()` from the admin client.
 
+## What is installing: `getStatus().installs`
+
+`getStatus()` lists the component installs waiting or running on the
+machine, whoever started them, oldest first and at most 16:
+
+```ts
+const { installs = [] } = await client.getStatus();
+// [{ platform: "ios", component: "26.4", state: "downloading", since: 1790864071200, waiters: 2 }]
+```
+
+- `state` is `downloading` while the platform's installer runs, and `waiting`
+  while the install is queued behind another one on the same platform or
+  about to start. `since` is when the first request for it arrived; `waiters`
+  is how many requests wait on it.
+- An install leaves the list as soon as it ends, whether it succeeded,
+  failed or timed out. The field is absent only from an older daemon.
+- On a gateway the list covers the connected workers, each entry with its
+  `workerId`, the 16 oldest across the fleet. Each worker's own list is on
+  its entry in `workers` and on `listWorkers()`, beside its
+  `downloads.timeoutMs`.
+
 ## One connection, no reconnect, no retry
 
 This is the one thing to internalize before building anything on top of this

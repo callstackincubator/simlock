@@ -4,8 +4,11 @@ import { testComponentWiring } from "../core/test-wiring.js";
 import { EventBus, type EventEnvelope, EventHistory } from "../bus/index.js";
 import {
   CleanupReaper,
+  ComponentInstaller,
   type Config,
+  DiskSpaceGuard,
   Doctor,
+  DriverCatalog,
   FakeDriver,
   type HostFacts,
   HostFactsReader,
@@ -13,6 +16,7 @@ import {
   Nuke,
   PassthroughRefusedError,
   Registry,
+  SerializedDecision,
 } from "../core/index.js";
 import { OPERATIONS } from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";
@@ -112,6 +116,8 @@ async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     /** Replaces the capacity block, for a test about one strategy's options. */
     readonly capacity?: Config["capacity"];
+    /** The installer `status.get` lists installs from; none by default. */
+    readonly components?: Pick<ComponentInstaller, "inProgress">;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -207,6 +213,7 @@ async function buildDispatcher(
     capacity: engine,
     catalog: overrides.catalog ?? engine,
     clock,
+    ...(overrides.components === undefined ? {} : { components: overrides.components }),
     config,
     doctor,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
@@ -964,6 +971,108 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     ).toEqual([["27.0"]]);
   });
 });
+
+describe("Dispatcher: status.get installs in progress", () => {
+  const installTimeoutMs = 60_000;
+
+  /** A dispatcher whose `status.get` reads a real installer over an iOS fake driver that holds
+   * every install until the test releases it. */
+  async function withInstaller() {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.holdInstalls();
+    const installer = new ComponentInstaller({
+      clock,
+      decisions: new SerializedDecision(),
+      diskSpace: new DiskSpaceGuard(),
+      drivers: new DriverCatalog([driver]),
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      registry: { recordComponent: () => Promise.resolve() },
+      timeoutMs: installTimeoutMs,
+    });
+    const { dispatcher } = await buildDispatcher({ clock, components: installer });
+    const installs = async () => (await dispatcher.dispatch("status.get", {}, session())).installs;
+    return { clock, driver, installer, installs };
+  }
+
+  it("lists a running install as downloading and one behind it on the same platform as waiting", async () => {
+    const { clock, installer, installs } = await withInstaller();
+
+    void installer.install({ component: "27.0", platform: "ios" });
+    await flushPromises();
+    clock.advance(2_000);
+    void installer.install({ component: "28.0", platform: "ios" });
+    await flushPromises();
+
+    expect(await installs()).toEqual([
+      { component: "27.0", platform: "ios", since: 1_000, state: "downloading", waiters: 1 },
+      { component: "28.0", platform: "ios", since: 3_000, state: "waiting", waiters: 1 },
+    ]);
+  });
+
+  it("lists an install three calls joined once, with waiters: 3", async () => {
+    const { installer, installs } = await withInstaller();
+
+    for (let call = 0; call < 3; call += 1) {
+      void installer.install({ component: "27.0", platform: "ios" });
+    }
+    await flushPromises();
+
+    expect(await installs()).toEqual([
+      { component: "27.0", platform: "ios", since: 1_000, state: "downloading", waiters: 3 },
+    ]);
+  });
+
+  it("lists no install once it has succeeded", async () => {
+    const { driver, installer, installs } = await withInstaller();
+    const call = installer.install({ component: "27.0", platform: "ios" });
+    await flushPromises();
+    expect(await installs()).toHaveLength(1);
+
+    driver.releaseInstalls();
+    await call;
+
+    expect(await installs()).toEqual([]);
+  });
+
+  it("lists no install once it has failed", async () => {
+    const { driver, installer, installs } = await withInstaller();
+    driver.releaseInstalls();
+    driver.failOn("installComponent", 1, new Error("installer exited 1"));
+    const call = installer.install({ component: "27.0", platform: "ios" });
+    // Listed from the moment it is asked for, before the driver has run.
+    expect(installer.inProgress()).toHaveLength(1);
+
+    await expect(call).rejects.toThrow("installer exited 1");
+    expect(await installs()).toEqual([]);
+  });
+
+  it("lists no install once it has timed out, running or still waiting", async () => {
+    const { clock, installer, installs } = await withInstaller();
+    const running = installer.install({ component: "27.0", platform: "ios" });
+    const waiting = installer.install({ component: "28.0", platform: "ios" });
+    await flushPromises();
+    expect(await installs()).toHaveLength(2);
+
+    clock.advance(installTimeoutMs);
+    await expect(running).rejects.toMatchObject({ name: "ComponentInstallTimeoutError" });
+    await expect(waiting).rejects.toMatchObject({ name: "ComponentInstallTimeoutError" });
+
+    expect(await installs()).toEqual([]);
+  });
+
+  it("answers an empty list when nothing is installing", async () => {
+    const { installs } = await withInstaller();
+
+    expect(await installs()).toEqual([]);
+  });
+});
+
+/** Lets every settled promise and queued continuation run. */
+async function flushPromises(): Promise<void> {
+  for (let count = 0; count < 100; count += 1) await Promise.resolve();
+}
 
 describe("Dispatcher: status.get host facts", () => {
   it("reports operating system, version, architecture, and every driver's tool versions", async () => {

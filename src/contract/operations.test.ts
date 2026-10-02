@@ -299,6 +299,57 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
   });
 
+  it("status.get: cuts installs to their first 16 and each component to 64 characters, on the status and on a worker view", () => {
+    const installs = Array.from({ length: 20 }, (_, index) => ({
+      component: `${String(index).padStart(2, "0")}${"x".repeat(100)}`,
+      platform: "ios",
+      since: index,
+      state: "waiting",
+      waiters: 1,
+    }));
+    const cut = installs
+      .slice(0, 16)
+      .map((install) => ({ ...install, component: install.component.slice(0, 64) }));
+    const capacityEntry = {
+      running: 0,
+      maxRunning: 1,
+      reserved: 0,
+      overLimit: false,
+      limit: 1,
+      warm: 0,
+      used: 0,
+    };
+
+    const parsed = OPERATIONS["status.get"].output.parse({
+      capacity: {
+        android: capacityEntry,
+        global: { running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0 },
+        ios: capacityEntry,
+      },
+      daemon: { health: "running", mode: "gateway" },
+      devices: [],
+      host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
+      installs,
+      leases: [],
+      queueDepth: 0,
+      workers: [
+        {
+          catalog: [],
+          connection: "connected",
+          devices: [],
+          drained: false,
+          id: "wrk_1",
+          installs,
+          lastSeenAt: 1,
+          leases: [],
+        },
+      ],
+    });
+
+    expect(parsed.installs).toEqual(cut);
+    expect(parsed.workers?.[0]?.installs).toEqual(cut);
+  });
+
   it("status.get: round-trips a gateway's aggregate, workers and all (ADR 0005 §20)", () => {
     const capacityEntry = {
       running: 1,

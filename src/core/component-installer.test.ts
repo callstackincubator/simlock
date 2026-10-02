@@ -816,3 +816,73 @@ describe("ComponentInstaller", () => {
     );
   });
 });
+
+describe("ComponentInstaller.inProgress", () => {
+  it("lists an install at the front of its queue that is still checking whether it is needed as waiting", async () => {
+    const harness = await createHarness();
+
+    void harness.installer.install(ios("27.0", { stillNeeded: () => new Promise(() => {}) }));
+    await flush();
+
+    expect(harness.installer.inProgress()).toEqual([
+      { component: "27.0", platform: "ios", since: 1_000, state: "waiting", waiters: 1 },
+    ]);
+    expect(installs(harness.ios)).toEqual([]);
+  });
+
+  it("lists an install whose driver returned and whose record is being written as downloading", async () => {
+    const harness = await createHarness({
+      // A gate that never opens: the record write waits behind it.
+      decisions: { run: () => new Promise(() => {}) },
+    });
+
+    void harness.installer.install(ios("27.0"));
+    await flush();
+
+    expect(installs(harness.ios)).toEqual(["27.0"]);
+    expect(harness.installer.inProgress()).toEqual([
+      { component: "27.0", platform: "ios", since: 1_000, state: "downloading", waiters: 1 },
+    ]);
+  });
+
+  it("does not list a waiting install once its only call has timed out", async () => {
+    const harness = await createHarness({ clock: new ManualClock() });
+    harness.ios.holdInstalls();
+
+    void harness.installer.install(ios("27.0"));
+    const waiting = track(harness.installer.install(ios("28.0")));
+    await flush();
+    expect(harness.installer.inProgress().map((install) => install.component)).toEqual([
+      "27.0",
+      "28.0",
+    ]);
+    // Timer 1 is the budget of the call for 28.0.
+    (harness.clock as ManualClock).fire(1);
+    await flush();
+
+    expect(waiting.error()).toEqual(new ComponentInstallTimeoutError("ios", "28.0", timeoutMs));
+    expect(harness.installer.inProgress().map((install) => install.component)).toEqual(["27.0"]);
+  });
+
+  it("lists the 16 oldest installs across platforms, oldest first, when more are in progress", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({ availableOsVersions: [], clock, platform: "ios" }),
+        new FakeDriver({ availableOsVersions: [], clock, platform: "android" }),
+      ],
+    });
+    for (const driver of harness.drivers) driver.holdInstalls();
+
+    // Alternating platforms, so the oldest are not the first ones of any one queue.
+    for (let index = 0; index < 20; index += 1) {
+      const platform = index % 2 === 0 ? "ios" : "android";
+      void harness.installer.install({ component: `c${String(index)}`, platform });
+      harness.clock.advance(1_000);
+    }
+    await flush();
+
+    expect(harness.installer.inProgress().map((install) => install.component)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `c${String(index)}`),
+    );
+  });
+});

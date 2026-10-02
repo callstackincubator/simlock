@@ -779,11 +779,14 @@ why its Android catalog looks thin, trimmed to one worker:
         },
         "global": {"running": 0, "maxRunning": 8, "reserved": 0, "overLimit": false, "warm": 0}
       },
-      "downloads": {"policy": "on-request"},
+      "downloads": {"policy": "on-request", "timeoutMs": 1200000},
       "lease": {"maxTtlMs": 14400000},
       "queueDepth": 0,
       "leases": [],
       "devices": [],
+      "installs": [
+        {"platform": "ios", "component": "26.4", "state": "downloading", "since": 1790864071200, "waiters": 1}
+      ],
       "catalog": [
         {
           "platform": "ios",
@@ -814,11 +817,18 @@ why its Android catalog looks thin, trimmed to one worker:
 }
 ```
 
-`downloads.policy` and `lease.maxTtlMs` are that worker's own effective
-config, read when its uplink connects and again on every periodic refresh.
+`downloads.policy`, `downloads.timeoutMs` and `lease.maxTtlMs` are that
+worker's own effective config, read when its uplink connects, again on every
+periodic refresh, and after the worker installs a component.
 The policy is shown for reference; routing does not read it, since no
-download is started through a gateway. `catalog` is what that
-worker can lease, each model with the runtimes it pairs with. `host` is the
+download is started through a gateway. `installs` lists the
+component installs waiting or running on that worker, whoever started them,
+in the shape [`simlock status`](#simlock-status) describes. It is re-read
+when an install on that worker starts, finishes or fails, and on every
+periodic refresh, so an install queued behind another may appear only then.
+A disconnected or incompatible worker lists none. `catalog` is what that
+worker can lease, each model with the runtimes it pairs with, and lists a
+newly installed component as soon as its install ends. `host` is the
 machine: operating system, its version, CPU architecture, and the version of
 each platform tool its drivers use (`xcode` with its build; the Android
 `emulator`, `platform-tools` and `cmdline-tools`). A tool the worker does not
@@ -976,9 +986,22 @@ platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
 managed device with its state and device mode
 (`Device dev_7: ready, mode slim`), current leases (who — the agent
 id, see [Agent identity](#agent-identity) — since when, and when each was last
-renewed), and queue depth. `--json` for the structured equivalent. `overLimit`
+renewed), the component installs in progress, and queue depth. `--json` for
+the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
+
+Each install in progress gets one line: platform, component, state, how long
+since it was first asked for, and how many requests wait on it
+(`Install ios 26.4: downloading for 42s, 2 waiters`). Every install is
+listed, whoever started it, for example a lease request with
+`--allow-download`. `downloading` means the platform's installer is running;
+`waiting` means it is queued behind another install on the same platform, or
+about to start. A line goes away as soon as its install ends, whether it
+succeeded, failed or timed out. In `--json` the list is `installs`, oldest
+first, at most 16 entries: `platform`, `component` (the version, or the word
+the platform uses for its newest), `state`, `since` (milliseconds since the
+epoch) and `waiters`. It is empty when nothing is installing.
 
 The RAM budget line appears only under the `resource` capacity strategy
 (see [CONFIGURATION.md](CONFIGURATION.md#capacity-strategies)); under
@@ -994,10 +1017,12 @@ Against a **gateway** (`config.mode: "gateway"`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads
 `running (gateway)`, capacity is summed across the connected workers (the RAM
 budget over those that report one, over its limit when any worker is), one line
-per worker precedes the devices, and every device and lease names the worker it
-lives on (`Device dev_7 on wrk_a: leased, mode full`). `--json` gains a `workers` array of
+per worker precedes the devices, and every device, lease and install names the
+worker it lives on (`Device dev_7 on wrk_a: leased, mode full`,
+`Install ios 26.4 on wrk_a: waiting for 3s, 1 waiter`). Installs are listed
+for the connected workers, the 16 oldest across the fleet. `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each
-device and lease; `daemon.mode` says which kind of daemon answered.
+device, lease and install; `daemon.mode` says which kind of daemon answered.
 
 The daemon block carries `mode` (`"worker"` or `"gateway"`) — the one field
 that tells a client which kind of daemon answered. Beside it, `host` says
@@ -1290,7 +1315,8 @@ operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
   identity — stable across restarts, and not its label or host name), its
   label if it set one, connection state, capacity, how many leases it
   holds, and its host: operating system, version, architecture, and tool
-  versions. A worker the gateway cannot speak to shows `incompatible` with both
+  versions. Under each worker, one indented line per component install
+  waiting or running there, in the form `simlock status` prints. A worker the gateway cannot speak to shows `incompatible` with both
   protocol ranges, which is what version skew looks like from here. `--json`
   prints the raw worker views, which is what the console renders.
 - `drain <worker-id>` / `undrain <worker-id>` — a drained worker keeps its
@@ -1311,6 +1337,7 @@ operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
 ```console
 $ simlock worker list
 wrk_9f2c (mac-mini-1): connected -- ios 1/2, android 0/1, 1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9
+  Install ios 26.4: downloading for 42s, 1 waiter
 wrk_4a10 (ci-runner-3): disconnected, drained -- ios 0/4, android 0/2, 0 lease(s) -- macOS 14.7 x64; xcode 16.2 (16C5032a)
 ```
 

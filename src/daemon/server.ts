@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { type EventBus, type EventEnvelope, type EventHistory } from "../bus/index.js";
 import {
+  type ComponentInstaller,
   type Config,
   type LeaseProgress,
   type Registry,
@@ -136,6 +137,8 @@ interface Connection {
 export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
+  /** `status.get`'s installs in progress; see `DispatcherOptions.components`. */
+  readonly components?: Pick<ComponentInstaller, "inProgress">;
   readonly doctor?: Doctor;
   /** What `events.replay` answers from; see `EventHistory`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
@@ -282,6 +285,7 @@ function buildDispatcher(
     capacity: options.capacity,
     catalog: options.catalog,
     clock: options.clock,
+    ...(options.components === undefined ? {} : { components: options.components }),
     config: options.config,
     ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
     // The `operation` log line's error code: the same classifier this server answers with.
@@ -372,7 +376,6 @@ export class DaemonServer {
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- retained as a daemon compatibility facade.
   get socketPath(): string {
     return this.options.host.endpoint;
   }

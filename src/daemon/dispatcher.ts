@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { EventHistory } from "../bus/index.js";
 import {
   type CleanupReaper,
+  type ComponentInstaller,
   type Config,
   type DeviceRecord,
   type DeviceRequest,
@@ -81,6 +82,11 @@ export interface DispatcherOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
   readonly clock: Clock;
+  /**
+   * `status.get`'s installs in progress (ADR 0010 §3), read from the installer's own queues.
+   * Optional so tests that never install need not build one; without it the list is empty.
+   */
+  readonly components?: Pick<ComponentInstaller, "inProgress">;
   readonly config: Config;
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
@@ -289,6 +295,7 @@ export class Dispatcher {
       // #117 is what makes `gateway` mean something beyond this field.
       daemon: { health: this.options.health(), mode: this.options.config.mode },
       host: this.options.hostFacts(),
+      installs: [...(this.options.components?.inProgress() ?? [])],
       leases: [...snapshot.leases],
       queueDepth: this.options.queue.queueDepth,
     };

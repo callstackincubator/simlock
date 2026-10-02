@@ -28,6 +28,7 @@ import {
   proposalSchema,
   statusCapacitySchema,
   statusDeviceSchema,
+  statusInstallsSchema,
   statusLeaseSchema,
   tokenRecordSchema,
   tokenRoleSchema,
@@ -108,6 +109,12 @@ export const statusGet = defineOperation({
      */
     host: hostFactsSchema,
     queueDepth: z.number(),
+    /**
+     * ADR 0010 §3: the component installs waiting or running, the oldest first. A worker always
+     * sends it, empty when nothing is installing; a gateway lists its connected workers'
+     * installs, each with its `workerId`. Optional because an older daemon sends none.
+     */
+    installs: statusInstallsSchema.optional(),
     /**
      * ADR 0005 §20: one entry per worker view, additive and gateway-only. Absent (not empty)
      * from a worker's answer -- a worker has no fleet, and an empty array would read as "a

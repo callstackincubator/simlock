@@ -25,8 +25,8 @@ import type {
   StatusGetOutput,
 } from "../admin/index.js";
 import { SimlockError } from "../admin/index.js";
-import { PROTOCOL_VERSION_RANGE } from "../contract/index.js";
-import type { OPERATIONS, platformCatalogSchema } from "../contract/index.js";
+import { OPERATIONS, PROTOCOL_VERSION_RANGE } from "../contract/index.js";
+import type { platformCatalogSchema } from "../contract/index.js";
 
 type CatalogOutput = z.infer<(typeof OPERATIONS)["catalog.get"]["output"]>;
 type PlatformCatalog = z.infer<typeof platformCatalogSchema>;
@@ -210,6 +210,8 @@ export class ScriptedWorkerClient {
   catalog: CatalogOutput = catalogFixture([]);
   /** What `config.get` reports; the view carries it for display (ADR 0009 §3). */
   downloadPolicy: DownloadPolicy = "on-request";
+  /** What `config.get` reports for `downloads.timeoutMs` (ADR 0010 §7). */
+  downloadTimeoutMs = 20 * 60_000;
   /** What `config.get` reports for `lease.maxTtlMs` (ADR 0005 §15) -- the routing-adjacent
    * counterpart to `downloadPolicy` above. Defaults comfortably above every gateway cap this
    * suite's fixtures use, so a test that never sets it cannot accidentally trip the new warning;
@@ -298,7 +300,9 @@ export class ScriptedWorkerClient {
     this.calls.push("status.get");
     if (this.hangingCalls.has("status.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
-    return this.status;
+    // Parsed through the operation's output schema, as the real client parses every answer:
+    // that parse is where the contract bounds what a worker claims (safety rule 10).
+    return OPERATIONS["status.get"].output.parse(this.status);
   }
 
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
@@ -379,13 +383,16 @@ export class ScriptedWorkerClient {
 
   // fallow-ignore-next-line unused-class-member -- reached structurally through the `SimlockAdminClient` the cast in `asClient()` produces; the audit cannot follow a member access through that.
   async getConfig(): Promise<{
-    readonly downloads: { readonly policy: DownloadPolicy };
+    readonly downloads: { readonly policy: DownloadPolicy; readonly timeoutMs: number };
     readonly lease: { readonly maxTtlMs: number };
   }> {
     this.calls.push("config.get");
     if (this.hangingCalls.has("config.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
-    return { downloads: { policy: this.downloadPolicy }, lease: { maxTtlMs: this.leaseMaxTtlMs } };
+    return {
+      downloads: { policy: this.downloadPolicy, timeoutMs: this.downloadTimeoutMs },
+      lease: { maxTtlMs: this.leaseMaxTtlMs },
+    };
   }
 
   async subscribeEvents(

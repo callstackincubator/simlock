@@ -1248,7 +1248,7 @@ async function runStatus(
   try {
     const status = await client.getStatus();
     if (values.json) writeResult(environment, status);
-    else environment.stdout.write(`${formatStatus(status)}\n`);
+    else environment.stdout.write(`${formatStatus(status, environment.clock.now())}\n`);
     return 0;
   } finally {
     await client.close();
@@ -1555,7 +1555,7 @@ async function runDaemon(
       try {
         const status = await client.getStatus();
         if (values.json) writeResult(environment, status);
-        else environment.stdout.write(`${formatStatus(status)}\n`);
+        else environment.stdout.write(`${formatStatus(status, environment.clock.now())}\n`);
       } finally {
         await client.close();
       }
@@ -1805,7 +1805,10 @@ async function runWorkerList(
   }
   const result = await client.listWorkers();
   if (values.json) writeResult(environment, result);
-  else environment.stdout.write(`${formatWorkers(result.workers)}\n`);
+  else
+    environment.stdout.write(
+      `${formatWorkers(result.workers, { installsAt: environment.clock.now() })}\n`,
+    );
   return 0;
 }
 
@@ -1835,11 +1838,25 @@ async function runWorkerAction(
  * One line per worker, in the shape an operator scans: state first (that is the question), then
  * identity, then what it is carrying. `simlock worker list --json` is the machine-readable
  * answer, so this stays a summary rather than a dump.
+ *
+ * With `installsAt` (the time now), each worker's installs in progress follow it, indented.
+ * `simlock status` leaves it out: it lists the fleet's installs on their own lines, each naming
+ * its worker, the way it lists devices and leases.
  */
-function formatWorkers(workers: WorkerView[]): string {
+function formatWorkers(
+  workers: WorkerView[],
+  options: { readonly installsAt?: number } = {},
+): string {
   if (workers.length === 0) return "No workers have connected to this gateway.";
+  const { installsAt } = options;
   return workers
     .map((worker) => {
+      const installs =
+        installsAt === undefined
+          ? ""
+          : (worker.installs ?? [])
+              .map((install) => `\n  ${formatInstall(install, installsAt)}`)
+              .join("");
       const label = worker.label === undefined ? worker.id : `${worker.id} (${worker.label})`;
       const state = worker.drained ? `${worker.connection}, drained` : worker.connection;
       const capacity =
@@ -1853,9 +1870,20 @@ function formatWorkers(workers: WorkerView[]): string {
           : ` protocol ${worker.protocol.worker.min}-${worker.protocol.worker.max}` +
             ` vs gateway ${worker.protocol.gateway.min}-${worker.protocol.gateway.max}`;
       const host = worker.host === undefined ? "" : ` -- ${formatHost(worker.host)}`;
-      return `${label}: ${state} -- ${capacity}, ${String(worker.leases.length)} lease(s)${skew}${host}`;
+      return `${label}: ${state} -- ${capacity}, ${String(worker.leases.length)} lease(s)${skew}${host}${installs}`;
     })
     .join("\n");
+}
+
+/** `Install ios 26.4: downloading for 42s, 2 waiters` -- platform, component, state, age, waiters. */
+function formatInstall(
+  install: NonNullable<StatusGetOutput["installs"]>[number],
+  now: number,
+): string {
+  const where = install.workerId === undefined ? "" : ` on ${install.workerId}`;
+  const ageSeconds = Math.max(0, Math.round((now - install.since) / 1000));
+  const waiters = `${String(install.waiters)} waiter${install.waiters === 1 ? "" : "s"}`;
+  return `Install ${install.platform} ${install.component}${where}: ${install.state} for ${String(ageSeconds)}s, ${waiters}`;
 }
 
 function formatGibibytes(bytes: number): string {
@@ -1988,8 +2016,8 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
 }
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
-function formatStatus(status: StatusGetOutput): string {
-  const { capacity, daemon, devices, host, leases, queueDepth, workers } = status;
+function formatStatus(status: StatusGetOutput, now: number): string {
+  const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
   const globalLine = `Running global: ${capacity.global.running} + ${capacity.global.reserved} reserved/${capacity.global.maxRunning}, warm ${capacity.global.warm}${capacity.global.overLimit ? " (over limit)" : ""}`;
   const capacityLines = (["ios", "android"] as const).map((platform) => {
     const usage = capacity[platform];
@@ -2035,6 +2063,7 @@ function formatStatus(status: StatusGetOutput): string {
     ...workerLines,
     ...deviceLines,
     ...leaseLines,
+    ...(installs ?? []).map((install) => formatInstall(install, now)),
     `Queue depth: ${queueDepth}`,
   ].join("\n");
 }

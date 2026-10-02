@@ -262,6 +262,27 @@ describe("GatewayDispatcher", () => {
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
   });
 
+  it("lists each worker's installs on status.get with its workerId, and on its view in worker.list", async () => {
+    const { dispatcher, workers } = harness();
+    const install = {
+      component: "26.4",
+      platform: "ios" as const,
+      since: 500,
+      state: "downloading" as const,
+      waiters: 2,
+    };
+    workers.connected("wrk_1", undefined, "0.3.0");
+    workers.connected("wrk_2", undefined, "0.3.0");
+    workers.refresh("wrk_1", { installs: [install] });
+    workers.refresh("wrk_2", { installs: [] });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+    const list = await dispatcher.dispatch("worker.list", {}, session());
+
+    expect(status.installs).toEqual([{ ...install, workerId: "wrk_1" }]);
+    expect(list.workers.map((worker) => worker.installs)).toEqual([[install], []]);
+  });
+
   it("reports its own host with no tools on status.get, and each worker's on its view", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");

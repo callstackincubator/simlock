@@ -171,10 +171,31 @@ when the use exceeds the limit, for example after a restart with larger
 per-device sizes; until a device is deleted, none is created, and no
 shut-down slim device boots if its slim size is smaller than the full size.
 
+**`installs`** lists the component installs waiting or running on the
+machine, whoever started them (a lease request that allowed a download, for
+example), oldest first and at most 16:
+
+```json
+"installs": [
+  { "platform": "ios", "component": "26.4", "state": "downloading", "since": 1790864071200, "waiters": 2 },
+  { "platform": "ios", "component": "26.5", "state": "waiting", "since": 1790864075000, "waiters": 1 }
+]
+```
+
+`state` is `downloading` while the platform's installer runs, and `waiting`
+while the install is queued behind another one on the same platform or about
+to start. `component` is the version, or the word the platform uses for its
+newest. `since` is when the first request for that install arrived, in
+milliseconds since the epoch, and `waiters` is how many requests wait on it.
+An install leaves the list as soon as it ends, whether it succeeded, failed
+or timed out. A worker always sends the field, empty when nothing is
+installing; an older daemon leaves it out.
+
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers (`ramBudget` over the workers that report one, `overLimit` when any of
-them is, absent when none does), every gateway-issued and local lease, every device, the gateway
-queue's depth — every lease and device carries the **`workerId`** it lives
+them is, absent when none does), every gateway-issued and local lease, every device, the
+connected workers' installs (the 16 oldest across the fleet), the gateway
+queue's depth — every lease, device and install carries the **`workerId`** it lives
 on, and an additive **`workers`** array carries one
 [worker view](#worker-routes) per worker:
 
@@ -691,11 +712,14 @@ simulated (hence the thin Android catalog), trimmed to one worker:
         },
         "global": {"running": 0, "maxRunning": 8, "reserved": 0, "overLimit": false, "warm": 0}
       },
-      "downloads": {"policy": "on-request"},
+      "downloads": {"policy": "on-request", "timeoutMs": 1200000},
       "lease": {"maxTtlMs": 14400000},
       "queueDepth": 0,
       "leases": [],
       "devices": [],
+      "installs": [
+        {"platform": "ios", "component": "26.4", "state": "downloading", "since": 1790864071200, "waiters": 1}
+      ],
       "catalog": [
         {
           "platform": "ios",
@@ -726,13 +750,21 @@ simulated (hence the thin Android catalog), trimmed to one worker:
 }
 ```
 
-`downloads.policy` is that worker's own effective policy, read when its
-uplink connects and again on every periodic refresh. It is shown for
-reference; routing does not read it, since no download is started through a
-gateway.
+`downloads.policy` and `downloads.timeoutMs` are that worker's own effective
+config, read when its uplink connects, again on every periodic refresh, and
+after the worker installs a component. The policy is shown for reference;
+routing does not read it, since no download is started through a gateway.
+
+`installs` is the worker's own `installs` list from its
+[`GET /v1/status`](#get-v1status). It is re-read when an install on that
+worker starts, finishes or fails, and on every periodic refresh, so an
+install queued behind another may appear only then. A worker that does not
+send one shows an empty list; a disconnected or incompatible worker shows
+none.
 
 `catalog` is what that worker can lease, each model with the runtimes it
-pairs with. `host` is the worker's machine, the same block its own
+pairs with, and lists a newly installed component as soon as its install
+ends. `host` is the worker's machine, the same block its own
 `GET /v1/status` reports, as of the gateway's last refresh: a tool installed
 or upgraded on the worker shows here without a restart of either side.
 

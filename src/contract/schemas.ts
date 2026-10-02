@@ -702,6 +702,48 @@ const protocolRangeShapeSchema = z.object({ min: z.number().int(), max: z.number
  */
 const workerConnectionStateSchema = z.enum(["connected", "disconnected", "incompatible"]);
 
+// ---- installs in progress (ADR 0010 §3) ---------------------------------------------------
+
+const MAX_LISTED_INSTALLS = 16;
+const MAX_INSTALL_COMPONENT_LENGTH = 64;
+
+/**
+ * One component install a daemon has waiting or running. A worker's list reaches the gateway as
+ * a claim (safety rule 10), so the bounds cut rather than refuse: an over-long list keeps its
+ * first (oldest) 16 entries and an over-long `component` its first 64 characters, and the view
+ * stays usable instead of failing its whole refresh over one field.
+ */
+const installInProgressSchema = z.object({
+  platform: platformSchema,
+  /** As the daemon's driver named it: a version, or a word such as "newest". */
+  component: z.string().transform((value) => value.slice(0, MAX_INSTALL_COMPONENT_LENGTH)),
+  /** `waiting` behind another install on its platform, or `downloading`. */
+  state: z.enum(["waiting", "downloading"]),
+  /** When the first call for this install arrived. */
+  since: z.number(),
+  /** How many calls are joined to it. */
+  waiters: z.number().int().nonnegative(),
+});
+
+/** A list of at most `MAX_LISTED_INSTALLS` entries; a longer one is cut to its first ones. */
+function boundedInstalls<Entry extends z.ZodTypeAny>(entry: Entry) {
+  return z.array(entry).transform((installs) => installs.slice(0, MAX_LISTED_INSTALLS));
+}
+
+/** A worker view's installs: the worker's own `status.get` list, copied (ADR 0010 §7). */
+const workerInstallsSchema = boundedInstalls(installInProgressSchema);
+
+/** `status.get`'s installs. On a gateway each entry names the worker it runs on. */
+export const statusInstallsSchema = boundedInstalls(
+  installInProgressSchema.extend({ workerId: z.string().optional() }),
+);
+
+/**
+ * The bound above, for a producer that merges lists the schema checked one by one: a gateway's
+ * fleet list must itself fit, or the schema cuts it wherever the merge left it.
+ */
+export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
+
 /**
  * What the gateway currently knows about one worker (ADR 0005's vocabulary table, §7, §31).
  * Rebuilt over the uplink, never persisted: a gateway restart re-derives every field from the
@@ -741,7 +783,14 @@ export const workerViewSchema = z.object({
    * worker whose `config.get` the gateway could not read (an incompatible one, or a call that
    * failed).
    */
-  downloads: z.object({ policy: z.enum(["never", "on-request", "always"]) }).optional(),
+  downloads: z
+    .object({
+      policy: z.enum(["never", "on-request", "always"]),
+      /** The worker's own `downloads.timeoutMs`, read with the policy (ADR 0010 §7). Optional
+       * so a gateway on an older build still parses a view. */
+      timeoutMs: z.number().optional(),
+    })
+    .optional(),
   /**
    * The worker's own `lease.maxTtlMs`, read once with `config.get` when the uplink connects
    * (and again on the periodic backstop tick, alongside the catalog and `downloads.policy`
@@ -763,6 +812,9 @@ export const workerViewSchema = z.object({
   /** ADR 0008 §8: the `host` block of the worker's last `status.get`. Absent for a worker the
    * gateway has not read status from, and for an `incompatible` one. */
   host: hostFactsSchema.optional(),
+  /** ADR 0010 §7: the `installs` of the worker's last `status.get`. Empty for a worker whose
+   * status lists none, including one too old to list them. */
+  installs: workerInstallsSchema.optional(),
 });
 
 /**

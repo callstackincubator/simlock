@@ -272,6 +272,58 @@ describe("aggregateStatus", () => {
     expect(status).toMatchObject({ daemon: { health: "starting" }, queueDepth: 0 });
     expect(status.workers?.[0]).toMatchObject({ health: "failed", queueDepth: 7 });
   });
+
+  describe("installs (ADR 0010 §3)", () => {
+    function install(component: string, since: number) {
+      return {
+        component,
+        platform: "ios" as const,
+        since,
+        state: "downloading" as const,
+        waiters: 1,
+      };
+    }
+
+    it("lists each connected worker's installs with its workerId", () => {
+      const status = aggregateStatus(
+        [
+          view({ id: "wrk_a", installs: [install("26.4", 10)] }),
+          view({ id: "wrk_b", installs: [install("35", 5)] }),
+          view({ id: "wrk_c" }),
+        ],
+        { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      );
+
+      expect(status.installs).toEqual([
+        { ...install("35", 5), workerId: "wrk_b" },
+        { ...install("26.4", 10), workerId: "wrk_a" },
+      ]);
+    });
+
+    it("keeps the 16 oldest across the fleet, so the list fits the contract's bound", () => {
+      const status = aggregateStatus(
+        [
+          view({
+            id: "wrk_a",
+            installs: Array.from({ length: 10 }, (_, index) =>
+              install(`a${String(index)}`, index * 2 + 1),
+            ),
+          }),
+          view({
+            id: "wrk_b",
+            installs: Array.from({ length: 10 }, (_, index) =>
+              install(`b${String(index)}`, index * 2),
+            ),
+          }),
+        ],
+        { health: "running", host: GATEWAY_HOST, queueDepth: 0 },
+      );
+
+      expect(status.installs?.map((entry) => entry.since)).toEqual(
+        Array.from({ length: 16 }, (_, index) => index),
+      );
+    });
+  });
 });
 
 describe("aggregateCatalog", () => {

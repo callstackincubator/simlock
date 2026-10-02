@@ -6,14 +6,14 @@
  * (`connectSimlockAdmin`), which is the whole reason the fleet needs no second API. What it
  * does with that client is exactly what §7 prescribes -- `status.get`, `list.get`,
  * `catalog.get` and `events.subscribe` on connect, a refresh on every worker event that can
- * change capacity or leases, and a periodic refresh as a backstop -- plus §22's republishing of
+ * change capacity, leases or installs (ADR 0010 §7), and a periodic refresh as a backstop -- plus §22's republishing of
  * those events onto the gateway's own bus with `workerId` added.
  *
- * One call §7 does not name is here too: `config.get`, read once per session for the worker's
- * `downloads.policy` and `lease.maxTtlMs`. The policy is shown on the view for display only:
- * routing counts installed runtimes and never reads it (ADR 0009 §3). Neither changes without a
- * worker restart -- which is a new session anyway -- and the uplink session is admin, so the
- * gateway may read it.
+ * One call §7 does not name is here too: `config.get`, for the worker's `downloads.policy`,
+ * `downloads.timeoutMs` and `lease.maxTtlMs`, read with the catalog: on connect, on every
+ * periodic refresh, and after `component.installed`. The policy is shown on the view for display
+ * only: routing counts installed runtimes and never reads it (ADR 0009 §3). The uplink session is
+ * admin, so the gateway may read it.
  */
 import { z } from "zod";
 
@@ -23,7 +23,7 @@ import type { SimlockAdminClient } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import type { WorkerRegistry } from "./worker-registry.js";
+import type { WorkerRegistry, WorkerViewSnapshot } from "./worker-registry.js";
 
 /**
  * How long the gateway waits for one round trip to a worker before giving up on it.
@@ -116,7 +116,8 @@ export class WorkerLink {
   #unsubscribeEvents: (() => Promise<void>) | undefined;
   #closed = false;
   #refreshing = false;
-  #refreshQueued = false;
+  /** The one follow-up refresh queued behind the one in flight, if any. */
+  #queuedRefresh: RefreshOptions | undefined;
   /** P1/C-1: consecutive `status.get` timeouts, reset to 0 the instant any `status.get` answers
    * (inside `#rebuildView`) rather than only once a whole refresh completes -- see
    * `MAX_CONSECUTIVE_REFRESH_TIMEOUTS`'s comment for why liveness is judged on that one call. */
@@ -275,11 +276,11 @@ export class WorkerLink {
    * its capacity changed) must not become a burst of round trips, but the *last* event in a
    * burst must still be reflected.
    */
-  async refresh(options: { readonly includeCatalog?: boolean } = {}): Promise<void> {
+  async refresh(options: RefreshOptions = {}): Promise<void> {
     const client = this.#client;
     if (client === undefined || this.#closed) return;
     if (this.#refreshing) {
-      this.#refreshQueued = true;
+      this.#queuedRefresh = mergeQueuedRefresh(this.#queuedRefresh, options);
       return;
     }
     this.#refreshing = true;
@@ -319,10 +320,9 @@ export class WorkerLink {
       }
     } finally {
       this.#refreshing = false;
-      if (this.#refreshQueued && !this.#closed) {
-        this.#refreshQueued = false;
-        void this.refresh();
-      }
+      const queued = this.#queuedRefresh;
+      this.#queuedRefresh = undefined;
+      if (queued !== undefined && !this.#closed) void this.refresh(queued);
     }
   }
 
@@ -343,8 +343,8 @@ export class WorkerLink {
       Promise.all([
         client.list({ kind: "devices" }),
         includeCatalog ? client.getCatalog() : undefined,
-        // Read on the same pass as the catalog: both are session-lifetime facts, and pairing
-        // them keeps the per-event refresh down to the two calls that actually go stale.
+        // Read on the same pass as the catalog: neither changes with a lease or a device, so
+        // the per-event refresh stays at the two calls that do.
         includeCatalog ? client.getConfig() : undefined,
       ]),
       "view refresh",
@@ -356,23 +356,11 @@ export class WorkerLink {
     // overwriting a fresh view with a stale one for up to `WORKER_CALL_TIMEOUT_MS`.
     if (this.#closed || (this.options.isCurrentLink?.() ?? true) === false) return;
     this.options.registry.refresh(this.workerId, {
-      capacity: status.capacity,
+      ...viewStatus(status),
       devices: viewDevicesSchema.parse(devices),
-      health: status.daemon.health,
-      host: status.host,
-      leases: status.leases,
-      queueDepth: status.queueDepth,
       version: client.daemonVersion,
       ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
-      ...(config === undefined
-        ? {}
-        : {
-            downloads: { policy: config.downloads.policy },
-            // ADR 0005 §15: the one other field this gateway keeps out of a worker's config,
-            // alongside `downloads.policy` above -- `WorkerRegistry#refresh` is where it is
-            // compared against the gateway's own `lease.maxTtlMs` and warned about.
-            lease: { maxTtlMs: config.lease.maxTtlMs },
-          }),
+      ...(config === undefined ? {} : viewConfig(config)),
     });
   }
 
@@ -474,7 +462,9 @@ export class WorkerLink {
     // `EventMap` has never heard of. Forwarding it is better than dropping it -- the envelope
     // is what `events.replay` returns, and a consumer that knows the name gets it either way.
     this.options.eventBus.emit(envelope.event as EventName, payload as never, envelope.module);
-    if (changesCapacityOrLeases(envelope.event)) void this.refresh();
+    // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
+    if (changesCapacityOrLeases(envelope.event))
+      void this.refresh({ includeCatalog: envelope.event === "component.installed" });
   }
 }
 
@@ -499,9 +489,61 @@ const GATEWAY_OWN_EVENTS: ReadonlySet<string> = new Set([
  * about a lease or a device is, by construction, about something a view reports -- and a list
  * would silently miss the next one added to `EventMap`. The cost of being generous is one
  * coalesced round trip; the cost of missing one is a view that stays wrong until the next tick.
+ *
+ * ADR 0010 §7 adds the three install events by name: the view lists the worker's installs in
+ * progress, and an install that starts or ends changes that list.
  */
 function changesCapacityOrLeases(event: string): boolean {
-  return event.startsWith("lease.") || event.startsWith("device.");
+  return event.startsWith("lease.") || event.startsWith("device.") || INSTALL_EVENTS.has(event);
+}
+
+const INSTALL_EVENTS: ReadonlySet<string> = new Set([
+  "component.install-started",
+  "component.installed",
+  "component.install-failed",
+]);
+
+interface RefreshOptions {
+  readonly includeCatalog?: boolean;
+}
+
+/** One queued refresh stands for every request that queued; it reads the catalog when any of
+ * them asked for it. */
+function mergeQueuedRefresh(
+  queued: RefreshOptions | undefined,
+  next: RefreshOptions,
+): RefreshOptions {
+  return { includeCatalog: queued?.includeCatalog === true || next.includeCatalog === true };
+}
+
+/** What a worker's view keeps of its `status.get`. */
+function viewStatus(
+  status: Awaited<ReturnType<SimlockAdminClient["getStatus"]>>,
+): Pick<WorkerViewSnapshot, "capacity" | "health" | "host" | "installs" | "leases" | "queueDepth"> {
+  return {
+    capacity: status.capacity,
+    health: status.daemon.health,
+    host: status.host,
+    // ADR 0010 §7: copied as the worker lists them, already bounded by the contract's parse
+    // (safety rule 10). A worker too old to list installs reports none.
+    installs: status.installs ?? [],
+    leases: status.leases,
+    queueDepth: status.queueDepth,
+  };
+}
+
+/** The few keys of a worker's config its view keeps. */
+function viewConfig(
+  config: Awaited<ReturnType<SimlockAdminClient["getConfig"]>>,
+): Pick<WorkerViewSnapshot, "downloads" | "lease"> {
+  return {
+    // ADR 0010 §7: the worker's own install budget, read with its policy.
+    downloads: { policy: config.downloads.policy, timeoutMs: config.downloads.timeoutMs },
+    // ADR 0005 §15: the one other field this gateway keeps out of a worker's config,
+    // alongside `downloads` -- `WorkerRegistry#refresh` is where it is compared against the
+    // gateway's own `lease.maxTtlMs` and warned about.
+    lease: { maxTtlMs: config.lease.maxTtlMs },
+  };
 }
 
 const defaultConnect: WorkerClientFactory = (connection, principal) =>
