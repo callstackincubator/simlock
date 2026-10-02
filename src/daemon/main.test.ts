@@ -140,6 +140,41 @@ describe("startDaemon", () => {
     expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
   });
 
+  it("keeps gateway.token out of the daemon log, the events.replay answer, and events.jsonl, while config.get still returns it", async () => {
+    const secret = "secret-join-token-170";
+    // Nothing listens on a port just released, so the uplink's one dial fails fast; the fake
+    // clock never fires its retry.
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address() as { readonly port: number };
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const { daemon, directory, sink } = await start({
+      configOverrides: { gateway: { token: secret, url: `ws://127.0.0.1:${port}` } },
+    });
+    const admin = {
+      manageEventSubscription: () => undefined,
+      principal: "operator",
+      role: "admin",
+    } as const;
+
+    const replayed = await daemon.dispatch("events.replay", {}, admin);
+    const eventFile = await readFile(join(directory, "events.jsonl"), "utf8");
+    const config = (await daemon.dispatch("config.get", {}, admin)) as {
+      readonly gateway: { readonly token?: string };
+    };
+
+    // The fixture is real: the daemon did log its start and emit `daemon.started` to both
+    // the ring and the file, so "absent" below means redacted, not never written.
+    expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
+    expect(eventFile).toContain('"daemon.started"');
+    expect({
+      daemonLog: JSON.stringify(sink.records).includes(secret),
+      eventsReplay: JSON.stringify(replayed).includes(secret),
+      eventsJsonl: eventFile.includes(secret),
+    }).toEqual({ daemonLog: false, eventsReplay: false, eventsJsonl: false });
+    expect(config.gateway.token).toBe(secret);
+  });
+
   it("runs no prerequisite check at startup convergence, and runs every check on each doctor.run", async () => {
     const runs = { android: 0, ios: 0 };
     const missing = { message: "gone", prerequisite: "android-emulator", remedy: "install it" };
