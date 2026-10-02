@@ -388,9 +388,16 @@ export class ComponentInstaller {
         `Simlock has no record of installing ${platform} ${version}, so it will not remove it`,
       );
     }
-    const listed = (await this.#listDriver(driver)).find((entry) =>
-      sameReceipt(entry.receipt, record.receipt),
-    );
+    const components = await this.#listDriver(driver);
+    // A record outlives a removal that failed after the driver deleted the component (ADR 0010
+    // §5): with no such version on the machine, the refusal must not name one.
+    if (!components.some((entry) => entry.listing.version === version)) {
+      throw new ComponentNotOwnedError(
+        platform,
+        `No ${platform} ${version} is installed now, so there is nothing to remove`,
+      );
+    }
+    const listed = components.find((entry) => sameReceipt(entry.receipt, record.receipt));
     if (listed === undefined) {
       throw new ComponentNotOwnedError(
         platform,
