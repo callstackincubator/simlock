@@ -1438,12 +1438,12 @@ export class IosSimctlDriver implements Driver {
       );
     }
     // A bare `simctl` reaches this too, so refusing it takes no capability away. The
-    // wrapper is advertised as the safe path, and being the convenient route to an
-    // unrecoverable multi-gigabyte deletion is not that.
+    // wrapper is advertised as the safe path, and being the convenient route to a
+    // multi-gigabyte deletion of a runtime Xcode shares is not that.
     if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
       this.#refuse(
         "runtime delete",
-        "it deletes a runtime shared with Xcode, and Simlock will not download one back (`--allow-download` cannot install iOS runtimes). Delete it through Xcode if that is really what you meant.",
+        "it deletes a runtime shared with Xcode and other tools. Delete it through Xcode if that is really what you meant.",
       );
     }
   }
