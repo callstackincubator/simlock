@@ -69,12 +69,16 @@ export async function runInstallerProcess(
   }
 }
 
-/** The last percentage printed on a line, e.g. `12.5` from `Downloading iOS 18.0: 12.5%`. */
+/**
+ * The last percentage printed on a line, e.g. `12.5` from `Downloading iOS 18.0: 12.5%`.
+ * `xcodebuild` formats it in the user's locale, so the decimal separator may be a comma
+ * (`12,5%`); a percentage never reaches a thousand, so no grouping separator comes before `%`.
+ */
 function parseProgressPercent(line: string): number | undefined {
-  const matches = [...line.matchAll(/(\d{1,3}(?:\.\d+)?)\s*%/g)];
+  const matches = [...line.matchAll(/(\d{1,3}(?:[.,]\d+)?)\s*%/g)];
   const last = matches.at(-1)?.[1];
   if (last === undefined) return undefined;
-  const percent = Number.parseFloat(last);
+  const percent = Number.parseFloat(last.replace(",", "."));
   return percent >= 0 && percent <= 100 ? percent : undefined;
 }
 
