@@ -134,7 +134,7 @@ export interface DoctorOptions {
   /**
    * Read-only view of the per-device operation claims. A device this daemon holds a
    * claim on is work in progress by definition, which is what keeps a healthy
-   * backgrounded reclaim from being read as a stall -- see `stalledTransitionFinding`.
+   * backgrounded reclaim from being read as a stall -- see `isStalledTransition`.
    */
   readonly claims?: Pick<DeviceOperationClaims, "isClaimed">;
   /**
@@ -718,7 +718,7 @@ function registryDriftFindings(
   // including erasing it, so neither run state nor marks are compared.
   //
   // A device this daemon holds an operation claim on is excluded the same way, the same
-  // live-versus-orphaned test `stalledTransitionFinding` already applies (see its comment). A
+  // live-versus-orphaned test `isStalledTransition` already applies (see its comment). A
   // lease-path boot from `shutdown` runs `makeReady` while the committed record still says
   // `shutdown` -- observed reality goes `running` before the transition that would update
   // `expectedRunState` ever commits. Without this guard a concurrent `doctor --fix` reads that
@@ -726,7 +726,7 @@ function registryDriftFindings(
   // afterwards finds the record changed underneath it and silently drops its
   // `address`/`driverData`/`mode`, dropping the waiter. The claim is held for the
   // whole boot, so it exactly brackets the window this needs to cover -- unlike
-  // `stalledTransitionFinding`, this applies regardless of `device.state`, since the record can
+  // `isStalledTransition`, this applies regardless of `device.state`, since the record can
   // be `shutdown`, `ready`, or `leased` while a claimed operation is in flight against it.
   const expected = expectedRunState(device.state);
   const observed = observedDevices.get(deviceKey);

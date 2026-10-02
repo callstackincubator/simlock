@@ -368,7 +368,7 @@ test.describe("the attention view", () => {
     try {
       hangUp = await joinOldWorker(gateway, {
         id: "wrk_with_a_long_id_that_does_not_fit_on_a_phone_0123456789",
-        label: "a-worker-with-a-label-far-too-long-for-one-line-on-a-phone",
+        label: "aworkerwithalabelfartoolongforonelineonaphonewithnohyphensinit",
       });
       await untilTheDaemonSays(gateway, (views) => views.length === 1);
       await page.setViewportSize({ height: 740, width: 360 });

@@ -69,13 +69,21 @@ function resolvePassthroughOverride(
   return override ?? engine;
 }
 
-/** The claims the stall test reads: a test's own, or the engine's. Pulled out of
- * `buildDispatcher` for the same reason as `resolvePassthroughOverride`. */
-function resolveClaimsOverride(
+/** What the stall test reads: a test's own claims or the engine's, and this driver after any
+ * other platforms' a test lists. Pulled out of `buildDispatcher` for the same reason as
+ * `resolvePassthroughOverride`. */
+function stallOptions(
   engine: LeaseEngine,
-  override: { isClaimed(deviceId: string): boolean } | undefined,
-): { isClaimed(deviceId: string): boolean } {
-  return override ?? engine.claimReader;
+  driver: FakeDriver,
+  overrides: {
+    readonly claims?: { isClaimed(deviceId: string): boolean };
+    readonly otherStallDrivers?: readonly FakeDriver[];
+  },
+) {
+  return {
+    claims: overrides.claims ?? engine.claimReader,
+    drivers: [...(overrides.otherStallDrivers ?? []), driver],
+  };
 }
 
 function resolveEventHistoryOverride(
@@ -196,6 +204,8 @@ async function buildDispatcher(
     readonly http?: Config["http"];
     /** Stands in for the engine's operation claims in the stall test, so a test can hold one. */
     readonly claims?: { isClaimed(deviceId: string): boolean };
+    /** Other platforms' drivers, listed before this one's in the stall test's driver list. */
+    readonly otherStallDrivers?: readonly FakeDriver[];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -294,7 +304,7 @@ async function buildDispatcher(
     queue: engine,
     reaper,
     registry,
-    stalls: { claims: resolveClaimsOverride(engine, overrides.claims), drivers: [driver] },
+    stalls: stallOptions(engine, driver, overrides),
     tokens,
     version: "1.2.3",
   });
@@ -1207,6 +1217,27 @@ describe("Dispatcher: device mode on every surface", () => {
     expect(await stalled()).toBeUndefined();
     claimed.delete(device.id);
     expect(await stalled()).toBe(true);
+  });
+
+  it("status measures a stall against the driver for the device's own platform", async () => {
+    // Android's estimate puts its threshold at 30 min; the iOS fake's 0 leaves the 60 s floor.
+    const android = new FakeDriver({
+      clock: new FakeClock(1_000),
+      estimateMs: { boot: 300_000, provision: 300_000 },
+      platform: "android",
+    });
+    const { clock, dispatcher, registry } = await buildDispatcher({ otherStallDrivers: [android] });
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-ios-stuck",
+      provisionDuration: 0,
+      spec: { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+    });
+    clock.advance(60_001);
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.devices.find((entry) => entry.id === device.id)?.stalled).toBe(true);
   });
 
   it("no lease.request, list.get, or status.get response carries featureProfile or slim", async () => {
