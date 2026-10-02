@@ -1,6 +1,6 @@
 # 0010. Components are installed, recorded and removed through one owner in the core
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-02
 - **Issue:** [#208](https://github.com/callstackincubator/simlock/issues/208),
   [#209](https://github.com/callstackincubator/simlock/issues/209),
