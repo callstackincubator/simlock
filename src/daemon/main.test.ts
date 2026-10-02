@@ -991,9 +991,14 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       join(SIMLOCK_HOME, "adb-server.json"),
       JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
     );
-    // No scripted process at all: the first one the driver starts is the emulator launch, which
-    // the runner records and then refuses, so the boot stops right after showing its argv.
-    const processRunner = new ScriptedProcessRunner([]);
+    // Only the console-port lookup a boot starts with is scripted: the emulator launch after it
+    // is recorded and then refused, so the boot stops right after showing its argv.
+    const processRunner = new ScriptedProcessRunner([
+      {
+        match: { args: ["devices"], command: "/android-sdk/platform-tools/adb" },
+        result: { code: 0, stderr: "", stdout: "List of devices attached\n" },
+      },
+    ]);
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
       androidEmulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
@@ -1017,6 +1022,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ).rejects.toThrow(/Unexpected process invocation/);
 
     expect(processRunner.calls.map((call) => call.args)).toEqual([
+      ["devices"],
       [
         "-avd",
         "simlock_one",

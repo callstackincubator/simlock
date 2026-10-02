@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { OWNED_ROOT_MARKER_FILE } from "../../core/index.js";
 import {
@@ -53,7 +53,7 @@ const second: Instance = {
 };
 
 describe("AndroidDriver with two Simlock instances on one machine (#257)", () => {
-  it("provisions a device on a console port no other instance's emulator is listening on", async () => {
+  it("boots a device on a console port no other instance's emulator is listening on", async () => {
     const machine = await Machine.with([first, second]);
 
     // The second instance is already running when the first boots a device, so nothing has
@@ -64,13 +64,15 @@ describe("AndroidDriver with two Simlock instances on one machine (#257)", () =>
     await firstDriver.makeReady(await firstDriver.provision(spec));
 
     await secondDriver.resolveSpec(spec);
-    const provisioned = await secondDriver.provision(spec);
+    const readying = secondDriver.makeReady(await secondDriver.provision(spec));
+    await vi.waitFor(() => expect(machine.spawnedOn.has("simlock_second")).toBe(true));
+    const serial = `emulator-${String(machine.spawnedOn.get("simlock_second"))}`;
 
-    expect(provisioned.address).toMatch(/^emulator-\d+$/);
     expect(
-      machine.avdListeningAt(provisioned.address),
-      `the emulator already listening on ${provisioned.address}, the address the second instance gave its new device`,
-    ).toBeUndefined();
+      machine.avdListeningAt(serial),
+      `the emulator listening on ${serial}, the port the second instance booted its new device on`,
+    ).toBe("simlock_second");
+    await expect(readying).resolves.toMatchObject({ address: serial });
   });
 });
 
@@ -96,6 +98,8 @@ class Machine {
   /** Console port -> the adb servers holding a transport to the emulator on it. */
   readonly #attached = new Map<number, Set<number>>();
   readonly #exits = new Map<number, () => void>();
+  /** AVD name -> the console port its emulator was last started on. */
+  readonly spawnedOn = new Map<string, number>();
   #nextPid = 1;
 
   private constructor(
@@ -253,6 +257,7 @@ class Machine {
     }
     const avdName = args[1] ?? "";
     const port = Number(args[args.indexOf("-port") + 1]);
+    this.spawnedOn.set(avdName, port);
     let exit!: (result: ProcessResult) => void;
     const exited = new Promise<ProcessResult>((resolve) => {
       exit = resolve;

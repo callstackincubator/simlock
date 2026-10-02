@@ -267,9 +267,9 @@ export function transition(
     // the device permanently -- `AcquisitionPlanner` would then grant it, `grantedDevice`
     // makes `address` optional so nothing rejected it, and the holder got a grant with no
     // adb serial it could not recover (`driverData`, which holds the port, is not part of a
-    // grant). The address is also not what a port collision is made of: the console port
-    // lives in `driverData.port`, and this driver reuses the one already recorded there
-    // rather than taking a new one (see `ManagedDeviceLifecycle.recoverLeased`).
+    // grant). The address is also not what a port collision is made of: Android records a
+    // boot's console port in `driverData.port`, and after a daemon restart only a recovery
+    // boot reuses it (see `ManagedDeviceLifecycle.recoverLeased`); any other takes a new one.
     const { address: _stale, ...stopped } = record;
     return { ...stopped, ...update, state: to };
   }
