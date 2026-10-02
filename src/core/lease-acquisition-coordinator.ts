@@ -696,9 +696,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /**
-   * Wakes the queue whether or not the grant happened: releasing the capacity reservation
-   * frees a slot either way, and a request that planned while this device was still being
-   * readied may have queued only because that reservation counted.
+   * Wakes the queue after a grant as well as after a waiter that was rejected meanwhile: a
+   * request that planned while this device was still being readied may have queued only
+   * because this waiter held the head of the queue or because the capacity reservation
+   * released here still counted.
    */
   async #grantHandoff(
     waiter: AcquisitionWaiter,

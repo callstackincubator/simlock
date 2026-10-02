@@ -799,6 +799,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       secondDeviceId = grant.device.id;
     });
     await settle();
+    expect(harness.coordinator.queueDepth).toBe(1);
 
     harness.driver.releaseMakeReady();
     const firstGrant = await first;
@@ -808,6 +809,45 @@ describe("LeaseAcquisitionCoordinator", () => {
       queueDepth: harness.coordinator.queueDepth,
       secondGranted: secondDeviceId !== undefined,
       sameDevice: secondDeviceId === firstGrant.device.id,
+    }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
+  });
+
+  it("grants a request queued behind another request booting a shut-down device once that device is granted, with no release", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    const held = await Promise.all([
+      harness.coordinator.request(request, { ownerId: "x", requesterId: "x" }),
+      harness.coordinator.request(request, { ownerId: "y", requesterId: "y" }),
+    ]);
+    const booting = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
+    await settle();
+    // Both devices come back shut down without the release path, so only the kick below wakes
+    // the queue; its head boots one of them and holds there.
+    harness.driver.hangMakeReady();
+    for (const grant of held) {
+      await harness.registry.beginRelease(grant.lease.id);
+      await harness.registry.transitionDevice(grant.device.id, "shutdown", {
+        event: "device.reclaimed",
+        payload: { deviceId: grant.device.id, duration: 0, strategy: "wipe" },
+      });
+    }
+    harness.coordinator.kick();
+    await settle();
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    let secondDeviceId: string | undefined;
+    void second.then((grant) => {
+      secondDeviceId = grant.device.id;
+    });
+    await settle();
+    expect(harness.coordinator.queueDepth).toBe(2);
+
+    harness.driver.releaseMakeReady();
+    const bootedGrant = await booting;
+    await settle();
+
+    expect({
+      queueDepth: harness.coordinator.queueDepth,
+      secondGranted: secondDeviceId !== undefined,
+      sameDevice: secondDeviceId === bootedGrant.device.id,
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
   });
 
