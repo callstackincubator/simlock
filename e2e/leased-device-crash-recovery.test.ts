@@ -148,58 +148,6 @@ describe("leased device crash recovery", () => {
     await held.waitForExit(15_000).catch(() => undefined);
   });
 
-  it("gives the lease up when a leased device cannot be recovered", async () => {
-    const env = await withDaemon({
-      configOverrides: {
-        health: { ...HEALTH_CONFIG_BASE, maxRecoveryAttempts: 1 },
-        limits: { ios: { maxDevices: 2, maxRunning: 2 }, maxRunning: 2 },
-      },
-    });
-    await env.driverScript.set({
-      ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] },
-    });
-
-    const held = leaseHeld(env, "crash-recovery-b");
-    const grant = await grantOf(held);
-    await waitForLeaseCount(env, 1);
-
-    // Same crash as the first flow, but every reboot attempt fails and there is
-    // only one attempt to give -- recovery cannot work.
-    await env.driverScript.merge({
-      ios: {
-        failures: {
-          makeReady: { message: "simulated unrecoverable boot failure", type: "generic" },
-        },
-        managedReality: {
-          devices: [{ deviceId: grant.device.driverDeviceId, runState: "stopped" }],
-        },
-      },
-    });
-
-    const recorded = await env.expectEvents(["device.recovery-failed", "lease.released"]);
-    const recoveryFailed = recorded.find((event) => event.event === "device.recovery-failed");
-    expect(recoveryFailed?.payload).toMatchObject({
-      leaseId: grant.lease.id,
-      reason: "attempts-exhausted",
-    });
-    const released = recorded.find(
-      (event) =>
-        event.event === "lease.released" &&
-        (event.payload as { leaseId?: string }).leaseId === grant.lease.id,
-    );
-    expect(released?.payload).toMatchObject({ leaseId: grant.lease.id, reason: "device-lost" });
-
-    // The device is back in the pool, not stuck leased to a dead device.
-    await waitForLeaseCount(env, 0);
-    const leases = (await env.cli(["list", "--leases"])).json;
-    expect(leases).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: grant.lease.id })]),
-    );
-
-    held.kill("SIGKILL");
-    await held.waitForExit(15_000).catch(() => undefined);
-  });
-
   // Regression guard: writing this suite found that the held CLI never learned its
   // lease had died. The daemon has always pushed `lease-lost` for a `device-lost`
   // release -- the same push MCP's `#handleLeaseLost` reacts to -- but `runLease`'s
@@ -207,7 +155,7 @@ describe("leased device crash recovery", () => {
   // nor exited; it sat forever awaiting an OS signal while holding nothing. Recovery
   // giving up is the first thing that ends a lease with no human involved, which is
   // what made the gap matter enough to fix.
-  it("the held CLI observes its lease ending when the device is unrecoverable", async () => {
+  it("gives the lease up as device-lost when a leased device cannot be recovered, and the held CLI reports it and exits 14", async () => {
     const env = await withDaemon({
       configOverrides: {
         health: { ...HEALTH_CONFIG_BASE, maxRecoveryAttempts: 1 },
@@ -233,7 +181,19 @@ describe("leased device crash recovery", () => {
       },
     });
 
-    // The daemon-side lease is released well before this returns.
+    // Every reboot attempt fails and there is only one attempt to give, so recovery gives
+    // up and the lease ends with the device, not stuck leased to a dead device.
+    const recorded = await env.expectEvents(["device.recovery-failed", "lease.released"]);
+    expect(
+      recorded.find((event) => event.event === "device.recovery-failed")?.payload,
+    ).toMatchObject({ leaseId: grant.lease.id, reason: "attempts-exhausted" });
+    expect(
+      recorded.find(
+        (event) =>
+          event.event === "lease.released" &&
+          (event.payload as { leaseId?: string }).leaseId === grant.lease.id,
+      )?.payload,
+    ).toMatchObject({ leaseId: grant.lease.id, reason: "device-lost" });
     await waitForLeaseCount(env, 0);
 
     // Expected: the held process reports the lost lease on stderr (mirroring

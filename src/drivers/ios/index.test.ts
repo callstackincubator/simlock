@@ -2571,7 +2571,7 @@ describe("IosSimctlDriver", () => {
       );
     });
 
-    it("treats a total apply failure as a skip: single boot, no reboot, no marker, no event", async () => {
+    it("treats a total apply failure as a skip whose detail carries simctl's exit and stderr: single boot, no reboot, no marker, no event", async () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       const runner = new ScriptedProcessRunner([
@@ -2582,7 +2582,8 @@ describe("IosSimctlDriver", () => {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
             command: "xcrun",
           },
-          result: { code: 1, stderr: "boom", stdout: "" },
+          // Real simctl stderr ends in a newline; the detail must not carry it.
+          result: { code: 1, stderr: "boom\n", stdout: "" },
         },
       ]);
       const onSlimmed = vi.fn();
@@ -2617,7 +2618,61 @@ describe("IosSimctlDriver", () => {
       ]);
       expect(onSlimmed).not.toHaveBeenCalled();
       expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
+        expect.objectContaining({
+          deviceId: slim18_5.udid,
+          detail: "all 1 chunk(s) failed to run; last: exit 1: boom",
+          reason: "apply-failed",
+        }),
+      );
+    });
+
+    it("names the last failed chunk's cause when every chunk fails, a timeout included", async () => {
+      const allLabels = labelsFor(resolveSlimCategories(undefined).categories);
+      const chunks = [0, 1, 2, 3].map((index) => allLabels.slice(index * 50, (index + 1) * 50));
+      expect(allLabels.length).toBeGreaterThan(150);
+      const spawnArgs = (labelChunk: readonly string[]) =>
+        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(labelChunk));
+
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
+        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
+        // Three different exits before the timeout, so a detail that kept any but the last
+        // failure would name one of them instead.
+        ...["first", "second", "third"].map((stderr, index) => ({
+          match: { args: spawnArgs(chunks[index] ?? []), command: "xcrun" },
+          result: { code: 1, stderr, stdout: "" },
+        })),
+        { hangs: true, match: { args: spawnArgs(chunks[3] ?? []), command: "xcrun" } },
+      ]);
+      const onSlimSkipped = vi.fn();
+      const driver = await IosSimctlDriver.create({
+        driverConfig: { deviceRoot },
+        instanceId,
+        simlockHome: "/home/.simlock",
+        clock,
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        onSlimSkipped,
+        processRunner: runner,
+        slim: { bootTimeoutMs: 300_000 },
+      });
+
+      const ready = driver.makeReady(
+        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
+        prepareSlim,
+      );
+      await waitForCalls(runner, 6);
+      clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
+
+      expect((await ready).mode).toBe("full");
+      expect(onSlimSkipped).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detail: "all 4 chunk(s) failed to run; last: timed out after 60000ms",
+          reason: "apply-failed",
+        }),
       );
     });
 

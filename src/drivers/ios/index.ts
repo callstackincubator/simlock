@@ -1053,6 +1053,9 @@ export class IosSimctlDriver implements Driver {
     const rejectedLabels: string[] = [...rejected];
     const unattemptedLabels: string[] = [];
     let anyChunkSucceeded = false;
+    // Why the most recent failed chunk failed, so a skip that drops the whole slim pass says
+    // what simctl actually reported rather than only that something went wrong.
+    let lastChunkFailure = "";
 
     for (const chunkLabels of chunks) {
       // `DYLD_ROOT_PATH` is what makes a bare `launchctl` inside the simulator load the
@@ -1071,6 +1074,7 @@ export class IosSimctlDriver implements Driver {
 
       if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
         unattemptedLabels.push(...chunkLabels);
+        lastChunkFailure = describeFailedChunk(outcome);
         continue;
       }
 
@@ -1084,7 +1088,10 @@ export class IosSimctlDriver implements Driver {
     }
 
     if (!anyChunkSucceeded) {
-      return { detail: `all ${String(chunks.length)} chunk(s) failed to run`, kind: "failed" };
+      return {
+        detail: `all ${String(chunks.length)} chunk(s) failed to run; last: ${lastChunkFailure}`,
+        kind: "failed",
+      };
     }
 
     return { kind: "applied", rejectedLabels, unattemptedLabels };
@@ -2196,6 +2203,14 @@ export function sanitizeSlimLabels(labels: readonly string[]): {
     (SLIM_LABEL_SAFE_PATTERN.test(label) ? safe : rejected).push(label);
   }
   return { rejected, safe };
+}
+
+/** What simctl reported for a slim chunk that did not run: its timeout, or exit and stderr. */
+function describeFailedChunk(outcome: ProcessOutcome): string {
+  if (outcome.kind === "timed-out") {
+    return `timed out after ${String(SLIM_CHUNK_TIMEOUT_MS)}ms`;
+  }
+  return `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
 }
 
 function chunk<T>(items: readonly T[], size: number): readonly (readonly T[])[] {

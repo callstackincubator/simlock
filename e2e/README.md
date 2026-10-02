@@ -53,13 +53,13 @@ running test body silently never fires — see the comment in `helpers/env.ts`.
 
 ## Known gaps
 
-- **The slow lane does not pass reliably as a whole run.** Each of the three
-  flows passes on its own, but a combined `pnpm run test:e2e:slow` has failed on
-  every attempt so far: a daemon occasionally outlives `daemon stop` and trips
-  teardown's stray-process assertion, and the no-implicit-download flow has hit
-  its 300s timeout. Not yet root-caused, and not yet distinguished from the
-  reclaim stall recorded in [../docs/internal/KNOWN-PITFALLS.md](../docs/internal/KNOWN-PITFALLS.md).
-  Treat the slow lane as a manual, one-flow-at-a-time tool until that is fixed.
+- **The slow lane does not pass reliably as a whole run.** A daemon
+  occasionally outlives `daemon stop` and trips teardown's stray-process
+  assertion; not yet root-caused, and not yet distinguished from the reclaim
+  stall recorded in [../docs/internal/KNOWN-PITFALLS.md](../docs/internal/KNOWN-PITFALLS.md).
+  The slim lane also fails while a 50-label disable batch can outrun its fixed
+  60s limit on a cold boot ([#206](https://github.com/callstackincubator/simlock/issues/206)). Treat the slow lane as a manual,
+  one-flow-at-a-time tool until both are fixed.
 - `daemon status` ignores `--json` and always prints raw JSON; documented by an
   `it.fails` in `daemon-lifecycle.test.ts`.
 - Android is exercised through the fake driver in the fast lane; only

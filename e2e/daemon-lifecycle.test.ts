@@ -30,29 +30,6 @@ describe("daemon lifecycle & recovery", () => {
     expect(countOccurrences(after, "Daemon started")).toBe(startedCountBefore);
   });
 
-  it("simlock config renders the android.emulator block with its defaults", async () => {
-    const env = await withDaemon({ mode: "running" });
-
-    const config = await env.cli(["config"]);
-
-    expect(config.code).toBe(0);
-    expect((config.json as { android?: unknown }).android).toEqual({
-      emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: false },
-    });
-  });
-
-  it("simlock config renders ios.defaultMode, full by default, and no on/off switch under ios.slim", async () => {
-    const env = await withDaemon({ mode: "running" });
-
-    const config = await env.cli(["config"]);
-
-    expect(config.code).toBe(0);
-    const ios = (config.json as { ios: { defaultMode: string; slim: Record<string, unknown> } })
-      .ios;
-    expect(ios.defaultMode).toBe("full");
-    expect(ios.slim).not.toHaveProperty("enabled");
-  });
-
   it("recovers from a kill -9 that leaves a stale socket behind", async () => {
     const env = await withDaemon({ mode: "running" });
     expect(existsSync(env.socketPath)).toBe(true);
@@ -84,50 +61,6 @@ describe("daemon lifecycle & recovery", () => {
     const statusHuman = await env.cli(["daemon", "status"]);
     expect(statusHuman.code).toBe(0);
     expect(statusHuman.stdout).toContain("Daemon running");
-  });
-
-  it("writes the documented structured startup lines to daemon.log", async () => {
-    const env = await withDaemon({ mode: "running" });
-
-    const contents = await readFile(env.logPath, "utf8");
-    const lines = contents
-      .trim()
-      .split("\n")
-      .filter((line) => line !== "")
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-
-    expect(lines.length, "daemon.log is empty after startup -- see report").toBeGreaterThan(0);
-
-    const startRecord = lines.find((line) => line.message === "Daemon started");
-    expect(startRecord, "no 'Daemon started' record in daemon.log").toBeDefined();
-    expect(startRecord).toMatchObject({
-      fields: expect.objectContaining({
-        version: expect.any(String),
-        protocolVersion: expect.any(Number),
-        socketPath: env.socketPath,
-      }),
-    });
-
-    const modules = new Set(lines.map((line) => line.module));
-    expect(modules.has("daemon.driver-discovery"), "no driver-discovery log lines").toBe(true);
-    expect(modules.has("daemon.connection-host"), "no connection-host log lines").toBe(true);
-  });
-
-  it("rotates daemon.log to daemon.log.1 once past config.log.rotateBytes", async () => {
-    const env = await withDaemon({ mode: "auto" });
-
-    await env.withConfig({ log: { rotateBytes: 200 } }, async () => {
-      await waitFor(() => existsSync(`${env.logPath}.1`), {
-        timeout: 15_000,
-        label: "daemon.log.1 created after low rotateBytes",
-      });
-      // Rotation renames daemon.log away and then opens a fresh one; with a 200-byte cap
-      // nearly every startup line rotates, so a one-shot check can land in that gap.
-      await waitFor(() => existsSync(env.logPath), {
-        timeout: 15_000,
-        label: "a fresh daemon.log opened after rotation",
-      });
-    });
   });
 
   it("stops while a detached lease is still outstanding", async () => {

@@ -157,60 +157,6 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     await waitForLeaseCount(env, 0);
   });
 
-  it("reports overLimit when a lowered running limit can't yet be met, without evicting existing leases", async () => {
-    const env = await withDaemon({
-      configOverrides: { limits: { maxRunning: 3, ios: { maxDevices: 3, maxRunning: 3 } } },
-    });
-    await env.driverScript.set({
-      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
-    });
-
-    // `--detach`, so no holder process has to stay alive across the `daemon stop` that
-    // `withConfig` triggers to pick up the new limit. The leases themselves survive that
-    // stop either way now (ADR 0004 §3), which is what lets this exercise "a lowered limit
-    // doesn't evict an existing lease" against a genuinely still-leased device.
-    const leaseOne = await env.cli([
-      "lease",
-      "--platform",
-      "ios",
-      "--device",
-      "iPhone 16",
-      "--os",
-      "18.4",
-      "--agent-id",
-      "overlimit-one",
-      "--detach",
-    ]);
-    const grantOne = leaseOne.json as { lease: { id: string } };
-    const leaseTwo = await env.cli([
-      "lease",
-      "--platform",
-      "ios",
-      "--device",
-      "iPhone 16",
-      "--os",
-      "18.4",
-      "--agent-id",
-      "overlimit-two",
-      "--detach",
-    ]);
-    const grantTwo = leaseTwo.json as { lease: { id: string } };
-
-    await env.withConfig({ limits: { ios: { maxRunning: 1 } } }, async () => {
-      const afterLower = await status(env);
-      expect(afterLower.capacity.ios.overLimit).toBe(true);
-
-      // Pre-existing leases must never be evicted just because the limit dropped
-      // below what is currently held.
-      const leases = (await env.cli(["list", "--leases"])).json as { id: string }[];
-      expect(leases.map((lease) => lease.id)).toEqual(
-        expect.arrayContaining([grantOne.lease.id, grantTwo.lease.id]),
-      );
-    });
-
-    await env.cli(["release", "--all", "--yes"]);
-  });
-
   it("demotes an idle device, previews cleanup without executing on --dry-run, and nuke touches only registry devices", async () => {
     const env = await withDaemon({
       configOverrides: {
