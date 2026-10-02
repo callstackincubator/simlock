@@ -1212,17 +1212,19 @@ own name for it.
 
 Simlock reads Android device models from two places and writes to neither:
 
-- **Built-in profiles** ship with the Android SDK's `cmdline-tools`: the
-  ones `avdmanager list device` prints. A model newer than your
-  `cmdline-tools` is not there; update `cmdline-tools` to get it.
+- **Built-in profiles** ship with the Android SDK's `cmdline-tools`. A
+  model newer than your `cmdline-tools` is not there; update
+  `cmdline-tools` to get it.
 - **Custom profiles** are the ones you make with Android Studio's device
   manager. Android Studio keeps them in `devices.xml` in your `.android`
   directory. A custom profile exists only on the machine where it was made,
   so in a fleet only the worker that has it can lease it. To add one, create
   it with Android Studio's device manager on that machine.
 
-When a name is in both, the built-in profile wins and the model is not
-custom. If `devices.xml` cannot be read, the built-in models are still
+`avdmanager list device` prints both kinds; it shows a custom profile with
+`OEM : User`. Simlock also reads `devices.xml` itself. When a custom profile
+has the same name as a built-in one, the built-in profile wins and the model
+is not custom. If `devices.xml` cannot be read, the built-in models are still
 listed. A custom model is marked `(custom)` in the human view of `simlock
 catalog` and listed in `customModels` in `--json`.
 

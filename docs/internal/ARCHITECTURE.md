@@ -747,8 +747,9 @@ resolves. The same holds for names: the Android driver's
 order, any of whose names equals the request ignoring case), and the
 catalog's `modelAliases` are a profile's other names that the matcher sends
 back to that profile. A listed model is in `customModels` when the profile
-the matcher sends its name to is a `devices.xml` one, so the mark and the
-resolution cannot disagree. The iOS driver matches a device type's name
+the matcher sends its name to is a `devices.xml` one (parsed by Simlock, or
+listed by `avdmanager` with `OEM : User`), so the mark and the resolution
+cannot disagree. The iOS driver matches a device type's name
 only. `DriverCatalog.listCatalog` leaves out and logs a driver whose catalog
 rejects when no platform is named, and fails with that driver's error when
 its platform is named.

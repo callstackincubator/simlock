@@ -9,6 +9,9 @@ import type { Filesystem, ProcessRunner } from "../../ports/index.js";
  * source's own canonical spelling of the model (case may differ from what the caller asked
  * for), which `AndroidDriver` needs so `DeviceSpec.model` and cache lookups stay stable.
  *
+ * A `builtin` profile is `custom` when `avdmanager` lists it with `OEM : User`: that is how it
+ * prints a profile from Android Studio's `devices.xml`, which it reads itself.
+ *
  * `names` is every name the profile answers to, `name` first, no two equal ignoring case.
  * `DeviceProfileRegistry` matches a requested model against it and lists the rest as the
  * model's other names, so the two can never disagree.
@@ -19,6 +22,7 @@ export type DeviceProfile =
       readonly name: string;
       readonly names: readonly string[];
       readonly avdmanagerId: string;
+      readonly custom: boolean;
     }
   | {
       readonly kind: "properties";
@@ -55,8 +59,8 @@ export interface DeviceProfileCatalog {
   /** Only models with another name appear, keyed by their spelling in `models`. */
   readonly modelAliases: Readonly<Record<string, readonly string[]>>;
   /**
-   * The listed models whose name resolves to a `properties` profile: a custom profile from
-   * this machine rather than one the SDK ships. In `models` order.
+   * The listed models whose name resolves to a `properties` profile or a `custom` `builtin`
+   * one: a custom profile from this machine rather than one the SDK ships. In `models` order.
    */
   readonly customModels: readonly string[];
 }
@@ -101,10 +105,11 @@ export class DeviceProfileRegistry {
     }
     const models = [...listed.values()].map((profile) => profile.name);
     // Custom by the profile the name resolves to, not the one it was listed from: a
-    // devices.xml name that a built-in already answers to stays listed but is built-in.
-    const customModels = models.filter(
-      (model) => matchProfile(profiles, model)?.kind === "properties",
-    );
+    // devices.xml name that a real SDK profile already answers to stays listed but is built-in.
+    const customModels = models.filter((model) => {
+      const profile = matchProfile(profiles, model);
+      return profile !== undefined && isCustom(profile);
+    });
     return { customModels, modelAliases, models };
   }
 
@@ -130,6 +135,11 @@ export class DeviceProfileRegistry {
     }
     return profiles;
   }
+}
+
+/** Made on this machine rather than shipped with the SDK. */
+function isCustom(profile: DeviceProfile): boolean {
+  return profile.kind === "properties" || profile.custom;
 }
 
 /** The first profile any of whose names is `model`, ignoring case. */
@@ -164,18 +174,29 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
     this.#env = env;
   }
 
-  /** Answers to its display name and, when it differs ignoring case, its avdmanager id. */
+  /**
+   * Answers to its display name and, when it differs ignoring case, its avdmanager id. SDK
+   * profiles come before custom ones, so a real SDK profile wins a name clash with a
+   * devices.xml one whatever order `avdmanager` prints them in.
+   */
   // fallow-ignore-next-line unused-class-member -- reached through the DeviceProfileSource port by DeviceProfileRegistry.
   async profiles(): Promise<readonly DeviceProfile[]> {
-    return (await this.#avdmanagerProfiles()).map((profile) => ({
-      avdmanagerId: profile.id,
-      kind: "builtin",
-      name: profile.name,
-      names:
-        profile.id.toLocaleLowerCase() === profile.name.toLocaleLowerCase()
-          ? [profile.name]
-          : [profile.name, profile.id],
-    }));
+    const profiles = (await this.#avdmanagerProfiles()).map(
+      (profile): DeviceProfile => ({
+        avdmanagerId: profile.id,
+        custom: profile.oem === "User",
+        kind: "builtin",
+        name: profile.name,
+        names:
+          profile.id.toLocaleLowerCase() === profile.name.toLocaleLowerCase()
+            ? [profile.name]
+            : [profile.name, profile.id],
+      }),
+    );
+    return [
+      ...profiles.filter((profile) => !isCustom(profile)),
+      ...profiles.filter((profile) => isCustom(profile)),
+    ];
   }
 
   async #avdmanagerProfiles(): Promise<readonly AvdmanagerDeviceProfile[]> {
@@ -196,23 +217,44 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
 interface AvdmanagerDeviceProfile {
   readonly id: string;
   readonly name: string;
+  /** The entry's `OEM :` line, or undefined without one. `User` marks a devices.xml profile. */
+  readonly oem: string | undefined;
 }
 
+/**
+ * One profile per `id:` entry that has a `Name:` line. `OEM :` comes after `Name:`, so an
+ * entry is complete only at the next `id:` line or the end of the output.
+ */
 export function parseAvdmanagerDeviceProfiles(output: string): AvdmanagerDeviceProfile[] {
   const profiles: AvdmanagerDeviceProfile[] = [];
-  let id: string | undefined;
+  let entry: { id: string; name: string | undefined; oem: string | undefined } | undefined;
+  const flush = (): void => {
+    if (entry?.name !== undefined) {
+      profiles.push({ id: entry.id, name: entry.name, oem: entry.oem });
+    }
+  };
   for (const line of output.split(/\r?\n/)) {
-    const idMatch = /^id:\s*\d+\s+or\s+"([^"]+)"/.exec(line.trim());
+    const trimmed = line.trim();
+    const idMatch = /^id:\s*\d+\s+or\s+"([^"]+)"/.exec(trimmed);
     if (idMatch?.[1] !== undefined) {
-      id = idMatch[1];
+      flush();
+      entry = { id: idMatch[1], name: undefined, oem: undefined };
       continue;
     }
-    const nameMatch = /^Name:\s*(.+)$/.exec(line.trim());
-    if (id !== undefined && nameMatch?.[1] !== undefined) {
-      profiles.push({ id, name: nameMatch[1] });
-      id = undefined;
+    if (entry === undefined) {
+      continue;
+    }
+    const nameMatch = /^Name:\s*(.+)$/.exec(trimmed);
+    if (nameMatch?.[1] !== undefined) {
+      entry.name = nameMatch[1];
+      continue;
+    }
+    const oemMatch = /^OEM\s*:\s*(.+)$/.exec(trimmed);
+    if (oemMatch?.[1] !== undefined) {
+      entry.oem = oemMatch[1];
     }
   }
+  flush();
   return profiles;
 }
 

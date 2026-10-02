@@ -19,7 +19,34 @@ describe("BuiltinDeviceProfileSource", () => {
     const source = new BuiltinDeviceProfileSource(avdmanager, runner);
 
     await expect(source.profiles()).resolves.toEqual([
-      { avdmanagerId: "pixel_8", kind: "builtin", name: "Pixel 8", names: ["Pixel 8", "pixel_8"] },
+      {
+        avdmanagerId: "pixel_8",
+        custom: false,
+        kind: "builtin",
+        name: "Pixel 8",
+        names: ["Pixel 8", "pixel_8"],
+      },
+    ]);
+  });
+
+  it("marks a profile custom only when avdmanager lists it with OEM : User", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(
+        `${pixelDevices}---------\n` +
+          `id: 68 or "iPhone 13 mini"\n    Name: iPhone 13 mini\n    OEM : User\n---------\n` +
+          `id: 69 or "2.7in QVGA"\n    Name: 2.7" QVGA\n    OEM : Generic\n`,
+      ),
+    ]);
+    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
+
+    // SDK profiles first, so the User one moves after `2.7" QVGA`.
+    const profiles = await source.profiles();
+    expect(
+      profiles.map((profile) => [profile.name, "custom" in profile && profile.custom]),
+    ).toEqual([
+      ["Pixel 8", false],
+      ['2.7" QVGA', false],
+      ["iPhone 13 mini", true],
     ]);
   });
 
@@ -30,7 +57,13 @@ describe("BuiltinDeviceProfileSource", () => {
     const source = new BuiltinDeviceProfileSource(avdmanager, runner);
 
     await expect(source.profiles()).resolves.toEqual([
-      { avdmanagerId: "TV_1080p", kind: "builtin", name: "tv_1080p", names: ["tv_1080p"] },
+      {
+        avdmanagerId: "TV_1080p",
+        custom: false,
+        kind: "builtin",
+        name: "tv_1080p",
+        names: ["tv_1080p"],
+      },
     ]);
   });
 });
@@ -211,6 +244,7 @@ describe("DeviceProfileRegistry", () => {
 
     await expect(registry.resolve("Pixel 8")).resolves.toEqual({
       avdmanagerId: "pixel_8",
+      custom: false,
       kind: "builtin",
       name: "Pixel 8",
       names: ["Pixel 8", "pixel_8"],
@@ -342,6 +376,27 @@ describe("DeviceProfileRegistry", () => {
     });
   });
 
+  it("lists a devices.xml model in customModels when avdmanager also lists it as a User profile", async () => {
+    // `avdmanager list device` reads devices.xml itself and prints each of its profiles with
+    // `OEM : User` (seen on a real SDK, issue #236), so the built-in source returns the name too.
+    const withUserProfile =
+      `${pixelDevices}---------\n` +
+      `id: 1 or "My Custom Phone"\n    Name: My Custom Phone\n    OEM : User\n`;
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(withUserProfile)]),
+      ),
+      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
+    ]);
+
+    await expect(registry.catalog()).resolves.toEqual({
+      customModels: ["My Custom Phone"],
+      modelAliases: { "Pixel 8": ["pixel_8"] },
+      models: ["Pixel 8", "My Custom Phone"],
+    });
+  });
+
   it("does not list a built-in model in customModels", async () => {
     const registry = new DeviceProfileRegistry([
       new BuiltinDeviceProfileSource(
@@ -354,6 +409,32 @@ describe("DeviceProfileRegistry", () => {
     const catalog = await registry.catalog();
     expect(catalog.models).toContain("Pixel 8");
     expect(catalog.customModels).not.toContain("Pixel 8");
+  });
+
+  it("resolves a name avdmanager lists as both an SDK and a User profile to the SDK one, whatever the order", async () => {
+    const user = `id: 68 or "My Pixel"\n    Name: Pixel 8\n    OEM : User\n`;
+    const sdk = `id: 0 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n`;
+    for (const [first, second] of [
+      [user, sdk],
+      [sdk, user],
+    ]) {
+      const output = `Available devices:\n${first}---------\n${second}`;
+      const registry = new DeviceProfileRegistry([
+        new BuiltinDeviceProfileSource(
+          avdmanager,
+          new ScriptedProcessRunner([processResult(output), processResult(output)]),
+        ),
+      ]);
+
+      await expect(registry.catalog()).resolves.toMatchObject({
+        customModels: [],
+        models: ["Pixel 8"],
+      });
+      await expect(registry.resolve("Pixel 8")).resolves.toMatchObject({
+        avdmanagerId: "pixel_8",
+        custom: false,
+      });
+    }
   });
 
   it("lists a name in both sources once, and not in customModels", async () => {
@@ -435,27 +516,35 @@ describe("DeviceProfileRegistry", () => {
     }
   });
 
-  it("resolves every model in customModels to a profile of kind properties", async () => {
+  it("resolves every model in customModels to a properties profile or a custom built-in one", async () => {
     // `pixel_8` is listed, since no earlier profile is named that, but the built-in Pixel 8
     // answers to it, so it resolves to the built-in and must not be marked custom.
+    // `iPhone 13 mini` is avdmanager's `OEM : User` entry; `My Custom Phone` is only in
+    // devices.xml. Both are custom, by different kinds of profile.
     const twoDevices = devicesXml().replace(
       "</d:devices>",
       "<d:device><d:name>pixel_8</d:name></d:device></d:devices>",
     );
+    const withUserProfile =
+      `${pixelDevices}---------\n` +
+      `id: 68 or "iPhone 13 mini"\n    Name: iPhone 13 mini\n    OEM : User\n`;
     const registry = new DeviceProfileRegistry([
       new BuiltinDeviceProfileSource(
         avdmanager,
-        new ScriptedProcessRunner([processResult(pixelDevices), processResult(pixelDevices)]),
+        new ScriptedProcessRunner(Array.from({ length: 3 }, () => processResult(withUserProfile))),
       ),
       new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(twoDevices)),
     ]);
 
     const catalog = await registry.catalog();
-    expect(catalog.models).toEqual(["Pixel 8", "My Custom Phone", "pixel_8"]);
-    expect(catalog.customModels).toEqual(["My Custom Phone"]);
+    expect(catalog.models).toEqual(["Pixel 8", "iPhone 13 mini", "My Custom Phone", "pixel_8"]);
+    expect(catalog.customModels).toEqual(["iPhone 13 mini", "My Custom Phone"]);
+    const resolved = [];
     for (const model of catalog.customModels) {
-      await expect(registry.resolve(model)).resolves.toMatchObject({ kind: "properties" });
+      const profile = await registry.resolve(model);
+      resolved.push(profile.kind === "builtin" ? { custom: profile.custom } : profile.kind);
     }
+    expect(resolved).toEqual([{ custom: true }, "properties"]);
   });
 });
 
