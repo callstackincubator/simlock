@@ -270,12 +270,6 @@ export class FakeDriver implements Driver {
     return { outcome: "installed", receipt, version };
   }
 
-  /** Removes an installed version, as a user deleting it would. */
-  uninstall(version: string): void {
-    this.#availableOsVersions.delete(version);
-    this.#receipts.delete(version);
-  }
-
   holdInstalls(): void {
     this.#holdInstalls = true;
   }

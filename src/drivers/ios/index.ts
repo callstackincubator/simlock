@@ -1914,11 +1914,6 @@ function installedComponent(runtime: Runtime, images: readonly RuntimeImage[]): 
 }
 
 /**
- * The installed runtime an install of `component` produced: the newest runtime for `latest`,
- * the newest of that major for a bare major (the bounded default), and that exact version
- * otherwise.
- */
-/**
  * A bare major is the driver's own guess at a bounded model's newest runtime, and Xcode may have
  * no build matching it: a crash there tells the requester to name an exact release instead.
  */
@@ -1931,6 +1926,11 @@ function withBareMajorHint(component: string, error: unknown): unknown {
   );
 }
 
+/**
+ * The installed runtime an install of `component` produced: the newest runtime for `latest`,
+ * the newest of that major for a bare major (the bounded default), and that exact version
+ * otherwise.
+ */
 function runtimeForComponent(catalog: SimctlCatalog, component: string): Runtime | undefined {
   const available = catalog.runtimes.filter((runtime) => runtime.isAvailable);
   if (component === LATEST_COMPONENT) return newestRuntime(available);

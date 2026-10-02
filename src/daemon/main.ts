@@ -223,10 +223,10 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     system: hostSystem,
   });
   void hostFacts.refresh();
-  // The one caller of `Driver.installComponent` (ADR 0010 §3). Its `DiskSpaceGuard` is the only
-  // one, so an iOS and an Android install see each other's reservations.
   // One gate for every registry write: the lease engine's and the installer's records.
   const decisions = new SerializedDecision();
+  // The one caller of `Driver.installComponent` (ADR 0010 §3). Its `DiskSpaceGuard` is the only
+  // one, so an iOS and an Android install see each other's reservations.
   const components = new ComponentInstaller({
     clock,
     decisions,

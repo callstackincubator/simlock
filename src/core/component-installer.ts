@@ -63,10 +63,11 @@ export class ComponentInstallerClosedError extends Error {
 /**
  * Where one install is. `waiting`: behind another install on its platform. `front`: at the head
  * of the queue, checking whether it is still needed, already there, and fits on disk. `running`:
- * the driver's installer is running. `ended`: settled or abandoned, so nothing joins it any more
+ * the driver's installer is running. `recording`: it returned an install, and its record is being
+ * written. `ended`: settled or abandoned, so nothing joins it any more
  * -- an install whose calls all timed out stays `ended` at the head until its driver returns.
  */
-type InstallState = "waiting" | "front" | "running" | "ended";
+type InstallState = "waiting" | "front" | "running" | "recording" | "ended";
 
 interface Install {
   readonly platform: Platform;
@@ -176,11 +177,8 @@ export class ComponentInstaller {
 
   /** Starts the head of a platform's queue when nothing is running there. */
   #pump(platform: Platform): void {
-    const queue = this.#queue(platform);
-    while (queue[0] !== undefined && queue[0].state === "waiting" && queue[0].calls.length === 0) {
-      queue.shift();
-    }
-    const front = queue[0];
+    // A waiting install whose calls all left still goes to the front, finds none, and ends.
+    const front = this.#queue(platform)[0];
     if (front === undefined || front.state !== "waiting") return;
     front.state = "front";
     const run = this.#run(front).finally(() => {
@@ -224,7 +222,7 @@ export class ComponentInstaller {
       const queue = this.#queue(install.platform);
       const index = queue.indexOf(install);
       if (index !== -1) queue.splice(index, 1);
-      if (!this.#closed) this.#pump(install.platform);
+      this.#pump(install.platform);
     }
   }
 
@@ -272,6 +270,8 @@ export class ComponentInstaller {
           receipt: result.receipt,
           version: result.version,
         };
+        // The install happened: a call that runs out while the record is written fails alone.
+        if (install.state === "running") install.state = "recording";
         await this.options.decisions.run(() => this.options.registry.recordComponent(record));
       }
     } catch (error: unknown) {
@@ -304,8 +304,8 @@ export class ComponentInstaller {
   }
 
   /**
-   * A call's budget ran out. A waiting call leaves alone; the install it waited on carries on for
-   * the others, or leaves the queue with it when it was the last. A running install is ended at
+   * A call's budget ran out. A waiting call, or one whose install is only writing its record,
+   * leaves alone; the install carries on for the others, or ends when it was the last. A running install is ended at
    * the deadline of the oldest call joined to it -- the first of its timers to fire -- and every
    * call joined to it fails now, not when the driver returns.
    */
@@ -322,8 +322,7 @@ export class ComponentInstaller {
       this.#settleAll(install, { error });
       return;
     }
-    // A waiting install left with no calls is dropped when the queue next moves (`#pump`); one
-    // at the front notices on its next step (`#run`).
+    // An install left with no calls ends at its next step (`#run`), so the queue moves on.
     this.#settle(call, { error });
   }
 
