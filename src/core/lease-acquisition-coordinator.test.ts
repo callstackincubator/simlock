@@ -794,6 +794,30 @@ describe("LeaseAcquisitionCoordinator", () => {
     expect(progress).toEqual([]);
   });
 
+  it("grants a request queued while a new device was booting a second new device once the first is granted, with no release", async () => {
+    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
+    harness.driver.hangMakeReady();
+
+    const first = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
+    await settle();
+    const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
+    let secondDeviceId: string | undefined;
+    void second.then((grant) => {
+      secondDeviceId = grant.device.id;
+    });
+    await settle();
+
+    harness.driver.releaseMakeReady();
+    const firstGrant = await first;
+    await settle();
+
+    expect({
+      queueDepth: harness.coordinator.queueDepth,
+      secondGranted: secondDeviceId !== undefined,
+      sameDevice: secondDeviceId === firstGrant.device.id,
+    }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
+  });
+
   it("retries provisioning once and rejects boot failures", async () => {
     const harness = await createHarness();
     harness.driver.failOn("provision", 1, new DriverCrashError("temporary"));
