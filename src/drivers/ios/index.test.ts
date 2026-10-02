@@ -2582,7 +2582,8 @@ describe("IosSimctlDriver", () => {
             args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
             command: "xcrun",
           },
-          result: { code: 1, stderr: "boom", stdout: "" },
+          // Real simctl stderr ends in a newline; the detail must not carry it.
+          result: { code: 1, stderr: "boom\n", stdout: "" },
         },
       ]);
       const onSlimmed = vi.fn();

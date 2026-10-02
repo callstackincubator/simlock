@@ -316,7 +316,10 @@ interface TeardownState {
   readonly env: NodeJS.ProcessEnv;
   readonly home: string;
   readonly mcpClients: ReadonlySet<McpClientHandle>;
-  /** The real-SDK lane: the home holds a real iOS device set that must be emptied first. */
+  /**
+   * The real-SDK lane: the home may hold a real iOS device set, which must be emptied before
+   * the home is removed. An Android-only or non-macOS run has none; emptying it is a no-op.
+   */
   readonly realDrivers: boolean;
   readonly socketPath: string;
 }

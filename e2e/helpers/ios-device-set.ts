@@ -25,13 +25,26 @@ export function iosDeviceSet(home: string): string {
 export async function simctlInSet(
   deviceSet: string,
   args: readonly string[],
+  options: { readonly timeoutMs?: number } = {},
 ): Promise<{ readonly stdout: string }> {
-  return execFileAsync("xcrun", ["simctl", "--set", deviceSet, ...args]);
+  return execFileAsync("xcrun", ["simctl", "--set", deviceSet, ...args], {
+    timeout: options.timeoutMs ?? 0,
+  });
 }
 
+/**
+ * Per call while emptying a set. Teardown runs inside a 60s hook that already spends up to
+ * ~25s stopping the daemon, so a hung simctl must give up rather than eat the rest of it --
+ * the home's removal comes after.
+ */
+const EMPTY_SET_CALL_TIMEOUT_MS = 15_000;
+
 /** Devices in one device set. */
-export async function setDevices(deviceSet: string): Promise<SimctlDevice[]> {
-  const { stdout } = await simctlInSet(deviceSet, ["list", "devices", "-j"]);
+export async function setDevices(
+  deviceSet: string,
+  options: { readonly timeoutMs?: number } = {},
+): Promise<SimctlDevice[]> {
+  const { stdout } = await simctlInSet(deviceSet, ["list", "devices", "-j"], options);
   const parsed = JSON.parse(stdout) as { devices: Record<string, SimctlDevice[]> };
   return Object.values(parsed.devices).flat();
 }
@@ -46,12 +59,19 @@ export async function setDevices(deviceSet: string): Promise<SimctlDevice[]> {
  * without shutting down would leave a running `launchd_sim` attached to a set directory
  * that `withDaemon`'s teardown is about to remove recursively, and still writing into it
  * while it does (`ENOTEMPTY`).
+ *
+ * Devices are handled in parallel and every call is bounded, so emptying a set of any size
+ * takes at most two `EMPTY_SET_CALL_TIMEOUT_MS`.
  */
 export async function emptyDeviceSet(deviceSet: string): Promise<void> {
-  for (const device of await setDevices(deviceSet).catch(() => [])) {
-    await simctlInSet(deviceSet, ["shutdown", device.udid]).catch(() => undefined);
-    await simctlInSet(deviceSet, ["delete", device.udid]).catch(() => undefined);
-  }
+  const bounded = { timeoutMs: EMPTY_SET_CALL_TIMEOUT_MS };
+  const devices = await setDevices(deviceSet, bounded).catch(() => []);
+  await Promise.all(
+    devices.map(async (device) => {
+      await simctlInSet(deviceSet, ["shutdown", device.udid], bounded).catch(() => undefined);
+      await simctlInSet(deviceSet, ["delete", device.udid], bounded).catch(() => undefined);
+    }),
+  );
 }
 
 /** Older than any run of a real-simctl lane can be. */
