@@ -19,6 +19,7 @@ export type FakeDriverOperation =
   | "listManaged"
   | "listCatalog"
   | "listComponents"
+  | "removeComponent"
   /** The root re-proof `doctor --purge-orphans` takes before its first destroy. */
   | "revalidateRoot";
 
@@ -102,6 +103,8 @@ export interface FakeDriverPlatformScript {
   readonly componentSizes?: Readonly<Record<string, number>>;
   /** What `listComponents` reports as each version's foreign devices; 0 for one left out. */
   readonly foreignDevices?: Readonly<Record<string, number>>;
+  /** What every `removeComponent` reports as left on disk; nothing unless set. */
+  readonly removalResidue?: string;
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
   readonly reclaimResult?: "ready" | "shutdown";

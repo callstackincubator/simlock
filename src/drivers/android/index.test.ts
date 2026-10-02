@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Driver } from "../../core/driver.js";
 import {
+  ComponentInUseError,
+  ComponentNotOwnedError,
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
   PassthroughRefusedError,
@@ -2760,7 +2762,158 @@ describe("AndroidDriver listComponents()", () => {
     );
     expect(runner.calls).toHaveLength(callsBeforeListing);
   });
+
+  describe("removeComponent()", () => {
+    const packageName = "system-images;android-35;google_apis;arm64-v8a";
+    const signal = () => new AbortController().signal;
+
+    it("removes the image the receipt names with sdkmanager --uninstall and its package, and verifies it is gone", async () => {
+      const filesystem = await androidFilesystem({
+        images: [
+          ["35", "google_apis", "arm64-v8a"],
+          ["35", "default", "arm64-v8a"],
+        ],
+      });
+      await filesystem.writeFileAtomic(`${googleApis}/system.img`, "0123456789");
+      const runner = new InstallReflectingProcessRunner(
+        [processResult(binaries.sdkmanager, ["--uninstall", packageName])],
+        filesystem,
+      );
+      const driver = await createDriver(filesystem, runner);
+      const target = (await driver.listComponents()).find(
+        (component) => component.variant === "google_apis/arm64-v8a",
+      );
+
+      await expect(
+        driver.removeComponent(target?.receipt ?? {}, { signal: signal() }),
+      ).resolves.toEqual({ sizeBytes: 10 });
+
+      expect(runner.calls.map((call) => [call.command, ...call.args])).toEqual([
+        [binaries.sdkmanager, "--uninstall", packageName],
+      ]);
+      expect((await driver.listComponents()).map(({ variant }) => variant)).toEqual([
+        "default/arm64-v8a",
+      ]);
+    });
+
+    it("refuses with ComponentInUseError when an AVD in the user's AVD home names the image, and uninstalls nothing", async () => {
+      const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+      await userAvd(filesystem, "Pixel_8", "system-images/android-35/google_apis/arm64-v8a/");
+      // The scripted runner fails any call it was not given, so an uninstall would fail this test.
+      const runner = new ScriptedProcessRunner([]);
+      const driver = await createDriver(filesystem, runner);
+      const [target] = await driver.listComponents();
+
+      const error = await driver
+        .removeComponent(target?.receipt ?? {}, { signal: signal() })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ComponentInUseError);
+      expect(error).toMatchObject({ foreignDevices: 1 });
+      expect(runner.calls).toEqual([]);
+    });
+
+    it("refuses with ComponentNotOwnedError when no installed image has the receipt, and uninstalls nothing", async () => {
+      const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+      const runner = new ScriptedProcessRunner([]);
+      const driver = await createDriver(filesystem, runner);
+
+      await expect(
+        driver.removeComponent(
+          { package: packageName, revision: "1", stamp: "elsewhere@0" },
+          { signal: signal() },
+        ),
+      ).rejects.toBeInstanceOf(ComponentNotOwnedError);
+      expect(runner.calls).toEqual([]);
+    });
+
+    it("fails with sdkmanager's output when the uninstall exits non-zero", async () => {
+      const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+      const runner = new ScriptedProcessRunner([
+        {
+          match: { args: ["--uninstall", packageName], command: binaries.sdkmanager },
+          result: { code: 1, stderr: "Failed to find package", stdout: "" },
+        },
+      ]);
+      const driver = await createDriver(filesystem, runner);
+      const [target] = await driver.listComponents();
+
+      await expect(
+        driver.removeComponent(target?.receipt ?? {}, { signal: signal() }),
+      ).rejects.toThrow("Failed to find package");
+    });
+
+    it("ends sdkmanager --uninstall when its signal fires", async () => {
+      const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+      const runner = new ScriptedProcessRunner([
+        {
+          hangs: true,
+          match: { args: ["--uninstall", packageName], command: binaries.sdkmanager },
+        },
+      ]);
+      const driver = await createDriver(filesystem, runner);
+      const [target] = await driver.listComponents();
+      const abort = new AbortController();
+
+      const removal = driver
+        .removeComponent(target?.receipt ?? {}, { signal: abort.signal })
+        .catch((caught: unknown) => caught);
+      await vi.waitFor(() => expect(runner.calls).toHaveLength(1));
+      abort.abort();
+
+      expect(await settledValue(removal)).toMatchObject({
+        message: expect.stringMatching(/was ended before it finished/),
+      });
+    });
+
+    it("ends sdkmanager --uninstall after five minutes, SIGTERM then SIGKILL, and answers only once it has exited", async () => {
+      const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        {
+          // Ignores SIGTERM: only the SIGKILL ten seconds later ends it.
+          hangs: true,
+          ignoresSigterm: true,
+          match: { args: ["--uninstall", packageName], command: binaries.sdkmanager },
+        },
+      ]);
+      const driver = await createDriver(filesystem, runner, { clock });
+      const [target] = await driver.listComponents();
+
+      let settled = false;
+      const removal = driver
+        .removeComponent(target?.receipt ?? {}, { signal: signal() })
+        .catch((caught: unknown) => caught)
+        .finally(() => {
+          settled = true;
+        });
+      await vi.waitFor(() => expect(runner.calls).toHaveLength(1));
+      clock.advance(5 * 60_000);
+      for (let count = 0; count < 100; count += 1) await Promise.resolve();
+      expect(settled).toBe(false);
+      clock.advance(10_000);
+
+      expect(await settledValue(removal)).toMatchObject({
+        message: expect.stringMatching(/timed out after 300000ms/),
+      });
+    });
+  });
 });
+
+/**
+ * What a promise settled with, once it has: a promise still open fails a named assertion rather
+ * than the test's own timeout, so a deadline that never ends anything reads as that.
+ */
+async function settledValue(promise: Promise<unknown>): Promise<unknown> {
+  const state: { done: boolean; value: unknown } = { done: false, value: undefined };
+  const settle = (value: unknown): void => {
+    state.done = true;
+    state.value = value;
+  };
+  void promise.then(settle, settle);
+  await vi.waitFor(() => expect(state.done).toBe(true));
+  return state.value;
+}
 
 function bootProbes(runner: ScriptedProcessRunner): number {
   return runner.calls.filter((call) => call.args.includes("sys.boot_completed")).length;
@@ -3247,6 +3400,12 @@ class InstallReflectingProcessRunner extends ScriptedProcessRunner {
     options: ProcessRunOptions = {},
   ): ProcessHandle {
     const handle = super.spawn(command, args, options);
+    const uninstalled = args[0] === "--uninstall" ? imageDirectory(args[1]) : undefined;
+    if (uninstalled !== undefined) {
+      void handle.wait().then(async (result) => {
+        if (result.code === 0) await this.#filesystem.rm(uninstalled);
+      });
+    }
     if (args[0] === "--install" && typeof args[1] === "string") {
       const packageName = args[1];
       void handle.wait().then((result) => {
@@ -3284,6 +3443,14 @@ function installFor(
     onProgress: options.onProgress ?? (() => undefined),
     signal: options.signal ?? new AbortController().signal,
   });
+}
+
+/** Where sdkmanager puts a `system-images;android-<api>;<tag>;<abi>` package. */
+function imageDirectory(packageName: string | undefined): string | undefined {
+  const match = /^system-images;android-(.+);(.+);(.+)$/.exec(packageName ?? "");
+  if (match === null) return undefined;
+  const [, api, tag, abi] = match;
+  return `${sdk}/system-images/android-${api ?? ""}/${tag ?? ""}/${abi ?? ""}`;
 }
 
 function processResult(command: string, args: readonly (string | RegExp)[], stdout = "") {

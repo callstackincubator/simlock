@@ -61,6 +61,8 @@ Commands:
                               Install a simulator runtime or system image
   component list [--platform <ios|android>]
                               List installed runtimes and system images
+  component remove <ios|android> <version> [--dry-run] [--yes]
+                              Remove a runtime or system image Simlock installed
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
@@ -1865,7 +1867,8 @@ async function runWorkerAction(
 
 const COMPONENT_USAGE =
   "Usage: simlock component install <ios|android> <version> [--worker <id>... | --all-workers]\n" +
-  "       simlock component list [--platform <ios|android>]\n";
+  "       simlock component list [--platform <ios|android>]\n" +
+  "       simlock component remove <ios|android> <version> [--dry-run] [--yes]\n";
 
 /**
  * ADR 0010 §6: installs one component through the daemon's `component.install`. Argument
@@ -1888,6 +1891,7 @@ async function runComponent(
     return 0;
   }
   if (command === "list") return runComponentList(argv.slice(1), environment, token);
+  if (command === "remove") return runComponentRemove(argv.slice(1), environment, token);
   if (command !== "install") {
     throw new UsageError(withHelpHint(`Unknown component command: ${command}`));
   }
@@ -1954,6 +1958,67 @@ async function runComponentList(
   } finally {
     await client.close();
   }
+}
+
+/**
+ * ADR 0010 §8: `component remove` renders the daemon's `component.remove` as one JSON line on
+ * stdout. Destructive, so without `--dry-run` it confirms or requires `--yes`, exactly as
+ * `release --all` does (safety rule 5); a dry run removes nothing and asks nothing. Whether the
+ * component may go is the daemon's answer.
+ */
+async function runComponentRemove(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  token: string | undefined,
+): Promise<number> {
+  const parsed = parseComponentRemoveArgs(argv);
+  if (parsed === "help") {
+    environment.stdout.write(COMPONENT_USAGE);
+    return 0;
+  }
+  const { dryRun, platform, version } = parsed;
+  if (!dryRun) {
+    const confirmed =
+      parsed.yes || (await environment.confirm?.(`Remove ${platform} ${version}? [y/N] `));
+    if (confirmed !== true) {
+      throw new UsageError("component remove requires confirmation or --yes");
+    }
+  }
+  const client = await connectDaemonClient(environment, token);
+  try {
+    writeResult(
+      environment,
+      await client.removeComponent({ platform, version, ...(dryRun ? { dryRun } : {}) }),
+    );
+    return 0;
+  } finally {
+    await client.close();
+  }
+}
+
+/** `component remove`'s arguments: exactly a platform and a version and its flags, or `--help`. */
+function parseComponentRemoveArgs(argv: readonly string[]):
+  | {
+      readonly platform: "ios" | "android";
+      readonly version: string;
+      readonly dryRun: boolean;
+      readonly yes: boolean;
+    }
+  | "help" {
+  const values = commandArgs(argv, {
+    "dry-run": { type: "boolean" },
+    help: { type: "boolean", short: "h" },
+    yes: { type: "boolean" },
+  });
+  if (values.help) return "help";
+  const [platform, version, ...extra] = values.positionals;
+  if (platform === undefined || version === undefined || extra.length > 0) {
+    throw new UsageError(withHelpHint("Expected <ios|android> <version>"));
+  }
+  if (platform !== "ios" && platform !== "android") {
+    throw new UsageError("component remove <platform> must be ios or android");
+  }
+  return { dryRun: values["dry-run"] === true, platform, version, yes: values.yes === true };
 }
 
 /** `component install`'s arguments: exactly a platform and a version, optionally the workers to

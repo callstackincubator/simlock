@@ -9,6 +9,19 @@ never enforce them only inside an individual rule or driver.
    (i.e. that simlock created). Everything else on the machine is strictly
    read-only. This includes `doctor --fix` and `nuke`.
 
+   A component (an iOS simulator runtime or an Android system image) is
+   removed only through its record: `ComponentInstaller.remove`, from an
+   admin's explicit `component.remove`, and only when a component record's
+   receipt equals the receipt of what is installed now
+   ([ADR 0010](../adr/0010-components-have-one-owner-in-the-core.md) §5, §8).
+   It is never removed while any device uses it, Simlock's own in any state
+   but `deleted` or a foreign one, booted or not; and nothing removes one on
+   its own — no cleanup rule, idle tier or disk-pressure reaction. To count
+   foreign devices a driver may read the platform's default device locations
+   (the machine's default simulator set, the user's own AVD home), and never
+   writes there. Simlock never deletes a file in the macOS asset store: it
+   asks `simctl` to delete the runtime and reports what `simctl` left.
+
    There is exactly one exception, and it is opt-in: `doctor --purge-orphans`
    may destroy a device that sits inside a *validly-marked Simlock device root*
    but has no registry record (see

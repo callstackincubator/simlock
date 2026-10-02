@@ -72,6 +72,18 @@ export interface ErrorDetailsMap {
    * no operation overrides that policy, so the install never starts.
    */
   DOWNLOADS_DISABLED: { readonly policy: "never" };
+  /**
+   * ADR 0010 §5/§8: a `component.remove` for a component Simlock did not install -- no record of
+   * installing it, or what is installed now is not what the record names. Nothing was removed.
+   */
+  COMPONENT_NOT_OWNED: Record<string, never>;
+  /**
+   * ADR 0010 §8: a `component.remove` for a component a device uses: `devices` of Simlock's own,
+   * in any state but deleted, and `foreignDevices` outside Simlock. Nothing was removed.
+   */
+  COMPONENT_IN_USE: { readonly devices: number; readonly foreignDevices: number };
+  /** ADR 0010 §8: a `component.remove` while an install or removal runs or waits on the platform. */
+  COMPONENT_BUSY: Record<string, never>;
   UNKNOWN_LEASE: { readonly leaseId: string };
   /** A `simlock <tool>` verb the owning driver will not proxy (ADR 0001, decision 7). Carries
    * the tool so a caller can say which wrapper refused without re-parsing the message. */
@@ -173,6 +185,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   LICENSE_NOT_ACCEPTED: true,
   DOWNLOAD_TIMEOUT: true,
   DOWNLOADS_DISABLED: true,
+  COMPONENT_IN_USE: true,
   UNKNOWN_LEASE: true,
   PASSTHROUGH_REFUSED: true,
   UNKNOWN_PASSTHROUGH_TOOL: true,
@@ -303,6 +316,22 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 12,
     httpStatus: 403,
   },
+  // A refused removal: 409, the component is not in a state that allows it. 12 for the two that
+  // a retry does not change on its own (not Simlock's; in use until its devices are deleted),
+  // 11 for the one that passes once the platform's install or removal ends, like `NO_CAPACITY`.
+  COMPONENT_NOT_OWNED: {
+    code: "COMPONENT_NOT_OWNED",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 409,
+  },
+  COMPONENT_IN_USE: {
+    code: "COMPONENT_IN_USE",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 409,
+  },
+  COMPONENT_BUSY: { code: "COMPONENT_BUSY", kind: "domain", cliExitCode: 11, httpStatus: 409 },
   DOCTOR_UNAVAILABLE: {
     code: "DOCTOR_UNAVAILABLE",
     kind: "domain",

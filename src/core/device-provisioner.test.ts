@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
@@ -9,10 +13,11 @@ import {
   MemoryLogSink,
 } from "../ports/index.js";
 import { type CapacityReservation } from "./capacity/index.js";
+import { ComponentBeingRemovedError, ComponentInstaller } from "./component-installer.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import { DriverCrashError, BootTimeoutError } from "./driver.js";
+import { DriverCrashError, BootTimeoutError, DiskSpaceGuard } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry } from "./registry.js";
@@ -57,15 +62,26 @@ async function createHarness(
     new DeviceOperationClaims(),
     clock,
   );
+  const components = new ComponentInstaller({
+    clock,
+    decisions,
+    diskSpace: new DiskSpaceGuard(),
+    drivers: new DriverCatalog([driver]),
+    eventBus,
+    filesystem: new MemoryFilesystem(),
+    registry,
+    timeoutMs: 1_200_000,
+  });
   const provisioner = new DeviceProvisioner({
     catalog: new DriverCatalog([driver]),
     clock,
+    components,
     decisions,
     lifecycle,
     ...(logger === undefined ? {} : { logger }),
     registry,
   });
-  return { clock, driver, eventBus, lifecycle, provisioner, registry };
+  return { clock, components, decisions, driver, eventBus, lifecycle, provisioner, registry };
 }
 
 describe("DeviceProvisioner", () => {
@@ -73,6 +89,10 @@ describe("DeviceProvisioner", () => {
     const harness = await createHarness({ makeReady: 7, provision: 11 });
     const pending = harness.provisioner.provision(spec, { reservation: reservation() });
 
+    // The provision is claimed in the decision gate first; the driver's call starts after that.
+    await vi.waitFor(() =>
+      expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1),
+    );
     harness.clock.advance(11);
     await vi.waitFor(() =>
       expect(harness.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1),
@@ -223,6 +243,7 @@ describe("DeviceProvisioner", () => {
     const provisioner = new DeviceProvisioner({
       catalog: new DriverCatalog([harness.driver]),
       clock: harness.clock,
+      components: harness.components,
       decisions: new SerializedDecision(),
       lifecycle: harness.lifecycle,
       registry: {
@@ -237,5 +258,113 @@ describe("DeviceProvisioner", () => {
     );
     expect(reserved.releaseCount()).toBe(1);
     expect(harness.driver.calls.filter((call) => call.operation === "destroy")).toEqual([]);
+  });
+});
+
+describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
+  const removal = { platform: "ios" as const, requesterId: "tok_admin", version: "26.5" };
+
+  /** A harness whose 26.5 runtime was installed by Simlock, so it can be removed. */
+  async function withSimlockRuntime(latencyMs?: { readonly provision?: number }) {
+    const harness = await createHarness(latencyMs);
+    await harness.components.install({ component: "26.5", platform: "ios" });
+    return harness;
+  }
+
+  function driverCalls(harness: { readonly driver: FakeDriver }, operation: string): number {
+    return harness.driver.calls.filter((call) => call.operation === operation).length;
+  }
+
+  it("refuses a device on a version being removed before the driver creates it, registers nothing and releases the reservation", async () => {
+    const harness = await withSimlockRuntime();
+    harness.driver.holdRemovals();
+    const removing = harness.components.remove(removal);
+    await vi.waitFor(() => expect(driverCalls(harness, "removeComponent")).toBe(1));
+    const reserved = reservation();
+
+    await expect(harness.provisioner.provision(spec, { reservation: reserved })).rejects.toThrow(
+      ComponentBeingRemovedError,
+    );
+
+    expect(driverCalls(harness, "provision")).toBe(0);
+    expect(harness.registry.snapshot.devices).toEqual([]);
+    expect(reserved.releaseCount()).toBe(1);
+    harness.driver.releaseRemovals();
+    await expect(removing).resolves.toMatchObject({ outcome: "removed" });
+  });
+
+  it("counts a device the driver is still creating as in use, so a removal started meanwhile is refused", async () => {
+    const harness = await withSimlockRuntime({ provision: 50 });
+    const provisioning = harness.provisioner.provision(spec, { reservation: reservation() });
+    await vi.waitFor(() => expect(driverCalls(harness, "provision")).toBe(1));
+    expect(harness.registry.snapshot.devices).toEqual([]);
+
+    await expect(harness.components.remove(removal)).rejects.toMatchObject({
+      devices: 1,
+      foreignDevices: 0,
+      name: "ComponentInUseError",
+    });
+    expect(driverCalls(harness, "removeComponent")).toBe(0);
+
+    harness.clock.advance(50);
+    await provisioning;
+    // Once registered the device is counted by the registry alone, not twice.
+    const listed = await harness.components.list("ios");
+    expect(listed.find((component) => component.version === "26.5")).toMatchObject({
+      devices: 1,
+    });
+  });
+
+  it("is the only code in src that asks a driver to provision or registers a device", () => {
+    const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const sources = (readdirSync(srcRoot, { recursive: true }) as string[])
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
+      .map((file) => join(srcRoot, file));
+    // Every production source file is read, not a chosen few (testing rule 4).
+    expect(sources.length).toBeGreaterThan(100);
+
+    const creators = (pattern: RegExp) =>
+      sources
+        .filter((file) => pattern.test(readFileSync(file, "utf8")))
+        .map((file) => relative(srcRoot, file));
+
+    expect(creators(/\.registerDevice\(/)).toEqual([join("core", "device-provisioner.ts")]);
+    expect(creators(/driver\.provision\(/)).toEqual([join("core", "device-provisioner.ts")]);
+  });
+
+  it("takes its claim inside the decision gate, so the driver creates nothing while another decision holds it", async () => {
+    const harness = await withSimlockRuntime();
+    let releaseGate!: () => void;
+    void harness.decisions.run(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseGate = resolve;
+        }),
+    );
+
+    const provisioning = harness.provisioner.provision(spec, { reservation: reservation() });
+    for (let count = 0; count < 100; count += 1) await Promise.resolve();
+
+    expect(driverCalls(harness, "provision")).toBe(0);
+    const listed = await harness.components.list("ios");
+    expect(listed.find((component) => component.version === "26.5")).toMatchObject({
+      devices: 0,
+    });
+    releaseGate();
+    await provisioning;
+    expect(driverCalls(harness, "provision")).toBe(1);
+  });
+
+  it("ends its claim when the driver cannot provision, so the component can be removed", async () => {
+    const harness = await withSimlockRuntime();
+    harness.driver.failOn("provision", 1, new DriverCrashError("simctl create failed"));
+
+    await expect(
+      harness.provisioner.provision(spec, { reservation: reservation() }),
+    ).rejects.toThrow("simctl create failed");
+
+    await expect(harness.components.remove(removal)).resolves.toMatchObject({
+      outcome: "removed",
+    });
   });
 });

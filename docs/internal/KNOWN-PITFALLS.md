@@ -355,9 +355,46 @@ tens of gigabytes on every `doctor` run — and stays silent when the store is
 absent or unreadable, which is the normal state on a machine that has never
 downloaded a runtime.
 
+**What `component remove` reports:** `simlock component remove ios <version>`
+runs `simctl runtime delete` without `--keep-asset`, so CoreSimulator is asked
+to let go of the download too, then reads the store the same way the advisory
+does. When a bundle of the removed image's build (or, for an image with no
+build, its version) is still there, the result and `component.removed` carry
+`residue`: a sentence naming the store and Xcode's Settings → Platforms as the
+way to reclaim it. The removal itself succeeded either way, and Simlock still
+never deletes a file in the store (ADR 0010 §8).
+
 **The knob:** `downloads.policy` decides whether the host downloads runtimes
 at all; short of that, the reclaim is manual and periodic, driven by what
-`doctor` reports.
+`doctor` and `component remove` report.
+
+## `component remove` counts only the devices this instance can see (ADR 0010 §8)
+
+`simlock component remove` refuses while a device uses the component: every
+device in this instance's registry, in any state but `deleted` (and every
+device being provisioned that has no record yet), plus the devices the driver
+counts outside Simlock — simulators in the machine's default device set,
+AVDs in the user's own AVD home.
+
+**The pitfall:** two kinds of device are not counted.
+
+- A **second Simlock instance** on the same machine keeps its devices in its
+  own root, which this instance cannot see and must not read. Removing a
+  component that instance uses breaks its devices until the component is
+  installed again.
+- A **foreign device created after the driver's last count** — the count runs
+  once in the removal's checks and once more in the driver, just before the
+  platform's own removal. A simulator or AVD the user creates between that
+  count and the end of `simctl runtime delete` / `sdkmanager --uninstall` is
+  not seen. A new *Simlock* device cannot slip in the same way: the removal
+  marks the component inside the decision gate, and `DeviceProvisioner`
+  refuses every device on a marked component until the removal settles.
+
+**Why it is accepted:** both need knowledge Simlock does not have without
+reaching outside what it owns. The ADR accepts them (Consequences, and §8's
+"a foreign device created after the driver's last count is not seen"), and
+removal is never automatic: an operator runs it, after reading
+`simlock component list`.
 
 ## True cancellation during provisioning is not implemented (ADR 0003 §10)
 

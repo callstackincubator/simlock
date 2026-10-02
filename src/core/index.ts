@@ -23,10 +23,15 @@ export { automaticCleanupRules } from "./cleanup/rules.js";
 export { CleanupReaper } from "./reaper.js";
 export {
   BootTimeoutError,
+  ComponentBusyError,
+  ComponentInUseError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
   ComponentInstallTimeoutError,
+  ComponentNotOwnedError,
   type ComponentReceipt,
+  type ComponentRemoval,
+  COMPONENT_REMOVAL_TIMEOUT_MS,
   type DeviceRequest,
   DiskSpaceGuard,
   type Driver,
@@ -48,6 +53,7 @@ export {
   type PassthroughCommand,
   type PrerequisiteCheck,
   PassthroughRefusedError,
+  removeListedComponent,
   RuntimeMissingError,
   sameReceipt,
   UnknownModelError,

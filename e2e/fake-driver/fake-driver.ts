@@ -6,6 +6,8 @@ import {
   BootTimeoutError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
+  type ComponentReceipt,
+  type ComponentRemoval,
   DriverCrashError,
   type InstalledComponent,
   RuntimeMissingError,
@@ -23,6 +25,7 @@ import {
   type PassthroughCommand,
   type PassthroughContext,
   PassthroughRefusedError,
+  removeListedComponent,
 } from "../../dist/core/driver.js";
 import type { DeviceSpec, Platform } from "../../dist/core/domain.js";
 import type {
@@ -297,6 +300,33 @@ export class OutOfProcessFakeDriver implements Driver {
    */
   async listComponents(): Promise<readonly DriverComponent[]> {
     const script = await this.#beforeCall("listComponents", []);
+    return this.#listed(script);
+  }
+
+  /**
+   * Removes an installed version through the steps every driver takes (`removeListedComponent`),
+   * reading the listing `listComponents` answers. Scripted by `latencyMs.removeComponent`,
+   * `failures.removeComponent` and `removalResidue` like any call. Only a version an install put
+   * in place goes: a scripted one stays in `availableOsVersions`, as the user's own would.
+   */
+  async removeComponent(
+    receipt: ComponentReceipt,
+    options: { readonly signal: AbortSignal },
+  ): Promise<ComponentRemoval> {
+    const script = await this.#beforeCall("removeComponent", [receipt]);
+    if (options.signal.aborted) throw new DriverCrashError("Fake removal aborted");
+    return removeListedComponent({
+      list: async () => this.#listed(script),
+      platform: this.platform,
+      receipt,
+      remove: async ({ version }) => {
+        this.#installed.delete(version);
+        return script.removalResidue === undefined ? {} : { residue: script.removalResidue };
+      },
+    });
+  }
+
+  #listed(script: FakeDriverPlatformScript): DriverComponent[] {
     return this.#available(script).flatMap((version): DriverComponent[] => {
       const found = this.#find(version, script);
       if (found === undefined) return [];

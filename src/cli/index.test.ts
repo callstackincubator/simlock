@@ -1426,6 +1426,170 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
   });
 });
 
+describe("CLI: component remove (ADR 0010 §8)", () => {
+  /** A client that records every removal it is asked for and answers it. */
+  function removingClient(asked: unknown[]) {
+    return fakeClient({
+      removeComponent: async (input) => {
+        asked.push(input);
+        return {
+          outcome: input.dryRun === true ? "would-remove" : "removed",
+          platform: input.platform,
+          sizeBytes: 7_000_000_000,
+          version: input.version,
+        };
+      },
+    });
+  }
+
+  it("removes with --yes and prints the daemon's answer as one JSON line on stdout", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["component", "remove", "ios", "26.4", "--yes"],
+        output.environmentWith({
+          confirm: async () => {
+            throw new Error("--yes must not ask");
+          },
+          connectAdmin: async () => removingClient(asked),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{ platform: "ios", version: "26.4" }]);
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stdout)).toEqual({
+      outcome: "removed",
+      platform: "ios",
+      sizeBytes: 7_000_000_000,
+      version: "26.4",
+    });
+  });
+
+  it("asks for confirmation without --yes, and removes once it is given", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const questions: string[] = [];
+
+    await expect(
+      runCli(
+        ["component", "remove", "android", "35"],
+        output.environmentWith({
+          confirm: async (question) => {
+            questions.push(question);
+            return true;
+          },
+          connectAdmin: async () => removingClient(asked),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(questions).toEqual(["Remove android 35? [y/N] "]);
+    expect(asked).toEqual([{ platform: "android", version: "35" }]);
+  });
+
+  it.each([
+    ["declined", async () => false],
+    // No terminal to ask on: the CLI's own `confirmTerminal` is not installed, so this is the
+    // no-terminal case rather than the default.
+    ["unavailable", undefined],
+  ] as const)(
+    "refuses without --yes when confirmation is %s, and contacts nobody",
+    async (_case, confirm) => {
+      const output = outputCapture();
+      let connected = false;
+
+      await expect(
+        runCli(
+          ["component", "remove", "ios", "26.4"],
+          output.environmentWith({
+            ...(confirm === undefined ? { confirm: undefined } : { confirm }),
+            connectAdmin: async () => {
+              connected = true;
+              return fakeClient();
+            },
+          }),
+        ),
+      ).resolves.toBe(2);
+
+      expect(connected).toBe(false);
+      expect(JSON.parse(output.stderr)).toEqual({
+        error: { code: "USAGE", message: expect.stringContaining("--yes") },
+      });
+    },
+  );
+
+  it("does not ask under --dry-run, and asks the daemon for a dry run", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["component", "remove", "ios", "26.4", "--dry-run"],
+        output.environmentWith({
+          confirm: async () => {
+            throw new Error("--dry-run must not ask");
+          },
+          connectAdmin: async () => removingClient(asked),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{ dryRun: true, platform: "ios", version: "26.4" }]);
+    expect(JSON.parse(output.stdout)).toMatchObject({ outcome: "would-remove" });
+  });
+
+  it.each([
+    ["COMPONENT_NOT_OWNED", {}, 12],
+    ["COMPONENT_IN_USE", { devices: 1, foreignDevices: 2 }, 12],
+    ["COMPONENT_BUSY", {}, 11],
+  ] as const)(
+    "exits with the table's code when the daemon refuses with %s",
+    async (code, details, exit) => {
+      const output = outputCapture();
+      const client = fakeClient({
+        removeComponent: () =>
+          Promise.reject(new SimlockError(code, "domain", "refused", details as never)),
+      });
+
+      await expect(
+        runCli(
+          ["component", "remove", "ios", "26.4", "--yes"],
+          output.environmentWith({ connectAdmin: async () => client }),
+        ),
+      ).resolves.toBe(exit);
+      expect(output.stdout).toBe("");
+      expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toMatchObject({
+        error: { code },
+      });
+    },
+  );
+
+  it.each([
+    ["no version", ["component", "remove", "ios"]],
+    ["an unknown platform", ["component", "remove", "tvos", "1.0", "--yes"]],
+    ["an extra argument", ["component", "remove", "ios", "26.4", "extra", "--yes"]],
+  ])("exits 2 with USAGE for %s, without asking the daemon", async (_label, argv) => {
+    const output = outputCapture();
+    let connected = false;
+
+    await expect(
+      runCli(
+        argv,
+        output.environmentWith({
+          connectAdmin: async () => {
+            connected = true;
+            return fakeClient();
+          },
+        }),
+      ),
+    ).resolves.toBe(2);
+    expect(connected).toBe(false);
+  });
+});
+
 describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
   it("rejects an invalid merged config without writing the file", async () => {
     const output = outputCapture();
@@ -1934,7 +2098,7 @@ describe("CLI: component install (ADR 0010 §6)", () => {
     ["an extra argument", ["component", "install", "ios", "26.4", "26.5"]],
     ["an unknown platform", ["component", "install", "tvos", "26.4"]],
     ["--json", ["component", "install", "ios", "26.4", "--json"]],
-    ["an unknown subcommand", ["component", "remove", "ios", "26.4"]],
+    ["an unknown subcommand", ["component", "uninstall", "ios", "26.4"]],
   ])("exits 2 with USAGE for %s, without asking the daemon", async (_label, argv) => {
     const output = outputCapture();
     let installs = 0;
@@ -1973,7 +2137,8 @@ describe("CLI: component install (ADR 0010 §6)", () => {
       ).resolves.toBe(0);
       expect(output.stdout).toBe(
         "Usage: simlock component install <ios|android> <version> [--worker <id>... | --all-workers]\n" +
-          "       simlock component list [--platform <ios|android>]\n",
+          "       simlock component list [--platform <ios|android>]\n" +
+          "       simlock component remove <ios|android> <version> [--dry-run] [--yes]\n",
       );
       expect(connected).toBe(false);
     },
@@ -4260,6 +4425,12 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
         version: input.version,
       }),
     installComponentOnWorkers: () => Promise.resolve({ results: [] }),
+    removeComponent: (input) =>
+      Promise.resolve({
+        outcome: input.dryRun === true ? ("would-remove" as const) : ("removed" as const),
+        platform: input.platform,
+        version: input.version,
+      }),
     ...overrides,
   };
   return base;

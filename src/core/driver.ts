@@ -265,6 +265,19 @@ export interface Driver {
    * it reads them and never writes there (safety rule 1).
    */
   listComponents(): Promise<readonly DriverComponent[]>;
+  /**
+   * Removes the installed component whose receipt equals `receipt` (ADR 0010 §8), through
+   * `removeListedComponent`: it proves the receipt against a fresh listing
+   * (`ComponentNotOwnedError` when nothing matches), refuses when a foreign device uses it
+   * (`ComponentInUseError`), runs the platform's own removal bounded by
+   * `COMPONENT_REMOVAL_TIMEOUT_MS` and ended by `signal`, and lists again to verify it is gone.
+   * `ComponentInstaller` is its only caller, and calls it only for a component it has a record
+   * of and no Simlock device uses.
+   */
+  removeComponent(
+    receipt: ComponentReceipt,
+    options: { readonly signal: AbortSignal },
+  ): Promise<ComponentRemoval>;
   provision(spec: DeviceSpec): Promise<DriverDevice>;
   /**
    * Boots the device and returns it with a freshly read `address`. Never trust the address a
@@ -519,6 +532,116 @@ export interface DriverComponent extends InstalledComponent {
  */
 export interface ComponentInstallResult extends InstalledComponent {
   readonly outcome: "installed" | "already-installed";
+}
+
+/**
+ * What one `removeComponent` freed and left. `sizeBytes` is the component's size as listed just
+ * before it was removed, absent when the driver could not read it. `residue` is a sentence for
+ * the operator when something stays on disk after the removal, and how to reclaim it.
+ */
+export interface ComponentRemoval {
+  readonly sizeBytes?: number;
+  readonly residue?: string;
+}
+
+/** How long one platform removal (`simctl runtime delete`, `sdkmanager --uninstall`) may run. */
+export const COMPONENT_REMOVAL_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * The one shape of `Driver.removeComponent`, for every driver alike (ADR 0010 §8):
+ *
+ * 1. find the listed component whose receipt equals `receipt`; none is `ComponentNotOwnedError`;
+ * 2. a foreign device that uses it is `ComponentInUseError`;
+ * 3. `remove` it, the driver's own platform step;
+ * 4. list again, and fail when a component with that receipt is still there.
+ *
+ * `list` is the driver's listing, the same one `listComponents` answers from, so the "in use"
+ * answer here and in `component.list` cannot differ. A listing that rejects rejects the removal.
+ */
+export async function removeListedComponent<Listed extends DriverComponent>(options: {
+  readonly platform: Platform;
+  readonly receipt: ComponentReceipt;
+  readonly list: () => Promise<readonly Listed[]>;
+  readonly remove: (component: Listed) => Promise<{ readonly residue?: string }>;
+}): Promise<ComponentRemoval> {
+  const { platform, receipt } = options;
+  const target = (await options.list()).find((listed) => sameReceipt(listed.receipt, receipt));
+  if (target === undefined) {
+    throw new ComponentNotOwnedError(
+      platform,
+      `The ${platform} component Simlock installed is no longer installed as Simlock installed ` +
+        "it, so Simlock will not remove anything",
+    );
+  }
+  if (target.foreignDevices > 0) {
+    throw new ComponentInUseError(platform, target.version, {
+      devices: 0,
+      foreignDevices: target.foreignDevices,
+    });
+  }
+  const { residue } = await options.remove(target);
+  if ((await options.list()).some((listed) => sameReceipt(listed.receipt, receipt))) {
+    throw new DriverCrashError(
+      `${platform} ${target.version} is still installed after it was removed`,
+    );
+  }
+  return {
+    ...(target.sizeBytes === undefined ? {} : { sizeBytes: target.sizeBytes }),
+    ...(residue === undefined ? {} : { residue }),
+  };
+}
+
+/**
+ * A removal Simlock refuses because the component is not Simlock's (ADR 0010 §5): there is no
+ * record of installing it, or what is installed now is not what the record names.
+ */
+export class ComponentNotOwnedError extends Error {
+  constructor(
+    readonly platform: Platform,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ComponentNotOwnedError";
+  }
+}
+
+/**
+ * A removal Simlock refuses because a device uses the component (ADR 0010 §8): `devices` of
+ * Simlock's own, in any state but deleted, and `foreignDevices` outside Simlock.
+ */
+export class ComponentInUseError extends Error {
+  readonly devices: number;
+  readonly foreignDevices: number;
+
+  constructor(
+    readonly platform: Platform,
+    readonly version: string,
+    counts: { readonly devices: number; readonly foreignDevices: number },
+  ) {
+    super(
+      `${platform} ${version} is in use by ${String(counts.devices)} Simlock ` +
+        `${counts.devices === 1 ? "device" : "devices"} and ${String(counts.foreignDevices)} ` +
+        `other ${counts.foreignDevices === 1 ? "device" : "devices"}; delete ` +
+        `${counts.devices + counts.foreignDevices === 1 ? "it" : "them"} before removing it`,
+    );
+    this.name = "ComponentInUseError";
+    this.devices = counts.devices;
+    this.foreignDevices = counts.foreignDevices;
+  }
+}
+
+/** A removal refused because an install, or another removal, is running or waiting on the platform. */
+export class ComponentBusyError extends Error {
+  constructor(
+    readonly platform: Platform,
+    readonly version: string,
+  ) {
+    super(
+      `Cannot remove ${platform} ${version} while a ${platform} component is being installed or ` +
+        "removed; try again when it has finished",
+    );
+    this.name = "ComponentBusyError";
+  }
 }
 
 /** A driver's progress report while it installs: the percentage its installer printed. */

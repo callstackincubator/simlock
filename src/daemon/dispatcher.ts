@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { EventHistory } from "../bus/index.js";
 import {
   type CleanupReaper,
+  ComponentInUseError,
   type ComponentInstaller,
   type ComponentInstallerProgress,
   type Config,
@@ -88,9 +89,9 @@ export interface DispatcherOptions {
   /**
    * The one installer (ADR 0010 §3), shared with the lease path so `component.install` and a
    * lease request's download join one install, and read for `status.get`'s installs in progress
-   * and for `component.list`.
+   * and for `component.list`. `component.remove` goes through it too (ADR 0010 §8).
    */
-  readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list">;
+  readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly config: Config;
   readonly doctor?: Doctor;
   /** Answers `events.replay`: the ring, or the event file for a `sinceTs`. */
@@ -223,6 +224,7 @@ export class Dispatcher {
       "token.revoke": this.#tokenRevoke,
       "component.install": this.#componentInstall,
       "component.list": this.#componentList,
+      "component.remove": this.#componentRemove,
       // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
       // `dispatch()` for a frame type this map has no entry for.
     };
@@ -646,6 +648,31 @@ export class Dispatcher {
   #componentList: Handler<"component.list"> = async (input) => ({
     components: await this.options.components.list(input.platform),
   });
+
+  /**
+   * ADR 0010 §8: an operator's removal of a component Simlock installed. Every check and the
+   * removal itself are the installer's; this names the admin principal for `component.removed`
+   * (safety rule 6) and puts the in-use counts on the wire as `COMPONENT_IN_USE`'s details.
+   */
+  #componentRemove: Handler<"component.remove"> = async (input, session) => {
+    try {
+      const result = await this.options.components.remove({
+        platform: input.platform,
+        requesterId: session.principal,
+        version: input.version,
+        ...(input.dryRun === undefined ? {} : { dryRun: input.dryRun }),
+      });
+      return { platform: input.platform, version: input.version, ...result };
+    } catch (error: unknown) {
+      if (error instanceof ComponentInUseError) {
+        throw new DispatchError("COMPONENT_IN_USE", error.message, {
+          devices: error.devices,
+          foreignDevices: error.foreignDevices,
+        });
+      }
+      throw error;
+    }
+  };
 
   /**
    * ADR §11: the daemon is the only owner of `tokens.json` -- `TokenStore.create` never

@@ -16,7 +16,11 @@ import {
   type Platform,
   sameSpec,
 } from "./domain.js";
-import type { ComponentInstaller, ComponentInstallerProgress } from "./component-installer.js";
+import {
+  ComponentBeingRemovedError,
+  type ComponentInstaller,
+  type ComponentInstallerProgress,
+} from "./component-installer.js";
 import {
   BootTimeoutError,
   type DeviceRequest,
@@ -426,6 +430,15 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       if (error instanceof BootTimeoutError) {
         await this.options.decisions.run(async () => {
           if (waiter.state !== "rejected") this.#reject(waiter, error, "boot-timeout");
+        });
+        this.#wakeQueue();
+        return;
+      }
+      // The spec resolved to a component being removed (ADR 0010 §8): no device was created,
+      // and none will be on it, so the request ends as `RUNTIME_MISSING` rather than retrying.
+      if (error instanceof ComponentBeingRemovedError) {
+        await this.options.decisions.run(async () => {
+          if (waiter.state !== "rejected") this.#reject(waiter, error, "unresolvable-spec");
         });
         this.#wakeQueue();
         return;

@@ -85,6 +85,7 @@ consumer, just operator diagnostics, so it's a `warn` log line (`daemon.driver-d
 | `component.install-started` | platform, component id (the string the install was asked for: an iOS runtime version, `latest`, or a bare major; an Android API level), requester id (of the request that started the install, when known: a lease request's requester, or the principal that ran `component install`) | once per install, after the free-disk check passed and disk was set aside, just before `xcodebuild -downloadPlatform` / `sdkmanager --install` runs | component-installer | implemented |
 | `component.installed` | platform, component id, version (the exact version now installed), already present (`true` when the installer ran and found the component already there), duration, requester id | once per install, when the installer finished **and** a fresh read confirmed the component — never on a bare exit 0 | component-installer | implemented |
 | `component.install-failed` | platform, component id, duration, stable error summary, requester id | once per install, when it failed: the installer failed (a license retry included), it ran out of `downloads.timeoutMs`, the daemon stopped, the installer exited 0 but a fresh read could not confirm the component, or the component installed but its record could not be stored | component-installer | implemented |
+| `component.removed` | platform, component id (the version the removal was asked for), version (the exact version removed), size in bytes (when it could be read), residue (when something stayed on disk: what, and how to reclaim it), requester id (the admin principal that ran `component remove`) | once per removal, after the platform's own removal (`simctl runtime delete` / `sdkmanager --uninstall`) finished, a fresh read confirmed the component is gone, and Simlock's record of installing it was deleted — never for a dry run or a refused removal | component-installer | implemented |
 
 `ComponentInstaller` (`src/core/component-installer.ts`) is the only emitter (ADR 0010 §3):
 drivers install but never emit (architecture rule 5). The events fire once per install, not
@@ -96,6 +97,14 @@ nothing was recorded (ADR 0010 §5). `requesterId` is the requester whose call s
 install. See "Device requests" in [ARCHITECTURE.md](ARCHITECTURE.md) for how a missing
 component gets to this point. The requester hears the install through its own `downloading`
 progress stage, a direct call chain from the installer, not these events (architecture rule 5).
+
+`component.removed` has the same single emitter (ADR 0010 §8). `ComponentInstaller.remove`
+emits it after the driver's `removeComponent` returned and the component record was deleted
+from the registry (events rule 3); a dry run, a refusal (`COMPONENT_NOT_OWNED`,
+`COMPONENT_IN_USE`, `COMPONENT_BUSY`) and a driver failure emit nothing, and a failure keeps the
+record. `requesterId` is the admin session's principal, never a caller-supplied id (safety rule
+6). `residue` is the driver's sentence, carried unread: on iOS it names the asset-store download
+`simctl runtime delete` left behind (#79).
 
 ## System
 

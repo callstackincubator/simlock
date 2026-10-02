@@ -109,7 +109,7 @@ function withCapacity(
 async function createHarness(
   options: {
     /** Stands in for the installer, when a test needs to see whether it was reached at all. */
-    readonly components?: Pick<ComponentInstaller, "install">;
+    readonly components?: Pick<ComponentInstaller, "claimProvision" | "install">;
     readonly driver?: FakeDriver;
     readonly drivers?: readonly FakeDriver[];
     /** The state directory of an earlier harness: loading it again is a daemon restart. */
@@ -236,6 +236,7 @@ describe("LeaseEngine", () => {
     const asked: unknown[] = [];
     const harness = await createHarness({
       components: {
+        claimProvision: () => () => undefined,
         install: async (call) => {
           asked.push(call);
           return { outcome: "installed", version: "26.5" };

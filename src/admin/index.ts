@@ -17,6 +17,8 @@ export type {
   CatalogGetOutput,
   ComponentListInput,
   ComponentListOutput,
+  ComponentRemoveInput,
+  ComponentRemoveOutput,
   CleanupRunInput,
   CleanupRunOutput,
   ComponentInstallInput,

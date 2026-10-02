@@ -6,6 +6,8 @@ import {
   type ComponentInstallProgress,
   type ComponentInstallResult,
   type ComponentReceipt,
+  type ComponentRemoval,
+  COMPONENT_REMOVAL_TIMEOUT_MS,
   type DeviceRequest,
   type Driver,
   type DriverCatalogEntry,
@@ -24,6 +26,7 @@ import {
   PassthroughRefusedError,
   type PassthroughContext,
   type ReclaimResult,
+  removeListedComponent,
   RuntimeMissingError,
   sameReceipt,
 } from "../../core/driver.js";
@@ -33,7 +36,7 @@ import {
   type LegacyDevice,
   OwnedRootError,
 } from "../../core/index.js";
-import { runInstallerProcess } from "../installer-process.js";
+import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
   isMissingPathError,
   type Clock,
@@ -1210,16 +1213,71 @@ export class AndroidDriver implements Driver {
    * home whose `config.ini` names the image's directory; that home is only read.
    */
   async listComponents(): Promise<readonly DriverComponent[]> {
+    return (await this.#listedImages()).map(({ image: _image, ...component }) => component);
+  }
+
+  /**
+   * Removes the system image whose receipt this is with `sdkmanager --uninstall <package>`,
+   * through the steps every driver takes (`removeListedComponent`): refused when an AVD in the
+   * user's own AVD home names it, verified gone afterwards.
+   */
+  async removeComponent(
+    receipt: ComponentReceipt,
+    options: { readonly signal: AbortSignal },
+  ): Promise<ComponentRemoval> {
+    return removeListedComponent({
+      list: () => this.#listedImages(),
+      platform: this.platform,
+      receipt,
+      remove: async ({ image }) => {
+        await this.#uninstall(systemImagePackage(image.apiLevel, image.tag, image.abi), options);
+        return {};
+      },
+    });
+  }
+
+  async #uninstall(packageName: string, options: { readonly signal: AbortSignal }): Promise<void> {
+    const command = `${this.#sdk.sdkmanager} --uninstall ${packageName}`;
+    let outcome;
+    try {
+      outcome = await runBoundedProcess(
+        this.#processRunner,
+        this.#clock,
+        this.#sdk.sdkmanager,
+        ["--uninstall", packageName],
+        { signal: options.signal, timeoutMs: COMPONENT_REMOVAL_TIMEOUT_MS },
+      );
+    } catch (error: unknown) {
+      throw new DriverCrashError(
+        `${command} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (outcome.timedOut) {
+      throw new DriverCrashError(
+        `${command} timed out after ${String(COMPONENT_REMOVAL_TIMEOUT_MS)}ms`,
+      );
+    }
+    if (outcome.stopped) throw new DriverCrashError(`${command} was ended before it finished`);
+    if (outcome.result.code !== 0) {
+      throw new DriverCrashError(
+        `${command} failed: ${outcome.result.stderr || outcome.result.stdout}`,
+      );
+    }
+  }
+
+  /** `listComponents`' entries, each with the system image it describes. */
+  async #listedImages(): Promise<(DriverComponent & { readonly image: SystemImage })[]> {
     const [images, foreignAvds] = await Promise.all([
       this.#installedImages(),
       this.#foreignAvdImageDirectories(),
     ]);
     return Promise.all(
-      images.map(async (image): Promise<DriverComponent> => {
+      images.map(async (image): Promise<DriverComponent & { readonly image: SystemImage }> => {
         const sizeBytes = await this.#filesystem.directorySize(image.path).catch(() => undefined);
         const directories = [image.path, relativeImageDirectory(image)];
         return {
           ...(await this.#installedComponent(image)),
+          image,
           foreignDevices: foreignAvds.filter((named) =>
             named.some((directory) => directories.includes(directory)),
           ).length,

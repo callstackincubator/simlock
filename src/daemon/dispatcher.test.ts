@@ -149,7 +149,10 @@ async function buildDispatcher(
     readonly capacity?: Config["capacity"];
     /** Stands in for the component installer: a test that needs to see whether it was reached,
      * or one that reads `status.get`'s installs from an installer of its own. */
-    readonly components?: Pick<ComponentInstaller, "install" | "inProgress" | "list">;
+    readonly components?: Pick<
+      ComponentInstaller,
+      "claimProvision" | "inProgress" | "install" | "list" | "remove"
+    >;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -1037,6 +1040,7 @@ describe("Dispatcher: status.get installs in progress", () => {
       eventBus: new EventBus(clock),
       filesystem: new MemoryFilesystem(),
       registry: {
+        deleteComponent: () => Promise.resolve(),
         recordComponent: () => Promise.resolve(),
         snapshot: { components: [], devices: [], leases: [] },
       },
@@ -1134,7 +1138,13 @@ describe("Dispatcher: component.install", () => {
     const install = vi.fn(() =>
       Promise.resolve({ outcome: "installed" as const, version: "unreachable" }),
     );
-    return { inProgress: () => [], install, list: () => Promise.resolve([]) };
+    return {
+      claimProvision: () => () => undefined,
+      inProgress: () => [],
+      install,
+      list: () => Promise.resolve([]),
+      remove: vi.fn(() => Promise.reject(new Error("unreachable"))),
+    };
   }
 
   function installCalls(driver: FakeDriver): unknown[] {
@@ -2193,3 +2203,173 @@ function testConfig(
     },
   };
 }
+
+describe("Dispatcher: component.remove", () => {
+  const admin = (overrides: Partial<DispatchSession> = {}) =>
+    session({ principal: "tok_operator", role: "admin", ...overrides });
+
+  function driverCalls(driver: FakeDriver, operation: string): number {
+    return driver.calls.filter((call) => call.operation === operation).length;
+  }
+
+  /** A dispatcher over a real engine and installer, with iOS 27.0 installed by Simlock. */
+  async function withSimlockInstall() {
+    const built = await buildDispatcher({
+      driverOptions: { componentSizes: { "27.0": 7_000_000_000 }, knownModels: ["iPhone 17 Pro"] },
+    });
+    await built.dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin(),
+    );
+    return built;
+  }
+
+  it("removes a component Simlock installed and emits component.removed with the admin principal as requesterId", async () => {
+    const { dispatcher, eventBus } = await withSimlockInstall();
+
+    await expect(
+      dispatcher.dispatch(
+        "component.remove",
+        { platform: "ios", version: "27.0" },
+        admin({ principal: "tok_remover" }),
+      ),
+    ).resolves.toEqual({
+      outcome: "removed",
+      platform: "ios",
+      sizeBytes: 7_000_000_000,
+      version: "27.0",
+    });
+    expect(
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === "component.removed")
+        .map((envelope) => envelope.payload),
+    ).toEqual([
+      {
+        componentId: "27.0",
+        platform: "ios",
+        requesterId: "tok_remover",
+        sizeBytes: 7_000_000_000,
+        version: "27.0",
+      },
+    ]);
+  });
+
+  it("answers a dry run with would-remove and removes nothing", async () => {
+    const { dispatcher, driver } = await withSimlockInstall();
+
+    await expect(
+      dispatcher.dispatch(
+        "component.remove",
+        { dryRun: true, platform: "ios", version: "27.0" },
+        admin(),
+      ),
+    ).resolves.toEqual({
+      outcome: "would-remove",
+      platform: "ios",
+      sizeBytes: 7_000_000_000,
+      version: "27.0",
+    });
+    expect(driverCalls(driver, "removeComponent")).toBe(0);
+  });
+
+  it("refuses an agent session with FORBIDDEN and never reaches the installer", async () => {
+    const { components, dispatcher } = await withSimlockInstall();
+    const removals = vi.spyOn(components, "remove");
+
+    await expect(
+      dispatcher.dispatch("component.remove", { platform: "ios", version: "27.0" }, session()),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(removals).not.toHaveBeenCalled();
+  });
+
+  it("refuses a component Simlock did not install with COMPONENT_NOT_OWNED", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+
+    const error = await dispatcher
+      .dispatch("component.remove", { platform: "ios", version: "26.5" }, admin())
+      .catch((caught: unknown) => caught);
+
+    expect(classifyError(error)).toBe("COMPONENT_NOT_OWNED");
+    expect(driverCalls(driver, "removeComponent")).toBe(0);
+  });
+
+  it("refuses a component a leased device uses with COMPONENT_IN_USE, carrying both counts as details", async () => {
+    const { dispatcher, driver, registry } = await withSimlockInstall();
+    await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
+      session(),
+    );
+    expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["leased"]);
+
+    const error = await dispatcher
+      .dispatch("component.remove", { platform: "ios", version: "27.0" }, admin())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DispatchError);
+    expect(error).toMatchObject({
+      code: "COMPONENT_IN_USE",
+      details: { devices: 1, foreignDevices: 0 },
+    });
+    expect(classifyError(error)).toBe("COMPONENT_IN_USE");
+    expect(driverCalls(driver, "removeComponent")).toBe(0);
+  });
+
+  it("refuses with COMPONENT_BUSY while an install runs on that platform", async () => {
+    const { dispatcher, driver } = await withSimlockInstall();
+    driver.holdInstalls();
+    const install = dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "28.0" },
+      admin(),
+    );
+    await vi.waitFor(() => expect(driverCalls(driver, "installComponent")).toBe(2));
+
+    const error = await dispatcher
+      .dispatch("component.remove", { platform: "ios", version: "27.0" }, admin())
+      .catch((caught: unknown) => caught);
+
+    expect(classifyError(error)).toBe("COMPONENT_BUSY");
+    driver.releaseInstalls();
+    await install;
+  });
+
+  it("rejects a lease request that resolves to the version being removed with RUNTIME_MISSING, and creates no device record", async () => {
+    const { dispatcher, driver, registry } = await withSimlockInstall();
+    driver.holdRemovals();
+    const removal = dispatcher.dispatch(
+      "component.remove",
+      { platform: "ios", version: "27.0" },
+      admin(),
+    );
+    await vi.waitFor(() => expect(driverCalls(driver, "removeComponent")).toBe(1));
+
+    let leaseError: unknown;
+    let leaseSettled = false;
+    void dispatcher
+      .dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "27.0", platform: "ios" },
+        session(),
+      )
+      .then(
+        () => undefined,
+        (caught: unknown) => {
+          leaseError = caught;
+        },
+      )
+      .finally(() => {
+        leaseSettled = true;
+      });
+    // Rejected while the removal is still running, not queued until it ends.
+    await vi.waitFor(() => expect(leaseSettled).toBe(true));
+
+    expect(classifyError(leaseError)).toBe("RUNTIME_MISSING");
+    expect(registry.snapshot.devices).toEqual([]);
+    expect(driverCalls(driver, "provision")).toBe(0);
+    driver.releaseRemovals();
+    await expect(removal).resolves.toMatchObject({ outcome: "removed" });
+  });
+});

@@ -4,6 +4,7 @@ import {
   type ComponentInstallProgress,
   type ComponentInstallResult,
   type ComponentReceipt,
+  type ComponentRemoval,
   type DeviceRequest,
   type Driver,
   type DriverCatalogEntry,
@@ -18,6 +19,7 @@ import {
   type PassthroughCommand,
   PassthroughRefusedError,
   type PassthroughContext,
+  removeListedComponent,
   RuntimeMissingError,
   UnknownModelError,
 } from "./driver.js";
@@ -34,6 +36,7 @@ export type FakeDriverOperation =
   | "listManaged"
   | "listCatalog"
   | "listComponents"
+  | "removeComponent"
   /** Recorded like every other call, so a test can pin that it precedes the first destroy. */
   | "revalidateRoot"
   | "findLegacy"
@@ -57,6 +60,8 @@ export interface FakeDriverOptions {
   readonly componentSizes?: Readonly<Record<string, number>>;
   /** What `listComponents` reports as each version's foreign devices; 0 for one left out. */
   readonly foreignDevices?: Readonly<Record<string, number>>;
+  /** What every `removeComponent` reports as left on disk; nothing unless set. */
+  readonly removalResidue?: string;
   /** Stands in for a real driver's owned root; nothing here validates or creates it. */
   readonly deviceRoot?: string;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
@@ -134,10 +139,16 @@ export class FakeDriver implements Driver {
   #installCount = 0;
   readonly #install: Pick<
     FakeDriverOptions,
-    "componentFootprint" | "componentSizes" | "foreignDevices" | "installProgress"
+    | "componentFootprint"
+    | "componentSizes"
+    | "foreignDevices"
+    | "installProgress"
+    | "removalResidue"
   >;
   #holdInstalls = false;
   readonly #pendingInstalls: (() => void)[] = [];
+  #holdRemovals = false;
+  readonly #pendingRemovals: (() => void)[] = [];
   readonly #callCounts = new Map<FakeDriverOperation, number>();
   readonly #calls: FakeDriverCall[] = [];
   readonly #clock: Clock;
@@ -271,7 +282,7 @@ export class FakeDriver implements Driver {
     for (const percent of this.#install.installProgress ?? []) {
       options.onProgress({ percent, stage: "downloading" });
     }
-    if (this.#holdInstalls) await this.#heldInstall(options.signal);
+    if (this.#holdInstalls) await this.#held(this.#pendingInstalls, options.signal);
     const version =
       component === "latest" ? (newestVersion(this.#availableOsVersions) ?? component) : component;
     const existing = this.#installed(version);
@@ -289,6 +300,44 @@ export class FakeDriver implements Driver {
    */
   async listComponents(): Promise<readonly DriverComponent[]> {
     await this.#beforeCall("listComponents");
+    return this.#listedComponents();
+  }
+
+  /**
+   * Removes the available version whose receipt this is, through the same steps every driver
+   * takes (`removeListedComponent`), reading the same listing `listComponents` answers. Scripted
+   * through `failOn("removeComponent", n, error)`, `holdRemovals()` (it then waits for
+   * `releaseRemovals()` or its signal) and the `removalResidue` option.
+   */
+  async removeComponent(
+    receipt: ComponentReceipt,
+    options: { readonly signal: AbortSignal },
+  ): Promise<ComponentRemoval> {
+    await this.#beforeCall("removeComponent", receipt);
+    return removeListedComponent({
+      list: async () => this.#listedComponents(),
+      platform: this.platform,
+      receipt,
+      remove: async ({ version }) => {
+        if (this.#holdRemovals) await this.#held(this.#pendingRemovals, options.signal);
+        this.#availableOsVersions.delete(version);
+        this.#receipts.delete(version);
+        const residue = this.#install.removalResidue;
+        return residue === undefined ? {} : { residue };
+      },
+    });
+  }
+
+  holdRemovals(): void {
+    this.#holdRemovals = true;
+  }
+
+  releaseRemovals(): void {
+    this.#holdRemovals = false;
+    for (const resolve of this.#pendingRemovals.splice(0)) resolve();
+  }
+
+  #listedComponents(): readonly DriverComponent[] {
     return [...this.#availableOsVersions].flatMap((version): DriverComponent[] => {
       const installed = this.#installed(version);
       if (installed === undefined) return [];
@@ -319,13 +368,13 @@ export class FakeDriver implements Driver {
       : undefined;
   }
 
-  #heldInstall(signal: AbortSignal): Promise<void> {
+  #held(pending: (() => void)[], signal: AbortSignal): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       if (signal.aborted) {
         reject(abortReason(signal));
         return;
       }
-      this.#pendingInstalls.push(resolve);
+      pending.push(resolve);
       signal.addEventListener("abort", () => reject(abortReason(signal)), { once: true });
     });
   }

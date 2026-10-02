@@ -6,14 +6,20 @@ import {
   NoopLogger,
   type TimerHandle,
 } from "../ports/index.js";
-import type { Platform } from "./domain.js";
+import type { DeviceSpec, Platform } from "./domain.js";
 import {
+  ComponentBusyError,
+  ComponentInUseError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
   ComponentInstallTimeoutError,
+  ComponentNotOwnedError,
+  type ComponentReceipt,
+  type ComponentRemoval,
   type DiskSpaceGuard,
   type Driver,
   type DriverComponent,
+  RuntimeMissingError,
   sameReceipt,
 } from "./driver.js";
 import type { DriverCatalog } from "./driver-catalog.js";
@@ -70,7 +76,7 @@ export interface ComponentInstallerOptions {
   readonly filesystem: Pick<Filesystem, "diskFree">;
   /** Hears a driver whose `listComponents` rejects; `list` leaves that driver out. */
   readonly logger?: Logger;
-  readonly registry: Pick<Registry, "recordComponent" | "snapshot">;
+  readonly registry: Pick<Registry, "deleteComponent" | "recordComponent" | "snapshot">;
   /** `downloads.timeoutMs`: one budget per call, from the moment `install` is called. */
   readonly timeoutMs: number;
 }
@@ -109,13 +115,50 @@ export interface InstalledComponentListing {
   readonly foreignDevices: number;
 }
 
+export interface ComponentRemoveRequest {
+  readonly platform: Platform;
+  /** The version as the catalog lists it, which names Simlock's record of installing it. */
+  readonly version: string;
+  /** Run every check a removal runs, and remove nothing. */
+  readonly dryRun?: boolean;
+  /** Who asked, for `component.removed` (safety rule 6). */
+  readonly requesterId: string;
+}
+
+export interface ComponentRemoveOutcome {
+  readonly outcome: "removed" | "would-remove";
+  /** The component's size as listed, when the driver could read it. */
+  readonly sizeBytes?: number;
+  /** What stayed on disk after a removal, and how to reclaim it; never on a dry run. */
+  readonly residue?: string;
+}
+
+/**
+ * A device request that resolved to a component being removed (ADR 0010 §8). A
+ * `RuntimeMissingError`, so a lease request that hits it is rejected with `RUNTIME_MISSING`.
+ */
+export class ComponentBeingRemovedError extends RuntimeMissingError {
+  constructor(platform: Platform, version: string) {
+    super(platform, version);
+    this.message = `${platform} ${version} is being removed; no new device is created on it`;
+    this.name = "ComponentBeingRemovedError";
+  }
+}
+
+/** One running removal; see `ComponentInstaller.#removals`. */
+interface Removal {
+  readonly abort: AbortController;
+  readonly version: string;
+  marked: boolean;
+}
+
 /** `inProgress()` lists at most this many installs, the oldest first. */
 const MAX_LISTED_INSTALLS = 16;
 
 /** Every call still open when the daemon stops rejects with this; nothing is resumed. */
 export class ComponentInstallerClosedError extends Error {
-  constructor() {
-    super("The daemon is stopping; the component install was ended");
+  constructor(operation: "install" | "removal" = "install") {
+    super(`The daemon is stopping; the component ${operation} was ended`);
     this.name = "ComponentInstallerClosedError";
   }
 }
@@ -164,11 +207,23 @@ interface InstallCall {
  * install's error, `ComponentInstallTimeoutError` when its budget runs out, or
  * `ComponentInstallerClosedError` on `close()`. Settling removes it from its install, cancels its
  * timer and fires its promise, in one place (`#settle`).
+ *
+ * Also the only caller of `Driver.removeComponent` (ADR 0010 §8): a removal holds its platform's
+ * turn like an install, and `claimProvision` is how device creation learns what is being removed.
  */
 export class ComponentInstaller {
   readonly #queues = new Map<Platform, Install[]>();
   readonly #runs = new Set<Promise<void>>();
   #closed = false;
+  /**
+   * The one record of each running removal (architecture rule 12), by the platform whose turn it
+   * holds: while a platform is here no install on it starts (`#pump`). `marked` is set inside the
+   * decision gate; from then until the removal leaves this map, on every exit, `claimProvision`
+   * refuses every device of `version`. `abort` ends the removal on `close()`.
+   */
+  readonly #removals = new Map<Platform, Removal>();
+  /** Per `componentKey`, the provisions that have claimed it and not yet registered a device. */
+  readonly #provisioning = new Map<string, number>();
 
   readonly #logger: Logger;
 
@@ -206,8 +261,9 @@ export class ComponentInstaller {
       } catch {
         // An observer, like `onProgress`: a throw there must not reach the install.
       }
-      if (queue[0] !== install) notify(call, { stage: "waiting" });
-      else if (install.latest !== undefined) notify(call, install.latest);
+      if (queue[0] !== install || this.#removals.has(request.platform)) {
+        notify(call, { stage: "waiting" });
+      } else if (install.latest !== undefined) notify(call, install.latest);
       this.#pump(request.platform);
     });
   }
@@ -250,42 +306,222 @@ export class ComponentInstaller {
     const listed = await Promise.all(
       this.options.drivers.select(platform).map(async (driver) => {
         try {
-          return { components: await driver.listComponents(), platform: driver.platform };
+          return await this.#listDriver(driver);
         } catch (error: unknown) {
           this.#logger.warn("A driver could not list its installed components", {
             error: stableError(error),
             platform: driver.platform,
           });
-          return { components: [], platform: driver.platform };
+          return [];
         }
       }),
     );
-    const { components: records, devices } = this.options.registry.snapshot;
     return listed
-      .flatMap(({ components, platform: listedPlatform }) =>
-        components.map((component): InstalledComponentListing => {
-          const record = records.find(
-            (candidate) =>
-              candidate.platform === listedPlatform &&
-              sameReceipt(candidate.receipt, component.receipt),
-          );
-          return {
-            devices: devices.filter(
-              (device) =>
-                device.state !== "deleted" &&
-                device.spec.platform === listedPlatform &&
-                device.spec.osVersion === component.version,
-            ).length,
-            foreignDevices: component.foreignDevices,
-            installedBySimlock: record !== undefined,
-            platform: listedPlatform,
-            version: component.version,
-            ...(record === undefined ? {} : { installedAt: record.installedAt }),
-            ...optionalFields(component),
-          };
-        }),
-      )
+      .flat()
+      .map(({ listing }) => listing)
       .sort(compareListings);
+  }
+
+  /**
+   * Removes a component Simlock installed (ADR 0010 §8), or with `dryRun` runs every check a
+   * removal runs and stops. Refused, before anything changes, with `ComponentNotOwnedError` when
+   * Simlock has no record of it or what is installed now is not what the record names,
+   * `ComponentInUseError` when `list` counts a device of Simlock's or a foreign one on it, and
+   * `ComponentBusyError` while an install or another removal is running or waiting on the
+   * platform. A listing that rejects rejects the removal: an unreadable count is never "no users".
+   *
+   * A removal holds the platform's turn, so an install that arrives waits behind it. Inside the
+   * decision gate it counts Simlock's devices again and marks the component as being removed;
+   * from then until it settles `claimProvision` refuses every device on it. The driver removes
+   * it; then the record is deleted and `component.removed` emitted. A failure is logged, keeps
+   * the record, and rethrows. Every exit clears the mark and gives the turn back.
+   */
+  async remove(request: ComponentRemoveRequest): Promise<ComponentRemoveOutcome> {
+    if (this.#closed) throw new ComponentInstallerClosedError("removal");
+    const { platform, version } = request;
+    const driver = this.options.drivers.get(platform);
+    const { receipt, sizeBytes } = await this.#removable(driver, version);
+    if (this.#closed) throw new ComponentInstallerClosedError("removal");
+    // Checked and taken with no `await` between them, so nothing can start on the platform in
+    // between. `#removals` is the one record of the turn (architecture rule 12).
+    if (this.#queue(platform).length > 0 || this.#removals.has(platform)) {
+      throw new ComponentBusyError(platform, version);
+    }
+    if (request.dryRun === true) {
+      return { outcome: "would-remove", ...(sizeBytes === undefined ? {} : { sizeBytes }) };
+    }
+
+    const removal: Removal = { abort: new AbortController(), marked: false, version };
+    this.#removals.set(platform, removal);
+    const run = this.#removeHoldingTurn(driver, request, receipt, removal);
+    const settled = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#runs.add(settled);
+    try {
+      return await run;
+    } finally {
+      // Every exit, a throw included, clears the mark and gives the turn back.
+      this.#runs.delete(settled);
+      this.#removals.delete(platform);
+      this.#pump(platform);
+    }
+  }
+
+  /**
+   * The checks a removal and a dry run share, from `list` (architecture rule 10): Simlock's
+   * record of this version, a listed component whose receipt equals the record's, and no device
+   * of Simlock's or a foreign one on it. Answers the receipt to remove and the listed size.
+   */
+  async #removable(
+    driver: Driver,
+    version: string,
+  ): Promise<{ readonly receipt: ComponentReceipt; readonly sizeBytes?: number }> {
+    const { platform } = driver;
+    const record = this.options.registry.snapshot.components.find(
+      (candidate) => candidate.platform === platform && candidate.version === version,
+    );
+    if (record === undefined) {
+      throw new ComponentNotOwnedError(
+        platform,
+        `Simlock has no record of installing ${platform} ${version}, so it will not remove it`,
+      );
+    }
+    const listed = (await this.#listDriver(driver)).find((entry) =>
+      sameReceipt(entry.receipt, record.receipt),
+    );
+    if (listed === undefined) {
+      throw new ComponentNotOwnedError(
+        platform,
+        `The ${platform} ${version} installed now is not the one Simlock installed, so Simlock ` +
+          "will not remove it",
+      );
+    }
+    const { devices, foreignDevices, sizeBytes } = listed.listing;
+    if (devices > 0 || foreignDevices > 0) {
+      throw new ComponentInUseError(platform, version, { devices, foreignDevices });
+    }
+    return { receipt: record.receipt, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
+  }
+
+  async #removeHoldingTurn(
+    driver: Driver,
+    request: ComponentRemoveRequest,
+    receipt: ComponentReceipt,
+    removal: Removal,
+  ): Promise<ComponentRemoveOutcome> {
+    const { signal } = removal.abort;
+    const { platform, version } = request;
+    await this.options.decisions.run(() => {
+      const devices = this.#simlockDevices(platform, version);
+      if (devices > 0) {
+        throw new ComponentInUseError(platform, version, { devices, foreignDevices: 0 });
+      }
+      removal.marked = true;
+    });
+    let removed: ComponentRemoval;
+    try {
+      removed = await driver.removeComponent(receipt, { signal });
+      // Committed before `component.removed` is emitted (events rule 3).
+      await this.options.decisions.run(() =>
+        this.options.registry.deleteComponent(platform, version),
+      );
+    } catch (error: unknown) {
+      // The driver may have removed it before the failure: who asked and what failed is logged
+      // (safety rule 6), and the record stands, claiming nothing once its receipt is gone.
+      this.#logger.warn("A component removal failed; Simlock's record of it is kept", {
+        error: stableError(error),
+        platform,
+        requesterId: request.requesterId,
+        version,
+      });
+      if (signal.aborted) throw new ComponentInstallerClosedError("removal");
+      throw error;
+    }
+    const outcome = {
+      ...(removed.sizeBytes === undefined ? {} : { sizeBytes: removed.sizeBytes }),
+      ...(removed.residue === undefined ? {} : { residue: removed.residue }),
+    };
+    this.options.eventBus.emit(
+      "component.removed",
+      { componentId: version, platform, requesterId: request.requesterId, version, ...outcome },
+      "component-installer",
+    );
+    return { outcome: "removed", ...outcome };
+  }
+
+  /**
+   * Claims a device about to be provisioned on `spec`'s platform and version, and answers the
+   * release that ends the claim. Call it inside the decision gate, before the driver creates
+   * the device, and release once the device's record is committed or the provision failed. A
+   * component being removed refuses it with `ComponentBeingRemovedError`; a claim counts as a
+   * Simlock device in `list` and in a removal's checks, so a removal cannot start under a
+   * device the registry does not hold yet (ADR 0010 §8).
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through DeviceProvisioner's `components` option, typed as a Pick of this class.
+  claimProvision(spec: Pick<DeviceSpec, "osVersion" | "platform">): () => void {
+    const key = componentKey(spec.platform, spec.osVersion);
+    const removal = this.#removals.get(spec.platform);
+    if (removal?.marked === true && removal.version === spec.osVersion) {
+      throw new ComponentBeingRemovedError(spec.platform, spec.osVersion);
+    }
+    this.#provisioning.set(key, (this.#provisioning.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.#provisioning.get(key) ?? 0) - 1;
+      if (remaining > 0) this.#provisioning.set(key, remaining);
+      else this.#provisioning.delete(key);
+    };
+  }
+
+  /**
+   * One driver's components, each as `list` reports it and with its receipt. Rejects when the
+   * driver's listing does: `list` leaves that driver out, and `remove` refuses.
+   */
+  async #listDriver(
+    driver: Driver,
+  ): Promise<
+    { readonly listing: InstalledComponentListing; readonly receipt: ComponentReceipt }[]
+  > {
+    const components = await driver.listComponents();
+    const records = this.options.registry.snapshot.components;
+    return components.map((component) => {
+      const record = records.find(
+        (candidate) =>
+          candidate.platform === driver.platform &&
+          sameReceipt(candidate.receipt, component.receipt),
+      );
+      return {
+        listing: {
+          devices: this.#simlockDevices(driver.platform, component.version),
+          foreignDevices: component.foreignDevices,
+          installedBySimlock: record !== undefined,
+          platform: driver.platform,
+          version: component.version,
+          ...(record === undefined ? {} : { installedAt: record.installedAt }),
+          ...optionalFields(component),
+        },
+        receipt: component.receipt,
+      };
+    });
+  }
+
+  /**
+   * Simlock's own devices of this platform and version: every registry device in any state but
+   * `deleted`, and every provision that has claimed one and not registered it yet. The one count
+   * `list` reports and a removal refuses on.
+   */
+  #simlockDevices(platform: Platform, version: string): number {
+    const registered = this.options.registry.snapshot.devices.filter(
+      (device) =>
+        device.state !== "deleted" &&
+        device.spec.platform === platform &&
+        device.spec.osVersion === version,
+    ).length;
+    return registered + (this.#provisioning.get(componentKey(platform, version)) ?? 0);
   }
 
   /**
@@ -294,6 +530,7 @@ export class ComponentInstaller {
    */
   async close(): Promise<void> {
     this.#closed = true;
+    for (const removal of this.#removals.values()) removal.abort.abort();
     const error = new ComponentInstallerClosedError();
     for (const queue of this.#queues.values()) {
       for (const install of queue) {
@@ -336,7 +573,7 @@ export class ComponentInstaller {
   #pump(platform: Platform): void {
     // A waiting install whose calls all left still goes to the front, finds none, and ends.
     const front = this.#queue(platform)[0];
-    if (front === undefined || front.state !== "waiting") return;
+    if (front === undefined || front.state !== "waiting" || this.#removals.has(platform)) return;
     front.state = "front";
     const run = this.#run(front).finally(() => {
       this.#runs.delete(run);
@@ -535,6 +772,11 @@ function notify(call: InstallCall, progress: ComponentInstallerProgress): void {
   } catch {
     // Isolated like an event handler (events rule 5).
   }
+}
+
+/** One component's key in `#provisioning`: its platform and version. */
+function componentKey(platform: Platform, version: string): string {
+  return JSON.stringify([platform, version]);
 }
 
 function optionalFields(

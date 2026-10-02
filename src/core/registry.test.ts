@@ -57,6 +57,27 @@ describe("Registry: component records", () => {
     ]);
   });
 
+  it("deletes the record of one platform and version, keeps the others, and the deletion survives a reload", async () => {
+    const filesystem = new MemoryFilesystem();
+    const registry = await load(filesystem);
+    for (const [platform, version] of [
+      ["ios", "26.4"],
+      ["ios", "27.0"],
+      ["android", "26.4"],
+    ] as const) {
+      await registry.recordComponent({ installedAt: 1, platform, receipt: { version }, version });
+    }
+
+    await registry.deleteComponent("ios", "26.4");
+
+    const kept = [
+      { installedAt: 1, platform: "ios", receipt: { version: "27.0" }, version: "27.0" },
+      { installedAt: 1, platform: "android", receipt: { version: "26.4" }, version: "26.4" },
+    ];
+    expect(registry.snapshot.components).toEqual(kept);
+    expect((await load(filesystem)).snapshot.components).toEqual(kept);
+  });
+
   it("drops a stored component record whose receipt is not all strings, and keeps the others", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");

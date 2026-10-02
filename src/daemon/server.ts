@@ -139,9 +139,9 @@ export interface DaemonServerEngineOptions {
   readonly capacity: CapacityReader;
   readonly catalog: CatalogReader;
   /** The one component installer (ADR 0010 §3), threaded into the `Dispatcher` for
-   * `component.install`, `component.list` and `status.get`'s installs; the same instance the lease engine
-   * downloads through. */
-  readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list">;
+   * `component.install`, `component.list`, `component.remove` and `status.get`'s installs; the same
+   * instance the lease engine downloads through. */
+  readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
   /** What `events.replay` answers from; see `EventHistory`. */
   readonly eventHistory: Pick<EventHistory, "replay">;
@@ -1145,6 +1145,12 @@ export class DaemonServer {
         return this.#dispatcher.dispatch(
           "component.list",
           frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "component.remove":
+        return this.#dispatcher.dispatch(
+          "component.remove",
+          frame.payload,
           this.#session(connection),
         );
       // "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it

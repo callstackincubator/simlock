@@ -61,11 +61,15 @@ putting in front of every event-bus consumer.
 | `component.install-started` | platform, component id (the string the install was asked for: an iOS runtime version, `latest`, or a bare major; an Android API level), requester id (of the request that started the install, when known: a lease request's requester, or the principal that ran `component install`) | once per install, after the free-disk check passed and disk was set aside, just before `xcodebuild -downloadPlatform` / `sdkmanager --install` runs | component-installer | implemented |
 | `component.installed` | platform, component id, version (the exact version now installed), already present (`true` when the installer ran and found the component already there), duration, requester id | once per install, when the installer finished **and** a fresh read confirmed the component — never on a bare exit 0 | component-installer | implemented |
 | `component.install-failed` | platform, component id, duration, stable error summary, requester id | once per install, when it failed: the installer failed (a license retry included), it ran out of `downloads.timeoutMs`, the daemon stopped, the installer exited 0 but a fresh read could not confirm the component, or the component installed but its record could not be stored | component-installer | implemented |
+| `component.removed` | platform, component id (the version the removal was asked for), version (the exact version removed), size in bytes (when it could be read), residue (when something stayed on disk: what, and how to reclaim it), requester id (the admin principal that ran `component remove`) | once per removal, after the platform's own removal (`simctl runtime delete` / `sdkmanager --uninstall`) finished, a fresh read confirmed the component is gone, and Simlock's record of installing it was deleted — never for a dry run or a refused removal | component-installer | implemented |
 
 These fire once per install, however many requests joined it. A request that
 needs no install emits none: one whose component turned out to be installed
 already, one another install made unnecessary while it waited, or one refused
 for lack of disk before anything started.
+
+`component.removed` fires once per removal. A removal that is refused, or
+that fails, emits nothing, and the component stays installed.
 
 ## System
 
