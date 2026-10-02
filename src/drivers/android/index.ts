@@ -441,6 +441,7 @@ export class AndroidDriver implements Driver {
   readonly #registrar: AdbRegistrar;
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
+  readonly #tcpProbe: TcpProbe;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
 
   private constructor(
@@ -468,6 +469,7 @@ export class AndroidDriver implements Driver {
     this.#registrar = new AdbRegistrar({ serverPort: adbServerPort, tcp: options.tcpProbe });
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
+    this.#tcpProbe = options.tcpProbe;
     // System images land under the SDK root, so that is the volume an install is reserved on.
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
     // Where an AVD Simlock made before it owned a root still sits: the AVD home the user
@@ -695,9 +697,7 @@ export class AndroidDriver implements Driver {
    * has no scanner to rediscover anything -- so every emulator that survived the restart
    * (which is by design: releasing a lease hands a device to the warm pool) would be
    * invisible forever. Invisible is worse than gone: `listManaged` reports no process, so
-   * `doctor` can never call it an orphan and several gigabytes of RSS leak permanently; the
-   * port allocator derives occupancy from `adb devices` and hands out a console port that is
-   * already in use, whose emulator then cannot bind and is quarantined for it.
+   * `doctor` can never call it an orphan and several gigabytes of RSS leak permanently.
    *
    * `connect_emulator` is idempotent (adb keys transports by port), a port with nothing on
    * it is a cheap failed connect, and the range is bounded and Simlock's own -- so this is
@@ -803,7 +803,7 @@ export class AndroidDriver implements Driver {
     }
 
     const configHash = await this.#configHash(avdName, image);
-    const port = await this.#portAllocator.allocate(this.#env());
+    const port = await this.#portAllocator.allocate(this.#env(), this.#tcpProbe);
     const driverData: AndroidDriverData = {
       avdName,
       configHash,
@@ -1966,12 +1966,20 @@ class PortAllocator {
   ) {}
 
   /**
-   * The scoped environment is passed per call rather than held, because one allocator is
-   * shared by every driver on a runner (see `portAllocatorFor`) while the environment
-   * belongs to one driver instance -- a stored one would go stale the moment a second
-   * driver appeared and would silently poll the wrong adb server.
+   * The scoped environment and the probe are passed per call rather than held, because one
+   * allocator is shared by every driver on a runner (see `portAllocatorFor`) while both
+   * belong to one driver instance -- a stored environment would go stale the moment a
+   * second driver appeared and would silently poll the wrong adb server.
+   *
+   * `adb devices` answers only for emulators announced to this instance's own server, so a
+   * port it leaves free is then probed: an emulator another Simlock instance started is in
+   * neither this process's reservations nor this server's list, but it holds its console
+   * port and the adb port above it on the machine, and an emulator told to take either
+   * exits at once. Each probe is one loopback connect, refused at once on a free port and
+   * bounded by the probe's own timeout otherwise; the walk stops at the first free port, so
+   * the wait is at most one probe pair per console port in the range.
    */
-  async allocate(env: NodeJS.ProcessEnv): Promise<number> {
+  async allocate(env: NodeJS.ProcessEnv, tcpProbe: TcpProbe): Promise<number> {
     const previous = this.#lock;
     let release!: () => void;
     this.#lock = new Promise((resolve) => {
@@ -1985,7 +1993,7 @@ class PortAllocator {
       }
       const unavailable = new Set([...this.#reserved, ...portsFromAdbDevices(result.stdout)]);
       for (let port = PORT_MIN; port <= PORT_MAX; port += 2) {
-        if (!unavailable.has(port)) {
+        if (!unavailable.has(port) && !(await consolePortsInUse(tcpProbe, port))) {
           this.#reserved.add(port);
           return port;
         }
@@ -1999,6 +2007,15 @@ class PortAllocator {
   release(port: number): void {
     this.#reserved.delete(port);
   }
+}
+
+/** True when anything on the machine listens on `consolePort` or on the adb port above it. */
+async function consolePortsInUse(tcpProbe: TcpProbe, consolePort: number): Promise<boolean> {
+  const listening = await Promise.all([
+    tcpProbe.isListening(consolePort),
+    tcpProbe.isListening(consolePort + 1),
+  ]);
+  return listening.includes(true);
 }
 
 class SequentialIdGenerator implements IdGenerator {
