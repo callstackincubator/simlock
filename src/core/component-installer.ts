@@ -24,7 +24,7 @@ import { stableError } from "./stable-error.js";
 /**
  * What a caller hears while its call is open: that it waits behind another install, that its
  * install has started (`downloading` with no `percent`, before the driver reports anything), or
- * the driver's own progress.
+ * the driver's own progress, its `percent` within 0..100 or left out when it was not a number.
  */
 export type ComponentInstallerProgress =
   | ComponentInstallProgress
@@ -417,7 +417,7 @@ export class ComponentInstaller {
     try {
       result = await driver.installComponent(install.component, {
         onProgress: (progress) => {
-          this.#report(install, progress);
+          this.#report(install, cleanPercent(progress));
         },
         signal: abort.signal,
       });
@@ -517,6 +517,15 @@ export class ComponentInstaller {
     if ("outcome" in result && result.outcome !== undefined) call.resolve(result.outcome);
     else call.reject(result.error);
   }
+}
+
+/**
+ * The one place a driver's percentage is cleaned for every caller: clamped to 0..100, and left
+ * out when it is not a finite number rather than guessed.
+ */
+function cleanPercent(progress: ComponentInstallProgress): ComponentInstallerProgress {
+  if (!Number.isFinite(progress.percent)) return { stage: "downloading" };
+  return { percent: Math.min(100, Math.max(0, progress.percent)), stage: "downloading" };
 }
 
 /** A caller's progress callback is an observer: a throw there must not reach the install. */

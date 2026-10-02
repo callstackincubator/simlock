@@ -537,7 +537,7 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     const driver = new FakeDriver({
       availableOsVersions: [],
       clock,
-      installProgress: [41.2, 41.7],
+      installProgress: [41.7, 41.9],
       platform: "ios",
     });
     const harness = await createHarness({ drivers: [driver] });

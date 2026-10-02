@@ -338,6 +338,30 @@ describe("ComponentInstaller", () => {
     expect(early).toHaveLength(3);
   });
 
+  it("tells its calls a driver's percentage clamped to 0..100, and one that is not a number as no percent", async () => {
+    const harness = await createHarness({
+      drivers: (clock) => [
+        new FakeDriver({
+          availableOsVersions: [],
+          clock,
+          installProgress: [Number.NaN, -5, 150, 41.7],
+          platform: "ios",
+        }),
+      ],
+    });
+    const heard: ComponentInstallerProgress[] = [];
+
+    await harness.installer.install(ios("27.0", { onProgress: (report) => heard.push(report) }));
+
+    expect(heard).toEqual([
+      { stage: "downloading" },
+      { stage: "downloading" },
+      { percent: 0, stage: "downloading" },
+      { percent: 100, stage: "downloading" },
+      { percent: 41.7, stage: "downloading" },
+    ]);
+  });
+
   it("still lists a running install as downloading and one behind it as waiting after a call joined the running one", async () => {
     const harness = await createHarness({
       drivers: (clock) => [

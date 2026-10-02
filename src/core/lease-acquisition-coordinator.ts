@@ -809,8 +809,8 @@ type DownloadingProgress = Extract<LeaseProgress, { readonly stage: "downloading
 
 /**
  * The installer's report in the requester's words. `waiting` is a request still behind another
- * install; `downloading` is its own install running, with the driver's percentage rounded down to
- * a whole number from 0 to 100. A percentage that is not a finite number is left out.
+ * install; `downloading` is its own install running, with the installer's percentage (already
+ * within 0..100) rounded down to a whole number.
  */
 function downloadingProgress(
   component: string,
@@ -818,14 +818,9 @@ function downloadingProgress(
 ): DownloadingProgress {
   if (progress.stage === "waiting") return { component, stage: "downloading", waiting: true };
   const { percent } = progress;
-  return percent === undefined || !Number.isFinite(percent)
+  return percent === undefined
     ? { component, stage: "downloading", waiting: false }
-    : {
-        component,
-        percent: Math.min(100, Math.max(0, Math.floor(percent))),
-        stage: "downloading",
-        waiting: false,
-      };
+    : { component, percent: Math.floor(percent), stage: "downloading", waiting: false };
 }
 
 /** Both reports are for the one component a `#resolveOrInstall` call downloads. */

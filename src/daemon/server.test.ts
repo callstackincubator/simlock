@@ -2105,10 +2105,15 @@ describe("DaemonServer download policy", () => {
     await client.close();
   });
 
-  it("still answers a lease request whose download names a component past the progress push's bound, sending no downloading push for it", async () => {
+  it("still answers a lease request whose download names a component past the progress push's bound, sending no downloading push for it and logging that", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
-    const harness = await createHarness({ clock, driver });
+    const sink = new MemoryLogSink();
+    const harness = await createHarness({
+      clock,
+      driver,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+    });
     const client = await createClient(harness.socketPath);
     await hello(client);
     // The fake names the requested version as the component: 65 characters, one past the bound.
@@ -2129,6 +2134,13 @@ describe("DaemonServer download policy", () => {
       .map((frame) => (frame.payload as { progress: { stage: string } }).progress.stage);
     expect(stages).toContain("provisioning");
     expect(stages).not.toContain("downloading");
+    expect(sink.records).toContainEqual(
+      expect.objectContaining({
+        fields: { stage: "downloading" },
+        level: "warn",
+        message: "A lease progress push was not sent",
+      }),
+    );
     await client.close();
   });
 
