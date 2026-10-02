@@ -553,7 +553,11 @@ export interface ComponentRemoval {
   readonly residue?: string;
 }
 
-/** How long one platform removal (`simctl runtime delete`, `sdkmanager --uninstall`) may run. */
+/**
+ * How long one platform removal (`simctl runtime delete`, `sdkmanager --uninstall`) may run. On
+ * iOS it also covers the wait, after `simctl runtime delete` answers, for the image to stop
+ * being listed as deleting; the budget is measured from the start of the delete.
+ */
 export const COMPONENT_REMOVAL_TIMEOUT_MS = 5 * 60_000;
 
 /**

@@ -1451,7 +1451,10 @@ every one of them and removes nothing.
   waits for it, and no new Simlock device is created on the component being
   removed: a lease request for it fails with `RUNTIME_MISSING`.
 
-An iOS runtime is removed with `simctl runtime delete`. Two things can stay
+An iOS runtime is removed with `simctl runtime delete`. `simctl` can answer
+while the runtime is still being deleted, so Simlock waits until it is gone:
+at most five minutes from the start of the removal, after which the command
+fails and Simlock keeps its record of the runtime. Two things can stay
 behind, and the result's `residue` names each one that did:
 
 - The never-booted simulators of that runtime in Xcode's default device set.
