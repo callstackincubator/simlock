@@ -9,8 +9,9 @@ The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
 This version has sign-in, the console's navigation (Workers, Leases, Waiting,
-Attention and Events), the Workers pages, the Waiting page and the Attention
-page. The other pages say "Coming soon" until their views are built.
+Attention and Events), the Workers and Leases pages, the Waiting page and
+the Attention page. The other pages say "Coming soon" until their views are
+built.
 
 ## Turn it on
 
@@ -115,6 +116,7 @@ Select a worker to open its page. It adds:
   was granted, and a device being provisioned or reclaimed on a connected
   worker how long that has taken so far. Other states show `—`: the daemon
   reports no time for them.
+- **Leases**: the leases on this worker, as the Leases page shows them.
 - **Host**: the operating system, the CPU architecture, and the version of
   each platform tool, such as Xcode or the Android emulator.
 - **Catalog**: the models and runtimes the worker can lease. It is read again
@@ -124,6 +126,47 @@ Select a worker to open its page. It adds:
 
 A page the daemon cannot answer on a single host says "Not available on a
 single host" in place of its content.
+
+## Leases
+
+**Leases** lists every lease the daemon holds, as `simlock list --leases`
+does. On a gateway that is every lease on every worker, including the ones a
+worker granted itself. On a single host it is the host's own leases.
+
+Each lease shows:
+
+| Fact | What it says |
+| --- | --- |
+| Holder | Who holds the lease (see below) |
+| Worker | The worker the device is on, by its label, or its id when it has none |
+| Device | The device's model and id |
+| Mode | `slim` or `full` |
+| Image tag | The image tag the device was created from, or `—` |
+| Granted | How long ago the lease was granted |
+| Expires in | How long until the lease expires unless it is renewed. It counts down every second. |
+| Last renewed | How long ago the lease was last renewed, or granted if it never was |
+
+Select a lease to open its page. It shows the same facts, the platform and
+runtime, the device's UDID, and the id of the request that was granted the
+lease, while the daemon still keeps it. A lease that has been released or has
+expired says "Lease not found".
+
+### Who holds a lease
+
+A lease taken over the HTTP API belongs to the token that took it. The console
+shows that token's label, with the token id beside it: `ci-runner-3
+tok_9f2c`. Give each agent's token a label when you create it, so you can tell
+them apart:
+
+```sh
+simlock token create --role agent --label ci-runner-3
+```
+
+A token created without `--label` shows as its id alone. So does a lease
+taken through the CLI or the MCP server on the host itself: it is held by the
+agent id it was taken with, not by a token. On a gateway the labels are the
+gateway's own tokens. A lease taken on a worker directly shows its holder's id
+as that worker reports it.
 
 ## Waiting
 

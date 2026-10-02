@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 
 import { AttentionCount, AttentionView } from "./attention";
 import { ComingSoon } from "./coming-soon";
+import { LeasesView } from "./leases";
 import { WaitingView } from "./waiting";
 import { WorkersView } from "./workers";
 
@@ -21,7 +22,7 @@ export interface View {
 
 export const VIEWS: readonly View[] = [
   { path: "/workers", label: "Workers", Component: WorkersView },
-  { path: "/leases", label: "Leases", Component: () => <ComingSoon title="Leases" /> },
+  { path: "/leases", label: "Leases", Component: LeasesView },
   { path: "/waiting", label: "Waiting", Component: WaitingView },
   { path: "/attention", label: "Attention", Component: AttentionView, Badge: AttentionCount },
   { path: "/events", label: "Events", Component: () => <ComingSoon title="Events" /> },
