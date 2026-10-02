@@ -57,7 +57,7 @@ Commands:
   daemon, config, token
   worker <list|drain|undrain|remove>
                               Inspect and manage the workers of a gateway
-  component install <ios|android> <version>
+  component install <ios|android> <version> [--worker <id>... | --all-workers]
                               Install a simulator runtime or system image
   component list [--platform <ios|android>]
                               List installed runtimes and system images
@@ -78,6 +78,14 @@ resolution order.`;
  * counting down (ADR 0004 §3).
  */
 const LEASE_LOST_EXIT_CODE = 14;
+
+/**
+ * `component install --worker`/`--all-workers` on a gateway: at least one worker did not end
+ * `installed` or `already-installed` -- it refused, failed, was skipped, or its result is
+ * unknown. Like 14, an outcome of the command rather than a daemon error code: the call itself
+ * succeeded, and the per-worker report on stdout says which worker ended how.
+ */
+const WORKER_INSTALL_INCOMPLETE_EXIT_CODE = 15;
 
 /**
  * A key that is safe to the left of `=` in a shell `export`. Anything else is a command
@@ -1856,7 +1864,7 @@ async function runWorkerAction(
 }
 
 const COMPONENT_USAGE =
-  "Usage: simlock component install <ios|android> <version>\n" +
+  "Usage: simlock component install <ios|android> <version> [--worker <id>... | --all-workers]\n" +
   "       simlock component list [--platform <ios|android>]\n";
 
 /**
@@ -1864,6 +1872,10 @@ const COMPONENT_USAGE =
  * parsing and rendering only (architecture rule 8): whether the install may run, joins another
  * or is already done is the daemon's answer. The result is one JSON line on stdout; progress
  * is JSON lines on stderr, the same split every other command makes.
+ *
+ * With `--worker` or `--all-workers` it calls a gateway's `worker.install-component` instead
+ * (ADR 0010 §7): each progress line names its worker, the result lists one entry per worker, and
+ * the command exits 15 unless every worker ended `installed` or `already-installed`.
  */
 async function runComponent(
   argv: readonly string[],
@@ -1885,14 +1897,25 @@ async function runComponent(
     return 0;
   }
   const client = await connectDaemonClient(environment, token);
+  const onProgress = (progress: unknown): void => {
+    environment.stderr.write(`${JSON.stringify(progress)}\n`);
+  };
   try {
-    const result = await client.installComponent(input, {
-      onProgress: (progress) => {
-        environment.stderr.write(`${JSON.stringify(progress)}\n`);
-      },
-    });
+    if (input.workers === undefined) {
+      writeResult(environment, await client.installComponent(input, { onProgress }));
+      return 0;
+    }
+    const { platform, version, workers } = input;
+    const result = await client.installComponentOnWorkers(
+      { platform, version, workers },
+      { onProgress },
+    );
     writeResult(environment, result);
-    return 0;
+    return result.results.every(
+      (entry) => entry.outcome === "installed" || entry.outcome === "already-installed",
+    )
+      ? 0
+      : WORKER_INSTALL_INCOMPLETE_EXIT_CODE;
   } finally {
     await client.close();
   }
@@ -1933,12 +1956,22 @@ async function runComponentList(
   }
 }
 
-/** `component install`'s arguments: exactly a platform and a version, or `--help`. */
-function parseComponentInstallArgs(
-  argv: readonly string[],
-): { readonly platform: "ios" | "android"; readonly version: string } | "help" {
-  const values = commandArgs(argv, { help: { type: "boolean", short: "h" } });
+/** `component install`'s arguments: exactly a platform and a version, optionally the workers to
+ * install on (`--worker`, repeatable, or `--all-workers`, never both), or `--help`. */
+function parseComponentInstallArgs(argv: readonly string[]):
+  | {
+      readonly platform: "ios" | "android";
+      readonly version: string;
+      readonly workers?: "all" | string[];
+    }
+  | "help" {
+  const values = commandArgs(argv, {
+    "all-workers": { type: "boolean" },
+    help: { type: "boolean", short: "h" },
+    worker: { type: "string", multiple: true },
+  });
   if (values.help) return "help";
+  const workers = installTargets(values.worker as string[] | undefined, values["all-workers"]);
   const [platform, version, ...extra] = values.positionals;
   if (platform === undefined || version === undefined || extra.length > 0) {
     throw new UsageError(withHelpHint("Expected <ios|android> <version>"));
@@ -1946,7 +1979,16 @@ function parseComponentInstallArgs(
   if (platform !== "ios" && platform !== "android") {
     throw new UsageError("component install <platform> must be ios or android");
   }
-  return { platform, version };
+  return workers === undefined ? { platform, version } : { platform, version, workers };
+}
+
+/** The workers `--worker`/`--all-workers` name, or none for an install on this daemon. */
+function installTargets(named: string[] | undefined, all: unknown): "all" | string[] | undefined {
+  if (all !== true) return named;
+  if (named !== undefined) {
+    throw new UsageError("component install takes --worker or --all-workers, not both");
+  }
+  return "all";
 }
 
 /**

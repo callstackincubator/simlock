@@ -667,7 +667,8 @@ an ordinary JSON error with its own status:
 - `400 BAD_REQUEST` — a malformed body or version.
 - `422 NO_DRIVER` — no driver for that platform on this machine.
 - `501 UNSUPPORTED_IN_GATEWAY_MODE` — the daemon is a gateway, which owns no
-  components; ask the worker.
+  components, and the body names no `workers`; name the workers to install
+  on (below).
 
 Once the install has taken the request the response is `200`,
 `Content-Type: text/event-stream`, the same SSE shape the exec route uses:
@@ -700,6 +701,64 @@ Disconnecting does **not** stop the install. Repeating the request while it
 runs joins it and gets its result; repeating it after it finished answers
 `already-installed`. A lease request for the same component joins the same
 download too.
+
+#### On a gateway's workers
+
+Against a gateway, add `workers`: a list of 1 to 64 worker ids, as
+`GET /v1/workers` shows them, or `"all"` for every connected worker.
+
+```json
+{ "platform": "android", "version": "35", "workers": "all" }
+```
+
+The gateway asks every targeted worker at the same time, and each one
+installs the component itself under its own `downloads.policy`, Android
+license setting, disk check and `downloads.timeoutMs`. A worker set to
+`downloads.policy: "never"` refuses; the gateway has no download policy of
+its own and stores or forwards no image. A drained worker is asked like any
+other. `workers` on a daemon that is not a gateway is `400 UNKNOWN_REQUEST`.
+
+Before any worker is asked, these are JSON errors:
+
+- `403 FORBIDDEN` — an `agent` token.
+- `400 BAD_REQUEST` — a malformed body, version, or worker list (empty, more
+  than 64, or an id twice).
+- `404 UNKNOWN_WORKER` — a named id the gateway does not know.
+- `503 WORKER_UNREACHABLE` — a named worker that is disconnected, speaks an
+  incompatible protocol, or whose config the gateway has not read yet.
+
+Then the response is the same event stream. Each `progress` event carries the
+`workerId` it came from, and the terminal `result` event lists one entry per
+worker, in ascending worker id:
+
+```
+event: progress
+data: {"stage":"downloading","fraction":0.41,"workerId":"3f81a2c4"}
+
+event: result
+data: {"results":[{"workerId":"3f81a2c4","label":"mac-studio-2","outcome":"installed","version":"35"},{"workerId":"9b07de11","outcome":"refused","error":{"code":"DOWNLOADS_DISABLED","message":"..."}}]}
+```
+
+`outcome` is one of:
+
+- `installed` / `already-installed` — the worker's own answer, with the exact
+  `version`.
+- `refused` — the worker's `downloads.policy` is `"never"`.
+- `failed` — the worker answered with another error; `error.code` is the
+  worker's own.
+- `skipped` — `"all"` only: the worker could not be asked (disconnected,
+  incompatible, or its config not read yet). It is not asked when it comes
+  back.
+- `unknown` — the worker's connection dropped during its install, or it did
+  not answer within its own `downloads.timeoutMs` plus one minute. The
+  install carries on on the worker; `GET /v1/catalog` shows the component
+  once it is there and the worker is connected.
+
+Every outcome but the first two carries `error: {code, message}`. A
+worker's new component is in the gateway's `GET /v1/catalog` by the time the
+`result` event is sent, unless the gateway could not read that worker's
+catalog just then; its next read brings it in. Nothing is retried or kept for
+later.
 
 ### `GET /v1/components?platform=ios|android`
 
@@ -984,15 +1043,17 @@ and a client with one retry rule for `transport` should not need a second one
 because the unreachable thing happened to be a worker.
 
 `UNSUPPORTED_IN_GATEWAY_MODE` comes from two routes in this version,
-`POST /v1/components/install` and `GET /v1/components` asked of a gateway —
-`nuke`, `cleanup`, and
+`POST /v1/components/install` without `workers` and `GET /v1/components`
+asked of a gateway — `nuke`, `cleanup`, and
 `doctor` are absent from the HTTP surface (see
 [Not implemented](#not-implemented)), and the status is fixed so adding
 `POST /v1/doctor` or `POST /v1/cleanup` later is additive rather than a fresh
 decision. `501` is the honest status for it: this is not a temporary
 condition to retry past, it is an operation this daemon will never perform,
-and `nuke`/`cleanup`/`doctor`/`driver.passthrough`/component installs and
-listings stay per-worker permanently rather than pending some later fan-out.
+and `nuke`/`cleanup`/`doctor`/`driver.passthrough` and component listings
+stay per-worker permanently rather than pending some later fan-out. A
+component install through a gateway is a different request, one that names
+its workers.
 
 `EXEC_TIMEOUT`'s `504` is documented for completeness rather than for the
 exec route: `POST /v1/leases/{id}/exec` has already answered `200` and begun

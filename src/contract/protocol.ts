@@ -25,7 +25,7 @@ const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().in
  * on the grant, `status.get`, and `list.get` (taking it to 7), then lets a lease request choose
  * that mode with `mode`, replacing `full`, and reshapes `config.get`'s `ios` block (taking it to
  * 8). ADR 0010 adds `component.install` and its `component-progress` push (taking it to 9): a
- * gateway's `worker.install-component` (ADR 0010 §7, a later task) relays that operation to its
+ * gateway's `worker.install-component` (ADR 0010 §7) relays that operation to its
  * workers, so a worker without it must be `incompatible` rather than fail in the middle of a
  * relay. It only ever widens once a second version is actually kept alive side by side with the
  * first, which nothing here does.

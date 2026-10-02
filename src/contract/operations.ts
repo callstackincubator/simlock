@@ -744,6 +744,65 @@ export const componentList = defineOperation({
   }),
 });
 
+// ---- worker.install-component (ADR 0010 §7) -------------------------------------------------
+
+/** The longest worker id a gateway accepts at the uplink, and so the longest one it can name. */
+const WORKER_ID_MAX_LENGTH = 128;
+
+/** The longest error message a relayed result carries. A worker's message is a claim, cut to
+ * this before it is stored in a result (safety rule 10). */
+export const WORKER_RESULT_MESSAGE_MAX_LENGTH = 1024;
+
+const workerInstallTargetsSchema = z.union([
+  z.literal("all"),
+  z
+    .array(z.string().min(1).max(WORKER_ID_MAX_LENGTH))
+    .min(1)
+    .max(64)
+    .refine((ids) => new Set(ids).size === ids.length, "worker ids must be distinct"),
+]);
+
+/**
+ * One worker's answer to a relayed install. `installed` and `already-installed` are the worker's
+ * own outcome, with the version it installed or found. `refused` is the worker's
+ * `DOWNLOADS_DISABLED`; `failed` is any other error the worker answered; `skipped` is a worker
+ * the gateway did not ask; `unknown` is a worker whose uplink closed, or that did not answer
+ * within its own `downloads.timeoutMs` plus a minute. Every outcome but the first two carries
+ * `error`.
+ */
+const workerInstallResultSchema = z.object({
+  workerId: z.string(),
+  label: z.string().optional(),
+  outcome: z.enum(["installed", "already-installed", "refused", "failed", "skipped", "unknown"]),
+  version: z.string().max(64).optional(),
+  error: z
+    .object({
+      code: z.string().max(64),
+      message: z.string().max(WORKER_RESULT_MESSAGE_MAX_LENGTH),
+    })
+    .optional(),
+});
+
+/**
+ * ADR 0010 §7: installs one component on named workers, or on every connected one, through a
+ * gateway. The gateway asks each target at the same time with `component.install`, and each
+ * worker answers for itself under its own `downloads.policy`. One result per worker, in
+ * ascending worker id. Progress arrives as `component-progress` pushes carrying `workerId`.
+ * Gateway-only: a worker answers `UNKNOWN_REQUEST`.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerInstallComponent = defineOperation({
+  name: "worker.install-component",
+  role: "admin",
+  effect: "write",
+  input: z.object({
+    platform: platformSchema,
+    version: componentVersionSchema,
+    workers: workerInstallTargetsSchema,
+  }),
+  output: z.object({ results: z.array(workerInstallResultSchema) }),
+});
+
 // ---- the full registry ----------------------------------------------------------------------
 
 export const OPERATIONS = {
@@ -775,6 +834,7 @@ export const OPERATIONS = {
   "worker.remove": workerRemove,
   "component.install": componentInstall,
   "component.list": componentList,
+  "worker.install-component": workerInstallComponent,
 } as const;
 
 /**
@@ -788,6 +848,7 @@ export const GATEWAY_ONLY_OPERATIONS = [
   "worker.drain",
   "worker.undrain",
   "worker.remove",
+  "worker.install-component",
 ] as const satisfies readonly OperationName[];
 
 export type GatewayOnlyOperationName = (typeof GATEWAY_ONLY_OPERATIONS)[number];

@@ -65,8 +65,9 @@ export function buildHttpSession(
      * call (ADR 0010 §6). */
     readonly onStarted?: () => void;
     /** ADR 0010 §6: the component install route's own override -- each update becomes one SSE
-     * `progress` event on that request's response. Inert for every other route. */
-    readonly onComponentProgress?: (progress: ComponentProgress) => void;
+     * `progress` event on that request's response, with `workerId` when a gateway relayed it
+     * from a worker (§7). Inert for every other route. */
+    readonly onComponentProgress?: (progress: ComponentProgress, workerId?: string) => void;
     readonly manageEventSubscription?: (subscribe: boolean) => string | undefined;
   },
 ): DispatchSession {

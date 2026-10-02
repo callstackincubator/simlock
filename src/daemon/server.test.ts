@@ -1638,6 +1638,21 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await client.close();
   });
 
+  it("answers worker.install-component with UNKNOWN_REQUEST: a worker has no workers to install on", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("worker.install-component", {
+        platform: "android",
+        version: "35",
+        workers: "all",
+      }),
+    ).resolves.toMatchObject({ error: { code: "UNKNOWN_REQUEST" }, ok: false });
+    await client.close();
+  });
+
   it("rejects a ttlMs above lease.maxTtlMs on a request and on a renew, rather than clamping", async () => {
     const harness = await createHarness({ lease: { defaultTtlMs: 40, maxTtlMs: 100 } });
     const client = await createClient(harness.socketPath);

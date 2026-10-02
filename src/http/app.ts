@@ -108,12 +108,14 @@ const execBodySchema = z
   })
   .strict();
 
-/** Shape only: what a valid platform and version are is `component.install`'s own contract
- * schema's answer, reached through the dispatcher like every other transport's. */
+/** Shape only: what a valid platform, version and worker list are is `component.install`'s and
+ * `worker.install-component`'s own contract schemas' answer, reached through the dispatcher like
+ * every other transport's. `workers` present is what picks the gateway operation. */
 const componentInstallBodySchema = z
   .object({
     platform: z.string(),
     version: z.string(),
+    workers: z.union([z.string(), z.array(z.string())]).optional(),
   })
   .strict();
 
@@ -440,40 +442,47 @@ export function createHttpApp(deps: HttpGatewayDeps): Hono<Env> & HttpAppDisposa
   });
 
   app.post("/v1/components/install", agentAuth, jsonBody(componentInstallBodySchema), async (c) => {
-    const body = c.req.valid("json");
+    const { workers, ...component } = c.req.valid("json");
     // Progress that arrives before the stream opens is held in order and flushed when it
     // does. After the client is gone, a write is a no-op (`pipeSse`); the install itself
-    // carries on, and a repeat of this request joins it (ADR 0010 §6).
-    const early: ComponentProgress[] = [];
-    let deliver: ((progress: ComponentProgress) => void) | undefined;
+    // carries on, and a repeat of this request joins it (ADR 0010 §6). Through a gateway each
+    // update names the worker it came from (§7).
+    type ProgressEvent = ComponentProgress & { readonly workerId?: string };
+    const early: ProgressEvent[] = [];
+    let deliver: ((progress: ProgressEvent) => void) | undefined;
     let onAdmitted!: () => void;
     const admitted = new Promise<void>((resolve) => {
       onAdmitted = resolve;
     });
+    const session = buildHttpSession(c.get("identity"), {
+      onStarted: () => onAdmitted(),
+      onComponentProgress: (progress, workerId) => {
+        const event = workerId === undefined ? progress : { ...progress, workerId };
+        if (deliver === undefined) early.push(event);
+        else deliver(event);
+      },
+    });
 
-    const settled = deps
-      .dispatch(
-        "component.install",
-        body,
-        buildHttpSession(c.get("identity"), {
-          onStarted: () => onAdmitted(),
-          onComponentProgress: (progress) => {
-            if (deliver === undefined) early.push(progress);
-            else deliver(progress);
-          },
-        }),
-      )
-      .then(
-        (result) => ({ kind: "done", result }) as const,
-        (error: unknown) => ({ error, kind: "failed" }) as const,
-      );
+    // `workers` names the gateway's relay: it asks each worker and answers with one result per
+    // worker. Without it, the install runs on the daemon this request reached.
+    const dispatched: Promise<unknown> =
+      workers === undefined
+        ? deps.dispatch("component.install", component, session)
+        : deps.dispatch("worker.install-component", { ...component, workers }, session);
+    const settled = dispatched.then(
+      (result) => ({ kind: "done", result }) as const,
+      (error: unknown) => ({ error, kind: "failed" }) as const,
+    );
 
     // The same decision point as the exec route: every refusal that comes before an install
     // (the token's role, the input, `downloads.policy`, a platform with no driver) is an
     // ordinary JSON error with its own status. Once the installer has taken the call, the
     // response is committed to a stream, which is what gives a call waiting behind another
     // download its `200` and its keepalives at once. Bounded by the install's own budget,
-    // `downloads.timeoutMs`, which ends the call with `DOWNLOAD_TIMEOUT`.
+    // `downloads.timeoutMs`, which ends the call with `DOWNLOAD_TIMEOUT`. Through a gateway the
+    // decision point is the moment the targets are resolved: an unknown or unreachable worker
+    // named in `workers` is still a JSON error, and each worker's call is bounded by its own
+    // budget plus the gateway's backstop.
     const outcome = await Promise.race([settled, admitted.then(() => undefined)]);
     if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
 

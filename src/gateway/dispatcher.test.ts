@@ -163,6 +163,7 @@ function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay">
     },
     config: gatewayConfig,
     coordinator,
+    directory,
     eventHistory:
       options.eventHistory ??
       new EventHistory({
@@ -568,6 +569,66 @@ describe("GatewayDispatcher", () => {
     expect(closedUplinkTokens).toEqual([]);
   });
 
+  describe("worker.install-component (ADR 0010 §7)", () => {
+    /** One connected worker whose config has been read, scripted behind the directory. */
+    function withWorker() {
+      const fixture = harness();
+      const worker = new ScriptedWorkerClient();
+      fixture.workers.connected("wrk_1", undefined, "0.3.0");
+      fixture.workers.refresh("wrk_1", {
+        downloads: { policy: "on-request", timeoutMs: 60_000 },
+      });
+      fixture.directory.add("wrk_1", worker);
+      return { ...fixture, worker };
+    }
+
+    it("refuses an agent session with FORBIDDEN and asks no worker", async () => {
+      const { dispatcher, worker } = withWorker();
+
+      await expect(
+        dispatcher.dispatch(
+          "worker.install-component",
+          { platform: "android", version: "35", workers: "all" },
+          session({ role: "agent" }),
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(worker.calls.filter((call) => call.startsWith("component.install"))).toEqual([]);
+    });
+
+    it("opens the session's stream before asking a worker, and hands it each update with the worker's id", async () => {
+      const { dispatcher, worker } = withWorker();
+      const seen: unknown[] = [];
+      worker.installComponentHandler = async (input, options) => {
+        seen.push("asked");
+        options.onProgress?.({ stage: "waiting" });
+        return {
+          component: input.version,
+          outcome: "installed",
+          platform: input.platform,
+          version: input.version,
+        };
+      };
+
+      const result = await dispatcher.dispatch(
+        "worker.install-component",
+        { platform: "android", version: "35", workers: ["wrk_1"] },
+        session({
+          onComponentProgress: (progress, workerId) => seen.push({ progress, workerId }),
+          onStarted: () => seen.push("started"),
+        }),
+      );
+
+      expect(seen).toEqual([
+        "started",
+        "asked",
+        { progress: { stage: "waiting" }, workerId: "wrk_1" },
+      ]);
+      expect(result).toEqual({
+        results: [{ outcome: "installed", version: "35", workerId: "wrk_1" }],
+      });
+    });
+  });
+
   describe("UNSUPPORTED_IN_GATEWAY_MODE", () => {
     it.each(["nuke.run", "cleanup.run", "doctor.run", "driver.passthrough"] as const)(
       "%s stays per-worker, permanently",
@@ -583,7 +644,7 @@ describe("GatewayDispatcher", () => {
       },
     );
 
-    it("component.install answers UNSUPPORTED_IN_GATEWAY_MODE, saying it installs on one machine (ADR 0010 §7)", async () => {
+    it("component.install answers UNSUPPORTED_IN_GATEWAY_MODE, telling the operator to name workers (ADR 0010 §7)", async () => {
       const { dispatcher } = harness();
 
       await expect(
@@ -591,7 +652,9 @@ describe("GatewayDispatcher", () => {
       ).rejects.toMatchObject({
         code: "UNSUPPORTED_IN_GATEWAY_MODE",
         details: { operation: "component.install" },
-        message: "component.install installs on one machine; run it against a worker",
+        message:
+          "component.install installs on one machine; on a gateway, name the workers to install on " +
+          "(simlock component install --worker <id> or --all-workers)",
       });
     });
 

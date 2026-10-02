@@ -298,6 +298,10 @@ should never download anything sets it, and its operator installs components
 with the platform's own tools. Warm-pool provisioning and startup never
 download under any policy.
 
+A gateway has no download policy of its own. `simlock component install
+--worker`/`--all-workers` asks each worker, and each worker's own
+`downloads.policy` and `downloads.timeoutMs` decide.
+
 A platform downloads one component at a time, whichever way it was asked
 for; a request for the component already downloading joins that download.
 Every request has `downloads.timeoutMs` to finish, waiting included.

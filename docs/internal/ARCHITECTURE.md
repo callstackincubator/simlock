@@ -179,7 +179,9 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   silently overridden. `nuke.run`, `cleanup.run`, `doctor.run`,
   `driver.passthrough`, `component.install` and `component.list` answer
   `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they act on one machine's devices
-  or components, and stay per-worker. The lease lifecycle
+  or components, and stay per-worker. Installing through a gateway is its own
+  gateway-only operation, `worker.install-component`, which names the
+  workers (see "Through a gateway" under Components). The lease lifecycle
   (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`
   are forwarded through the fleet's own queue and routing policy (§10-§19,
   `FleetLeaseCoordinator`) rather than answering `UNSUPPORTED_IN_GATEWAY_MODE`;
@@ -236,7 +238,7 @@ and `modelAliases` required, taking it to 6; ADR 0007 makes every device report 
 as a required `mode`, taking it to 7, then lets a lease request choose that
 mode with `mode` in place of `full`, taking it to 8. ADR 0010 adds
 `component.install` and its `component-progress` push, taking it to 9: a
-gateway's `worker.install-component` (ADR 0010 §7, not yet implemented)
+gateway's `worker.install-component` (ADR 0010 §7)
 relays that operation to workers, so a worker without it must be
 `incompatible` rather than fail in the middle of a relay. So the range both
 sides advertise is `{min: 9, max: 9}`, an older client and a current daemon simply
@@ -1496,6 +1498,52 @@ two variants of one version show the same count. A driver whose listing
 rejects is left out and logged, and the other platform is still listed.
 Entries are ordered by platform, then version, then variant. A gateway
 answers `UNSUPPORTED_IN_GATEWAY_MODE`.
+
+#### Through a gateway
+
+`worker.install-component` (ADR 0010 §7) is gateway-only: it is in
+`GATEWAY_ONLY_OPERATIONS`, so a worker answers `UNKNOWN_REQUEST`, and no
+worker ever receives it, which is why it moves no protocol version. Its input
+is `{ platform, version, workers }`; `version` runs `component.install`'s own
+schema and `workers` is `"all"` or 1 to 64 distinct ids. One function,
+`relayComponentInstall` in `src/gateway/component-relay.ts`, does the
+fan-out; `GatewayDispatcher`'s handler only calls it.
+
+- **Targets.** One check, `askable`, says whether a worker can be asked: its
+  view is `connected`, its link is reachable, and its view carries
+  `downloads.timeoutMs`, which is absent until that worker's `config.get` has
+  been read. Under `"all"` every other known view is `skipped`; a named id
+  with no view fails the call with `UNKNOWN_WORKER`, and a named worker that
+  is not askable with `WORKER_UNREACHABLE`, both before anything is sent.
+  Drain is not read.
+- **The call.** Every target's own admin client gets `installComponent` at
+  the same time, over the uplink session the link already holds. The
+  session's `onStarted` fires once the targets are resolved, which is where
+  `POST /v1/components/install` with `workers` commits to its stream. Each
+  `component-progress` update is passed to the session with the worker's id,
+  and the socket transport writes it with `workerId` on the push.
+- **One outcome per target** (architecture rule 12). The worker's answer, the
+  gateway's client rejecting with `DAEMON_CONNECTION_LOST` (the uplink
+  closed), and a backstop timer each settle the target, first one wins, and
+  everything after it is dropped, progress included. The backstop is that
+  worker's `downloads.timeoutMs` plus `INSTALL_BACKSTOP_MARGIN_MS` (one
+  minute), set on the `Clock` when the call is sent and never restarted
+  (rule 11); it and the uplink closing both answer `unknown`. The relay never
+  cancels a worker's install. A success keeps the worker's outcome and
+  version, `DOWNLOADS_DISABLED` is `refused`, and any other error is
+  `failed` with the worker's code and message, the message cut to the
+  contract's bound and an answer that still does not fit it `failed` as
+  `INTERNAL` (safety rule 10).
+- **The catalog.** After an `installed` answer the relay awaits that link's
+  `refresh({ includeCatalog: true })` before the result counts.
+  `WorkerLink#refresh` resolves only once a refresh that started after the
+  call has finished, also when it coalesced into a queued one, so the fleet
+  catalog lists the component by the time the relay answers. The refresh is
+  best effort: one that fails, or a link that closed, leaves the view as it
+  was, and the next refresh (an event, a reconnect, or the periodic tick)
+  brings the component in.
+- The relay keeps nothing: no request is remembered for a worker that is
+  away, and nothing is retried.
 
 ## External APIs behind interfaces (ports)
 

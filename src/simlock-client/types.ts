@@ -84,6 +84,8 @@ export type ComponentInstallInput = OpInput<"component.install">;
 export type ComponentInstallOutput = OpOutput<"component.install">;
 export type ComponentListInput = OpInput<"component.list">;
 export type ComponentListOutput = OpOutput<"component.list">;
+export type WorkerInstallComponentInput = OpInput<"worker.install-component">;
+export type WorkerInstallComponentOutput = OpOutput<"worker.install-component">;
 
 // ---- pushes ---------------------------------------------------------------------------------
 
@@ -143,6 +145,13 @@ export interface ExecOptions {
 
 export interface InstallComponentOptions {
   readonly onProgress?: (progress: ComponentInstallProgress) => void;
+}
+
+/** One progress update a gateway relayed from one of its workers (ADR 0010 §7). */
+export type WorkerComponentProgress = ComponentInstallProgress & { readonly workerId: string };
+
+export interface InstallComponentOnWorkersOptions {
+  readonly onProgress?: (progress: WorkerComponentProgress) => void;
 }
 
 export interface RequestLeaseOptions {
