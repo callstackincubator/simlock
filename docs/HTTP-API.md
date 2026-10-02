@@ -157,8 +157,22 @@ passed, so this endpoint never waits for them. Right after a start, or for a
 tool that is not installed, `tools` has no entry for it; if a later read
 fails, the last version read stays.
 
+Under the `resource` capacity strategy, **`capacity.ramBudget`** reports the
+RAM budget; under `fixed` the field is absent:
+
+```json
+"ramBudget": { "limitBytes": 12884901888, "usedBytes": 4831838208, "overLimit": false }
+```
+
+`limitBytes` is the machine's RAM minus 4 GiB left for the OS. `usedBytes` is
+the sum over every listed device that is not deleted, each at the size of the
+mode it reports, so it always matches the device list. `overLimit` is true
+when the use exceeds the limit, which happens when a device planned as slim
+comes up full; no device is created until a device is deleted.
+
 On a **gateway** the numbers are the fleet's — capacity summed across connected
-workers, every gateway-issued and local lease, every device, the gateway
+workers (`ramBudget` over the workers that report one, `overLimit` when any of
+them is, absent when none does), every gateway-issued and local lease, every device, the gateway
 queue's depth — every lease and device carries the **`workerId`** it lives
 on, and an additive **`workers`** array carries one
 [worker view](#worker-routes) per worker:

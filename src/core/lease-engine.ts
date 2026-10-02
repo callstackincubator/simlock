@@ -1,8 +1,8 @@
 import type { EventBus } from "../bus/index.js";
 import type { Clock, IdGenerator, Logger, SystemStats } from "../ports/index.js";
-import type { RunningCapacity } from "./capacity/index.js";
+import type { CapacityDevice, RamBudget, RunningCapacity } from "./capacity/index.js";
 import { AcquisitionPlanner } from "./acquisition-planner.js";
-import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
+import { CapacityCoordinator, capacityDevices, createCapacityStrategy } from "./capacity/index.js";
 import { CleanupExecutor, type CleanupActionExecutor } from "./cleanup-executor.js";
 import type { Config } from "./config.js";
 import type { Proposal } from "./cleanup/types.js";
@@ -353,6 +353,11 @@ export class LeaseEngine {
     return this.#capacity.deviceLimit(platform);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the CapacityReader port by DaemonServer.
+  get ramBudget(): RamBudget | undefined {
+    return this.#capacity.ramBudget(this.#capacityDevices());
+  }
+
   /** Safely converges unleased running devices after startup reconciliation. */
   async convergeRunningCapacity(): Promise<void> {
     await this.#startup.converge();
@@ -385,11 +390,8 @@ export class LeaseEngine {
     return this.cleanup.execute(proposal);
   }
 
-  #capacityDevices(): { readonly platform: Platform; readonly state: string }[] {
-    return this.options.registry.snapshot.devices.map((device) => ({
-      platform: device.spec.platform,
-      state: device.state,
-    }));
+  #capacityDevices(): readonly CapacityDevice[] {
+    return capacityDevices(this.options.registry.snapshot.devices);
   }
 }
 

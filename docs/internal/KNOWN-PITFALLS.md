@@ -750,14 +750,24 @@ otherwise be instant. Depending on capacity, that means either queueing for
 a fresh device to provision or forcing a re-provision of a device already
 running. This is what keeps `full` a guarantee, not a bug to fix.
 
-**A budget sized for slim devices overcommits when full devices are leased.**
-The capacity budget counts every device as one size, whatever its mode. An
-operator who sized `capacity` for slim devices (~0.9 GB each) on a worker
-that also serves `full` requests (~4 GB each) can end up with more full
-devices running than the machine has memory for. Until capacity counts by
-mode ([#174](https://github.com/callstackincubator/simlock/issues/174)),
-size the budget for the mode that is actually leased, or for full devices
-when both are.
+**A RAM budget over its limit clears on delete, not on release (#174).** The
+`resource` strategy counts every device Simlock manages, running or shut
+down, by the mode it actually has. A device planned as slim whose slim pass
+fails is admitted at the slim size and then counts at the full one, which can
+put the budget over its limit. Nothing is stopped or reclaimed for it (the
+lease stays granted, safety rule 2): the worker only stops creating devices,
+in either mode, while idle devices of a requested spec are still granted.
+Releasing a lease does not lower the use, because the device still exists;
+the budget comes back under its limit when the idle-delete tier (or a
+device-limit eviction) deletes a device.
+
+**A full request at the device limit can evict a slim device and still wait
+(#174).** Only the device limit evicts (`selectManagedVictim`); the RAM
+budget never does. A full request at the device limit deletes an idle
+device of that platform, which may be slim, and its next plan can then be
+refused on the RAM budget because the freed slim size is smaller than the
+full size it needs. The request waits with one fewer warm device. Evicting
+for RAM is out of scope for #174.
 
 **A cold slim lease outlives a default MCP request timeout.** Measured on
 one machine: a full cold lease took ~28s, a cold slim lease ~160s (two

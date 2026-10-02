@@ -1,6 +1,11 @@
 import type { EventBus } from "../bus/index.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
-import type { CapacityDecision, CapacityDevice, RunningCapacity } from "./capacity/index.js";
+import {
+  capacityDevices,
+  type CapacityDecision,
+  type CapacityDevice,
+  type RunningCapacity,
+} from "./capacity/index.js";
 import {
   type DeviceRecord,
   type DeviceSpec,
@@ -300,10 +305,6 @@ export class WarmPoolCoordinator {
     if (head?.spec === undefined || sameSpec(head.spec, device.spec)) return true;
     return this.options.capacity.canReserveRunning(head.spec.platform, devices).ok;
   }
-}
-
-function capacityDevices(devices: readonly DeviceRecord[]): readonly CapacityDevice[] {
-  return devices.map((device) => ({ platform: device.spec.platform, state: device.state }));
 }
 
 /**

@@ -63,6 +63,11 @@ export interface FakeDriverPlatformScript {
    */
   readonly slimmableOsVersions?: readonly string[];
   /**
+   * Makes the slim pass fail: a prepare boot of a slim-spec device reports `mode: "full"`, as
+   * the iOS driver does when it cannot slim a device it planned to. Needs `slimmableOsVersions`.
+   */
+  readonly slimPassFails?: boolean;
+  /**
    * What `listCatalog` reports a model pairs with. A model left out pairs with every available
    * version, which is also the default for every model.
    */

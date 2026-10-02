@@ -614,4 +614,27 @@ describe("operation input/output round trips", () => {
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
   });
+
+  it("config.get: keeps both slim RAM sizes of the resource strategy when they are set", () => {
+    const ramBudget = {
+      androidBytesPerDevice: 4,
+      androidSlimBytesPerDevice: 2,
+      iosBytesPerDevice: 3,
+      iosSlimBytesPerDevice: 1,
+    };
+    const capacity = {
+      strategy: "resource",
+      config: {
+        limits: {
+          android: { maxDevices: 1, maxRunning: 1 },
+          ios: { maxDevices: 1, maxRunning: 1 },
+          maxRunning: 2,
+        },
+        ramBudget,
+      },
+    };
+    const shape = OPERATIONS["config.get"].output.shape.capacity;
+
+    expect(shape.parse(capacity)).toEqual(capacity);
+  });
 });

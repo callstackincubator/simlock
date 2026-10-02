@@ -109,6 +109,8 @@ async function buildDispatcher(
     readonly eventHistory?: Pick<EventHistory, "replay">;
     /** `status.get`'s host block; a fixed machine with no tools by default. */
     readonly hostFacts?: () => HostFacts;
+    /** Replaces the capacity block, for a test about one strategy's options. */
+    readonly capacity?: Config["capacity"];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -149,7 +151,12 @@ async function buildDispatcher(
           passthroughTool: overrides.passthroughTool,
         }),
   });
-  const config = testConfig(overrides.downloadsPolicy, overrides.lease ?? {}, overrides.exec ?? {});
+  const config = testConfig(
+    overrides.downloadsPolicy,
+    overrides.lease ?? {},
+    overrides.exec ?? {},
+    overrides.capacity,
+  );
   const engine = new LeaseEngine({
     clock,
     config,
@@ -982,6 +989,69 @@ describe("Dispatcher: status.get host facts", () => {
   });
 });
 
+describe("Dispatcher: status.get RAM budget", () => {
+  const sizes = {
+    androidBytesPerDevice: 4 * gibibyte,
+    iosBytesPerDevice: 2 * gibibyte,
+    iosSlimBytesPerDevice: 0.5 * gibibyte,
+  };
+
+  it("reports a use equal to the sum of the listed devices' sizes, each by its reported mode", async () => {
+    const { dispatcher, registry } = await buildDispatcher({
+      capacity: {
+        strategy: "resource",
+        config: {
+          limits: {
+            android: { maxDevices: 2, maxRunning: 2 },
+            ios: { maxDevices: 4, maxRunning: 4 },
+            maxRunning: 6,
+          },
+          ramBudget: sizes,
+        },
+      },
+      driverOptions: { slimmableOsVersions: ["26.5"] },
+    });
+    const ios = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    await dispatcher.dispatch("lease.request", { ...ios, mode: "slim" }, session());
+    await dispatcher.dispatch(
+      "lease.request",
+      { ...ios, mode: "full" },
+      session({ principal: "tok_other" }),
+    );
+    await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-provisioning",
+      provisionDuration: 0,
+      spec: ios,
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    const listed = status.devices
+      .filter((device) => device.state !== "deleted")
+      .map((device) =>
+        device.mode === "slim" ? sizes.iosSlimBytesPerDevice : sizes.iosBytesPerDevice,
+      );
+    expect(status.devices.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
+    expect(status.capacity.ramBudget).toEqual({
+      limitBytes: 28 * gibibyte,
+      overLimit: false,
+      usedBytes: listed.reduce((total, bytes) => total + bytes, 0),
+    });
+    expect(status.capacity.ramBudget?.usedBytes).toBe(4.5 * gibibyte);
+  });
+
+  it("omits the RAM budget under the fixed strategy", async () => {
+    const { dispatcher } = await buildDispatcher({
+      capacity: { strategy: "fixed", config: { maxRunning: 2 } },
+    });
+
+    const status = await dispatcher.dispatch("status.get", {}, session());
+
+    expect(status.capacity).not.toHaveProperty("ramBudget");
+  });
+});
+
 describe("Dispatcher: startup-readiness parking", () => {
   it("answers status.get with host facts while other operations are parked on startup", async () => {
     const { dispatcher } = await buildDispatcher({
@@ -1549,6 +1619,17 @@ function testConfig(
   downloadsPolicy: Config["downloads"]["policy"] = "on-request",
   leaseOverrides: Partial<Config["lease"]> = {},
   execOverrides: Partial<Config["exec"]> = {},
+  capacity: Config["capacity"] = {
+    strategy: "resource",
+    config: {
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 2 },
+        maxRunning: 3,
+      },
+      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+    },
+  },
 ): Config {
   return {
     mode: "worker",
@@ -1584,17 +1665,7 @@ function testConfig(
       maxRequestRecords: 10_000,
       ...leaseOverrides,
     },
-    capacity: {
-      strategy: "resource",
-      config: {
-        limits: {
-          android: { maxDevices: 1, maxRunning: 1 },
-          ios: { maxDevices: 2, maxRunning: 2 },
-          maxRunning: 3,
-        },
-        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
-      },
-    },
+    capacity,
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: { rotateBytes: 5 * 1024 * 1024 },
     warmPool: {

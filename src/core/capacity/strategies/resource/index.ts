@@ -13,6 +13,8 @@ import {
   type CapacityDevice,
   type CapacityPlatform,
   type CapacityStrategy,
+  type PlannedCapacityDevice,
+  type RamBudget,
   type RunningCapacity,
 } from "../../strategy.js";
 
@@ -22,13 +24,16 @@ const OS_RAM_RESERVE_BYTES = 4 * GIBIBYTE;
 /**
  * Device and running ceilings derived from the machine, with a RAM budget gate
  * on top: a device may be created only if its budgeted RAM still fits under the
- * machine's total minus a reserve left for the OS.
+ * machine's total minus a reserve left for the OS. Each device counts by its own
+ * mode; a slim size left unset means the platform's full size.
  */
 export interface ResourceStrategyOptions {
   readonly limits: CapacityLimits;
   readonly ramBudget: {
     readonly iosBytesPerDevice: number;
+    readonly iosSlimBytesPerDevice?: number;
     readonly androidBytesPerDevice: number;
+    readonly androidSlimBytesPerDevice?: number;
   };
 }
 
@@ -38,18 +43,15 @@ class ResourceCapacityStrategy implements CapacityStrategy {
     private readonly systemStats: SystemStats,
   ) {}
 
-  canProvision(platform: CapacityPlatform, devices: readonly CapacityDevice[]): CapacityDecision {
-    if (!withinDeviceLimit(platform, devices, this.options.limits)) {
+  canProvision(
+    device: PlannedCapacityDevice,
+    devices: readonly CapacityDevice[],
+  ): CapacityDecision {
+    if (!withinDeviceLimit(device.platform, devices, this.options.limits)) {
       return { ok: false, reason: "device-limit" };
     }
 
-    const usedRamBytes = activeDevices(devices).reduce(
-      (total, device) => total + this.#ramBudget(device.platform),
-      0,
-    );
-    const availableRamBytes = this.systemStats.totalRamBytes() - OS_RAM_RESERVE_BYTES;
-
-    if (usedRamBytes + this.#ramBudget(platform) > availableRamBytes) {
+    if (this.#usedBytes(devices) + this.#bytesPerDevice(device) > this.#limitBytes()) {
       return { ok: false, reason: "ram-budget" };
     }
 
@@ -75,10 +77,30 @@ class ResourceCapacityStrategy implements CapacityStrategy {
     return this.options.limits[platform].maxDevices;
   }
 
-  #ramBudget(platform: CapacityPlatform): number {
-    return platform === "ios"
-      ? this.options.ramBudget.iosBytesPerDevice
-      : this.options.ramBudget.androidBytesPerDevice;
+  ramBudget(devices: readonly CapacityDevice[]): RamBudget {
+    const limitBytes = this.#limitBytes();
+    const usedBytes = this.#usedBytes(devices);
+    return { limitBytes, overLimit: usedBytes > limitBytes, usedBytes };
+  }
+
+  #limitBytes(): number {
+    return this.systemStats.totalRamBytes() - OS_RAM_RESERVE_BYTES;
+  }
+
+  #usedBytes(devices: readonly CapacityDevice[]): number {
+    return activeDevices(devices).reduce(
+      (total, device) => total + this.#bytesPerDevice(device),
+      0,
+    );
+  }
+
+  #bytesPerDevice({ platform, mode }: PlannedCapacityDevice): number {
+    const budget = this.options.ramBudget;
+    const full = platform === "ios" ? budget.iosBytesPerDevice : budget.androidBytesPerDevice;
+    if (mode === "full") return full;
+    return (
+      (platform === "ios" ? budget.iosSlimBytesPerDevice : budget.androidSlimBytesPerDevice) ?? full
+    );
   }
 }
 
@@ -90,7 +112,9 @@ const limitsValidator = objectValidator({
 
 const ramBudgetValidator = objectValidator({
   iosBytesPerDevice: nonNegativeNumber,
+  iosSlimBytesPerDevice: nonNegativeNumber,
   androidBytesPerDevice: nonNegativeNumber,
+  androidSlimBytesPerDevice: nonNegativeNumber,
 });
 
 /** Exported for the legacy top-level `limits` / `ramBudget` keys in `config.ts`. */

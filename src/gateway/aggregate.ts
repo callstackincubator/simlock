@@ -119,8 +119,27 @@ function sumCapacity(views: readonly WorkerView[]): StatusCapacity {
       running: capacity.global.running + reported.global.running,
       warm: capacity.global.warm + reported.global.warm,
     };
+    const ramBudget = sumRamBudget(capacity.ramBudget, reported.ramBudget);
+    if (ramBudget !== undefined) capacity.ramBudget = ramBudget;
   }
   return capacity;
+}
+
+type RamBudget = NonNullable<StatusCapacity["ramBudget"]>;
+
+/** A worker under `fixed` reports no budget and adds nothing; none reporting leaves it absent. */
+function sumRamBudget(
+  sum: RamBudget | undefined,
+  reported: RamBudget | undefined,
+): RamBudget | undefined {
+  if (reported === undefined) return sum;
+  if (sum === undefined) return { ...reported };
+  return {
+    limitBytes: sum.limitBytes + reported.limitBytes,
+    // Over when any worker is, for the same reason as `overLimit` above.
+    overLimit: sum.overLimit || reported.overLimit,
+    usedBytes: sum.usedBytes + reported.usedBytes,
+  };
 }
 
 /**

@@ -4,6 +4,8 @@ import type {
   CapacityPlatform,
   CapacityRefusal,
   CapacityStrategy,
+  PlannedCapacityDevice,
+  RamBudget,
   RunningCapacity,
 } from "./strategy.js";
 
@@ -20,6 +22,9 @@ interface ReservationEntry {
   readonly platform: CapacityPlatform;
 }
 
+/** A provisioning reservation holds the size of the mode it was planned with until released. */
+type ProvisioningEntry = PlannedCapacityDevice;
+
 /**
  * Stateful accounting around a pure capacity strategy.
  *
@@ -29,7 +34,7 @@ interface ReservationEntry {
  * corresponding operation ends.
  */
 export class CapacityCoordinator {
-  readonly #provisioningReservations: ReservationEntry[] = [];
+  readonly #provisioningReservations: ProvisioningEntry[] = [];
   readonly #runningReservations: ReservationEntry[] = [];
 
   constructor(private readonly strategy: CapacityStrategy) {}
@@ -40,19 +45,19 @@ export class CapacityCoordinator {
    * until released, including before the device appears in a registry snapshot.
    */
   tryReserveProvisioning(
-    platform: CapacityPlatform,
+    device: PlannedCapacityDevice,
     devices: readonly CapacityDevice[],
   ): CapacityReservationAttempt {
-    const provision = this.strategy.canProvision(platform, [
+    const provision = this.strategy.canProvision(device, [
       ...devices,
       ...this.#provisioningReservations.map(asProvisioningDevice),
     ]);
     if (!provision.ok) return provision;
 
-    const running = this.canReserveRunning(platform, devices);
+    const running = this.canReserveRunning(device.platform, devices);
     if (!running.ok) return running;
 
-    const reservation = { platform };
+    const reservation: ProvisioningEntry = { mode: device.mode, platform: device.platform };
     this.#provisioningReservations.push(reservation);
     return {
       ok: true,
@@ -88,16 +93,21 @@ export class CapacityCoordinator {
     return this.strategy.deviceLimit(platform);
   }
 
+  /**
+   * The RAM budget over `devices` alone: in-flight provisioning reservations are
+   * left out, so the use reported equals what the listed devices add up to.
+   */
+  ramBudget(devices: readonly CapacityDevice[]): RamBudget | undefined {
+    return this.strategy.ramBudget(devices);
+  }
+
   #allRunningReservations(): CapacityPlatform[] {
     return [...this.#provisioningReservations, ...this.#runningReservations].map(
       ({ platform }) => platform,
     );
   }
 
-  #reservation(
-    reservations: ReservationEntry[],
-    reservation: ReservationEntry,
-  ): CapacityReservation {
+  #reservation<Entry>(reservations: Entry[], reservation: Entry): CapacityReservation {
     let released = false;
     return {
       release: () => {
@@ -110,6 +120,6 @@ export class CapacityCoordinator {
   }
 }
 
-function asProvisioningDevice(reservation: ReservationEntry): CapacityDevice {
-  return { platform: reservation.platform, state: "provisioning" };
+function asProvisioningDevice(reservation: ProvisioningEntry): CapacityDevice {
+  return { mode: reservation.mode, platform: reservation.platform, state: "provisioning" };
 }

@@ -3,9 +3,23 @@ import type { Validator } from "../validation.js";
 
 export type CapacityPlatform = "ios" | "android";
 
-export interface CapacityDevice {
+export type CapacityMode = "slim" | "full";
+
+/** A device a strategy has yet to admit: what it will be, before it exists. */
+export interface PlannedCapacityDevice {
   readonly platform: CapacityPlatform;
+  readonly mode: CapacityMode;
+}
+
+export interface CapacityDevice extends PlannedCapacityDevice {
   readonly state: string;
+}
+
+/** A strategy's RAM budget as it stands: its limit, what devices use, and whether use exceeds it. */
+export interface RamBudget {
+  readonly limitBytes: number;
+  readonly usedBytes: number;
+  readonly overLimit: boolean;
 }
 
 export type CapacityRefusalReason =
@@ -44,11 +58,12 @@ export interface RunningCapacity {
  */
 export interface CapacityStrategy {
   /**
-   * Whether another device may be created. `devices` includes synthetic entries
-   * for in-flight provisioning reservations, so a strategy sees pending work as
-   * though it had already landed in the registry.
+   * Whether `device` may be created. `devices` includes synthetic entries for
+   * in-flight provisioning reservations, each with the mode it was planned with,
+   * so a strategy sees pending work as though it had already landed in the
+   * registry.
    */
-  canProvision(platform: CapacityPlatform, devices: readonly CapacityDevice[]): CapacityDecision;
+  canProvision(device: PlannedCapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision;
 
   canReserveRunning(
     platform: CapacityPlatform,
@@ -63,6 +78,9 @@ export interface CapacityStrategy {
 
   /** Managed-device ceiling for a platform, for reporting. */
   deviceLimit(platform: CapacityPlatform): number;
+
+  /** The RAM budget over `devices`, or `undefined` for a strategy that keeps none. */
+  ramBudget(devices: readonly CapacityDevice[]): RamBudget | undefined;
 }
 
 /**

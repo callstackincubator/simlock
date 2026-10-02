@@ -907,6 +907,19 @@ until the registry commits the resulting running or non-running state. Global
 and platform limits are checked atomically; no driver-specific runtime
 details participate in this decision.
 
+Every capacity device carries a mode (`slim` or `full`), and
+`core/capacity/devices.ts` is the one place a registry record or a spec
+becomes one (ADR 0007 §4, §6, §8): a device about to be created, and one
+still `provisioning`, counts by the mode its spec plans; from its first
+`ready` on, by the mode its record reports. The `resource` strategy sizes
+each device by platform and mode (a slim size left unset falls back to the
+full one) and uses one sum and one limit for both the provisioning decision
+and `status.get`'s `capacity.ramBudget`. A provisioning reservation keeps
+its planned mode until released; running slots ignore mode. A device that
+comes up full after being admitted as slim can leave the budget over its
+limit; the strategy then refuses every new device and the core stops or
+reclaims nothing for it. `fixed` ignores mode and reports no budget.
+
 At startup, `StartupConverger` restores the persisted TTL timer of **every**
 lease it finds, and re-arms retry timers for devices still `quarantined` (see
 below) from their persisted next-retry deadline. A lease survives a daemon

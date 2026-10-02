@@ -271,7 +271,7 @@ export class OutOfProcessFakeDriver implements Driver {
    * Re-reads the script's `address` on every boot -- see `FakeDriverPlatformScript.address`.
    * `options` is logged alongside the call. A script with `slimmableOsVersions` reports
    * `"slim"` for a prepare boot of a slim-spec device and `"full"` otherwise, as the iOS driver
-   * does; without it no mode is reported.
+   * does; without it no mode is reported. `slimPassFails` turns that `"slim"` into `"full"`.
    */
   async makeReady(
     device: DriverDevice,
@@ -280,13 +280,13 @@ export class OutOfProcessFakeDriver implements Driver {
     const script = await this.#beforeCall("makeReady", [device, options]);
     this.#devices.set(device.deviceId, "ready");
     const slims = script.slimmableOsVersions !== undefined;
+    const slimmed =
+      options.mode === "slim" && options.purpose === "prepare" && script.slimPassFails !== true;
     return {
       address: script.address ?? defaultAddress(device.deviceId),
       deviceId: device.deviceId,
       driverData: device.driverData,
-      ...(slims
-        ? { mode: options.mode === "slim" && options.purpose === "prepare" ? "slim" : "full" }
-        : {}),
+      ...(slims ? { mode: slimmed ? "slim" : "full" } : {}),
     } satisfies DriverDevice;
   }
 

@@ -1,4 +1,9 @@
-import type { CapacityReservation, CapacityCoordinator } from "./capacity/index.js";
+import {
+  capacityDevices,
+  plannedCapacityDevice,
+  type CapacityCoordinator,
+  type CapacityReservation,
+} from "./capacity/index.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
 import {
   type DeviceRecord,
@@ -82,7 +87,7 @@ export class AcquisitionPlanner {
   #planShutdownBoot(input: AcquisitionPlannerInput, device: DeviceRecord): AcquisitionPlan {
     const running = this.capacity.tryReserveRunning(
       input.spec.platform,
-      capacityDevices(input.snapshot),
+      capacityDevices(input.snapshot.devices),
     );
     if (!running.ok) {
       const victim = this.#runningVictim(input.snapshot, running.reason, input.spec.platform);
@@ -101,8 +106,8 @@ export class AcquisitionPlanner {
 
   #planProvision(input: AcquisitionPlannerInput): AcquisitionPlan {
     const reservation = this.capacity.tryReserveProvisioning(
-      input.spec.platform,
-      capacityDevices(input.snapshot),
+      plannedCapacityDevice(input.spec),
+      capacityDevices(input.snapshot.devices),
     );
     if (reservation.ok) {
       if (input.failures < 2) return { kind: "provision", reservation: reservation.reservation };
@@ -138,7 +143,7 @@ export class AcquisitionPlanner {
     platform: Platform,
   ): DeviceRecord | undefined {
     if (reason !== "global-running-limit" && reason !== "platform-running-limit") return undefined;
-    const capacity = this.capacity.runningCapacity(capacityDevices(snapshot));
+    const capacity = this.capacity.runningCapacity(capacityDevices(snapshot.devices));
     const platformBlocked =
       capacity[platform].running + capacity[platform].reserved >= capacity[platform].maxRunning;
     const scope: WarmVictimScope = platformBlocked
@@ -157,11 +162,4 @@ export class AcquisitionPlanner {
 
 function blocked(noWait: boolean): AcquisitionPlan {
   return noWait ? { kind: "no-capacity" } : { kind: "wait" };
-}
-
-function capacityDevices(snapshot: AcquisitionPlannerSnapshot) {
-  return snapshot.devices.map((device) => ({
-    platform: device.spec.platform,
-    state: device.state,
-  }));
 }

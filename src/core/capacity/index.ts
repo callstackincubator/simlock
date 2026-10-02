@@ -1,5 +1,6 @@
 export { CapacityCoordinator } from "./coordinator.js";
 export type { CapacityReservation } from "./coordinator.js";
+export { capacityDevices, plannedCapacityDevice } from "./devices.js";
 export type { CapacityLimits } from "./limits.js";
 export {
   capacityStrategyNames,
@@ -16,5 +17,6 @@ export type {
   CapacityDecision,
   CapacityDevice,
   CapacityPlatform,
+  RamBudget,
   RunningCapacity,
 } from "./strategy.js";

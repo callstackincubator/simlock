@@ -459,7 +459,8 @@ strategy's own options, so its shape depends on the strategy you selected.
 
 Device and running ceilings derived from the machine, with a RAM budget on
 top: a device is only created if its budgeted RAM still fits under the
-machine's total, minus 4 GiB left for the OS.
+machine's total, minus 4 GiB left for the OS. Each device counts by its own
+mode, at the slim or the full size for its platform.
 
 | Property                                        | Description                                                     | Default                                                                     |
 | ----------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -470,6 +471,8 @@ machine's total, minus 4 GiB left for the OS.
 | `capacity.config.limits.android.maxRunning`     | Max Android emulators running at once.                          | Same as `capacity.config.limits.android.maxDevices`                         |
 | `capacity.config.ramBudget.iosBytesPerDevice`   | RAM reserved per iOS simulator when computing capacity.         | `1.5 GiB`                                                                    |
 | `capacity.config.ramBudget.androidBytesPerDevice` | RAM reserved per Android emulator when computing capacity.    | `4 GiB`                                                                      |
+| `capacity.config.ramBudget.iosSlimBytesPerDevice` | RAM reserved per slim iOS simulator. Optional. | `capacity.config.ramBudget.iosBytesPerDevice` |
+| `capacity.config.ramBudget.androidSlimBytesPerDevice` | RAM reserved per slim Android emulator. Optional; has no effect yet, because Android devices are always full. | `capacity.config.ramBudget.androidBytesPerDevice` |
 
 Running limits are independent of managed-device limits — an omitted
 `maxRunning` defaults to its corresponding `maxDevices` value (and, at the
@@ -489,6 +492,52 @@ global level, to their sum):
   }
 }
 ```
+
+#### Sizing slim and full devices
+
+A worker can hold slim and full devices side by side (see
+[Device mode: slim and full](#device-mode-slim-and-full)), and the RAM
+budget counts each one at the size of the mode it has:
+
+```json
+{
+  "capacity": {
+    "strategy": "resource",
+    "config": {
+      "limits": {
+        "maxRunning": 12,
+        "ios": { "maxDevices": 12, "maxRunning": 12 }
+      },
+      "ramBudget": {
+        "iosBytesPerDevice": 4294967296,
+        "iosSlimBytesPerDevice": 1073741824
+      }
+    }
+  }
+}
+```
+
+- **With no slim size set**, a slim device counts at its platform's full
+  size, so nothing changes for an existing config.
+- **A device counts by the mode it has, not the one it asked for.** A device
+  is planned by the mode its request resolves to before it boots: a `slim`
+  request on a runtime that cannot be slimmed is counted at the full size
+  from the start. If a slim device's slimming fails and it comes up full, it
+  counts at the full size from then on.
+- **Over the limit.** That failed device keeps its lease and nothing is shut
+  down, but the use can end up above the limit. `simlock status` then shows
+  the RAM budget `(over limit)`, and no new device is created, in either
+  mode, until a device is deleted. Releasing a lease does not lower the use,
+  because the device still exists; idle devices are still handed out.
+- **Raise the limits with the slim size.** The device and running limits
+  still apply. A smaller slim size gives you more devices only where RAM is
+  what stops full ones; with the default limits (half the CPU count for
+  iOS) the device limit is often reached first. Raise
+  `limits.ios.maxDevices`, `limits.ios.maxRunning` and `limits.maxRunning`
+  together with it.
+
+`simlock status` shows the budget's limit and what is in use, and the use
+always equals the sizes of the devices it lists, each by its mode.
 
 ### `fixed`
 

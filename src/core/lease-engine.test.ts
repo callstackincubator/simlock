@@ -92,6 +92,17 @@ function resourceOptions(source: Config): ResourceStrategyOptions {
   return source.capacity.config;
 }
 
+/** The harness's resource options with whichever of `limits` and `ramBudget` a test replaces. */
+function withCapacity(
+  base: ResourceStrategyOptions,
+  overrides: Partial<ResourceStrategyOptions>,
+): ResourceStrategyOptions {
+  return {
+    limits: overrides.limits ?? base.limits,
+    ramBudget: overrides.ramBudget ?? base.ramBudget,
+  };
+}
+
 async function createHarness(
   options: {
     readonly driver?: FakeDriver;
@@ -102,6 +113,8 @@ async function createHarness(
     readonly lease?: Partial<Config["lease"]>;
     readonly limits?: CapacityLimits;
     readonly logger?: Logger;
+    readonly ramBudget?: ResourceStrategyOptions["ramBudget"];
+    readonly totalRamBytes?: number;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -122,16 +135,11 @@ async function createHarness(
     ...options.lease,
     ...(options.identity === undefined ? {} : { identity: options.identity }),
   });
-  const engineConfig: Config =
-    options.limits === undefined
-      ? baseConfig
-      : {
-          ...baseConfig,
-          capacity: {
-            strategy: "resource",
-            config: { ...resourceOptions(baseConfig), limits: options.limits },
-          },
-        };
+  const engineConfig: Config = {
+    ...baseConfig,
+    capacity: { strategy: "resource", config: withCapacity(resourceOptions(baseConfig), options) },
+  };
+  const totalRamBytes = options.totalRamBytes ?? 32 * gibibyte;
   const engine = new LeaseEngine({
     clock,
     config: engineConfig,
@@ -140,11 +148,7 @@ async function createHarness(
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
-    systemStats: new FakeSystemStats({
-      cpuCount: 8,
-      freeRamBytes: 32 * gibibyte,
-      totalRamBytes: 32 * gibibyte,
-    }),
+    systemStats: new FakeSystemStats({ cpuCount: 8, freeRamBytes: totalRamBytes, totalRamBytes }),
   });
 
   return { bus, clock, driver, engine, filesystem, registry };
@@ -1217,6 +1221,144 @@ describe("LeaseEngine", () => {
 // serial erases before any other request could be served. These cover the shape
 // that replaced it: the lease is released registry-only on the convergence path,
 // and its reclaim proceeds in the background.
+describe("LeaseEngine RAM budget by mode", () => {
+  const slimRequest = { ...request, mode: "slim" } as const;
+  const roomy: CapacityLimits = {
+    android: { maxDevices: 4, maxRunning: 4 },
+    ios: { maxDevices: 8, maxRunning: 8 },
+    maxRunning: 12,
+  };
+  /** With 9 GiB of RAM the budget is 5 GiB: one full iOS device (3 GiB) and two slim ones fit. */
+  const ramBudget = {
+    androidBytesPerDevice: 4 * gibibyte,
+    iosBytesPerDevice: 3 * gibibyte,
+    iosSlimBytesPerDevice: gibibyte,
+  };
+
+  function operations(driver: FakeDriver, operation: string): number {
+    return driver.calls.filter((call) => call.operation === operation).length;
+  }
+
+  it("refuses a full spec, which a slim request on a runtime that cannot be slimmed resolves to, at the full size before any driver call", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.4", "26.5"],
+      clock,
+      platform: "ios",
+      slimmableOsVersions: ["26.4"],
+    });
+    const harness = await createHarness({
+      driver,
+      limits: roomy,
+      ramBudget,
+      totalRamBytes: 9 * gibibyte,
+    });
+    await harness.engine.request(request, { ownerId: "full", requesterId: "full" });
+    const provisions = operations(driver, "provision");
+
+    // 3 GiB used of 5: the full spec 26.5 resolves to needs 3 more and is refused.
+    await expect(
+      harness.engine.request(slimRequest, {
+        noWait: true,
+        ownerId: "unslimmable",
+        requesterId: "unslimmable",
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+    expect(operations(driver, "provision")).toBe(provisions);
+
+    // Control: on a runtime that can be slimmed, the same request fits at the slim size.
+    const slim = await harness.engine.request(
+      { ...slimRequest, osVersion: "26.4" },
+      { noWait: true, ownerId: "slimmable", requesterId: "slimmable" },
+    );
+    expect(slim.device.mode).toBe("slim");
+  });
+
+  it("keeps the lease of a device planned as slim whose driver reports full, shuts nothing down, and goes over budget; only a delete brings it back", async () => {
+    const clock = new FakeClock(1_000);
+    // A slimming driver whose slim pass never takes: every device it boots reports `full`.
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      mode: "full",
+      platform: "ios",
+      slimmableOsVersions: ["26.5"],
+    });
+    const harness = await createHarness({
+      driver,
+      limits: roomy,
+      ramBudget,
+      totalRamBytes: 9 * gibibyte,
+    });
+
+    const first = await harness.engine.request(slimRequest, { ownerId: "a", requesterId: "a" });
+    expect(harness.engine.ramBudget).toEqual({
+      limitBytes: 5 * gibibyte,
+      overLimit: false,
+      usedBytes: 3 * gibibyte,
+    });
+    // Planned at 1 GiB, it fits next to the first device's 3; it then reports full too.
+    const second = await harness.engine.request(slimRequest, { ownerId: "b", requesterId: "b" });
+
+    expect(first.device.mode).toBe("full");
+    expect(second.device.mode).toBe("full");
+    expect(harness.registry.snapshot.leases.map((lease) => lease.id).sort()).toEqual(
+      [first.lease.id, second.lease.id].sort(),
+    );
+    expect(operations(driver, "shutdown")).toBe(0);
+    expect(harness.engine.ramBudget).toEqual({
+      limitBytes: 5 * gibibyte,
+      overLimit: true,
+      usedBytes: 6 * gibibyte,
+    });
+
+    // Over budget: no device is created in either mode.
+    const provisions = operations(driver, "provision");
+    for (const [owner, wanted] of [
+      ["slim", slimRequest],
+      ["full", request],
+    ] as const) {
+      await expect(
+        harness.engine.request(wanted, { noWait: true, ownerId: owner, requesterId: owner }),
+      ).rejects.toBeInstanceOf(NoCapacityError);
+    }
+    expect(operations(driver, "provision")).toBe(provisions);
+
+    // Releasing a lease does not lower the budget, and its idle device is still granted.
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    expect(harness.engine.ramBudget?.overLimit).toBe(true);
+    const reused = await harness.engine.request(slimRequest, {
+      noWait: true,
+      ownerId: "c",
+      requesterId: "c",
+    });
+    expect(reused.device.id).toBe(first.device.id);
+    await harness.engine.release(reused.lease.id, "explicit");
+    await harness.engine.settle();
+
+    // Deleting the idle device clears the over-budget state and lets a new device be created.
+    for (const action of ["shutdown", "destroy"] as const) {
+      await harness.engine.executeCleanup({
+        action,
+        reason: "test",
+        rule: "test",
+        target: first.device.id,
+      });
+    }
+    expect(harness.registry.snapshot.devices.find((d) => d.id === first.device.id)?.state).toBe(
+      "deleted",
+    );
+    expect(harness.engine.ramBudget).toEqual({
+      limitBytes: 5 * gibibyte,
+      overLimit: false,
+      usedBytes: 3 * gibibyte,
+    });
+    await harness.engine.request(slimRequest, { noWait: true, ownerId: "d", requesterId: "d" });
+    expect(operations(driver, "provision")).toBe(provisions + 1);
+  });
+});
+
 describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
   it("converges without waiting for an in-flight reclaim, and a fresh request is served immediately after", async () => {
     const clock = new FakeClock(1_000);

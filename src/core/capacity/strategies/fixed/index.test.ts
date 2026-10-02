@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeSystemStats } from "../../../../ports/index.js";
-import type { CapacityDevice } from "../../strategy.js";
+import type { CapacityDevice, CapacityMode } from "../../strategy.js";
 import { fixedStrategy, type FixedStrategyOptions } from "./index.js";
 
 const gibibyte = 1024 ** 3;
@@ -14,8 +14,12 @@ function strategy(options: FixedStrategyOptions) {
   );
 }
 
-function ready(platform: "ios" | "android", count: number): CapacityDevice[] {
-  return Array.from({ length: count }, () => ({ platform, state: "ready" }));
+function ready(
+  platform: "ios" | "android",
+  count: number,
+  mode: CapacityMode = "full",
+): CapacityDevice[] {
+  return Array.from({ length: count }, () => ({ mode, platform, state: "ready" }));
 }
 
 describe("fixed strategy", () => {
@@ -54,8 +58,10 @@ describe("fixed strategy", () => {
   it("lets maxDevices exceed maxRunning so shut-down devices can be kept around", () => {
     const fixed = strategy({ ios: { maxDevices: 5, maxRunning: 2 }, maxRunning: 2 });
 
-    expect(fixed.canProvision("ios", ready("ios", 4))).toEqual({ ok: true });
-    expect(fixed.canProvision("ios", ready("ios", 5))).toEqual({
+    expect(fixed.canProvision({ mode: "full", platform: "ios" }, ready("ios", 4))).toEqual({
+      ok: true,
+    });
+    expect(fixed.canProvision({ mode: "full", platform: "ios" }, ready("ios", 5))).toEqual({
       ok: false,
       reason: "device-limit",
     });
@@ -67,15 +73,38 @@ describe("fixed strategy", () => {
       new FakeSystemStats({ cpuCount: 1, freeRamBytes: 0, totalRamBytes: 0 }),
     );
 
-    expect(fixed.canProvision("android", ready("android", 7))).toEqual({ ok: true });
+    expect(fixed.canProvision({ mode: "full", platform: "android" }, ready("android", 7))).toEqual({
+      ok: true,
+    });
   });
 
   it("ignores deleted devices when counting against the pin", () => {
     const fixed = strategy({ maxRunning: 1 });
 
-    expect(fixed.canProvision("ios", [{ platform: "ios", state: "deleted" }])).toEqual({
+    expect(
+      fixed.canProvision({ mode: "full", platform: "ios" }, [
+        { mode: "full" as const, platform: "ios", state: "deleted" },
+      ]),
+    ).toEqual({
       ok: true,
     });
+  });
+
+  it("grants up to maxRunning whatever the modes, and reports no RAM budget", () => {
+    const fixed = strategy({ maxRunning: 3 });
+    const mixed = [...ready("ios", 1, "slim"), ...ready("ios", 1, "full")];
+
+    expect(fixed.canProvision({ mode: "slim", platform: "ios" }, mixed)).toEqual({ ok: true });
+    expect(fixed.canProvision({ mode: "full", platform: "ios" }, mixed)).toEqual({ ok: true });
+    for (const mode of ["slim", "full"] as const) {
+      expect(
+        fixed.canProvision({ mode, platform: "ios" }, [...mixed, ...ready("ios", 1, mode)]),
+      ).toEqual({
+        ok: false,
+        reason: "device-limit",
+      });
+    }
+    expect(fixed.ramBudget(mixed)).toBeUndefined();
   });
 
   it("defaults to a machine-independent pin", () => {

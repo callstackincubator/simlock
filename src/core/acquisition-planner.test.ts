@@ -81,16 +81,15 @@ function device(
   };
 }
 
-function planner() {
+function planner(
+  capacityConfig: Config["capacity"] = config.capacity,
+  totalRamBytes = 32 * gibibyte,
+) {
   const claims = new DeviceOperationClaims();
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(
-      config.capacity,
-      new FakeSystemStats({
-        cpuCount: 8,
-        freeRamBytes: 32 * gibibyte,
-        totalRamBytes: 32 * gibibyte,
-      }),
+      capacityConfig,
+      new FakeSystemStats({ cpuCount: 8, freeRamBytes: totalRamBytes, totalRamBytes }),
     ),
   );
   return { claims, planner: new AcquisitionPlanner(capacity, claims) };
@@ -99,14 +98,32 @@ function planner() {
 function plan(
   acquisitionPlanner: AcquisitionPlanner,
   devices: readonly DeviceRecord[],
-  options: { failures?: number; leases?: readonly LeaseRecord[]; noWait?: boolean } = {},
+  options: {
+    failures?: number;
+    leases?: readonly LeaseRecord[];
+    noWait?: boolean;
+    spec?: DeviceSpec;
+  } = {},
 ) {
   return acquisitionPlanner.plan({
     failures: options.failures ?? 0,
     noWait: options.noWait ?? false,
     snapshot: { devices, leases: options.leases ?? [] },
-    spec,
+    spec: options.spec ?? spec,
   });
+}
+
+function leaseOn(target: DeviceRecord): LeaseRecord {
+  return {
+    deviceId: target.id,
+    grantedAt: 1,
+    id: `lease-${target.id}`,
+    lastRenewedAt: 1,
+    ownerId: "holder",
+    requesterId: "holder",
+    ttlDeadline: 100,
+    ttlMs: 60_000,
+  };
 }
 
 describe("AcquisitionPlanner", () => {
@@ -237,5 +254,76 @@ describe("AcquisitionPlanner", () => {
     const result = plan(planner().planner, [{ ...spent, state: "deleted" }]);
     expect(result).toMatchObject({ kind: "provision" });
     if (result.kind === "provision") result.reservation.release();
+  });
+
+  describe("RAM budget by mode", () => {
+    const slimSpec: DeviceSpec = { ...spec, mode: "slim" };
+
+    /**
+     * 12 GiB of RAM: an 8 GiB budget once the 4 GiB reserve is taken. Full iOS devices take
+     * 3.5 GiB, slim ones 1 GiB, Android ones 4 GiB. Running limits leave room throughout, so
+     * any refusal below is the RAM budget's or the device limit's.
+     */
+    function sizedPlanner(iosMaxDevices: number) {
+      return planner(
+        {
+          strategy: "resource",
+          config: {
+            limits: {
+              android: { maxDevices: 4, maxRunning: 4 },
+              ios: { maxDevices: iosMaxDevices, maxRunning: 8 },
+              maxRunning: 12,
+            },
+            ramBudget: {
+              androidBytesPerDevice: 4 * gibibyte,
+              iosBytesPerDevice: 3.5 * gibibyte,
+              iosSlimBytesPerDevice: gibibyte,
+            },
+          },
+        },
+        12 * gibibyte,
+      );
+    }
+
+    it("plans a slim provision in a snapshot where a full one is refused on the RAM budget", () => {
+      const { planner: acquisitionPlanner } = sizedPlanner(8);
+      const android = device("android", "leased", {
+        model: "Pixel 9",
+        osVersion: "36",
+        platform: "android",
+      });
+      const iosSlim = { ...device("ios-slim", "leased", slimSpec), mode: "slim" as const };
+      const devices = [android, iosSlim];
+      const leases = devices.map(leaseOn);
+
+      // 5 GiB used of 8: a 3.5 GiB full device does not fit, a 1 GiB slim one does.
+      expect(plan(acquisitionPlanner, devices, { leases, noWait: true })).toEqual({
+        kind: "no-capacity",
+      });
+      const slim = plan(acquisitionPlanner, devices, { leases, noWait: true, spec: slimSpec });
+      expect(slim).toMatchObject({ kind: "provision" });
+      if (slim.kind === "provision") slim.reservation.release();
+    });
+
+    it("evicts an idle slim device for a full request at the device limit, then waits when the freed RAM is not enough", () => {
+      const { planner: acquisitionPlanner } = sizedPlanner(2);
+      const android = device("android", "leased", {
+        model: "Pixel 9",
+        osVersion: "36",
+        platform: "android",
+      });
+      const leasedSlim = { ...device("leased-slim", "leased", slimSpec), mode: "slim" as const };
+      const idleSlim = { ...device("idle-slim", "shutdown", slimSpec), mode: "slim" as const };
+      const leases = [leaseOn(android), leaseOn(leasedSlim)];
+
+      expect(plan(acquisitionPlanner, [android, leasedSlim, idleSlim], { leases })).toMatchObject({
+        device: idleSlim,
+        kind: "evict-managed",
+      });
+
+      // With the slim device gone, 5 GiB is used of 8: the 3.5 GiB full device still does not fit.
+      const afterEviction = [android, leasedSlim, { ...idleSlim, state: "deleted" as const }];
+      expect(plan(acquisitionPlanner, afterEviction, { leases })).toEqual({ kind: "wait" });
+    });
   });
 });

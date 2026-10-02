@@ -275,8 +275,13 @@ export class Dispatcher {
         },
       ]),
     );
+    const ramBudget = this.options.capacity.ramBudget;
     return {
-      capacity: { ...capacity, global: { ...running.global, warm: warmDevices.length } },
+      capacity: {
+        ...capacity,
+        global: { ...running.global, warm: warmDevices.length },
+        ...(ramBudget === undefined ? {} : { ramBudget }),
+      },
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       // ADR 0005 §1: what this daemon is, as opposed to what it holds. `mode` comes from
       // config rather than being assumed, because it is what tells a client whether the device
