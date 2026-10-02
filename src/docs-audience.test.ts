@@ -25,27 +25,41 @@ const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
     }
   });
 
+/** A markdown file by extension, in any case: `.md` or `.markdown`. */
+const isMarkdown = (name: string) => /\.(?:md|markdown)$/i.test(name);
+
 /** `README.md` and every markdown file under `docs/` that is not under `docs/internal/`. */
 const endUserDocs = trackedFiles.filter(
   (name) =>
     name === "README.md" ||
-    (name.startsWith("docs/") && !name.startsWith("docs/internal/") && name.endsWith(".md")),
+    (name.startsWith("docs/") && !name.startsWith("docs/internal/") && isMarkdown(name)),
 );
 
+const endUserNames = endUserDocs.map((doc) => basename(doc));
+
 /**
- * File names that exist only under `docs/internal/`, compared ignoring case. `EVENTS.md`,
- * `events.md` and `README.md` are left out: an end-user doc of the same name exists, so the
- * bare name says nothing about the audience.
+ * File names that exist only under `docs/internal/`. `EVENTS.md` and `README.md` are left out:
+ * an end-user doc of the same name exists, so the bare name says nothing about the audience.
  */
 const internalOnlyNames = [
   ...new Set(
     trackedFiles
-      .filter((name) => name.startsWith("docs/internal/") && name.endsWith(".md"))
+      .filter((name) => name.startsWith("docs/internal/") && isMarkdown(name))
       .map((name) => basename(name)),
   ),
-].filter((name) => !endUserDocs.some((doc) => basename(doc).toLowerCase() === name.toLowerCase()));
+].filter((name) => !endUserNames.includes(name));
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * An internal-only name, matched in any case unless that would also match an end-user doc's
+ * name: `events.md` is matched exactly, since ignoring case it is `EVENTS.md`.
+ */
+const internalName = (name: string) =>
+  new RegExp(
+    `(?<![\\w-])${escape(name)}(?![\\w-])`,
+    endUserNames.some((doc) => doc.toLowerCase() === name.toLowerCase()) ? "" : "i",
+  );
 
 /** What documentation rule 2 forbids an end-user doc from naming. */
 const FORBIDDEN: RegExp[] = [
@@ -55,7 +69,7 @@ const FORBIDDEN: RegExp[] = [
   /(?<![\w./-])(?:\.\/)?internal\//,
   /\bADRs?\b/i,
   /\bdecision records?\b/i,
-  ...internalOnlyNames.map((name) => new RegExp(`(?<![\\w-])${escape(name)}(?![\\w-])`, "i")),
+  ...internalOnlyNames.map(internalName),
 ];
 
 /**
@@ -79,7 +93,7 @@ describe("end-user docs", () => {
       ]),
     );
     expect(internalOnlyNames).toEqual(
-      expect.arrayContaining(["ARCHITECTURE.md", "KNOWN-PITFALLS.md", "testing.md"]),
+      expect.arrayContaining(["ARCHITECTURE.md", "KNOWN-PITFALLS.md", "events.md", "testing.md"]),
     );
   });
 
@@ -95,7 +109,8 @@ describe("end-user docs", () => {
         ),
     );
 
-    expect(offenders).toEqual([]);
+    // `ARCHITECTURE.md` and `architecture.md` both match either spelling; report a hit once.
+    expect([...new Set(offenders)]).toEqual([]);
   });
 });
 
