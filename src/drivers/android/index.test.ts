@@ -2744,7 +2744,7 @@ describe("AndroidDriver ownership", () => {
 });
 
 describe("AndroidDriver readiness on a taken console port", () => {
-  it("refuses to ready a device whose serial an emulator of an AVD outside its root answers, and changes nothing on that emulator (#256)", async () => {
+  it("refuses to ready a device whose serial an emulator of an AVD outside its root answers, and changes nothing on that emulator, even when the device is then shut down (#256)", async () => {
     const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
     const filesystem = await androidFilesystem();
     const host = new EmulatorHost(filesystem);
@@ -2767,6 +2767,9 @@ describe("AndroidDriver readiness on a taken console port", () => {
       (ready) => machine.avdPathAnswering(ready.address),
       (error: unknown) => driverCrashMessage(error),
     );
+    // What the core does with a device whose boot failed: it destroys it, and destroying a
+    // device starts by shutting it down.
+    await driver.shutdown(stopped);
 
     // A DriverCrashError naming both directories: the one that answered, and the device's own.
     const ownPath = `${avdDirectory}/simlock_one.avd`;
@@ -2781,13 +2784,15 @@ describe("AndroidDriver readiness on a taken console port", () => {
   });
 
   it.each([
+    ["exactly", `${avdDirectory}/simlock_one.avd\r\nOK\r\n`],
     ["with a trailing slash", `${avdDirectory}/simlock_one.avd/\r\nOK\r\n`],
-    // macOS's `/var` -> `/private/var` is the everyday case of this.
+    // `/private/home` is a link to `/home` here; macOS's `/var` -> `/private/var` is the same
+    // comparison with the link on the device root's side.
     [
-      "through a symlinked ancestor of the device root",
+      "under another spelling that resolves to the same directory",
       `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
     ],
-  ])("readies a device whose emulator reports its AVD directory %s", async (_, answer) => {
+  ])("readies a device whose emulator reports its AVD directory %s", async (label, answer) => {
     const filesystem = await androidFilesystem();
     filesystem.defineSymlink("/private/home", "/home");
     const host = new EmulatorHost(filesystem);
@@ -2798,20 +2803,59 @@ describe("AndroidDriver readiness on a taken console port", () => {
       osVersion: "34",
       platform: "android",
     });
+    const device = await driver.provision(spec);
+    if (label === "exactly") {
+      // An exact answer needs nothing from the filesystem: a directory that cannot be
+      // resolved this moment does not fail the boot.
+      filesystem.defineFailure(`${avdDirectory}/simlock_one.avd`, "EACCES");
+    }
 
-    const ready = await driver.makeReady(await driver.provision(spec));
+    const ready = await driver.makeReady(device);
 
     expect(ready.address).toBe("emulator-5586");
   });
 
-  it.each([
-    ["a console error", ok("KO: unknown command\r\n")],
-    ["a failed adb call", { code: 1, stderr: "error: could not connect to console", stdout: "" }],
-    ["a directory that does not exist", ok(`/private/elsewhere/simlock_one.avd\r\nOK\r\n`)],
+  it.each<{
+    readonly answered: string;
+    readonly answer: ProcessResult;
+    readonly filesystem?: () => MemoryFilesystem;
+    readonly existing?: string;
+  }>([
+    { answer: ok("KO: unknown command\r\n"), answered: "a console error" },
+    {
+      answer: { code: 1, stderr: "error: could not connect to console", stdout: "" },
+      answered: "a failed adb call",
+    },
+    {
+      answer: ok(`/private/elsewhere/simlock_one.avd\r\nOK\r\n`),
+      answered: "a directory that does not exist",
+    },
+    {
+      answer: ok(`${avdDirectory}/simlock_two.avd\r\nOK\r\n`),
+      answered: "another device's directory in the same root",
+      existing: `${avdDirectory}/simlock_two.avd`,
+    },
+    {
+      answer: ok(`${home}/.android/avd/simlock_one.avd\r\nOK\r\n`),
+      answered: "a directory of the same name outside the root",
+      existing: `${home}/.android/avd/simlock_one.avd`,
+    },
+    {
+      answer: ok(`\r\n${avdDirectory}/simlock_one.avd\r\nOK\r\n`),
+      answered: "its own directory below a blank first line",
+    },
+    {
+      // Resolved against the daemon's working directory, which here is the device root, a
+      // relative answer would name the device's own directory -- by accident.
+      answer: ok("simlock_one.avd\r\nOK\r\n"),
+      answered: "a relative path",
+      filesystem: () => new WorkingDirectoryFilesystem(avdDirectory),
+    },
   ])(
-    "refuses to ready a device whose emulator answers the AVD path query with %s, and stops that emulator",
-    async (_, answer) => {
-      const filesystem = await androidFilesystem();
+    "refuses to ready a device whose emulator answers the AVD path query with $answered, and stops that emulator",
+    async ({ answer, existing, filesystem: createFilesystem }) => {
+      const filesystem = await androidFilesystem({}, createFilesystem?.());
+      if (existing !== undefined) await filesystem.mkdirp(existing);
       const host = new EmulatorHost(filesystem);
       const runner = answeringAvdPath(host.runner(), answer);
       const driver = await createDriver(filesystem, runner, { ids: ["one"] });
@@ -4131,6 +4175,20 @@ function answeringAvdPath(inner: ProcessRunner, answer: ProcessResult): ProcessR
     spawn: (command, args, options) => inner.spawn(command, args, options),
     spawnStreaming: (command, args, options) => inner.spawnStreaming(command, args, options),
   };
+}
+
+/**
+ * A filesystem whose `realpath` resolves a relative path against `workingDirectory`, as
+ * Node's does against the process's working directory.
+ */
+class WorkingDirectoryFilesystem extends MemoryFilesystem {
+  constructor(private readonly workingDirectory: string) {
+    super();
+  }
+
+  override async realpath(path: string): Promise<string> {
+    return super.realpath(path.startsWith("/") ? path : `${this.workingDirectory}/${path}`);
+  }
 }
 
 /** Commands that only read an emulator's state. */

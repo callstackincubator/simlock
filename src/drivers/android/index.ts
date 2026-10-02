@@ -223,6 +223,12 @@ interface DeviceState {
   imageIdentity: string;
   needsWipe: boolean;
   snapshotExpected: boolean;
+  /**
+   * Set when the last readiness wait found another AVD's emulator answering on this device's
+   * serial, cleared when one finds the device's own: while set, nothing is sent to the serial,
+   * because whoever answers it is not this device.
+   */
+  serialHeldByAnother?: boolean;
 }
 
 interface SystemImage {
@@ -1722,20 +1728,24 @@ export class AndroidDriver implements Driver {
 
   /**
    * Proves the emulator that answered the readiness wait on `data.serial` runs this device's
-   * AVD, by the AVD directory it reports: a directory inside the device root is Simlock's,
-   * a name is not (safety rule 8). An emulator whose console port is already held exits
-   * without answering, so the one that answers is whoever holds the port -- another device,
-   * another Simlock instance, the user's own emulator. Refusing here, before any mark,
-   * snapshot or baseline touches it, is what keeps a port collision from readying a device
-   * at another device's address. The reported path is compared whole, and through
-   * `realpath` when the two spellings differ (an ancestor symlink such as macOS's `/var` ->
-   * `/private/var`); anything unreadable fails closed.
+   * AVD, by the AVD directory it reports: only this device's own directory in the device root
+   * will do -- not a sibling's, and never a name (safety rule 8). An emulator whose console
+   * port is already held exits without answering, so the one that answers is whoever holds
+   * the port -- another device, another Simlock instance, the user's own emulator. Refusing
+   * here, before a mark or a baseline capture touches it, is what keeps a port collision from
+   * readying a device at another device's address; `serialHeldByAnother` then keeps the
+   * shutdown and destroy that follow a failed boot from sending it `emu kill`. The reported
+   * path is compared whole, and through `realpath` when the two spellings differ (an ancestor
+   * symlink such as macOS's `/var` -> `/private/var`); anything unreadable fails closed.
    */
   async #confirmAvdAnswers(data: AndroidDriverData): Promise<void> {
+    const state = this.#stateFor(data);
+    state.serialHeldByAnother = true;
     const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
     const result = await this.#runOrThrow(this.#sdk.adb, ["-s", data.serial, "emu", "avd", "path"]);
     const answered = answeredAvdPath(result.stdout);
     if (answered === expected || (await this.#sameDirectory(answered, expected))) {
+      state.serialHeldByAnother = false;
       return;
     }
     throw new DriverCrashError(
@@ -1879,9 +1889,11 @@ export class AndroidDriver implements Driver {
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
-      env: this.#env(),
-    });
+    if (state.serialHeldByAnother !== true) {
+      await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
+        env: this.#env(),
+      });
+    }
     const handle = state.handle;
     if (handle === undefined) {
       return;
@@ -2183,13 +2195,12 @@ function relativeImageDirectory(image: SystemImage): string {
 }
 
 /**
- * The AVD directory in an `adb emu avd path` answer: its first non-empty line, which the
- * console follows with an `OK` line, with CR line endings and trailing slashes dropped.
- * An error answer (`KO: ...`) comes back as itself and matches no directory.
+ * The AVD directory in an `adb emu avd path` answer: its first line, which the console
+ * follows with an `OK` line, with its CR line ending, surrounding blanks and trailing slashes
+ * dropped. An error answer (`KO: ...`) comes back as itself and matches no directory.
  */
 function answeredAvdPath(stdout: string): string {
-  const line = stdout.split(/\r?\n/).find((entry) => entry.trim() !== "") ?? "";
-  return line.trim().replace(/(?<=.)\/+$/, "");
+  return (stdout.split("\n")[0] ?? "").trim().replace(/(?<=.)\/+$/, "");
 }
 
 function serialFor(port: number): string {
