@@ -3179,7 +3179,7 @@ describe("IosSimctlDriver listComponents()", () => {
     };
   }
 
-  function imagesListed(images: readonly Image[]) {
+  function imagesListed(images: readonly Image[], state = "Ready") {
     const stdout = JSON.stringify(
       Object.fromEntries(
         images.map((entry) => [
@@ -3190,7 +3190,7 @@ describe("IosSimctlDriver listComponents()", () => {
             platformIdentifier: entry.platform ?? "com.apple.platform.iphonesimulator",
             runtimeIdentifier: entry.runtime,
             sizeBytes: entry.sizeBytes ?? 1_000,
-            state: "Ready",
+            state,
             version: entry.version,
           },
         ]),
@@ -3478,6 +3478,8 @@ describe("IosSimctlDriver listComponents()", () => {
     const other = image("18.4", "22E238");
     const receipt = { build: "23E244", image: "IMG-26.4-23E244" };
     const deleteInvocation = simctl("runtime", "delete", "IMG-26.4-23E244");
+    // After a delete the driver lists the images once more to see whether the image is still
+    // being deleted (#259), then the shared check lists images and the default set again.
     const deleted = { match: deleteInvocation, result: { code: 0, stderr: "", stdout: "" } };
     const signal = () => new AbortController().signal;
 
@@ -3497,6 +3499,7 @@ describe("IosSimctlDriver listComponents()", () => {
         imagesListed([target, other]),
         defaultSetListed({ [other.runtime]: { unused: 4 } }),
         deleted,
+        imagesListed([other]),
         imagesListed([other]),
         defaultSetListed({ [other.runtime]: { unused: 4 } }),
       ]);
@@ -3520,6 +3523,7 @@ describe("IosSimctlDriver listComponents()", () => {
         defaultSetListed({}),
         deleted,
         imagesListed([]),
+        imagesListed([]),
         defaultSetListed({}),
       ]);
       const filesystem = await assetStore([["26.4", "23E244"]]);
@@ -3542,6 +3546,7 @@ describe("IosSimctlDriver listComponents()", () => {
         defaultSetListed({ [target.runtime]: { unused: 11 } }),
         deleted,
         imagesListed([]),
+        imagesListed([]),
         defaultSetListed({ [target.runtime]: { unused: 11 } }),
       ]);
       const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
@@ -3557,6 +3562,7 @@ describe("IosSimctlDriver listComponents()", () => {
         imagesListed([target]),
         defaultSetListed({ [target.runtime]: { unused: 3 } }),
         deleted,
+        imagesListed([]),
         imagesListed([]),
         defaultSetListed({ [target.runtime]: { unused: 3 } }),
       ]);
@@ -3576,6 +3582,7 @@ describe("IosSimctlDriver listComponents()", () => {
         defaultSetListed({ [target.runtime]: { unused: 1 } }),
         deleted,
         imagesListed([]),
+        imagesListed([]),
         defaultSetListed({ [target.runtime]: { unused: 1 } }),
       ]);
       const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
@@ -3592,6 +3599,7 @@ describe("IosSimctlDriver listComponents()", () => {
         imagesListed([target]),
         defaultSetListed({ [target.runtime]: { unused: 2 } }),
         deleted,
+        imagesListed([]),
         imagesListed([]),
         defaultSetListed({ [target.runtime]: { unused: 2 } }),
       ]);
@@ -3618,6 +3626,7 @@ describe("IosSimctlDriver listComponents()", () => {
         defaultSetListed({ [target.runtime]: { unused: 3 } }),
         deleted,
         imagesListed([sibling]),
+        imagesListed([sibling]),
         defaultSetListed({ [target.runtime]: { unused: 3 } }),
       ]);
       const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
@@ -3633,6 +3642,7 @@ describe("IosSimctlDriver listComponents()", () => {
         defaultSetListed({ [target.runtime]: { unused: 11 } }),
         deleted,
         imagesListed([]),
+        imagesListed([]),
         defaultSetListed({ [target.runtime]: { unused: 11 } }),
       ]);
       const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
@@ -3647,7 +3657,7 @@ describe("IosSimctlDriver listComponents()", () => {
         defaultSetInvocation.args,
         defaultSetInvocation.args,
       ]);
-      expect(runner.calls).toHaveLength(5);
+      expect(runner.calls).toHaveLength(6);
     });
 
     it("reports the same foreign-device count in listComponents and in removeComponent's refusal for the same default set (#241)", async () => {
@@ -3722,13 +3732,224 @@ describe("IosSimctlDriver listComponents()", () => {
         defaultSetListed({}),
         deleted,
         imagesListed([target]),
+        imagesListed([target]),
         defaultSetListed({}),
       ]);
       const driver = await createDriver(runner);
 
-      await expect(driver.removeComponent(receipt, { signal: signal() })).rejects.toThrow(
-        "ios 26.4 is still installed after it was removed",
+      // The clock never moves, so a removal that waited would never settle.
+      const error = await settledValue(
+        driver.removeComponent(receipt, { signal: signal() }).catch((caught: unknown) => caught),
       );
+
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect(error).toMatchObject({ message: "ios 26.4 is still installed after it was removed" });
+      expect(runner.calls).toHaveLength(6);
+    });
+
+    it("answers the removal with its size and residue when simctl runtime list shows the image as Deleting after simctl runtime delete returns and drops it seconds later (#259)", async () => {
+      // As seen on Xcode 26.4.1: `simctl runtime delete` exits while `simctl runtime list`
+      // still lists the image, in state `Deleting`, for about eight seconds. The runner answers
+      // by the fake clock rather than by call order, so it does not dictate how a fix waits.
+      const clock = new FakeClock();
+      const deletingForMs = 8_000;
+      const runner = new ClockedSimctl259(clock, deletingForMs, {
+        defaultSet: defaultSetListed({ [target.runtime]: { unused: 2 } }),
+        deleted,
+        gone: imagesListed([]),
+        ready: imagesListed([target]),
+        deleting: imagesListed([target], "Deleting"),
+      });
+      const driver = await createDriver(runner, clock, await assetStore([]));
+
+      let settled = false;
+      const removal = driver
+        .removeComponent(receipt, { signal: signal() })
+        .catch((caught: unknown) => caught)
+        .finally(() => {
+          settled = true;
+        });
+      // Lets time pass in one-second steps, well inside the five-minute removal budget.
+      for (let second = 0; second < 30 && !settled; second += 1) {
+        await flushMicrotasks221();
+        clock.advance(1_000);
+      }
+
+      expect(await settledValue(removal)).toEqual({
+        residue:
+          "2 never-used simulators in the default device set are now unavailable; Simlock does " +
+          "not delete simulators there -- `xcrun simctl delete unavailable` clears them",
+        sizeBytes: 7_000_000_000,
+      });
+      expect(runner.deletes).toBe(1);
+    });
+
+    it("fails with DriverCrashError five minutes after simctl runtime delete started, not after it answered, when simctl runtime list keeps showing the image as Deleting (#259)", async () => {
+      // The delete itself takes two minutes, so a budget restarted when it answers would end
+      // two minutes later than one measured from its start.
+      const clock = new FakeClock();
+      const runner = new ClockedSimctl259(
+        clock,
+        Number.POSITIVE_INFINITY,
+        {
+          defaultSet: defaultSetListed({}),
+          deleted,
+          gone: imagesListed([]),
+          ready: imagesListed([target]),
+          deleting: imagesListed([target], "Deleting"),
+        },
+        // Half a second off the one-second polls, so the last pause must be cut short.
+        120_500,
+      );
+      const driver = await createDriver(runner, clock, await assetStore([]));
+
+      let settledAt: number | undefined;
+      const removal = driver
+        .removeComponent(receipt, { signal: signal() })
+        .catch((caught: unknown) => caught)
+        .finally(() => {
+          settledAt = clock.now();
+        });
+      // Half-second steps land on the deadline itself, so the time it fails at is exact.
+      for (let step = 0; step < 1_200 && settledAt === undefined; step += 1) {
+        await flushMicrotasks221();
+        clock.advance(500);
+      }
+
+      const error = await settledValue(removal);
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect(error).toMatchObject({
+        message: "ios 26.4 was still being deleted 300000ms after its removal started",
+      });
+      expect(settledAt).toBe((runner.deleteStartedAt ?? Number.NaN) + 300_000);
+      expect(clock.pendingTimerCount).toBe(0);
+    });
+
+    it("fails with DriverCrashError as soon as the signal fires while simctl runtime list shows the image as Deleting, and lists no more (#259)", async () => {
+      const clock = new FakeClock();
+      const runner = new ClockedSimctl259(clock, Number.POSITIVE_INFINITY, {
+        defaultSet: defaultSetListed({}),
+        deleted,
+        gone: imagesListed([]),
+        ready: imagesListed([target]),
+        deleting: imagesListed([target], "Deleting"),
+      });
+      const driver = await createDriver(runner, clock, await assetStore([]));
+      const controller = new AbortController();
+
+      const removal = driver
+        .removeComponent(receipt, { signal: controller.signal })
+        .catch((caught: unknown) => caught);
+      await vi.waitFor(() => expect(runner.listsAfterDelete).toBe(1));
+      await flushMicrotasks221();
+      // The clock never moves: only the signal can end the wait.
+      controller.abort();
+
+      const error = await settledValue(removal);
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect(error).toMatchObject({
+        message: "The removal of ios 26.4 was ended while it was still being deleted",
+      });
+      expect(runner.listsAfterDelete).toBe(1);
+      expect(clock.pendingTimerCount).toBe(0);
+    });
+
+    it("lists the images again every second while simctl runtime list shows the image as Deleting, and leaves no abort listener behind (#259)", async () => {
+      const clock = new FakeClock();
+      const runner = new ClockedSimctl259(clock, 3_500, {
+        defaultSet: defaultSetListed({}),
+        deleted,
+        gone: imagesListed([]),
+        ready: imagesListed([target]),
+        deleting: imagesListed([target], "Deleting"),
+      });
+      const driver = await createDriver(runner, clock, await assetStore([]));
+      const controller = new AbortController();
+      const added = vi.spyOn(controller.signal, "addEventListener");
+      const removed = vi.spyOn(controller.signal, "removeEventListener");
+
+      const removal = driver.removeComponent(receipt, { signal: controller.signal });
+      await vi.waitFor(() => expect(runner.listsAfterDelete).toBe(1));
+      for (const expected of [2, 3, 4]) {
+        await flushMicrotasks221();
+        clock.advance(999);
+        await flushMicrotasks221();
+        expect(runner.listsAfterDelete).toBe(expected - 1);
+        clock.advance(1);
+        await vi.waitFor(() => expect(runner.listsAfterDelete).toBe(expected));
+      }
+      // Gone at 3.5 s: the listing at 4 s ends the wait.
+      await flushMicrotasks221();
+      clock.advance(1_000);
+      await expect(removal).resolves.toEqual({ sizeBytes: 7_000_000_000 });
+      expect(added.mock.calls.length).toBeGreaterThan(1);
+      expect(removed.mock.calls.map(([, listener]) => listener)).toEqual(
+        expect.arrayContaining(added.mock.calls.map(([, listener]) => listener)),
+      );
+    });
+
+    it.each(["deleting", "DELETING"])(
+      "waits while simctl runtime list shows the image in state %s, the state compared ignoring case (#259)",
+      async (state) => {
+        const clock = new FakeClock();
+        const runner = new ClockedSimctl259(clock, 2_000, {
+          defaultSet: defaultSetListed({}),
+          deleted,
+          gone: imagesListed([]),
+          ready: imagesListed([target]),
+          deleting: imagesListed([target], state),
+        });
+        const driver = await createDriver(runner, clock, await assetStore([]));
+
+        let settled = false;
+        const removal = driver
+          .removeComponent(receipt, { signal: signal() })
+          .catch((caught: unknown) => caught)
+          .finally(() => {
+            settled = true;
+          });
+        for (let second = 0; second < 30 && !settled; second += 1) {
+          await flushMicrotasks221();
+          clock.advance(1_000);
+        }
+
+        expect(await settledValue(removal)).toEqual({ sizeBytes: 7_000_000_000 });
+      },
+    );
+
+    it("fails with DriverCrashError when the signal fires while simctl runtime list is answering that the image is Deleting, and lists no more (#259)", async () => {
+      const clock = new FakeClock();
+      const controller = new AbortController();
+      const runner = new ClockedSimctl259(
+        clock,
+        Number.POSITIVE_INFINITY,
+        {
+          defaultSet: defaultSetListed({}),
+          deleted,
+          gone: imagesListed([]),
+          ready: imagesListed([target]),
+          deleting: imagesListed([target], "Deleting"),
+        },
+        0,
+        () => {
+          controller.abort();
+        },
+      );
+      const driver = await createDriver(runner, clock, await assetStore([]));
+
+      // The clock never moves: only the signal, already fired when the pause starts, ends it.
+      const error = await settledValue(
+        driver
+          .removeComponent(receipt, { signal: controller.signal })
+          .catch((caught: unknown) => caught),
+      );
+
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect(error).toMatchObject({
+        message: "The removal of ios 26.4 was ended while it was still being deleted",
+      });
+      expect(runner.listsAfterDelete).toBe(1);
+      expect(clock.pendingTimerCount).toBe(0);
     });
 
     it("ends simctl runtime delete after five minutes, SIGTERM then SIGKILL, and answers only once it has exited", async () => {
@@ -3787,6 +4008,71 @@ describe("IosSimctlDriver listComponents()", () => {
     });
   });
 });
+
+type ScriptedStep259 = ConstructorParameters<typeof ScriptedProcessRunner>[0][number];
+
+/**
+ * A scripted `simctl` that answers by state rather than by call order (#259): `simctl runtime
+ * list -j` answers `ready` until `simctl runtime delete` has run, then `deleting` until
+ * `deletingForMs` of fake-clock time has passed since, then `gone`. The default set's listing
+ * always answers `defaultSet`. `deleteTakesMs` moves the fake clock on while the delete runs,
+ * as a slow `simctl runtime delete` would. Every call is recorded in `calls`, as the scripted
+ * runner does, and `deleteStartedAt` and `listsAfterDelete` say when the delete started and how
+ * often the images were listed after it; `onListAfterDelete` runs at each of those listings.
+ */
+class ClockedSimctl259 extends ScriptedProcessRunner {
+  deletes = 0;
+  deleteStartedAt: number | undefined;
+  listsAfterDelete = 0;
+  #deletedAt: number | undefined;
+
+  constructor(
+    private readonly clock: FakeClock,
+    private readonly deletingForMs: number,
+    private readonly steps: {
+      readonly ready: ScriptedStep259;
+      readonly deleting: ScriptedStep259;
+      readonly gone: ScriptedStep259;
+      readonly deleted: ScriptedStep259;
+      readonly defaultSet: ScriptedStep259;
+    },
+    private readonly deleteTakesMs = 0,
+    private readonly onListAfterDelete: () => void = () => undefined,
+  ) {
+    super([]);
+  }
+
+  override spawn(...call: Parameters<ScriptedProcessRunner["spawn"]>) {
+    const [command, args] = call;
+    const argv = args.join(" ");
+    let step: ScriptedStep259;
+    if (argv.endsWith("runtime delete IMG-26.4-23E244")) {
+      this.deletes += 1;
+      this.deleteStartedAt = this.clock.now();
+      this.clock.advance(this.deleteTakesMs);
+      this.#deletedAt = this.clock.now();
+      step = this.steps.deleted;
+    } else if (argv.endsWith("runtime list -j")) {
+      if (this.#deletedAt !== undefined) {
+        this.listsAfterDelete += 1;
+        this.onListAfterDelete();
+      }
+      step =
+        this.#deletedAt === undefined
+          ? this.steps.ready
+          : this.clock.now() - this.#deletedAt < this.deletingForMs
+            ? this.steps.deleting
+            : this.steps.gone;
+    } else if (argv === "simctl list -j devices") {
+      step = this.steps.defaultSet;
+    } else {
+      throw new Error(`Unexpected process invocation: ${command} ${argv}`);
+    }
+    const handle = new ScriptedProcessRunner([step]).spawn(...call);
+    this.calls.push({ args: [...args], command, options: call[2] ?? {} });
+    return handle;
+  }
+}
 
 /** Lets queued continuations run, so a test can see that something has not happened yet. */
 async function flushMicrotasks221(): Promise<void> {

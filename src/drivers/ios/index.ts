@@ -50,6 +50,9 @@ const COMMAND_TIMEOUT_MS = 30_000;
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
 const PROVISION_ESTIMATE_MS = 500;
+// How often a removal lists again while `simctl runtime list` shows the deleted image as still
+// being deleted, which it does for a few seconds after `simctl runtime delete` answers (#259).
+const DELETING_POLL_MS = 1_000;
 // This driver's word for "the newest runtime Apple offers": a bare `xcodebuild -downloadPlatform
 // iOS`. Not a version, so `findComponent` never finds it (ADR 0010 §2).
 const LATEST_COMPONENT = "latest";
@@ -557,6 +560,11 @@ export class IosSimctlDriver implements Driver {
    * unavailable and stay where they are, and `residue` says how many and how to clear them. When
    * the download is still in the macOS asset store afterwards (#79), `residue` says that too.
    * Nothing is written to the default set: Simlock never deletes a simulator or a file there.
+   *
+   * `simctl runtime delete` can answer while the image is still listed as being deleted (#259),
+   * so the removal waits for that state to end before it is verified (`#waitWhileDeleting`).
+   * The delete and the wait share one budget, `COMPONENT_REMOVAL_TIMEOUT_MS` from the start of
+   * the delete.
    */
   async removeComponent(
     receipt: ComponentReceipt,
@@ -567,7 +575,9 @@ export class IosSimctlDriver implements Driver {
       platform: this.platform,
       receipt,
       remove: async ({ image, unusedDevices, version }) => {
+        const deadline = this.#clock.now() + COMPONENT_REMOVAL_TIMEOUT_MS;
         await this.#deleteRuntimeImage(image.identifier, options.signal);
+        await this.#waitWhileDeleting(image.identifier, version, deadline, options.signal);
         const sentences = [
           unavailableDevicesResidue(unusedDevices),
           (await this.#downloadResidue(image, version)).residue,
@@ -604,6 +614,55 @@ export class IosSimctlDriver implements Driver {
     }
     if (outcome.stopped) throw new DriverCrashError(`${command} was ended before it finished`);
     this.#assertSuccessful(args, outcome.result);
+  }
+
+  /**
+   * Lists the runtime images every `DELETING_POLL_MS` while the image `identifier` is listed as
+   * being deleted (`isBeingDeleted`), and answers once it is gone or listed in any other state;
+   * `removeListedComponent`'s check then decides. Still being deleted at `deadline`, or when
+   * `signal` fires, is `DriverCrashError`, so the removal fails and the record is kept. A listing
+   * already running is not cut short by either: it ends on its own `COMMAND_TIMEOUT_MS` first.
+   */
+  async #waitWhileDeleting(
+    identifier: string,
+    version: string,
+    deadline: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    for (;;) {
+      const listed = (await this.#loadRuntimeImages()).find(
+        (image) => image.identifier === identifier,
+      );
+      if (listed === undefined || !isBeingDeleted(listed)) return;
+      const remainingMs = deadline - this.#clock.now();
+      if (remainingMs <= 0) {
+        throw new DriverCrashError(
+          `${this.platform} ${version} was still being deleted ` +
+            `${String(COMPONENT_REMOVAL_TIMEOUT_MS)}ms after its removal started`,
+        );
+      }
+      if (!(await this.#pause(Math.min(DELETING_POLL_MS, remainingMs), signal))) {
+        throw new DriverCrashError(
+          `The removal of ${this.platform} ${version} was ended while it was still being deleted`,
+        );
+      }
+    }
+  }
+
+  /** Answers `true` after `delayMs` on the clock, or `false` as soon as `signal` fires. */
+  #pause(delayMs: number, signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const onAbort = (): void => {
+        this.#clock.cancel(timer);
+        resolve(false);
+      };
+      const timer = this.#clock.setTimer(delayMs, () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(true);
+      });
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   /**
@@ -1609,8 +1668,9 @@ export class IosSimctlDriver implements Driver {
 
   /**
    * The runtime images `simctl runtime list -j` reports, one per downloaded disk image. Read
-   * only for receipts: the image identifier is what changes when a runtime is deleted and
-   * downloaded again, even at the same version and build.
+   * for receipts -- the image identifier is what changes when a runtime is deleted and
+   * downloaded again, even at the same version and build -- and, after a removal, for whether
+   * the image is still being deleted.
    */
   async #loadRuntimeImages(): Promise<readonly RuntimeImage[]> {
     const result = await this.#simctl(["runtime", "list", "-j"], COMMAND_TIMEOUT_MS);
@@ -2022,6 +2082,17 @@ interface RuntimeImage {
   readonly platformIdentifier?: string;
   readonly version?: string;
   readonly sizeBytes?: number;
+  /** What the image is doing: `Ready` once installed, and a deleting state after a delete. */
+  readonly state?: string;
+}
+
+/**
+ * Whether `simctl runtime list -j` shows the image as still being deleted, which it does for a
+ * few seconds after `simctl runtime delete` answers (#259). The text listing prints
+ * `(Deleting)`; the JSON value has not been captured mid-delete, so it is compared ignoring case.
+ */
+function isBeingDeleted(image: RuntimeImage): boolean {
+  return image.state?.toLowerCase() === "deleting";
 }
 
 /** The `platformIdentifier` `simctl runtime list -j` gives an iOS simulator runtime image. */
@@ -2043,6 +2114,7 @@ function parseRuntimeImages(value: unknown): readonly RuntimeImage[] {
             ...optionalString("build", entry.build),
             ...optionalString("platformIdentifier", entry.platformIdentifier),
             ...optionalString("version", entry.version),
+            ...optionalString("state", entry.state),
             ...(isByteCount(entry.sizeBytes) ? { sizeBytes: entry.sizeBytes } : {}),
           },
         ]
