@@ -91,6 +91,8 @@ describe("AndroidDriver with two Simlock instances on one machine (#257)", () =>
 class Machine {
   /** Console port -> the AVD whose emulator is listening on it. */
   readonly #listening = new Map<number, string>();
+  /** Console port -> the directory of the AVD whose emulator is listening on it. */
+  readonly #avdPaths = new Map<number, string>();
   /** Console port -> the adb servers holding a transport to the emulator on it. */
   readonly #attached = new Map<number, Set<number>>();
   readonly #exits = new Map<number, () => void>();
@@ -235,6 +237,8 @@ class Machine {
       return ok("OK: killing emulator, bye bye\n");
     }
     if (rest.startsWith("shell echo ")) return ok();
+    // The console answers with the AVD's directory, then `OK`.
+    if (rest === "emu avd path") return ok(`${this.#avdPaths.get(port) ?? ""}\nOK\n`);
     const answer = ADB_ANSWERS.get(rest);
     return answer === undefined ? undefined : ok(answer);
   }
@@ -256,6 +260,7 @@ class Machine {
     const bound = !this.#listening.has(port);
     if (bound) {
       this.#listening.set(port, avdName);
+      this.#avdPaths.set(port, `${options?.env?.["ANDROID_AVD_HOME"] ?? ""}/${avdName}.avd`);
       this.#exits.set(port, () => exit(ok()));
       // An emulator announces itself to the server its environment names.
       this.#attach(port, serverPortOf(options));
@@ -283,6 +288,7 @@ class Machine {
 
   #exit(port: number): void {
     this.#listening.delete(port);
+    this.#avdPaths.delete(port);
     this.#attached.delete(port);
     this.#exits.get(port)?.();
     this.#exits.delete(port);
