@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket, connect } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testComponentWiring } from "../core/test-wiring.js";
 
 import { EventBus, EventHistory } from "../bus/index.js";
@@ -1661,6 +1661,33 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
       ok: true,
       payload: { workers: [{ id: "instance-test", version: "test" }] },
     });
+    await client.close();
+  });
+
+  it("re-reads worker.list's kept catalog once this daemon's bus reports a component installed", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    const catalogReads = vi.spyOn(harness.driver, "listCatalog");
+
+    await client.request("worker.list", {});
+    await client.request("worker.list", {});
+    expect(catalogReads).toHaveBeenCalledTimes(1);
+
+    harness.eventBus.emit(
+      "component.installed",
+      {
+        alreadyPresent: false,
+        componentId: "27.0",
+        durationMs: 1,
+        platform: "ios",
+        version: "27.0",
+      },
+      "test",
+    );
+    await client.request("worker.list", {});
+
+    expect(catalogReads).toHaveBeenCalledTimes(2);
     await client.close();
   });
 

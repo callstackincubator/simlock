@@ -14,6 +14,15 @@ import { z } from "zod";
 import type { OPERATIONS } from "./operations.js";
 import { statusDeviceSchema, type workerViewSchema } from "./schemas.js";
 
+/**
+ * How often a worker view is re-read in full, catalog and config included, when no event asks
+ * for it sooner. A gateway refreshes every view on this tick (ADR 0005 §7's backstop), and a
+ * worker answering `worker.list` about itself re-reads its catalog no more often, so an open
+ * console polling `GET /v1/workers` does not run a driver's catalog read on every poll. Both
+ * re-read the catalog at once after a component install.
+ */
+export const WORKER_VIEW_REFRESH_INTERVAL_MS = 30_000;
+
 type Output<Name extends keyof typeof OPERATIONS> = z.infer<(typeof OPERATIONS)[Name]["output"]>;
 type WorkerView = z.infer<typeof workerViewSchema>;
 

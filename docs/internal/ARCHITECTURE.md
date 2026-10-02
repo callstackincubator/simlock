@@ -520,7 +520,11 @@ call. The reported fields come from its own `status.get`, `list.get`,
 `catalog.get` and `config.get`, turned into view fields by
 `workerViewFields` in `src/contract/worker-view.ts` — the same pure function
 `WorkerLink` builds a gateway's views with, so the two cannot disagree about
-a field. `worker.drain`, `worker.undrain`, `worker.remove` and
+a field. The catalog is the one read the worker keeps: `catalog.get` runs
+each driver's catalog read (`simctl list` on iOS), and the console polls
+`GET /v1/workers` every second, so the dispatcher re-reads it only once
+`WORKER_VIEW_REFRESH_INTERVAL_MS` (the gateway's own refresh tick) has
+passed, or after `component.installed` or `component.removed`. `worker.drain`, `worker.undrain`, `worker.remove` and
 `worker.install-component` answer `UNSUPPORTED_IN_WORKER_MODE` (`501`, exit
 `2`), the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The `/v1/workers*` routes
 are registered in both modes.

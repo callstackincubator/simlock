@@ -19,7 +19,11 @@ import {
   SerializedDecision,
   RuntimeMissingError,
 } from "../core/index.js";
-import { OPERATIONS, statusDeviceSchema } from "../contract/index.js";
+import {
+  OPERATIONS,
+  statusDeviceSchema,
+  WORKER_VIEW_REFRESH_INTERVAL_MS,
+} from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";
 import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
@@ -242,6 +246,7 @@ async function buildDispatcher(
     components: wiring.components,
     config,
     doctor,
+    eventBus,
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
     health: () => "running",
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
@@ -396,6 +401,82 @@ describe("Dispatcher: the fleet operations on a worker", () => {
 
     expect(withLabel.workers[0]?.label).toBe("mac-mini-1");
     expect(withoutLabel.workers[0]).not.toHaveProperty("label");
+  });
+
+  it("worker.list on a worker reads the driver's catalog once per refresh interval, not on every call", async () => {
+    const { clock, dispatcher, driver } = await buildDispatcher();
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+
+    for (let poll = 0; poll < 5; poll += 1) {
+      await dispatcher.dispatch("worker.list", {}, admin);
+      clock.advance(1_000);
+    }
+    expect(catalogReads).toHaveBeenCalledTimes(1);
+
+    clock.advance(WORKER_VIEW_REFRESH_INTERVAL_MS);
+    await dispatcher.dispatch("worker.list", {}, admin);
+    expect(catalogReads).toHaveBeenCalledTimes(2);
+  });
+
+  it("worker.list on a worker lists a runtime installed since its last read, without waiting for the interval", async () => {
+    const { components, dispatcher } = await buildDispatcher();
+    const runtimes = async () =>
+      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog.flatMap(
+        (entry) => entry.runtimes,
+      );
+    expect(await runtimes()).toEqual(["26.5"]);
+
+    await components.install({ component: "27.0", platform: "ios" });
+
+    expect(await runtimes()).toEqual(expect.arrayContaining(["26.5", "27.0"]));
+  });
+
+  it("worker.list on a worker drops a removed runtime without waiting for the interval", async () => {
+    const { components, dispatcher } = await buildDispatcher();
+    const runtimes = async () =>
+      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog.flatMap(
+        (entry) => entry.runtimes,
+      );
+    await components.install({ component: "27.0", platform: "ios" });
+    expect(await runtimes()).toEqual(expect.arrayContaining(["27.0"]));
+
+    await expect(
+      components.remove({ platform: "ios", requesterId: "operator", version: "27.0" }),
+    ).resolves.toMatchObject({
+      outcome: "removed",
+    });
+
+    expect(await runtimes()).not.toContain("27.0");
+  });
+
+  it("worker.list on a worker reads the catalog again after a read that failed", async () => {
+    let calls = 0;
+    const { dispatcher } = await buildDispatcher({
+      catalog: {
+        listCatalog: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("the catalog could not be read");
+          return [
+            {
+              defaultRuntime: "26.5",
+              modelAliases: {},
+              models: [],
+              modelRuntimes: {},
+              platform: "ios",
+              runtimes: ["26.5"],
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(dispatcher.dispatch("worker.list", {}, admin)).rejects.toThrow(
+      "the catalog could not be read",
+    );
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(calls).toBe(2);
+    expect(workers[0]?.catalog.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
   });
 
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { EventHistory } from "../bus/index.js";
+import type { EventBus, EventHistory } from "../bus/index.js";
 import {
   type CleanupReaper,
   ComponentInUseError,
@@ -39,6 +39,7 @@ import {
   requestedDevice,
   type ComponentProgress,
   type OperationName,
+  WORKER_VIEW_REFRESH_INTERVAL_MS,
   workerViewFields,
 } from "../contract/index.js";
 import type { TokenStore } from "../http/token-store.js";
@@ -148,6 +149,12 @@ export interface DispatcherOptions {
   readonly instanceId: string;
   /** This daemon's own version, the one its `hello` reply carries; `worker.list`'s `version`. */
   readonly version: string;
+  /**
+   * Where `worker.list` hears that a component was installed or removed, so its kept catalog is
+   * read again at once rather than on its next interval. Optional for the tests that never call
+   * `worker.list`; without it the kept catalog is only re-read on the interval.
+   */
+  readonly eventBus?: Pick<EventBus, "subscribe">;
 }
 
 /**
@@ -197,9 +204,24 @@ export class Dispatcher {
    * what a worker answers.
    */
   readonly #handlers: Record<WorkerOperationName, ErasedHandler>;
+  /**
+   * `worker.list`'s catalog: the last `catalog.get` answer and when it was read. Kept for
+   * `WORKER_VIEW_REFRESH_INTERVAL_MS`, the rhythm a gateway re-reads a worker's catalog at, and
+   * dropped when a component is installed or removed. Without it every `worker.list` runs each
+   * driver's catalog read (`simctl list` on iOS), and the console polls that route every second.
+   * Holds the promise, so calls that arrive while a read runs share it; a read that fails is
+   * dropped, so the next call reads again.
+   */
+  #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    // Observers only (architecture rule 5): dropping a kept read decides nothing.
+    const dropViewCatalog = () => {
+      this.#viewCatalog = undefined;
+    };
+    options.eventBus?.subscribe("component.installed", dropViewCatalog);
+    options.eventBus?.subscribe("component.removed", dropViewCatalog);
     this.#dispatchLogger = this.#logger.child("dispatch");
     this.#handlers = {
       "catalog.get": this.#catalogGet,
@@ -614,14 +636,16 @@ export class Dispatcher {
    * come from the same four reads, made here against this dispatcher's own handlers; the
    * contract's one builder turns them into a view. The parses only turn the handlers' core
    * records into the wire types the builder takes: `worker.list`'s own output schema, applied
-   * by `dispatch()`, is what bounds and narrows the view on the wire. `drained` is always
-   * `false`: a gateway that drained this worker holds that flag, not this host.
+   * by `dispatch()`, is what bounds and narrows the view on the wire. The catalog is the kept
+   * one (see `#viewCatalog`); status and devices are read on every call, as a gateway reads
+   * them on every worker event. `drained` is always `false`: a gateway that drained this worker
+   * holds that flag, not this host.
    */
   #workerList: Handler<"worker.list"> = async (_input, session) => {
     const [status, devices, catalog] = await Promise.all([
       this.#statusGet({}, session),
       this.#listGet({ kind: "devices" }, session),
-      this.#catalogGet({}, session),
+      this.#keptViewCatalog(session),
     ]);
     const label = this.options.config.gateway.label;
     return {
@@ -643,6 +667,22 @@ export class Dispatcher {
       ],
     };
   };
+
+  /** The kept catalog for `worker.list`, read again once it is older than the interval. */
+  #keptViewCatalog(session: DispatchSession): Promise<unknown> {
+    const now = this.options.clock.now();
+    const kept = this.#viewCatalog;
+    if (kept !== undefined && now - kept.readAt < WORKER_VIEW_REFRESH_INTERVAL_MS) {
+      return kept.catalog;
+    }
+    const catalog = Promise.resolve(this.#catalogGet({}, session));
+    const entry = { catalog, readAt: now };
+    this.#viewCatalog = entry;
+    catalog.catch(() => {
+      if (this.#viewCatalog === entry) this.#viewCatalog = undefined;
+    });
+    return catalog;
+  }
 
   /**
    * ADR 0010 §4 and §6: an operator's explicit install. The command itself is the consent, so the

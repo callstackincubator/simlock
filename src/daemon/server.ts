@@ -296,6 +296,8 @@ function buildDispatcher(
     ...(options.doctor === undefined ? {} : { doctor: options.doctor }),
     // The `operation` log line's error code: the same classifier this server answers with.
     errorCode: classifyError,
+    // `worker.list` drops its kept catalog when a component is installed or removed.
+    eventBus: options.eventBus,
     eventHistory: options.eventHistory,
     health: hooks.health,
     hostFacts: options.hostFacts,
