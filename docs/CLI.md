@@ -1202,9 +1202,9 @@ Platform: android
 Against a gateway, `modelAliases` is the union of each worker's other names
 for a model, and `images` the union of their images. A model is in
 `customModels` when any worker that lists it marks it custom;
-`simlock worker list --json` shows which worker that is. The gateway does not
-yet route by another name, so ask a gateway for a model by its name in
-`models`.
+`simlock worker list --json` shows which worker that is. A gateway accepts any
+name a worker lists for a model, in any letter case, and sends that worker its
+own name for it.
 
 ### Where Android models come from
 
