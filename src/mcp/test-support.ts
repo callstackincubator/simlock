@@ -8,6 +8,8 @@ import {
   type AnySimlockError,
   type CatalogGetInput,
   type CatalogGetOutput,
+  type ComponentListInput,
+  type ComponentListOutput,
   type DeviceRecoveredPush,
   type DeviceUnhealthyPush,
   type DoctorReport,
@@ -58,6 +60,8 @@ export class FakeSimlockClient implements SimlockClient {
 
   getCatalogImpl: (input: CatalogGetInput) => Promise<CatalogGetOutput> = notStubbed("getCatalog");
   getStatusImpl: () => Promise<StatusGetOutput> = notStubbed("getStatus");
+  listComponentsImpl: (input: ComponentListInput) => Promise<ComponentListOutput> =
+    notStubbed("listComponents");
   requestLeaseImpl: (
     input: LeaseRequestInput,
     options: RequestLeaseOptions,
@@ -92,6 +96,12 @@ export class FakeSimlockClient implements SimlockClient {
   getStatus(): Promise<StatusGetOutput> {
     this.calls.push({ input: undefined, method: "getStatus" });
     return this.#dead ? this.#deadConnection() : this.getStatusImpl();
+  }
+
+  // fallow-ignore-next-line unused-class-member -- part of the SimlockClient interface this fake implements; MCP exposes no component tool of its own.
+  listComponents(input: ComponentListInput = {}): Promise<ComponentListOutput> {
+    this.calls.push({ input, method: "listComponents" });
+    return this.#dead ? this.#deadConnection() : this.listComponentsImpl(input);
   }
 
   requestLease(input: LeaseRequestInput, options: RequestLeaseOptions = {}): Promise<LeaseGrant> {

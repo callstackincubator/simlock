@@ -10,6 +10,7 @@ import {
   type DriverAdvisory,
   type DriverToolVersion,
   type DriverCatalogEntry,
+  type DriverComponent,
   type DriverDevice,
   DriverCrashError,
   type DriverEstimate,
@@ -521,6 +522,40 @@ export class IosSimctlDriver implements Driver {
     const installed = installedComponent(runtime, images);
     const wasThere = before.some((receipt) => sameReceipt(receipt, installed.receipt));
     return { ...installed, outcome: wasThere ? "already-installed" : "installed" };
+  }
+
+  /**
+   * One entry per iOS runtime image `simctl runtime list -j` reports: its version, its size, its
+   * build as the variant, and the receipt `findComponent` and `installComponent` build for the
+   * runtime it provides. `foreignDevices` counts the devices in the machine's default device set
+   * whose runtime is the image's; that read is an unscoped `simctl list`, which mutates nothing.
+   * An image that reports no version names no component and is left out.
+   */
+  async listComponents(): Promise<readonly DriverComponent[]> {
+    const [images, defaultSet] = await Promise.all([
+      this.#loadRuntimeImages(),
+      this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS),
+    ]);
+    let foreign: ReadonlyMap<string, number>;
+    try {
+      foreign = devicesPerRuntime(JSON.parse(defaultSet.stdout) as unknown);
+    } catch (error: unknown) {
+      if (error instanceof DriverCrashError) throw error;
+      throw new DriverCrashError(`Could not parse simctl device list: ${errorMessage(error)}`);
+    }
+    return images.filter(isIosImage).flatMap((image): DriverComponent[] =>
+      image.version === undefined
+        ? []
+        : [
+            {
+              foreignDevices: foreign.get(image.runtimeIdentifier) ?? 0,
+              receipt: imageReceipt(image),
+              version: image.version,
+              ...(image.build === undefined ? {} : { variant: image.build }),
+              ...(image.sizeBytes === undefined ? {} : { sizeBytes: image.sizeBytes }),
+            },
+          ],
+    );
   }
 
   /** The receipt of every runtime installed right now, before an installer run. */
@@ -1530,7 +1565,8 @@ export class IosSimctlDriver implements Driver {
    * `findLegacy` / `destroyLegacy` deal with are in the machine's default set, which is
    * where a `--set` would stop reaching them. Only those two may call it, and only for a
    * UDID a registry record names -- registry-only destruction (safety rule 1) is satisfied
-   * by that record, not by the root.
+   * by that record, not by the root. The one other caller is `listComponents`, and only for
+   * `simctl list`, which reads the default set and mutates nothing (ADR 0010 §8).
    */
   async #invokeLegacySimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
     return this.#invokeXcrun(["simctl", ...args], timeoutMs);
@@ -1869,7 +1905,14 @@ interface RuntimeImage {
   /** The `SimRuntime` identifier the image provides, as `simctl list runtimes` names it. */
   readonly runtimeIdentifier: string;
   readonly build?: string;
+  /** The platform the image is for: `com.apple.platform.iphonesimulator` for iOS. */
+  readonly platformIdentifier?: string;
+  readonly version?: string;
+  readonly sizeBytes?: number;
 }
+
+/** The `platformIdentifier` `simctl runtime list -j` gives an iOS simulator runtime image. */
+const IOS_SIMULATOR_PLATFORM = "com.apple.platform.iphonesimulator";
 
 /** `simctl runtime list -j` is an object keyed by image identifier; unreadable entries are skipped. */
 function parseRuntimeImages(value: unknown): readonly RuntimeImage[] {
@@ -1884,18 +1927,33 @@ function parseRuntimeImages(value: unknown): readonly RuntimeImage[] {
           {
             identifier: entry.identifier,
             runtimeIdentifier: entry.runtimeIdentifier,
-            ...(typeof entry.build === "string" ? { build: entry.build } : {}),
+            ...optionalString("build", entry.build),
+            ...optionalString("platformIdentifier", entry.platformIdentifier),
+            ...optionalString("version", entry.version),
+            ...(isByteCount(entry.sizeBytes) ? { sizeBytes: entry.sizeBytes } : {}),
           },
         ]
       : [],
   );
 }
 
+/** `{ [key]: value }` when `value` is a string, and nothing otherwise. */
+function optionalString<Key extends string>(
+  key: Key,
+  value: unknown,
+): Partial<Record<Key, string>> {
+  return typeof value === "string" ? ({ [key]: value } as Record<Key, string>) : {};
+}
+
+function isByteCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 /**
- * The one function that builds this driver's receipt (ADR 0010 §5): the runtime image the
- * runtime is mounted from, and its build. A runtime with no image of its own -- one bundled
- * inside Xcode rather than downloaded -- is named by its runtime identifier instead; Simlock
- * never installs one of those, so no record of Simlock's can match it.
+ * The receipt of the installed component a runtime is (ADR 0010 §5): the receipt of the image it
+ * is mounted from. A runtime with no image of its own -- one bundled inside Xcode rather than
+ * downloaded -- is named by its runtime identifier instead; Simlock never installs one of those,
+ * so no record of Simlock's can match it.
  */
 function runtimeReceipt(runtime: Runtime, images: readonly RuntimeImage[]): ComponentReceipt {
   const image = images.find(
@@ -1903,10 +1961,40 @@ function runtimeReceipt(runtime: Runtime, images: readonly RuntimeImage[]): Comp
       candidate.runtimeIdentifier === runtime.identifier &&
       (runtime.build === undefined || candidate.build === runtime.build),
   );
-  const build = runtime.build ?? image?.build ?? "";
   return image === undefined
-    ? { build, runtime: runtime.identifier }
-    : { build, image: image.identifier };
+    ? { build: runtime.build ?? "", runtime: runtime.identifier }
+    : imageReceipt(image);
+}
+
+/**
+ * The one function that builds an image's receipt, for an install, a find and a listing alike
+ * (ADR 0010 §5): the image identifier and its build. `runtimeReceipt` only picks the image.
+ */
+function imageReceipt(image: RuntimeImage): ComponentReceipt {
+  return { build: image.build ?? "", image: image.identifier };
+}
+
+/** Whether an image is an iOS simulator runtime, not a watchOS, tvOS or visionOS one. */
+function isIosImage(image: RuntimeImage): boolean {
+  return image.platformIdentifier === undefined
+    ? image.runtimeIdentifier.includes(".SimRuntime.iOS-")
+    : image.platformIdentifier === IOS_SIMULATOR_PLATFORM;
+}
+
+/**
+ * How many devices a `simctl list -j devices` answer holds under each runtime: the answer is
+ * keyed by runtime identifier, with one array of devices under each.
+ */
+function devicesPerRuntime(value: unknown): ReadonlyMap<string, number> {
+  if (!isRecord(value) || !isRecord(value.devices)) {
+    throw new DriverCrashError("Invalid simctl device list JSON");
+  }
+  return new Map(
+    Object.entries(value.devices).map(([runtime, devices]) => [
+      runtime,
+      Array.isArray(devices) ? devices.length : 0,
+    ]),
+  );
 }
 
 function installedComponent(runtime: Runtime, images: readonly RuntimeImage[]): InstalledComponent {

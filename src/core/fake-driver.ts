@@ -8,6 +8,7 @@ import {
   type Driver,
   type DriverCatalogEntry,
   type DriverCatalogImage,
+  type DriverComponent,
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
@@ -32,6 +33,7 @@ export type FakeDriverOperation =
   | "destroy"
   | "listManaged"
   | "listCatalog"
+  | "listComponents"
   /** Recorded like every other call, so a test can pin that it precedes the first destroy. */
   | "revalidateRoot"
   | "findLegacy"
@@ -51,6 +53,10 @@ export interface FakeDriverOptions {
   readonly componentFootprint?: { readonly path: string; readonly bytes: number };
   /** The percentages every `installComponent` reports through `onProgress`, in order. */
   readonly installProgress?: readonly number[];
+  /** What `listComponents` reports as each version's size; absent for a version left out. */
+  readonly componentSizes?: Readonly<Record<string, number>>;
+  /** What `listComponents` reports as each version's foreign devices; 0 for one left out. */
+  readonly foreignDevices?: Readonly<Record<string, number>>;
   /** Stands in for a real driver's owned root; nothing here validates or creates it. */
   readonly deviceRoot?: string;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
@@ -124,7 +130,10 @@ export class FakeDriver implements Driver {
   /** One receipt per installed version; an install replaces it with a new one. */
   readonly #receipts: Map<string, ComponentReceipt>;
   #installCount = 0;
-  readonly #install: Pick<FakeDriverOptions, "componentFootprint" | "installProgress">;
+  readonly #install: Pick<
+    FakeDriverOptions,
+    "componentFootprint" | "componentSizes" | "foreignDevices" | "installProgress"
+  >;
   #holdInstalls = false;
   readonly #pendingInstalls: (() => void)[] = [];
   readonly #callCounts = new Map<FakeDriverOperation, number>();
@@ -268,6 +277,26 @@ export class FakeDriver implements Driver {
     this.#availableOsVersions.add(version);
     this.#receipts.set(version, receipt);
     return { outcome: "installed", receipt, version };
+  }
+
+  /**
+   * One entry per available version, with the receipt `findComponent` and `installComponent`
+   * report for it, and the scripted size and foreign devices.
+   */
+  async listComponents(): Promise<readonly DriverComponent[]> {
+    await this.#beforeCall("listComponents");
+    return [...this.#availableOsVersions].flatMap((version): DriverComponent[] => {
+      const installed = this.#installed(version);
+      if (installed === undefined) return [];
+      const sizeBytes = this.#install.componentSizes?.[version];
+      return [
+        {
+          ...installed,
+          foreignDevices: this.#install.foreignDevices?.[version] ?? 0,
+          ...(sizeBytes === undefined ? {} : { sizeBytes }),
+        },
+      ];
+    });
   }
 
   holdInstalls(): void {

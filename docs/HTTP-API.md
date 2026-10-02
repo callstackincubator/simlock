@@ -62,7 +62,7 @@ Three roles:
 
 | Role | Can |
 |---|---|
-| `agent` | catalog, status, its own lease requests and leases, `exec` on its own lease |
+| `agent` | catalog, status, installed components, its own lease requests and leases, `exec` on its own lease |
 | `operator` | everything `agent` can, plus every other requester's leases/devices, the worker routes, event replay/stream, and releasing any lease |
 | `worker` | open an uplink at [`/v1/uplink`](#get-v1uplink-websocket-upgrade), and nothing else |
 
@@ -116,8 +116,8 @@ Routes, status codes, and every other field are unchanged.
 Gateway/worker fleet mode is purely additive on top of
 that: the same routes answer identically whether the daemon behind them is a
 worker or a **gateway** fronting a fleet of workers (except
-`POST /v1/components/install`, which only a worker serves; a gateway answers
-`501 UNSUPPORTED_IN_GATEWAY_MODE`), and what it adds are new
+`POST /v1/components/install` and `GET /v1/components`, which only a worker
+serves; a gateway answers `501 UNSUPPORTED_IN_GATEWAY_MODE`), and what it adds are new
 routes (`/v1/uplink`, `/v1/workers*`, `POST /v1/leases/{id}/exec`), new
 fields (`mode` on status, `workers[]`, `workerId`, `worker` on the lease),
 and new error codes. Nothing existing changes shape, and a client that
@@ -691,6 +691,45 @@ runs joins it and gets its result; repeating it after it finished answers
 `already-installed`. A lease request for the same component joins the same
 download too.
 
+### `GET /v1/components?platform=ios|android`
+
+Role: `agent`. Lists every iOS simulator runtime and Android system image
+installed on this machine, whoever installed it — the same answer as
+`simlock component list`. It changes nothing. Without `platform`, both
+platforms are listed.
+
+```json
+{
+  "components": [
+    {
+      "platform": "android",
+      "version": "35",
+      "variant": "google_apis/arm64-v8a",
+      "sizeBytes": 4201234567,
+      "installedBySimlock": true,
+      "installedAt": 1790864071200,
+      "devices": 2,
+      "foreignDevices": 0
+    }
+  ]
+}
+```
+
+Entries are ordered by platform, then version, then variant. `version` is
+the string `GET /v1/catalog` lists under `runtimes`; `variant` tells two
+components of one version apart (an iOS runtime's build, an Android image's
+tag and ABI). `sizeBytes` is left out when it cannot be read.
+`installedBySimlock` is `true` only for a component Simlock installed that is
+still the same one on disk, and `installedAt` is when it did. `devices`
+counts Simlock's own devices of this platform and version that have not been
+deleted; two variants of one version show the same count. `foreignDevices`
+counts the devices outside Simlock that use the component: simulators in
+Xcode's default device set, AVDs in the user's own AVD home.
+
+A platform whose tools cannot answer is left out. `400 BAD_REQUEST` for a
+`platform` other than `ios` or `android`; `501 UNSUPPORTED_IN_GATEWAY_MODE`
+from a gateway, which owns no components — ask the worker.
+
 ### `DELETE /v1/leases/{id}`
 
 Role: `agent` (own lease); `operator` may release any lease.
@@ -919,7 +958,7 @@ Every failure is the same shape the daemon protocol uses:
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
 | 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
-| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`) |
+| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
@@ -933,15 +972,16 @@ behind this is not reachable right now" is the same answer in all four cases,
 and a client with one retry rule for `transport` should not need a second one
 because the unreachable thing happened to be a worker.
 
-`UNSUPPORTED_IN_GATEWAY_MODE` comes from one route in this version,
-`POST /v1/components/install` asked of a gateway — `nuke`, `cleanup`, and
+`UNSUPPORTED_IN_GATEWAY_MODE` comes from two routes in this version,
+`POST /v1/components/install` and `GET /v1/components` asked of a gateway —
+`nuke`, `cleanup`, and
 `doctor` are absent from the HTTP surface (see
 [Not implemented](#not-implemented)), and the status is fixed so adding
 `POST /v1/doctor` or `POST /v1/cleanup` later is additive rather than a fresh
 decision. `501` is the honest status for it: this is not a temporary
 condition to retry past, it is an operation this daemon will never perform,
-and `nuke`/`cleanup`/`doctor`/`driver.passthrough`/component installs stay
-per-worker permanently rather than pending some later fan-out.
+and `nuke`/`cleanup`/`doctor`/`driver.passthrough`/component installs and
+listings stay per-worker permanently rather than pending some later fan-out.
 
 `EXEC_TIMEOUT`'s `504` is documented for completeness rather than for the
 exec route: `POST /v1/leases/{id}/exec` has already answered `200` and begun

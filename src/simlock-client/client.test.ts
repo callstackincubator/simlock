@@ -166,6 +166,35 @@ describe("connectSimlock: handshake", () => {
     expect(connection.sent).toHaveLength(before);
   });
 
+  it("lists components from an agent client with component.list, sending the platform and returning the daemon's answer", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+    const answer = {
+      components: [
+        {
+          devices: 0,
+          foreignDevices: 2,
+          installedBySimlock: false,
+          platform: "ios",
+          sizeBytes: 9_100_000_000,
+          variant: "23A343",
+          version: "26.0",
+        },
+      ],
+    };
+
+    const callPromise = client.listComponents({ platform: "ios" });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("component.list")!;
+    expect(call.payload).toEqual({ platform: "ios" });
+    connection.reply(call.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+  });
+
   it("wraps a malformed daemon response instead of throwing a raw parse failure", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });

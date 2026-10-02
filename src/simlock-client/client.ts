@@ -33,6 +33,8 @@ import type {
   CleanupRunOutput,
   ComponentInstallInput,
   ComponentInstallOutput,
+  ComponentListInput,
+  ComponentListOutput,
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
@@ -85,6 +87,8 @@ export type {
   ComponentInstallInput,
   ComponentInstallOutput,
   ComponentInstallProgress,
+  ComponentListInput,
+  ComponentListOutput,
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
@@ -167,6 +171,11 @@ export interface SimlockClient {
 
   getCatalog(input?: CatalogGetInput): Promise<CatalogGetOutput>;
   getStatus(): Promise<StatusGetOutput>;
+  /**
+   * ADR 0010 §8: every installed iOS simulator runtime and Android system image on the daemon's
+   * machine, with its size, whether Simlock installed it, and how many devices use it.
+   */
+  listComponents(input?: ComponentListInput): Promise<ComponentListOutput>;
   requestLease(input: LeaseRequestInput, options?: RequestLeaseOptions): Promise<LeaseGrant>;
   cancelLease(input?: LeaseCancelInput): Promise<LeaseCancelOutput>;
   renewLease(input: LeaseRenewInput): Promise<LeaseRecord>;
@@ -313,6 +322,7 @@ function buildDegradedClient(
 
     getCatalog: () => rejected(),
     getStatus: () => rejected(),
+    listComponents: () => rejected(),
     requestLease: () => rejected(),
     cancelLease: () => rejected(),
     renewLease: () => rejected(),
@@ -420,6 +430,10 @@ class SimlockClientImpl {
 
   getStatus(): Promise<StatusGetOutput> {
     return this.#call("status.get", {});
+  }
+
+  listComponents(input: ComponentListInput = {}): Promise<ComponentListOutput> {
+    return this.#call("component.list", input);
   }
 
   async requestLease(

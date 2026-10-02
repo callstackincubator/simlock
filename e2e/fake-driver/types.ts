@@ -18,6 +18,7 @@ export type FakeDriverOperation =
   | "destroy"
   | "listManaged"
   | "listCatalog"
+  | "listComponents"
   /** The root re-proof `doctor --purge-orphans` takes before its first destroy. */
   | "revalidateRoot";
 
@@ -95,6 +96,10 @@ export interface FakeDriverPlatformScript {
    * `failures.installComponent` makes it fail.
    */
   readonly installProgress?: readonly number[];
+  /** What `listComponents` reports as each version's size in bytes; absent for one left out. */
+  readonly componentSizes?: Readonly<Record<string, number>>;
+  /** What `listComponents` reports as each version's foreign devices; 0 for one left out. */
+  readonly foreignDevices?: Readonly<Record<string, number>>;
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
   readonly reclaimResult?: "ready" | "shutdown";

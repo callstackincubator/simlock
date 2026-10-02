@@ -77,17 +77,20 @@ export class DriverCatalog {
    * omitted rather than raising `NoDriverError` — mirrors `discoverDrivers`.
    */
   async listCatalog(platform?: Platform): Promise<readonly PlatformCatalog[]> {
-    const drivers =
-      platform === undefined ? [...this.#drivers.values()] : this.#driverIfKnown(platform);
     return Promise.all(
-      drivers.map(async (driver) => ({
+      this.select(platform).map(async (driver) => ({
         platform: driver.platform,
         ...(await driver.listCatalog()),
       })),
     );
   }
 
-  #driverIfKnown(platform: Platform): readonly Driver[] {
+  /**
+   * Every registered driver, or only the given platform's. A platform with no registered driver
+   * gives none rather than raising `NoDriverError`: a read across platforms leaves it out.
+   */
+  select(platform?: Platform): readonly Driver[] {
+    if (platform === undefined) return [...this.#drivers.values()];
     const driver = this.#drivers.get(platform);
     return driver === undefined ? [] : [driver];
   }

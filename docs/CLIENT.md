@@ -259,6 +259,34 @@ const result = await admin.installComponent(
   component share one download, and each gets its result. A dropped
   connection does not stop the download; calling again joins it.
 
+## What is installed: `listComponents`
+
+`listComponents({ platform? })`, on either client, lists every iOS
+simulator runtime and Android system image installed on the daemon's
+machine, whoever installed it — the call behind `simlock component list`:
+
+```ts
+const { components } = await client.listComponents({ platform: "android" });
+// [{ platform: "android", version: "35", variant: "google_apis/arm64-v8a",
+//    sizeBytes: 4201234567, installedBySimlock: true, installedAt: 1790864071200,
+//    devices: 2, foreignDevices: 0 }]
+```
+
+- Entries are ordered by platform, then version, then variant. Without
+  `platform`, both platforms are listed; a platform whose tools cannot
+  answer is left out.
+- `version` is the string `getCatalog` lists under `runtimes`. `variant`
+  tells two components of one version apart: an iOS runtime's build, an
+  Android image's tag and ABI. `sizeBytes` is absent when it cannot be read.
+- `installedBySimlock` is `true` only for a component Simlock installed that
+  is still the same one on disk; `installedAt` is when it did.
+- `devices` counts Simlock's own devices of this platform and version that
+  have not been deleted; two variants of one version show the same count.
+  `foreignDevices` counts the devices outside Simlock that use the
+  component: simulators in Xcode's default device set, AVDs in the user's
+  own AVD home.
+- A gateway rejects it with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
 ## What machine answered: `getStatus().host`
 
 `getStatus()` carries a `host` block beside `daemon`: the machine the daemon

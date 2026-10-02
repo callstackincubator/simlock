@@ -1897,7 +1897,10 @@ describe("CLI: component install (ADR 0010 §6)", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(output.stdout).toBe("Usage: simlock component install <ios|android> <version>\n");
+      expect(output.stdout).toBe(
+        "Usage: simlock component install <ios|android> <version>\n" +
+          "       simlock component list [--platform <ios|android>]\n",
+      );
       expect(connected).toBe(false);
     },
   );
@@ -1906,6 +1909,91 @@ describe("CLI: component install (ADR 0010 §6)", () => {
     const output = outputCapture();
     await runCli(["--help"], output.environmentWith({}));
     expect(output.stdout).toContain("component install <ios|android> <version>");
+  });
+});
+
+describe("CLI: component list (ADR 0010 §8)", () => {
+  const listing = {
+    components: [
+      {
+        devices: 2,
+        foreignDevices: 1,
+        installedAt: 1_790_864_071_200,
+        installedBySimlock: true,
+        platform: "android" as const,
+        sizeBytes: 4_200_000_000,
+        variant: "google_apis/arm64-v8a",
+        version: "35",
+      },
+    ],
+  };
+
+  it("prints the daemon's component.list answer as one JSON object on stdout, and exits 0", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const client = fakeClient({
+      listComponents: async (input) => {
+        asked.push(input);
+        return listing;
+      },
+    });
+
+    await expect(
+      runCli(["component", "list"], output.environmentWith({ connectAdmin: async () => client })),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{}]);
+    expect(output.stdout.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(output.stdout)).toEqual(listing);
+  });
+
+  it("asks for one platform with --platform", async () => {
+    const output = outputCapture();
+    const asked: unknown[] = [];
+    const client = fakeClient({
+      listComponents: async (input) => {
+        asked.push(input);
+        return { components: [] };
+      },
+    });
+
+    await expect(
+      runCli(
+        ["component", "list", "--platform", "ios"],
+        output.environmentWith({ connectAdmin: async () => client }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(asked).toEqual([{ platform: "ios" }]);
+  });
+
+  it.each([
+    ["an unknown platform", ["component", "list", "--platform", "tvos"]],
+    ["a positional argument", ["component", "list", "ios"]],
+    ["an unknown flag", ["component", "list", "--json"]],
+  ])("exits 2 with USAGE for %s, without asking the daemon", async (_label, argv) => {
+    const output = outputCapture();
+    let listed = 0;
+    const client = fakeClient({
+      listComponents: () => {
+        listed += 1;
+        return Promise.resolve({ components: [] });
+      },
+    });
+
+    await expect(
+      runCli(argv, output.environmentWith({ connectAdmin: async () => client })),
+    ).resolves.toBe(2);
+    expect(listed).toBe(0);
+    expect(JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "")).toMatchObject({
+      error: { code: "USAGE" },
+    });
+  });
+
+  it("lists the command in the usage banner", async () => {
+    const output = outputCapture();
+    await runCli(["--help"], output.environmentWith({}));
+    expect(output.stdout).toContain("component list [--platform <ios|android>]");
   });
 });
 
@@ -3941,6 +4029,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     daemonVersion: "test",
     getCatalog: () => Promise.resolve(emptyCatalog),
     getStatus: () => Promise.resolve(EMPTY_STATUS),
+    listComponents: () => Promise.resolve({ components: [] }),
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
     exec: () => Promise.resolve({ exitCode: 0 }),

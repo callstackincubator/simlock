@@ -82,6 +82,8 @@ export type WorkerRemoveOutput = OpOutput<"worker.remove">;
 
 export type ComponentInstallInput = OpInput<"component.install">;
 export type ComponentInstallOutput = OpOutput<"component.install">;
+export type ComponentListInput = OpInput<"component.list">;
+export type ComponentListOutput = OpOutput<"component.list">;
 
 // ---- pushes ---------------------------------------------------------------------------------
 

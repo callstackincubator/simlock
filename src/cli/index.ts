@@ -59,6 +59,8 @@ Commands:
                               Inspect and manage the workers of a gateway
   component install <ios|android> <version>
                               Install a simulator runtime or system image
+  component list [--platform <ios|android>]
+                              List installed runtimes and system images
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
@@ -1838,7 +1840,9 @@ async function runWorkerAction(
   return 0;
 }
 
-const COMPONENT_USAGE = "Usage: simlock component install <ios|android> <version>\n";
+const COMPONENT_USAGE =
+  "Usage: simlock component install <ios|android> <version>\n" +
+  "       simlock component list [--platform <ios|android>]\n";
 
 /**
  * ADR 0010 §6: installs one component through the daemon's `component.install`. Argument
@@ -1856,6 +1860,7 @@ async function runComponent(
     environment.stdout.write(COMPONENT_USAGE);
     return 0;
   }
+  if (command === "list") return runComponentList(argv.slice(1), environment, token);
   if (command !== "install") {
     throw new UsageError(withHelpHint(`Unknown component command: ${command}`));
   }
@@ -1872,6 +1877,41 @@ async function runComponent(
       },
     });
     writeResult(environment, result);
+    return 0;
+  } finally {
+    await client.close();
+  }
+}
+
+/**
+ * ADR 0010 §8: `component list` renders the daemon's `component.list` as one JSON object on
+ * stdout. Which components are Simlock's, and how many devices use each, is the daemon's answer.
+ */
+async function runComponentList(
+  argv: readonly string[],
+  environment: CliEnvironment,
+  token: string | undefined,
+): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    platform: { type: "string" },
+  });
+  if (values.help) {
+    environment.stdout.write(COMPONENT_USAGE);
+    return 0;
+  }
+  if (values.positionals.length > 0) {
+    throw new UsageError(withHelpHint("component list takes no positional arguments"));
+  }
+  if (values.platform !== undefined && values.platform !== "ios" && values.platform !== "android")
+    throw new UsageError("component list --platform must be ios or android");
+  const platform = values.platform as "ios" | "android" | undefined;
+  const client = await connectDaemonClient(environment, token);
+  try {
+    writeResult(
+      environment,
+      await client.listComponents(platform === undefined ? {} : { platform }),
+    );
     return 0;
   } finally {
     await client.close();

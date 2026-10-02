@@ -1,5 +1,11 @@
 import type { EventBus } from "../bus/index.js";
-import type { Clock, Filesystem, TimerHandle } from "../ports/index.js";
+import {
+  type Clock,
+  type Filesystem,
+  type Logger,
+  NoopLogger,
+  type TimerHandle,
+} from "../ports/index.js";
 import type { Platform } from "./domain.js";
 import {
   type ComponentInstallProgress,
@@ -7,6 +13,8 @@ import {
   ComponentInstallTimeoutError,
   type DiskSpaceGuard,
   type Driver,
+  type DriverComponent,
+  sameReceipt,
 } from "./driver.js";
 import type { DriverCatalog } from "./driver-catalog.js";
 import type { Registry } from "./registry.js";
@@ -50,10 +58,12 @@ export interface ComponentInstallerOptions {
    */
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly diskSpace: Pick<DiskSpaceGuard, "reserve">;
-  readonly drivers: Pick<DriverCatalog, "get">;
+  readonly drivers: Pick<DriverCatalog, "get" | "select">;
   readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Pick<Filesystem, "diskFree">;
-  readonly registry: Pick<Registry, "recordComponent">;
+  /** Hears a driver whose `listComponents` rejects; `list` leaves that driver out. */
+  readonly logger?: Logger;
+  readonly registry: Pick<Registry, "recordComponent" | "snapshot">;
   /** `downloads.timeoutMs`: one budget per call, from the moment `install` is called. */
   readonly timeoutMs: number;
 }
@@ -72,6 +82,24 @@ export interface ComponentInstallInProgress {
   readonly since: number;
   /** How many calls are joined to it. */
   readonly waiters: number;
+}
+
+/**
+ * One installed component as `list` reports it (ADR 0010 §8). `installedBySimlock` is true only
+ * when a component record's receipt equals this component's: the record is the only proof (§5).
+ * `devices` counts Simlock's own devices of this platform and version in any state but
+ * `deleted`; the core cannot tell variants apart, so two variants of one version show the same
+ * count. `variant` and `foreignDevices` are the driver's, carried unread.
+ */
+export interface InstalledComponentListing {
+  readonly platform: Platform;
+  readonly version: string;
+  readonly variant?: string;
+  readonly sizeBytes?: number;
+  readonly installedBySimlock: boolean;
+  readonly installedAt?: number;
+  readonly devices: number;
+  readonly foreignDevices: number;
 }
 
 /** `inProgress()` lists at most this many installs, the oldest first. */
@@ -133,7 +161,11 @@ export class ComponentInstaller {
   readonly #runs = new Set<Promise<void>>();
   #closed = false;
 
-  constructor(private readonly options: ComponentInstallerOptions) {}
+  readonly #logger: Logger;
+
+  constructor(private readonly options: ComponentInstallerOptions) {
+    this.#logger = options.logger ?? new NoopLogger();
+  }
 
   install(request: ComponentInstallRequest): Promise<ComponentInstallOutcome> {
     if (this.#closed) return Promise.reject(new ComponentInstallerClosedError());
@@ -195,6 +227,56 @@ export class ComponentInstaller {
       }
     }
     return listed.sort((a, b) => a.since - b.since).slice(0, MAX_LISTED_INSTALLS);
+  }
+
+  /**
+   * Every installed component on this platform's driver, or on every driver, ordered by
+   * platform, then version, then variant. Read-only: it asks each driver's `listComponents` and
+   * reads the registry, and writes nothing. A driver whose listing rejects is left out and
+   * logged, and the other platforms are still listed.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through the Dispatcher's `components` option, typed as a Pick of this class.
+  async list(platform?: Platform): Promise<readonly InstalledComponentListing[]> {
+    const listed = await Promise.all(
+      this.options.drivers.select(platform).map(async (driver) => {
+        try {
+          return { components: await driver.listComponents(), platform: driver.platform };
+        } catch (error: unknown) {
+          this.#logger.warn("A driver could not list its installed components", {
+            error: stableError(error),
+            platform: driver.platform,
+          });
+          return { components: [], platform: driver.platform };
+        }
+      }),
+    );
+    // Read after every driver answered, so a record written while they ran is seen.
+    const { components: records, devices } = this.options.registry.snapshot;
+    return listed
+      .flatMap(({ components, platform: listedPlatform }) =>
+        components.map((component): InstalledComponentListing => {
+          const record = records.find(
+            (candidate) =>
+              candidate.platform === listedPlatform &&
+              sameReceipt(candidate.receipt, component.receipt),
+          );
+          return {
+            devices: devices.filter(
+              (device) =>
+                device.state !== "deleted" &&
+                device.spec.platform === listedPlatform &&
+                device.spec.osVersion === component.version,
+            ).length,
+            foreignDevices: component.foreignDevices,
+            installedBySimlock: record !== undefined,
+            platform: listedPlatform,
+            version: component.version,
+            ...(record === undefined ? {} : { installedAt: record.installedAt }),
+            ...optionalFields(component),
+          };
+        }),
+      )
+      .sort(compareListings);
   }
 
   /**
@@ -426,4 +508,27 @@ function notify(call: InstallCall, progress: ComponentInstallerProgress): void {
   } catch {
     // Isolated like an event handler (events rule 5).
   }
+}
+
+function optionalFields(
+  component: DriverComponent,
+): Pick<InstalledComponentListing, "variant" | "sizeBytes"> {
+  return {
+    ...(component.variant === undefined ? {} : { variant: component.variant }),
+    ...(component.sizeBytes === undefined ? {} : { sizeBytes: component.sizeBytes }),
+  };
+}
+
+const ORDER = new Intl.Collator("en", { numeric: true });
+
+/** By platform, then version (numerically, so `9` precedes `35`), then variant. */
+function compareListings(
+  left: InstalledComponentListing,
+  right: InstalledComponentListing,
+): number {
+  return (
+    ORDER.compare(left.platform, right.platform) ||
+    ORDER.compare(left.version, right.version) ||
+    ORDER.compare(left.variant ?? "", right.variant ?? "")
+  );
 }

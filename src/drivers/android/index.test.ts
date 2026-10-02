@@ -2545,6 +2545,150 @@ describe("AndroidDriver pre-root devices", () => {
   });
 });
 
+describe("AndroidDriver listComponents()", () => {
+  const userAvdHome = `${home}/.android/avd`;
+  const googleApis = `${sdk}/system-images/android-35/google_apis/arm64-v8a`;
+  const plain = `${sdk}/system-images/android-35/default/arm64-v8a`;
+
+  /** An AVD the user made with avdmanager: `<name>.ini` pointing at `<name>.avd`. */
+  async function userAvd(
+    filesystem: MemoryFilesystem,
+    name: string,
+    sysdir: string,
+    options: { readonly avdHome?: string; readonly avdPath?: string } = {},
+  ): Promise<void> {
+    const avdHome = options.avdHome ?? userAvdHome;
+    const avdPath = options.avdPath ?? `${avdHome}/${name}.avd`;
+    await filesystem.mkdirp(avdPath);
+    await filesystem.writeFileAtomic(
+      `${avdHome}/${name}.ini`,
+      `avd.ini.encoding=UTF-8\npath=${avdPath}\n`,
+    );
+    await filesystem.writeFileAtomic(
+      `${avdPath}/config.ini`,
+      `hw.ramSize=2048\nimage.sysdir.1=${sysdir}\ntag.id=google_apis\n`,
+    );
+  }
+
+  it("lists two images of one API level as two entries with different variants, each with its directory's size", async () => {
+    const filesystem = await androidFilesystem({
+      images: [
+        ["35", "google_apis", "arm64-v8a"],
+        ["35", "default", "arm64-v8a"],
+      ],
+    });
+    await filesystem.writeFileAtomic(`${googleApis}/source.properties`, "Pkg.Revision=7\n");
+    await filesystem.mkdirp(`${googleApis}/data`);
+    await filesystem.writeFileAtomic(`${googleApis}/data/userdata.img`, "0123456789");
+    await filesystem.writeFileAtomic(`${plain}/system.img`, "abc");
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    const listed = await driver.listComponents();
+
+    expect(listed).toEqual([
+      {
+        foreignDevices: 0,
+        receipt: {
+          package: "system-images;android-35;default;arm64-v8a",
+          revision: "unknown",
+          stamp: "",
+        },
+        sizeBytes: 3,
+        variant: "default/arm64-v8a",
+        version: "35",
+      },
+      {
+        foreignDevices: 0,
+        receipt: {
+          package: "system-images;android-35;google_apis;arm64-v8a",
+          revision: "7",
+          stamp: expect.stringMatching(/^.+@\d+$/),
+        },
+        sizeBytes: "Pkg.Revision=7\n".length + 10,
+        variant: "google_apis/arm64-v8a",
+        version: "35",
+      },
+    ]);
+  });
+
+  it("counts an AVD in the user's AVD home that names the image as foreign, wherever its directory is, and not an AVD in Simlock's root", async () => {
+    const filesystem = await androidFilesystem({
+      images: [
+        ["35", "google_apis", "arm64-v8a"],
+        ["35", "default", "arm64-v8a"],
+      ],
+    });
+    await userAvd(filesystem, "Pixel_8", "system-images/android-35/google_apis/arm64-v8a/");
+    // avdmanager's `-p`: the AVD directory lives elsewhere, and the `.ini` points at it.
+    await userAvd(filesystem, "Elsewhere", `${googleApis}/`, { avdPath: "/work/Elsewhere.avd" });
+    await userAvd(filesystem, "Other", "system-images/android-34/google_apis/arm64-v8a/");
+    // Simlock's own AVD of the same image: one of its devices, counted from the registry.
+    await userAvd(filesystem, "simlock_one", "system-images/android-35/google_apis/arm64-v8a/", {
+      avdHome: avdDirectory,
+    });
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices, variant }) => ({ foreignDevices, variant }))).toEqual([
+      { foreignDevices: 0, variant: "default/arm64-v8a" },
+      { foreignDevices: 2, variant: "google_apis/arm64-v8a" },
+    ]);
+  });
+
+  it("looks for an AVD beside its unreadable .ini, counts nothing for an unreadable config.ini, and still lists the image", async () => {
+    const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+    const sysdir = "system-images/android-35/google_apis/arm64-v8a/";
+    await userAvd(filesystem, "Locked", sysdir);
+    filesystem.defineFailure(`${userAvdHome}/Locked.ini`, "EACCES");
+    await userAvd(filesystem, "Broken", sysdir);
+    filesystem.defineFailure(`${userAvdHome}/Broken.avd/config.ini`, "EACCES");
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices, version }) => ({ foreignDevices, version }))).toEqual([
+      { foreignDevices: 1, version: "35" },
+    ]);
+  });
+
+  it("leaves sizeBytes out when the image directory cannot be read, and still lists the image", async () => {
+    const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+    await filesystem.writeFileAtomic(`${googleApis}/system.img`, "abc");
+    filesystem.defineFailure(`${googleApis}/system.img`, "EACCES");
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    const listed = await driver.listComponents();
+
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ variant: "google_apis/arm64-v8a", version: "35" });
+    expect(listed[0]).not.toHaveProperty("sizeBytes");
+  });
+
+  it("lists an image with the receipt installComponent returned for it, and starts no process to list", async () => {
+    const filesystem = await androidFilesystem();
+    const runner = new InstallReflectingProcessRunner(
+      [
+        processResult(binaries.sdkmanager, [
+          "--install",
+          "system-images;android-35;google_apis;arm64-v8a",
+        ]),
+      ],
+      filesystem,
+    );
+    const driver = await createDriver(filesystem, runner);
+    const installed = await installFor(driver, "35");
+    const callsBeforeListing = runner.calls.length;
+
+    const listed = await driver.listComponents();
+
+    expect(listed.find((component) => component.version === "35")?.receipt).toEqual(
+      installed.receipt,
+    );
+    expect(runner.calls).toHaveLength(callsBeforeListing);
+  });
+});
+
 function bootProbes(runner: ScriptedProcessRunner): number {
   return runner.calls.filter((call) => call.args.includes("sys.boot_completed")).length;
 }

@@ -13,6 +13,7 @@ import {
   type DeviceRequest,
   type Driver,
   type DriverCatalogEntry,
+  type DriverComponent,
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
@@ -288,6 +289,26 @@ export class OutOfProcessFakeDriver implements Driver {
     const receipt = { install: String(this.#installCount) };
     this.#installed.set(component, receipt);
     return { outcome: "installed", receipt, version: component };
+  }
+
+  /**
+   * One entry per available version, with the receipt `findComponent` reports for it; sizes and
+   * foreign devices come from `componentSizes` and `foreignDevices`.
+   */
+  async listComponents(): Promise<readonly DriverComponent[]> {
+    const script = await this.#beforeCall("listComponents", []);
+    return this.#available(script).flatMap((version): DriverComponent[] => {
+      const found = this.#find(version, script);
+      if (found === undefined) return [];
+      const sizeBytes = script.componentSizes?.[version];
+      return [
+        {
+          ...found,
+          foreignDevices: script.foreignDevices?.[version] ?? 0,
+          ...(sizeBytes === undefined ? {} : { sizeBytes }),
+        },
+      ];
+    });
   }
 
   #find(component: string, script: FakeDriverPlatformScript): InstalledComponent | undefined {

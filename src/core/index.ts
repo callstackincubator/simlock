@@ -32,6 +32,7 @@ export {
   type Driver,
   type DriverAdvisory,
   type DriverCatalogEntry,
+  type DriverComponent,
   DriverCrashError,
   type DriverDevice,
   type DriverEstimate,
