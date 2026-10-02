@@ -389,16 +389,16 @@ export class ComponentInstaller {
       );
     }
     const components = await this.#listDriver(driver);
-    // A record outlives a removal that failed after the driver deleted the component (ADR 0010
-    // §5): with no such version on the machine, the refusal must not name one.
-    if (!components.some((entry) => entry.listing.version === version)) {
-      throw new ComponentNotOwnedError(
-        platform,
-        `No ${platform} ${version} is installed now, so there is nothing to remove`,
-      );
-    }
     const listed = components.find((entry) => sameReceipt(entry.receipt, record.receipt));
     if (listed === undefined) {
+      // A record outlives a removal that failed after the driver deleted the component (ADR 0010
+      // §5): with no such version on the machine, the refusal must not name one.
+      if (!components.some((entry) => entry.listing.version === version)) {
+        throw new ComponentNotOwnedError(
+          platform,
+          `No ${platform} ${version} is installed now, so there is nothing to remove`,
+        );
+      }
       throw new ComponentNotOwnedError(
         platform,
         `The ${platform} ${version} installed now is not the one Simlock installed, so Simlock ` +

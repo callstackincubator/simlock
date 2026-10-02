@@ -1423,6 +1423,23 @@ describe("ComponentInstaller.remove", () => {
     expect(removals(harness.ios)).toEqual([]);
   });
 
+  it("removes a component whose receipt matches the record even when the listing names its version differently", async () => {
+    // The driver lists 26.5 with the receipt Simlock recorded under 26.5.0.
+    const harness = await createHarness();
+    const receipt = { preinstalled: "26.5" };
+    await harness.registry.recordComponent({
+      installedAt: 1_000,
+      platform: "ios",
+      receipt,
+      version: "26.5.0",
+    });
+
+    await expect(harness.installer.remove(removeIos("26.5.0"))).resolves.toMatchObject({
+      outcome: "removed",
+    });
+    expect(removals(harness.ios)).toEqual([receipt]);
+  });
+
   it.each(["provisioning", "ready", "leased", "reclaiming", "quarantined", "shutdown"] as const)(
     "refuses a component a %s registry device uses with ComponentInUseError naming the count, and never calls removeComponent",
     async (state) => {
