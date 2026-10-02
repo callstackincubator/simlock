@@ -15,7 +15,12 @@
  *   closes, and a stream silent for 40 seconds each mark the console disconnected. While
  *   disconnected nothing is polled and the stream stays closed; `/v1/healthz` is asked after 1,
  *   2, 4 and 8 seconds, then every 10. When it answers, the screen is refetched and the stream
- *   reopened, and the console says the daemon is starting until the daemon answers a read.
+ *   reopened, and the console says the daemon is starting until the daemon answers a read or
+ *   opens the stream. A starting daemon holds both until it is ready, so while it is starting a
+ *   request that gives up is sent again rather than counted as a loss. Each new loss starts the
+ *   backoff from 1 second again, and so does a tab shown again while disconnected, which asks
+ *   at once.
+ * - A stream the console closed itself, hiding the tab or signing out, is not a loss.
  * - A request the daemon refuses is a fact about its route, not about the connection. A refused
  *   stream is asked for again with the next poll.
  */
@@ -338,6 +343,11 @@ export class LiveConnection {
   async #readStream(controller: AbortController): Promise<void> {
     const body = await this.#connectStream(controller);
     if (body === undefined) return;
+    if (this.#stream !== controller) {
+      // Closed while its headers were being handed over, by a loss or a hidden tab.
+      void body.cancel().catch(() => undefined);
+      return;
+    }
     this.#streamOpened();
     const ended = await this.#follow(controller, body);
     // The daemon closed the stream, or it broke.

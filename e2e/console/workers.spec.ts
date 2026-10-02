@@ -34,7 +34,17 @@ interface WorkerView {
 }
 
 interface Status {
-  readonly devices: readonly { readonly id: string; readonly state: string }[];
+  readonly devices: readonly {
+    readonly id: string;
+    readonly state: string;
+    readonly mode: string;
+    readonly spec: {
+      readonly platform: string;
+      readonly model: string;
+      readonly osVersion: string;
+      readonly imageTag?: string;
+    };
+  }[];
   readonly host: {
     readonly os: string;
     readonly osVersion: string;
@@ -133,6 +143,66 @@ function expectedFacts(view: WorkerView): Record<string, string> {
   };
 }
 
+/** The status tones, in the order the colour test reads their tokens. */
+const TONES = ["ok", "warn", "error", "idle"] as const;
+
+/** What each word the colour test meets means, as the design guide sorts them. */
+const TONE_OF: Readonly<Partial<Record<string, (typeof TONES)[number]>>> = {
+  Connected: "ok",
+  compatible: "ok",
+  connected: "ok",
+  drained: "warn",
+  incompatible: "error",
+  leased: "ok",
+  ready: "ok",
+  running: "ok",
+};
+
+/** Every status on the page: its word and its square's colour, with the tokens' colours. */
+async function readStatuses(page: Page) {
+  return page.locator(".status").evaluateAll((elements) => {
+    const root = getComputedStyle(document.documentElement);
+    const named = (token: string) => {
+      const probe = document.createElement("span");
+      probe.style.color = root.getPropertyValue(token).trim();
+      document.body.append(probe);
+      const resolved = getComputedStyle(probe).color;
+      probe.remove();
+      return resolved;
+    };
+    return {
+      accent: named("--accent"),
+      shown: elements.map((element) => ({
+        colour: getComputedStyle(element.querySelector(".status-dot") ?? element).backgroundColor,
+        word: element.textContent?.trim() ?? "",
+      })),
+      tones: ["--status-ok", "--status-warn", "--status-error", "--status-idle"].map(named),
+    };
+  });
+}
+
+/**
+ * Every status on the page is a word with a status colour that is not the accent, the colour
+ * each known word should have; and `words` are among them.
+ */
+async function expectStatusColours(
+  page: Page,
+  where: string,
+  words: readonly string[],
+): Promise<void> {
+  await expect(page.locator(".status").first()).toBeVisible();
+  const { accent, shown, tones } = await readStatuses(page);
+  expect(shown.map((status) => status.word)).toEqual(expect.arrayContaining([...words]));
+  for (const status of shown) {
+    const context = `${status.word} in ${where}`;
+    expect(status.word, where).not.toBe("");
+    expect(tones, context).toContain(status.colour);
+    expect(status.colour, context).not.toBe(accent);
+    const tone = TONE_OF[status.word];
+    if (tone !== undefined) expect(status.colour, context).toBe(tones[TONES.indexOf(tone)]);
+  }
+}
+
 /** Whether the page itself scrolls sideways. */
 async function hasHorizontalScroll(page: Page): Promise<boolean> {
   return page.evaluate(
@@ -219,7 +289,7 @@ test.describe("the workers views", () => {
     await expect(page.getByRole("heading", { level: 2, name: "Devices" })).toBeVisible();
   });
 
-  test("a worker's detail lists every device it has, with state and time in that state", async ({
+  test("a worker's detail lists every device it has, with state and, where the data has one, time in that state", async ({
     page,
   }) => {
     const host = await startDaemon("worker", { driverScript: { ios: IOS } });
@@ -251,6 +321,11 @@ test.describe("the workers views", () => {
       for (const device of devices) {
         const cells = deviceRow(page, device.id).getByRole("cell");
         await expect(cells.nth(1)).toHaveText(device.state);
+        await expect(cells.nth(3)).toHaveText(device.spec.platform === "ios" ? "iOS" : "Android");
+        await expect(cells.nth(4)).toHaveText(device.spec.model);
+        await expect(cells.nth(5)).toHaveText(device.spec.osVersion);
+        await expect(cells.nth(6)).toHaveText(device.mode);
+        await expect(cells.nth(7)).toHaveText(device.spec.imageTag ?? "—");
         const held = view?.leases.find((candidate) => candidate.deviceId === device.id);
         if (held === undefined) {
           // A ready device: the worker view carries no time for that state.
@@ -433,52 +508,18 @@ test.describe("the workers views", () => {
       await expect(fact(card(page, "old-worker"), "Connection")).toHaveText("incompatible");
       await expect(fact(card(page, "worker-b"), "Connection")).toHaveText("connected drained");
 
-      const statuses = async () =>
-        page.locator(".status").evaluateAll((elements) => {
-          const root = getComputedStyle(document.documentElement);
-          const colour = (value: string) => {
-            const probe = document.createElement("span");
-            probe.style.color = value;
-            document.body.append(probe);
-            const resolved = getComputedStyle(probe).color;
-            probe.remove();
-            return resolved;
-          };
-          const named = (token: string) => colour(root.getPropertyValue(token).trim());
-          const tones = ["--status-ok", "--status-warn", "--status-error", "--status-idle"];
-          return {
-            accent: named("--accent"),
-            shown: elements.map((element) => ({
-              colour: getComputedStyle(element.querySelector(".status-dot") ?? element)
-                .backgroundColor,
-              word: element.textContent?.trim() ?? "",
-            })),
-            tones: tones.map(named),
-          };
-        });
-
       for (const colorScheme of ["light", "dark"] as const) {
         await page.emulateMedia({ colorScheme });
-        for (const where of ["list", "detail"] as const) {
-          if (where === "detail")
-            await page.getByRole("link", { name: "worker-a", exact: true }).click();
-          else await page.getByRole("link", { name: "Workers", exact: true }).click();
-          await expect(page.locator(".status").first()).toBeVisible();
-          const { accent, shown, tones } = await statuses();
-          const words = shown.map((status) => status.word);
-          expect(words).toEqual(
-            expect.arrayContaining(
-              where === "list"
-                ? ["connected", "drained", "incompatible", "running", "compatible"]
-                : ["connected", "leased"],
-            ),
-          );
-          for (const status of shown) {
-            expect(status.word, `${where} ${colorScheme}`).not.toBe("");
-            expect(tones, `${status.word} in ${where} ${colorScheme}`).toContain(status.colour);
-            expect(status.colour, `${status.word} in ${where} ${colorScheme}`).not.toBe(accent);
-          }
-        }
+        await page.getByRole("link", { name: "Workers", exact: true }).click();
+        await expectStatusColours(page, `list ${colorScheme}`, [
+          "connected",
+          "drained",
+          "incompatible",
+          "running",
+          "compatible",
+        ]);
+        await page.getByRole("link", { name: "worker-a", exact: true }).click();
+        await expectStatusColours(page, `detail ${colorScheme}`, ["connected", "leased"]);
       }
     } finally {
       hangUp();

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, type ApiPath, RequestTimeoutError } from "../api";
+import type { StreamOpened } from "./connection";
 import { connect, settle } from "./test-support";
 
 const EVENT = 'event: lease.granted\ndata: {"seq":1,"timestamp":1,"event":"lease.granted"}\n\n';
@@ -230,6 +231,132 @@ describe("LiveConnection", () => {
     expect(daemon.healthChecks).toHaveLength(1);
   });
 
+  it("a stream the console closes itself does not mark the console disconnected", async () => {
+    const { connection, daemon, visibility } = connect();
+    const events: unknown[] = [];
+    connection.onEvent((event) => events.push(event));
+    await settle();
+
+    // An open stream, idle, closed by hiding the tab.
+    visibility.set(true);
+    await settle();
+    expect(connection.state().phase).toBe("connected");
+    visibility.set(false);
+    await settle();
+
+    // An open stream, closed by hiding the tab, with an event already read off it.
+    daemon.openStream()?.send(EVENT);
+    visibility.set(true);
+    await settle();
+    expect(events).toEqual([]);
+    expect(connection.state().phase).toBe("connected");
+
+    // A stream whose headers have not arrived yet, closed the same way.
+    daemon.holdStreams = true;
+    visibility.set(false);
+    await settle();
+    visibility.set(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(connection.state().phase).toBe("connected");
+    expect(daemon.healthChecks).toEqual([]);
+  });
+
+  it("a loss while the stream opens leaves the next open saying how long it was closed", async () => {
+    const { connection, daemon } = connect();
+    connection.watch("/v1/workers", () => {});
+    await settle();
+    const opened: StreamOpened[] = [];
+    connection.onStreamOpened((event) => opened.push(event));
+    daemon.openStream()?.end();
+    await settle();
+    // Recovering: the stream's headers and the screen's read are both held.
+    let failRead: (error: unknown) => void = () => {};
+    daemon.reads = () =>
+      new Promise((_resolve, reject) => {
+        failRead = reject;
+      });
+    daemon.holdStreams = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connection.state().phase).toBe("starting");
+
+    // The headers arrive, and in the same moment the read fails at the network level.
+    daemon.openHeldStreams();
+    failRead(new TypeError("Failed to fetch"));
+    await settle();
+    expect(connection.state().phase).toBe("disconnected");
+    expect(opened).toEqual([]);
+
+    daemon.reads = "answer";
+    daemon.holdStreams = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connection.state().phase).toBe("connected");
+    expect(opened).toEqual([{ closedForMs: 2_000 }]);
+  });
+
+  it("each loss starts the /v1/healthz backoff from 1 second again", async () => {
+    const { connection, daemon } = connect();
+    await settle();
+    daemon.health = "down";
+    daemon.openStream()?.end();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(daemon.healthChecks).toHaveLength(4);
+    daemon.health = "up";
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(connection.state().phase).toBe("connected");
+
+    daemon.health = "down";
+    daemon.openStream()?.end();
+    await settle();
+    const lostAt = Date.now();
+    const before = daemon.healthChecks.length;
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(daemon.healthChecks.slice(before).map((at) => at - lostAt)).toEqual([1_000, 3_000]);
+  });
+
+  it("a daemon that is starting is ready once it opens the stream", async () => {
+    const { connection, daemon } = connect();
+    connection.watch("/v1/workers", () => {});
+    await settle();
+    daemon.openStream()?.end();
+    await settle();
+    daemon.reads = "hold";
+    daemon.holdStreams = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connection.state().phase).toBe("starting");
+
+    daemon.openHeldStreams();
+    await settle();
+
+    expect(connection.state().phase).toBe("connected");
+  });
+
+  it("nothing is asked while the tab is hidden: not a coalesced read, not /v1/healthz", async () => {
+    const { connection, daemon, visibility } = connect();
+    let failRead: (error: unknown) => void = () => {};
+    daemon.reads = () =>
+      new Promise((_resolve, reject) => {
+        failRead = reject;
+      });
+    connection.watch("/v1/workers", () => {});
+    await settle();
+    // An event while the read is in flight asks for one more read after it.
+    daemon.openStream()?.send(EVENT);
+    await settle();
+    visibility.set(true);
+    await settle();
+    const reads = daemon.gets.length;
+
+    // The read fails while the tab is hidden: lost, but nothing more is asked.
+    failRead(new TypeError("Failed to fetch"));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(connection.state().phase).toBe("disconnected");
+    expect(daemon.gets).toHaveLength(reads);
+    expect(daemon.healthChecks).toEqual([]);
+  });
+
   it("a tab shown again while disconnected asks /v1/healthz at once", async () => {
     const { connection, daemon, visibility } = connect();
     await settle();
@@ -242,9 +369,13 @@ describe("LiveConnection", () => {
 
     visibility.set(false);
     await settle();
+    const shownAt = Date.now();
 
-    expect(daemon.healthChecks).toEqual([Date.now()]);
+    expect(daemon.healthChecks).toEqual([shownAt]);
     expect(connection.state().phase).toBe("disconnected");
+    // And the backoff starts again from 1 second.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(daemon.healthChecks.map((at) => at - shownAt)).toEqual([0, 1_000, 3_000]);
   });
 
   it("a refused read keeps the data the console had and the console connected", async () => {

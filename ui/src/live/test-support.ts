@@ -74,6 +74,11 @@ class FakeDaemon implements LiveApi {
     return Promise.resolve({ body: { read: this.gets.length }, date: this.date } as never);
   }
 
+  /** Sends the headers of every held stream, and leaves held reads held. */
+  openHeldStreams(): void {
+    for (const open of this.#heldStreams.splice(0)) open();
+  }
+
   /** Answers every held read, and sends the headers of every held stream. */
   release(): void {
     for (const held of this.#held.splice(0))
@@ -112,7 +117,13 @@ class FakeDaemon implements LiveApi {
     if (this.refuseStreams !== undefined) return this.refuseStreams();
     const response = { body, date: this.date };
     if (!this.holdStreams) return Promise.resolve(response);
-    return new Promise((resolve) => this.#heldStreams.push(() => resolve(response)));
+    // As `fetch` does, a request aborted before its headers arrive rejects with an AbortError.
+    return new Promise((resolve, reject) => {
+      this.#heldStreams.push(() => resolve(response));
+      signal.addEventListener("abort", () =>
+        reject(new DOMException("The request was aborted", "AbortError")),
+      );
+    });
   }
 
   /** The stream the layer has open now, if any. */

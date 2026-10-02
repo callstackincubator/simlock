@@ -114,6 +114,44 @@ describe("createApiClient", () => {
     expect(await api.get("/v1/workers")).toEqual({ body: { workers: [] }, date });
   });
 
+  it("/v1/healthz is asked with no token, and only a success status counts as up", async () => {
+    const date = "Fri, 02 Oct 2026 12:00:00 GMT";
+    const up = answering(200, { ok: true });
+    const down = answering(503);
+    const api = (fetch: Fetch) =>
+      createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" }).healthz();
+
+    expect((await api(up.fetch)).body).toBe(true);
+    expect((await api(down.fetch)).body).toBe(false);
+    expect(up.calls[0]?.input).toBe("/v1/healthz");
+    expect(up.calls[0]?.init.headers).toEqual({});
+    const dated: Fetch = async () => new Response("{}", { headers: { Date: date } });
+    expect((await api(dated)).date).toBe(date);
+  });
+
+  it("a stream refused with a 401 signs out, and any refusal rejects with the daemon's code", async () => {
+    const signOut = vi.fn();
+    const refusing = (status: number) =>
+      createApiClient({
+        fetch: answering(status, { error: { code: "UNAUTHENTICATED", message: "Unknown" } }).fetch,
+        signOut,
+        token: () => "slk_op",
+      }).stream("/v1/events/stream", new AbortController().signal);
+
+    await expect(refusing(401)).rejects.toMatchObject({ code: "UNAUTHENTICATED", status: 401 });
+    expect(signOut).toHaveBeenCalledTimes(1);
+    await expect(refusing(500)).rejects.toBeInstanceOf(ApiError);
+    expect(signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stream's Date header comes back with its body", async () => {
+    const date = "Fri, 02 Oct 2026 12:00:00 GMT";
+    const fetch: Fetch = async () => new Response("", { headers: { Date: date }, status: 200 });
+    const api = createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" });
+
+    expect((await api.stream("/v1/events/stream", new AbortController().signal)).date).toBe(date);
+  });
+
   it("aborting a stream's signal closes its body after the headers arrived", async () => {
     vi.useFakeTimers();
     let closedWith: unknown;
