@@ -1282,6 +1282,21 @@ describe("LeaseEngine RAM budget by mode", () => {
     ).resolves.toMatchObject({ device: { mode: "slim" } });
   });
 
+  it("counts a slim-spec device quarantined from provisioning at the full size", async () => {
+    const harness = await createHarness({ limits: roomy, ramBudget, totalRamBytes: 9 * gibibyte });
+    const registered = await harness.registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver-stalled",
+      provisionDuration: 0,
+      spec: slimRequest,
+    });
+    // A stalled provision is quarantined before the device ever booted.
+    const quarantined = await harness.registry.enterQuarantine(registered.id, 60_000);
+
+    expect(quarantined.state).toBe("quarantined");
+    expect(harness.engine.ramBudget?.usedBytes).toBe(ramBudget.iosBytesPerDevice);
+  });
+
   it("keeps the lease of a device planned as slim whose driver reports full, shuts nothing down, and counts it full", async () => {
     const clock = new FakeClock(1_000);
     // A slimming driver whose slim pass never takes: every device it boots reports `full`.

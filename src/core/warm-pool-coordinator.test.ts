@@ -349,13 +349,16 @@ describe("WarmPoolCoordinator", () => {
       );
     }
 
-    async function reclaimBeside(fullDevices: number) {
+    async function reclaimBeside(
+      fullDevices: number,
+      reclaimResult: "ready" | "shutdown" = "shutdown",
+    ) {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({
         clock,
         mode: "slim",
         platform: "ios",
-        reclaimResult: "shutdown",
+        reclaimResult,
       });
       const reclaiming = {
         ...device(
@@ -381,6 +384,14 @@ describe("WarmPoolCoordinator", () => {
 
       expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
       expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
+    });
+
+    it("stays warm when its reclaim left it running, even where a boot would not fit", async () => {
+      // 7 GiB used of 8, as above, but nothing needs to boot.
+      const { driver, harness } = await reclaimBeside(2, "ready");
+
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+      expect(driver.calls.map((call) => call.operation)).not.toContain("shutdown");
     });
 
     it("boots back to warm when its full size fits, and frees the boot's extra size after", async () => {

@@ -756,7 +756,8 @@ down, by the mode it actually has. A restart with larger per-device sizes
 than the devices were admitted under, or an unchecked recovery reboot (next
 entry), can put the budget over its limit. Nothing is stopped or reclaimed
 for it (leases stay granted, safety rule 2): the worker only stops creating
-devices, in either mode, and booting shut-down slim ones, while idle devices
+devices, in either mode, and booting shut-down slim ones smaller than the
+full size, while idle devices
 of a requested spec are still granted. Releasing a lease does not lower the
 use, because the device still exists; the budget comes back under its limit
 when the idle-delete tier (or a device-limit eviction) deletes a device.

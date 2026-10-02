@@ -168,8 +168,8 @@ RAM budget; under `fixed` the field is absent:
 the sum over every listed device that is not deleted, each at the size of the
 mode it reports, so it always matches the device list. `overLimit` is true
 when the use exceeds the limit, for example after a restart with larger
-per-device sizes; no device is created, and no shut-down slim device boots,
-until a device is deleted.
+per-device sizes; until a device is deleted, none is created, and no
+shut-down slim device boots if its slim size is smaller than the full size.
 
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers (`ramBudget` over the workers that report one, `overLimit` when any of

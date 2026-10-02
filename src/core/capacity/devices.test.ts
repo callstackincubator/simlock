@@ -46,17 +46,6 @@ describe("capacity devices", () => {
     );
   });
 
-  it("counts a device quarantined from provisioning at the full size", () => {
-    // `registerDevice` writes "full" on every record until the device is first made ready,
-    // and quarantine leaves it there.
-    expect(capacityDevice(record({ mode: "full", spec: slimSpec, state: "quarantined" }))).toEqual({
-      id: "device-1",
-      mode: "full",
-      platform: "ios",
-      state: "quarantined",
-    });
-  });
-
   it("counts a planned device at the full size whatever its spec's mode", () => {
     expect(plannedCapacityDevice(slimSpec)).toEqual({ mode: "full", platform: "ios" });
     expect(plannedCapacityDevice({ ...fullSpec, platform: "android" })).toEqual({

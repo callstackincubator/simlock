@@ -533,8 +533,9 @@ budget counts each one at the size of the mode it has:
   full size from then on, and keeps its lease.
 - **Over the limit.** Restarting with larger sizes than the devices were
   admitted under can put the use above the limit. `simlock status` then
-  shows the RAM budget `(over limit)`. No new device is created, in either
-  mode, and no shut-down slim device boots, until a device is deleted.
+  shows the RAM budget `(over limit)`. Until a device is deleted, no new
+  device is created, in either mode, and no shut-down slim device boots if
+  its slim size is smaller than the full size.
   Releasing a lease does not lower the use, because the device still exists;
   idle devices are still handed out.
 - **Raise the limits with the slim size.** The device and running limits

@@ -923,7 +923,7 @@ that device as `full` in every decision until released; status leaves every
 reservation out. A boot refused for RAM evicts nothing and waits. Running
 slots ignore mode. A restart with larger sizes, or an unchecked recovery
 reboot, can leave the budget over its limit; the strategy then refuses every
-new device and every slim boot, and the core stops or reclaims nothing for
+new device and every boot that adds RAM, and the core stops or reclaims nothing for
 it. `fixed` ignores mode, never refuses a boot, and reports no budget.
 
 At startup, `StartupConverger` restores the persisted TTL timer of **every**
