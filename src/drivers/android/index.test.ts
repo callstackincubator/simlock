@@ -3494,8 +3494,8 @@ async function writeDevicesXml(filesystem: MemoryFilesystem, deviceBodies: strin
 
 function customDeviceXml(name: string, ramMiB: number): string {
   return (
-    `<d:device><d:name>${name}</d:name><d:hardware><d:ram>` +
-    `<d:ram-size unit="MiB">${ramMiB}</d:ram-size></d:ram></d:hardware></d:device>`
+    `<d:device><d:name>${name}</d:name><d:hardware>` +
+    `<d:ram unit="MiB">${ramMiB}</d:ram></d:hardware></d:device>`
   );
 }
 
