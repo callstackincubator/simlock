@@ -13,7 +13,12 @@ export interface PlannedCapacityDevice {
 
 export interface CapacityDevice extends PlannedCapacityDevice {
   readonly state: string;
+  /** The registry id, so the coordinator can find a device it holds a boot reservation for. */
+  readonly id?: string;
 }
+
+/** A capacity device the registry knows, so a boot reservation can find it again. */
+export type RegisteredCapacityDevice = CapacityDevice & { readonly id: string };
 
 /** A strategy's RAM budget as it stands: its limit, what devices use, and whether use exceeds it. */
 export interface RamBudget {
@@ -59,11 +64,18 @@ export interface RunningCapacity {
 export interface CapacityStrategy {
   /**
    * Whether `device` may be created. `devices` includes synthetic entries for
-   * in-flight provisioning reservations, each with the mode it was planned with,
-   * so a strategy sees pending work as though it had already landed in the
-   * registry.
+   * in-flight provisioning reservations, and counts a device being booted at its
+   * full size, so a strategy sees pending work as though it had already landed in
+   * the registry.
    */
   canProvision(device: PlannedCapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision;
+
+  /**
+   * Whether the shut-down `device`, already among `devices`, may boot. A device
+   * boots at its platform's full size before any slim pass, so a boot needs room
+   * for the difference between that and the size the device counts at.
+   */
+  canBoot(device: CapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision;
 
   canReserveRunning(
     platform: CapacityPlatform,

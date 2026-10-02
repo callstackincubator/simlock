@@ -8,7 +8,8 @@ import {
   type Logger,
   MemoryLogSink,
 } from "../ports/index.js";
-import { CapacityCoordinator, createCapacityStrategy } from "./capacity/index.js";
+import { CapacityCoordinator, capacityDevices, createCapacityStrategy } from "./capacity/index.js";
+import { resourceStrategy } from "./capacity/strategies/resource/index.js";
 import type { Config } from "./config.js";
 import type { DeviceRecord, DeviceSpec, DeviceTransitionUpdate, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -144,6 +145,7 @@ function capacity(): CapacityCoordinator {
 
 async function createHarness(
   options: {
+    readonly capacity?: CapacityCoordinator;
     readonly devices?: readonly DeviceRecord[];
     readonly driver?: FakeDriver;
     readonly headSpec?: DeviceSpec;
@@ -164,7 +166,7 @@ async function createHarness(
     enter: vi.fn(async (failure) => void quarantined.push(failure)),
   };
   const coordinator = new WarmPoolCoordinator({
-    capacity: capacity(),
+    capacity: options.capacity ?? capacity(),
     clock,
     decisions: new SerializedDecision(),
     drivers: new DriverCatalog([driver]),
@@ -318,6 +320,84 @@ describe("WarmPoolCoordinator", () => {
       expect(boot?.arguments[1]).toEqual({ mode, purpose: "prepare" });
     },
   );
+
+  describe("a reclaimed slim device that needs a boot to stay warm", () => {
+    const slimSpec: DeviceSpec = { ...spec, mode: "slim" };
+
+    /** 12 GiB of RAM: an 8 GiB budget. Full iOS devices take 3 GiB, slim ones 1 GiB. */
+    function sizedCapacity(): CapacityCoordinator {
+      return new CapacityCoordinator(
+        resourceStrategy.create(
+          {
+            limits: {
+              android: { maxDevices: 8, maxRunning: 8 },
+              ios: { maxDevices: 8, maxRunning: 8 },
+              maxRunning: 16,
+            },
+            ramBudget: {
+              androidBytesPerDevice: 4 * gibibyte,
+              iosBytesPerDevice: 3 * gibibyte,
+              iosSlimBytesPerDevice: gibibyte,
+            },
+          },
+          new FakeSystemStats({
+            cpuCount: 8,
+            freeRamBytes: 12 * gibibyte,
+            totalRamBytes: 12 * gibibyte,
+          }),
+        ),
+      );
+    }
+
+    async function reclaimBeside(fullDevices: number) {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({
+        clock,
+        mode: "slim",
+        platform: "ios",
+        reclaimResult: "shutdown",
+      });
+      const reclaiming = {
+        ...device(
+          "reclaiming",
+          "reclaiming",
+          (await driver.provision(slimSpec)).deviceId,
+          slimSpec,
+        ),
+        mode: "slim" as const,
+      };
+      const others = Array.from({ length: fullDevices }, (_, index) =>
+        device(`full-${index}`, "leased", `full-driver-${index}`, { ...spec, model: "iPhone SE" }),
+      );
+      const capacity = sizedCapacity();
+      const harness = await createHarness({ capacity, devices: [reclaiming, ...others], driver });
+      await harness.coordinator.reclaim(released(reclaiming));
+      return { capacity, driver, harness };
+    }
+
+    it("stays shut down, without a boot, when its full size does not fit", async () => {
+      // 7 GiB used of 8: the boot adds the 2 GiB between the slim and the full size.
+      const { driver, harness } = await reclaimBeside(2);
+
+      expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+      expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
+    });
+
+    it("boots back to warm when its full size fits, and frees the boot's extra size after", async () => {
+      // 4 GiB used of 8: the boot reaches 6.
+      const { capacity, driver, harness } = await reclaimBeside(1);
+
+      expect(harness.registry.snapshot.devices[0]).toMatchObject({ mode: "slim", state: "ready" });
+      expect(driver.calls.map((call) => call.operation)).toContain("makeReady");
+      // Back at 4 GiB: a new device's 3 GiB fits. Were the 2 GiB still held, it would not.
+      expect(
+        capacity.tryReserveProvisioning(
+          { mode: "full", platform: "ios" },
+          capacityDevices(harness.registry.snapshot.devices),
+        ),
+      ).toMatchObject({ ok: true });
+    });
+  });
 
   it("stores full, replacing a stored slim, when a warm re-boot's makeReady reports no mode", async () => {
     const clock = new FakeClock(1_000);

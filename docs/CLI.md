@@ -973,9 +973,9 @@ The RAM budget line appears only under the `resource` capacity strategy
 `fixed` there is none. In `--json` it is `capacity.ramBudget`:
 `limitBytes` (the machine's RAM minus 4 GiB left for the OS), `usedBytes`
 (the sizes of every listed device that is not deleted, each by its mode) and
-`overLimit`. The line reads `(over limit)` when a slim device came up full
-and pushed the use past the limit; no device is created until one is
-deleted.
+`overLimit`. The line reads `(over limit)` when the use is past the limit,
+for example after a restart with larger per-device sizes; no device is
+created, and no shut-down slim device boots, until one is deleted.
 
 Against a **gateway** (`config.mode: "gateway"`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads

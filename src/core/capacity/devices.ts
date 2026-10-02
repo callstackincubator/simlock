@@ -1,28 +1,30 @@
-import { specMode, type DeviceRecord, type DeviceSpec } from "../domain.js";
-import type { CapacityDevice, PlannedCapacityDevice } from "./strategy.js";
+import type { DeviceRecord, DeviceSpec } from "../domain.js";
+import type { PlannedCapacityDevice, RegisteredCapacityDevice } from "./strategy.js";
 
 /**
- * The one place a registry record or a spec becomes a capacity device. A device
- * still `provisioning` has not been made ready, so its record's mode says nothing
- * yet and it counts by the mode its spec plans. In every other state it counts by
- * the mode its record reports, which is the mode it actually has. That includes a
- * device quarantined straight from `provisioning`: its record keeps no proof that
- * it never booted, so it counts by the record's `full` placeholder, which can
- * overcount a slim device but never undercounts one.
+ * The one place a registry record or a spec becomes a capacity device. A slim
+ * device uses its platform's full RAM until its slim pass runs, so a device that
+ * has not booted yet counts at the full size, whatever its spec plans. A device
+ * still `provisioning` is one of those. Every other device counts by the mode its
+ * record reports. A device quarantined straight from `provisioning` still carries
+ * the `full` placeholder `registerDevice` wrote, so it counts at the full size too.
  */
-export function capacityDevice(record: DeviceRecord): CapacityDevice {
+export function capacityDevice(record: DeviceRecord): RegisteredCapacityDevice {
   return {
-    mode: record.state === "provisioning" ? specMode(record.spec) : record.mode,
+    id: record.id,
+    mode: record.state === "provisioning" ? "full" : record.mode,
     platform: record.spec.platform,
     state: record.state,
   };
 }
 
-export function capacityDevices(records: readonly DeviceRecord[]): readonly CapacityDevice[] {
+export function capacityDevices(
+  records: readonly DeviceRecord[],
+): readonly RegisteredCapacityDevice[] {
   return records.map(capacityDevice);
 }
 
-/** A device about to be created counts by the mode its spec plans, full when it names none. */
+/** A device about to be created counts at its platform's full size, whatever its spec plans. */
 export function plannedCapacityDevice(spec: DeviceSpec): PlannedCapacityDevice {
-  return { mode: specMode(spec), platform: spec.platform };
+  return { mode: "full", platform: spec.platform };
 }

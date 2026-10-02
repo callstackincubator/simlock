@@ -90,7 +90,7 @@ describe("fixed strategy", () => {
     });
   });
 
-  it("grants up to maxRunning whatever the modes, and reports no RAM budget", () => {
+  it("grants up to maxRunning whatever the modes, never refuses a boot, and reports no RAM budget", () => {
     const fixed = strategy({ maxRunning: 3 });
     const mixed = [...ready("ios", 1, "slim"), ...ready("ios", 1, "full")];
 
@@ -104,6 +104,9 @@ describe("fixed strategy", () => {
         reason: "device-limit",
       });
     }
+    const shutdown: CapacityDevice = { mode: "slim", platform: "ios", state: "shutdown" };
+    // 1 GiB of RAM and three devices: a strategy with a RAM budget would refuse this boot.
+    expect(fixed.canBoot(shutdown, [...mixed, shutdown])).toEqual({ ok: true });
     expect(fixed.ramBudget(mixed)).toBeUndefined();
   });
 

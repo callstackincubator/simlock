@@ -996,7 +996,7 @@ describe("Dispatcher: status.get RAM budget", () => {
     iosSlimBytesPerDevice: 0.5 * gibibyte,
   };
 
-  it("reports a use equal to the sum of the listed devices' sizes, each by its reported mode", async () => {
+  it("reports a use equal to the sum of the listed devices' sizes by reported mode, including a slim-spec device still provisioning", async () => {
     const { dispatcher, registry } = await buildDispatcher({
       capacity: {
         strategy: "resource",
@@ -1022,7 +1022,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       driverData: {},
       driverDeviceId: "driver-provisioning",
       provisionDuration: 0,
-      spec: ios,
+      spec: { ...ios, mode: "slim" },
     });
 
     const status = await dispatcher.dispatch("status.get", {}, session());
@@ -1032,6 +1032,7 @@ describe("Dispatcher: status.get RAM budget", () => {
       .map((device) =>
         device.mode === "slim" ? sizes.iosSlimBytesPerDevice : sizes.iosBytesPerDevice,
       );
+    // The provisioning device is listed `full` until its slim pass, and counts at that size.
     expect(status.devices.map((device) => device.mode).sort()).toEqual(["full", "full", "slim"]);
     expect(status.capacity.ramBudget).toEqual({
       limitBytes: 28 * gibibyte,

@@ -184,13 +184,16 @@ describe("resource strategy RAM budget by mode", () => {
     state = "ready",
   ): CapacityDevice => ({ mode, platform, state });
 
-  /** How many devices of one mode the strategy admits, one at a time, before it refuses. */
+  /**
+   * How many devices of one mode the strategy admits, one at a time, before it refuses. Each
+   * is planned at the full size, as every new device is, and counts by its mode once booted.
+   */
   function admitted(strategy: CapacityStrategy, mode: "slim" | "full"): number {
     const devices: CapacityDevice[] = [];
-    while (strategy.canProvision({ mode, platform: "ios" }, devices).ok) {
+    while (strategy.canProvision({ mode: "full", platform: "ios" }, devices).ok) {
       devices.push(device("ios", mode));
     }
-    expect(strategy.canProvision({ mode, platform: "ios" }, devices)).toEqual({
+    expect(strategy.canProvision({ mode: "full", platform: "ios" }, devices)).toEqual({
       ok: false,
       reason: "ram-budget",
     });
@@ -204,8 +207,39 @@ describe("resource strategy RAM budget by mode", () => {
       iosSlimBytesPerDevice: gibibyte,
     });
 
+    // 8 GiB, 2 GiB full, 1 GiB slim: the seventh slim device is the last with full-size room.
     expect(admitted(strategy, "full")).toBe(4);
-    expect(admitted(strategy, "slim")).toBe(8);
+    expect(admitted(strategy, "slim")).toBe(7);
+  });
+
+  it("refuses booting a shut-down slim device with ram-budget when its full size does not fit, and allows it when it does", () => {
+    const strategy = sized({
+      androidBytesPerDevice: 4 * gibibyte,
+      iosBytesPerDevice: 2 * gibibyte,
+      iosSlimBytesPerDevice: gibibyte,
+    });
+    const shutdown = device("ios", "slim", "shutdown");
+    // 7 GiB used of 8: booting adds the 1 GiB between the slim and the full size.
+    const fits = [shutdown, device("ios", "full"), device("ios", "full"), device("ios", "full")];
+    expect(strategy.canBoot(shutdown, fits)).toEqual({ ok: true });
+    // 8 GiB used: the same boot would reach 9.
+    expect(strategy.canBoot(shutdown, [...fits, device("ios", "slim")])).toEqual({
+      ok: false,
+      reason: "ram-budget",
+    });
+  });
+
+  it("never refuses booting a shut-down full device for RAM, even over the limit", () => {
+    const strategy = sized({
+      androidBytesPerDevice: 4 * gibibyte,
+      iosBytesPerDevice: 3 * gibibyte,
+      iosSlimBytesPerDevice: gibibyte,
+    });
+    const shutdown = device("ios", "full", "shutdown");
+    const over = [shutdown, device("ios", "full"), device("ios", "full")];
+
+    expect(strategy.ramBudget(over)?.overLimit).toBe(true);
+    expect(strategy.canBoot(shutdown, over)).toEqual({ ok: true });
   });
 
   it("counts slim and full devices on both platforms at the sum of each device's own size", () => {
@@ -223,12 +257,6 @@ describe("resource strategy RAM budget by mode", () => {
     ];
 
     expect(strategy.ramBudget(devices)?.usedBytes).toBe(7 * gibibyte);
-    // 7 GiB used of 8: one more slim iOS device fits, a full one does not.
-    expect(strategy.canProvision({ mode: "slim", platform: "ios" }, devices)).toEqual({ ok: true });
-    expect(strategy.canProvision({ mode: "full", platform: "ios" }, devices)).toEqual({
-      ok: false,
-      reason: "ram-budget",
-    });
   });
 
   it("counts a slim device at the platform's configured full size when no slim size is set", () => {
@@ -240,6 +268,13 @@ describe("resource strategy RAM budget by mode", () => {
     expect(strategy.ramBudget([device("ios", "slim")])?.usedBytes).toBe(2.5 * gibibyte);
     expect(strategy.ramBudget([device("android", "slim")])?.usedBytes).toBe(3 * gibibyte);
     expect(admitted(strategy, "slim")).toBe(admitted(strategy, "full"));
+    // The boot of a slim device adds nothing: its size already is the full one.
+    const shutdown = device("ios", "slim", "shutdown");
+    expect(
+      strategy.canBoot(shutdown, [shutdown, device("ios", "full"), device("ios", "full")]),
+    ).toEqual({
+      ok: true,
+    });
   });
 
   it("reports the limit as total RAM minus the reserve, use over non-deleted devices, and over only past the limit", () => {

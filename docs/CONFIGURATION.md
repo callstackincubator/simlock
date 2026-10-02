@@ -459,8 +459,9 @@ strategy's own options, so its shape depends on the strategy you selected.
 
 Device and running ceilings derived from the machine, with a RAM budget on
 top: a device is only created if its budgeted RAM still fits under the
-machine's total, minus 4 GiB left for the OS. Each device counts by its own
-mode, at the slim or the full size for its platform.
+machine's total, minus 4 GiB left for the OS. Each device that has booted
+counts by its own mode, at the slim or the full size for its platform. A
+device that has not booted yet counts at the full size.
 
 | Property                                        | Description                                                     | Default                                                                     |
 | ----------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -519,16 +520,23 @@ budget counts each one at the size of the mode it has:
 
 - **With no slim size set**, a slim device counts at its platform's full
   size, so nothing changes for an existing config.
-- **A device counts by the mode it has, not the one it asked for.** A device
-  is planned by the mode its request resolves to before it boots: a `slim`
-  request on a runtime that cannot be slimmed is counted at the full size
-  from the start. If a slim device's slimming fails and it comes up full, it
-  counts at the full size from then on.
-- **Over the limit.** That failed device keeps its lease and nothing is shut
-  down, but the use can end up above the limit. `simlock status` then shows
-  the RAM budget `(over limit)`, and no new device is created, in either
-  mode, until a device is deleted. Releasing a lease does not lower the use,
-  because the device still exists; idle devices are still handed out.
+- **Every new device needs room for the full size.** A slim device boots
+  full and is slimmed after, so it uses the full size until then. A device
+  counts at the full size until it has booted, whatever mode it asked for.
+  Booting a shut-down slim device needs the same room; if there is none, it
+  stays shut down and a request for it waits. A slim size pays off once
+  devices have booted: in a budget that fits two full devices, with slim
+  ones at half that size, three slim devices fit.
+- **A device counts by the mode it has, not the one it asked for.** A
+  `slim` request on a runtime that cannot be slimmed gets a full device. A
+  slim device whose slimming fails comes up full. Either one counts at the
+  full size from then on, and keeps its lease.
+- **Over the limit.** Restarting with larger sizes than the devices were
+  admitted under can put the use above the limit. `simlock status` then
+  shows the RAM budget `(over limit)`. No new device is created, in either
+  mode, and no shut-down slim device boots, until a device is deleted.
+  Releasing a lease does not lower the use, because the device still exists;
+  idle devices are still handed out.
 - **Raise the limits with the slim size.** The device and running limits
   still apply. A smaller slim size gives you more devices only where RAM is
   what stops full ones; with the default limits (half the CPU count for

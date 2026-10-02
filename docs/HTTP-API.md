@@ -167,8 +167,9 @@ RAM budget; under `fixed` the field is absent:
 `limitBytes` is the machine's RAM minus 4 GiB left for the OS. `usedBytes` is
 the sum over every listed device that is not deleted, each at the size of the
 mode it reports, so it always matches the device list. `overLimit` is true
-when the use exceeds the limit, which happens when a device planned as slim
-comes up full; no device is created until a device is deleted.
+when the use exceeds the limit, for example after a restart with larger
+per-device sizes; no device is created, and no shut-down slim device boots,
+until a device is deleted.
 
 On a **gateway** the numbers are the fleet's — capacity summed across connected
 workers (`ramBudget` over the workers that report one, `overLimit` when any of

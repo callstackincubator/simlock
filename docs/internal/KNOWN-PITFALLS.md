@@ -752,14 +752,21 @@ running. This is what keeps `full` a guarantee, not a bug to fix.
 
 **A RAM budget over its limit clears on delete, not on release (#174).** The
 `resource` strategy counts every device Simlock manages, running or shut
-down, by the mode it actually has. A device planned as slim whose slim pass
-fails is admitted at the slim size and then counts at the full one, which can
-put the budget over its limit. Nothing is stopped or reclaimed for it (the
-lease stays granted, safety rule 2): the worker only stops creating devices,
-in either mode, while idle devices of a requested spec are still granted.
-Releasing a lease does not lower the use, because the device still exists;
-the budget comes back under its limit when the idle-delete tier (or a
-device-limit eviction) deletes a device.
+down, by the mode it actually has. A restart with larger per-device sizes
+than the devices were admitted under, or an unchecked recovery reboot (next
+entry), can put the budget over its limit. Nothing is stopped or reclaimed
+for it (leases stay granted, safety rule 2): the worker only stops creating
+devices, in either mode, and booting shut-down slim ones, while idle devices
+of a requested spec are still granted. Releasing a lease does not lower the
+use, because the device still exists; the budget comes back under its limit
+when the idle-delete tier (or a device-limit eviction) deletes a device.
+
+**A recovery reboot of a leased device is not checked against the RAM budget
+(#174).** A slim device boots full before its slim pass, so a recovery reboot
+(`purpose: "recover"`) briefly needs the full size, and keeps it if the slim
+pass then fails. The reboot runs regardless: refusing it would leave the
+holder with a broken device. The budget can go over its limit, with the
+effects above. Quarantine retries are unchecked in the same way.
 
 **A full request at the device limit can evict a slim device and still wait
 (#174).** Only the device limit evicts (`selectManagedVictim`); the RAM

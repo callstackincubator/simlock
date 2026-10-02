@@ -49,6 +49,11 @@ class FixedCapacityStrategy implements CapacityStrategy {
       : { ok: false, reason: "device-limit" };
   }
 
+  /** No RAM budget, so a boot is limited by running slots alone. */
+  canBoot(): CapacityDecision {
+    return { ok: true };
+  }
+
   canReserveRunning(
     platform: CapacityPlatform,
     devices: readonly CapacityDevice[],

@@ -1,4 +1,5 @@
 import {
+  capacityDevice,
   capacityDevices,
   plannedCapacityDevice,
   type CapacityCoordinator,
@@ -85,8 +86,9 @@ export class AcquisitionPlanner {
   }
 
   #planShutdownBoot(input: AcquisitionPlannerInput, device: DeviceRecord): AcquisitionPlan {
-    const running = this.capacity.tryReserveRunning(
-      input.spec.platform,
+    // A boot refused for RAM evicts nothing: freeing a running slot frees no RAM.
+    const running = this.capacity.tryReserveBoot(
+      capacityDevice(device),
       capacityDevices(input.snapshot.devices),
     );
     if (!running.ok) {
