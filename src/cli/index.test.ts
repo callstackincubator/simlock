@@ -2179,6 +2179,29 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(await print([])).not.toContain("Install ");
   });
 
+  it("prints an install whose start is ahead of this machine's clock as 0s old, not a negative age", async () => {
+    const output = outputCapture();
+    const install = {
+      component: "26.4",
+      platform: "ios" as const,
+      since: 5_000,
+      state: "waiting" as const,
+      waiters: 1,
+    };
+    await runCli(
+      ["status"],
+      output.environmentWith({
+        clock: new FakeClock(1_000),
+        connectAdmin: async () =>
+          fakeClient({
+            getStatus: () => Promise.resolve({ ...EMPTY_STATUS, installs: [install] }),
+          }),
+      }),
+    );
+
+    expect(output.stdout).toContain("Install ios 26.4: waiting for 0s, 1 waiter\n");
+  });
+
   it("prints a gateway's installs once each, naming the worker, not again under the worker", async () => {
     const output = outputCapture();
     const install = {

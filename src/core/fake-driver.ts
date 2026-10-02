@@ -274,7 +274,6 @@ export class FakeDriver implements Driver {
     this.#holdInstalls = true;
   }
 
-  // fallow-ignore-next-line unused-class-member -- a test-only control: tests end a held install with it.
   releaseInstalls(): void {
     this.#holdInstalls = false;
     for (const resolve of this.#pendingInstalls.splice(0)) resolve();

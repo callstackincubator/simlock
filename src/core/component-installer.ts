@@ -160,7 +160,6 @@ export class ComponentInstaller {
    * covers an `ended` install too, which never has a call: settling it empties its list, and
    * nothing joins it after.
    */
-  // fallow-ignore-next-line unused-class-member -- called through the dispatcher's `components` option, a `Pick` of this class.
   inProgress(): readonly ComponentInstallInProgress[] {
     const listed: ComponentInstallInProgress[] = [];
     for (const queue of this.#queues.values()) {

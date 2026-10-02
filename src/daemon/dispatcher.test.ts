@@ -1041,6 +1041,8 @@ describe("Dispatcher: status.get installs in progress", () => {
     driver.releaseInstalls();
     driver.failOn("installComponent", 1, new Error("installer exited 1"));
     const call = installer.install({ component: "27.0", platform: "ios" });
+    // Listed from the moment it is asked for, before the driver has run.
+    expect(installer.inProgress()).toHaveLength(1);
 
     await expect(call).rejects.toThrow("installer exited 1");
     expect(await installs()).toEqual([]);
