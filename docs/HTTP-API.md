@@ -240,6 +240,15 @@ for that platform has an `images` field. A gateway accepts any name a worker
 lists for a model, in any letter case, and sends that worker its own name for
 it.
 
+An entry may also carry `customModels`: the names from `models` that exist
+because of something on that machine rather than the platform's tools. On
+Android that is a profile made with Android Studio's device manager, read
+from `devices.xml`; when a built-in profile has the same name, the built-in
+one wins and the model is not custom. The field is absent when there are
+none, and iOS never has it. On a gateway a model is listed when any worker
+that lists it marks it custom; each worker's own list is in its catalog in
+[`GET /v1/workers`](#worker-routes).
+
 ```json
 { "platforms": [ {
     "platform": "ios",
@@ -255,6 +264,7 @@ it.
     "defaultRuntime": "35",
     "modelRuntimes": { "My Tablet": ["34", "35"], "Pixel 8": ["34", "35"] },
     "modelAliases": { "Pixel 8": ["pixel_8"] },
+    "customModels": ["My Tablet"],
     "images": [ { "runtime": "34", "tag": "default", "abi": "x86_64" },
                 { "runtime": "35", "tag": "google_apis", "abi": "arm64-v8a" } ]
 } ] }
@@ -827,7 +837,8 @@ none.
 
 `catalog` is what that worker can lease, each model with the runtimes it
 pairs with, and lists a newly installed component as soon as its install
-ends. `host` is the worker's machine, the same block its own
+ends. Its `customModels` are that worker's own, so this is where you see
+which worker has a custom Android profile. `host` is the worker's machine, the same block its own
 `GET /v1/status` reports, as of the gateway's last refresh: a tool installed
 or upgraded on the worker shows here without a restart of either side.
 

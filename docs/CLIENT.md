@@ -209,6 +209,11 @@ const { platforms } = await client.getCatalog({ platform: "ios" });
 - `images` is on Android entries only: every installed system image as
   `{ runtime, tag, abi }`, where `runtime` is a value from `runtimes`. An
   image whose ABI the host cannot run natively is listed too.
+- `customModels` lists the models that exist because of something on that
+  machine rather than the platform's tools: on Android, a profile made with
+  Android Studio's device manager and read from `devices.xml`. A built-in
+  profile with the same name wins, and that model is not custom. The field
+  is absent when there are none, and iOS never has it.
 - `defaultRuntime` is the newest installed runtime, and is absent when none
   is installed.
 - The catalog lists only what is installed. It never lists a runtime the
@@ -219,7 +224,9 @@ model is paired with a runtime when at least one worker pairs them, and
 `modelWorkers` and `runtimeWorkers` say which workers have each model and
 runtime. The gateway sends a request only to a worker that pairs the model
 with the runtime. `modelAliases` and `images` are the unions of each
-worker's own. A model may be asked for by any name a worker lists for it, in
+worker's own. A model is in `customModels` when any worker that lists it
+marks it custom; each worker's own list is in its catalog on
+`listWorkers()` from the admin client. A model may be asked for by any name a worker lists for it, in
 any letter case, and the gateway sends that worker its own name for it.
 `allowDownload` has no effect through a gateway: only installed runtimes
 count.

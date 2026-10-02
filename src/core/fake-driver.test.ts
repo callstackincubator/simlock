@@ -261,6 +261,20 @@ describe("FakeDriver", () => {
     });
     expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("images");
   });
+
+  it("reports the custom models its options name, and no customModels field without them", async () => {
+    const options = {
+      availableOsVersions: ["35"],
+      clock: new FakeClock(),
+      knownModels: ["Pixel 8", "My Tablet"],
+      platform: "android" as const,
+    };
+
+    await expect(
+      new FakeDriver({ ...options, customModels: ["My Tablet"] }).listCatalog(),
+    ).resolves.toMatchObject({ customModels: ["My Tablet"] });
+    expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("customModels");
+  });
 });
 
 const prepare = { mode: "full", purpose: "prepare" } as const;

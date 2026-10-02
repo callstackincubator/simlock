@@ -82,6 +82,8 @@ export interface FakeDriverOptions {
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as installed images; the field is absent unless set. */
   readonly images?: readonly DriverCatalogImage[];
+  /** What `listCatalog` reports as custom models; the field is absent unless set. */
+  readonly customModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
@@ -140,6 +142,7 @@ export class FakeDriver implements Driver {
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
   readonly #images: FakeDriverOptions["images"];
+  readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
   readonly passthroughTool: string | undefined;
@@ -168,6 +171,7 @@ export class FakeDriver implements Driver {
     this.#modelRuntimes = options.modelRuntimes;
     this.#modelAliases = options.modelAliases;
     this.#images = options.images;
+    this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
     this.#legacyDevices = new Map(Object.entries(options.legacyDevices ?? {}));
@@ -402,6 +406,7 @@ export class FakeDriver implements Driver {
     return {
       defaultRuntime: newestVersion(this.#availableOsVersions),
       ...(this.#images === undefined ? {} : { images: [...this.#images] }),
+      ...(this.#customModels === undefined ? {} : { customModels: [...this.#customModels] }),
       modelAliases: { ...this.#modelAliases },
       modelRuntimes: Object.fromEntries(
         models.map((model) => [model, [...(this.#modelRuntimes?.[model] ?? runtimes)]]),

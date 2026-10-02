@@ -1028,6 +1028,15 @@ describe("IosSimctlDriver", () => {
     expect(catalog).not.toHaveProperty("images");
   });
 
+  it("has no customModels field", async () => {
+    const driver = await createDriver(scriptedListRunner());
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models.length).toBeGreaterThan(0);
+    expect(catalog).not.toHaveProperty("customModels");
+  });
+
   describe("model and runtime pairing", () => {
     function pairingRunner(calls = 1): ScriptedProcessRunner {
       return new ScriptedProcessRunner(

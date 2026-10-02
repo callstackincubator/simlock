@@ -1791,6 +1791,42 @@ describe("CLI: catalog", () => {
       ].join("\n"),
     );
   });
+
+  it("prints (custom) after a custom model and not after a built-in one", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      connectAdmin: async () =>
+        fakeClient({
+          getCatalog: () =>
+            Promise.resolve({
+              platforms: [
+                {
+                  customModels: ["My Tablet"],
+                  defaultRuntime: "35",
+                  modelAliases: {},
+                  modelRuntimes: { "My Tablet": ["35"], "Pixel 8": ["35"] },
+                  models: ["My Tablet", "Pixel 8"],
+                  platform: "android",
+                  runtimes: ["35"],
+                },
+              ],
+            }),
+        }),
+    });
+
+    await expect(runCli(["catalog"], environment)).resolves.toBe(0);
+
+    expect(output.stdout).toBe(
+      [
+        "Platform: android",
+        "  Runtimes: 35 (default: 35)",
+        "  Models:",
+        "    My Tablet (custom): 35",
+        "    Pixel 8: 35",
+        "",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("CLI: component install (ADR 0010 §6)", () => {

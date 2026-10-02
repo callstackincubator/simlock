@@ -1104,12 +1104,13 @@ export class AndroidDriver implements Driver {
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
-    const [{ modelAliases, models }, images] = await Promise.all([
+    const [{ customModels, modelAliases, models }, images] = await Promise.all([
       this.#deviceProfiles.catalog(),
       this.#installedImages(),
     ]);
     const runtimes = installedApiLevels(images);
     return {
+      ...(customModels.length === 0 ? {} : { customModels: [...customModels] }),
       defaultRuntime: runtimes.at(-1),
       // Installed only, a foreign ABI included: the same images `installedApiLevels` reads.
       images: images

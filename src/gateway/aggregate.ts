@@ -178,7 +178,8 @@ function sumRamBudget(
  * §4). It is never built from the fleet's `models` and `runtimes`: one worker having a model and
  * another having a runtime does not make the pair leasable anywhere.
  *
- * `modelAliases` is the union per model, deduplicated ignoring case. `images` is the union by
+ * `customModels` lists a model when any worker that lists it marks it custom, and is absent when
+ * none does. `modelAliases` is the union per model, deduplicated ignoring case. `images` is the union by
  * runtime, tag, and ABI, and is absent when no worker reports the field at all. Each worker's
  * lists fit the contract's bounds but their union may not, so both are cut to those bounds after
  * sorting: an answer its own clients refuse would lose the whole catalog, not a tail of it.
@@ -207,6 +208,8 @@ interface CatalogBucket {
   readonly modelAliases: Map<string, Map<string, string>>;
   /** Every image reported, keyed by runtime, tag, and ABI; `undefined` until one worker has the field. */
   images: Map<string, CatalogImage> | undefined;
+  /** Models any worker that lists them marks custom. */
+  readonly customModels: Set<string>;
   readonly defaults: Set<string | undefined>;
 }
 
@@ -233,6 +236,7 @@ function addCatalogEntry(
   workerId: string,
 ): void {
   const bucket = byPlatform.get(entry.platform) ?? {
+    customModels: new Set<string>(),
     defaults: new Set<string | undefined>(),
     images: undefined,
     modelAliases: new Map<string, Map<string, string>>(),
@@ -245,6 +249,7 @@ function addCatalogEntry(
   for (const runtime of entry.runtimes) annotate(bucket.runtimes, runtime, workerId);
   for (const model of entry.models) addPairings(bucket.modelRuntimes, entry, model);
   for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
+  addCustomModels(bucket.customModels, entry);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
 }
@@ -263,6 +268,13 @@ function addAliases(
     if (key !== model.toLocaleLowerCase() && !aliases.has(key)) aliases.set(key, alias);
   }
   if (aliases.size > 0) index.set(model, aliases);
+}
+
+/** Folds one worker's custom models into the fleet's; a name the worker does not list itself is dropped. */
+function addCustomModels(index: Set<string>, entry: PlatformCatalog): void {
+  for (const model of entry.customModels ?? []) {
+    if (entry.models.includes(model)) index.add(model);
+  }
 }
 
 /** Folds one worker's images into the fleet's; one whose runtime the worker does not list is dropped. */
@@ -294,6 +306,11 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
   const agreedDefault = bucket.defaults.size === 1 ? [...bucket.defaults][0] : undefined;
   const runtimes = [...bucket.runtimes.keys()].sort();
   return {
+    ...(bucket.customModels.size === 0
+      ? {}
+      : {
+          customModels: [...bucket.customModels].sort().slice(0, CATALOG_LIST_LIMITS.customModels),
+        }),
     ...(bucket.images === undefined
       ? {}
       : {

@@ -54,6 +54,11 @@ export interface DeviceProfileCatalog {
   readonly models: readonly string[];
   /** Only models with another name appear, keyed by their spelling in `models`. */
   readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+  /**
+   * The listed models whose name resolves to a `properties` profile: a custom profile from
+   * this machine rather than one the SDK ships. In `models` order.
+   */
+  readonly customModels: readonly string[];
 }
 
 /**
@@ -94,7 +99,13 @@ export class DeviceProfileRegistry {
         modelAliases[profile.name] = others;
       }
     }
-    return { modelAliases, models: [...listed.values()].map((profile) => profile.name) };
+    const models = [...listed.values()].map((profile) => profile.name);
+    // Custom by the profile the name resolves to, not the one it was listed from: a
+    // devices.xml name that a built-in already answers to stays listed but is built-in.
+    const customModels = models.filter(
+      (model) => matchProfile(profiles, model)?.kind === "properties",
+    );
+    return { customModels, modelAliases, models };
   }
 
   /**

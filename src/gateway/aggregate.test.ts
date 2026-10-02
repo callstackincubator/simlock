@@ -526,11 +526,13 @@ describe("aggregateCatalog", () => {
         modelAliases: Record<string, string[]>;
         images: { runtime: string; tag: string; abi: string }[];
         runtimes: string[];
+        customModels: string[];
       }>,
     ) => {
       const models = overrides.models ?? ["Pixel 8"];
       const runtimes = overrides.runtimes ?? ["34", "35"];
       return {
+        ...(overrides.customModels === undefined ? {} : { customModels: overrides.customModels }),
         ...(overrides.images === undefined ? {} : { images: overrides.images }),
         modelAliases: overrides.modelAliases ?? {},
         modelRuntimes: Object.fromEntries(models.map((model) => [model, runtimes])),
@@ -651,6 +653,7 @@ describe("aggregateCatalog", () => {
             ...Object.fromEntries(names(`${prefix}m`, 4095).map((model) => [model, ["x"]])),
             "Pixel 8": names(prefix, 32),
           },
+          customModels: ["Pixel 8", ...names(`${prefix}m`, 4095)],
           models: ["Pixel 8", ...names(`${prefix}m`, 4095)],
         });
       const valid = [worker("a"), worker("b")];
@@ -672,6 +675,42 @@ describe("aggregateCatalog", () => {
       expect(aliasedModels).toHaveLength(4096);
       expect(aliasedModels.filter((model) => model.startsWith("bm"))).toEqual([]);
       expect(platform?.modelAliases["Pixel 8"]).toEqual(names("a", 32).sort());
+      expect(platform?.customModels).toHaveLength(4096);
+      expect(platform?.customModels?.filter((model) => model.startsWith("bm"))).toEqual([]);
+    });
+
+    it("marks a model custom when one worker marks it and another lists it as built-in", () => {
+      const catalog = aggregateCatalog([
+        view({ catalog: [androidOn({ models: ["Pixel 8", "My Tablet"] })], id: "wrk_a" }),
+        view({
+          catalog: [androidOn({ customModels: ["My Tablet"], models: ["My Tablet"] })],
+          id: "wrk_b",
+        }),
+      ]);
+
+      expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+      expect(catalog.platforms[0]?.customModels).toEqual(["My Tablet"]);
+    });
+
+    it("drops a custom name the worker does not list in models", () => {
+      const catalog = aggregateCatalog([
+        view({
+          catalog: [androidOn({ customModels: ["My Tablet", "Ghost"], models: ["My Tablet"] })],
+          id: "wrk_a",
+        }),
+        // Another worker lists Ghost, but only the worker that marks a name can make it custom.
+        view({ catalog: [androidOn({ models: ["Ghost"] })], id: "wrk_b" }),
+      ]);
+
+      expect(catalog.platforms[0]?.customModels).toEqual(["My Tablet"]);
+    });
+
+    it("omits customModels when no worker marks a model", () => {
+      const catalog = aggregateCatalog([
+        view({ catalog: [androidOn({ customModels: ["Ghost"] })], id: "wrk_a" }),
+      ]);
+
+      expect(catalog.platforms[0]).not.toHaveProperty("customModels");
     });
 
     it("drops an image whose runtime the reporting worker does not list", () => {
