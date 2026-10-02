@@ -93,6 +93,12 @@ export class FleetLeaseIndex {
     return this.gatewayRequesterPrefix;
   }
 
+  /** Whether a worker-reported requester id is one this gateway sent (§14/§27): the one place
+   * the gateway answers that, for its leases and for the requests waiting on its workers. */
+  isGatewayRequester(requesterId: string): boolean {
+    return requesterId.startsWith(this.gatewayRequesterPrefix);
+  }
+
   /** Every entry, for `lease.release-all` (§34's own-leases-only filter) and for a caller
    * reconciling worker ids that disappeared entirely (`forgetWorker`). */
   all(): readonly FleetLeaseEntry[] {
@@ -209,7 +215,7 @@ export class FleetLeaseIndex {
   #addReported(workerId: string, leases: readonly WorkerReportedLease[]): ReadonlySet<string> {
     const reported = new Set<string>();
     for (const lease of leases) {
-      if (!lease.requesterId.startsWith(this.gatewayRequesterPrefix)) continue;
+      if (!this.isGatewayRequester(lease.requesterId)) continue;
       const gatewayLeaseId = `${workerId}.${lease.id}`;
       reported.add(gatewayLeaseId);
       this.#missingSince.delete(gatewayLeaseId);

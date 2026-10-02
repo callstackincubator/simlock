@@ -61,9 +61,12 @@ describe("the Waiting view", () => {
     // The copy a gateway sent worker-b, under the gateway's requester id: never the same request,
     // even under the same id.
     const sentOn = request({ id: "req_f", requesterId: "gw:gateway-1:fleet-agent" });
+    // Another request from the same requester, under another id: not this one either.
+    const another = request({ id: "req_x", requesterId: "fleet-agent" });
     const workers = [
       worker({ id: "wrk_1", label: "host", waiting: [onHost] }),
       worker({ id: "wrk_2", label: "worker-b", waiting: [sentOn] }),
+      worker({ id: "wrk_3", label: "worker-c", waiting: [another] }),
     ];
 
     const html = renderToStaticMarkup(

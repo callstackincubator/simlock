@@ -147,12 +147,16 @@ test.describe("the Waiting view", () => {
     const host = await startDaemon("worker", { config: ONE_DEVICE, driverScript: { ios: IOS } });
     try {
       const held = await holdTheDevice(host, "holder");
-      host.cliBackground([...LEASE, "--agent-id", "agent-b"]);
+      const waiter = host.cliBackground([...LEASE, "--agent-id", "agent-b"]);
       await untilTheDaemonSays(host, (requests) => requests.length === 1);
       await openWaiting(page, host);
       await expect(row(page, "agent-b")).toBeVisible();
 
       expect((await host.cli(["release", held])).code).toBe(0);
+      const grant = JSON.parse(await waiter.firstStdoutLine(10_000)) as {
+        lease: { requesterId: string };
+      };
+      expect(grant.lease.requesterId).toBe("agent-b");
       await untilTheDaemonSays(host, (requests) => requests.length === 0);
 
       await expect(row(page, "agent-b")).toHaveCount(0, { timeout: 1_000 });

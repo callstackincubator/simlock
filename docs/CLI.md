@@ -1161,8 +1161,9 @@ Request req_9: local-agent on 2b026432-7743-4a08-98fc-ce494d11866f, ios iPhone 1
 Each line names the request, the agent that sent it, the device it asked for
 (only the fields it named), where it stands, and how long it has waited.
 `queued at 2` is its place in the queue, counting from 1, the requests ahead
-of it that are already starting included. `starting` means a device is being
-found, created, booted or downloaded for it. With nothing waiting it prints
+of it that are already starting included. `starting` means the daemon is working
+on it: placing it as it arrives, or finding, creating, booting or downloading
+a device for it. With nothing waiting it prints
 `No requests are waiting.` A granted, failed or cancelled request is not
 listed.
 

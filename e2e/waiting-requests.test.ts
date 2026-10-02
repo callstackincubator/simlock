@@ -12,19 +12,25 @@ const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "1
 /** One iOS device and no more, so a second request waits. */
 const ONE_DEVICE = { ios: { maxDevices: 1, maxRunning: 1 }, maxRunning: 1 };
 
-/** The lines `simlock list --requests` prints, once there are `count` of them. */
-async function requestLines(env: TestEnv, count: number): Promise<string[]> {
+/**
+ * Waits until `simlock list --requests` prints exactly one line per pattern, each matching its
+ * own. A request that has just arrived is listed as `starting` until the daemon has placed it,
+ * so a line is read again until it settles.
+ */
+async function untilListed(env: TestEnv, patterns: readonly RegExp[]): Promise<void> {
   let lines: string[] = [];
   await waitFor(
     async () => {
       const listed = await env.cli(["list", "--requests"]);
       expect(listed.code, listed.stderr).toBe(0);
       lines = listed.stdout.trimEnd().split("\n");
-      return lines.length === count && lines.every((line) => line.startsWith("Request "));
+      return (
+        lines.length === patterns.length &&
+        patterns.every((pattern, index) => pattern.test(lines[index] ?? ""))
+      );
     },
-    { label: `${String(count)} waiting request lines` },
+    { label: "the waiting request lines" },
   );
-  return lines;
 }
 
 describe("simlock list --requests", () => {
@@ -37,17 +43,15 @@ describe("simlock list --requests", () => {
     const empty = await env.cli(["list", "--requests"]);
     expect(empty.stdout).toBe("No requests are waiting.\n");
 
+    const b = /^Request \S+: agent-b, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/;
     env.cliBackground([...LEASE, "--agent-id", "agent-b"]);
-    await requestLines(env, 1);
+    await untilListed(env, [b]);
     env.cliBackground([...LEASE, "--agent-id", "agent-c", "--mode", "slim"]);
-    const lines = await requestLines(env, 2);
 
-    expect(lines[0]).toMatch(
-      /^Request \S+: agent-b, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/,
-    );
-    expect(lines[1]).toMatch(
+    await untilListed(env, [
+      b,
       /^Request \S+: agent-c, ios iPhone 16 18\.4 mode slim, queued at 2, waiting \d+s$/,
-    );
+    ]);
   });
 
   it("on a gateway, lists the fleet queue and a request in a worker's own queue with that worker", async () => {
@@ -84,19 +88,15 @@ describe("simlock list --requests", () => {
     // own queue. A fleet request then waits in the gateway's.
     expect((await worker.cli([...LEASE, "--agent-id", "local-a", "--detach"])).code).toBe(0);
     worker.cliBackground([...LEASE, "--agent-id", "local-b"]);
-    await requestLines(worker, 1);
+    await untilListed(worker, [
+      /^Request \S+: local-b, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/,
+    ]);
     gateway.cliBackground([...LEASE, "--agent-id", "fleet-c"]);
 
-    const lines = await requestLines(gateway, 2);
-
-    expect(lines).toEqual([
-      expect.stringMatching(
-        /^Request \S+: fleet-c, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/,
-      ),
-      expect.stringMatching(
-        new RegExp(
-          `^Request \\S+: local-b on ${workerId}, ios iPhone 16 18\\.4, queued at 1, waiting \\d+s$`,
-        ),
+    await untilListed(gateway, [
+      /^Request \S+: fleet-c, ios iPhone 16 18\.4, queued at 1, waiting \d+s$/,
+      new RegExp(
+        `^Request \\S+: local-b on ${workerId}, ios iPhone 16 18\\.4, queued at 1, waiting \\d+s$`,
       ),
     ]);
   });

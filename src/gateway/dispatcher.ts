@@ -146,9 +146,9 @@ export interface GatewayDispatcherOptions {
   >;
   /** #118: read-only access for `lease.list`/`list.get`/`status.get`'s lease projection
    * (`FleetLeaseIndex#project`/`#all`) -- kept separate from `coordinator` because this
-   * dispatcher only ever *reads* it, never mutates it. `requesterPrefix` marks the requests
+   * dispatcher only ever *reads* it, never mutates it. `isGatewayRequester` marks the requests
    * this gateway sent a worker, which `list.get`'s `requests` already lists as its own. */
-  readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all" | "requesterPrefix">;
+  readonly leaseIndex: Pick<FleetLeaseIndex, "project" | "all" | "isGatewayRequester">;
 }
 
 export class GatewayDispatcher {
@@ -382,12 +382,12 @@ export class GatewayDispatcher {
    * §27); the gateway already lists that request, so the worker's copy is left out.
    */
   #fleetWaiting() {
-    const prefix = this.options.leaseIndex.requesterPrefix;
+    const { leaseIndex } = this.options;
     const onWorkers = this.options.workers
       .views()
       .flatMap((view) =>
         (view.waiting ?? [])
-          .filter((request) => !request.requesterId.startsWith(prefix))
+          .filter((request) => !leaseIndex.isGatewayRequester(request.requesterId))
           .map((request) => ({ ...request, workerId: view.id })),
       );
     return [...this.options.coordinator.waitingRequests(), ...onWorkers];

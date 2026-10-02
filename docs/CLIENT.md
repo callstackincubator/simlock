@@ -482,8 +482,9 @@ const { waiting = [] } = await client.getStatus();
 ```
 
 - `stage` is `queued` while the request holds a place in the queue, with
-  `queuePosition` counting from 1, and `starting` while a device is being
-  found, created, booted or downloaded for it. `spec` has only the fields the
+  `queuePosition` counting from 1, and `starting` while the daemon is
+  working on it: placing it as it arrives, or finding, creating, booting or
+  downloading a device for it. `spec` has only the fields the
   request named.
 - A request leaves the list as soon as it is granted, fails or is cancelled.
   The field is absent only from an older daemon.

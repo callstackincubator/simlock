@@ -266,8 +266,9 @@ export const leaseRequestRecordSchema = z.object({
 /**
  * A request still waiting for a device (`list.get` with `requests`, `status.get`'s `waiting`).
  * `stage` is `queued` while the request holds a place in the queue, with that place in
- * `queuePosition`, counted from 1 the way `lease.queued` counts it; `starting` while a device is
- * being found, made, booted or downloaded for it. `workerId` names the worker whose own queue
+ * `queuePosition`, counted from 1 the way `lease.queued` counts it; `starting` while the daemon is
+ * working on it: placing it as it arrives, or finding, making, booting or downloading a device
+ * for it. `workerId` names the worker whose own queue
  * the request waits in; only a gateway sets it. The request's idempotency key and owner are
  * never part of it: a key lets its holder replay the request, and neither is the operator's.
  */

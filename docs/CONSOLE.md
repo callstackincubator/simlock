@@ -135,7 +135,7 @@ single host" in place of its content.
 | Requester | The agent that asked |
 | Device | The platform and model it asked for, and the runtime, mode and image tag when it named them |
 | Worker | The worker whose own queue it waits in, or `—` for a request in a gateway's queue |
-| Stage | `queued` while it waits its turn, `starting` while a device is being found, created, booted or downloaded for it |
+| Stage | `queued` while it waits its turn, `starting` while the daemon is working on it: placing it as it arrives, or finding, creating, booting or downloading a device for it |
 | Place in queue | Where it stands, counting from 1, the requests ahead of it that are already starting included; `—` while starting |
 | Waiting for | How long since the daemon received it |
 

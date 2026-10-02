@@ -156,8 +156,8 @@ export class InMemoryLeaseRequestStore<Grant> implements LeaseRequestStore<Grant
 
 /**
  * A request still waiting for a device, as an operator sees it: who asked, for what, since when,
- * and where it stands. `queued` while it holds a place in the queue, `starting` while its device
- * is being found, made, booted or downloaded for. Its idempotency key and owner are not here: they
+ * and where it stands. `queued` while it holds a place in the queue, `starting` while the daemon works
+ * on it: placing it as it arrives, or finding, making, booting or downloading its device. Its idempotency key and owner are not here: they
  * are the requester's, not the operator's.
  */
 export interface WaitingRequest {

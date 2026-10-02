@@ -1162,8 +1162,8 @@ Every request still waiting for a device, oldest first, whoever sent it. An
 - `createdAt` is when the daemon holding the request received it, in
   milliseconds since the epoch.
 - `stage` is `queued` while the request holds a place in the queue, and
-  `starting` while a device is being found, created, booted or downloaded for
-  it.
+  `starting` while the daemon is working on it: placing it as it arrives, or
+  finding, creating, booting or downloading a device for it.
 - `queuePosition` is set only while `queued`: its place in the queue counting
   from 1, the requests ahead of it that are already starting included. It is
   the request's place now, not the one its `queued` progress first reported.
