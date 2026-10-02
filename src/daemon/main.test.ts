@@ -141,13 +141,20 @@ describe("startDaemon", () => {
   });
 
   it("runs no prerequisite check at startup convergence, and runs every check on each doctor.run", async () => {
-    let runs = 0;
+    const runs = { android: 0, ios: 0 };
     const missing = { message: "gone", prerequisite: "android-emulator", remedy: "install it" };
     const { daemon } = await start({
       prerequisiteChecks: [
         {
           check: () => {
-            runs += 1;
+            runs.ios += 1;
+            return Promise.resolve([]);
+          },
+          platform: "ios",
+        },
+        {
+          check: () => {
+            runs.android += 1;
             return Promise.resolve([missing]);
           },
           platform: "android",
@@ -165,14 +172,14 @@ describe("startDaemon", () => {
     const first = (await daemon.dispatch("doctor.run", {}, admin)) as {
       readonly findings: readonly { readonly kind: string; readonly prerequisite?: string }[];
     };
-    expect(runs).toBe(1);
+    expect(runs).toEqual({ android: 1, ios: 1 });
     // Android has no driver in this daemon, so the finding is the platform's, not running.
     expect(first.findings).toContainEqual(
       expect.objectContaining({ kind: "prerequisite-missing", platform: "android" }),
     );
 
     await daemon.dispatch("doctor.run", {}, admin);
-    expect(runs).toBe(2);
+    expect(runs).toEqual({ android: 2, ios: 2 });
   });
 
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {

@@ -247,14 +247,16 @@ export class Doctor {
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
     findings.push(...(await this.#collectAdvisories()));
-    findings.push(...(await this.#collectPrerequisites(prerequisites)));
 
     if (fix) {
       await this.#applySafeFixes(findings, driversByPlatform);
     }
-    const remaining = purgeOrphans
-      ? await this.#purgeOrphans(findings, driversByPlatform)
-      : findings;
+    // Prerequisites last: a check may run for tens of seconds, and nothing `--fix` or a purge
+    // acts on should wait behind it and go stale. They are never acted on themselves.
+    const remaining = [
+      ...(purgeOrphans ? await this.#purgeOrphans(findings, driversByPlatform) : findings),
+      ...(await this.#collectPrerequisites(prerequisites)),
+    ];
 
     const report = { findings: remaining };
     this.#emitFindingEvents(remaining);

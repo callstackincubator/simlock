@@ -14,13 +14,53 @@ export interface AndroidSdkPaths {
 }
 
 /** The SDK roots searched, in order: `ANDROID_HOME`, `ANDROID_SDK_ROOT`, then Android Studio's default. */
-export function sdkSearchRoots(
+function sdkSearchRoots(
   env: Readonly<Record<string, string | undefined>>,
   homeDirectory: string,
 ): string[] {
   return [env.ANDROID_HOME, env.ANDROID_SDK_ROOT, `${homeDirectory}/Library/Android/sdk`].filter(
     (root): root is string => root !== undefined && root !== "",
   );
+}
+
+/**
+ * Which SDK root is the SDK. `complete`: the first searched root holding every tool, the one
+ * driver discovery runs. Otherwise `incomplete`: the first searched root that is a directory, the
+ * one a prerequisite check reports on. Otherwise `absent`. Both discovery and the check ask this,
+ * so a running driver's SDK is never the one reported as missing tools.
+ */
+export type SdkLocation =
+  | { readonly kind: "complete"; readonly paths: AndroidSdkPaths }
+  | { readonly kind: "incomplete"; readonly root: string; readonly searched: readonly string[] }
+  | { readonly kind: "absent"; readonly searched: readonly string[] };
+
+export async function locateSdk(
+  env: Readonly<Record<string, string | undefined>>,
+  homeDirectory: string,
+  filesystem: Filesystem,
+): Promise<SdkLocation> {
+  const searched = sdkSearchRoots(env, homeDirectory);
+  const directories: string[] = [];
+  for (const root of searched) {
+    if (await isDirectory(filesystem, root)) directories.push(root);
+  }
+  for (const root of directories) {
+    const paths = await sdkPathsAt(root, filesystem);
+    if (paths !== undefined) return { kind: "complete", paths };
+  }
+  const first = directories[0];
+  return first === undefined
+    ? { kind: "absent", searched }
+    : { kind: "incomplete", root: first, searched };
+}
+
+async function isDirectory(filesystem: Filesystem, path: string): Promise<boolean> {
+  try {
+    return (await filesystem.stat(path)).kind === "directory";
+  } catch {
+    // Absent or unreadable: not an SDK this daemon could use either.
+    return false;
+  }
 }
 
 export function emulatorPath(root: string): string {
@@ -32,7 +72,7 @@ export function adbPath(root: string): string {
 }
 
 /** Every tool the driver runs, when all of them are at `root`; otherwise `undefined`. */
-export async function sdkPathsAt(
+async function sdkPathsAt(
   root: string,
   filesystem: Filesystem,
 ): Promise<AndroidSdkPaths | undefined> {

@@ -1,6 +1,6 @@
 import type { MissingPrerequisite, PrerequisiteCheck } from "../../core/driver.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
-import { adbPath, emulatorPath, sdkSearchRoots, sdkToolBin } from "./sdk-paths.js";
+import { adbPath, emulatorPath, locateSdk, sdkToolBin } from "./sdk-paths.js";
 
 const SDKMANAGER_TIMEOUT_MS = 30_000;
 const COMMAND_LINE_TOOLS_PAGE = "https://developer.android.com/studio#command-line-tools-only";
@@ -27,13 +27,12 @@ export function androidPrerequisites(options: AndroidPrerequisitesOptions): Prer
 async function missingAndroidPrerequisites(
   options: AndroidPrerequisitesOptions,
 ): Promise<readonly MissingPrerequisite[]> {
-  const roots = sdkSearchRoots(options.env, options.homeDirectory);
-  const root = await firstDirectory(options.filesystem, roots);
-  if (root === undefined) {
+  const location = await locateSdk(options.env, options.homeDirectory, options.filesystem);
+  if (location.kind === "absent") {
     // One finding, not one per tool: with no SDK at all, every tool is missing for the same reason.
     return [
       {
-        message: `No Android SDK found; searched: ${roots.join(", ")}.`,
+        message: `No Android SDK found; searched: ${location.searched.join(", ")}.`,
         prerequisite: "android-sdk",
         remedy:
           "Install Android Studio (https://developer.android.com/studio), or the command-line " +
@@ -42,6 +41,8 @@ async function missingAndroidPrerequisites(
     ];
   }
 
+  // The SDK discovery runs, when it found one; otherwise the first root there is.
+  const root = location.kind === "complete" ? location.paths.root : location.root;
   const missing: MissingPrerequisite[] = [];
   const tools = await sdkToolBin(root, options.filesystem);
   if (tools === undefined) {
@@ -72,20 +73,6 @@ async function missingAndroidPrerequisites(
     if (jdk !== undefined) missing.push(jdk);
   }
   return missing;
-}
-
-async function firstDirectory(
-  filesystem: Filesystem,
-  paths: readonly string[],
-): Promise<string | undefined> {
-  for (const path of paths) {
-    try {
-      if ((await filesystem.stat(path)).kind === "directory") return path;
-    } catch {
-      // Absent or unreadable: not an SDK this daemon could use either.
-    }
-  }
-  return undefined;
 }
 
 /**

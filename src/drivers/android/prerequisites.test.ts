@@ -138,6 +138,49 @@ describe("androidPrerequisites", () => {
     expect(runner.calls).toEqual([]);
   });
 
+  it("checks the complete SDK discovery would run, not an earlier root that is incomplete", async () => {
+    const studioSdk = `${home}/Library/Android/sdk`;
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/stale-sdk");
+    for (const tool of [
+      "cmdline-tools/latest/bin/sdkmanager",
+      "cmdline-tools/latest/bin/avdmanager",
+      "emulator/emulator",
+      "platform-tools/adb",
+    ]) {
+      await writeFile(filesystem, `${studioSdk}/${tool}`);
+    }
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["--version"], command: `${studioSdk}/cmdline-tools/latest/bin/sdkmanager` },
+        result: { code: 0, stderr: "", stdout: "12.0\n" },
+      },
+    ]);
+    const prerequisites = androidPrerequisites({
+      env: { ANDROID_HOME: "/stale-sdk" },
+      filesystem,
+      homeDirectory: home,
+      processRunner: runner,
+    });
+
+    await expect(prerequisites.check()).resolves.toEqual([]);
+  });
+
+  it("reports on the first root that is a directory when no root is complete", async () => {
+    const filesystem = await sdkFilesystem(["emulator"]);
+    const prerequisites = androidPrerequisites({
+      env: { ANDROID_HOME: "/nowhere", ANDROID_SDK_ROOT: sdk },
+      filesystem,
+      homeDirectory: home,
+      processRunner: new ScriptedProcessRunner([SDKMANAGER_RUNS]),
+    });
+
+    const missing = await prerequisites.check();
+
+    expect(missing.map((found) => found.prerequisite)).toEqual(["android-emulator"]);
+    expect(missing[0]?.message).toContain(sdk);
+  });
+
   it("treats a root that is a file, not a directory, as no SDK", async () => {
     const filesystem = new MemoryFilesystem();
     await writeFile(filesystem, sdk);

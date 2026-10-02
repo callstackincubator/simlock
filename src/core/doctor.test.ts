@@ -1708,7 +1708,7 @@ describe("Doctor", () => {
       expect(android?.remedy).toMatch(RESTART);
     });
 
-    it("reports the same prerequisite findings with fix: true and starts no installer", async () => {
+    it("reports the same prerequisite findings with fix: true and asks the driver for nothing but listManaged", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
       const android = new FakeDriver({ clock, platform: "android" });
@@ -1732,7 +1732,46 @@ describe("Doctor", () => {
       expect(check.runs).toBe(2);
     });
 
-    it("runs no prerequisite check unless asked to, which startup convergence never is", async () => {
+    it("applies --fix before any prerequisite check runs, so a slow check never delays a fix", async () => {
+      const { eventBus, registry } = await readyIosDevice();
+      const deviceId = registry.snapshot.devices[0]!.id;
+      await registry.createLease({
+        deviceId,
+        ownerId: "agent",
+        requesterId: "agent",
+        ttlDeadline: 9_000,
+        ttlMs: 60_000,
+      });
+      const order: string[] = [];
+      const doctor = new Doctor({
+        clock: new FakeClock(10_000),
+        config: config(),
+        drivers: [],
+        eventBus,
+        leaseExpirer: {
+          expire: (leaseId: string) => {
+            order.push(`expire ${leaseId}`);
+            return Promise.resolve();
+          },
+        },
+        prerequisiteChecks: [
+          {
+            check: () => {
+              order.push("check");
+              return Promise.resolve([]);
+            },
+            platform: "android",
+          },
+        ],
+        registry,
+      });
+
+      await doctor.reconcile({ fix: true, prerequisites: true });
+
+      expect(order).toEqual([`expire ${registry.snapshot.leases[0]!.id}`, "check"]);
+    });
+
+    it("runs no prerequisite check when reconcile is not asked to", async () => {
       const check = prerequisiteCheck("android", [EMULATOR]);
       const { doctor } = await doctorWith({ prerequisiteChecks: [check] });
 

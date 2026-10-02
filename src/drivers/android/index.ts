@@ -56,7 +56,7 @@ import {
   type DeviceProfileSourceDiagnostic,
   type DeviceProfile,
 } from "./device-profile-source.js";
-import { type AndroidSdkPaths, sdkPathsAt, sdkSearchRoots } from "./sdk-paths.js";
+import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
 
@@ -1870,16 +1870,11 @@ function configuredAdbServerPort(options: AndroidDriverOptions): number {
 }
 
 async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPaths> {
-  const searchedPaths: string[] = [];
-
-  for (const root of sdkSearchRoots(options.env, options.homeDirectory)) {
-    const paths = await sdkPathsAt(root, options.filesystem);
-    searchedPaths.push(root);
-    if (paths !== undefined) {
-      return paths;
-    }
+  const location = await locateSdk(options.env, options.homeDirectory, options.filesystem);
+  if (location.kind === "complete") {
+    return location.paths;
   }
-  throw new SdkMissingError(searchedPaths);
+  throw new SdkMissingError(location.searched);
 }
 
 /**
