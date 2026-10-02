@@ -176,7 +176,7 @@ describe("WorkerRegistry", () => {
     ]);
   });
 
-  it("forgets a worker's granted devices with its view, so a worker re-added under that id lists none until it refreshes", async () => {
+  it("forgets a worker's granted devices with its view, so a worker re-added under that id lists none of them", async () => {
     const { workers } = registry();
     workers.connected("wrk_1", undefined, "0.3.0");
     workers.refresh("wrk_1", {

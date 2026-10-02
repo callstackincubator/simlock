@@ -1417,8 +1417,10 @@ describe("lease routes", () => {
     dispatcher.handlers["lease.release"] = (input) => {
       const leaseId = (input as { leaseId: string }).leaseId;
       registry.leases = registry.leases.filter((lease) => lease.id !== leaseId);
+      // Not `reclaiming`: that is also the route's default for a device it cannot find, so only
+      // another state proves the answer is read from the registry.
       registry.devices = registry.devices.map((device) =>
-        device.id === "dev_1" ? { ...device, state: "reclaiming" } : device,
+        device.id === "dev_1" ? { ...device, state: "quarantined" } : device,
       );
       return { leaseId };
     };
@@ -1429,7 +1431,7 @@ describe("lease routes", () => {
     });
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual({
-      device: { id: "dev_1", state: "reclaiming" },
+      device: { id: "dev_1", state: "quarantined" },
       released: true,
     });
   });

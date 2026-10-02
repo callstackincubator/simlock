@@ -86,8 +86,8 @@ export interface WorkerRegistryOptions {
 
 export class WorkerRegistry {
   readonly #workers = new Map<string, WorkerView>();
-  /** Each worker's devices in the grant shape (see `WorkerGrantedDevice`), written only by
-   * `refresh` and read only through `grantedDevices`, which skips a worker with no view. */
+  /** Each worker's devices in the grant shape (see `WorkerGrantedDevice`). Set by `refresh`,
+   * which writes nothing for a worker with no view, and deleted with the view by `#forget`. */
   readonly #grantedDevices = new Map<string, readonly WorkerGrantedDevice[]>();
   /**
    * Drained worker ids, including ids with no view yet. Kept beside the views rather than only
@@ -123,9 +123,8 @@ export class WorkerRegistry {
 
   /**
    * Every worker's devices in the grant shape, each with the `workerId` it came from: what a
-   * gateway's `GET /v1/leases/{id}` builds the lease payload from. Only workers that still have
-   * a view are listed, so a device is never served for a worker the gateway has forgotten. The
-   * caller matches a device by worker and id together, never by id alone.
+   * gateway's `GET /v1/leases/{id}` builds the lease payload from. Ordered by worker id, as
+   * `views()` is. The caller matches a device by worker and id together, never by id alone.
    */
   grantedDevices(): readonly (WorkerGrantedDevice & { readonly workerId: string })[] {
     return this.views().flatMap((view) =>

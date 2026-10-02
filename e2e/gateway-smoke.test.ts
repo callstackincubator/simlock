@@ -410,7 +410,7 @@ describe("gateway smoke", () => {
   // `worker`, and the request resource embeds that object once `granted`. It is handed out in
   // two places: the `201` when the grant lands before any progress, and the stored request read
   // back. The first request provisions, so its `201` is not granted; it warms the device. The
-  // second finds that device free and is granted inside its own `201`. All three leases count.
+  // second finds that device free and is granted inside its own `201`. All three lease objects count.
   it("returns workerId and worker on a gateway-granted lease, in POST /v1/lease-requests' 201 and in GET /v1/lease-requests/{id} (#253)", async () => {
     const { baseUrl, gateway } = await startFleet(
       [{ label: "worker-a", models: ["Pixel 8"] }],
