@@ -163,8 +163,7 @@ export type ErasedHandler = (input: never, session: DispatchSession) => Promise<
 
 export interface DispatchPipeline {
   /** Handler per operation. An operation with no entry answers `UNKNOWN_REQUEST` -- which is
-   * how a worker answers `worker.*` and how `daemon.stop` (intercepted by the transport) never
-   * reaches a handler. */
+   * how `daemon.stop` (intercepted by the transport) never reaches a handler. */
   readonly handlers: Partial<Record<OperationName, ErasedHandler>>;
   /** The two live lookups an `authorize` hook needs (ADR 0003 §1's `ownsLease`). A dispatcher
    * with no lease state of its own may leave this out: an absent context answers `undefined`

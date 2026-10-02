@@ -164,6 +164,64 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("the worker view builder gives a gateway the same view it built before this change", async () => {
+    // Every field a refresh fills, set to a value that is not a default, and the whole view
+    // compared as one literal: the expected value is what the gateway built before the view
+    // builder moved into the contract, so any field the move dropped, renamed or reshaped
+    // fails here by name.
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient("admin", "9.8.7");
+    const install = {
+      component: "26.0",
+      platform: "ios" as const,
+      since: 500,
+      state: "downloading" as const,
+      waiters: 2,
+    };
+    worker.status = statusFixture({
+      daemon: { health: "starting", mode: "worker" },
+      host: hostFixture({ arch: "x64" }),
+      installs: [install],
+      leases: [leaseFixture("lease_1", "dev_1")],
+      queueDepth: 3,
+    });
+    worker.devices = [
+      { ...deviceFixture("dev_1", "leased"), createdAt: 1, driverData: { private: true } },
+    ];
+    worker.catalog = catalogFixture([
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+    ]);
+    worker.downloadPolicy = "always";
+    worker.downloadTimeoutMs = 45 * 60_000;
+    worker.leaseMaxTtlMs = 6 * 60 * 60_000;
+
+    await harness.join("wrk_1", worker, "mac-mini-1");
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.lease).toBeDefined());
+
+    expect(harness.service.workers.view("wrk_1")).toEqual({
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      connection: "connected",
+      devices: [deviceFixture("dev_1", "leased")],
+      downloads: { policy: "always", timeoutMs: 45 * 60_000 },
+      drained: false,
+      health: "starting",
+      host: hostFixture({ arch: "x64" }),
+      id: "wrk_1",
+      installs: [install],
+      label: "mac-mini-1",
+      lastSeenAt: 1_000,
+      lease: { maxTtlMs: 6 * 60 * 60_000 },
+      leases: [leaseFixture("lease_1", "dev_1")],
+      queueDepth: 3,
+      version: "9.8.7",
+    });
+
+    await harness.service.stop();
+  });
+
   it("narrows a worker's device records: no driver-private data crosses the fleet", async () => {
     const harness = fleet();
     await harness.service.start();

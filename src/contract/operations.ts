@@ -626,11 +626,10 @@ export const tokenRevoke = defineOperation({
 
 // ---- worker.list / worker.drain / worker.undrain / worker.remove (ADR 0005 §8, §23) ---------
 //
-// Gateway-only operations: they act on the gateway's worker registry, which a worker daemon
-// does not have. A worker's `Dispatcher` deliberately declares no handler for them at all
-// (see `src/daemon/dispatcher.ts`'s `#handlers` type), so asking a worker for one answers
-// `UNKNOWN_REQUEST` -- "this daemon does not implement that operation" -- rather than a
-// fabricated empty fleet. The gateway's own dispatcher implements all four.
+// They act on the gateway's worker registry. A worker answers them as a fleet of one (ADR
+// 0012): `worker.list` returns one view, the worker itself, and `worker.drain`,
+// `worker.undrain` and `worker.remove` answer `UNSUPPORTED_IN_WORKER_MODE`, since a single host
+// has no gateway to drain it or forget it.
 //
 // `admin` throughout: these are operator tools (drain a machine for maintenance, forget a
 // machine that is gone), and ADR 0003 §3's matrix puts every daemon-wide administrative
@@ -807,7 +806,7 @@ const workerInstallResultSchema = z.object({
  * gateway. The gateway asks each target at the same time with `component.install`, and each
  * worker answers for itself under its own `downloads.policy`. One result per worker, in
  * ascending worker id. Progress arrives as `component-progress` pushes carrying `workerId`.
- * Gateway-only: a worker answers `UNKNOWN_REQUEST`.
+ * A worker answers `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerInstallComponent = defineOperation({
@@ -885,21 +884,5 @@ export const OPERATIONS = {
   "worker.install-component": workerInstallComponent,
   "component.remove": componentRemove,
 } as const;
-
-/**
- * The operations only a gateway implements (ADR 0005 §23). Named as a set here, rather than
- * spelled out again in each dispatcher, so "which operations are gateway-only" has exactly one
- * answer: the worker's dispatcher excludes these from its handler table, and the gateway's
- * implements them.
- */
-export const GATEWAY_ONLY_OPERATIONS = [
-  "worker.list",
-  "worker.drain",
-  "worker.undrain",
-  "worker.remove",
-  "worker.install-component",
-] as const satisfies readonly OperationName[];
-
-export type GatewayOnlyOperationName = (typeof GATEWAY_ONLY_OPERATIONS)[number];
 
 export type OperationName = keyof typeof OPERATIONS;

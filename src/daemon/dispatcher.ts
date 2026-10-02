@@ -38,8 +38,8 @@ import {
   OPERATIONS,
   requestedDevice,
   type ComponentProgress,
-  type GatewayOnlyOperationName,
   type OperationName,
+  workerViewFields,
 } from "../contract/index.js";
 import type { TokenStore } from "../http/token-store.js";
 import {
@@ -143,6 +143,11 @@ export interface DispatcherOptions {
    * since the session's `role` is itself resolved from `hello`'s payload (see `session.ts`).
    */
   readonly awaitReady: () => Promise<void>;
+  /** This daemon's instance id (`instance.json`), the id it presents to a gateway. `worker.list`
+   * answers with it as the one worker's id (ADR 0012 §1). */
+  readonly instanceId: string;
+  /** This daemon's own version, the one its `hello` reply carries; `worker.list`'s `version`. */
+  readonly version: string;
 }
 
 /**
@@ -162,9 +167,8 @@ type Handler<Op extends OperationName> = (
 ) => Promise<unknown> | unknown;
 
 /** Every operation this (worker-mode) dispatcher implements: the contract's set minus
- * `daemon.stop` (intercepted by `DaemonServer` itself, ADR 0003 §6) and minus the
- * gateway-only ones (ADR 0005 §23). */
-type WorkerOperationName = Exclude<OperationName, "daemon.stop" | GatewayOnlyOperationName>;
+ * `daemon.stop` (intercepted by `DaemonServer` itself, ADR 0003 §6). */
+type WorkerOperationName = Exclude<OperationName, "daemon.stop">;
 
 /**
  * The transport-independent dispatcher (ADR 0003 §2). One `dispatch()` call does, in order:
@@ -172,8 +176,7 @@ type WorkerOperationName = Exclude<OperationName, "daemon.stop" | GatewayOnlyOpe
  * output. Handlers never see a raw payload or run their own role/ownership check -- both
  * already happened by the time a handler's function body runs.
  *
- * Deliberately excludes `hello` (protocol-level, answered before a session exists), the
- * gateway-only `worker.*` operations (ADR 0005 §23 -- see `#handlers`), and
+ * Deliberately excludes `hello` (protocol-level, answered before a session exists) and
  * `daemon.stop` (ADR §6's frozen exception -- scoped to the protocol-version gate only, so it
  * stays reachable across a version mismatch; still requires a completed handshake and the
  * `admin` role, checked in `DaemonServer#dispatchLine` itself) -- both stay in `DaemonServer`,
@@ -183,18 +186,15 @@ export class Dispatcher {
   readonly #logger: Logger;
   readonly #dispatchLogger: Logger;
   /**
-   * Total over every operation but `daemon.stop` and the gateway-only ones. Deliberately *not*
-   * a partial map: a declared operation whose handler was never written is otherwise invisible
-   * to the compiler and only shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how
-   * `driver.passthrough` came to be declared, dispatched, and unimplemented at once.
+   * Total over every operation but `daemon.stop`. Deliberately *not* a partial map: a declared
+   * operation whose handler was never written is otherwise invisible to the compiler and only
+   * shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how `driver.passthrough` came
+   * to be declared, dispatched, and unimplemented at once.
    *
-   * `GATEWAY_ONLY_OPERATIONS` (ADR 0005 §23: `worker.list|drain|undrain|remove`; ADR 0010 §7:
-   * `worker.install-component`) are excluded from the type rather than given handlers that throw. A worker daemon has no worker
-   * registry to answer them from, and the honest answer is the one `dispatch()`'s own
-   * missing-handler guard already gives -- `UNKNOWN_REQUEST`, "this daemon does not implement
-   * that operation". Excluding them here also means adding a gateway operation cannot silently
-   * acquire a meaningless worker-side implementation: it either lands in
-   * `GATEWAY_ONLY_OPERATIONS` or the compiler asks for a handler in this map.
+   * ADR 0012: a worker answers the fleet operations as a fleet of one. `worker.list` returns
+   * this host as its only worker; the operations that act on a gateway's workers refuse with
+   * `UNSUPPORTED_IN_WORKER_MODE`, so adding a gateway operation still makes the compiler ask
+   * what a worker answers.
    */
   readonly #handlers: Record<WorkerOperationName, ErasedHandler>;
 
@@ -226,6 +226,14 @@ export class Dispatcher {
       "component.install": this.#componentInstall,
       "component.list": this.#componentList,
       "component.remove": this.#componentRemove,
+      "worker.list": this.#workerList,
+      "worker.drain": unsupportedOnWorker("worker.drain"),
+      "worker.undrain": unsupportedOnWorker("worker.undrain"),
+      "worker.remove": unsupportedOnWorker("worker.remove"),
+      "worker.install-component": unsupportedOnWorker(
+        "worker.install-component",
+        "worker.install-component installs on a gateway's workers, and this daemon is not a gateway; install on this host without naming workers",
+      ),
       // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
       // `dispatch()` for a frame type this map has no entry for.
     };
@@ -602,6 +610,40 @@ export class Dispatcher {
   #configGet: Handler<"config.get"> = () => this.options.config;
 
   /**
+   * ADR 0012 §1: this host as its own fleet of one. The fields a gateway reads over the uplink
+   * come from the same four reads, made here against this dispatcher's own handlers and parsed
+   * through their output schemas, so they are what a gateway would have received; the
+   * contract's one builder turns them into a view. `drained` is always `false`: a gateway that
+   * drained this worker holds that flag, not this host.
+   */
+  #workerList: Handler<"worker.list"> = async (_input, session) => {
+    const [status, devices, catalog] = await Promise.all([
+      this.#statusGet({}, session),
+      this.#listGet({ kind: "devices" }, session),
+      this.#catalogGet({}, session),
+    ]);
+    const label = this.options.config.gateway.label;
+    return {
+      workers: [
+        {
+          ...workerViewFields({
+            catalog: OPERATIONS["catalog.get"].output.parse(catalog),
+            config: OPERATIONS["config.get"].output.parse(this.#configGet({}, session)),
+            devices: OPERATIONS["list.get"].output.parse(devices),
+            status: OPERATIONS["status.get"].output.parse(status),
+          }),
+          connection: "connected",
+          drained: false,
+          id: this.options.instanceId,
+          lastSeenAt: this.options.clock.now(),
+          version: this.options.version,
+          ...(label === undefined ? {} : { label }),
+        },
+      ],
+    };
+  };
+
+  /**
    * ADR 0010 §4 and §6: an operator's explicit install. The command itself is the consent, so the
    * one consent function is asked with `true`; only `downloads.policy: "never"` refuses it, and it
    * does so before the installer is reached. Everything else -- joining an install already
@@ -723,4 +765,14 @@ function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): vo
   } catch {
     // Already gone.
   }
+}
+
+/** ADR 0012 §2: an operation that acts on a gateway's workers, asked of a worker. */
+function unsupportedOnWorker(
+  operation: OperationName,
+  message = `${operation} acts on a gateway's workers, and this daemon is not a gateway`,
+): ErasedHandler {
+  return () => {
+    throw new DispatchError("UNSUPPORTED_IN_WORKER_MODE", message, { operation });
+  };
 }

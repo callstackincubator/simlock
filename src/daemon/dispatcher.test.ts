@@ -19,7 +19,7 @@ import {
   SerializedDecision,
   RuntimeMissingError,
 } from "../core/index.js";
-import { OPERATIONS } from "../contract/index.js";
+import { OPERATIONS, statusDeviceSchema } from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";
 import type { CatalogReader, PassthroughResolver } from "../core/lease-ports.js";
 import {
@@ -104,6 +104,11 @@ function fakePassthroughOptions(
   };
 }
 
+/** `config` with `gateway.label` set, or unchanged when there is no label. */
+function withGatewayLabel(config: Config, label: string | undefined): Config {
+  return label === undefined ? config : { ...config, gateway: { ...config.gateway, label } };
+}
+
 async function buildDispatcher(
   overrides: {
     readonly downloadsPolicy?: Config["downloads"]["policy"];
@@ -153,6 +158,8 @@ async function buildDispatcher(
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
     >;
+    /** `gateway.label` in this daemon's config; unset by default. */
+    readonly gatewayLabel?: string;
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -172,11 +179,14 @@ async function buildDispatcher(
     ...overrides.driverOptions,
     ...fakePassthroughOptions(overrides.passthroughTool, overrides.passthroughContextSink),
   });
-  const config = testConfig(
-    overrides.downloadsPolicy,
-    overrides.lease ?? {},
-    overrides.exec ?? {},
-    overrides.capacity,
+  const config = withGatewayLabel(
+    testConfig(
+      overrides.downloadsPolicy,
+      overrides.lease ?? {},
+      overrides.exec ?? {},
+      overrides.capacity,
+    ),
+    overrides.gatewayLabel,
   );
   const wiring = testComponentWiring({
     clock: clock,
@@ -235,6 +245,7 @@ async function buildDispatcher(
     eventHistory: resolveEventHistoryOverride(eventBus, filesystem, overrides.eventHistory),
     health: () => "running",
     hostFacts: overrides.hostFacts ?? (() => ({ ...HOST_SYSTEM, tools: [] })),
+    instanceId: "instance-1",
     leases: engine,
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
@@ -244,6 +255,7 @@ async function buildDispatcher(
     reaper,
     registry,
     tokens,
+    version: "1.2.3",
   });
   return {
     clock,
@@ -348,6 +360,117 @@ describe("Dispatcher: parsing", () => {
     await expect(
       dispatcher.dispatch("daemon.stop", {}, session({ role: "admin" })),
     ).rejects.toMatchObject({ code: "UNKNOWN_REQUEST" });
+  });
+});
+
+/**
+ * ADR 0012: a worker answers the fleet operations as a fleet of one. `worker.list` is this host's
+ * own view; the operations that act on a gateway's workers refuse with their own code.
+ */
+describe("Dispatcher: the fleet operations on a worker", () => {
+  const admin = session({ principal: "operator", role: "admin" });
+
+  it("worker.list on a worker returns one view whose id is the instance id", async () => {
+    const { clock, dispatcher } = await buildDispatcher();
+    clock.advance(500);
+
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(workers).toHaveLength(1);
+    expect(workers[0]).toMatchObject({
+      connection: "connected",
+      drained: false,
+      id: "instance-1",
+      lastSeenAt: 1_500,
+      version: "1.2.3",
+    });
+    expect(workers[0]).not.toHaveProperty("protocol");
+  });
+
+  it("worker.list on a worker carries gateway.label as label, and no label when it is unset", async () => {
+    const labelled = await buildDispatcher({ gatewayLabel: "mac-mini-1" });
+    const unlabelled = await buildDispatcher();
+
+    const withLabel = await labelled.dispatcher.dispatch("worker.list", {}, admin);
+    const withoutLabel = await unlabelled.dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(withLabel.workers[0]?.label).toBe("mac-mini-1");
+    expect(withoutLabel.workers[0]).not.toHaveProperty("label");
+  });
+
+  it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {
+    const { components, dispatcher, driver } = await buildDispatcher({
+      driverOptions: { knownModels: ["iPhone 17 Pro"] },
+      hostFacts: () => ({
+        ...HOST_SYSTEM,
+        tools: [{ build: "16F6", name: "xcode", platform: "ios", version: "16.4" }],
+      }),
+    });
+    // One lease on one device, and one install held mid-download: every field has something
+    // in it, so a field the view dropped or took from the wrong read cannot pass as empty.
+    await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", platform: "ios" },
+      session(),
+    );
+    driver.holdInstalls();
+    void components.install({ component: "27.0", platform: "ios" });
+    await flushPromises();
+
+    const [{ workers }, status, devices, catalog, config] = await Promise.all([
+      dispatcher.dispatch("worker.list", {}, admin),
+      dispatcher.dispatch("status.get", {}, admin),
+      dispatcher.dispatch("list.get", { kind: "devices" }, admin),
+      dispatcher.dispatch("catalog.get", {}, admin),
+      dispatcher.dispatch("config.get", {}, admin),
+    ]);
+
+    expect(status.leases).toHaveLength(1);
+    expect(status.installs).toHaveLength(1);
+    expect(status.host.tools).toHaveLength(1);
+    expect(catalog.platforms[0]?.models).toEqual(["iPhone 17 Pro"]);
+    expect(workers[0]).toMatchObject({
+      capacity: status.capacity,
+      catalog: catalog.platforms,
+      devices: statusDeviceSchema.array().parse(devices),
+      downloads: { policy: config.downloads.policy, timeoutMs: config.downloads.timeoutMs },
+      health: status.daemon.health,
+      host: status.host,
+      installs: status.installs,
+      lease: { maxTtlMs: config.lease.maxTtlMs },
+      leases: status.leases,
+      queueDepth: status.queueDepth,
+    });
+    expect(workers[0]?.devices).toHaveLength(1);
+    expect(workers[0]?.devices[0]).not.toHaveProperty("driverData");
+  });
+
+  it.each(["worker.drain", "worker.undrain", "worker.remove"] as const)(
+    "worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE: %s",
+    async (operation) => {
+      const { dispatcher } = await buildDispatcher();
+
+      await expect(
+        dispatcher.dispatch(operation, { workerId: "instance-1" }, admin),
+      ).rejects.toMatchObject({ code: "UNSUPPORTED_IN_WORKER_MODE", details: { operation } });
+    },
+  );
+
+  it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE: worker.install-component, installing nothing", async () => {
+    const { components, dispatcher } = await buildDispatcher();
+    const install = vi.spyOn(components, "install");
+
+    await expect(
+      dispatcher.dispatch(
+        "worker.install-component",
+        { platform: "ios", version: "27.0", workers: "all" },
+        admin,
+      ),
+    ).rejects.toMatchObject({
+      code: "UNSUPPORTED_IN_WORKER_MODE",
+      details: { operation: "worker.install-component" },
+    });
+    expect(install).not.toHaveBeenCalled();
   });
 });
 

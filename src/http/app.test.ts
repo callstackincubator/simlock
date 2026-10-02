@@ -1765,22 +1765,49 @@ describe("hardening from review", () => {
 
 /**
  * ADR 0005 §23. The routes themselves are thin -- one dispatch each -- so what is worth
- * asserting is which daemon has them at all, that the gateway-only ones reach the right
- * operation with the id from the path, and that a refusal's typed `details` reach the body.
+ * asserting is which daemon has them at all, that they reach the right operation with the id
+ * from the path, and that a refusal's typed `details` reach the body. What a worker's own
+ * dispatcher answers on them is the HTTP API e2e flow's business.
  */
-describe("worker routes (gateway mode)", () => {
+describe("worker routes", () => {
   function gatewayHarness() {
     return buildHarness({ config: testConfig({}, "gateway") });
   }
 
-  it("are not routes at all on a worker", async () => {
-    const { app } = buildHarness();
+  it("are routes on a worker too (ADR 0012 §3), each dispatching its operation", async () => {
+    const { app, config, dispatcher } = buildHarness();
+    expect(config.mode).toBe("worker");
+    dispatcher.handlers["worker.list"] = () => ({ workers: [] });
+    for (const operation of ["worker.drain", "worker.undrain", "worker.remove"] as const) {
+      dispatcher.handlers[operation] = () => {
+        throw new DispatchError("UNSUPPORTED_IN_WORKER_MODE", `${operation} is refused`, {
+          operation,
+        });
+      };
+    }
 
-    const response = await app.request("/v1/workers", { headers: operatorAuth });
+    const list = await app.request("/v1/workers", { headers: operatorAuth });
+    const drain = await app.request("/v1/workers/w/drain", {
+      headers: operatorAuth,
+      method: "POST",
+    });
+    const undrain = await app.request("/v1/workers/w/drain", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+    const remove = await app.request("/v1/workers/w", { headers: operatorAuth, method: "DELETE" });
 
-    // 404, not 501: a worker has no worker registry, so this is not an endpoint that exists
-    // and is switched off -- it is not an endpoint.
-    expect(response.status).toBe(404);
+    expect(list.status).toBe(200);
+    expect(await list.json()).toEqual({ workers: [] });
+    // Each refusal names the operation its handler was reached through, so the body proves
+    // which route dispatched what.
+    const refusals = [drain, undrain, remove];
+    expect(refusals.map((response) => response.status)).toEqual([501, 501, 501]);
+    expect(await Promise.all(refusals.map((response) => response.json()))).toEqual(
+      ["worker.drain", "worker.undrain", "worker.remove"].map((operation) => ({
+        error: { code: "UNSUPPORTED_IN_WORKER_MODE", message: expect.any(String), operation },
+      })),
+    );
   });
 
   it("GET /v1/workers returns the views", async () => {

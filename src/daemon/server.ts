@@ -149,6 +149,8 @@ export interface DaemonServerEngineOptions {
   readonly leases: LeaseCommands;
   /** `status.get`'s host block (ADR 0008 §5); see `DispatcherOptions.hostFacts`. */
   readonly hostFacts: () => HostFacts;
+  /** This daemon's instance id; `worker.list` answers with it (see `DispatcherOptions`). */
+  readonly instanceId: string;
   readonly queue: QueueControl;
   readonly reaper: CleanupReaper;
   readonly healthMonitor?: LeaseHealthMonitor;
@@ -297,6 +299,7 @@ function buildDispatcher(
     eventHistory: options.eventHistory,
     health: hooks.health,
     hostFacts: options.hostFacts,
+    instanceId: options.instanceId,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
@@ -307,6 +310,7 @@ function buildDispatcher(
     reaper: options.reaper,
     registry: options.registry,
     ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    version: options.version,
   });
 }
 
@@ -805,7 +809,8 @@ export class DaemonServer {
         });
       }
       // ADR 0003 §7's typed `details` travel with the code when the thrown error carries any
-      // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`),
+      // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`,
+      // and a worker's `UNSUPPORTED_IN_WORKER_MODE`),
       // so a socket client can narrow on them exactly as an HTTP one does.
       await this.#respondError(
         connection.socket,
@@ -1117,10 +1122,9 @@ export class DaemonServer {
       case "token.revoke":
         return this.#dispatcher.dispatch("token.revoke", frame.payload, this.#session(connection));
       // ADR 0005 §23. Listed here like any other operation: this switch is the socket's whole
-      // surface, and whether a *given* daemon implements one is the dispatcher's answer, not
-      // the transport's -- a worker's dispatcher has no handler for these and says
-      // `UNKNOWN_REQUEST` itself, which is the same code this switch's default produces but
-      // for the honest reason.
+      // surface, and what a *given* daemon answers is the dispatcher's business, not the
+      // transport's -- a worker's dispatcher answers `worker.list` about itself and refuses the
+      // rest with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012).
       case "worker.list":
         return this.#dispatcher.dispatch(
           "worker.list",
@@ -1313,8 +1317,8 @@ export class DaemonServer {
    * reconnects repeats the request to join it again.
    *
    * A gateway's `worker.install-component` takes the same path: its progress names the worker
-   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher has
-   * no handler for it and answers `UNKNOWN_REQUEST`.
+   * it came from, and the push carries that `workerId` (ADR 0010 §7). A worker's dispatcher
+   * refuses it with `UNSUPPORTED_IN_WORKER_MODE` (ADR 0012 §2).
    */
   #installComponent(
     connection: Connection,

@@ -1648,8 +1648,8 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await client.close();
   });
 
-  it("answers worker.install-component with UNKNOWN_REQUEST: a worker has no workers to install on", async () => {
-    const harness = await createHarness();
+  it("answers worker.install-component with UNSUPPORTED_IN_WORKER_MODE: a worker has no workers to install on", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
     const client = await createClient(harness.socketPath);
     await hello(client);
 
@@ -1659,7 +1659,13 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
         version: "35",
         workers: "all",
       }),
-    ).resolves.toMatchObject({ error: { code: "UNKNOWN_REQUEST" }, ok: false });
+    ).resolves.toMatchObject({
+      error: {
+        code: "UNSUPPORTED_IN_WORKER_MODE",
+        details: { operation: "worker.install-component" },
+      },
+      ok: false,
+    });
     await client.close();
   });
 
@@ -2953,6 +2959,7 @@ async function createHarness(
     ...(options.adminSecret === undefined ? {} : { adminSecret: options.adminSecret }),
     capacity: engine,
     catalog: engine,
+    instanceId: "instance-test",
     clock,
     components: wiring.components,
     config,
