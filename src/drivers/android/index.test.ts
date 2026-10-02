@@ -2875,6 +2875,22 @@ describe("AndroidDriver listComponents()", () => {
     ]);
   });
 
+  it("counts every AVD in the user's AVD home that names the image, booted before or never (#241)", async () => {
+    const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+    const sysdir = "system-images/android-35/google_apis/arm64-v8a/";
+    // Never booted: only what avdmanager writes.
+    await userAvd(filesystem, "Fresh", sysdir);
+    // Booted: the emulator has written its disk image and hardware config beside config.ini.
+    await userAvd(filesystem, "Booted", sysdir);
+    await filesystem.writeFileAtomic(`${userAvdHome}/Booted.avd/userdata-qemu.img`, "data");
+    await filesystem.writeFileAtomic(`${userAvdHome}/Booted.avd/hardware-qemu.ini`, "hw\n");
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices }) => foreignDevices)).toEqual([2]);
+  });
+
   it("finds an AVD beside a pointer file with an empty path, counts nothing for an AVD whose directory is gone, and still lists the image", async () => {
     const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
     const sysdir = "system-images/android-35/google_apis/arm64-v8a/";

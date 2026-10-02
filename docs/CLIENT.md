@@ -378,8 +378,10 @@ const { components } = await client.listComponents({ platform: "android" });
 - `devices` counts Simlock's own devices of this platform and version that
   have not been deleted; two variants of one version show the same count.
   `foreignDevices` counts the devices outside Simlock that use the
-  component: simulators in Xcode's default device set, AVDs in the user's
-  own AVD home.
+  component: simulators in Xcode's default device set that have been booted
+  at least once, and every AVD in the user's own AVD home. The simulators
+  macOS creates by itself for each runtime it installs do not count until
+  someone boots one.
 - A gateway rejects it with `UNSUPPORTED_IN_GATEWAY_MODE`.
 
 ## Removing a runtime: `removeComponent`
@@ -398,13 +400,17 @@ const result = await admin.removeComponent({ platform: "ios", version: "26.4" })
 - `outcome` is `removed`, or `would-remove` for a dry run. `sizeBytes` is
   absent when it could not be read. The catalog stops listing the component
   at once.
-- `residue`, when present, says what stayed on disk and how to reclaim it:
-  on iOS, macOS can keep the runtime's download in its asset store, which
-  Xcode's Settings, under Platforms, removes.
+- `residue`, when present, says what stayed behind and how to reclaim it.
+  On iOS that can be the runtime's never-booted simulators in Xcode's
+  default device set, now unavailable, which `xcrun simctl delete
+  unavailable` clears, and the runtime's download in macOS's asset store,
+  which Xcode's Settings, under Platforms, removes. Simlock deletes
+  neither.
 - It rejects, removing nothing, with `COMPONENT_NOT_OWNED` when Simlock did
   not install the component or it changed on disk since,
   `COMPONENT_IN_USE` when a device uses it, Simlock's or not (`details`
-  carries `devices` and `foreignDevices`), and `COMPONENT_BUSY` while an
+  carries `devices` and `foreignDevices`; a never-booted simulator in the
+  default device set does not count), and `COMPONENT_BUSY` while an
   install or removal runs or waits on that platform. Other rejections:
   `FORBIDDEN` for an agent session, `NO_DRIVER`, and
   `UNSUPPORTED_IN_GATEWAY_MODE` from a gateway.

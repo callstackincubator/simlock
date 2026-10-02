@@ -829,7 +829,9 @@ still the same one on disk, and `installedAt` is when it did. `devices`
 counts Simlock's own devices of this platform and version that have not been
 deleted; two variants of one version show the same count. `foreignDevices`
 counts the devices outside Simlock that use the component: simulators in
-Xcode's default device set, AVDs in the user's own AVD home.
+Xcode's default device set that have been booted at least once, and every
+AVD in the user's own AVD home. The simulators macOS creates by itself for
+each runtime it installs do not count until someone boots one.
 
 A platform whose tools cannot answer is left out. `400 BAD_REQUEST` for a
 `platform` other than `ios` or `android`; `501 UNSUPPORTED_IN_GATEWAY_MODE`
@@ -855,9 +857,12 @@ The answer is one JSON body, not a stream:
 
 `outcome` is `removed`, or `would-remove` for a dry run. `sizeBytes` is the
 disk the component took, left out when it could not be read. `residue`
-appears when something stayed on disk after the removal: on iOS, macOS can
-keep the runtime's download in its own asset store, and `residue` says so and
-how to reclaim it (remove the platform in Xcode's Settings, under Platforms).
+appears when something stayed behind after the removal, and names each
+thing. On iOS that is the runtime's never-booted simulators in Xcode's
+default device set, which become unavailable (`residue` says how many, and
+that `xcrun simctl delete unavailable` clears them), and the runtime's
+download when macOS keeps it in its own asset store (remove the platform in
+Xcode's Settings, under Platforms). Simlock deletes neither.
 A removed component leaves `GET /v1/catalog` and `GET /v1/components` at once,
 and the removal is reported as a `component.removed` event naming who asked.
 
@@ -869,7 +874,8 @@ platform. Each refusal removes nothing:
   disk since. There is no way to force it.
 - `409 COMPONENT_IN_USE` — a device uses it: one of Simlock's, in any state,
   leased ones included, or one outside Simlock (a simulator in Xcode's
-  default device set, an AVD in the user's own AVD home). The body carries
+  default device set that has been booted at least once, an AVD in the
+  user's own AVD home). Never-booted simulators do not block it. The body carries
   `devices` and `foreignDevices`, how many of each.
 - `409 COMPONENT_BUSY` — an install or removal runs or waits on that
   platform; try again once it ends.
