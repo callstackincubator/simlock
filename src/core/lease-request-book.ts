@@ -434,14 +434,15 @@ function storedResult<Grant>(record: LeaseRequestRecord<Grant>): Promise<Grant> 
 
 /**
  * Whether two requests name the same device: what an idempotency key promises not to change. An
- * omitted `osVersion` and an omitted `mode` compare equal to themselves only: a request that
- * named no mode is not the same request as one that named the worker's default.
+ * omitted `osVersion`, `mode` or `imageTag` compares equal to itself only: a request that named
+ * no mode is not the same request as one that named the worker's default.
  */
 function sameDeviceRequest(left: DeviceRequest, right: DeviceRequest): boolean {
   return (
     left.platform === right.platform &&
     left.model === right.model &&
     left.osVersion === right.osVersion &&
-    left.mode === right.mode
+    left.mode === right.mode &&
+    left.imageTag === right.imageTag
   );
 }

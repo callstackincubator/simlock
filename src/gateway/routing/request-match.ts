@@ -12,7 +12,8 @@ import type { RoutableRequest } from "./pipeline.js";
  * The model is the first entry of `models` whose name or `modelAliases` entry equals the requested
  * name, ignoring letter case. A named runtime must be among that model's `modelRuntimes`; an
  * unnamed one needs the list to be non-empty. Only installed runtimes are listed, so a request
- * that would need a download never matches.
+ * that would need a download never matches. A request naming an image tag counts only the
+ * runtimes for which the catalog's `images` lists an image of that tag.
  */
 export function matchRequest(worker: WorkerView, request: RoutableRequest): string | undefined {
   const catalog = worker.catalog.find((entry) => entry.platform === request.platform);
@@ -24,7 +25,15 @@ export function matchRequest(worker: WorkerView, request: RoutableRequest): stri
       ownList(catalog.modelAliases, name).some((alias) => fold(alias) === wanted),
   );
   if (model === undefined) return undefined;
-  const runtimes = ownList(catalog.modelRuntimes, model);
+  const { imageTag } = request;
+  const runtimes =
+    imageTag === undefined
+      ? ownList(catalog.modelRuntimes, model)
+      : ownList(catalog.modelRuntimes, model).filter((runtime) =>
+          (catalog.images ?? []).some(
+            (image) => image.tag === imageTag && image.runtime === runtime,
+          ),
+        );
   const pairs =
     request.osVersion === undefined ? runtimes.length > 0 : runtimes.includes(request.osVersion);
   return pairs ? model : undefined;

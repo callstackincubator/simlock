@@ -36,6 +36,7 @@ import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
   fitPlatformCatalog,
   OPERATIONS,
+  requestedDevice,
   type ComponentProgress,
   type GatewayOnlyOperationName,
   type OperationName,
@@ -311,12 +312,7 @@ export class Dispatcher {
 
   // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
-    const request: DeviceRequest = {
-      model: input.model,
-      platform: input.platform,
-      ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-      ...(input.mode === undefined ? {} : { mode: input.mode }),
-    };
+    const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
     const requesterId = input.requesterId ?? session.principal;
     const requestedAllowDownload = input.allowDownload ?? false;

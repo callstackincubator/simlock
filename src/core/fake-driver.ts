@@ -91,7 +91,10 @@ export interface FakeDriverOptions {
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as other names per model; none unless a test says otherwise. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
-  /** What `listCatalog` reports as installed images; the field is absent unless set. */
+  /**
+   * What `listCatalog` reports as installed images; the field is absent unless set. A request
+   * naming an image tag resolves only to a runtime listed here with that tag.
+   */
   readonly images?: readonly DriverCatalogImage[];
   /** What `listCatalog` reports as custom models; the field is absent unless set. */
   readonly customModels?: readonly string[];
@@ -241,22 +244,47 @@ export class FakeDriver implements Driver {
       throw new UnknownModelError(this.platform, request.model);
     }
 
-    const osVersion = request.osVersion ?? newestVersion(this.#availableOsVersions);
+    const osVersion =
+      request.imageTag === undefined
+        ? this.#resolveOsVersion(request.osVersion)
+        : this.#resolveTaggedOsVersion(request.osVersion, request.imageTag);
+
+    return {
+      model: request.model,
+      osVersion,
+      platform: this.platform,
+      ...(request.imageTag === undefined ? {} : { imageTag: request.imageTag }),
+      ...(request.mode === "slim" && this.#slimmableOsVersions.has(osVersion)
+        ? { mode: "slim" as const }
+        : {}),
+    };
+  }
+
+  /** Defaults to the newest available version; a missing one fails, naming it as the component. */
+  #resolveOsVersion(requested: string | undefined): string {
+    const osVersion = requested ?? newestVersion(this.#availableOsVersions);
     if (osVersion === undefined) {
       throw new RuntimeMissingError(this.platform, "default", { component: "latest" });
     }
     if (!this.#availableOsVersions.has(osVersion)) {
       throw new RuntimeMissingError(this.platform, osVersion, { component: osVersion });
     }
+    return osVersion;
+  }
 
-    return {
-      model: request.model,
-      osVersion,
-      platform: this.platform,
-      ...(request.mode === "slim" && this.#slimmableOsVersions.has(osVersion)
-        ? { mode: "slim" as const }
-        : {}),
-    };
+  /**
+   * A version with a scripted image (`images`) of `imageTag`: the requested one, or else the
+   * newest. None fails naming no component, so a tagged request is never offered a download.
+   */
+  #resolveTaggedOsVersion(requested: string | undefined, imageTag: string): string {
+    const tagged = new Set(
+      (this.#images ?? []).filter((image) => image.tag === imageTag).map((image) => image.runtime),
+    );
+    const osVersion = requested ?? newestVersion(tagged);
+    if (osVersion === undefined || !tagged.has(osVersion)) {
+      throw new RuntimeMissingError(this.platform, osVersion ?? "default");
+    }
+    return osVersion;
   }
 
   /** `"latest"` is not a version, so it is never found here -- only an install run can tell. */

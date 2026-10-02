@@ -57,6 +57,7 @@ export {
   RuntimeMissingError,
   sameReceipt,
   UnknownModelError,
+  UnsupportedRequestOptionError,
 } from "./driver.js";
 export { DriverCatalog, UnknownPassthroughToolError } from "./driver-catalog.js";
 // fallow-ignore-next-line unused-type -- wire-visible rejection vocabulary for Simlock's own adb server.

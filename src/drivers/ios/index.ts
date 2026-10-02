@@ -30,6 +30,7 @@ import {
   RuntimeMissingError,
   sameReceipt,
   UnknownModelError,
+  UnsupportedRequestOptionError,
 } from "../../core/index.js";
 import type { ObservedMark } from "../../core/driver.js";
 import type { DeviceMode, DeviceSpec } from "../../core/index.js";
@@ -375,9 +376,15 @@ export class IosSimctlDriver implements Driver {
     await ensureOwnedRoot(this.#rootOptions);
   }
 
-  /** Never downloads: a runtime a download could supply throws, naming it as the component. */
+  /**
+   * Never downloads: a runtime a download could supply throws, naming it as the component. An iOS
+   * runtime comes in one type, so a request naming an image tag is refused.
+   */
   async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
     this.#requireIosPlatform(request.platform);
+    if (request.imageTag !== undefined) {
+      throw new UnsupportedRequestOptionError("ios", "imageTag");
+    }
     const catalog = await this.#loadCatalog();
     const deviceType = findDeviceType(catalog, request.model);
 

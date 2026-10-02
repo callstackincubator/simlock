@@ -53,6 +53,33 @@ Spotlight, StoreKit sheets, universal links, system pickers — so check it
 before treating such a failure as a bug. Every device in `getStatus()` and in
 an admin's `list({ kind: "devices" })` carries the same `mode`.
 
+On Android, `requestLease` also takes an optional `imageTag`: the system image
+type to create the device from, such as `"google_apis_playstore"`, as
+`getCatalog()` lists it under each image's `tag`. Without it Simlock picks the
+image itself (`google_apis` for the host's ABI when installed). With it the
+device comes from an installed image of that tag, and without `osVersion` from
+the newest API level that has one. A request with `imageTag` never downloads:
+when no image of that tag is installed for the API level it fails with
+`RUNTIME_MISSING`, whatever `allowDownload` says. On iOS it is a
+`BAD_REQUEST`, and so is a tag that is not 1 to 64 letters, digits, `_`, `.`
+or `-`. Through a gateway, a request whose tag no worker lists for that API
+level, an iOS one included, is sent to no worker: it waits in the queue, or
+fails with `NO_CAPACITY` under `noWait`.
+
+```ts
+const grant = await client.requestLease({
+  platform: "android",
+  model: "Pixel 8",
+  imageTag: "google_apis_playstore",
+});
+grant.device.spec.imageTag; // "google_apis_playstore"
+```
+
+`grant.device.spec.imageTag` is present on a device whose request named a
+tag, in the grant, in `getStatus()` and in `list({ kind: "devices" })`, and
+absent otherwise. A request reuses only an idle device created for the same
+tag, or for no tag when it names none.
+
 `requestLease` takes an optional `onProgress` in its second argument, called
 with the request's `LeaseProgress` as it moves along:
 

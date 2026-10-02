@@ -155,6 +155,14 @@ describe("sameSpec", () => {
     expect(sameSpec({ ...spec, mode: "slim" }, { ...spec, mode: "slim" })).toBe(true);
   });
 
+  it("keeps a spec with an image tag apart from one with another tag and from one with none", () => {
+    const tagged: DeviceSpec = { ...spec, imageTag: "google_apis_playstore" };
+    expect(sameSpec(tagged, { ...spec, imageTag: "google_apis" })).toBe(false);
+    expect(sameSpec(tagged, spec)).toBe(false);
+    expect(sameSpec(spec, tagged)).toBe(false);
+    expect(sameSpec(tagged, { ...tagged })).toBe(true);
+  });
+
   it("still compares platform, model, and osVersion", () => {
     expect(sameSpec(spec, { ...spec, model: "iPhone 15" })).toBe(false);
     expect(sameSpec(spec, { ...spec, osVersion: "26.4" })).toBe(false);

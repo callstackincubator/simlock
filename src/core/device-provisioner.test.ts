@@ -315,6 +315,48 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
     });
   });
 
+  describe("for a spec with an image tag, which is still a device of its platform and version", () => {
+    const tagged = { ...spec, imageTag: "google_apis_playstore" };
+
+    it("refuses it while that version is being removed", async () => {
+      const harness = await withSimlockRuntime();
+      harness.driver.holdRemovals();
+      const removing = harness.components.remove(removal);
+      await vi.waitFor(() => expect(driverCalls(harness, "removeComponent")).toBe(1));
+
+      await expect(
+        harness.provisioner.provision(tagged, { reservation: reservation() }),
+      ).rejects.toThrow(ComponentBeingRemovedError);
+
+      expect(driverCalls(harness, "provision")).toBe(0);
+      harness.driver.releaseRemovals();
+      await expect(removing).resolves.toMatchObject({ outcome: "removed" });
+    });
+
+    it("counts it as in use while it is created and once it is registered", async () => {
+      const harness = await withSimlockRuntime({ provision: 50 });
+      const provisioning = harness.provisioner.provision(tagged, { reservation: reservation() });
+      await vi.waitFor(() => expect(driverCalls(harness, "provision")).toBe(1));
+
+      await expect(harness.components.remove(removal)).rejects.toMatchObject({
+        devices: 1,
+        name: "ComponentInUseError",
+      });
+
+      harness.clock.advance(50);
+      await provisioning;
+      expect(harness.registry.snapshot.devices.map((device) => device.spec)).toEqual([tagged]);
+      const listed = await harness.components.list("ios");
+      expect(listed.find((component) => component.version === "26.5")).toMatchObject({
+        devices: 1,
+      });
+      await expect(harness.components.remove(removal)).rejects.toMatchObject({
+        devices: 1,
+        name: "ComponentInUseError",
+      });
+    });
+  });
+
   it("is the only code in src that asks a driver to provision or registers a device", () => {
     const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
     const sources = (readdirSync(srcRoot, { recursive: true }) as string[])

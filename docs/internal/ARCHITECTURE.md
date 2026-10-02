@@ -733,8 +733,9 @@ model when any worker that lists it marks it custom; a name a worker marks
 but does not list is dropped. Each worker's lists are
 within the contract's bounds but their union may not be, so the gateway
 cuts the sorted union to those bounds rather than answer with a catalog its
-own clients would refuse. Routing still reads only
-`models` and `runtimes`.
+own clients would refuse. Routing reads `models`, `runtimes`,
+`modelRuntimes`, `modelAliases`, and, for a request naming an image tag,
+`images`.
 
 Within a worker, each driver decides which installed runtimes pair with a
 model in one function that `listCatalog` and `resolveSpec` both call
@@ -860,6 +861,20 @@ listManaged()        -> device/process reality inside this driver's owned root, 
 
 The litmus test for the boundary: adding a third driver (e.g. physical
 devices) must require **no core changes**. If it does, the interface leaked.
+
+A request may name an image tag (#214). The core carries `imageTag` from
+the request to `resolveSpec` and onto the spec without reading it: `sameSpec`
+compares it, so a tagged device and an untagged one never share a pool, and
+`LeaseAcquisitionCoordinator` refuses a resolved spec whose tag is not the
+request's. Only the Android driver knows what a tag is. Its one image picker
+(`#matchingImage`) serves resolving and creating alike, picks among the
+installed images of the tag (host ABI first), and a missing tag is a
+`RuntimeMissingError` naming no component, so a tagged request never
+downloads. A driver without image types (iOS) refuses the option itself with
+`UnsupportedRequestOptionError` (`BAD_REQUEST`); the core keeps no list of
+which platforms take it. On a gateway, `matchRequest` counts a worker's
+runtime for a tagged request only when the catalog's `images` lists the tag
+for it, and `warm-hit` compares the device's tag.
 
 ### Prerequisite checks
 

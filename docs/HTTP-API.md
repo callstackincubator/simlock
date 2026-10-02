@@ -302,8 +302,23 @@ can wait for a fresh device even while devices of the other mode sit idle. See
 [CONFIGURATION.md](CONFIGURATION.md#device-mode-slim-and-full) for what a slim
 device leaves out.
 
-The body is strict: a key this route does not know, or a `mode` other than
-`"slim"` or `"full"`, is `400 BAD_REQUEST`.
+`imageTag` (optional, Android only) is the system image type to create the
+device from, such as `"google_apis_playstore"` or `"default"`: the `tag` of an
+image `GET /v1/catalog` lists. Without it, Simlock picks the image itself:
+`google_apis` for the host's ABI when installed, otherwise another installed
+image of that API level. With it, the device is created from an installed image
+of that tag, the host's ABI first; without `os` the request gets the newest API
+level that has one. A request with `imageTag` never downloads: when no image of
+that tag is installed for the API level it fails with `RUNTIME_MISSING`,
+whatever `allowDownload` says. It only reuses an idle device created for the
+same tag, and a request without `imageTag` only one created for none. On iOS
+`imageTag` is `400 BAD_REQUEST`. Through a gateway, a request whose tag no
+worker lists for that API level, an iOS one included, is sent to no worker: it
+waits in the queue, or fails with `NO_CAPACITY` when `noWait` is set.
+
+The body is strict: a key this route does not know, a `mode` other than
+`"slim"` or `"full"`, or an `imageTag` that is not 1 to 64 letters, digits,
+`_`, `.` or `-`, is `400 BAD_REQUEST`.
 
 `allowDownload` is now clamped through `config.downloads.policy` the same
 way the socket protocol always was (**bug fix, 0.3.0**): before this
@@ -322,7 +337,7 @@ changed since — a request that failed with `NO_CAPACITY` stays failed. To
 try again, use a new key. Repeating works across a daemon restart, for
 `lease.requestRetentionMs` after the request finished (see
 [CONFIGURATION.md](CONFIGURATION.md)). The same key with a different
-`platform`, `device`, `os`, or `mode` is `409 IDEMPOTENCY_CONFLICT`. Keys
+`platform`, `device`, `os`, `mode`, or `imageTag` is `409 IDEMPOTENCY_CONFLICT`. Keys
 belong to your token: another token sending the same key starts a request of
 its own.
 
@@ -332,7 +347,8 @@ count. It still makes the `POST` answer early, as described below. The
 gateway sends the request only to a worker whose catalog can serve it: one
 that lists `device` as a model or another name for one, in any letter case,
 and pairs that model with `os` (or, without `os`, with at least one installed
-runtime). The worker is sent its own name for the model.
+runtime). With `imageTag`, the worker's catalog must also list an image of that
+tag, for `os` when it is given. The worker is sent its own name for the model.
 
 With `allowDownload: true` the `201` is returned as soon as the request is
 stored — resolving a downloadable runtime can take minutes, so progress and
@@ -454,6 +470,9 @@ request is never granted `"slim"`. It lets a client explain a
 feature-loss failure (missing push notification, Spotlight result,
 StoreKit sheet, universal link, or system picker) instead of misreading it
 as a bug.
+
+`imageTag` is present on a lease whose request named one: the image tag the
+device was created from. A lease whose request named none has no `imageTag`.
 
 ### `GET /v1/leases/{id}`
 

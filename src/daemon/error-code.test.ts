@@ -4,6 +4,7 @@ import {
   ComponentInstallerClosedError,
   NoCapacityError,
   ReplayedLeaseRequestError,
+  UnsupportedRequestOptionError,
 } from "../core/index.js";
 import { classifyError, describeLeaseRequestFailure } from "./error-code.js";
 
@@ -38,5 +39,17 @@ describe("classifyError on a replayed lease request", () => {
 describe("classifyError on a component install", () => {
   it("answers DAEMON_STOPPING for an install the daemon's stop ended", () => {
     expect(classifyError(new ComponentInstallerClosedError())).toBe("DAEMON_STOPPING");
+  });
+});
+
+describe("classifyError on a request option the driver does not have", () => {
+  it("answers BAD_REQUEST for UnsupportedRequestOptionError, and stores it with its own message", () => {
+    const error = new UnsupportedRequestOptionError("ios", "imageTag");
+
+    expect(classifyError(error)).toBe("BAD_REQUEST");
+    expect(describeLeaseRequestFailure(error)).toEqual({
+      code: "BAD_REQUEST",
+      message: "ios lease requests do not take imageTag",
+    });
   });
 });

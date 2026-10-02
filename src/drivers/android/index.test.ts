@@ -165,6 +165,202 @@ describe("AndroidDriver", () => {
     expect(runner.calls.map((call) => call.command)).not.toContain(binaries.sdkmanager);
   });
 
+  describe("image tag", () => {
+    /** A driver over `images` whose next `provision` creates `simlock_one`. */
+    async function taggedHarness(
+      images: readonly (readonly [string, string, string])[],
+      hostAbi = "arm64-v8a",
+    ) {
+      const filesystem = await androidFilesystem({ images });
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.avdmanager, [
+          "create",
+          "avd",
+          "-n",
+          "simlock_one",
+          "-k",
+          /.+/,
+          "-d",
+          "pixel_8",
+        ]),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      const driver = await createDriver(filesystem, runner, { hostAbi, ids: ["one"] });
+      return { driver, filesystem, runner };
+    }
+
+    /** The system image package `avdmanager create avd -k` was given. */
+    function createdFromPackage(runner: ScriptedProcessRunner): string | undefined {
+      const create = runner.calls.find(
+        (call) => call.command === binaries.avdmanager && call.args[0] === "create",
+      );
+      return create?.args[create.args.indexOf("-k") + 1];
+    }
+
+    it("resolves a request naming an installed tag to a spec with that tag, and creates the device from that image", async () => {
+      const { driver, runner } = await taggedHarness([
+        ["34", "google_apis", "arm64-v8a"],
+        ["34", "google_apis_playstore", "arm64-v8a"],
+      ]);
+
+      const spec = await driver.resolveSpec({
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+      await driver.provision(spec);
+
+      expect(spec).toEqual({
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+      expect(createdFromPackage(runner)).toBe(
+        "system-images;android-34;google_apis_playstore;arm64-v8a",
+      );
+    });
+
+    it("fails a tag that is not installed for the API level as a runtime that cannot be downloaded, naming the tag, and starts no sdkmanager", async () => {
+      const { driver, runner } = await taggedHarness([
+        ["34", "google_apis", "arm64-v8a"],
+        ["35", "google_apis_playstore", "arm64-v8a"],
+      ]);
+
+      const failure = await driver
+        .resolveSpec({
+          imageTag: "google_apis_playstore",
+          model: "Pixel 8",
+          osVersion: "34",
+          platform: "android",
+        })
+        .catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({
+        component: undefined,
+        downloadable: false,
+        name: "RuntimeMissingError",
+      });
+      expect((failure as Error).message).toContain("google_apis_playstore");
+      expect(runner.calls.map((call) => call.command)).not.toContain(binaries.sdkmanager);
+    });
+
+    it("gives a tagged request with no API level the newest API level that has an image of that tag", async () => {
+      const { driver } = await taggedHarness([
+        ["33", "google_apis_playstore", "arm64-v8a"],
+        ["34", "google_apis_playstore", "arm64-v8a"],
+        ["35", "google_apis", "arm64-v8a"],
+      ]);
+
+      await expect(
+        driver.resolveSpec({
+          imageTag: "google_apis_playstore",
+          model: "Pixel 8",
+          platform: "android",
+        }),
+      ).resolves.toMatchObject({ imageTag: "google_apis_playstore", osVersion: "34" });
+    });
+
+    it("resolves a request naming no tag to the same google_apis image as before, with no tag on the spec", async () => {
+      const { driver, runner } = await taggedHarness([
+        ["34", "default", "arm64-v8a"],
+        ["34", "google_apis_playstore", "arm64-v8a"],
+        ["34", "google_apis", "arm64-v8a"],
+      ]);
+
+      const spec = await driver.resolveSpec({ model: "Pixel 8", platform: "android" });
+      await driver.provision(spec);
+
+      expect(spec).toEqual({ model: "Pixel 8", osVersion: "34", platform: "android" });
+      expect(createdFromPackage(runner)).toBe("system-images;android-34;google_apis;arm64-v8a");
+    });
+
+    it("creates a tagged device from the host ABI's image when the tag is installed for two ABIs", async () => {
+      // On an x86_64 host the foreign arm64-v8a image is listed first, so taking the first image
+      // of the tag would pick it.
+      const { driver, runner } = await taggedHarness(
+        [
+          ["34", "google_apis_playstore", "arm64-v8a"],
+          ["34", "google_apis_playstore", "x86_64"],
+        ],
+        "x86_64",
+      );
+
+      const spec = await driver.resolveSpec({
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+      await driver.provision(spec);
+
+      expect(createdFromPackage(runner)).toBe(
+        "system-images;android-34;google_apis_playstore;x86_64",
+      );
+    });
+
+    it("creates a tagged device from a foreign ABI's image when that is the only image of the tag", async () => {
+      const { driver, runner } = await taggedHarness([
+        ["34", "google_apis", "arm64-v8a"],
+        ["34", "google_apis_playstore", "x86_64"],
+      ]);
+
+      const spec = await driver.resolveSpec({
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+      await driver.provision(spec);
+
+      expect(createdFromPackage(runner)).toBe(
+        "system-images;android-34;google_apis_playstore;x86_64",
+      );
+    });
+
+    it("fails a tag installed for no API level, with no API level named, naming the tag and no API level", async () => {
+      const { driver } = await taggedHarness([["34", "google_apis", "arm64-v8a"]]);
+
+      const failure = await driver
+        .resolveSpec({ imageTag: "google_apis_playstore", model: "Pixel 8", platform: "android" })
+        .catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({
+        component: undefined,
+        downloadable: false,
+        message: "No google_apis_playstore system image is installed for any Android API level",
+        name: "RuntimeMissingError",
+      });
+    });
+
+    it("fails provisioning a tagged spec whose image went missing after it resolved, offering no download", async () => {
+      const { driver, filesystem, runner } = await taggedHarness([
+        ["34", "google_apis", "arm64-v8a"],
+        ["34", "google_apis_playstore", "arm64-v8a"],
+      ]);
+      const spec = await driver.resolveSpec({
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+      await filesystem.rm(`${sdk}/system-images/android-34/google_apis_playstore`);
+
+      const failure = await driver.provision(spec).catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({
+        component: undefined,
+        downloadable: false,
+        name: "RuntimeMissingError",
+      });
+      expect((failure as Error).message).toContain("google_apis_playstore");
+      expect(createdFromPackage(runner)).toBeUndefined();
+    });
+  });
+
   it("allocates different even ports for concurrent provisions and skips adb-owned ports", async () => {
     const firstFilesystem = await androidFilesystem();
     const secondFilesystem = await androidFilesystem();
@@ -3133,6 +3329,8 @@ async function createDriver(
     readonly clock?: FakeClock;
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
     readonly emulator?: AndroidEmulatorLaunchOptions;
+    /** The ABI this host runs natively; `arm64-v8a` unless a test says otherwise. */
+    readonly hostAbi?: string;
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly readinessTimeoutMs?: number;
@@ -3156,7 +3354,7 @@ async function createDriver(
     },
     filesystem,
     homeDirectory: home,
-    hostAbi: "arm64-v8a",
+    hostAbi: options.hostAbi ?? "arm64-v8a",
     idGenerator: {
       generate: () => options.ids?.[nextId++] ?? `device-${nextId}`,
     },

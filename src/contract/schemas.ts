@@ -37,12 +37,28 @@ const deviceModeSchema = z.enum(["slim", "full"]);
 
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
 
+/** The longest image tag a lease request may name. */
+const IMAGE_TAG_MAX = 64;
+
+/**
+ * An image tag as a lease request names it, such as `google_apis_playstore`: the word the catalog
+ * lists as an image's `tag`. Bounded here, before a driver sees it, because it arrives over the
+ * wire and is stored with the request and on the device.
+ */
+export const imageTagSchema = z
+  .string()
+  .min(1)
+  .max(IMAGE_TAG_MAX)
+  .regex(/^[A-Za-z0-9_.-]+$/, "imageTag may contain only letters, digits, '_', '.' and '-'");
+
 /** A device's spec as responses show it. The spec's planned mode is not shown (ADR 0007 §9): the
- * device's `mode` is the one mode a response reports. */
+ * device's `mode` is the one mode a response reports. `imageTag` is shown on a device whose
+ * request named one. */
 const deviceSpecSchema = z.object({
   platform: platformSchema,
   model: z.string(),
   osVersion: z.string(),
+  imageTag: imageTagSchema.optional(),
 });
 
 /** Mirrors `DeviceRecord` (src/core/domain.ts) field for field, plus the `status`/`list`
@@ -235,6 +251,7 @@ export const leaseRequestRecordSchema = z.object({
     model: z.string(),
     osVersion: z.string().optional(),
     mode: deviceModeSchema.optional(),
+    imageTag: imageTagSchema.optional(),
   }),
   createdAt: z.number(),
   state: z.enum(["open", "granted", "failed", "cancelled"]),

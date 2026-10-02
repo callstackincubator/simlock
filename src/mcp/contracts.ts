@@ -25,6 +25,7 @@ import { leaseRecordSchema, OPERATIONS } from "../contract/index.js";
  * inherits it from the contract like every other field -- `lease.defaultTtlMs` when the caller
  * names none, `BAD_REQUEST` above `lease.maxTtlMs`. `mode` is the device mode, inherited the
  * same way: `slim` or `full`, absent for the worker's default, anything else `BAD_REQUEST`.
+ * `imageTag` is inherited too, bounded by the contract.
  */
 export const leaseSimulatorInputSchema = OPERATIONS["lease.request"].input.omit({
   requesterId: true,

@@ -727,14 +727,30 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  /** Never installs: a missing API level throws, naming it as the component to install. */
+  /**
+   * Never installs: a missing API level throws, naming it as the component to install. A request
+   * naming an image tag resolves only to an installed image of that tag, and never names a
+   * component, so it can never lead to a download.
+   */
   async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
     if (request.platform !== this.platform) {
       throw new Error(`Android driver cannot resolve ${request.platform} requests`);
     }
 
     const profile = await this.#deviceProfiles.resolve(request.model);
-    const installed = installedApiLevels(await this.#installedImages());
+    const images = await this.#installedImages();
+    if (request.imageTag !== undefined) {
+      const apiLevel = this.#taggedApiLevel(images, request.imageTag, request.osVersion);
+      this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
+      return {
+        imageTag: request.imageTag,
+        model: profile.name,
+        osVersion: apiLevel,
+        platform: this.platform,
+      };
+    }
+
+    const installed = installedApiLevels(images);
     const apiLevel = request.osVersion ?? installed.at(-1);
     if (apiLevel === undefined) {
       throw new RuntimeMissingError(this.platform, request.osVersion ?? "default");
@@ -753,7 +769,7 @@ export class AndroidDriver implements Driver {
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
     this.#assertAndroidSpec(spec);
     const profile = await this.#profileFor(spec.model);
-    const image = await this.#requireImage(spec.osVersion);
+    const image = await this.#requireImage(spec.osVersion, spec.imageTag);
     // Cosmetic only, and worth saying so: the prefix is a label that makes an emulator
     // recognisable in `adb devices` and in its window title. Nothing reads it back as
     // evidence of anything -- ownership comes from the root this AVD is created in.
@@ -1169,7 +1185,7 @@ export class AndroidDriver implements Driver {
    * receipt, or `undefined` when no image of that level is installed. Never installs.
    */
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
-    const image = this.#matchingImage(await this.#installedImages(), component);
+    const image = this.#matchingImage(await this.#installedImages(), component, undefined);
     return image === undefined ? undefined : this.#installedComponent(image);
   }
 
@@ -1470,8 +1486,22 @@ export class AndroidDriver implements Driver {
     return images;
   }
 
-  #matchingImage(images: readonly SystemImage[], apiLevel: string): SystemImage | undefined {
+  /**
+   * The one function that picks the image of an API level, for resolving and for creating. With a
+   * tag it picks among the images of that tag only, the host's ABI first. Without one,
+   * `google_apis` for the host's ABI, then any image for the host's ABI, then any `google_apis`,
+   * then any.
+   */
+  #matchingImage(
+    images: readonly SystemImage[],
+    apiLevel: string,
+    imageTag: string | undefined,
+  ): SystemImage | undefined {
     const matching = images.filter((image) => image.apiLevel === apiLevel);
+    if (imageTag !== undefined) {
+      const tagged = matching.filter((image) => image.tag === imageTag);
+      return tagged.find((image) => image.abi === this.#hostAbi) ?? tagged[0];
+    }
     return (
       matching.find((image) => image.tag === "google_apis" && image.abi === this.#hostAbi) ??
       matching.find((image) => image.abi === this.#hostAbi) ??
@@ -1480,12 +1510,34 @@ export class AndroidDriver implements Driver {
     );
   }
 
-  async #requireImage(apiLevel: string): Promise<SystemImage> {
-    const image = this.#matchingImage(await this.#installedImages(), apiLevel);
+  async #requireImage(apiLevel: string, imageTag: string | undefined): Promise<SystemImage> {
+    const image = this.#matchingImage(await this.#installedImages(), apiLevel, imageTag);
     if (image === undefined) {
-      throw new RuntimeMissingError(this.platform, apiLevel);
+      throw imageTag === undefined
+        ? new RuntimeMissingError(this.platform, apiLevel)
+        : new AndroidImageTagMissingError(apiLevel, imageTag);
     }
     return image;
+  }
+
+  /**
+   * The API level a request naming `imageTag` gets: the one it names, which must have an image of
+   * that tag, or else the newest that has one. Throws a `RuntimeMissingError` naming no
+   * component when there is none, so no download is ever tried for a tag.
+   */
+  #taggedApiLevel(
+    images: readonly SystemImage[],
+    imageTag: string,
+    requested: string | undefined,
+  ): string {
+    const levels = installedApiLevels(images).filter(
+      (level) => this.#matchingImage(images, level, imageTag) !== undefined,
+    );
+    const apiLevel = requested ?? levels.at(-1);
+    if (apiLevel === undefined || !levels.includes(apiLevel)) {
+      throw new AndroidImageTagMissingError(apiLevel ?? "default", imageTag);
+    }
+    return apiLevel;
   }
 
   async #configHash(avdName: string, image: SystemImage): Promise<string> {
@@ -2005,6 +2057,21 @@ async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPat
     return location.paths;
   }
   throw new SdkMissingError(location.searched);
+}
+
+/**
+ * No installed image of the requested tag for the API level. Never downloadable: a component is
+ * an API level, not a tag, so `--allow-download` cannot supply it; the operator installs it with
+ * `sdkmanager`.
+ */
+class AndroidImageTagMissingError extends RuntimeMissingError {
+  constructor(apiLevel: string, imageTag: string) {
+    super("android", apiLevel, { downloadable: false });
+    this.message =
+      apiLevel === "default"
+        ? `No ${imageTag} system image is installed for any Android API level`
+        : `No ${imageTag} system image is installed for Android API ${apiLevel}`;
+  }
 }
 
 /**

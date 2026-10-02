@@ -11,6 +11,8 @@ export interface RoutableRequest {
   readonly platform: Platform;
   readonly model: string;
   readonly osVersion?: string;
+  /** The image tag the request names, matched against the catalog's `images`; absent for none. */
+  readonly imageTag?: string;
   /**
    * Read only by the legacy `eligible` stage, which the conformance tests run. The gateway always
    * routes with `false`: only installed runtimes count, and a client's `allowDownload` has no

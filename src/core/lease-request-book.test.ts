@@ -158,6 +158,33 @@ describe("Registry lease requests", () => {
     expect(registry.leaseRequests().map((record) => record.id)).toEqual(["req_valid"]);
   });
 
+  it("loads a stored request's image tag, and drops a record whose image tag is not a string", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const record = (id: string, imageTag: unknown) => ({
+      createdAt: 1_000,
+      id,
+      ownerId: "agent",
+      request: { ...request, imageTag },
+      requesterId: "agent",
+      state: "open",
+    });
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [record("req_tagged", "google_apis"), record("req_broken", 7)],
+        leases: [],
+      }),
+    );
+
+    const { registry } = await loadRegistry({ filesystem });
+
+    expect(registry.leaseRequests().map((loaded) => [loaded.id, loaded.request])).toEqual([
+      ["req_tagged", { ...request, imageTag: "google_apis" }],
+    ]);
+  });
+
   it("loads a granted record stored before mode existed with its grant's device as full, without featureProfile", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
@@ -358,6 +385,7 @@ describe("LeaseRequestBook", () => {
     ["a different osVersion", { ...request, osVersion: "18.0" }],
     ["no osVersion where one was named", { model: request.model, platform: request.platform }],
     ["a mode where none was named", { ...request, mode: "full" as const }],
+    ["an image tag where none was named", { ...request, imageTag: "google_apis" }],
   ])("refuses a repeat naming %s as an idempotency conflict", async (_label, different) => {
     const book = bookOver(memoryStore());
     await book.admit(request, keyed, () => granted("lse_1"));

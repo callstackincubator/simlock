@@ -223,6 +223,41 @@ describe("MCP server (smoke)", () => {
     }
   });
 
+  it("passes lease_simulator's imageTag to the lease request, and refuses one outside the allowed characters before asking", async () => {
+    const client = new FakeSimlockClient();
+    const inputs: unknown[] = [];
+    client.requestLeaseImpl = (input) => {
+      inputs.push(input);
+      return Promise.resolve(sampleGrant());
+    };
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const call = (imageTag: string) =>
+        mcpClient.request(
+          {
+            method: "tools/call",
+            params: {
+              arguments: { imageTag, model: "Pixel 8", platform: "android" },
+              name: "lease_simulator",
+            },
+          },
+          CallToolResultSchema,
+        );
+
+      const granted = await call("google_apis_playstore");
+      const refused = await call("google apis").catch((error: unknown) => error);
+
+      expect(granted.isError).not.toBe(true);
+      expect(inputs).toEqual([expect.objectContaining({ imageTag: "google_apis_playstore" })]);
+      expect(refused).toSatisfy(
+        (result: unknown) =>
+          result instanceof Error || (result as { isError?: boolean }).isError === true,
+      );
+    } finally {
+      await close();
+    }
+  });
+
   it("relays queued/provisioning/booting/reclaiming progress as notifications/progress when a token is supplied (MCP-only relay)", async () => {
     const client = new FakeSimlockClient();
     let onProgress: ((progress: unknown) => void) | undefined;

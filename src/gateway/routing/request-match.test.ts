@@ -116,6 +116,51 @@ describe("matchRequest", () => {
     ).toBe("iPhone 17");
   });
 
+  describe("with an image tag", () => {
+    const TAGGED = {
+      images: [
+        { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis_playstore" },
+      ],
+      models: ["Pixel 8"],
+      platform: "android" as const,
+      runtimes: ["34", "35"],
+    };
+    const tagged = {
+      allowDownload: false,
+      imageTag: "google_apis_playstore",
+      model: "Pixel 8",
+      platform: "android" as const,
+    };
+
+    it("matches a named runtime that has an image of the tag", () => {
+      expect(matchRequest(worker(TAGGED), { ...tagged, osVersion: "35" })).toBe("Pixel 8");
+    });
+
+    it("rejects a named runtime that has images of other tags only", () => {
+      expect(matchRequest(worker(TAGGED), { ...tagged, osVersion: "34" })).toBeUndefined();
+    });
+
+    it("with no runtime named, needs one runtime with an image of the tag", () => {
+      expect(matchRequest(worker(TAGGED), tagged)).toBe("Pixel 8");
+      expect(matchRequest(worker(TAGGED), { ...tagged, imageTag: "default" })).toBeUndefined();
+    });
+
+    it("rejects a tag whose image is for a runtime the model does not pair with", () => {
+      const view = worker({ ...TAGGED, modelRuntimes: { "Pixel 8": ["34"] } });
+
+      expect(matchRequest(view, tagged)).toBeUndefined();
+    });
+
+    it("rejects any tag on a catalog that lists no images", () => {
+      const view = worker({ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] });
+
+      expect(
+        matchRequest(view, { ...tagged, model: "iPhone 17", platform: "ios" }),
+      ).toBeUndefined();
+    });
+  });
+
   it("matches no download: allowDownload does not make an unlisted runtime pair", () => {
     const view = worker({ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] });
 

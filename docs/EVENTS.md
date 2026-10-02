@@ -9,7 +9,7 @@ through `simlock events` and `simlock events --follow`.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `lease.requested` | request id, request spec (platform, model, os version, device mode when the request named one), requester, wait policy | a lease request is accepted by the daemon and stored; the request id is the stored request's, so an observer can match this event to it | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway — its own fleet queue's admission, before any worker is chosen) | implemented |
+| `lease.requested` | request id, request spec (platform, model, os version, device mode when the request named one, image tag when the request named one), requester, wait policy | a lease request is accepted by the daemon and stored; the request id is the stored request's, so an observer can match this event to it | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway — its own fleet queue's admission, before any worker is chosen) | implemented |
 | `lease.queued` | request id, queue position | no capacity; request entered the wait queue | LeaseAcquisitionCoordinator (worker) / FleetLeaseCoordinator (gateway) | implemented |
 | `lease.granted` | lease id, device id, requester | a device was assigned and handed out | LeaseLifecycle | implemented |
 | `lease.renewed` | lease id, new deadline | a `lease.renew` succeeded — whether it came from `simlock lease renew`, `POST /v1/leases/{id}/renew`, or the renew timer a running `simlock lease` / MCP session keeps over its own lease. There is one renew path and this is it | LeaseLifecycle | implemented |
@@ -29,7 +29,7 @@ the gateway's own lease index before any worker is ever contacted.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `device.provisioned` | device id, spec (platform, model, os version, and `mode: "slim"` for a device planned slim), driver, duration | driver `provision` committed to registry | Registry | implemented |
+| `device.provisioned` | device id, spec (platform, model, os version, `mode: "slim"` for a device planned slim, and `imageTag` for a device whose request named one), driver, duration | driver `provision` committed to registry | Registry | implemented |
 | `device.ready` | device id, boot duration | readiness probe passed | Registry | implemented |
 | `device.reclaimed` | device id, strategy (erase/snapshot/wipe), duration | fresh-state reclaim finished. Never emitted for a device created under `lease.identity` `fresh`: nothing is reclaimed, the device is deleted instead | Registry | implemented |
 | `device.purge-failed` | device id, lease id, attempted strategy (erase/snapshot/wipe/delete), duration, stable error summary | release-time purge failed, or (strategy `delete`) the shutdown or delete that ends a `fresh` device's lease failed; the device enters `quarantined` (see below) rather than rejoining the pool. The strategy list can grow: a consumer must tolerate a strategy it does not know | WarmPoolCoordinator | implemented |

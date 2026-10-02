@@ -2,7 +2,12 @@ import type { Config, DeviceRecord, LeaseRecord } from "../core/index.js";
 import { InMemoryLeaseRequestStore, LeaseRequestBook } from "../core/lease-request-book.js";
 import { SerializedDecision } from "../core/serialized-decision.js";
 import type { LeaseGrant, LeaseRequestOptions } from "../core/wait-queue.js";
-import { describeSchemaIssues, OPERATIONS, type OperationName } from "../contract/index.js";
+import {
+  describeSchemaIssues,
+  OPERATIONS,
+  requestedDevice,
+  type OperationName,
+} from "../contract/index.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import type { DispatchSession } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
@@ -211,12 +216,7 @@ export class FakeDispatcher {
       throw new DispatchError("BAD_REQUEST", describeSchemaIssues(parsed.error.issues));
     }
     const input = parsed.data;
-    const request = {
-      model: input.model,
-      platform: input.platform,
-      ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-      ...(input.mode === undefined ? {} : { mode: input.mode }),
-    };
+    const request = requestedDevice(input);
     const options = fakeRequestOptions(input, session);
     const replay = this.requests.replay(request, options);
     if (replay !== undefined) return replay;

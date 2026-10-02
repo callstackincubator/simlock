@@ -13,6 +13,13 @@ export interface DeviceRequest {
    * the worker's default, and a driver's `resolveSpec` always receives it resolved.
    */
   readonly mode?: DeviceMode;
+  /**
+   * The image type the request names, as the driver's catalog lists it; absent when it names
+   * none. Transports carry it as it arrived. Only a driver knows what a tag is: one that has none
+   * throws `UnsupportedRequestOptionError`, and one that has them resolves only to an installed
+   * image of that tag, never to a download.
+   */
+  readonly imageTag?: string;
 }
 
 export interface DriverDevice {
@@ -697,6 +704,21 @@ export class RuntimeMissingError extends Error {
     } else {
       this.downloadable = false;
     }
+  }
+}
+
+/**
+ * A request named an option this driver does not have, such as an image tag on a platform whose
+ * runtimes come in one type. The driver decides that itself, so the core keeps no list of which
+ * platforms take which option.
+ */
+export class UnsupportedRequestOptionError extends Error {
+  constructor(
+    readonly platform: Platform,
+    readonly option: string,
+  ) {
+    super(`${platform} lease requests do not take ${option}`);
+    this.name = "UnsupportedRequestOptionError";
   }
 }
 

@@ -120,7 +120,7 @@ export function createMcpServer(session: McpSession): McpServer {
     {
       title: "Lease simulator",
       description:
-        "Lease one simulator or emulator for this MCP session. The lease is held until released or this MCP connection closes; provisioning can block unless noWait is true. Downloads are disabled by default and require allowDownload: true.",
+        "Lease one simulator or emulator for this MCP session. The lease is held until released or this MCP connection closes; provisioning can block unless noWait is true. Downloads are disabled by default and require allowDownload: true. On Android, imageTag picks the system image type (a tag from list_devices' images, such as google_apis_playstore); a request with imageTag uses only an installed image and never downloads.",
       inputSchema: leaseSimulatorInputSchema,
       outputSchema: leaseSimulatorOutputSchema,
     },

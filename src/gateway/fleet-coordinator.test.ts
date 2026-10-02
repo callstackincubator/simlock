@@ -2184,6 +2184,67 @@ describe("FleetLeaseCoordinator sends a worker only requests its catalog can ser
     expect(leaseRequests(paired)).toHaveLength(1);
   });
 
+  it("sends a request naming an image tag to the worker whose catalog lists that tag for the API level, not to one listing the API level with another tag, and forwards the tag", async () => {
+    const { coordinator, directory, workers } = harness();
+    const otherTag = new ScriptedWorkerClient();
+    const lister = new ScriptedWorkerClient();
+    directory.add("wrk_a", otherTag);
+    directory.add("wrk_b", lister);
+    lister.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // wrk_a sorts first and has the same free capacity, so only the tag can send it to wrk_b.
+    connectWithCatalog(workers, "wrk_a", {
+      images: [
+        { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis_playstore" },
+      ],
+      models: ["Pixel 8"],
+      platform: "android",
+      runtimes: ["34", "35"],
+    });
+    connectWithCatalog(workers, "wrk_b", {
+      images: [{ abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" }],
+      models: ["Pixel 8"],
+      platform: "android",
+      runtimes: ["34"],
+    });
+
+    await coordinator.request(
+      {
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(leaseRequests(otherTag)).toEqual([]);
+    expect(lister.lastRequestLeaseInput).toMatchObject({
+      imageTag: "google_apis_playstore",
+      osVersion: "34",
+    });
+  });
+
+  it("rejects a no-wait request naming an image tag no worker lists with NO_CAPACITY, sending it to no worker", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWithCatalog(workers, "wrk_a", {
+      images: [{ abi: "arm64-v8a", runtime: "34", tag: "google_apis" }],
+      models: ["Pixel 8"],
+      platform: "android",
+      runtimes: ["34"],
+    });
+
+    await expect(
+      coordinator.request(
+        { imageTag: "google_apis_playstore", model: "Pixel 8", platform: "android" },
+        requestOptions({ noWait: true }),
+      ),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+    expect(leaseRequests(client)).toEqual([]);
+  });
+
   it("does not make a worker eligible for allowDownload: true, and forwards allowDownload: false", async () => {
     const { coordinator, directory, workers } = harness();
     const downloader = new ScriptedWorkerClient();

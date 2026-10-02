@@ -15,6 +15,7 @@ export interface LeaseRequestInput {
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
   readonly mode?: "slim" | "full";
+  readonly imageTag?: string;
   /** ADR §27a. Threaded straight through to the shared dispatcher's own `lease.request` input --
    * the same gate every other transport is held to (`FORBIDDEN` for a non-admin token) decides
    * this, not this route (H7, round 2 review: before this, `leaseRequestBodySchema` had no
@@ -40,6 +41,8 @@ export interface LeasePayload {
   readonly dataPlane: null;
   /** The mode the granted device actually has -- see `DeviceRecord.mode`. */
   readonly mode: "slim" | "full";
+  /** The image tag the device was created from, on a device whose request named one. */
+  readonly imageTag?: string;
 }
 
 /**
@@ -72,6 +75,39 @@ export function buildLeasePayload(
     ttlMs: lease.ttlMs,
     dataPlane: null,
     mode: device.mode,
+    ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
+  };
+}
+
+/**
+ * `lease.request`'s input for an HTTP body: the route's names (`device`, `os`) mapped onto the
+ * contract's, and a field the body left out left out.
+ */
+function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: string | undefined) {
+  return {
+    model: body.device,
+    platform: body.platform,
+    ...(body.os === undefined ? {} : { osVersion: body.os }),
+    ...(body.mode === undefined ? {} : { mode: body.mode }),
+    ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
+    ...requestOptions(body),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
+/** The body's fields that say how to wait and hold, rather than which device. */
+function requestOptions(body: LeaseRequestInput) {
+  return {
+    ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
+    ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
+    ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
+    // ADR 0003 §9: the initial TTL travels on the request itself -- this deletes the old
+    // grant-then-immediately-renew hack. Under ADR 0004 the daemon then stores that width on the
+    // lease, so nothing here has to remember it either.
+    ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
+    // ADR §27a (H7, round 2 review): forwarded as-is -- the shared dispatcher's own
+    // `lease.request` handler is what rejects a non-admin token naming this.
+    ...(body.owner === undefined ? {} : { owner: body.owner }),
   };
 }
 
@@ -203,27 +239,7 @@ export class LeaseRequestTracker {
       });
 
       this.options
-        .dispatch(
-          "lease.request",
-          {
-            model: body.device,
-            platform: body.platform,
-            ...(body.os === undefined ? {} : { osVersion: body.os }),
-            ...(body.mode === undefined ? {} : { mode: body.mode }),
-            ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
-            ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
-            ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
-            // ADR 0003 §9: the initial TTL travels on the request itself -- this deletes the
-            // old grant-then-immediately-renew hack. Under ADR 0004 the daemon then stores
-            // that width on the lease, so nothing here has to remember it either.
-            ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs }),
-            // ADR §27a (H7, round 2 review): forwarded as-is -- the shared dispatcher's own
-            // `lease.request` handler is what rejects a non-admin token naming this.
-            ...(body.owner === undefined ? {} : { owner: body.owner }),
-            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-          },
-          session,
-        )
+        .dispatch("lease.request", leaseRequestDispatchInput(body, idempotencyKey), session)
         .then(
           // The grant answers before its record is written (the daemon stores the result
           // once the wait settles), so the `201` is built from the grant itself.
@@ -353,7 +369,12 @@ type HttpLeaseProgress =
 interface HttpLeaseDevice {
   readonly id: string;
   readonly driverDeviceId: string;
-  readonly spec: { readonly platform: string; readonly model: string; readonly osVersion: string };
+  readonly spec: {
+    readonly platform: string;
+    readonly model: string;
+    readonly osVersion: string;
+    readonly imageTag?: string | undefined;
+  };
   readonly mode: "slim" | "full";
 }
 

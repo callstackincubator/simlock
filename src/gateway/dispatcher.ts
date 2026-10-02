@@ -34,7 +34,12 @@
 import type { z } from "zod";
 
 import type { EventHistory } from "../bus/index.js";
-import { OPERATIONS, type OperationName, type tokenRecordSchema } from "../contract/index.js";
+import {
+  OPERATIONS,
+  requestedDevice,
+  type OperationName,
+  type tokenRecordSchema,
+} from "../contract/index.js";
 import {
   DispatchError,
   runDispatch,
@@ -399,13 +404,9 @@ export class GatewayDispatcher {
       );
     }
     return this.options.coordinator.request(
-      {
-        model: input.model,
-        platform: input.platform,
-        ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
-        // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own.
-        ...(input.mode === undefined ? {} : { mode: input.mode }),
-      },
+      // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own, and
+      // relays an image tag unread.
+      requestedDevice(input),
       {
         // `input.allowDownload` stays accepted and is not passed on: only installed runtimes
         // count through a gateway (ADR 0009 §3).
