@@ -3000,7 +3000,7 @@ describe("IosSimctlDriver", () => {
       });
 
       it("reports downloaded runtime assets whose runtime is not in the catalog, and only those (#79)", async () => {
-        // `simctl runtime delete` only unregisters a runtime from CoreSimulator: its ~7.5 GiB
+        // `simctl runtime delete` only unregisters a runtime from CoreSimulator: its ~8.5 GiB
         // asset bundle stays in mobileassetd's store, tagged `NeverCollected`, on the same
         // volume the download preflight measures. So the bytes stay spent and CoreSimulator can
         // re-register the runtime from them later. The catalog here installs 18.4 and 26.5 while
@@ -3095,6 +3095,58 @@ describe("IosSimctlDriver", () => {
         const message = (await driver.advisories())[0]?.message ?? "";
 
         expect(message.indexOf("9.3")).toBeLessThan(message.indexOf("18.6"));
+      });
+
+      it("states the same measured size of a leftover download as a removal's residue would", async () => {
+        const bundle = `${IOS_RUNTIME_ASSET_ROOT}/c3.asset`;
+        const filesystem = new SizedFilesystem(new Map([[bundle, 8_917_036 * 1024]]));
+        await filesystem.mkdirp(bundle);
+        await filesystem.writeFileAtomic(`${bundle}/Info.plist`, assetInfoPlist("18.6", "22G86"));
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        const advisories = await driver.advisories();
+
+        expect(advisories).toEqual([
+          {
+            code: "runtime-cache-unreclaimable",
+            message: expect.stringContaining(
+              "iOS 18.6 (22G86) is no longer installed, but its download (8.5 GiB) is still in",
+            ),
+          },
+        ]);
+      });
+
+      it("states the measured sizes of several leftover downloads as one total", async () => {
+        // The iOS 18.6 and 18.4 downloads measured on a real machine.
+        const filesystem = new SizedFilesystem(
+          new Map([
+            [`${IOS_RUNTIME_ASSET_ROOT}/c3.asset`, 8_917_036 * 1024],
+            [`${IOS_RUNTIME_ASSET_ROOT}/e5.asset`, 8_916_744 * 1024],
+          ]),
+        );
+        for (const [bundle, simulatorVersion, build] of [
+          ["c3.asset", "18.6", "22G86"],
+          ["e5.asset", "18.3", "22D8075"],
+        ] as const) {
+          await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/${bundle}`);
+          await filesystem.writeFileAtomic(
+            `${IOS_RUNTIME_ASSET_ROOT}/${bundle}/Info.plist`,
+            assetInfoPlist(simulatorVersion, build),
+          );
+        }
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        const advisories = await driver.advisories();
+
+        expect(advisories).toEqual([
+          {
+            code: "runtime-cache-unreclaimable",
+            message: expect.stringContaining(
+              "iOS 18.3 (22D8075), 18.6 (22G86) are no longer installed, but their downloads " +
+                "(17.0 GiB in all) are still in",
+            ),
+          },
+        ]);
       });
 
       it("reports nothing when every downloaded asset belongs to an installed runtime (#79)", async () => {
@@ -3483,8 +3535,17 @@ describe("IosSimctlDriver listComponents()", () => {
     const deleted = { match: deleteInvocation, result: { code: 0, stderr: "", stdout: "" } };
     const signal = () => new AbortController().signal;
 
-    async function assetStore(builds: readonly (readonly [string, string])[]): Promise<Filesystem> {
-      const filesystem = new MemoryFilesystem();
+    async function assetStore(
+      builds: readonly (readonly [string, string])[],
+    ): Promise<MemoryFilesystem> {
+      return addAssets(new MemoryFilesystem(), builds);
+    }
+
+    /** Adds one `bundle-<index>.asset` per build to the asset store in `filesystem`. */
+    async function addAssets(
+      filesystem: MemoryFilesystem,
+      builds: readonly (readonly [string, string])[],
+    ): Promise<MemoryFilesystem> {
       for (const [index, [version, build]] of builds.entries()) {
         const bundle = `${IOS_RUNTIME_ASSET_ROOT}/bundle-${String(index)}.asset`;
         await filesystem.mkdirp(bundle);
@@ -3538,6 +3599,47 @@ describe("IosSimctlDriver listComponents()", () => {
       await expect(filesystem.exists(`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`)).resolves.toBe(
         true,
       );
+    });
+
+    it("states the measured size of the download in residue, 8.5 GiB for an asset of 8,917,036 KiB", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        deleted,
+        imagesListed([]),
+        imagesListed([]),
+        defaultSetListed({}),
+      ]);
+      // The iOS 18.6 download measured on a real machine.
+      const filesystem = new SizedFilesystem(
+        new Map([[`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`, 8_917_036 * 1024]]),
+      );
+      await addAssets(filesystem, [["26.4", "23E244"]]);
+      const driver = await createDriver(runner, new FakeClock(), filesystem);
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal.residue).toContain("its download (8.5 GiB) is still in");
+    });
+
+    it("states no size in residue when the download's size cannot be read", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        deleted,
+        imagesListed([]),
+        imagesListed([]),
+        defaultSetListed({}),
+      ]);
+      const filesystem = await assetStore([["26.4", "23E244"]]);
+      await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset/AssetData`);
+      filesystem.defineFailure(`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset/AssetData`, "EACCES");
+      const driver = await createDriver(runner, new FakeClock(), filesystem);
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal.residue).toContain("its download is still in");
+      expect(removal.residue).not.toContain("GiB");
     });
 
     it("removes the runtime when its only default-set devices were never used (#241)", async () => {
@@ -3613,7 +3715,7 @@ describe("IosSimctlDriver listComponents()", () => {
 
       // Two sentences, the devices first, joined as prose.
       expect(removal.residue).toMatch(
-        /^2 never-used simulators .*`xcrun simctl delete unavailable` clears them\. The download of iOS 26\.4 \(23E244\) .*Xcode's Settings -> Platforms to get the space back$/,
+        /^2 never-used simulators .*`xcrun simctl delete unavailable` clears them\. iOS 26\.4 \(23E244\) is no longer installed, but its download .*Xcode's Settings -> Platforms to get the space back$/,
       );
     });
 
@@ -4303,6 +4405,20 @@ function scriptedListRunner(): ScriptedProcessRunner {
  * compile would prove nothing (#79).
  */
 const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
+
+/**
+ * A `MemoryFilesystem` whose `directorySize` answers a set size for the directories in `sizes`,
+ * as a downloaded runtime bundle of several GiB would; it measures every other path as usual.
+ */
+class SizedFilesystem extends MemoryFilesystem {
+  constructor(private readonly sizes: ReadonlyMap<string, number>) {
+    super();
+  }
+
+  override async directorySize(path: string): Promise<number> {
+    return this.sizes.get(path) ?? super.directorySize(path);
+  }
+}
 
 /**
  * mobileassetd's own metadata for one downloaded simulator runtime, cut down to the keys that

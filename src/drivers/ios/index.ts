@@ -72,9 +72,6 @@ const IOS_RUNTIME_MIN_FREE_BYTES = 8 * 1024 ** 3;
 // the same free space `IOS_RUNTIME_MIN_FREE_BYTES` measures. Nothing Simlock may do can
 // reclaim it (issue #79), so the driver only ever reads this path.
 const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime";
-// Observed size of one downloaded runtime bundle, for an advisory that must not stat the
-// store: a `du` over three bundles is tens of gigabytes of directory walking per doctor run.
-const IOS_RUNTIME_ASSET_APPROX_SIZE = "roughly 7-8 GiB";
 // A cold `simctl boot` to `bootstatus` measures roughly 30s on a fast, idle machine and up to
 // a minute on a loaded or slower one. The upper end is the estimate, deliberately: this number
 // is what a waiting requester is quoted, and quoting 30s to someone who then waits 60s is the
@@ -284,6 +281,8 @@ interface Runtime {
 
 /** One downloaded runtime bundle in the OS asset store, identified by its own metadata. */
 interface RuntimeAsset {
+  /** The bundle's own directory in the store, the one whose size is the download's. */
+  readonly path: string;
   /** `MobileAssetProperties.SimulatorVersion` -- the marketing version, for the operator. */
   readonly version: string;
   /** `MobileAssetProperties.Build` -- what says which runtime this bundle actually holds. */
@@ -670,18 +669,29 @@ export class IosSimctlDriver implements Driver {
    * store: matched by build, or by version for an image that names no build.
    */
   async #downloadResidue(image: RuntimeImage, version: string): Promise<{ residue?: string }> {
-    const left = (await this.#downloadedRuntimeAssets()).some((asset) =>
+    const left = (await this.#downloadedRuntimeAssets()).filter((asset) =>
       image.build === undefined ? asset.version === version : asset.build === image.build,
     );
-    if (!left) return {};
+    if (left.length === 0) return {};
     const label = image.build === undefined ? version : `${version} (${image.build})`;
-    return {
-      residue:
-        `The download of iOS ${label} (${IOS_RUNTIME_ASSET_APPROX_SIZE}) is still in ` +
-        `${IOS_RUNTIME_ASSET_ROOT}; \`simctl runtime delete\` did not reclaim it and Simlock ` +
-        "does not delete files there -- remove the platform in Xcode's Settings -> Platforms " +
-        "to get the space back",
-    };
+    return { residue: leftoverDownloadsSentence([label], await this.#assetsSize(left)) };
+  }
+
+  /**
+   * The bytes the bundles of `assets` hold together, measured through the `Filesystem` port and
+   * never written, or `undefined` when any of them cannot be read: a sentence states no size
+   * rather than a guess.
+   */
+  async #assetsSize(assets: readonly RuntimeAsset[]): Promise<number | undefined> {
+    let total = 0;
+    for (const asset of assets) {
+      try {
+        total += await this.#filesystem.directorySize(asset.path);
+      } catch {
+        return undefined;
+      }
+    }
+    return total;
   }
 
   /**
@@ -1321,7 +1331,7 @@ export class IosSimctlDriver implements Driver {
 
   /**
    * Issue #79: a runtime download outlives the runtime. `simctl runtime delete` unregisters
-   * the runtime and leaves its ~7.5 GiB bundle in the OS asset store, from which CoreSimulator
+   * the runtime and leaves its ~8.5 GiB bundle in the OS asset store, from which CoreSimulator
    * can re-register it later -- so an operator running `downloads.policy` on a long-lived host
    * loses disk to bundles no Simlock command, and no `simctl` verb, can reclaim, while the
    * download preflight silently measures the space they already spent. Reports one
@@ -1330,8 +1340,8 @@ export class IosSimctlDriver implements Driver {
    *
    * Read-only, and quiet on anything it cannot read: the store belongs to macOS, is absent on
    * a machine that never downloaded a runtime, and is a system directory this driver has no
-   * business failing `doctor` over. It reads each bundle's own metadata and never its size --
-   * measuring the store means walking tens of gigabytes on every `doctor` run.
+   * business failing `doctor` over. It reads each bundle's metadata, and measures only the
+   * bundles it reports: their sizes, read as file sizes rather than file contents.
    */
   async #unreclaimableCacheAdvisories(): Promise<readonly DriverAdvisory[]> {
     const assets = await this.#downloadedRuntimeAssets();
@@ -1361,16 +1371,10 @@ export class IosSimctlDriver implements Driver {
           compareVersions(left.version, right.version) || left.build.localeCompare(right.build),
       )
       .map(([label]) => label);
-    const plural = described.length > 1;
     return [
       {
         code: "runtime-cache-unreclaimable",
-        message:
-          `iOS ${described.join(", ")} ${plural ? "are" : "is"} no longer installed, but ` +
-          `${plural ? "their downloads" : "its download"} (${IOS_RUNTIME_ASSET_APPROX_SIZE} each) ` +
-          `still ${plural ? "occupy" : "occupies"} ${IOS_RUNTIME_ASSET_ROOT}; ` +
-          "`simctl runtime delete` does not reclaim that space and neither can Simlock -- " +
-          "remove the platform in Xcode's Settings -> Platforms to get it back",
+        message: leftoverDownloadsSentence(described, await this.#assetsSize(orphans)),
       },
     ];
   }
@@ -1400,7 +1404,7 @@ export class IosSimctlDriver implements Driver {
         continue;
       }
 
-      const asset = parseRuntimeAsset(contents);
+      const asset = parseRuntimeAsset(join(IOS_RUNTIME_ASSET_ROOT, bundle), contents);
       if (asset !== undefined) {
         assets.push(asset);
       }
@@ -2047,13 +2051,13 @@ function runtimeMountsAsset(runtime: Runtime, asset: RuntimeAsset): boolean {
  * every runtime ever downloaded. Both keys are read from `MobileAssetProperties` onwards, so a
  * same-named key in the surrounding envelope cannot be mistaken for the asset's own.
  */
-function parseRuntimeAsset(plist: string): RuntimeAsset | undefined {
+function parseRuntimeAsset(path: string, plist: string): RuntimeAsset | undefined {
   const propertiesAt = plist.indexOf("<key>MobileAssetProperties</key>");
   const properties = propertiesAt === -1 ? plist : plist.slice(propertiesAt);
   const build = /<key>Build<\/key>\s*<string>([^<]+)<\/string>/.exec(properties)?.[1];
   const version = /<key>SimulatorVersion<\/key>\s*<string>([^<]+)<\/string>/.exec(properties)?.[1];
 
-  return build === undefined || version === undefined ? undefined : { build, version };
+  return build === undefined || version === undefined ? undefined : { build, path, version };
 }
 
 function versionIntOr(value: unknown, fallback: number): number {
@@ -2172,6 +2176,30 @@ type ListedImage = DriverComponent & {
   readonly image: RuntimeImage;
   readonly unusedDevices: number;
 };
+
+/**
+ * The one sentence that names runtime downloads left in the macOS asset store, for a removal's
+ * `residue` and for `doctor`'s `runtime-cache-unreclaimable` advisory alike: which runtimes,
+ * how much space their downloads take as measured (`sizeBytes`, left out when it could not be
+ * read), and the one supported way to reclaim it. Simlock never deletes a file there.
+ */
+function leftoverDownloadsSentence(
+  labels: readonly string[],
+  sizeBytes: number | undefined,
+): string {
+  const plural = labels.length > 1;
+  const size =
+    sizeBytes === undefined
+      ? ""
+      : ` (${(sizeBytes / 1024 ** 3).toFixed(1)} GiB${plural ? " in all" : ""})`;
+  return (
+    `iOS ${labels.join(", ")} ${plural ? "are" : "is"} no longer installed, but ` +
+    `${plural ? "their downloads" : "its download"}${size} ${plural ? "are" : "is"} still in ` +
+    `${IOS_RUNTIME_ASSET_ROOT}; \`simctl runtime delete\` ` +
+    `does not reclaim ${plural ? "them" : "it"} and Simlock does not delete files there -- ` +
+    "remove the platform in Xcode's Settings -> Platforms to get the space back"
+  );
+}
 
 /**
  * The `residue` sentence for the never-used default-set simulators a runtime removal leaves

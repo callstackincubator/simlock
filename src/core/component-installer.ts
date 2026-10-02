@@ -703,7 +703,19 @@ export class ComponentInstaller {
       },
       "component-installer",
     );
+    if (result.outcome === "installed") this.#reportComplete(install);
     this.#settleAll(install, { outcome: { outcome: result.outcome, version: result.version } });
+  }
+
+  /**
+   * Reports 100 for an install that succeeded, unless its last report already was. A driver's
+   * last report can stop short of it (an iOS download ends near 99%, then goes quiet until the
+   * runtime is mounted), so every platform's install ends at 100 before it settles.
+   */
+  #reportComplete(install: Install): void {
+    const last = install.latest;
+    if (last?.stage === "downloading" && last.percent === 100) return;
+    this.#report(install, { percent: 100, stage: "downloading" });
   }
 
   /** Tells every call on the install, and keeps the report for a call that joins later. */

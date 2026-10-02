@@ -1476,6 +1476,50 @@ describe("Dispatcher: component.install", () => {
     ]);
   });
 
+  /** The fractions one install's `component-progress` pushes carry, the driver reporting `percents`. */
+  async function fractionsFor(percents: readonly number[]): Promise<unknown[]> {
+    const { dispatcher } = await buildDispatcher({ driverOptions: { installProgress: percents } });
+    const fractions: unknown[] = [];
+    await dispatcher.dispatch(
+      "component.install",
+      { platform: "ios", version: "27.0" },
+      admin({
+        onComponentProgress: (update) => {
+          if ("fraction" in update) fractions.push(update.fraction);
+        },
+      }),
+    );
+    return fractions;
+  }
+
+  it("turns a percentage of 1.1 into a fraction of exactly 0.011", async () => {
+    // 1.1 / 100 is 0.011000000000000001 in floating point.
+    const [fraction] = await fractionsFor([1.1]);
+
+    expect(String(fraction)).toBe("0.011");
+  });
+
+  it("turns a percentage of 64.1 into a fraction of exactly 0.641", async () => {
+    // 64.1 / 100 is 0.6409999999999999 in floating point.
+    const [fraction] = await fractionsFor([64.1]);
+
+    expect(String(fraction)).toBe("0.641");
+  });
+
+  it("sends no fraction with more than three decimals for any percentage from 0 to 100 in steps of 0.1", async () => {
+    // Summed rather than computed, so the percentages carry the noise a driver's own arithmetic
+    // would.
+    const percents: number[] = [];
+    for (let percent = 0, step = 0; step <= 1000; step += 1, percent += 0.1) percents.push(percent);
+
+    const fractions = await fractionsFor(percents);
+
+    expect(fractions.length).toBeGreaterThanOrEqual(1001);
+    expect(fractions.filter((fraction) => !/^[01](\.\d{1,3})?$/.test(String(fraction)))).toEqual(
+      [],
+    );
+  });
+
   it("tells a caller behind another install on the platform that it waits, then that it downloads", async () => {
     const { dispatcher, driver } = await buildDispatcher({
       driverOptions: { installProgress: [41] },
@@ -1504,6 +1548,8 @@ describe("Dispatcher: component.install", () => {
       { stage: "waiting" },
       { stage: "downloading" },
       { fraction: 0.41, stage: "downloading" },
+      // The installer's own report that the install it ran is complete.
+      { fraction: 1, stage: "downloading" },
     ]);
   });
 

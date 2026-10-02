@@ -720,8 +720,9 @@ data: {"platform":"android","component":"35","outcome":"installed","version":"35
 ```
 
 `waiting` means another download on the same platform runs first; a
-platform downloads one component at a time. `fraction`, from 0 to 1, is
-present when the platform's installer reports one. `outcome` is `installed`,
+platform downloads one component at a time. `fraction`, from 0 to 1 with at
+most three decimals, is present when the platform's installer reports one;
+an install that succeeds reports 1 before its result. `outcome` is `installed`,
 or `already-installed` when the component was already there (repeating the
 request changes nothing); `version` is the exact version installed. A failure
 after that point is the terminal `error` event, in the exec route's shape —

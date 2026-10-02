@@ -343,7 +343,8 @@ reports no progress at all rather than wrong progress.
 
 `xcrun simctl runtime delete` unregisters a runtime from CoreSimulator and
 stops there. The download it was installed from — one `.asset` bundle of
-roughly 7-8 GiB, marked never-collected — stays in macOS's own asset store at
+about 8.5 GiB for an iOS 18 runtime, marked never-collected — stays in
+macOS's own asset store at
 `/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime`, on the
 same volume as the device root. CoreSimulator can re-register a runtime from
 what is still sitting there, which is why a deleted runtime sometimes
@@ -364,8 +365,9 @@ driver reports instead of acting: `advisories()` compares the store's bundles
 against the installed catalog by build and reports the leftovers as
 `doctor`'s `driver-advisory` / `runtime-cache-unreclaimable` finding, naming
 Xcode's Settings → Platforms as the way to reclaim them. It reads each
-bundle's `Info.plist` and never its size — measuring the store means walking
-tens of gigabytes on every `doctor` run — and stays silent when the store is
+bundle's `Info.plist`, measures only the bundles it reports (file sizes, never
+file contents), and states that measured size, as a removal's `residue` does,
+or no size when it cannot be read. It stays silent when the store is
 absent or unreadable, which is the normal state on a machine that has never
 downloaded a runtime.
 

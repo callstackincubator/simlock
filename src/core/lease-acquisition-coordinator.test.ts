@@ -474,6 +474,7 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     expect(downloading(progress)).toEqual([
       { component: "27.0", stage: "downloading", waiting: true },
       { component: "27.0", stage: "downloading", waiting: false },
+      { component: "27.0", percent: 100, stage: "downloading", waiting: false },
     ]);
     await expect(second).resolves.toMatchObject({ device: { spec: { osVersion: "27.0" } } });
   });
@@ -536,7 +537,40 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
       { component: "26.5", stage: "downloading", waiting: false },
       { component: "26.5", percent: 30, stage: "downloading", waiting: false },
       { component: "26.5", percent: 60, stage: "downloading", waiting: false },
+      { component: "26.5", percent: 100, stage: "downloading", waiting: false },
     ]);
+  });
+
+  it("sends a request waiting on an install percent 100 once, before provisioning", async () => {
+    const clock = new FakeClock(1_000);
+    // An iOS download's last report before the runtime is mounted.
+    const driver = new FakeDriver({
+      availableOsVersions: [],
+      clock,
+      installProgress: [99.3],
+      platform: "ios",
+    });
+    const harness = await createHarness({ drivers: [driver] });
+    const progress: Progress[] = [];
+
+    await harness.coordinator.request(request, {
+      allowDownload: true,
+      onProgress: (report) => progress.push(report),
+      ownerId: "a",
+      requesterId: "a",
+    });
+
+    const complete = progress.filter(
+      (report) => report.stage === "downloading" && report.percent === 100,
+    );
+    expect(complete).toEqual([
+      { component: "26.5", percent: 100, stage: "downloading", waiting: false },
+    ]);
+    const provisioning = progress.findIndex((report) => report.stage === "provisioning");
+    expect(provisioning).toBeGreaterThan(progress.indexOf(complete[0] as Progress));
+    expect(progress.slice(provisioning).some((report) => report.stage === "downloading")).toBe(
+      false,
+    );
   });
 
   it("sends a percentage of 41.7 as 41, and one that rounds down to the last sent not at all", async () => {
@@ -560,6 +594,7 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     expect(downloading(progress)).toEqual([
       { component: "26.5", stage: "downloading", waiting: false },
       { component: "26.5", percent: 41, stage: "downloading", waiting: false },
+      { component: "26.5", percent: 100, stage: "downloading", waiting: false },
     ]);
   });
 

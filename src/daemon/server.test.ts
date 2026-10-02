@@ -626,6 +626,11 @@ describe("DaemonServer", () => {
         payload: { progress: { fraction: 0.5, stage: "downloading" }, requestId: "install-frame" },
         push: "component-progress",
       },
+      // The install succeeded: its final report, before the reply.
+      {
+        payload: { progress: { fraction: 1, stage: "downloading" }, requestId: "install-frame" },
+        push: "component-progress",
+      },
     ]);
   });
 

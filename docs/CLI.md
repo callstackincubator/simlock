@@ -1252,8 +1252,9 @@ Progress is JSON lines on stderr, the result one JSON line on stdout:
 
 `outcome` is `installed`, or `already-installed` when the component was
 already there; running the command again changes nothing and succeeds.
-`version` is the exact version installed. `fraction`, from 0 to 1, is
-present when the platform's installer reports one. The installed component
+`version` is the exact version installed. `fraction`, from 0 to 1 with at
+most three decimals, is present when the platform's installer reports one;
+an install that succeeds reports 1 before its result. The installed component
 appears in `simlock catalog` at once.
 
 - **Consent.** The command is the consent to download, so no
@@ -1460,12 +1461,14 @@ behind, and the result's `residue` names each one that did:
 - The never-booted simulators of that runtime in Xcode's default device set.
   They become unavailable, and Simlock does not delete them. `residue` says
   how many there are; `xcrun simctl delete unavailable` clears them.
-- The runtime's download in macOS's own asset store. `residue` says so and
-  how to get the space back: remove the platform in Xcode's Settings, under
-  Platforms. Simlock never deletes files there itself.
+- The runtime's download in macOS's own asset store, about 8.5 GiB for an
+  iOS 18 runtime. `residue` says so, with the size the download measures on
+  disk (or no size when it cannot be read), and how to get the space back:
+  remove the platform in Xcode's Settings, under Platforms. Simlock never
+  deletes files there itself.
 
 ```text
-{"platform":"ios","version":"26.4","outcome":"removed","sizeBytes":9103456789,"residue":"11 never-used simulators in the default device set are now unavailable; ... The download of iOS 26.4 (23E244) ..."}
+{"platform":"ios","version":"26.4","outcome":"removed","sizeBytes":9103456789,"residue":"11 never-used simulators in the default device set are now unavailable; ... iOS 26.4 (23E244) is no longer installed, but its download (8.5 GiB) is still in ..."}
 ```
 
 An Android image is removed with `sdkmanager --uninstall`.
@@ -1559,12 +1562,13 @@ is no `--fix` for it, since the fix is upgrading the runtime.
 On macOS, `doctor` also reports a `driver-advisory` finding (code
 `runtime-cache-unreclaimable`) for each iOS runtime that was downloaded to
 this machine and is no longer installed. Deleting a simulator runtime only
-unregisters it: the download it was installed from — roughly 7-8 GiB of it
-— stays in the operating system's own asset store, where it keeps spending
-the same free space the download preflight measures, and where nothing
-Simlock runs can reclaim it. On a host that has been leasing with downloads
+unregisters it: the download it was installed from — about 8.5 GiB for an
+iOS 18 runtime — stays in the operating system's own asset store, where it
+keeps spending the same free space the download preflight measures, and
+where nothing Simlock runs can reclaim it. On a host that has been leasing with downloads
 enabled for a while, several of these can accumulate unnoticed. The finding
-names each one and the one supported way to get the space back: remove the
+names each one, the space their downloads measure on disk (or no size when
+it cannot be read), and the one supported way to get it back: remove the
 platform in Xcode's Settings → Platforms. Advisory only, like the finding
 above — reclaiming this space is outside anything `--fix` may do.
 

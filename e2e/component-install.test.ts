@@ -68,6 +68,8 @@ describe("lease-triggered component installs", () => {
       { component: "19.0", push: "progress", stage: "downloading", waiting: false },
       { component: "19.0", percent: 20, push: "progress", stage: "downloading", waiting: false },
       { component: "19.0", percent: 60, push: "progress", stage: "downloading", waiting: false },
+      // The install succeeded: its final report.
+      { component: "19.0", percent: 100, push: "progress", stage: "downloading", waiting: false },
     ]);
     const lastDownloading = stages.findLastIndex((line) => line["stage"] === "downloading");
     const provisioning = stages.findIndex((line) => line["stage"] === "provisioning");
@@ -313,6 +315,8 @@ describe("POST /v1/components/install", () => {
       // The install's start, before the driver's own percentage.
       { data: { stage: "downloading" }, event: "progress" },
       { data: { fraction: 0.41, stage: "downloading" }, event: "progress" },
+      // The install succeeded: its final report, before the result.
+      { data: { fraction: 1, stage: "downloading" }, event: "progress" },
       {
         data: { component: "35", outcome: "installed", platform: "android", version: "35" },
         event: "result",
@@ -344,6 +348,8 @@ describe("POST /v1/components/install", () => {
     expect(await readSse(repeat)).toEqual([
       // Joining a running install, it hears that install's latest progress at once.
       { data: { stage: "downloading" }, event: "progress" },
+      // The install succeeded: its final report, before the result.
+      { data: { fraction: 1, stage: "downloading" }, event: "progress" },
       {
         data: { component: "35", outcome: "installed", platform: "android", version: "35" },
         event: "result",
