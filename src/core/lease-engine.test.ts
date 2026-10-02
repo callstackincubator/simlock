@@ -2127,6 +2127,27 @@ describe("LeaseEngine logger wiring", () => {
     ]);
   });
 
+  it("LeaseEngine hands its logger to the driver catalog: a platform left out of the catalog is logged", async () => {
+    const clock = new FakeClock(1_000);
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["34"], clock, platform: "android" });
+    android.failOn("listCatalog", 1, new DriverCrashError("~/.android is not readable"));
+    const { logger, sink } = debugLogger();
+    const harness = await createHarness({ driver: ios, drivers: [ios, android], logger });
+
+    await harness.engine.listCatalog();
+
+    expect(
+      sink.records.filter((record) => record.message === "A driver could not read its catalog"),
+    ).toMatchObject([
+      {
+        level: "warn",
+        module: "daemon.driver-catalog",
+        fields: { error: "DriverCrashError: ~/.android is not readable", platform: "android" },
+      },
+    ]);
+  });
+
   it("LeaseEngine hands its logger to the device provisioner: a new device that fails to boot is logged", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });

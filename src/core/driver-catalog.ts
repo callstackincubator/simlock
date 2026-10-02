@@ -37,7 +37,7 @@ export class DriverCatalog {
 
   constructor(drivers: readonly Driver[], options: { readonly logger?: Logger | undefined } = {}) {
     this.#drivers = new Map(drivers.map((driver) => [driver.platform, driver]));
-    this.#logger = options.logger ?? new NoopLogger();
+    this.#logger = options.logger?.child("driver-catalog") ?? new NoopLogger();
   }
 
   get(platform: Platform): Driver {
