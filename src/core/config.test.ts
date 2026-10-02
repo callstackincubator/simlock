@@ -3,7 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
 import { configSchema } from "../contract/schemas.js";
-import { type Config, effectiveAllowDownload, loadConfig } from "./index.js";
+import {
+  type Config,
+  effectiveAllowDownload,
+  loadConfig,
+  REDACTED_VALUE,
+  redactConfig,
+} from "./index.js";
 
 /** Narrows the capacity block for assertions on resource-strategy configs. */
 function resourceOptions(config: Config): ResourceStrategyOptions {
@@ -1427,6 +1433,35 @@ describe("effectiveAllowDownload", () => {
   it("defers to the request's own flag under the on-request policy", () => {
     expect(effectiveAllowDownload("on-request", false)).toBe(false);
     expect(effectiveAllowDownload("on-request", true)).toBe(true);
+  });
+});
+
+describe("redactConfig", () => {
+  async function load(contents: unknown): Promise<Config> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+    return loadConfig({ configPath, filesystem, systemStats: createStats() });
+  }
+
+  it("replaces a set gateway.token with the marker, keeps every other key, and leaves the input untouched", async () => {
+    const config = await load({
+      gateway: { label: "mac-1", token: "secret-join-token", url: "wss://gw.example:4700" },
+    });
+
+    const redacted = redactConfig(config);
+
+    expect(redacted).toEqual({ ...config, gateway: { ...config.gateway, token: REDACTED_VALUE } });
+    expect(config.gateway.token).toBe("secret-join-token");
+  });
+
+  it("adds no gateway.token to a config that has none, so unset still reads as unset", async () => {
+    const config = await load({});
+
+    const redacted = redactConfig(config);
+
+    expect(redacted).toEqual(config);
+    expect(Object.keys(redacted.gateway)).not.toContain("token");
   });
 });
 

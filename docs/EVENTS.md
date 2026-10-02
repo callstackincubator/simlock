@@ -75,7 +75,7 @@ that fails, emits nothing, and the component stays installed.
 
 | Event | Payload (key fields) | Emitted when | Emitter | Status |
 |---|---|---|---|---|
-| `daemon.started` | version, config snapshot | daemon finished startup + reconcile | DaemonServer | implemented |
+| `daemon.started` | version, config snapshot (`gateway.token`, when set, reads `[redacted]`) | daemon finished startup + reconcile | DaemonServer | implemented |
 | `daemon.stopping` | reason | graceful shutdown began | DaemonServer | implemented |
 | `disk.pressure-detected` | free bytes, threshold | free disk crossed under the configured threshold (edge-triggered: once per crossing, not once per tick while it persists) | CleanupReaper | implemented |
 | `cleanup.executed` | rule name, action, target, reason | cleanup executor committed a proposed action | CleanupExecutor | implemented |
