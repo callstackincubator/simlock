@@ -470,6 +470,28 @@ const { installs = [] } = await client.getStatus();
   its entry in `workers` and on `listWorkers()`, beside its
   `downloads.timeoutMs`.
 
+## What is waiting: `getStatus().waiting`
+
+`getStatus()` lists the requests waiting for a device in the daemon's own
+queue, oldest first:
+
+```ts
+const { waiting = [] } = await client.getStatus();
+// [{ id: "req_7", requesterId: "agent-b", spec: { platform: "ios", model: "iPhone 16" },
+//    createdAt: 1790864071200, stage: "queued", queuePosition: 1 }]
+```
+
+- `stage` is `queued` while the request holds a place in the queue, with
+  `queuePosition` counting from 1, and `starting` while a device is being
+  found, created, booted or downloaded for it. `spec` has only the fields the
+  request named.
+- A request leaves the list as soon as it is granted, fails or is cancelled.
+  The field is absent only from an older daemon.
+- On a gateway the list is the gateway's own queue. Each worker's own is on
+  its entry in `workers` and on `listWorkers()`. The admin client's
+  `list({ kind: "requests" })` lists both, each worker's entries with their
+  `workerId`, the same list as `GET /v1/lease-requests`.
+
 ## One connection, no reconnect, no retry
 
 This is the one thing to internalize before building anything on top of this

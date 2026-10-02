@@ -390,15 +390,16 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
   }
 
   /**
-   * Every stored request that is still open and that a live wait in `places` is driving, oldest
-   * first. A request whose wait has ended is not listed, even before its result is written; nor is
-   * an open record no wait drives, such as one a restarted daemon has not settled yet.
+   * Every stored request that a live wait in `places` is driving, oldest first. A wait leaves
+   * `places` the moment it ends, before its result is written, so a settled request is never
+   * listed; nor is an open record no wait drives, such as one a restarted daemon has not settled
+   * yet.
    */
   waiting(places: readonly QueuePlace[]): WaitingRequest[] {
     const byId = new Map(places.map((place) => [place.id, place]));
     return this.options.store.leaseRequests().flatMap((record) => {
       const place = byId.get(record.id);
-      return isSettled(record) || place === undefined ? [] : [waitingRequest(record, place)];
+      return place === undefined ? [] : [waitingRequest(record, place)];
     });
   }
 

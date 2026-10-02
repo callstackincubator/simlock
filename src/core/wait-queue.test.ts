@@ -90,6 +90,33 @@ describe("WaitQueue", () => {
     expect(third.state).toBe("queued");
   });
 
+  it("places a queued waiter by its index in the queue, counting the waiters ahead that are already being worked on", async () => {
+    const { queue } = createQueue();
+    const starting = createWaiter(queue, "starting");
+    const second = createWaiter(queue, "second");
+    const third = createWaiter(queue, "third");
+    const unqueued = createWaiter(queue, "unqueued");
+    for (const waiter of [starting, second, third]) queue.enqueue(waiter);
+    queue.markProcessing(starting);
+    queue.markProcessing(unqueued);
+
+    expect(queue.places()).toEqual([
+      { id: starting.id },
+      { id: second.id, queuePosition: 2 },
+      { id: third.id, queuePosition: 3 },
+      { id: unqueued.id },
+    ]);
+
+    // The waiter ahead is granted: the ones behind it move up, and a settled one is gone.
+    queue.resolve(starting, grant());
+    await starting.promise;
+    expect(queue.places()).toEqual([
+      { id: second.id, queuePosition: 1 },
+      { id: third.id, queuePosition: 2 },
+      { id: unqueued.id },
+    ]);
+  });
+
   it("tracks pending requesters and rejects duplicate requesters", async () => {
     const { queue } = createQueue();
     const waiter = createWaiter(queue, "agent");

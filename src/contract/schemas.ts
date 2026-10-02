@@ -236,11 +236,6 @@ export const leaseGrantSchema = z.object({
   timing: leaseTimingSchema,
 });
 
-/**
- * One stored lease request (`LeaseRequestRecord`, src/core/domain.ts): the shape a frontend reads
- * a request back in, whichever frontend sent it. `grant` is the grant the request was answered
- * with, stored as granted -- a later renew does not move its `ttlDeadline`.
- */
 /** The device a lease request named, with every field it left out left out. */
 const requestedDeviceSchema = z.object({
   platform: platformSchema,
@@ -250,6 +245,11 @@ const requestedDeviceSchema = z.object({
   imageTag: imageTagSchema.optional(),
 });
 
+/**
+ * One stored lease request (`LeaseRequestRecord`, src/core/domain.ts): the shape a frontend reads
+ * a request back in, whichever frontend sent it. `grant` is the grant the request was answered
+ * with, stored as granted -- a later renew does not move its `ttlDeadline`.
+ */
 export const leaseRequestRecordSchema = z.object({
   id: z.string(),
   requesterId: z.string(),
