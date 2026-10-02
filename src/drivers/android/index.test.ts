@@ -481,6 +481,31 @@ describe("AndroidDriver", () => {
     expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
   });
 
+  it("kills an emulator that has not exited within the readiness timeout of a shutdown", async () => {
+    const harness = await provisionedHarness({
+      afterwards: [processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"])],
+      readinessTimeoutMs: 2_000,
+    });
+    await harness.driver.makeReady(harness.device);
+    const launch = harness.runner.calls.findLastIndex(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    const running = harness.runner.handles[launch];
+    expect(running, "no running emulator").toBeDefined();
+    if (running === undefined) return;
+    const kill = vi.spyOn(running, "kill");
+
+    // The emulator ignores `emu kill`: only the timeout can end the wait.
+    const shutdown = harness.driver.shutdown(harness.device);
+    await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBe(1));
+    expect(kill).not.toHaveBeenCalled();
+    harness.clock.advance(2_000);
+    await shutdown;
+
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+    expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
+  });
+
   it("validates a new clean baseline by restarting from it before becoming ready", async () => {
     const harness = await provisionedHarness();
 

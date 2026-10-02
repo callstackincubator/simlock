@@ -47,6 +47,7 @@ import {
   type ProcessRunner,
   type ProcessSupervisor,
   type TcpProbe,
+  type TimerHandle,
 } from "../../ports/index.js";
 import { AdbRegistrar } from "./adb-registrar.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
@@ -1858,18 +1859,18 @@ export class AndroidDriver implements Driver {
   }
 
   async #waitForExit(handle: ProcessHandle, timeoutMs: number): Promise<boolean> {
-    let timerFired = false;
-    const timer = this.#clock.setTimer(timeoutMs, () => {
-      timerFired = true;
-    });
-    const result = await Promise.race([
+    let timer: TimerHandle | undefined;
+    const exited = await Promise.race([
       handle.wait().then(() => true),
       new Promise<boolean>((resolve) => {
-        this.#clock.setTimer(timeoutMs, () => resolve(false));
+        timer = this.#clock.setTimer(timeoutMs, () => resolve(false));
       }),
     ]);
-    this.#clock.cancel(timer);
-    return timerFired ? false : result;
+    // An armed timer holds the event loop open, so a stopped daemon would outlive it (#237).
+    if (timer !== undefined) {
+      this.#clock.cancel(timer);
+    }
+    return exited;
   }
 
   async #runOrThrow(
