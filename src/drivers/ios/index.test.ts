@@ -496,7 +496,7 @@ describe("IosSimctlDriver", () => {
         version: "18.6",
       });
       const xcodebuildCall = runner.calls.find((call) => call.command === "xcodebuild");
-      expect(xcodebuildCall?.options).toEqual({});
+      expect(xcodebuildCall?.options).toEqual({ lineEnd: "carriage-return-too" });
     });
 
     it("reports already-installed when the runtime the installer leaves was there before it ran", async () => {

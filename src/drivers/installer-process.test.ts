@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ComponentInstallProgress } from "../core/driver.js";
 import { FakeClock, ScriptedProcessRunner } from "../ports/index.js";
@@ -41,6 +41,44 @@ describe("runInstallerProcess", () => {
       { percent: 40, stage: "downloading" },
       { percent: 100, stage: "downloading" },
     ]);
+  });
+
+  it("reports each percentage of a progress bar redrawn with carriage returns", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: { args: ["install"], command },
+        stdoutLines: ["[=  ] 10% a\r[== ] 20% b\r[===] 30% c"],
+      },
+    ]);
+    const clock = new FakeClock();
+
+    const { outcome, progress } = run(runner, clock);
+    await outcome;
+
+    expect(progress.map((report) => report.percent)).toEqual([10, 20, 30]);
+  });
+
+  it("reports each percentage while the installer is still running, before it exits", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        hangs: true,
+        match: { args: ["install"], command },
+        stdoutLines: ["[=  ] 10% a\r[== ] 20% b\r[===] 30% c"],
+      },
+    ]);
+    const clock = new FakeClock();
+    const controller = new AbortController();
+    let exited = false;
+
+    const { outcome, progress } = run(runner, clock, { signal: controller.signal });
+    void outcome.then(() => (exited = true));
+    await vi.waitFor(() => {
+      expect(progress.map((report) => report.percent)).toEqual([10, 20, 30]);
+    });
+
+    expect(exited).toBe(false);
+    controller.abort();
+    await outcome;
   });
 
   it("starts nothing for a signal that already fired", async () => {

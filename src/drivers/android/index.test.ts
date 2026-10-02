@@ -2170,7 +2170,9 @@ describe("AndroidDriver", () => {
         receipt: { package: package35, revision: "1", stamp: expect.stringMatching(/^.+@\d+$/) },
         version: "35",
       });
-      expect(runner.calls.find((call) => call.args[0] === "--install")?.options).toEqual({});
+      expect(runner.calls.find((call) => call.args[0] === "--install")?.options).toEqual({
+        lineEnd: "carriage-return-too",
+      });
     });
 
     it("reports already-installed when the image was there before sdkmanager ran", async () => {

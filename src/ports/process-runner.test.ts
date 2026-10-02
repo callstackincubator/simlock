@@ -670,3 +670,128 @@ describe("NodeProcessRunner", () => {
     }
   }, 8_000);
 });
+
+describe("NodeProcessRunner: line ends", () => {
+  // Writes each argument as its own chunk, 50 ms apart, so a test controls where one chunk
+  // ends and the next begins.
+  const writeChunks =
+    "const parts = process.argv.slice(1); let i = 0;" +
+    "const next = () => { if (i === parts.length) return; process.stdout.write(parts[i++]); setTimeout(next, 50); };" +
+    "next();";
+
+  async function linesOf(lines: AsyncIterable<string>): Promise<string[]> {
+    const read: string[] = [];
+    for await (const line of lines) read.push(line);
+    return read;
+  }
+
+  it('ends a line at each bare carriage return on stdout and stderr with lineEnd "carriage-return-too", and still yields an unended last line', async () => {
+    const handle = new NodeProcessRunner().spawn(
+      process.execPath,
+      ["-e", "process.stdout.write('10%\\r20%\\r30%\\n'); process.stderr.write('a\\rb')"],
+      { lineEnd: "carriage-return-too" },
+    );
+
+    const [stdout, stderr] = await Promise.all([linesOf(handle.stdout), linesOf(handle.stderr)]);
+
+    expect(stdout).toEqual(["10%", "20%", "30%"]);
+    expect(stderr).toEqual(["a", "b"]);
+  });
+
+  it("keeps a bare carriage return inside the line by default", async () => {
+    const handle = new NodeProcessRunner().spawn(process.execPath, [
+      "-e",
+      "process.stdout.write('10%\\r20%\\r30%\\n')",
+    ]);
+
+    expect(await linesOf(handle.stdout)).toEqual(["10%\r20%\r30%"]);
+  });
+
+  it.each(["newline", "carriage-return-too"] as const)(
+    "reads a \\r\\n pair as one line end, not an empty line, with lineEnd %s",
+    async (lineEnd) => {
+      const handle = new NodeProcessRunner().spawn(
+        process.execPath,
+        ["-e", "process.stdout.write('a\\r\\nb\\r\\n')"],
+        { lineEnd },
+      );
+
+      expect(await linesOf(handle.stdout)).toEqual(["a", "b"]);
+    },
+  );
+
+  it("yields a \\r-ended line while the process is still running", async () => {
+    const handle = new NodeProcessRunner().spawn(
+      process.execPath,
+      ["-e", "process.stdout.write('10%\\r'); setTimeout(() => undefined, 30000)"],
+      { lineEnd: "carriage-return-too" },
+    );
+    const iterator = handle.stdout[Symbol.asyncIterator]();
+    let timer: NodeJS.Timeout | undefined;
+    const noLineYet = new Promise<string>((resolve) => {
+      timer = setTimeout(() => resolve("no line within 2 s"), 2_000);
+    });
+
+    try {
+      const first = await Promise.race([iterator.next().then((next) => next.value), noLineYet]);
+      expect(first).toBe("10%");
+    } finally {
+      clearTimeout(timer);
+      handle.kill("SIGKILL");
+      await handle.wait();
+    }
+  });
+
+  it("captures the same stdout whichever lineEnd is chosen", async () => {
+    const runner = new NodeProcessRunner();
+    const args = ["-e", writeChunks, "[=  ] 10%\r", "\n[== ] 20%\r\n", "\r[===] 30%\n"];
+
+    const byDefault = await runner.run(process.execPath, args);
+    const carriageReturnToo = await runner.run(process.execPath, args, {
+      lineEnd: "carriage-return-too",
+    });
+
+    expect(byDefault.stdout).toBe("[=  ] 10%\r\n[== ] 20%\r\n\r[===] 30%\n");
+    expect(carriageReturnToo.stdout).toBe(byDefault.stdout);
+  });
+});
+
+describe("ScriptedProcessRunner: line ends", () => {
+  it.each([
+    ["newline", ["10%\r20%", "30%"]],
+    ["carriage-return-too", ["10%", "20%", "30%"]],
+  ] as const)(
+    "splits a scripted line at a bare \\r only under carriage-return-too, with lineEnd %s",
+    async (lineEnd, expected) => {
+      const runner = new ScriptedProcessRunner([
+        { match: { args: [], command: "installer" }, stdoutLines: ["10%\r20%", "30%"] },
+      ]);
+      const handle = runner.spawn("installer", [], { lineEnd });
+      const lines: string[] = [];
+      for await (const line of handle.stdout) lines.push(line);
+
+      expect(lines).toEqual(expected);
+    },
+  );
+
+  it.each(["newline", "carriage-return-too"] as const)(
+    "reads a \\r ending one chunk and a \\n starting the next as one line end, and keeps an unended last line, with lineEnd %s",
+    async (lineEnd) => {
+      const runner = new ScriptedProcessRunner([
+        {
+          chunks: [
+            { chunk: "a\r", stream: "stdout" },
+            { chunk: "\nb", stream: "stdout" },
+          ],
+          match: { args: [], command: "installer" },
+        },
+      ]);
+      const handle = runner.spawn("installer", [], { lineEnd });
+      const lines: string[] = [];
+      for await (const line of handle.stdout) lines.push(line);
+
+      expect(lines).toEqual(["a", "b"]);
+      await expect(handle.wait()).resolves.toEqual({ code: 0, stderr: "", stdout: "a\r\nb" });
+    },
+  );
+});
