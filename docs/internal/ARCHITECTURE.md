@@ -1506,6 +1506,10 @@ read-only, never downloads, and every process it starts is bounded, like
 `listCatalog`. iOS reads `simctl runtime list -j` (iOS images only) and
 counts devices per runtime in the default device set with an unscoped
 `simctl list -j devices`, the one unscoped call besides the pre-root path's.
+One function, `devicesPerRuntime`, decides which of them count for the
+listing and the removal alike: only a device whose entry carries
+`lastUsedAt`, so the never-used simulators macOS creates for every installed
+runtime do not block a removal (#241).
 Android reads the installed images, sizes each directory with
 `Filesystem.directorySize`, and counts AVDs in the user's own AVD home whose
 `config.ini` names the image's directory. On both platforms a foreign-device
@@ -1575,8 +1579,11 @@ steps run through `runBoundedProcess` (`src/drivers/installer-process.ts`),
 which ends the process `SIGTERM` then `SIGKILL` and answers only once it has
 exited. iOS runs `simctl --set <root> runtime delete <image>` without
 `--keep-asset` (the `--set` from `#scopedSimctlArgv`, like every scoped call),
-then reads the asset store (#79) and reports `residue` when the build's
-download is still there; `simlock simctl runtime delete` stays refused and
+then reports `residue`: how many never-used default-set simulators of the
+runtime, counted in the listing taken before the delete, are now unavailable
+(Simlock deletes none of them; `xcrun simctl delete unavailable` does), and,
+after reading the asset store (#79), that the build's download is still
+there, each when it applies; `simlock simctl runtime delete` stays refused and
 points at `simlock component remove`. Android runs
 `sdkmanager --uninstall <package>`. A second
 Simlock instance's devices and a foreign device created after the driver's

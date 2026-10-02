@@ -3199,17 +3199,41 @@ describe("IosSimctlDriver listComponents()", () => {
     return { match: runtimeListInvocation, result: { code: 0, stderr: "", stdout } };
   }
 
-  function defaultSetListed(devices: Readonly<Record<string, number>>) {
+  /**
+   * The default set's devices per runtime: a number is that many used devices, or name both
+   * kinds. A used device carries `lastUsedAt`, as `simctl list -j devices` reports one that has
+   * been booted; an unused one -- like the batch CoreSimulator creates when a runtime install
+   * ends -- carries every other key a real entry has and no `lastUsedAt`.
+   */
+  function defaultSetListed(
+    devices: Readonly<
+      Record<string, number | { readonly used?: number; readonly unused?: number }>
+    >,
+  ) {
+    const entry = (runtime: string, index: number, used: boolean) => ({
+      dataPath: `/Users/me/Library/Developer/CoreSimulator/Devices/${runtime}-${String(index)}/data`,
+      dataPathSize: used ? 1_500_000_000 : 18_000_000,
+      deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+      isAvailable: true,
+      ...(used ? { lastUsedAt: "2026-10-01T12:00:00Z" } : {}),
+      logPath: `/Users/me/Library/Logs/CoreSimulator/${runtime}-${String(index)}`,
+      logPathSize: 4096,
+      name: `user-${String(index)}`,
+      state: "Shutdown",
+      udid: `USER-${runtime}-${String(index)}`,
+    });
     const stdout = JSON.stringify({
       devices: Object.fromEntries(
-        Object.entries(devices).map(([runtime, count]) => [
-          runtime,
-          Array.from({ length: count }, (_, index) => ({
-            name: `user-${String(index)}`,
-            state: "Shutdown",
-            udid: `USER-${runtime}-${String(index)}`,
-          })),
-        ]),
+        Object.entries(devices).map(([runtime, counts]) => {
+          const { unused = 0, used = 0 } = typeof counts === "number" ? { used: counts } : counts;
+          return [
+            runtime,
+            [
+              ...Array.from({ length: used }, (_, index) => entry(runtime, index, true)),
+              ...Array.from({ length: unused }, (_, index) => entry(runtime, used + index, false)),
+            ],
+          ];
+        }),
       ),
     });
     return { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout } };
@@ -3247,7 +3271,7 @@ describe("IosSimctlDriver listComponents()", () => {
     ]);
   });
 
-  it("counts a device in the default device set that uses an image's runtime as foreign, and reads no device in Simlock's own set for it", async () => {
+  it("counts a device in the default device set that has lastUsedAt and uses an image's runtime as foreign, and reads no device in Simlock's own set for it", async () => {
     const used = image("18.4", "22E238");
     const unused = image("26.0", "23A343");
     // The scripted runner refuses any call it was not given, so a `simctl --set <root> list`
@@ -3268,6 +3292,43 @@ describe("IosSimctlDriver listComponents()", () => {
       runtimeListInvocation.args,
       defaultSetInvocation.args,
     ]);
+  });
+
+  it("does not count a device in the default device set without lastUsedAt, such as the ones macOS creates when a runtime install ends (#241)", async () => {
+    const fresh = image("18.6", "22G86");
+    const runner = new ScriptedProcessRunner([
+      imagesListed([fresh]),
+      // What a runtime install leaves on Xcode 26.4.1: about eleven never-booted simulators of
+      // it. One more the user has booted is the only one that counts.
+      defaultSetListed({ [fresh.runtime]: { unused: 11, used: 1 } }),
+    ]);
+    const driver = await createDriver(runner);
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices }) => foreignDevices)).toEqual([1]);
+  });
+
+  it("counts a default-set entry that is not a device object as a user, so an unreadable entry never unblocks a removal (#241)", async () => {
+    const fresh = image("18.6", "22G86");
+    const runner = new ScriptedProcessRunner([
+      imagesListed([fresh]),
+      {
+        match: defaultSetInvocation,
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            devices: { [fresh.runtime]: ["garbled", null, { name: "fresh", udid: "U-1" }] },
+          }),
+        },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices }) => foreignDevices)).toEqual([2]);
   });
 
   it("lists a runtime with the receipt installComponent returned for it, and runs no installer to list", async () => {
@@ -3430,13 +3491,14 @@ describe("IosSimctlDriver listComponents()", () => {
       return filesystem;
     }
 
-    it("deletes the image the receipt names with simctl runtime delete and no --keep-asset, and reports no residue when its download is gone", async () => {
+    it("deletes the image the receipt names with simctl runtime delete and no --keep-asset, and reports no residue when it had no unused default-set device and its download is gone", async () => {
+      // Another runtime's never-used devices are not this removal's to report.
       const runner = new ScriptedProcessRunner([
         imagesListed([target, other]),
-        defaultSetListed({}),
+        defaultSetListed({ [other.runtime]: { unused: 4 } }),
         deleted,
         imagesListed([other]),
-        defaultSetListed({}),
+        defaultSetListed({ [other.runtime]: { unused: 4 } }),
       ]);
       // Other builds' downloads are in the store, one of them of the same version; this one's
       // is not.
@@ -3474,6 +3536,140 @@ describe("IosSimctlDriver listComponents()", () => {
       );
     });
 
+    it("removes the runtime when its only default-set devices were never used (#241)", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({ [target.runtime]: { unused: 11 } }),
+        deleted,
+        imagesListed([]),
+        defaultSetListed({ [target.runtime]: { unused: 11 } }),
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+
+      await expect(driver.removeComponent(receipt, { signal: signal() })).resolves.toMatchObject({
+        sizeBytes: 7_000_000_000,
+      });
+      expect(runner.calls[2]?.args).toEqual(deleteInvocation.args);
+    });
+
+    it("reports three unused default-set devices as unavailable in residue, naming xcrun simctl delete unavailable (#241)", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({ [target.runtime]: { unused: 3 } }),
+        deleted,
+        imagesListed([]),
+        defaultSetListed({ [target.runtime]: { unused: 3 } }),
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal.residue).toBe(
+        "3 never-used simulators in the default device set are now unavailable; Simlock does " +
+          "not delete simulators there -- `xcrun simctl delete unavailable` clears them",
+      );
+    });
+
+    it("names a single unused default-set device in the singular in residue (#241)", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({ [target.runtime]: { unused: 1 } }),
+        deleted,
+        imagesListed([]),
+        defaultSetListed({ [target.runtime]: { unused: 1 } }),
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal.residue).toMatch(
+        /^1 never-used simulator in the default device set is now unavailable;/,
+      );
+    });
+
+    it("carries both the unavailable devices and the download left in the asset store in residue (#241)", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({ [target.runtime]: { unused: 2 } }),
+        deleted,
+        imagesListed([]),
+        defaultSetListed({ [target.runtime]: { unused: 2 } }),
+      ]);
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        await assetStore([["26.4", "23E244"]]),
+      );
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      // Two sentences, the devices first, joined as prose.
+      expect(removal.residue).toMatch(
+        /^2 never-used simulators .*`xcrun simctl delete unavailable` clears them\. The download of iOS 26\.4 \(23E244\) .*Xcode's Settings -> Platforms to get the space back$/,
+      );
+    });
+
+    it("reports no unavailable simulators when another installed build of the same runtime stays behind (#241)", async () => {
+      // Two builds of iOS 26.4 share one runtime identifier, so its simulators keep working
+      // on the build that stays.
+      const sibling = image("26.4", "23E200", { id: "IMG-26.4-23E200" });
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target, sibling]),
+        defaultSetListed({ [target.runtime]: { unused: 3 } }),
+        deleted,
+        imagesListed([sibling]),
+        defaultSetListed({ [target.runtime]: { unused: 3 } }),
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal).toEqual({ sizeBytes: 7_000_000_000 });
+    });
+
+    it("runs no simctl command that writes to the default device set: its only unscoped call is the device list (#241)", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({ [target.runtime]: { unused: 11 } }),
+        deleted,
+        imagesListed([]),
+        defaultSetListed({ [target.runtime]: { unused: 11 } }),
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+
+      await driver.removeComponent(receipt, { signal: signal() });
+
+      // Every call that names no `--set` addresses the default set; each must be the read.
+      const unscoped = runner.calls.filter(
+        (call) => call.command === "xcrun" && !call.args.includes("--set"),
+      );
+      expect(unscoped.map((call) => call.args)).toEqual([
+        defaultSetInvocation.args,
+        defaultSetInvocation.args,
+      ]);
+      expect(runner.calls).toHaveLength(5);
+    });
+
+    it("reports the same foreign-device count in listComponents and in removeComponent's refusal for the same default set (#241)", async () => {
+      const set = defaultSetListed({ [target.runtime]: { unused: 9, used: 2 } });
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        set,
+        imagesListed([target]),
+        set,
+      ]);
+      const driver = await createDriver(runner);
+
+      const [listed] = await driver.listComponents();
+      const error = await driver
+        .removeComponent(receipt, { signal: signal() })
+        .catch((caught: unknown) => caught);
+
+      expect(listed?.foreignDevices).toBe(2);
+      expect(error).toBeInstanceOf(ComponentInUseError);
+      expect(error).toMatchObject({ foreignDevices: listed?.foreignDevices });
+    });
+
     it("fails with simctl's own error when runtime delete exits non-zero", async () => {
       // No listing after the failure: the scripted runner fails any call it was not given.
       const runner = new ScriptedProcessRunner([
@@ -3492,11 +3688,12 @@ describe("IosSimctlDriver listComponents()", () => {
       expect(runner.calls).toHaveLength(3);
     });
 
-    it("refuses with ComponentInUseError when a device in the default device set uses the runtime, and deletes nothing", async () => {
+    it("refuses with ComponentInUseError when one default-set device of the runtime has lastUsedAt, and deletes nothing", async () => {
       // The scripted runner fails any call it was not given, so a delete would fail this test.
+      // Ten never-used devices beside the used one: only the used one counts.
       const runner = new ScriptedProcessRunner([
         imagesListed([target]),
-        defaultSetListed({ [target.runtime]: 1 }),
+        defaultSetListed({ [target.runtime]: { unused: 10, used: 1 } }),
       ]);
       const driver = await createDriver(runner);
 

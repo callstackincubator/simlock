@@ -14,6 +14,11 @@
   `--allow-download` does nothing through a gateway "until the downloads
   feature is specified" becomes permanent (§7). Changes safety rules 1 and
   4; each changes in the task that makes its new text true (§4, §8).
+- **Amended:** §8 by
+  [#241](https://github.com/callstackincubator/simlock/issues/241), before
+  it was implemented, on the maintainer's decision: a foreign device counts
+  as a user when the driver says it is one, and never-used iOS simulators do
+  not.
 - **Depends on:** ADR 0003 (the contract), ADR 0005 (the gateway), ADR 0008
   (the catalog).
 
@@ -212,12 +217,22 @@ Counting foreign devices is the only place a driver looks at devices that
 are not Simlock's: the platform's default device set on iOS, the user's own
 AVD home on Android. It reads them and never writes there.
 
+A foreign device counts as a user when the driver says it is one. On Android
+that is every AVD in the user's AVD home. On iOS it is a simulator in the
+default set that has been used at least once: when a runtime install ends,
+macOS creates a batch of unused simulators for it by itself, and counting
+them would make every runtime Simlock installs unremovable ([#241](https://github.com/callstackincubator/simlock/issues/241)).
+One driver function decides this for the listing and the removal alike.
+The unused simulators are left in place: removing the runtime makes them
+unavailable, and the result reports how many there are and how to clear
+them. Simlock deletes none of them.
+
 `component.remove` is an admin operation. It removes a component only when
 all of these hold:
 
 - it is Simlock's (§5);
 - no device Simlock can see uses it: none of its own in any state but
-  `deleted`, and no foreign one, booted or not;
+  `deleted`, and no foreign one the driver counts as a user, running or not;
 - no install is running or waiting on that platform.
 
 The check and the removal cannot be split by a new Simlock device. The installer
@@ -228,8 +243,8 @@ device created after the driver's last count is not seen.
 
 The driver gains `removeComponent(receipt)`. It proves the receipt again,
 counts foreign devices again, removes, and verifies. When something stays on
-disk it says so: an iOS runtime's download can outlive `simctl runtime
-delete` (#79). Simlock asks `simctl` to delete the runtime and reports what
+disk it says so: an iOS runtime's unused simulators, now unavailable, and its
+download, which can outlive `simctl runtime delete` (#79). Simlock asks `simctl` to delete the runtime and reports what
 `simctl` left; it never deletes a file in the macOS asset store itself.
 
 A dry run does every check a removal does and removes nothing. The CLI confirms or requires

@@ -1390,9 +1390,11 @@ Entries are ordered by platform, then version, then variant.
   have not been deleted. Simlock does not track which variant a device uses,
   so two variants of one version show the same count.
 - `foreignDevices` counts the devices outside Simlock that use the
-  component: simulators in Xcode's default device set, or AVDs in your own
-  AVD home (`ANDROID_AVD_HOME`, or `~/.android/avd`). Simlock only reads
-  them.
+  component. On iOS that is the simulators in Xcode's default device set
+  that have been booted at least once; macOS creates a set of simulators for
+  every runtime it installs, and those do not count until someone uses one.
+  On Android it is every AVD in your own AVD home (`ANDROID_AVD_HOME`, or
+  `~/.android/avd`). Simlock only reads them.
 
 A platform whose tools cannot answer is left out, and the other platform is
 still listed. A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`; run the
@@ -1436,25 +1438,32 @@ every one of them and removes nothing.
   way, is never removed, and there is no flag to force it.
 - **No device uses it.** None of Simlock's own devices of that platform and
   version, in any state, leased ones included, and none of yours: a
-  simulator in Xcode's default device set or an AVD in your own AVD home,
-  booted or not. Otherwise it fails with `COMPONENT_IN_USE` (exit 12), and
-  the error says how many of each use it. Delete those devices first.
+  simulator in Xcode's default device set that has been booted at least
+  once, running now or not, or any AVD in your own AVD home. Otherwise it
+  fails with `COMPONENT_IN_USE` (exit 12), and the error says how many of
+  each use it. Delete those devices first. Simulators in the default device
+  set that were never booted do not block a removal.
 - **Nothing else is installing or removing on that platform.** Otherwise it
   fails with `COMPONENT_BUSY` (exit 11). Run it again once that ends. A
   `component install` or lease download that arrives while a removal runs
   waits for it, and no new Simlock device is created on the component being
   removed: a lease request for it fails with `RUNTIME_MISSING`.
 
-An iOS runtime is removed with `simctl runtime delete`. macOS can keep the
-runtime's download in its own asset store afterwards. When it does, the
-result carries `residue`, a sentence that says so and how to get the space
-back: remove the platform in Xcode's Settings, under Platforms. Simlock never
-deletes files there itself. An Android image is removed with
-`sdkmanager --uninstall`.
+An iOS runtime is removed with `simctl runtime delete`. Two things can stay
+behind, and the result's `residue` names each one that did:
+
+- The never-booted simulators of that runtime in Xcode's default device set.
+  They become unavailable, and Simlock does not delete them. `residue` says
+  how many there are; `xcrun simctl delete unavailable` clears them.
+- The runtime's download in macOS's own asset store. `residue` says so and
+  how to get the space back: remove the platform in Xcode's Settings, under
+  Platforms. Simlock never deletes files there itself.
 
 ```text
-{"platform":"ios","version":"26.4","outcome":"removed","sizeBytes":9103456789,"residue":"The download of iOS 26.4 (23E244) ..."}
+{"platform":"ios","version":"26.4","outcome":"removed","sizeBytes":9103456789,"residue":"11 never-used simulators in the default device set are now unavailable; ... The download of iOS 26.4 (23E244) ..."}
 ```
+
+An Android image is removed with `sdkmanager --uninstall`.
 
 Every removal emits `component.removed`, naming the component and who asked;
 see [EVENTS.md](EVENTS.md#components). Nothing removes a component on its

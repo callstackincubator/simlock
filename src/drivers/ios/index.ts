@@ -538,19 +538,25 @@ export class IosSimctlDriver implements Driver {
    * One entry per iOS runtime image `simctl runtime list -j` reports: its version, its size, its
    * build as the variant, and the receipt `findComponent` and `installComponent` build for the
    * runtime it provides. `foreignDevices` counts the devices in the machine's default device set
-   * whose runtime is the image's; that read is an unscoped `simctl list`, which mutates nothing.
+   * whose runtime is the image's and that have been used at least once (`devicesPerRuntime`);
+   * that read is an unscoped `simctl list`, which mutates nothing.
    * An image that reports no version names no component and is left out.
    */
   async listComponents(): Promise<readonly DriverComponent[]> {
-    return (await this.#listedImages()).map(({ image: _image, ...component }) => component);
+    return (await this.#listedImages()).map(
+      ({ image: _image, unusedDevices: _unused, ...component }) => component,
+    );
   }
 
   /**
    * Removes the runtime image whose receipt this is with `simctl runtime delete <image>` -- no
    * `--keep-asset`, so CoreSimulator is asked to let go of its download too -- through the steps
-   * every driver takes (`removeListedComponent`): refused when a device in the machine's default
-   * set uses it, verified gone afterwards. When the download is still in the macOS asset store
-   * afterwards (#79), `residue` says so and how to reclaim it; Simlock never deletes a file there.
+   * every driver takes (`removeListedComponent`): refused when a used device in the machine's
+   * default set has its runtime, verified gone afterwards. Never-used default-set devices of the
+   * runtime, counted in the listing taken before the delete, do not block it; they become
+   * unavailable and stay where they are, and `residue` says how many and how to clear them. When
+   * the download is still in the macOS asset store afterwards (#79), `residue` says that too.
+   * Nothing is written to the default set: Simlock never deletes a simulator or a file there.
    */
   async removeComponent(
     receipt: ComponentReceipt,
@@ -560,9 +566,13 @@ export class IosSimctlDriver implements Driver {
       list: () => this.#listedImages(),
       platform: this.platform,
       receipt,
-      remove: async ({ image, version }) => {
+      remove: async ({ image, unusedDevices, version }) => {
         await this.#deleteRuntimeImage(image.identifier, options.signal);
-        return this.#downloadResidue(image, version);
+        const sentences = [
+          unavailableDevicesResidue(unusedDevices),
+          (await this.#downloadResidue(image, version)).residue,
+        ].filter((sentence) => sentence !== undefined);
+        return sentences.length === 0 ? {} : { residue: sentences.join(". ") };
       },
     });
   }
@@ -615,35 +625,46 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
-  /** `listComponents`' entries, each with the runtime image it describes. */
-  async #listedImages(): Promise<(DriverComponent & { readonly image: RuntimeImage })[]> {
+  /**
+   * `listComponents`' entries, each with the runtime image it describes and the number of its
+   * default-set devices that were never used (`devicesPerRuntime`).
+   */
+  async #listedImages(): Promise<ListedImage[]> {
     const [images, defaultSet] = await Promise.all([
       this.#loadRuntimeImages(),
       this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS),
     ]);
-    let foreign: ReadonlyMap<string, number>;
+    let foreign: ReadonlyMap<string, DefaultSetDevices>;
     try {
       foreign = devicesPerRuntime(JSON.parse(defaultSet.stdout) as unknown);
     } catch (error: unknown) {
       if (error instanceof DriverCrashError) throw error;
       throw new DriverCrashError(`Could not parse simctl device list: ${errorMessage(error)}`);
     }
-    return images
-      .filter(isIosImage)
-      .flatMap((image): (DriverComponent & { readonly image: RuntimeImage })[] =>
-        image.version === undefined
-          ? []
-          : [
-              {
-                foreignDevices: foreign.get(image.runtimeIdentifier) ?? 0,
-                image,
-                receipt: imageReceipt(image),
-                version: image.version,
-                ...(image.build === undefined ? {} : { variant: image.build }),
-                ...(image.sizeBytes === undefined ? {} : { sizeBytes: image.sizeBytes }),
-              },
-            ],
-      );
+    return images.filter(isIosImage).flatMap((image): ListedImage[] =>
+      image.version === undefined
+        ? []
+        : [
+            {
+              foreignDevices: foreign.get(image.runtimeIdentifier)?.used ?? 0,
+              image,
+              // Another image of the same runtime keeps its simulators available after this
+              // one goes, so only the runtime's last image has unused devices to report.
+              unusedDevices: images.some(
+                (other) =>
+                  other !== image &&
+                  isIosImage(other) &&
+                  other.runtimeIdentifier === image.runtimeIdentifier,
+              )
+                ? 0
+                : (foreign.get(image.runtimeIdentifier)?.unused ?? 0),
+              receipt: imageReceipt(image),
+              version: image.version,
+              ...(image.build === undefined ? {} : { variant: image.build }),
+              ...(image.sizeBytes === undefined ? {} : { sizeBytes: image.sizeBytes }),
+            },
+          ],
+    );
   }
 
   /** The receipt of every runtime installed right now, before an installer run. */
@@ -2074,19 +2095,58 @@ function isIosImage(image: RuntimeImage): boolean {
   return image.platformIdentifier === IOS_SIMULATOR_PLATFORM;
 }
 
+/** One `listComponents` entry with what `removeComponent` needs beyond it. */
+type ListedImage = DriverComponent & {
+  readonly image: RuntimeImage;
+  readonly unusedDevices: number;
+};
+
 /**
- * How many devices a `simctl list -j devices` answer holds under each runtime: the answer is
- * keyed by runtime identifier, with one array of devices under each.
+ * The `residue` sentence for the never-used default-set simulators a runtime removal leaves
+ * behind, or nothing when there were none. Simlock does not delete them (safety rule 1).
  */
-function devicesPerRuntime(value: unknown): ReadonlyMap<string, number> {
+function unavailableDevicesResidue(unused: number): string | undefined {
+  if (unused === 0) return undefined;
+  const subject =
+    unused === 1
+      ? "1 never-used simulator in the default device set is"
+      : `${String(unused)} never-used simulators in the default device set are`;
+  return (
+    `${subject} now unavailable; Simlock does not delete simulators there -- ` +
+    "`xcrun simctl delete unavailable` clears them"
+  );
+}
+
+/** The default-set devices of one runtime, split by whether each has been used. */
+interface DefaultSetDevices {
+  /** Used at least once: these count as users of the runtime (`foreignDevices`). */
+  readonly used: number;
+  /** Never used: macOS created them on its own, and they do not block a removal. */
+  readonly unused: number;
+}
+
+/**
+ * Counts the default set's devices per runtime identifier: a `simctl list -j devices` answer is
+ * keyed by runtime identifier, with one array of devices under each. This is the one place that decides
+ * which of them use a runtime, for listing and for removal alike: a device counts when its
+ * `simctl list -j devices` entry carries `lastUsedAt`, which only a device that has been booted
+ * has; an entry that is not an object counts as used, so an unreadable entry never unblocks a
+ * removal. When a runtime install ends, CoreSimulator creates a batch of simulators for it in the
+ * default set by itself; those carry no `lastUsedAt`, and counting them would make every runtime
+ * Simlock installs unremovable.
+ */
+function devicesPerRuntime(value: unknown): ReadonlyMap<string, DefaultSetDevices> {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");
   }
   return new Map(
-    Object.entries(value.devices).map(([runtime, devices]) => [
-      runtime,
-      Array.isArray(devices) ? devices.length : 0,
-    ]),
+    Object.entries(value.devices).map(([runtime, devices]): [string, DefaultSetDevices] => {
+      const entries: readonly unknown[] = Array.isArray(devices) ? devices : [];
+      const used = entries.filter(
+        (device) => !isRecord(device) || device.lastUsedAt !== undefined,
+      ).length;
+      return [runtime, { unused: entries.length - used, used }];
+    }),
   );
 }
 

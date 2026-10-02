@@ -364,6 +364,12 @@ build, its version) is still there, the result and `component.removed` carry
 way to reclaim it. The removal itself succeeded either way, and Simlock still
 never deletes a file in the store (ADR 0010 §8).
 
+**Measured:** on Xcode 26.4.1 (macOS 26.6.1), on 2026-10-02, `simctl runtime
+delete` of the iOS 18.6 runtime, without `--keep-asset`, unregistered it — it
+left `simctl runtime list` — and left its download in the store: the 8.9 GB
+asset was still there two minutes after the delete. So `residue` is the
+expected result of an iOS removal on that Xcode, not an edge case.
+
 **The knob:** `downloads.policy` decides whether the host downloads runtimes
 at all; short of that, the reclaim is manual and periodic, driven by what
 `doctor` and `component remove` report.
@@ -373,10 +379,18 @@ at all; short of that, the reclaim is manual and periodic, driven by what
 `simlock component remove` refuses while a device uses the component: every
 device in this instance's registry, in any state but `deleted` (and every
 device being provisioned that has no record yet), plus the devices the driver
-counts outside Simlock — simulators in the machine's default device set,
-AVDs in the user's own AVD home.
+counts outside Simlock — simulators in the machine's default device set
+that have been used at least once, AVDs in the user's own AVD home.
 
-**The pitfall:** two kinds of device are not counted.
+**The pitfall:** three kinds of device are not counted.
+
+- A **never-used simulator in the default device set** — one with no
+  `lastUsedAt` in `simctl list -j devices`. macOS creates about eleven of
+  them for every runtime it installs, so counting them would make every
+  runtime unremovable (#241). A simulator the user created by hand and has
+  not booted yet looks the same and is not counted either. The removal makes
+  it unavailable; Simlock does not delete it, and `residue` says how many
+  there are and that `xcrun simctl delete unavailable` clears them.
 
 - A **second Simlock instance** on the same machine keeps its devices in its
   own root, which this instance cannot see and must not read. Removing a
@@ -386,13 +400,17 @@ AVDs in the user's own AVD home.
   once in the removal's checks and once more in the driver, just before the
   platform's own removal. A simulator or AVD the user creates between that
   count and the end of `simctl runtime delete` / `sdkmanager --uninstall` is
-  not seen. A new *Simlock* device cannot slip in the same way: the removal
+  not seen, and neither is a never-used simulator the user boots for the
+  first time in that window. A new *Simlock* device cannot slip in the same way: the removal
   marks the component inside the decision gate, and `DeviceProvisioner`
   refuses every device on a marked component until the removal settles.
 
-**Why it is accepted:** both need knowledge Simlock does not have without
-reaching outside what it owns. The ADR accepts them (Consequences, and §8's
-"a foreign device created after the driver's last count is not seen"), and
+**Why it is accepted:** the second and third need knowledge Simlock does not
+have without reaching outside what it owns, and the first is the only rule
+under which a runtime Simlock installed can be removed at all; a never-used
+simulator holds no user data, and becoming unavailable loses nothing. The ADR
+accepts them (Consequences, and §8's rule on unused simulators and "a
+foreign device created after the driver's last count is not seen"), and
 removal is never automatic: an operator runs it, after reading
 `simlock component list`.
 

@@ -524,7 +524,9 @@ export interface InstalledComponent {
  * `findComponent` and `installComponent` use, so a listed component and the record of its install
  * compare equal with `sameReceipt`. `variant` is the driver's own words for what tells two
  * components of one version apart, carried unread. `sizeBytes` is absent when the driver could
- * not read it. `foreignDevices` counts the devices outside Simlock's root that use it.
+ * not read it. `foreignDevices` is the number of devices outside Simlock's root that count as
+ * users of it; the driver decides what counts as a user, and a removal is refused while it is
+ * above zero.
  */
 export interface DriverComponent extends InstalledComponent {
   readonly variant?: string;
@@ -543,8 +545,8 @@ export interface ComponentInstallResult extends InstalledComponent {
 
 /**
  * What one `removeComponent` freed and left. `sizeBytes` is the component's size as listed just
- * before it was removed, absent when the driver could not read it. `residue` is a sentence for
- * the operator when something stays on disk after the removal, and how to reclaim it.
+ * before it was removed, absent when the driver could not read it. `residue` is one sentence or
+ * more for the operator when something stays on disk after the removal, and how to reclaim it.
  */
 export interface ComponentRemoval {
   readonly sizeBytes?: number;

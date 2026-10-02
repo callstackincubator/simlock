@@ -103,8 +103,9 @@ emits it after the driver's `removeComponent` returned and the component record 
 from the registry (events rule 3); a dry run, a refusal (`COMPONENT_NOT_OWNED`,
 `COMPONENT_IN_USE`, `COMPONENT_BUSY`) and a driver failure emit nothing, and a failure keeps the
 record. `requesterId` is the admin session's principal, never a caller-supplied id (safety rule
-6). `residue` is the driver's sentence, carried unread: on iOS it names the asset-store download
-`simctl runtime delete` left behind (#79).
+6). `residue` is the driver's text, carried unread: on iOS it names the never-used default-set
+simulators the removal left unavailable and the asset-store download `simctl runtime delete`
+left behind (#79), each when there is one.
 
 ## System
 
