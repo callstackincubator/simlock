@@ -3179,7 +3179,7 @@ describe("IosSimctlDriver listComponents()", () => {
     };
   }
 
-  function imagesListed(images: readonly Image[]) {
+  function imagesListed(images: readonly Image[], state = "Ready") {
     const stdout = JSON.stringify(
       Object.fromEntries(
         images.map((entry) => [
@@ -3190,7 +3190,7 @@ describe("IosSimctlDriver listComponents()", () => {
             platformIdentifier: entry.platform ?? "com.apple.platform.iphonesimulator",
             runtimeIdentifier: entry.runtime,
             sizeBytes: entry.sizeBytes ?? 1_000,
-            state: "Ready",
+            state,
             version: entry.version,
           },
         ]),
@@ -3731,6 +3731,43 @@ describe("IosSimctlDriver listComponents()", () => {
       );
     });
 
+    it("answers the removal with its size and residue when simctl runtime list shows the image as Deleting after simctl runtime delete returns and drops it seconds later (#259)", async () => {
+      // As seen on Xcode 26.4.1: `simctl runtime delete` exits while `simctl runtime list`
+      // still lists the image, in state `Deleting`, for about eight seconds. The runner answers
+      // by the fake clock rather than by call order, so it does not dictate how a fix waits.
+      const clock = new FakeClock();
+      const deletingForMs = 8_000;
+      const runner = new ClockedSimctl259(clock, deletingForMs, {
+        defaultSet: defaultSetListed({ [target.runtime]: { unused: 2 } }),
+        deleted,
+        gone: imagesListed([]),
+        ready: imagesListed([target]),
+        deleting: imagesListed([target], "Deleting"),
+      });
+      const driver = await createDriver(runner, clock, await assetStore([]));
+
+      let settled = false;
+      const removal = driver
+        .removeComponent(receipt, { signal: signal() })
+        .catch((caught: unknown) => caught)
+        .finally(() => {
+          settled = true;
+        });
+      // Lets time pass in one-second steps, well inside the five-minute removal budget.
+      for (let second = 0; second < 30 && !settled; second += 1) {
+        await flushMicrotasks221();
+        clock.advance(1_000);
+      }
+
+      expect(await settledValue(removal)).toEqual({
+        residue:
+          "2 never-used simulators in the default device set are now unavailable; Simlock does " +
+          "not delete simulators there -- `xcrun simctl delete unavailable` clears them",
+        sizeBytes: 7_000_000_000,
+      });
+      expect(runner.deletes).toBe(1);
+    });
+
     it("ends simctl runtime delete after five minutes, SIGTERM then SIGKILL, and answers only once it has exited", async () => {
       // Ignores SIGTERM: only the SIGKILL ten seconds later ends it.
       const stubborn = { hangs: true, ignoresSigterm: true, match: deleteInvocation };
@@ -3787,6 +3824,58 @@ describe("IosSimctlDriver listComponents()", () => {
     });
   });
 });
+
+type ScriptedStep259 = ConstructorParameters<typeof ScriptedProcessRunner>[0][number];
+
+/**
+ * A scripted `simctl` that answers by state rather than by call order (#259): `simctl runtime
+ * list -j` answers `ready` until `simctl runtime delete` has run, then `deleting` until
+ * `deletingForMs` of fake-clock time has passed since, then `gone`. The default set's listing
+ * always answers `defaultSet`. Every call is recorded in `calls`, as the scripted runner does.
+ */
+class ClockedSimctl259 extends ScriptedProcessRunner {
+  deletes = 0;
+  #deletedAt: number | undefined;
+
+  constructor(
+    private readonly clock: FakeClock,
+    private readonly deletingForMs: number,
+    private readonly steps: {
+      readonly ready: ScriptedStep259;
+      readonly deleting: ScriptedStep259;
+      readonly gone: ScriptedStep259;
+      readonly deleted: ScriptedStep259;
+      readonly defaultSet: ScriptedStep259;
+    },
+  ) {
+    super([]);
+  }
+
+  override spawn(...call: Parameters<ScriptedProcessRunner["spawn"]>) {
+    const [command, args] = call;
+    const argv = args.join(" ");
+    let step: ScriptedStep259;
+    if (argv.endsWith("runtime delete IMG-26.4-23E244")) {
+      this.deletes += 1;
+      this.#deletedAt = this.clock.now();
+      step = this.steps.deleted;
+    } else if (argv.endsWith("runtime list -j")) {
+      step =
+        this.#deletedAt === undefined
+          ? this.steps.ready
+          : this.clock.now() - this.#deletedAt < this.deletingForMs
+            ? this.steps.deleting
+            : this.steps.gone;
+    } else if (argv === "simctl list -j devices") {
+      step = this.steps.defaultSet;
+    } else {
+      throw new Error(`Unexpected process invocation: ${command} ${argv}`);
+    }
+    const handle = new ScriptedProcessRunner([step]).spawn(...call);
+    this.calls.push({ args: [...args], command, options: call[2] ?? {} });
+    return handle;
+  }
+}
 
 /** Lets queued continuations run, so a test can see that something has not happened yet. */
 async function flushMicrotasks221(): Promise<void> {
