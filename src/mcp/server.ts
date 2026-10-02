@@ -64,7 +64,8 @@ function leaseProgressParams(progress: LeaseProgressNotice): {
       ? { message: `Downloading ${progress.component}`, progress: base }
       : {
           message: `Downloading ${progress.component} (${percent}%)`,
-          progress: base + Math.min(100, Math.max(0, percent)) * 10,
+          // The contract bounds `percent` to a whole number from 0 to 100.
+          progress: base + percent * 10,
         };
   }
   const etaSeconds = Math.max(0, Math.ceil(progress.etaMs / 1_000));

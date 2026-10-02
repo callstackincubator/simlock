@@ -556,6 +556,33 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     ]);
   });
 
+  it("sends a driver's percentage outside 0 to 100 as the nearest bound, and one that is not a number as no percent", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: [],
+      clock,
+      installProgress: [10, Number.NaN, -5, 150],
+      platform: "ios",
+    });
+    const harness = await createHarness({ drivers: [driver] });
+    const progress: Progress[] = [];
+
+    await harness.coordinator.request(request, {
+      allowDownload: true,
+      onProgress: (report) => progress.push(report),
+      ownerId: "a",
+      requesterId: "a",
+    });
+
+    expect(downloading(progress)).toEqual([
+      { component: "26.5", stage: "downloading", waiting: false },
+      { component: "26.5", percent: 10, stage: "downloading", waiting: false },
+      { component: "26.5", stage: "downloading", waiting: false },
+      { component: "26.5", percent: 0, stage: "downloading", waiting: false },
+      { component: "26.5", percent: 100, stage: "downloading", waiting: false },
+    ]);
+  });
+
   it("sends no downloading stage to a request whose runtime is installed", async () => {
     const harness = await createHarness();
     const progress: Progress[] = [];

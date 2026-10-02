@@ -1399,7 +1399,7 @@ describe("Dispatcher: component.install", () => {
     ]);
   });
 
-  it("tells a caller that joins an install already running its latest progress at once", async () => {
+  it("tells a caller that joins an install already running its latest progress while the install is still running", async () => {
     const { dispatcher, driver } = await buildDispatcher({
       driverOptions: { installProgress: [41] },
     });

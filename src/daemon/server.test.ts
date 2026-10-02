@@ -2105,6 +2105,33 @@ describe("DaemonServer download policy", () => {
     await client.close();
   });
 
+  it("still answers a lease request whose download names a component past the progress push's bound, sending no downloading push for it", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ clock, driver });
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+    // The fake names the requested version as the component: 65 characters, one past the bound.
+    const osVersion = "x".repeat(65);
+
+    const grant = await client.request("lease.request", {
+      allowDownload: true,
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion,
+      platform: "ios",
+    });
+
+    expect(grant.ok, JSON.stringify(grant.error)).toBe(true);
+    const stages = client
+      .frames()
+      .filter((frame) => frame.push === "progress")
+      .map((frame) => (frame.payload as { progress: { stage: string } }).progress.stage);
+    expect(stages).toContain("provisioning");
+    expect(stages).not.toContain("downloading");
+    await client.close();
+  });
+
   it("withholds download permission under the never policy even when the request asks for it", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });

@@ -828,10 +828,7 @@ function downloadingProgress(
       };
 }
 
+/** Both reports are for the one component a `#resolveOrInstall` call downloads. */
 function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
-  return (
-    left.component === right.component &&
-    left.waiting === right.waiting &&
-    left.percent === right.percent
-  );
+  return left.waiting === right.waiting && left.percent === right.percent;
 }

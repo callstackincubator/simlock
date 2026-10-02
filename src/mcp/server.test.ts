@@ -304,9 +304,11 @@ describe("MCP server (smoke)", () => {
       onProgress!({ queuePosition: 2, stage: "queued" });
       onProgress!({ component: "26.4", stage: "downloading", waiting: true });
       onProgress!({ component: "26.4", stage: "downloading", waiting: false });
-      onProgress!({ component: "26.4", percent: 41, stage: "downloading", waiting: false });
-      onProgress!({ etaMs: 60_000, stage: "provisioning" });
-      onProgress!({ etaMs: 4_000, stage: "booting" });
+      // Each stage at its highest value, then the next at its lowest: a stage whose base did not
+      // sit above the one before would land at or under it, and be lifted by one.
+      onProgress!({ component: "26.4", percent: 100, stage: "downloading", waiting: false });
+      onProgress!({ etaMs: 0, stage: "provisioning" });
+      onProgress!({ etaMs: 600_000, stage: "booting" });
       await waitFor(() => progressEvents.length === 6);
 
       expect(progressEvents).toEqual([
@@ -315,12 +317,13 @@ describe("MCP server (smoke)", () => {
           message: "Waiting for another download before downloading 26.4",
         }),
         expect.objectContaining({ message: "Downloading 26.4" }),
-        expect.objectContaining({ message: "Downloading 26.4 (41%)" }),
+        expect.objectContaining({ message: "Downloading 26.4 (100%)" }),
         expect.objectContaining({ message: expect.stringMatching(/^Provisioning device/) }),
         expect.objectContaining({ message: expect.stringMatching(/^Booting device/) }),
       ]);
       const values = progressEvents.map((event) => (event as { progress: number }).progress);
-      const [queued, waiting, started, percent, provisioning] = values as [
+      const [queued, waiting, started, percent, provisioning, booting] = values as [
+        number,
         number,
         number,
         number,
@@ -332,6 +335,7 @@ describe("MCP server (smoke)", () => {
       expect(waiting - queued).toBeGreaterThan(1);
       expect(percent - started).toBeGreaterThan(1);
       expect(provisioning - percent).toBeGreaterThan(1);
+      expect(booting - provisioning).toBeGreaterThan(1);
       expect(values).toEqual([...values].sort((a, b) => a - b));
       expect(new Set(values).size).toBe(values.length);
 
