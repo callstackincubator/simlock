@@ -674,7 +674,9 @@ export class IosSimctlDriver implements Driver {
     );
     if (left.length === 0) return {};
     const label = image.build === undefined ? version : `${version} (${image.build})`;
-    return { residue: leftoverDownloadsSentence([label], await this.#assetsSize(left)) };
+    return {
+      residue: leftoverDownloadsSentence([label], left.length, await this.#assetsSize(left)),
+    };
   }
 
   /**
@@ -1374,7 +1376,11 @@ export class IosSimctlDriver implements Driver {
     return [
       {
         code: "runtime-cache-unreclaimable",
-        message: leftoverDownloadsSentence(described, await this.#assetsSize(orphans)),
+        message: leftoverDownloadsSentence(
+          described,
+          orphans.length,
+          await this.#assetsSize(orphans),
+        ),
       },
     ];
   }
@@ -2179,25 +2185,30 @@ type ListedImage = DriverComponent & {
 
 /**
  * The one sentence that names runtime downloads left in the macOS asset store, for a removal's
- * `residue` and for `doctor`'s `runtime-cache-unreclaimable` advisory alike: which runtimes,
- * how much space their downloads take as measured (`sizeBytes`, left out when it could not be
- * read), and the one supported way to reclaim it. Simlock never deletes a file there.
+ * `residue` and for `doctor`'s `runtime-cache-unreclaimable` advisory alike: which runtimes
+ * (`labels`), how much space their `bundles` take together as measured (`sizeBytes`, left out
+ * when it could not be read), and the one supported way to reclaim it. Two bundles can hold one
+ * runtime, so the downloads are counted apart from the runtimes. Simlock never deletes a file
+ * there.
  */
 function leftoverDownloadsSentence(
   labels: readonly string[],
+  bundles: number,
   sizeBytes: number | undefined,
 ): string {
-  const plural = labels.length > 1;
+  const runtimes = labels.length > 1;
+  const downloads = bundles > 1;
   const size =
     sizeBytes === undefined
       ? ""
-      : ` (${(sizeBytes / 1024 ** 3).toFixed(1)} GiB${plural ? " in all" : ""})`;
+      : ` (${(sizeBytes / 1024 ** 3).toFixed(1)} GiB${downloads ? " in all" : ""})`;
   return (
-    `iOS ${labels.join(", ")} ${plural ? "are" : "is"} no longer installed, but ` +
-    `${plural ? "their downloads" : "its download"}${size} ${plural ? "are" : "is"} still in ` +
-    `${IOS_RUNTIME_ASSET_ROOT}; \`simctl runtime delete\` ` +
-    `does not reclaim ${plural ? "them" : "it"} and Simlock does not delete files there -- ` +
-    "remove the platform in Xcode's Settings -> Platforms to get the space back"
+    `iOS ${labels.join(", ")} ${runtimes ? "are" : "is"} no longer installed, but ` +
+    `${runtimes ? "their" : "its"} ${downloads ? "downloads" : "download"}${size} ` +
+    `${downloads ? "are" : "is"} still in ${IOS_RUNTIME_ASSET_ROOT}; ` +
+    `\`simctl runtime delete\` does not reclaim ${downloads ? "them" : "it"} and Simlock does ` +
+    "not delete files there -- remove the platform in Xcode's Settings -> Platforms to get " +
+    "the space back"
   );
 }
 

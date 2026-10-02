@@ -3097,11 +3097,12 @@ describe("IosSimctlDriver", () => {
         expect(message.indexOf("9.3")).toBeLessThan(message.indexOf("18.6"));
       });
 
-      it("states the same measured size of a leftover download as a removal's residue would", async () => {
+      it("states no size in the advisory when a leftover download's size cannot be read", async () => {
         const bundle = `${IOS_RUNTIME_ASSET_ROOT}/c3.asset`;
-        const filesystem = new SizedFilesystem(new Map([[bundle, 8_917_036 * 1024]]));
-        await filesystem.mkdirp(bundle);
+        const filesystem = new MemoryFilesystem();
+        await filesystem.mkdirp(`${bundle}/AssetData`);
         await filesystem.writeFileAtomic(`${bundle}/Info.plist`, assetInfoPlist("18.6", "22G86"));
+        filesystem.defineFailure(`${bundle}/AssetData`, "EACCES");
         const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
 
         const advisories = await driver.advisories();
@@ -3110,10 +3111,35 @@ describe("IosSimctlDriver", () => {
           {
             code: "runtime-cache-unreclaimable",
             message: expect.stringContaining(
-              "iOS 18.6 (22G86) is no longer installed, but its download (8.5 GiB) is still in",
+              "iOS 18.6 (22G86) is no longer installed, but its download is still in",
             ),
           },
         ]);
+        expect(advisories[0]?.message).not.toContain("GiB");
+      });
+
+      it("counts two downloads of one build as downloads of one runtime, with their total size", async () => {
+        const filesystem = new SizedFilesystem(
+          new Map([
+            [`${IOS_RUNTIME_ASSET_ROOT}/c3.asset`, 8_917_036 * 1024],
+            [`${IOS_RUNTIME_ASSET_ROOT}/c4.asset`, 8_917_036 * 1024],
+          ]),
+        );
+        for (const bundle of ["c3.asset", "c4.asset"]) {
+          await filesystem.mkdirp(`${IOS_RUNTIME_ASSET_ROOT}/${bundle}`);
+          await filesystem.writeFileAtomic(
+            `${IOS_RUNTIME_ASSET_ROOT}/${bundle}/Info.plist`,
+            assetInfoPlist("18.6", "22G86"),
+          );
+        }
+        const driver = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+
+        const message = (await driver.advisories())[0]?.message ?? "";
+
+        expect(message).toContain(
+          "iOS 18.6 (22G86) is no longer installed, but its downloads (17.0 GiB in all) are " +
+            "still in",
+        );
       });
 
       it("states the measured sizes of several leftover downloads as one total", async () => {
@@ -3620,6 +3646,36 @@ describe("IosSimctlDriver listComponents()", () => {
       const removal = await driver.removeComponent(receipt, { signal: signal() });
 
       expect(removal.residue).toContain("its download (8.5 GiB) is still in");
+    });
+
+    it("states the same measured size in the doctor advisory as in the residue of the removal", async () => {
+      // One asset store, read by a driver removing iOS 26.4 and by one asked for its advisories
+      // afterwards, whose catalog does not install 26.4.
+      const filesystem = new SizedFilesystem(
+        new Map([[`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`, 8_917_036 * 1024]]),
+      );
+      await addAssets(filesystem, [["26.4", "23E244"]]);
+      const remover = await createDriver(
+        new ScriptedProcessRunner([
+          imagesListed([target]),
+          defaultSetListed({}),
+          deleted,
+          imagesListed([]),
+          imagesListed([]),
+          defaultSetListed({}),
+        ]),
+        new FakeClock(),
+        filesystem,
+      );
+      const residue = (await remover.removeComponent(receipt, { signal: signal() })).residue;
+      const doctor = await createDriver(scriptedListRunner(), new FakeClock(), filesystem);
+      const advisory = (await doctor.advisories()).find(
+        (candidate) => candidate.code === "runtime-cache-unreclaimable",
+      );
+
+      const sizeIn = (text: string | undefined) => /its download \(([^)]+)\)/.exec(text ?? "")?.[1];
+      expect(sizeIn(residue)).toBe("8.5 GiB");
+      expect(sizeIn(advisory?.message)).toBe(sizeIn(residue));
     });
 
     it("states no size in residue when the download's size cannot be read", async () => {

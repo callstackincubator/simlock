@@ -1462,8 +1462,8 @@ behind, and the result's `residue` names each one that did:
   They become unavailable, and Simlock does not delete them. `residue` says
   how many there are; `xcrun simctl delete unavailable` clears them.
 - The runtime's download in macOS's own asset store, about 8.5 GiB for an
-  iOS 18 runtime. `residue` says so, with the size the download measures on
-  disk (or no size when it cannot be read), and how to get the space back:
+  iOS 18 runtime. `residue` says so, with the download's measured size (or
+  no size when it cannot be read), and how to get the space back:
   remove the platform in Xcode's Settings, under Platforms. Simlock never
   deletes files there itself.
 
@@ -1567,8 +1567,8 @@ iOS 18 runtime — stays in the operating system's own asset store, where it
 keeps spending the same free space the download preflight measures, and
 where nothing Simlock runs can reclaim it. On a host that has been leasing with downloads
 enabled for a while, several of these can accumulate unnoticed. The finding
-names each one, the space their downloads measure on disk (or no size when
-it cannot be read), and the one supported way to get it back: remove the
+names each one, the measured size of their downloads (or no size when it
+cannot be read), and the one supported way to get the space back: remove the
 platform in Xcode's Settings → Platforms. Advisory only, like the finding
 above — reclaiming this space is outside anything `--fix` may do.
 
