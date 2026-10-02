@@ -222,6 +222,13 @@ interface DeviceState {
   handle: ProcessHandle | undefined;
   imageIdentity: string;
   needsWipe: boolean;
+  /**
+   * The console port this process reserved for the device: taken at its first `prepare` boot
+   * here, kept across its stops so no other device is handed the port its record names while
+   * this process runs, and given back by `destroy`. Nothing persists it, so after a restart a
+   * device holds none until it boots again (#52). A recovery boot reserves nothing.
+   */
+  port: number | undefined;
   snapshotExpected: boolean;
   /**
    * Set when the last readiness wait found another AVD's emulator answering on this device's
@@ -809,23 +816,24 @@ export class AndroidDriver implements Driver {
     }
 
     const configHash = await this.#configHash(avdName, image);
-    const port = await this.#portAllocator.allocate(this.#env(), this.#tcpProbe);
+    // No console port yet: `makeReady` reserves one at the device's first boot.
     const driverData: AndroidDriverData = {
       avdName,
       configHash,
       imageIdentity: `${image.path}@${image.version}`,
-      port,
-      serial: serialFor(port),
+      port: 0,
+      serial: "",
     };
     this.#devices.set(avdName, {
       baselineCaptured: false,
       handle: undefined,
       imageIdentity: `${image.path}@${image.version}`,
       needsWipe: false,
+      port: undefined,
       snapshotExpected: false,
     });
 
-    return { address: serialFor(port), deviceId: avdName, driverData };
+    return { address: "", deviceId: avdName, driverData };
   }
 
   /**
@@ -848,13 +856,14 @@ export class AndroidDriver implements Driver {
     return this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
       if (state.handle !== undefined) {
-        await this.#waitForReadiness(data, this.#clock.now());
+        const running = this.#onReservedPort(data, state);
+        await this.#waitForReadiness(running, this.#clock.now());
         // The device was already running (or booting) under this driver instance -- reclaim
         // never touched it, so its mark can't have gone stale. Re-mark anyway: this is the
         // single readiness transition that lets a caller re-lease an already-ready device
         // without ever seeing a moment where "ready" and "marked" disagree.
-        await this.#writeMark(data);
-        return { address: data.serial, deviceId: device.deviceId, driverData: data };
+        await this.#writeMark(running);
+        return { address: running.serial, deviceId: device.deviceId, driverData: running };
       }
 
       if (options?.purpose === "recover") {
@@ -864,20 +873,42 @@ export class AndroidDriver implements Driver {
       }
 
       await this.#reconcileBaseline(data, state);
-      await this.#startEmulator(data, state, prepareLaunchArgs(state), state.snapshotExpected);
+      const booted = await this.#withReservedPort(data, state);
+      await this.#startEmulator(booted, state, prepareLaunchArgs(state), state.snapshotExpected);
       state.needsWipe = false;
       state.snapshotExpected = false;
       if (!state.baselineCaptured) {
-        await this.#captureBaseline(data, state);
-        await this.#shutdown(data, state);
-        await this.#startEmulator(data, state, ["-snapshot", CLEAN_BASELINE], true);
+        await this.#captureBaseline(booted, state);
+        await this.#shutdown(booted, state);
+        await this.#startEmulator(booted, state, ["-snapshot", CLEAN_BASELINE], true);
       }
       // Covers all three boot paths above (wipe, snapshot restore, cold boot -- including the
       // baseline-capture restart) with a single call: whichever path ran, the device is ready
       // now and must be re-marked unconditionally.
-      await this.#writeMark(data);
-      return { address: data.serial, deviceId: device.deviceId, driverData: data };
+      await this.#writeMark(booted);
+      return { address: booted.serial, deviceId: device.deviceId, driverData: booted };
     });
+  }
+
+  /**
+   * The device's data on the console port this process reserved for it, taking one on its
+   * first `prepare` boot here. The port its record names is never booted on as such: after a
+   * restart nothing reserves it, so another device may have been handed it since (#52).
+   */
+  async #withReservedPort(data: AndroidDriverData, state: DeviceState): Promise<AndroidDriverData> {
+    state.port ??= await this.#portAllocator.allocate(this.#env(), this.#tcpProbe);
+    return this.#onReservedPort(data, state);
+  }
+
+  /**
+   * The device's data on the port this process reserved for it, if it has one. That port is
+   * the truth; the data a caller passes is only what the registry last committed, which a
+   * `makeReady` that failed after its boot never updated.
+   */
+  #onReservedPort(data: AndroidDriverData, state: DeviceState): AndroidDriverData {
+    return state.port === undefined
+      ? data
+      : { ...data, port: state.port, serial: serialFor(state.port) };
   }
 
   async reclaim(
@@ -948,12 +979,18 @@ export class AndroidDriver implements Driver {
   async destroy(device: DriverDevice): Promise<void> {
     const data = this.#dataFor(device);
     await this.#withDeviceLock(data.avdName, async () => {
-      if (data.port > 0) {
-        await this.#shutdown(data, this.#stateFor(data));
+      const state = this.#stateFor(data);
+      // Only an emulator this driver started can still be running here. After a restart the
+      // port a stopped device's record names may be another device's (#52), so it is never
+      // sent a kill.
+      if (state.handle !== undefined) {
+        await this.#shutdown(this.#onReservedPort(data, state), state);
       }
       await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
       this.#devices.delete(data.avdName);
-      this.#portAllocator.release(data.port);
+      if (state.port !== undefined) {
+        this.#portAllocator.release(state.port);
+      }
     });
   }
 
@@ -1889,7 +1926,8 @@ export class AndroidDriver implements Driver {
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    if (state.serialHeldByAnother !== true) {
+    // A device that has never booted has no console port, so no emulator to stop.
+    if (data.port > 0 && state.serialHeldByAnother !== true) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
         env: this.#env(),
       });
@@ -1966,6 +2004,7 @@ export class AndroidDriver implements Driver {
       handle: undefined,
       imageIdentity: data.imageIdentity ?? "",
       needsWipe: false,
+      port: undefined,
       snapshotExpected: false,
     };
     this.#devices.set(data.avdName, restored);
