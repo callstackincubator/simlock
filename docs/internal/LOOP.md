@@ -3,6 +3,9 @@
 Historical instructions for implementing a Simlock stage. Completed stage
 specifications have been removed from `docs/stages/`.
 
+Do not follow this loop for new work. [DELIVERY.md](DELIVERY.md) and the
+delivery rules in `docs/internal/agent-rules/delivery.md` replace it.
+
 ## Phase 0 — Orient
 
 1. Read `AGENTS.md`, all of `docs/internal/agent-rules/`, and `docs/internal/ARCHITECTURE.md`.
