@@ -197,6 +197,23 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([{ ...listInvocation, options: { timeoutMs: 30_000 } }]);
   });
 
+  it("refuses a request naming an image tag as an option iOS does not have", async () => {
+    const driver = await createDriver(scriptedListRunner());
+
+    await expect(
+      driver.resolveSpec({
+        imageTag: "google_apis",
+        model: "iPhone 16",
+        osVersion: "18.4",
+        platform: "ios",
+      }),
+    ).rejects.toMatchObject({
+      name: "UnsupportedRequestOptionError",
+      option: "imageTag",
+      platform: "ios",
+    });
+  });
+
   it("selects the newest installed iOS runtime by default", async () => {
     const driver = await createDriver(scriptedListRunner());
 

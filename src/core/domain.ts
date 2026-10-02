@@ -17,6 +17,13 @@ export interface DeviceSpec {
    * for as long as the device exists. The mode the device actually has is `DeviceRecord.mode`.
    */
   readonly mode?: "slim";
+  /**
+   * The image type the request named, as the driver's catalog lists it (`images[].tag`); absent
+   * when the request named none. Set only by a driver's `resolveSpec`, for a request that named
+   * it; `LeaseAcquisitionCoordinator` refuses a spec whose tag is not the request's. The core
+   * carries it and compares it in `sameSpec`, and never reads what it means.
+   */
+  readonly imageTag?: string;
 }
 
 /** The mode a spec plans: `"slim"` when it says so, `"full"` otherwise. */
@@ -24,13 +31,17 @@ export function specMode(spec: DeviceSpec): DeviceMode {
   return spec.mode ?? "full";
 }
 
-/** Spec identity as every selection path means it: same platform, model, OS version, and mode. */
+/**
+ * Spec identity as every selection path means it: same platform, model, OS version, mode, and
+ * image tag. A spec with no tag and a spec with one never match, so neither pool serves the other.
+ */
 export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
   return (
     left.platform === right.platform &&
     left.model === right.model &&
     left.osVersion === right.osVersion &&
-    specMode(left) === specMode(right)
+    specMode(left) === specMode(right) &&
+    left.imageTag === right.imageTag
   );
 }
 

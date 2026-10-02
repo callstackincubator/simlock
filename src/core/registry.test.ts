@@ -1073,6 +1073,21 @@ describe("Registry", () => {
       expect((await load()).snapshot.devices[0]?.spec).toEqual({ ...spec, mode: "slim" });
     });
 
+    it("loads a stored spec's image tag", async () => {
+      const { load } = await loadDevice({ ...spec, imageTag: "google_apis_playstore" });
+
+      expect((await load()).snapshot.devices[0]?.spec).toEqual({
+        ...spec,
+        imageTag: "google_apis_playstore",
+      });
+    });
+
+    it("fails the load on a stored spec.imageTag that is not a string", async () => {
+      const { load } = await loadDevice({ ...spec, imageTag: 7 });
+
+      await expect(load()).rejects.toThrow("Invalid device record in registry state");
+    });
+
     it.each(["full", "reduced"])("fails the load on a stored spec.mode of %s", async (mode) => {
       const { load } = await loadDevice({ ...spec, mode });
 

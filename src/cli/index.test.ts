@@ -3040,6 +3040,50 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     expect(capturedInput?.noWait).toBe(true);
   });
 
+  it("maps --image-tag onto the contract's imageTag input field, and sends none without it", async () => {
+    const inputs: Record<string, unknown>[] = [];
+    const client = fakeClient({
+      requestLease: (input) => {
+        inputs.push(input as unknown as Record<string, unknown>);
+        return Promise.resolve({
+          device: {
+            id: "dev_1",
+            driverDeviceId: "dev_1",
+            spec: { platform: "android", model: "Pixel 8", osVersion: "34" },
+            mode: "full",
+          },
+          environment: {},
+          lease: {
+            id: "lse_1",
+            deviceId: "dev_1",
+            requesterId: "test-requester",
+            ownerId: "test-requester",
+            grantedAt: 0,
+            lastRenewedAt: 0,
+            ttlMs: 60_000,
+            ttlDeadline: 60_000,
+          },
+          timing: {
+            estimatedProvisionMs: 0,
+            estimatedBootMs: 0,
+            estimatedReclaimMs: 0,
+            estimatedReadyMs: 0,
+          },
+        });
+      },
+    });
+    const lease = ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"];
+
+    await runCli(
+      [...lease, "--image-tag", "google_apis_playstore"],
+      outputCapture().environmentWith({ connectAdmin: async () => client }),
+    );
+    await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
+
+    expect(inputs[0]?.imageTag).toBe("google_apis_playstore");
+    expect(inputs[1]).not.toHaveProperty("imageTag");
+  });
+
   it("fails the removed full flag as an unknown option, before connecting", async () => {
     const output = outputCapture();
     let connected = false;

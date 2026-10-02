@@ -37,6 +37,7 @@ import {
   UnknownLeaseError,
   UnknownModelError,
   UnknownPassthroughToolError,
+  UnsupportedRequestOptionError,
   ReplayedLeaseRequestError,
   type LeaseRequestFailure,
 } from "../core/index.js";
@@ -123,6 +124,11 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof UnknownModelError) {
     return "UNKNOWN_MODEL";
+  }
+  // A request option the platform's driver does not have: the request itself is wrong, and
+  // asking again unchanged can never succeed.
+  if (error instanceof UnsupportedRequestOptionError) {
+    return "BAD_REQUEST";
   }
   if (error instanceof InsufficientDiskSpaceError) {
     return "INSUFFICIENT_DISK_SPACE";

@@ -1165,9 +1165,14 @@ function isDeviceRequest(value: unknown): value is DeviceRequest {
     isObject(value) &&
     isPlatform(value.platform) &&
     typeof value.model === "string" &&
-    (value.osVersion === undefined || typeof value.osVersion === "string") &&
-    (value.mode === undefined || value.mode === "slim" || value.mode === "full")
+    isOptionalString(value.osVersion) &&
+    (value.mode === undefined || value.mode === "slim" || value.mode === "full") &&
+    isOptionalString(value.imageTag)
   );
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
 }
 
 /** A stored request written before ADR 0007 may carry `full`; it is dropped, not written back. */
@@ -1189,7 +1194,8 @@ function isDeviceSpec(value: unknown): value is DeviceSpec {
     isObject(value) &&
     isPlatform(value.platform) &&
     typeof value.model === "string" &&
-    typeof value.osVersion === "string"
+    typeof value.osVersion === "string" &&
+    isOptionalString(value.imageTag)
   );
 }
 

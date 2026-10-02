@@ -7,6 +7,7 @@ import {
   grantedDeviceSchema,
   hostFactsSchema,
   leaseGrantSchema,
+  leaseRequestRecordSchema,
   platformCatalogSchema,
   statusDeviceSchema,
 } from "./schemas.js";
@@ -220,6 +221,22 @@ describe("statusDeviceSchema's device projection", () => {
     expect(deviceRecordSchema.parse(device).spec).not.toHaveProperty("mode");
   });
 
+  it("shows a device spec's image tag in a grant, a status device, and a list.get record", () => {
+    const device = {
+      ...fullCoreShapedDevice(),
+      spec: {
+        platform: "android",
+        model: "Pixel 8",
+        osVersion: "34",
+        imageTag: "google_apis_playstore",
+      },
+    };
+
+    expect(grantedDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
+    expect(statusDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
+    expect(deviceRecordSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
+  });
+
   it("rejects a list.get device record without a mode, or with a mode other than slim or full", () => {
     const record = {
       id: "device-1",
@@ -303,5 +320,43 @@ describe("fitPlatformCatalog", () => {
     const fits = entry(["My Tablet"]);
 
     expect(fitPlatformCatalog(fits)).toEqual(fits);
+  });
+});
+
+describe("leaseRequestRecordSchema", () => {
+  it("keeps the image tag a stored request named", () => {
+    const record = leaseRequestRecordSchema.parse({
+      createdAt: 0,
+      id: "req_1",
+      ownerId: "agent",
+      request: { imageTag: "google_apis", model: "Pixel 8", platform: "android" },
+      requesterId: "agent",
+      state: "open",
+    });
+
+    expect(record.request.imageTag).toBe("google_apis");
+  });
+
+  it.each([
+    ["a character outside letters, digits, '_', '.' and '-'", "google apis"],
+    ["more than 64 characters", "a".repeat(65)],
+  ])("refuses a stored request or a device spec whose image tag has %s", (_label, imageTag) => {
+    const record = {
+      createdAt: 0,
+      id: "req_1",
+      ownerId: "agent",
+      request: { imageTag, model: "Pixel 8", platform: "android" },
+      requesterId: "agent",
+      state: "open",
+    };
+    const device = {
+      driverDeviceId: "emulator-5554",
+      id: "dev_1",
+      mode: "full",
+      spec: { imageTag, model: "Pixel 8", osVersion: "34", platform: "android" },
+    };
+
+    expect(leaseRequestRecordSchema.safeParse(record).success).toBe(false);
+    expect(grantedDeviceSchema.safeParse(device).success).toBe(false);
   });
 });

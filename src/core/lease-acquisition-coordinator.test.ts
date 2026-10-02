@@ -16,7 +16,13 @@ import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
 import { ComponentInstaller } from "./component-installer.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import { DiskSpaceGuard, type Driver, DriverCrashError, readyTransitionUpdate } from "./driver.js";
+import {
+  DiskSpaceGuard,
+  type Driver,
+  DriverCrashError,
+  readyTransitionUpdate,
+  UnsupportedRequestOptionError,
+} from "./driver.js";
 import { type DeviceMode, type DeviceSpec, type Platform, specMode } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { LeaseAcquisitionCoordinator, NoCapacityError } from "./lease-acquisition-coordinator.js";
@@ -1468,4 +1474,165 @@ describe("LeaseAcquisitionCoordinator stored requests", () => {
     ).toMatchObject([{ requestId: stored?.id, requester: "agent" }]);
     expect(harness.registry.leaseRequests()[0]).not.toHaveProperty("idempotencyKey");
   });
+});
+
+describe("LeaseAcquisitionCoordinator: image tags", () => {
+  const android = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+  const playstore = { ...android, imageTag: "google_apis_playstore" } as const;
+  const owner = (id: string) => ({ ownerId: id, requesterId: id });
+
+  /** API 34 has a google_apis and a google_apis_playstore image; API 35 only google_apis. */
+  function taggedDriver(): FakeDriver {
+    return new FakeDriver({
+      availableOsVersions: ["34", "35"],
+      clock: new FakeClock(1_000),
+      images: [
+        { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+        { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
+        { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+      ],
+      platform: "android",
+    });
+  }
+
+  it("grants a request naming a tag a device whose spec carries that tag, and one naming none a spec without one", async () => {
+    const driver = taggedDriver();
+    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
+
+    const tagged = await harness.coordinator.request(playstore, owner("tagged"));
+    const untagged = await harness.coordinator.request(android, owner("untagged"));
+
+    expect(tagged.device.spec).toEqual(playstore);
+    expect(untagged.device.spec).toEqual(android);
+    const provisioned = driver.calls
+      .filter((call) => call.operation === "provision")
+      .map((call) => call.arguments[0]);
+    expect(provisioned).toEqual([playstore, android]);
+  });
+
+  it.each([
+    ["without allowDownload", false],
+    ["with allowDownload", true],
+  ])(
+    "fails a tag not installed for the API level with a RuntimeMissingError %s, and never asks the installer",
+    async (_label, allowDownload) => {
+      const asked: unknown[] = [];
+      const harness = await createHarness({
+        components: {
+          install: async (call) => {
+            asked.push(call);
+            return { outcome: "installed", version: "35" };
+          },
+        },
+        drivers: [taggedDriver()],
+      });
+
+      await expect(
+        harness.coordinator.request(
+          { ...playstore, osVersion: "35" },
+          { ...owner("agent"), allowDownload },
+        ),
+      ).rejects.toMatchObject({ downloadable: false, name: "RuntimeMissingError" });
+      expect(asked).toEqual([]);
+    },
+  );
+
+  it("does not give a request naming a tag an idle device of another tag", async () => {
+    const harness = await createHarness({ drivers: [taggedDriver()], maxDevices: 2 });
+    const other = await seedReady(harness, { ...android, imageTag: "google_apis" });
+
+    const granted = await harness.coordinator.request(playstore, owner("agent"));
+
+    expect(granted.device.id).not.toBe(other.id);
+    expect(granted.device.spec).toEqual(playstore);
+  });
+
+  it("does not give a request naming a tag an idle device with no tag", async () => {
+    const harness = await createHarness({ drivers: [taggedDriver()], maxDevices: 2 });
+    const untagged = await seedReady(harness, android);
+
+    const granted = await harness.coordinator.request(playstore, owner("agent"));
+
+    expect(granted.device.id).not.toBe(untagged.id);
+    expect(granted.device.spec).toEqual(playstore);
+  });
+
+  it("does not give a request naming no tag an idle device with a tag", async () => {
+    const harness = await createHarness({ drivers: [taggedDriver()], maxDevices: 2 });
+    const tagged = await seedReady(harness, playstore);
+
+    const granted = await harness.coordinator.request(android, owner("agent"));
+
+    expect(granted.device.id).not.toBe(tagged.id);
+    expect(granted.device.spec).toEqual(android);
+  });
+
+  it("gives a request naming a tag an idle device of that tag", async () => {
+    const harness = await createHarness({ drivers: [taggedDriver()], maxDevices: 2 });
+    const tagged = await seedReady(harness, playstore);
+
+    const granted = await harness.coordinator.request(playstore, owner("agent"));
+
+    expect(granted.device.id).toBe(tagged.id);
+  });
+
+  it("rejects a request whose driver refuses the image tag as unresolvable-spec, with the driver's error", async () => {
+    class NoTagsDriver extends FakeDriver {
+      override async resolveSpec(
+        ...args: Parameters<FakeDriver["resolveSpec"]>
+      ): Promise<DeviceSpec> {
+        if (args[0].imageTag !== undefined) {
+          throw new UnsupportedRequestOptionError(this.platform, "imageTag");
+        }
+        return super.resolveSpec(...args);
+      }
+    }
+    const driver = new NoTagsDriver({
+      availableOsVersions: ["26.5"],
+      clock: new FakeClock(1_000),
+      platform: "ios",
+    });
+    const harness = await createHarness({ drivers: [driver] });
+
+    await expect(
+      harness.coordinator.request({ ...request, imageTag: "google_apis" }, owner("agent")),
+    ).rejects.toBeInstanceOf(UnsupportedRequestOptionError);
+    expect(
+      harness.bus
+        .replay()
+        .filter((event) => event.event === "lease.rejected")
+        .map((event) => event.payload),
+    ).toEqual([
+      { reason: "unresolvable-spec", requestSpec: { ...request, imageTag: "google_apis" } },
+    ]);
+    expect(driver.calls.map((call) => call.operation)).not.toContain("provision");
+  });
+
+  it.each([
+    ["another tag than the one the request named", playstore, { imageTag: "default" }],
+    ["a tag for a request that named none", android, { imageTag: "google_apis" }],
+  ] as const)(
+    "refuses a spec the driver resolves with %s, and provisions nothing",
+    async (_label, asked, returned) => {
+      class WrongTagDriver extends FakeDriver {
+        override async resolveSpec(
+          ...args: Parameters<FakeDriver["resolveSpec"]>
+        ): Promise<DeviceSpec> {
+          return { ...(await super.resolveSpec(...args)), ...returned };
+        }
+      }
+      const driver = new WrongTagDriver({
+        availableOsVersions: ["34"],
+        clock: new FakeClock(1_000),
+        images: [{ abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" }],
+        platform: "android",
+      });
+      const harness = await createHarness({ drivers: [driver] });
+
+      await expect(harness.coordinator.request(asked, owner("agent"))).rejects.toThrow(
+        /resolved image tag/,
+      );
+      expect(driver.calls.map((call) => call.operation)).not.toContain("provision");
+    },
+  );
 });

@@ -44,7 +44,12 @@
  */
 import type { EventBus, EventMap } from "../bus/index.js";
 import type { LeaseGrant, LeaseRecord, SimlockAdminClient } from "../admin/index.js";
-import { isSimlockError, type AnySimlockError, type Platform } from "../contract/index.js";
+import {
+  isSimlockError,
+  requestedDevice,
+  type AnySimlockError,
+  type Platform,
+} from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import type { LeaseRequestFailure } from "../core/domain.js";
 import type { DeviceRequest } from "../core/driver.js";
@@ -804,12 +809,8 @@ export class FleetLeaseCoordinator {
       grant = await this.#withLeaseRequestTimeout(
         client.requestLease(
           {
-            platform: waiter.request.platform,
-            model,
-            ...(waiter.request.osVersion === undefined
-              ? {}
-              : { osVersion: waiter.request.osVersion }),
-            ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
+            // The request as it arrived, under the worker's own name for the model.
+            ...requestedDevice({ ...waiter.request, model }),
             requesterId: namespacedRequesterId,
             // ADR §27a (narrowed, round 3 review, H3): only the worker's own gateway-uplink
             // session may set `owner` -- and this RPC always travels over exactly that
@@ -1140,6 +1141,7 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     platform: waiter.request.platform as Platform,
     model: waiter.request.model,
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
+    ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
     allowDownload: false,
   };
 }

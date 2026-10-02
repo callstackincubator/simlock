@@ -938,6 +938,102 @@ describe("Dispatcher: error codes", () => {
   });
 });
 
+describe("Dispatcher: image tags", () => {
+  const androidImages: Partial<FakeDriverOptions> = {
+    availableOsVersions: ["34", "35"],
+    images: [
+      { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+      { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
+      { abi: "arm64-v8a", runtime: "35", tag: "google_apis" },
+    ],
+    platform: "android",
+  };
+
+  it("grants a request naming an installed tag a device whose spec shows the tag, and one naming none a spec without it", async () => {
+    // One dispatcher each: the test config's capacity holds one device.
+    const tagged = await (
+      await buildDispatcher({ driverOptions: androidImages })
+    ).dispatcher.dispatch(
+      "lease.request",
+      {
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+        requesterId: "tagged",
+      },
+      session(),
+    );
+    const untagged = await (
+      await buildDispatcher({ driverOptions: androidImages })
+    ).dispatcher.dispatch(
+      "lease.request",
+      { model: "Pixel 8", osVersion: "34", platform: "android", requesterId: "untagged" },
+      session(),
+    );
+
+    expect(tagged.device.spec).toEqual({
+      imageTag: "google_apis_playstore",
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    });
+    expect(untagged.device.spec).toEqual({
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    });
+  });
+
+  it("answers RUNTIME_MISSING for a tag not installed for the API level, even with allowDownload under downloads.policy 'always', and starts no install", async () => {
+    const asked: unknown[] = [];
+    const { dispatcher } = await buildDispatcher({
+      components: {
+        inProgress: () => [],
+        install: async (call) => {
+          asked.push(call);
+          return { outcome: "installed", version: "35" };
+        },
+        list: async () => [],
+      },
+      downloadsPolicy: "always",
+      driverOptions: androidImages,
+    });
+
+    const error = await dispatcher
+      .dispatch(
+        "lease.request",
+        {
+          allowDownload: true,
+          imageTag: "google_apis_playstore",
+          model: "Pixel 8",
+          osVersion: "35",
+          platform: "android",
+        },
+        session(),
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(classifyError(error)).toBe("RUNTIME_MISSING");
+    expect(asked).toEqual([]);
+  });
+
+  it.each([
+    ["a character outside letters, digits, '_', '.' and '-'", "google apis"],
+    ["more than 64 characters", "a".repeat(65)],
+    ["no characters", ""],
+  ])("refuses a tag with %s as BAD_REQUEST before any driver sees it", async (_label, imageTag) => {
+    const { dispatcher, driver } = await buildDispatcher({ driverOptions: androidImages });
+
+    const error = await dispatcher
+      .dispatch("lease.request", { imageTag, model: "Pixel 8", platform: "android" }, session())
+      .catch((caught: unknown) => caught);
+
+    expect(classifyError(error)).toBe("BAD_REQUEST");
+    expect(driver.calls.map((call) => call.operation)).not.toContain("resolveSpec");
+  });
+});
+
 describe("Dispatcher: the download policy clamp applies regardless of caller", () => {
   // This is the exact behaviour ADR 0003 §2 says HTTP was missing ("the socket path applies
   // `config.downloads.policy`, HTTP passes `allowDownload` through unclamped"). Since HTTP now

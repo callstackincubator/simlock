@@ -19,6 +19,7 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   hostFactsSchema,
+  imageTagSchema,
   leaseGrantSchema,
   leaseRecordSchema,
   nukeReportSchema,
@@ -134,6 +135,8 @@ export const statusGet = defineOperation({
  * when it names none so the worker's default applies; any value but `slim` or `full` -- the
  * lease mode ADR 0004 retired included -- is a `BAD_REQUEST`. `full` was replaced by `mode`
  * with no alias, so `.strict()` turns a request that still sends it into a `BAD_REQUEST` too.
+ * `imageTag` names the type of installed image the device is created from, as the catalog lists
+ * it; a request that names one never downloads, and a platform without image types refuses it.
  */
 const leaseRequestInputSchema = z
   .object({
@@ -141,6 +144,7 @@ const leaseRequestInputSchema = z
     platform: platformSchema,
     osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
+    imageTag: imageTagSchema.optional(),
     requesterId: z.string().optional(),
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),
@@ -203,6 +207,21 @@ export const leaseRequest = defineOperation({
    * with this operation's design rather than in tension with it.
    */
 });
+
+/**
+ * The device a `lease.request` input names, with every field it left out left out: what a
+ * daemon hands its lease path, as it arrived. A request that names no mode or image tag reaches
+ * the lease path, and a worker behind a gateway, naming none (ADR 0007 §2).
+ */
+export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
+  return {
+    model: input.model,
+    platform: input.platform,
+    ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
+    ...(input.mode === undefined ? {} : { mode: input.mode }),
+    ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
+  };
+}
 
 // ---- lease.cancel (new, ADR §9) --------------------------------------------------------------
 

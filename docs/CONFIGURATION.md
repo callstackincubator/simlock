@@ -296,7 +296,8 @@ decides which of them may start a download:
 `never` is absolute: no role and no command overrides it. A machine that
 should never download anything sets it, and its operator installs components
 with the platform's own tools. Warm-pool provisioning and startup never
-download under any policy.
+download under any policy, and neither does an Android lease that names an
+image tag (`--image-tag`): it uses only an installed image of that tag.
 
 A gateway has no download policy of its own. `simlock component install
 --worker`/`--all-workers` asks each worker, and each worker's own

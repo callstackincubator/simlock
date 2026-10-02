@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import type { EventBus } from "../bus/index.js";
-import { type ComponentProgress, describeSchemaIssues } from "../contract/index.js";
+import { type ComponentProgress, describeSchemaIssues, imageTagSchema } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
@@ -70,6 +70,7 @@ const leaseRequestBodySchema = z
   .object({
     allowDownload: z.boolean().optional(),
     device: z.string().min(1),
+    imageTag: imageTagSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
     noWait: z.boolean().optional(),
     // ADR §27a (H7, round 2 review): declared and forwarded, not silently dropped -- the shared
@@ -142,6 +143,7 @@ function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): Leas
     ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
+    ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
     ...(body.owner === undefined ? {} : { owner: body.owner }),
   };
 }

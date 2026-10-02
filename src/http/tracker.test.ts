@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { NoCapacityError, RequesterAlreadyLeasedError } from "../core/index.js";
+import { type DeviceRecord, NoCapacityError, RequesterAlreadyLeasedError } from "../core/index.js";
 import { RequestCancelledError } from "../core/wait-queue.js";
 import { FakeClock } from "../ports/index.js";
 import { FakeDispatcher, makeGrant, waitForDispatch } from "./test-fakes.js";
@@ -29,7 +29,11 @@ const body = { device: "iPhone 17 Pro", platform: "ios" as const };
 async function createTracked(
   tracker: LeaseRequestTracker,
   dispatcher: FakeDispatcher,
-  requestBody: typeof body & { readonly ttlMs?: number; readonly mode?: "slim" | "full" } = body,
+  requestBody: typeof body & {
+    readonly ttlMs?: number;
+    readonly mode?: "slim" | "full";
+    readonly imageTag?: string;
+  } = body,
 ): Promise<{ readonly view: TrackedRequestView; readonly callIndex: number }> {
   const outcomePromise = tracker.submit(identity, requestBody);
   const call = await waitForDispatch(dispatcher, "lease.request");
@@ -304,6 +308,37 @@ describe("LeaseRequestTracker granted lease payload", () => {
       expect(state.lease).not.toHaveProperty("featureProfile");
     },
   );
+
+  it("shows the granted device's image tag on the lease, and none for a device without one", async () => {
+    const granted = async (spec: DeviceRecord["spec"]) => {
+      const { dispatcher, tracker } = buildTracker();
+      const { view, callIndex } = await createTracked(tracker, dispatcher);
+      dispatcher.calls[callIndex]?.resolve(makeGrant({ device: { spec } }));
+      await Promise.resolve();
+      await Promise.resolve();
+      const state = tracker.get(view.id)?.state;
+      if (state?.stage !== "granted") throw new Error("expected granted");
+      return state.lease;
+    };
+    const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+
+    expect(await granted({ ...spec, imageTag: "google_apis_playstore" })).toMatchObject({
+      imageTag: "google_apis_playstore",
+    });
+    expect(await granted(spec)).not.toHaveProperty("imageTag");
+  });
+});
+
+describe("LeaseRequestTracker.submit with an image tag", () => {
+  it("passes imageTag through onto the dispatch input, and omits it when the body names none", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    await createTracked(tracker, dispatcher, { ...body, imageTag: "google_apis_playstore" });
+    expect(dispatcher.calls[0]?.input).toMatchObject({ imageTag: "google_apis_playstore" });
+
+    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
+    await createTracked(tracker2, dispatcher2);
+    expect(dispatcher2.calls[0]?.input).not.toHaveProperty("imageTag");
+  });
 });
 
 describe("LeaseRequestTracker.waitForChange abort", () => {

@@ -797,6 +797,34 @@ describe("GatewayDispatcher", () => {
       else expect(client.lastRequestLeaseInput).not.toHaveProperty("mode");
     });
 
+    it("forwards a lease.request's image tag to the worker unchanged", async () => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([
+          {
+            images: [{ abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" }],
+            models: ["Pixel 8"],
+            platform: "android",
+            runtimes: ["34"],
+          },
+        ]).platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      await dispatcher.dispatch(
+        "lease.request",
+        { imageTag: "google_apis_playstore", model: "Pixel 8", noWait: true, platform: "android" },
+        session({ role: "agent" }),
+      );
+
+      expect(client.lastRequestLeaseInput).toMatchObject({ imageTag: "google_apis_playstore" });
+    });
+
     it("forwards device.exec to the worker that holds the lease, gated on the caller owning it", async () => {
       const { coordinator, directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();

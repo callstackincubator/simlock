@@ -229,12 +229,16 @@ export class OutOfProcessFakeDriver implements Driver {
   async resolveSpec(request: DeviceRequest): Promise<DeviceSpec> {
     const script = await this.#beforeCall("resolveSpec", [request]);
     this.#assertKnownModel(request.model, script);
-    const osVersion = this.#resolveOsVersion(request.osVersion, script);
+    const osVersion =
+      request.imageTag === undefined
+        ? this.#resolveOsVersion(request.osVersion, script)
+        : this.#resolveTaggedOsVersion(request.osVersion, request.imageTag, script);
     const slim = request.mode === "slim" && script.slimmableOsVersions?.includes(osVersion);
     return {
       model: request.model,
       osVersion,
       platform: this.platform,
+      ...(request.imageTag === undefined ? {} : { imageTag: request.imageTag }),
       ...(slim === true ? { mode: "slim" as const } : {}),
     };
   }
@@ -254,6 +258,25 @@ export class OutOfProcessFakeDriver implements Driver {
     }
     if (!available.includes(osVersion)) {
       throw new RuntimeMissingError(this.platform, osVersion, { component: osVersion });
+    }
+    return osVersion;
+  }
+
+  /**
+   * A runtime with a scripted image (`images`) of `imageTag`: the requested one, or else the
+   * newest. None fails naming no component, so a tagged request is never offered a download.
+   */
+  #resolveTaggedOsVersion(
+    requested: string | undefined,
+    imageTag: string,
+    script: FakeDriverPlatformScript,
+  ): string {
+    const tagged = (script.images ?? [])
+      .filter((image) => image.tag === imageTag)
+      .map((image) => image.runtime);
+    const osVersion = requested ?? newestVersion(tagged);
+    if (osVersion === undefined || !tagged.includes(osVersion)) {
+      throw new RuntimeMissingError(this.platform, osVersion ?? "default");
     }
     return osVersion;
   }

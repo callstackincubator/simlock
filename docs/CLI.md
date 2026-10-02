@@ -74,7 +74,7 @@ command starts it again) to bring the platform up.
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
 | 11 | `COMPONENT_BUSY` | `component remove` while a component install or removal runs or waits on that platform; try again once it ends |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
-| 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
+| 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download`, or no installed image of the `--image-tag` asked for |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
 | 12 | `INSUFFICIENT_DISK_SPACE` | not enough free disk space to install a component |
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
@@ -171,7 +171,8 @@ a timer and releasing it when it exits.
 
 ```
 simlock lease --platform <ios|android> --device <model> [--os <version>]
-              [--mode <slim|full>] [--agent-id <id>] [--timeout <duration>]
+              [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
+              [--timeout <duration>]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
 ```
@@ -234,6 +235,22 @@ granted.
   idle. Any other value is a `BAD_REQUEST` (exit 2). See
   [CONFIGURATION.md](CONFIGURATION.md#device-mode-slim-and-full) for what a
   slim device leaves out.
+- `--image-tag <tag>` — Android only: the system image type to create the
+  device from, such as `google_apis_playstore` for Google Play or `default` for
+  plain AOSP. The tags you can name are the `tag` of each image `simlock
+  catalog` lists. Without it, Simlock picks the image itself: `google_apis` for
+  the host's ABI when installed, otherwise another installed image of that API
+  level. With it, the device is created from an installed image of that tag,
+  the host's ABI first; without `--os` the lease gets the newest API level
+  that has one. A lease with `--image-tag` never downloads: if no image of that
+  tag is installed for the API level it fails with `RUNTIME_MISSING` (exit 12),
+  `--allow-download` or not. Install other image types with `sdkmanager`. A
+  lease only reuses an idle device created for the same tag, or for no tag
+  when it names none. On iOS the flag is a `BAD_REQUEST` (exit 2). A tag is 1
+  to 64 letters, digits, `_`, `.` or `-`. Through a gateway, a lease whose tag
+  no worker lists for that API level, an iOS one included, is sent to no
+  worker: it waits in the queue, or fails with `NO_CAPACITY` (exit 11) under
+  `--no-wait`.
 - `--detach` — print the lease result (the same JSON shape as the grant line
   below, including `device.mode`) and exit instead of staying
   alive. Nothing then renews the lease on your behalf: keep it with
@@ -329,7 +346,9 @@ those needs the admin-role `list.get`/`status.get`, not `lease.request`'s
 output. `device.mode` is the device mode the granted device actually has:
 `"slim"` when its feature set was reduced, and `"full"` otherwise — always
 `"full"` for Android. A `--mode slim` lease can report `"full"` (slim is best
-effort); a `--mode full` lease never reports `"slim"`. It lets an agent explain a feature-loss failure (missing push notification,
+effort); a `--mode full` lease never reports `"slim"`. `device.spec.imageTag`
+is present on a device whose lease named `--image-tag`, and says which tag it
+was created from. `device.mode` lets an agent explain a feature-loss failure (missing push notification,
 Spotlight result, StoreKit sheet, universal link, or system picker) instead
 of misreading it as a bug. See `src/contract/schemas.ts`
 (`deviceRecordSchema`, `leaseRecordSchema`, `leaseGrantSchema`) for the full
@@ -633,7 +652,9 @@ matches a worker's model in any letter case and by any other name that
 worker's catalog lists for it, such as an Android AVD id (`pixel_7`). When
 `--os` is given, the worker must pair that runtime with the model; without
 it, the model must pair with at least one installed runtime. A worker that
-has the model and the runtime but cannot pair them is passed over. Among the
+has the model and the runtime but cannot pair them is passed over. With
+`--image-tag`, the worker's catalog must list an image of that tag, for that
+runtime when `--os` is given. Among the
 workers that can serve it, the request goes to a machine with a matching warm
 device first, otherwise the one with the most free capacity. You do not name a machine and there is no flag to; where
 a device lives is the gateway's decision.
@@ -1138,7 +1159,8 @@ built-in profile answers to its AVD id as well as its display name, so
 case. On iOS a device type answers to its name only, so iOS lists none.
 Android also lists `images`: every installed system image with its API
 level (`runtime`), tag, and ABI. An image whose ABI the host cannot run
-natively is listed too, with its ABI.
+natively is listed too, with its ABI. A tag listed here is what `simlock
+lease --image-tag` accepts.
 
 `customModels` lists the models that exist because of something on that
 machine rather than the platform's tools. The field is absent when there are

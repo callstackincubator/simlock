@@ -284,6 +284,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       // The one place a request with no mode gets the worker's default (ADR 0007 §2).
       const mode = request.mode ?? this.options.defaultModes[request.platform] ?? "full";
       const resolved = await this.#resolveOrInstall(waiter, driver, { ...request, mode }, options);
+      // The image tag is the request's, or none: a driver that returns another, or one the
+      // request did not name, would plan the device into a pool the request did not ask for.
+      if (resolved.imageTag !== request.imageTag) {
+        throw new Error(
+          `The ${request.platform} driver resolved image tag ${String(resolved.imageTag)} ` +
+            `for a request naming ${String(request.imageTag)}`,
+        );
+      }
       // Full is a guarantee (ADR 0007 §5): a slim spec is accepted only for a slim request, so a
       // driver that returns the wrong thing still cannot put a full request on a slim device.
       waiter.spec = mode === "slim" ? resolved : fullSpec(resolved);

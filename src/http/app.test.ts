@@ -422,6 +422,8 @@ describe("POST /v1/lease-requests", () => {
     ["full", { full: true }],
     ["a mode other than slim or full", { mode: "fast" }],
     ["a key the route does not know", { colour: "blue" }],
+    ["an image tag with a space", { imageTag: "google apis" }],
+    ["an image tag over 64 characters", { imageTag: "a".repeat(65) }],
   ])("400s a body carrying %s as BAD_REQUEST before ever dispatching", async (_label, extra) => {
     const { app, dispatcher } = buildHarness();
     // Raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
@@ -434,6 +436,13 @@ describe("POST /v1/lease-requests", () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
     expect(dispatcher.calls).toHaveLength(0);
+  });
+
+  it("forwards a body's imageTag to the dispatched lease.request", async () => {
+    const { app, dispatcher } = buildHarness();
+    void postLeaseRequest(app, { ...defaultBody, imageTag: "google_apis_playstore" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ imageTag: "google_apis_playstore" });
   });
 
   it("forwards a body's mode to the dispatched lease.request", async () => {

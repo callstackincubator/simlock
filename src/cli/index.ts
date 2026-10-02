@@ -930,6 +930,7 @@ async function runLease(
     device: { type: "string" },
     "export-env": { type: "boolean" },
     help: { type: "boolean", short: "h" },
+    "image-tag": { type: "string" },
     mode: { type: "string" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
@@ -940,7 +941,8 @@ async function runLease(
   if (values.help) {
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
-        "                     [--mode <slim|full>] [--agent-id <id>] [--timeout <duration>]\n" +
+        "                     [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--timeout <duration>]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );
@@ -1093,6 +1095,9 @@ async function runLease(
         // Sent as typed: the contract, not the CLI, decides which modes exist, and answers
         // anything else with `BAD_REQUEST`.
         ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
+        // Sent as typed too: the contract bounds it, and the platform's driver decides whether
+        // the platform has image tags at all.
+        ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(ttlMs === undefined ? {} : { ttlMs }),
       },
