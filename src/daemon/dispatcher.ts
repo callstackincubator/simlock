@@ -33,6 +33,7 @@ import type {
 } from "../ports/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
+  fitPlatformCatalog,
   OPERATIONS,
   type ComponentProgress,
   type GatewayOnlyOperationName,
@@ -266,7 +267,7 @@ export class Dispatcher {
   // already did, per the ADR's ordering.
 
   #catalogGet: Handler<"catalog.get"> = async (input) => ({
-    platforms: await this.options.catalog.listCatalog(input.platform),
+    platforms: (await this.options.catalog.listCatalog(input.platform)).map(fitPlatformCatalog),
   });
 
   #statusGet: Handler<"status.get"> = () => {

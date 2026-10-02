@@ -1074,6 +1074,47 @@ describe("AndroidDriver", () => {
     expect(Object.keys(catalog.modelRuntimes)).toEqual(catalog.models);
   });
 
+  it("marks a model that comes only from devices.xml as custom, and no built-in model", async () => {
+    const filesystem = await androidFilesystem();
+    await writeDevicesXml(filesystem, customDeviceXml("My Tablet", 4096));
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "Pixel 9", "My Tablet"]);
+    expect(catalog.customModels).toEqual(["My Tablet"]);
+  });
+
+  it("has no customModels field when there is no custom profile", async () => {
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+    ]);
+    const driver = await createDriver(await androidFilesystem(), runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "Pixel 9"]);
+    expect(catalog).not.toHaveProperty("customModels");
+  });
+
+  it("lists the built-in models and no customModels field when devices.xml cannot be parsed", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${home}/.android`);
+    await filesystem.writeFileAtomic(`${home}/.android/devices.xml`, "not xml at all {{{");
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const catalog = await driver.listCatalog();
+
+    expect(catalog.models).toEqual(["Pixel 8", "Pixel 9"]);
+    expect(catalog).not.toHaveProperty("customModels");
+  });
+
   it("lists models with one avdmanager run", async () => {
     // A second answer is scripted, so a second run would be served and counted, not refused.
     const runner = new ScriptedProcessRunner([

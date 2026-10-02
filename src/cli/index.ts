@@ -2186,6 +2186,8 @@ function formatCatalog(response: CatalogGetOutput): string {
       // Each model with the runtimes it pairs with: a model and a runtime both listed for the
       // platform are not necessarily leasable together.
       // A model's other names follow it on a line of their own.
+      // A model that exists only because of something on that machine is marked `(custom)`.
+      const custom = new Set(entry.customModels ?? []);
       const models = entry.models.flatMap((model) => {
         const paired =
           (Object.hasOwn(entry.modelRuntimes, model) ? entry.modelRuntimes[model] : undefined) ??
@@ -2193,7 +2195,7 @@ function formatCatalog(response: CatalogGetOutput): string {
         const aliases =
           (Object.hasOwn(entry.modelAliases, model) ? entry.modelAliases[model] : undefined) ?? [];
         return [
-          `    ${model}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
+          `    ${model}${custom.has(model) ? " (custom)" : ""}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
           ...(aliases.length > 0 ? [`      Other names: ${aliases.join(", ")}`] : []),
         ];
       });

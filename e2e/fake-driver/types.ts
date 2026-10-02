@@ -77,6 +77,8 @@ export interface FakeDriverPlatformScript {
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   /** What `listCatalog` reports as other names per model; none unless set. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
+  /** What `listCatalog` reports as custom models; the field is absent unless set. */
+  readonly customModels?: readonly string[];
   /** What `listCatalog` reports as installed images; the field is absent unless set. */
   readonly images?: readonly {
     readonly runtime: string;

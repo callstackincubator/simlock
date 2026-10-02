@@ -302,6 +302,7 @@ describe("DeviceProfileRegistry", () => {
     const registry = new DeviceProfileRegistry([builtin, user]);
 
     await expect(registry.catalog()).resolves.toEqual({
+      customModels: ["My Custom Phone"],
       modelAliases: { "Pixel 8": ["pixel_8"] },
       models: ["Pixel 8", "My Custom Phone"],
     });
@@ -321,9 +322,107 @@ describe("DeviceProfileRegistry", () => {
     ]);
 
     await expect(registry.catalog()).resolves.toEqual({
+      customModels: [],
       modelAliases: { "Pixel 8": ["pixel_8"] },
       models: ["Pixel 8", "Pixel 8 Copy"],
     });
+  });
+
+  it("lists a model that comes only from devices.xml in customModels", async () => {
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(pixelDevices)]),
+      ),
+      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
+    ]);
+
+    await expect(registry.catalog()).resolves.toMatchObject({
+      customModels: ["My Custom Phone"],
+    });
+  });
+
+  it("does not list a built-in model in customModels", async () => {
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(pixelDevices)]),
+      ),
+      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
+    ]);
+
+    const catalog = await registry.catalog();
+    expect(catalog.models).toContain("Pixel 8");
+    expect(catalog.customModels).not.toContain("Pixel 8");
+  });
+
+  it("lists a name in both sources once, and not in customModels", async () => {
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(pixelDevices)]),
+      ),
+      new UserDeviceProfileSource(
+        devicesXmlPath,
+        await filesystemWithDevicesXml(devicesXml().replace("My Custom Phone", "PIXEL 8")),
+      ),
+    ]);
+
+    await expect(registry.catalog()).resolves.toMatchObject({
+      customModels: [],
+      models: ["Pixel 8"],
+    });
+  });
+
+  it("yields the built-in models and no customModels when devices.xml cannot be read or parsed", async () => {
+    // A file that exists but whose read fails, the way a file without read permission does.
+    const unreadable = await filesystemWithDevicesXml(devicesXml());
+    unreadable.readFile = () =>
+      Promise.reject(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+    const malformed = await filesystemWithDevicesXml("not even close to xml {{{");
+
+    for (const filesystem of [unreadable, malformed]) {
+      const diagnostics: DeviceProfileSourceDiagnostic[] = [];
+      const registry = new DeviceProfileRegistry([
+        new BuiltinDeviceProfileSource(
+          avdmanager,
+          new ScriptedProcessRunner([processResult(pixelDevices)]),
+        ),
+        new UserDeviceProfileSource(devicesXmlPath, filesystem, (diagnostic) =>
+          diagnostics.push(diagnostic),
+        ),
+      ]);
+
+      await expect(registry.catalog()).resolves.toMatchObject({
+        customModels: [],
+        models: ["Pixel 8"],
+      });
+      // The source was reached and gave up, rather than never being asked.
+      expect(diagnostics).toHaveLength(1);
+    }
+  });
+
+  it("resolves every model in customModels to a profile of kind properties", async () => {
+    // `pixel_8` is listed, since no earlier profile is named that, but the built-in Pixel 8
+    // answers to it, so it resolves to the built-in and must not be marked custom.
+    const twoDevices = devicesXml().replace(
+      "</d:devices>",
+      "<d:device><d:name>pixel_8</d:name></d:device></d:devices>",
+    );
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(pixelDevices), processResult(pixelDevices)]),
+      ),
+      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(twoDevices)),
+    ]);
+
+    const catalog = await registry.catalog();
+    expect(catalog.models).toEqual(["Pixel 8", "My Custom Phone", "pixel_8"]);
+    expect(catalog.customModels).toEqual(["My Custom Phone"]);
+    for (const model of catalog.customModels) {
+      await expect(registry.resolve(model)).resolves.toMatchObject({ kind: "properties" });
+    }
   });
 });
 

@@ -962,6 +962,19 @@ describe("Dispatcher: the download policy clamp applies regardless of caller", (
     expect(listCalls.map((call) => call.arguments)).toEqual([[]]);
   });
 
+  it("catalog.get keeps a custom model whose name is too long for the mark listed, without the mark, in an answer the contract accepts", async () => {
+    const long = "x".repeat(300);
+    const { dispatcher } = await buildDispatcher({
+      driverOptions: { customModels: [long, "My Tablet"], knownModels: [long, "My Tablet"] },
+    });
+
+    const catalog = await dispatcher.dispatch("catalog.get", {}, session());
+
+    expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+    expect(catalog.platforms[0]?.models).toEqual([long, "My Tablet"]);
+    expect(catalog.platforms[0]?.customModels).toEqual(["My Tablet"]);
+  });
+
   it.each(["never", "on-request", "always"] as const)(
     "catalog.get lists exactly the images the driver finds installed under downloads.policy '%s'",
     async (downloadsPolicy) => {

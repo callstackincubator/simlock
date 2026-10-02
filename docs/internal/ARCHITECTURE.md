@@ -726,7 +726,9 @@ union of what each connected worker pairs it with, never the cross product
 of fleet models and fleet runtimes: one worker with the model and another
 with the runtime is not a leasable pair. `modelAliases` is the union per
 model, deduplicated ignoring case, and `images` the union by runtime, tag,
-and ABI, absent when no worker reports the field. Each worker's lists are
+and ABI, absent when no worker reports the field. `customModels` lists a
+model when any worker that lists it marks it custom; a name a worker marks
+but does not list is dropped. Each worker's lists are
 within the contract's bounds but their union may not be, so the gateway
 cuts the sorted union to those bounds rather than answer with a catalog its
 own clients would refuse. Routing still reads only
@@ -741,7 +743,10 @@ resolves. The same holds for names: the Android driver's
 `DeviceProfileRegistry` owns the only matcher (first profile, in source
 order, any of whose names equals the request ignoring case), and the
 catalog's `modelAliases` are a profile's other names that the matcher sends
-back to that profile. The iOS driver matches a device type's name only.
+back to that profile. A listed model is in `customModels` when the profile
+the matcher sends its name to is a `devices.xml` one, so the mark and the
+resolution cannot disagree. The iOS driver matches a device type's name
+only.
 
 Worker business events are republished on the gateway's bus with `workerId`
 added to the payload and land in the gateway's own ring buffer and event

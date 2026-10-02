@@ -300,6 +300,8 @@ const CATALOG_ALIASES_PER_MODEL_MAX = 32;
 const CATALOG_ALIASED_MODELS_MAX = 4096;
 const CATALOG_IMAGE_FIELD_MAX = 128;
 const CATALOG_IMAGES_MAX = 1024;
+/** `customModels` is a subset of `models`; it takes the bound already on a per-model list. */
+const CATALOG_CUSTOM_MODELS_MAX = CATALOG_ALIASED_MODELS_MAX;
 
 /**
  * The list bounds above, for a producer that merges lists the schema checked one by one: a
@@ -308,6 +310,7 @@ const CATALOG_IMAGES_MAX = 1024;
 export const CATALOG_LIST_LIMITS = {
   aliasedModels: CATALOG_ALIASED_MODELS_MAX,
   aliasesPerModel: CATALOG_ALIASES_PER_MODEL_MAX,
+  customModels: CATALOG_CUSTOM_MODELS_MAX,
   images: CATALOG_IMAGES_MAX,
 } as const;
 
@@ -404,6 +407,13 @@ export const platformCatalogSchema = z.object({
    */
   images: z.array(catalogImageSchema).max(CATALOG_IMAGES_MAX).optional(),
   /**
+   * Names from `models` that exist because of something on this machine rather than the
+   * platform's tools -- on Android, a custom profile from Android Studio's `devices.xml`.
+   * Absent when there are none. On a gateway a model is listed when any worker that lists it
+   * marks it custom.
+   */
+  customModels: z.array(z.string().max(CATALOG_NAME_MAX)).max(CATALOG_CUSTOM_MODELS_MAX).optional(),
+  /**
    * ADR 0005 §21: on a gateway, `models`/`runtimes` are the *union* over the fleet, and these
    * two maps say which workers each entry came from (`{"iPhone 16": ["wrk_a", "wrk_b"]}`).
    * Additive and gateway-only: a worker's own catalog needs no attribution, and a renderer
@@ -414,6 +424,23 @@ export const platformCatalogSchema = z.object({
   modelWorkers: z.record(z.string(), z.array(z.string())).optional(),
   runtimeWorkers: z.record(z.string(), z.array(z.string())).optional(),
 });
+
+/**
+ * Brings a catalog entry a daemon built from its own machine within `customModels`' bounds, so
+ * a custom profile name the platform's tools never checked cannot fail the whole `catalog.get`
+ * answer. A name that does not fit loses its mark and stays in `models`; the list stops at its
+ * maximum, and an empty list is left out. Lives beside the schema so the bounds are written once.
+ */
+export function fitPlatformCatalog<Entry extends { readonly customModels?: readonly string[] }>(
+  entry: Entry,
+): Entry {
+  if (entry.customModels === undefined) return entry;
+  const { customModels, ...rest } = entry;
+  const fitting = customModels
+    .filter((model) => model.length <= CATALOG_NAME_MAX)
+    .slice(0, CATALOG_CUSTOM_MODELS_MAX);
+  return (fitting.length === 0 ? rest : { ...rest, customModels: fitting }) as Entry;
+}
 
 export const proposalSchema = z.object({
   action: z.enum(["shutdown", "destroy"]),

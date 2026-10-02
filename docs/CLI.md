@@ -1083,6 +1083,11 @@ Android also lists `images`: every installed system image with its API
 level (`runtime`), tag, and ABI. An image whose ABI the host cannot run
 natively is listed too, with its ABI.
 
+`customModels` lists the models that exist because of something on that
+machine rather than the platform's tools. The field is absent when there are
+none, and iOS never has it. See [Where Android models come
+from](#where-android-models-come-from).
+
 A
 platform whose SDK is missing (e.g. Android without `ANDROID_HOME` on a
 non-macOS host, or iOS off macOS) is omitted rather than erroring the whole
@@ -1097,7 +1102,7 @@ with, its other names on the line below it, and then each image:
 Platform: android
   Runtimes: 34, 35 (default: 35)
   Models:
-    My Tablet: 34, 35
+    My Tablet (custom): 34, 35
     Pixel 8: 34, 35
       Other names: pixel_8
   Images (runtime, tag, ABI):
@@ -1111,13 +1116,34 @@ Platform: android
 {"platforms":[{"platform":"android","models":["My Tablet","Pixel 8"],"runtimes":["34","35"],"defaultRuntime":"35",
   "modelRuntimes":{"My Tablet":["34","35"],"Pixel 8":["34","35"]},
   "modelAliases":{"Pixel 8":["pixel_8"]},
+  "customModels":["My Tablet"],
   "images":[{"runtime":"34","tag":"default","abi":"x86_64"},{"runtime":"35","tag":"google_apis","abi":"arm64-v8a"}]}]}
 ```
 
 Against a gateway, `modelAliases` is the union of each worker's other names
-for a model, and `images` the union of their images. The gateway does not
+for a model, and `images` the union of their images. A model is in
+`customModels` when any worker that lists it marks it custom;
+`simlock worker list --json` shows which worker that is. The gateway does not
 yet route by another name, so ask a gateway for a model by its name in
 `models`.
+
+### Where Android models come from
+
+Simlock reads Android device models from two places and writes to neither:
+
+- **Built-in profiles** ship with the Android SDK's `cmdline-tools`: the
+  ones `avdmanager list device` prints. A model newer than your
+  `cmdline-tools` is not there; update `cmdline-tools` to get it.
+- **Custom profiles** are the ones you make with Android Studio's device
+  manager. Android Studio keeps them in `devices.xml` in your `.android`
+  directory. A custom profile exists only on the machine where it was made,
+  so in a fleet only the worker that has it can lease it. To add one, create
+  it with Android Studio's device manager on that machine.
+
+When a name is in both, the built-in profile wins and the model is not
+custom. If `devices.xml` cannot be read, the built-in models are still
+listed. A custom model is marked `(custom)` in the human view of `simlock
+catalog` and listed in `customModels` in `--json`.
 
 ## `simlock component install <ios|android> <version>`
 
@@ -1434,7 +1460,9 @@ operation **on a gateway**; against a worker they answer `UNKNOWN_REQUEST`
   versions. Under each worker, one indented line per component install
   waiting or running there, in the form `simlock status` prints. A worker the gateway cannot speak to shows `incompatible` with both
   protocol ranges, which is what version skew looks like from here. `--json`
-  prints the raw worker views, which is what the console renders.
+  prints the raw worker views, which is what the console renders. Each
+  view's catalog carries that worker's own `customModels`, so this is where
+  you see which worker has a custom Android profile.
 - `drain <worker-id>` / `undrain <worker-id>` — a drained worker keeps its
   existing leases and receives no new dispatches: the way to take a machine
   out of service without killing anyone's device. The flag is persisted by the

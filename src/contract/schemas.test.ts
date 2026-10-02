@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   deviceRecordSchema,
   fitHostFacts,
+  fitPlatformCatalog,
   grantedDeviceSchema,
   hostFactsSchema,
   leaseGrantSchema,
+  platformCatalogSchema,
   statusDeviceSchema,
 } from "./schemas.js";
 
@@ -267,5 +269,39 @@ describe("fitHostFacts", () => {
     };
 
     expect(fitHostFacts(host)).toEqual(host);
+  });
+});
+
+describe("fitPlatformCatalog", () => {
+  const entry = (customModels: string[]) => ({
+    customModels,
+    defaultRuntime: "35",
+    modelAliases: {},
+    modelRuntimes: Object.fromEntries(customModels.map((model) => [model, ["35"]])),
+    models: customModels,
+    platform: "android" as const,
+    runtimes: ["35"],
+  });
+
+  it("stops customModels at its maximum, in an entry the schema accepts", () => {
+    const names = Array.from({ length: 4097 }, (_, index) => `m${index}`);
+
+    const fitted = fitPlatformCatalog(entry(names));
+
+    expect(fitted.customModels).toEqual(names.slice(0, 4096));
+    expect(() => platformCatalogSchema.parse(fitted)).not.toThrow();
+  });
+
+  it("leaves out customModels when no name fits", () => {
+    const fitted = fitPlatformCatalog(entry(["x".repeat(257)]));
+
+    expect(fitted).not.toHaveProperty("customModels");
+    expect(fitted.models).toEqual(["x".repeat(257)]);
+  });
+
+  it("leaves an entry that already fits as it is", () => {
+    const fits = entry(["My Tablet"]);
+
+    expect(fitPlatformCatalog(fits)).toEqual(fits);
   });
 });

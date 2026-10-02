@@ -24,6 +24,7 @@ interface WorkerView {
     readonly models: readonly string[];
     readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
     readonly modelAliases: Readonly<Record<string, readonly string[]>>;
+    readonly customModels?: readonly string[];
     readonly images?: readonly {
       readonly runtime: string;
       readonly tag: string;
@@ -372,6 +373,61 @@ describe("gateway fleet", () => {
       { abi: "arm64", runtime: "26.0", tag: "default" },
       { abi: "x86_64", runtime: "26.0", tag: "default" },
     ]);
+  });
+
+  it("shows each worker's own custom models in the worker list, and marks a model custom in the catalog when any worker does", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret } = minted.json as { secret: string };
+    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    // Both workers list My Tablet; only worker-a has it as a custom profile.
+    await withDaemon({
+      configOverrides: { gateway: { ...uplink, label: "worker-a" } },
+      driverScript: {
+        android: {
+          availableOsVersions: ["35"],
+          customModels: ["My Tablet"],
+          knownModels: ["Pixel 8", "My Tablet"],
+        },
+      },
+    });
+    await withDaemon({
+      configOverrides: { gateway: { ...uplink, label: "worker-b" } },
+      driverScript: {
+        android: { availableOsVersions: ["35"], knownModels: ["Pixel 8", "My Tablet"] },
+      },
+    });
+
+    const workers = await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 2 &&
+        views.every((view) => view.connection === "connected" && view.catalog.length > 0),
+      "both workers connected with their catalogs",
+    );
+    const androidOf = (label: string) =>
+      workers
+        .find((view) => view.label === label)
+        ?.catalog.find((entry) => entry.platform === "android");
+    expect(androidOf("worker-a")?.customModels).toEqual(["My Tablet"]);
+    expect(androidOf("worker-b")?.models).toEqual(["Pixel 8", "My Tablet"]);
+    expect(androidOf("worker-b")).not.toHaveProperty("customModels");
+
+    const catalog = await gateway.cli(["catalog", "--json"]);
+    expect(catalog.code).toBe(0);
+    const android = (catalog.json as { platforms: WorkerView["catalog"] }).platforms.find(
+      (entry) => entry.platform === "android",
+    );
+    expect(android?.customModels).toEqual(["My Tablet"]);
+
+    const human = await gateway.cli(["catalog"]);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("    My Tablet (custom): 35");
+    expect(human.stdout).toContain("    Pixel 8: 35");
   });
 
   it("gives a request with a mode that mode on either worker, and a request with none the default of the worker it landed on", async () => {
