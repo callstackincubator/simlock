@@ -336,7 +336,8 @@ interface DevicesXmlProfile {
  * - `<d:manufacturer>`       -> `hw.device.manufacturer` (when present)
  * - `<d:screen><d:dimensions><d:x-dimension>` / `<d:y-dimension>` -> `hw.lcd.width` / `hw.lcd.height`
  * - `<d:screen><d:pixel-density>`  -> `hw.lcd.density` (bucket name or `<n>dpi` -> numeric dpi)
- * - `<d:ram><d:ram-size unit="...">` -> `hw.ramSize` (converted to MiB, unit-suffix-free like avdmanager writes it)
+ * - `<d:ram unit="...">n</d:ram>` -> `hw.ramSize` (unit B/KiB/MiB/GiB/TiB, converted to MiB,
+ *   unit-suffix-free like avdmanager writes it; an unknown unit leaves `hw.ramSize` unset)
  *
  * Deliberately skipped, because `config.ini`'s AVD-identity hash and the emulator's own
  * defaults cover them well enough that mirroring them exactly is not worth the parsing
@@ -445,7 +446,8 @@ function applyScreenProperties(
 }
 
 function applyRamProperty(deviceBlock: string, hardwareProperties: Record<string, string>): void {
-  const ram = extractElement(deviceBlock, "ram-size");
+  // `<d:ram unit="GiB">2</d:ram>`: the unit is an attribute, the number is the text.
+  const ram = extractElement(deviceBlock, "ram");
   if (ram === undefined) {
     return;
   }
@@ -476,21 +478,29 @@ function densityToDpi(raw: string): number | undefined {
   return numeric?.[1] === undefined ? undefined : Number(numeric[1]);
 }
 
+/** Bytes per unit, for every value of the devices.xml schema's `storageUnitType`. */
+const MEBIBYTE = 1024 ** 2;
+const STORAGE_UNIT_BYTES: ReadonlyMap<string, number> = new Map([
+  ["B", 1],
+  ["KiB", 1024],
+  ["MiB", MEBIBYTE],
+  ["GiB", 1024 ** 3],
+  ["TiB", 1024 ** 4],
+]);
+
+/**
+ * The RAM in MiB, or undefined when it cannot be known: a missing or unknown unit (the schema
+ * requires one), a value that is not a positive integer, or one that comes to under half a MiB
+ * or past what a number counts exactly. Undefined leaves `hw.ramSize` unset rather than
+ * guessing and writing a wrong size.
+ */
 function ramSizeToMebibytes(text: string, unit: string | undefined): number | undefined {
-  const value = Number(text.trim());
-  if (!Number.isFinite(value)) {
+  const bytesPerUnit = unit === undefined ? undefined : STORAGE_UNIT_BYTES.get(unit.trim());
+  if (bytesPerUnit === undefined || !/^\d+$/.test(text)) {
     return undefined;
   }
-  switch ((unit ?? "MiB").trim().toUpperCase()) {
-    case "KIB":
-      return Math.round(value / 1024);
-    case "GIB":
-      return Math.round(value * 1024);
-    case "TIB":
-      return Math.round(value * 1024 * 1024);
-    default:
-      return Math.round(value);
-  }
+  const mebibytes = Math.round((Number(text) * bytesPerUnit) / MEBIBYTE);
+  return mebibytes > 0 && Number.isSafeInteger(mebibytes) ? mebibytes : undefined;
 }
 
 /** All top-level `<(ns:)tag>...</(ns:)tag>` blocks' inner content, in document order. */

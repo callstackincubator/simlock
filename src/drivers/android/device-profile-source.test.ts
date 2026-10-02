@@ -170,9 +170,7 @@ describe("parseDevicesXml", () => {
                 <d:y-dimension>3040</d:y-dimension>
               </d:dimensions>
             </d:screen>
-            <d:ram>
-              <d:ram-size unit="KiB">4194304</d:ram-size>
-            </d:ram>
+            <d:ram unit="KiB">4194304</d:ram>
           </d:hardware>
         </d:device>
       </d:devices>`;
@@ -191,9 +189,93 @@ describe("parseDevicesXml", () => {
     ]);
   });
 
+  it("maps ram written as <d:ram unit> with the number as its text, the shape Android Studio writes", () => {
+    const xml = `<?xml version="1.0"?>
+      <d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">
+        <d:device>
+          <d:name>Studio Phone</d:name>
+          <d:hardware>
+            <d:keyboard>nokeys</d:keyboard>
+            <d:nav>nonav</d:nav>
+            <d:ram unit="GiB">2</d:ram>
+            <d:buttons>soft</d:buttons>
+          </d:hardware>
+        </d:device>
+      </d:devices>`;
+
+    expect(parseDevicesXml(xml)).toEqual([
+      {
+        hardwareProperties: {
+          "hw.device.name": "Studio Phone",
+          "hw.ramSize": "2048",
+        },
+        name: "Studio Phone",
+      },
+    ]);
+  });
+
+  it.each([
+    ["B", "3221225472", "3072"],
+    ["KiB", "3145728", "3072"],
+    ["MiB", "3072", "3072"],
+    ["GiB", "3", "3072"],
+    ["TiB", "1", "1048576"],
+  ])("converts ram in %s, every unit the devices.xml schema allows, to MiB", (unit, value, mib) => {
+    expect(parseDevicesXml(devicesXmlWithRam(`<d:ram unit="${unit}">${value}</d:ram>`))).toEqual([
+      {
+        hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": mib },
+        name: "Ram Phone",
+      },
+    ]);
+  });
+
+  it.each([
+    ["511", undefined],
+    ["512", "1"],
+    ["1535", "1"],
+    ["1536", "2"],
+  ])("rounds %s KiB of ram to the nearest MiB", (kib, mib) => {
+    const [profile] = parseDevicesXml(devicesXmlWithRam(`<d:ram unit="KiB">${kib}</d:ram>`));
+    expect(profile?.hardwareProperties["hw.ramSize"]).toBe(mib);
+  });
+
+  it("reads the unit with surrounding whitespace, which the schema's token type allows", () => {
+    expect(parseDevicesXml(devicesXmlWithRam('<d:ram unit=" GiB ">2</d:ram>'))).toEqual([
+      {
+        hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": "2048" },
+        name: "Ram Phone",
+      },
+    ]);
+  });
+
+  it("reads <d:ram> and not a <d:ram-size> element next to it", () => {
+    const ram = '<d:ram-size unit="MiB">6144</d:ram-size><d:ram unit="GiB">2</d:ram>';
+    expect(parseDevicesXml(devicesXmlWithRam(ram))).toEqual([
+      {
+        hardwareProperties: { "hw.device.name": "Ram Phone", "hw.ramSize": "2048" },
+        name: "Ram Phone",
+      },
+    ]);
+  });
+
+  it.each([
+    ["an unknown unit", '<d:ram unit="GB">2</d:ram>'],
+    ["a unit in the wrong case", '<d:ram unit="gib">2</d:ram>'],
+    ["no unit", "<d:ram>2048</d:ram>"],
+    ["a fractional value", '<d:ram unit="GiB">1.5</d:ram>'],
+    ["an empty value", '<d:ram unit="GiB"></d:ram>'],
+    ["a zero value", '<d:ram unit="GiB">0</d:ram>'],
+    ["a value under half a MiB", '<d:ram unit="KiB">511</d:ram>'],
+    ["a value too large to count exactly in MiB", '<d:ram unit="TiB">1000000000000000</d:ram>'],
+  ])("leaves hw.ramSize unset for ram with %s instead of guessing", (_case, ram) => {
+    expect(parseDevicesXml(devicesXmlWithRam(ram))).toEqual([
+      { hardwareProperties: { "hw.device.name": "Ram Phone" }, name: "Ram Phone" },
+    ]);
+  });
+
   it("skips a device with no name", () => {
     const xml = `<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">
-      <d:device><d:hardware><d:ram><d:ram-size unit="MiB">2048</d:ram-size></d:ram></d:hardware></d:device>
+      <d:device><d:hardware><d:ram unit="MiB">2048</d:ram></d:hardware></d:device>
     </d:devices>`;
 
     expect(parseDevicesXml(xml)).toEqual([]);
@@ -563,12 +645,16 @@ function devicesXml(): string {
               <d:y-dimension>2400</d:y-dimension>
             </d:dimensions>
           </d:screen>
-          <d:ram>
-            <d:ram-size unit="MiB">6144</d:ram-size>
-          </d:ram>
+          <d:ram unit="MiB">6144</d:ram>
         </d:hardware>
       </d:device>
     </d:devices>`;
+}
+
+function devicesXmlWithRam(ram: string): string {
+  return `<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">
+    <d:device><d:name>Ram Phone</d:name><d:hardware>${ram}</d:hardware></d:device>
+  </d:devices>`;
 }
 
 async function filesystemWithDevicesXml(contents: string): Promise<MemoryFilesystem> {
