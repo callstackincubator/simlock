@@ -212,7 +212,7 @@ describe.skipIf(process.platform !== "darwin")(
 
     it(
       "scenario 2/3/4/7: on a default-slim worker, a cold slim lease, --mode full while a slim device sits idle, idempotence across a reclaim, and doctor advisory absence",
-      { timeout: 900_000 },
+      { timeout: 1_200_000 },
       async () => {
         const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
         const { model, os } = await catalogModelAndOs(env);
@@ -242,7 +242,10 @@ describe.skipIf(process.platform !== "darwin")(
         // --- scenario 4: with the slim device released and idle in the pool, --mode full gets
         // a different, full device. ---
         expect((await env.cli(["release", slimGrant.lease])).code).toBe(0);
-        await waitForDeviceState(env, slimGrant.udid, "ready", { timeout: 120_000 });
+        // Back to `ready` means reclaim (an erase) and then a fresh slim prepare: a boot, the
+        // disable pass, and a second boot. The driver itself budgets ~34s plus ~150s for that,
+        // so a wait sized for one ordinary boot fails a device that is on schedule.
+        await waitForDeviceState(env, slimGrant.udid, "ready", { timeout: 300_000 });
 
         const fullStart = Date.now();
         const fullGrant = await leaseDetached(env, model, os, "slim-full", ["--mode", "full"]);
