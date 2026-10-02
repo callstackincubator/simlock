@@ -705,6 +705,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -746,6 +747,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -911,6 +913,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
     ];
 
     it.each([
@@ -1070,6 +1073,7 @@ describe("AndroidDriver", () => {
           ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
           "",
         ),
+        avdPathExpectation("emulator-5586"),
       ];
       const { filesystem, runner } = await bootAfterRestartWith(
         { ...defaults, headless: true },
@@ -1587,6 +1591,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", "device-3"),
     ]);
     const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
@@ -2767,6 +2772,60 @@ describe("AndroidDriver readiness on a taken console port", () => {
       other: { running: true, sentByDriver: [] },
     });
   });
+
+  it.each([
+    ["with a trailing slash", `${avdDirectory}/simlock_one.avd/\r\nOK\r\n`],
+    // macOS's `/var` -> `/private/var` is the everyday case of this.
+    [
+      "through a symlinked ancestor of the device root",
+      `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
+    ],
+  ])("readies a device whose emulator reports its AVD directory %s", async (_, answer) => {
+    const filesystem = await androidFilesystem();
+    filesystem.defineSymlink("/private/home", "/home");
+    const host = new EmulatorHost(filesystem);
+    const runner = answeringAvdPath(host.runner(), ok(answer));
+    const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+    const spec = await driver.resolveSpec({
+      model: "Pixel 8",
+      osVersion: "34",
+      platform: "android",
+    });
+
+    const ready = await driver.makeReady(await driver.provision(spec));
+
+    expect(ready.address).toBe("emulator-5586");
+  });
+
+  it.each([
+    ["a console error", ok("KO: unknown command\r\n")],
+    ["a failed adb call", { code: 1, stderr: "error: could not connect to console", stdout: "" }],
+    ["a directory that does not exist", ok(`/private/elsewhere/simlock_one.avd\r\nOK\r\n`)],
+  ])(
+    "refuses to ready a device whose emulator answers the AVD path query with %s, and stops that emulator",
+    async (_, answer) => {
+      const filesystem = await androidFilesystem();
+      const host = new EmulatorHost(filesystem);
+      const runner = answeringAvdPath(host.runner(), answer);
+      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+      const spec = await driver.resolveSpec({
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+
+      const readied = await driver.makeReady(await driver.provision(spec)).then(
+        () => "readied",
+        (error: unknown) =>
+          error instanceof Error && error.name === "DriverCrashError" ? "refused" : error,
+      );
+
+      expect({ readied, running: host.avdAnswering("emulator-5586") }).toEqual({
+        readied: "refused",
+        running: undefined,
+      });
+    },
+  );
 });
 
 describe("AndroidDriver emulator registration", () => {
@@ -3362,6 +3421,7 @@ async function provisionedHarness(
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", secondMarkToken),
     );
   }
@@ -3650,6 +3710,7 @@ function baselineBuildExpectations(options: {
       ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
       "",
     ),
+    avdPathExpectation("emulator-5586"),
     processResult(binaries.adb, [
       "-s",
       "emulator-5586",
@@ -3692,6 +3753,7 @@ function baselineBuildExpectations(options: {
       ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
       "",
     ),
+    avdPathExpectation("emulator-5586"),
   );
   return expectations;
 }
@@ -3918,6 +3980,19 @@ function processResult(command: string, args: readonly (string | RegExp)[], stdo
   };
 }
 
+/**
+ * The `emu avd path` query every readiness wait ends with, answered by the emulator of
+ * `avdName` in Simlock's device root -- with the console's own CRLF line endings and its
+ * closing `OK` line.
+ */
+function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedProcessExpectation {
+  return processResult(
+    binaries.adb,
+    ["-s", serial, "emu", "avd", "path"],
+    `${avdDirectory}/${avdName}.avd\r\nOK\r\n`,
+  );
+}
+
 /** The adb shell call `#writeErasableMark` makes as the second half of every mark write. */
 function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {
   return processResult(binaries.adb, [
@@ -4038,6 +4113,18 @@ class PortTakingMachine {
     if (command === "shell getprop ro.boot.qemu.avd_name") return ok(`${name}\n`);
     return undefined;
   }
+}
+
+/** `inner`, with every `adb -s <serial> emu avd path` answered by `answer`. */
+function answeringAvdPath(inner: ProcessRunner, answer: ProcessResult): ProcessRunner {
+  return {
+    run: async (command, args, options) =>
+      command === binaries.adb && args[0] === "-s" && args.slice(2).join(" ") === "emu avd path"
+        ? answer
+        : inner.run(command, args, options),
+    spawn: (command, args, options) => inner.spawn(command, args, options),
+    spawnStreaming: (command, args, options) => inner.spawnStreaming(command, args, options),
+  };
 }
 
 /** Commands that only read an emulator's state. */

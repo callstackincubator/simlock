@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import type { DeviceSpec } from "../../core/domain.js";
 import {
@@ -1709,6 +1709,7 @@ export class AndroidDriver implements Driver {
           "init.svc.bootanim",
         ]);
         if (bootAnimation.stdout.trim() === "" || bootAnimation.stdout.trim() === "stopped") {
+          await this.#confirmAvdAnswers(data);
           return;
         }
       }
@@ -1716,6 +1717,42 @@ export class AndroidDriver implements Driver {
       await this.#delay(
         Math.min(PORT_POLL_INTERVAL_MS, this.#readinessTimeoutMs - (this.#clock.now() - startedAt)),
       );
+    }
+  }
+
+  /**
+   * Proves the emulator that answered the readiness wait on `data.serial` runs this device's
+   * AVD, by the AVD directory it reports: a directory inside the device root is Simlock's,
+   * a name is not (safety rule 8). An emulator whose console port is already held exits
+   * without answering, so the one that answers is whoever holds the port -- another device,
+   * another Simlock instance, the user's own emulator. Refusing here, before any mark,
+   * snapshot or baseline touches it, is what keeps a port collision from readying a device
+   * at another device's address. The reported path is compared whole, and through
+   * `realpath` when the two spellings differ (an ancestor symlink such as macOS's `/var` ->
+   * `/private/var`); anything unreadable fails closed.
+   */
+  async #confirmAvdAnswers(data: AndroidDriverData): Promise<void> {
+    const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
+    const result = await this.#runOrThrow(this.#sdk.adb, ["-s", data.serial, "emu", "avd", "path"]);
+    const answered = answeredAvdPath(result.stdout);
+    if (answered === expected || (await this.#sameDirectory(answered, expected))) {
+      return;
+    }
+    throw new DriverCrashError(
+      `Refusing to ready ${data.avdName}: the emulator answering on ${data.serial} runs ${JSON.stringify(answered)}, not ${expected} -- another emulator holds its console port`,
+    );
+  }
+
+  async #sameDirectory(left: string, right: string): Promise<boolean> {
+    if (!isAbsolute(left)) return false;
+    try {
+      const [realLeft, realRight] = await Promise.all([
+        this.#filesystem.realpath(left),
+        this.#filesystem.realpath(right),
+      ]);
+      return realLeft === realRight;
+    } catch {
+      return false;
     }
   }
 
@@ -2143,6 +2180,16 @@ function iniValues(contents: string, key: RegExp): string[] {
 /** An image's directory relative to the SDK root, as an AVD's `image.sysdir.N` names it. */
 function relativeImageDirectory(image: SystemImage): string {
   return `system-images/android-${image.apiLevel}/${image.tag}/${image.abi}`;
+}
+
+/**
+ * The AVD directory in an `adb emu avd path` answer: its first non-empty line, which the
+ * console follows with an `OK` line, with CR line endings and trailing slashes dropped.
+ * An error answer (`KO: ...`) comes back as itself and matches no directory.
+ */
+function answeredAvdPath(stdout: string): string {
+  const line = stdout.split(/\r?\n/).find((entry) => entry.trim() !== "") ?? "";
+  return line.trim().replace(/(?<=.)\/+$/, "");
 }
 
 function serialFor(port: number): string {

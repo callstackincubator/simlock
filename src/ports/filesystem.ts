@@ -77,7 +77,8 @@ export interface Filesystem {
    */
   mkdir(path: string, options?: { readonly mode?: number }): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
-  /** Fully resolved real path. Used for diagnostics, never for rejection. */
+  /** Fully resolved real path. Used for diagnostics, and to recognise one directory under two
+   * spellings -- never to reject a path that already matched without it. */
   realpath(path: string): Promise<string>;
   readdir(path: string): Promise<string[]>;
   exists(path: string): Promise<boolean>;
@@ -411,7 +412,6 @@ export class MemoryFilesystem implements Filesystem {
     this.#rawEntryAt(path).mode = mode & 0o777;
   }
 
-  // fallow-ignore-next-line unused-class-member -- Filesystem.realpath contract; only tests reach this implementation of it.
   async realpath(path: string): Promise<string> {
     this.#failIfDefined(path);
     const resolved = this.#resolveLinks(path, 0);
