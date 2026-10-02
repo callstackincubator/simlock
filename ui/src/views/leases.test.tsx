@@ -108,13 +108,22 @@ describe("the leases views", () => {
     expect(cells(html, "Last renewed")).toEqual(["30 s ago"]);
   });
 
+  it("no leases shows as one line saying so", () => {
+    expect(text(table([], [token()]))).toBe("No leases.");
+  });
+
   it("a worker's leases are the ones that name it, or every one on a single host", () => {
     const onA = lease({ id: "a", workerId: "wrk_a" });
     const onB = lease({ id: "b", workerId: "wrk_b" });
     const local = lease({ id: "local" });
 
-    expect(leasesOnWorker([onA, onB], "wrk_a")).toEqual([onA]);
-    expect(leasesOnWorker([local], "wrk_host")).toEqual([local]);
+    const a = { ...HOST, id: "wrk_a" };
+    const b = { ...HOST, id: "wrk_b" };
+
+    expect(leasesOnWorker([onA, onB], "wrk_a", [a, b])).toEqual([onA]);
+    expect(leasesOnWorker([local], "wrk_host", [HOST])).toEqual([local]);
+    // A lease that names no worker, among several, is on none of them.
+    expect(leasesOnWorker([local], "wrk_a", [a, b])).toEqual([]);
   });
 
   it("a gateway lease's page path has no `.` in its last segment, and names the lease again", () => {
@@ -125,6 +134,8 @@ describe("the leases views", () => {
     expect(path.slice(path.lastIndexOf("/") + 1)).not.toContain(".");
     expect(leaseIdFrom(path)).toBe(id);
     expect(leaseIdFrom("/leases")).toBeUndefined();
+    // A malformed escape in a pasted address is read as written, not thrown.
+    expect(leaseIdFrom("/leases/lse_%E0%A4%A/")).toBe("lse_%E0%A4%A");
   });
 
   it("a lease's details show its request id when it has one, and its udid", () => {
@@ -135,6 +146,7 @@ describe("the leases views", () => {
       expiresAt: new Date(NOW + 125_000).toISOString(),
       id: "lse_1",
       mode: "slim",
+      imageTag: "base",
       requestId: "req_7d1a",
       udid: "ABCD-1234",
     };
@@ -159,6 +171,9 @@ describe("the leases views", () => {
     expect(withRequest).toContain("Worker mac-mini-1");
     expect(withRequest).toContain("UDID ABCD-1234");
     expect(withRequest).toContain("Last renewed 30 s ago");
+    expect(withRequest).toContain("Granted 1 min 30 s ago");
+    expect(withRequest).toContain("Expires in 2 min 5 s");
+    expect(withRequest).toContain("Image tag base");
     expect(withRequest).toContain("Request req_7d1a");
     expect(withoutRequest).not.toContain("Request");
   });

@@ -69,7 +69,7 @@ export function WorkerLeases(props: {
     <Loaded state={leases}>
       {(list) => (
         <LeaseTable
-          leases={leasesOnWorker(list.leases, props.worker.id)}
+          leases={leasesOnWorker(list.leases, props.worker.id, props.workers)}
           tokens={tokens}
           workers={props.workers}
           now={props.now}

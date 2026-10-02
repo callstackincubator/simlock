@@ -66,12 +66,13 @@ function workerOfLease(
   return workers.find((worker) => worker.id === lease.workerId);
 }
 
-/** The leases on one worker. On a single host no lease names a worker, and all are its own. */
+/** The leases on one worker, by the same rule `workerOfLease` names a lease's worker. */
 export function leasesOnWorker(
   leases: readonly LeaseRecord[],
   workerId: string,
+  workers: readonly WorkerView[],
 ): readonly LeaseRecord[] {
-  return leases.filter((lease) => lease.workerId === undefined || lease.workerId === workerId);
+  return leases.filter((lease) => workerOfLease(lease, workers)?.id === workerId);
 }
 
 /** The device a lease holds, as its worker reports it. A device id is matched on its own worker. */
