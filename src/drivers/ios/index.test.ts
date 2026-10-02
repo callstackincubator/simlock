@@ -3737,9 +3737,14 @@ describe("IosSimctlDriver listComponents()", () => {
       ]);
       const driver = await createDriver(runner);
 
-      await expect(driver.removeComponent(receipt, { signal: signal() })).rejects.toThrow(
-        "ios 26.4 is still installed after it was removed",
+      // The clock never moves, so a removal that waited would never settle.
+      const error = await settledValue(
+        driver.removeComponent(receipt, { signal: signal() }).catch((caught: unknown) => caught),
       );
+
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect(error).toMatchObject({ message: "ios 26.4 is still installed after it was removed" });
+      expect(runner.calls).toHaveLength(6);
     });
 
     it("answers the removal with its size and residue when simctl runtime list shows the image as Deleting after simctl runtime delete returns and drops it seconds later (#259)", async () => {
