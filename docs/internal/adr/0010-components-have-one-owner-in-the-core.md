@@ -14,6 +14,11 @@
   `--allow-download` does nothing through a gateway "until the downloads
   feature is specified" becomes permanent (§7). Changes safety rules 1 and
   4; each changes in the task that makes its new text true (§4, §8).
+- **Amended:** §8 by
+  [#241](https://github.com/callstackincubator/simlock/issues/241), before
+  it was implemented, on the maintainer's decision: a foreign device counts
+  as a user when the driver says it is one, and never-used iOS simulators do
+  not.
 - **Depends on:** ADR 0003 (the contract), ADR 0005 (the gateway), ADR 0008
   (the catalog).
 

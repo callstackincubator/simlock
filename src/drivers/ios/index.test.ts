@@ -3309,6 +3309,28 @@ describe("IosSimctlDriver listComponents()", () => {
     expect(listed.map(({ foreignDevices }) => foreignDevices)).toEqual([1]);
   });
 
+  it("counts a default-set entry that is not a device object as a user, so an unreadable entry never unblocks a removal (#241)", async () => {
+    const fresh = image("18.6", "22G86");
+    const runner = new ScriptedProcessRunner([
+      imagesListed([fresh]),
+      {
+        match: defaultSetInvocation,
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            devices: { [fresh.runtime]: ["garbled", null, { name: "fresh", udid: "U-1" }] },
+          }),
+        },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices }) => foreignDevices)).toEqual([2]);
+  });
+
   it("lists a runtime with the receipt installComponent returned for it, and runs no installer to list", async () => {
     const before = [
       { build: "22E238", id: "IMG-184", runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-4" },
@@ -3545,6 +3567,23 @@ describe("IosSimctlDriver listComponents()", () => {
       expect(removal.residue).toBe(
         "3 never-used simulators in the default device set are now unavailable; Simlock does " +
           "not delete simulators there -- `xcrun simctl delete unavailable` clears them",
+      );
+    });
+
+    it("names a single unused default-set device in the singular in residue (#241)", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({ [target.runtime]: { unused: 1 } }),
+        deleted,
+        imagesListed([]),
+        defaultSetListed({ [target.runtime]: { unused: 1 } }),
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal.residue).toMatch(
+        /^1 never-used simulator in the default device set is now unavailable;/,
       );
     });
 
