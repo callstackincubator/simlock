@@ -3283,6 +3283,73 @@ describe("IosSimctlDriver listComponents()", () => {
     ]);
   });
 
+  it("leaves out an image with no version or no platform, leaves out a size that is not a byte count, and counts no device under a runtime that lists none", async () => {
+    const ios = "com.apple.platform.iphonesimulator";
+    const runtimeList = {
+      "IMG-A": {
+        build: "22E238",
+        identifier: "IMG-A",
+        platformIdentifier: ios,
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+        sizeBytes: -1,
+        version: "18.4",
+      },
+      "IMG-B": {
+        build: "23A343",
+        identifier: "IMG-B",
+        platformIdentifier: ios,
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
+        sizeBytes: 1.5,
+      },
+      "IMG-C": {
+        build: "23A344",
+        identifier: "IMG-C",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-1",
+        sizeBytes: 10,
+        version: "26.1",
+      },
+    };
+    const runner = new ScriptedProcessRunner([
+      {
+        match: runtimeListInvocation,
+        result: { code: 0, stderr: "", stdout: JSON.stringify(runtimeList) },
+      },
+      {
+        match: defaultSetInvocation,
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            devices: { "com.apple.CoreSimulator.SimRuntime.iOS-18-4": "not a list" },
+          }),
+        },
+      },
+    ]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.listComponents()).resolves.toEqual([
+      {
+        foreignDevices: 0,
+        receipt: { build: "22E238", image: "IMG-A" },
+        variant: "22E238",
+        version: "18.4",
+      },
+    ]);
+  });
+
+  it("rejects with DriverCrashError when the default device set answers with something that is not JSON", async () => {
+    const runner = new ScriptedProcessRunner([
+      imagesListed([image("18.4", "22E238")]),
+      { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout: "not json" } },
+    ]);
+    const driver = await createDriver(runner);
+
+    const error = await driver.listComponents().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DriverCrashError);
+    expect((error as Error).message).toContain("Could not parse simctl device list");
+  });
+
   it("rejects when the default device set cannot be read, rather than report no foreign devices", async () => {
     const runner = new ScriptedProcessRunner([
       imagesListed([image("18.4", "22E238")]),

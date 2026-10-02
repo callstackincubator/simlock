@@ -1974,11 +1974,12 @@ function imageReceipt(image: RuntimeImage): ComponentReceipt {
   return { build: image.build ?? "", image: image.identifier };
 }
 
-/** Whether an image is an iOS simulator runtime, not a watchOS, tvOS or visionOS one. */
+/**
+ * Whether an image is an iOS simulator runtime, not a watchOS, tvOS or visionOS one. An image
+ * that does not say which platform it is for is not listed: nothing else proves it is iOS.
+ */
 function isIosImage(image: RuntimeImage): boolean {
-  return image.platformIdentifier === undefined
-    ? image.runtimeIdentifier.includes(".SimRuntime.iOS-")
-    : image.platformIdentifier === IOS_SIMULATOR_PLATFORM;
+  return image.platformIdentifier === IOS_SIMULATOR_PLATFORM;
 }
 
 /**

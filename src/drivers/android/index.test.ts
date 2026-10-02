@@ -2636,13 +2636,15 @@ describe("AndroidDriver listComponents()", () => {
     ]);
   });
 
-  it("looks for an AVD beside its unreadable .ini, counts nothing for an unreadable config.ini, and still lists the image", async () => {
+  it("finds an AVD beside a pointer file with an empty path, counts nothing for an AVD whose directory is gone, and still lists the image", async () => {
     const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
     const sysdir = "system-images/android-35/google_apis/arm64-v8a/";
-    await userAvd(filesystem, "Locked", sysdir);
-    filesystem.defineFailure(`${userAvdHome}/Locked.ini`, "EACCES");
-    await userAvd(filesystem, "Broken", sysdir);
-    filesystem.defineFailure(`${userAvdHome}/Broken.avd/config.ini`, "EACCES");
+    await userAvd(filesystem, "Beside", sysdir);
+    await filesystem.writeFileAtomic(
+      `${userAvdHome}/Beside.ini`,
+      "avd.ini.encoding=UTF-8\npath=\n",
+    );
+    await filesystem.writeFileAtomic(`${userAvdHome}/Gone.ini`, "path=/nowhere/Gone.avd\n");
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
     const listed = await driver.listComponents();
@@ -2651,6 +2653,22 @@ describe("AndroidDriver listComponents()", () => {
       { foreignDevices: 1, version: "35" },
     ]);
   });
+
+  it.each([
+    ["the user's AVD home", () => userAvdHome],
+    ["an AVD's pointer file", () => `${userAvdHome}/Locked.ini`],
+    ["an AVD's config.ini", () => `${userAvdHome}/Locked.avd/config.ini`],
+  ])(
+    "rejects when %s cannot be read, rather than count the AVDs there as using nothing",
+    async (_label, unreadable) => {
+      const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+      await userAvd(filesystem, "Locked", "system-images/android-35/google_apis/arm64-v8a/");
+      filesystem.defineFailure(unreadable(), "EACCES");
+      const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+
+      await expect(driver.listComponents()).rejects.toMatchObject({ code: "EACCES" });
+    },
+  );
 
   it("leaves sizeBytes out when the image directory cannot be read, and still lists the image", async () => {
     const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });

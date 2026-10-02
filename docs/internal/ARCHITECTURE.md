@@ -1456,7 +1456,8 @@ counts devices per runtime in the default device set with an unscoped
 `simctl list -j devices`, the one unscoped call besides the pre-root path's.
 Android reads the installed images, sizes each directory with
 `Filesystem.directorySize`, and counts AVDs in the user's own AVD home whose
-`config.ini` names the image's directory. Counting foreign devices is the
+`config.ini` names the image's directory. On both platforms a foreign-device
+read that fails rejects the listing rather than undercount. Counting foreign devices is the
 only place a driver looks at devices outside its root; it reads them and
 never writes there (safety rule 1).
 

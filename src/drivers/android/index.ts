@@ -1238,8 +1238,9 @@ export class AndroidDriver implements Driver {
 
   /**
    * For every AVD in the user's own AVD home, the image directories its `config.ini` names
-   * (`image.sysdir.N`), without trailing slashes. Read-only (safety rule 1). A home that does not
-   * exist holds no AVD; an AVD whose files cannot be read names no image.
+   * (`image.sysdir.N`), without trailing slashes. Read-only (safety rule 1). A home, pointer file
+   * or `config.ini` that does not exist names no image. Any other read failure rejects: a count
+   * that silently left an AVD out would read as "nothing of the user's uses this image".
    */
   async #foreignAvdImageDirectories(): Promise<readonly (readonly string[])[]> {
     const home = this.#legacyAvdHome;
@@ -1253,23 +1254,26 @@ export class AndroidDriver implements Driver {
     const avds = entries
       .filter((entry) => entry.endsWith(".ini"))
       .map(async (entry) => {
-        let avdPath = join(home, `${entry.slice(0, -".ini".length)}.avd`);
-        try {
-          avdPath =
-            iniValues(await this.#filesystem.readFile(join(home, entry)), /^path$/)[0] ?? avdPath;
-        } catch {
-          // No pointer file to read: the AVD sits beside it, where avdmanager puts it.
-        }
-        try {
-          const config = await this.#filesystem.readFile(join(avdPath, "config.ini"));
-          return iniValues(config, /^image\.sysdir\.\d+$/).map((value) =>
-            value.replace(/\/+$/, ""),
-          );
-        } catch {
-          return [];
-        }
+        const pointer = await this.#readIfPresent(join(home, entry));
+        if (pointer === undefined) return [];
+        // `path=` names the AVD's directory; avdmanager puts it beside the pointer by default.
+        const avdPath =
+          iniValues(pointer, /^path$/)[0] ?? join(home, `${entry.slice(0, -".ini".length)}.avd`);
+        const config = await this.#readIfPresent(join(avdPath, "config.ini"));
+        if (config === undefined) return [];
+        return iniValues(config, /^image\.sysdir\.\d+$/).map((value) => value.replace(/\/+$/, ""));
       });
     return Promise.all(avds);
+  }
+
+  /** A file's contents, or `undefined` when it does not exist; any other failure rejects. */
+  async #readIfPresent(path: string): Promise<string | undefined> {
+    try {
+      return await this.#filesystem.readFile(path);
+    } catch (error: unknown) {
+      if (isMissingPathError(error)) return undefined;
+      throw error;
+    }
   }
 
   async #installedComponent(image: SystemImage): Promise<InstalledComponent> {
