@@ -2654,6 +2654,20 @@ describe("AndroidDriver listComponents()", () => {
     ]);
   });
 
+  it("counts no foreign AVD when the user's AVD home is Simlock's own root, as in a daemon started from a lease's environment", async () => {
+    const filesystem = await androidFilesystem({ images: [["35", "google_apis", "arm64-v8a"]] });
+    await userAvd(filesystem, "simlock_one", "system-images/android-35/google_apis/arm64-v8a/", {
+      avdHome: avdDirectory,
+    });
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]), {
+      avdHome: avdDirectory,
+    });
+
+    const listed = await driver.listComponents();
+
+    expect(listed.map(({ foreignDevices }) => foreignDevices)).toEqual([0]);
+  });
+
   it.each([
     ["the user's AVD home", () => userAvdHome],
     ["an AVD's pointer file", () => `${userAvdHome}/Locked.ini`],
@@ -2920,6 +2934,8 @@ async function createDriver(
   processRunner: ScriptedProcessRunner,
   options: {
     readonly acceptAndroidLicenses?: boolean;
+    /** `ANDROID_AVD_HOME` in the environment the daemon started with; unset by default. */
+    readonly avdHome?: string;
     readonly clock?: FakeClock;
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
     readonly emulator?: AndroidEmulatorLaunchOptions;
@@ -2940,7 +2956,10 @@ async function createDriver(
     ...onlyProvided(options),
     clock: options.clock ?? new FakeClock(),
     driverConfig,
-    env: { ANDROID_HOME: sdk },
+    env: {
+      ANDROID_HOME: sdk,
+      ...(options.avdHome === undefined ? {} : { ANDROID_AVD_HOME: options.avdHome }),
+    },
     filesystem,
     homeDirectory: home,
     hostAbi: "arm64-v8a",

@@ -3350,6 +3350,19 @@ describe("IosSimctlDriver listComponents()", () => {
     expect((error as Error).message).toContain("Could not parse simctl device list");
   });
 
+  it("rejects with DriverCrashError when the default device set answers JSON with no devices map", async () => {
+    const runner = new ScriptedProcessRunner([
+      imagesListed([image("18.4", "22E238")]),
+      { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout: "{}" } },
+    ]);
+    const driver = await createDriver(runner);
+
+    const error = await driver.listComponents().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DriverCrashError);
+    expect((error as Error).message).toBe("Invalid simctl device list JSON");
+  });
+
   it("rejects when the default device set cannot be read, rather than report no foreign devices", async () => {
     const runner = new ScriptedProcessRunner([
       imagesListed([image("18.4", "22E238")]),

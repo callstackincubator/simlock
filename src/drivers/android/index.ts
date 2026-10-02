@@ -1238,12 +1238,15 @@ export class AndroidDriver implements Driver {
 
   /**
    * For every AVD in the user's own AVD home, the image directories its `config.ini` names
-   * (`image.sysdir.N`), without trailing slashes. Read-only (safety rule 1). A home, pointer file
-   * or `config.ini` that does not exist names no image. Any other read failure rejects: a count
-   * that silently left an AVD out would read as "nothing of the user's uses this image".
+   * (`image.sysdir.N`), without trailing slashes. Read-only (safety rule 1). A home or a
+   * `config.ini` that does not exist names no image. Any other read failure rejects: a count that
+   * silently left an AVD out would read as "nothing of the user's uses this image". A home that is
+   * this driver's own root -- the daemon started from a lease's environment -- holds Simlock's
+   * AVDs, which the registry counts, and none of the user's.
    */
   async #foreignAvdImageDirectories(): Promise<readonly (readonly string[])[]> {
     const home = this.#legacyAvdHome;
+    if (home === this.#deviceRoot) return [];
     let entries: string[];
     try {
       entries = await this.#filesystem.readdir(home);
@@ -1254,8 +1257,7 @@ export class AndroidDriver implements Driver {
     const avds = entries
       .filter((entry) => entry.endsWith(".ini"))
       .map(async (entry) => {
-        const pointer = await this.#readIfPresent(join(home, entry));
-        if (pointer === undefined) return [];
+        const pointer = await this.#filesystem.readFile(join(home, entry));
         // `path=` names the AVD's directory; avdmanager puts it beside the pointer by default.
         const avdPath =
           iniValues(pointer, /^path$/)[0] ?? join(home, `${entry.slice(0, -".ini".length)}.avd`);

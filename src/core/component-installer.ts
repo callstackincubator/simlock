@@ -250,7 +250,6 @@ export class ComponentInstaller {
         }
       }),
     );
-    // Read after every driver answered, so a record written while they ran is seen.
     const { components: records, devices } = this.options.registry.snapshot;
     return listed
       .flatMap(({ components, platform: listedPlatform }) =>

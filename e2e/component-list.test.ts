@@ -56,7 +56,7 @@ describe("simlock component list", () => {
     ]);
 
     expect(listed.code, listed.stderr).toBe(0);
-    expect(listed.stderr).toContain("notice");
+    expect(listed.stderr).toContain("connecting as agent");
     expect(listed.json).toMatchObject({ components: [{ platform: "ios", version: "18.4" }] });
   });
 });
