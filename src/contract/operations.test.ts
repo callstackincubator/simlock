@@ -615,6 +615,17 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
   });
 
+  it("status.get: rejects a RAM budget whose use is negative or not finite", () => {
+    const shape = OPERATIONS["status.get"].output.shape.capacity.shape.ramBudget;
+    const budget = { limitBytes: 8, overLimit: false, usedBytes: 1 };
+
+    expect(shape.parse(budget)).toEqual(budget);
+    for (const usedBytes of [-1, Number.POSITIVE_INFINITY, Number.NaN]) {
+      expect(() => shape.parse({ ...budget, usedBytes })).toThrow();
+    }
+    expect(() => shape.parse({ ...budget, limitBytes: Number.POSITIVE_INFINITY })).toThrow();
+  });
+
   it("config.get: keeps both slim RAM sizes of the resource strategy when they are set", () => {
     const ramBudget = {
       androidBytesPerDevice: 4,

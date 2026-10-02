@@ -1216,11 +1216,6 @@ describe("LeaseEngine", () => {
   });
 });
 
-// #43: startup convergence used to await each orphaned held lease's device reclaim
-// inline (an erase measured ~34s for one simulator), so N orphaned leases cost N
-// serial erases before any other request could be served. These cover the shape
-// that replaced it: the lease is released registry-only on the convergence path,
-// and its reclaim proceeds in the background.
 describe("LeaseEngine RAM budget by mode", () => {
   const slimRequest = { ...request, mode: "slim" } as const;
   const roomy: CapacityLimits = {
@@ -1239,7 +1234,7 @@ describe("LeaseEngine RAM budget by mode", () => {
     return driver.calls.filter((call) => call.operation === operation).length;
   }
 
-  it("refuses a full spec, which a slim request on a runtime that cannot be slimmed resolves to, at the full size before any driver call", async () => {
+  it("refuses a full spec, which a slim request on a runtime that cannot be slimmed resolves to, at the full size before it provisions a device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.4", "26.5"],
@@ -1359,6 +1354,11 @@ describe("LeaseEngine RAM budget by mode", () => {
   });
 });
 
+// #43: startup convergence used to await each orphaned held lease's device reclaim
+// inline (an erase measured ~34s for one simulator), so N orphaned leases cost N
+// serial erases before any other request could be served. These cover the shape
+// that replaced it: the lease is released registry-only on the convergence path,
+// and its reclaim proceeds in the background.
 describe("LeaseEngine startup reclaim backgrounding (#43)", () => {
   it("converges without waiting for an in-flight reclaim, and a fresh request is served immediately after", async () => {
     const clock = new FakeClock(1_000);

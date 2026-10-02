@@ -1858,11 +1858,11 @@ function formatWorkers(workers: WorkerView[]): string {
     .join("\n");
 }
 
-/** `macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9` -- the machine, then each tool. */
 function formatGibibytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 }
 
+/** `macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9` -- the machine, then each tool. */
 function formatHost(host: StatusGetOutput["host"]): string {
   const system = `${host.os} ${host.osVersion} ${host.arch}`;
   const tools = host.tools.map(

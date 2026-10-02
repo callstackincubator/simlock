@@ -46,6 +46,14 @@ describe("capacity devices", () => {
     );
   });
 
+  it("counts a device quarantined from provisioning by its record's full placeholder, never below it", () => {
+    expect(capacityDevice(record({ mode: "full", spec: slimSpec, state: "quarantined" }))).toEqual({
+      mode: "full",
+      platform: "ios",
+      state: "quarantined",
+    });
+  });
+
   it("counts a planned device by its spec's mode, and a spec with no mode as full", () => {
     expect(plannedCapacityDevice(slimSpec)).toEqual({ mode: "slim", platform: "ios" });
     expect(plannedCapacityDevice({ ...fullSpec, platform: "android" })).toEqual({
