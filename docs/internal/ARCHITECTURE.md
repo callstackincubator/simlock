@@ -1113,8 +1113,10 @@ Conclusions baked into the drivers:
   then `adb emu avd path` must name the device's own `<deviceRoot>/<avd>.avd`
   (whole path, or the same directory by `realpath`). Whatever answers on the
   serial is whoever holds the console port, so a collision fails the boot with
-  `DriverCrashError` before any mark, snapshot or baseline touches that
-  emulator; an AVD name proves nothing (safety rule 8).
+  `DriverCrashError` before a mark or a baseline capture touches that emulator,
+  and the shutdown or destroy that follows sends it no `emu kill`; an AVD name
+  proves nothing (safety rule 8). Reclaim's `emu avd snapshot load` still goes
+  to the serial before its readiness wait checks it.
 
 ## Leases
 
