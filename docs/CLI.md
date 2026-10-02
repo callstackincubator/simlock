@@ -442,8 +442,8 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
 - `shutdown all` — it stops every device in the set, for every agent, and each
   interrupted lease spends its recovery budget rebooting; one that runs out
   ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
-- `runtime delete` — it deletes a runtime shared with Xcode and other tools,
-  not just Simlock. It does not free the disk the runtime's download
+- `runtime delete` — it deletes a runtime shared with Xcode.
+  It does not free the disk the runtime's download
   takes either (see `doctor`'s `runtime-cache-unreclaimable` finding). Delete
   it through Xcode if that is what you mean.
 - `--set` and `--profiles`, wherever they appear *before* the subcommand and

@@ -1648,6 +1648,9 @@ describe("IosSimctlDriver", () => {
     expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(
       PassthroughRefusedError,
     );
+    expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(
+      /shared with Xcode and other tools/,
+    );
     expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(/through Xcode/);
   });
 

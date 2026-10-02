@@ -1436,7 +1436,7 @@ export class IosSimctlDriver implements Driver {
     if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
       this.#refuse(
         "runtime delete",
-        "it deletes a runtime shared with Xcode and other tools, not just Simlock. Delete it through Xcode if that is really what you meant.",
+        "it deletes a runtime shared with Xcode and other tools. Delete it through Xcode if that is really what you meant.",
       );
     }
   }
