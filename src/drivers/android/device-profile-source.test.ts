@@ -158,6 +158,31 @@ describe("parseDevicesXml", () => {
     ]);
   });
 
+  it("maps ram written as <d:ram unit> with the number as its text, the shape Android Studio writes", () => {
+    const xml = `<?xml version="1.0"?>
+      <d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">
+        <d:device>
+          <d:name>Studio Phone</d:name>
+          <d:hardware>
+            <d:keyboard>nokeys</d:keyboard>
+            <d:nav>nonav</d:nav>
+            <d:ram unit="GiB">2</d:ram>
+            <d:buttons>soft</d:buttons>
+          </d:hardware>
+        </d:device>
+      </d:devices>`;
+
+    expect(parseDevicesXml(xml)).toEqual([
+      {
+        hardwareProperties: {
+          "hw.device.name": "Studio Phone",
+          "hw.ramSize": "2048",
+        },
+        name: "Studio Phone",
+      },
+    ]);
+  });
+
   it("skips a device with no name", () => {
     const xml = `<d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">
       <d:device><d:hardware><d:ram><d:ram-size unit="MiB">2048</d:ram-size></d:ram></d:hardware></d:device>
