@@ -1449,9 +1449,12 @@ describe("redactConfig", () => {
       gateway: { label: "mac-1", token: "secret-join-token", url: "wss://gw.example:4700" },
     });
 
+    const before = structuredClone(config);
+
     const redacted = redactConfig(config);
 
-    expect(redacted).toEqual({ ...config, gateway: { ...config.gateway, token: REDACTED_VALUE } });
+    expect(redacted).toEqual({ ...before, gateway: { ...before.gateway, token: REDACTED_VALUE } });
+    expect(config).toEqual(before);
     expect(config.gateway.token).toBe("secret-join-token");
   });
 
