@@ -30,6 +30,7 @@ export type WorkerViewSnapshot = Pick<
   | "downloads"
   | "health"
   | "host"
+  | "installs"
   | "lease"
   | "leases"
   | "queueDepth"

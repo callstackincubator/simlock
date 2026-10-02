@@ -457,13 +457,16 @@ manually-advanced `Clock`, exactly as the core's tests script drivers.
 A **worker view** is what the gateway currently knows about one worker: its
 id, `label`, daemon health and version, negotiated protocol range (only when
 `incompatible`), capacity per platform, queue depth, leases, devices,
-catalog, host facts, effective download policy and `lease.maxTtlMs`, and
-drain state. On connect the gateway calls `status.get`, `list.get`,
-`catalog.get`, `config.get`, and `events.subscribe` on the worker and builds
-the view from the answers. It refreshes status and list on every worker event
-that changes capacity or leases. A slow periodic tick refreshes all four
-reads, catalog and config included, so a runtime installed on a worker
-reaches its view without a restart of either side.
+catalog, host facts, installs in progress, effective download policy and
+timeout, `lease.maxTtlMs`, and drain state. On connect the gateway calls
+`status.get`, `list.get`, `catalog.get`, `config.get`, and `events.subscribe`
+on the worker and builds the view from the answers. It refreshes status and
+list on every worker event that changes capacity or leases, and on
+`component.install-started`, `component.installed` and
+`component.install-failed` (ADR 0010 §7); after `component.installed` it
+re-reads catalog and config too. A slow periodic tick refreshes all four
+reads, catalog and config included, so a runtime installed on a worker by
+other means still reaches its view without a restart of either side.
 
 The **host facts** are the `host` block of the worker's `status.get`
 (ADR 0008 §5-§8): operating system, version, architecture from the host

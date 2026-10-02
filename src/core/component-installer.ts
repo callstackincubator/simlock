@@ -52,6 +52,25 @@ export interface ComponentInstallerOptions {
   readonly timeoutMs: number;
 }
 
+/**
+ * One install `status.get` lists (ADR 0010 §3). `waiting`: queued behind another install on its
+ * platform, or at the front checking whether it is still needed and fits on disk. `downloading`:
+ * the driver's installer is running, or has returned and its record is being written.
+ */
+export interface ComponentInstallInProgress {
+  readonly platform: Platform;
+  /** Carried unread, as the driver named it. */
+  readonly component: string;
+  readonly state: "waiting" | "downloading";
+  /** When the first call for this install arrived. */
+  readonly since: number;
+  /** How many calls are joined to it. */
+  readonly waiters: number;
+}
+
+/** `inProgress()` lists at most this many installs, the oldest first. */
+const MAX_LISTED_INSTALLS = 16;
+
 /** Every call still open when the daemon stops rejects with this; nothing is resumed. */
 export class ComponentInstallerClosedError extends Error {
   constructor() {
@@ -76,6 +95,8 @@ interface Install {
   readonly requesterId: string | undefined;
   /** The calls still open on it. A call leaves this list exactly when it settles. */
   readonly calls: InstallCall[];
+  /** When the call that created it arrived. */
+  readonly since: number;
   state: InstallState;
   abort: AbortController | undefined;
 }
@@ -108,7 +129,6 @@ export class ComponentInstaller {
 
   constructor(private readonly options: ComponentInstallerOptions) {}
 
-  // fallow-ignore-next-line unused-class-member -- called through the acquisition coordinator's components port.
   install(request: ComponentInstallRequest): Promise<ComponentInstallOutcome> {
     if (this.#closed) return Promise.reject(new ComponentInstallerClosedError());
     return new Promise<ComponentInstallOutcome>((resolve, reject) => {
@@ -131,6 +151,32 @@ export class ComponentInstaller {
       if (queue[0] !== install) notify(call, { stage: "waiting" });
       this.#pump(request.platform);
     });
+  }
+
+  /**
+   * The installs waiting or running, read from the queues themselves (architecture rule 12):
+   * the oldest `MAX_LISTED_INSTALLS`, oldest first. An install no call waits on any more is not
+   * listed: it has ended for everyone who asked, even while it is still in its queue.
+   */
+  // fallow-ignore-next-line unused-class-member -- called through the dispatcher's `components` option, a `Pick` of this class.
+  inProgress(): readonly ComponentInstallInProgress[] {
+    const listed: ComponentInstallInProgress[] = [];
+    for (const queue of this.#queues.values()) {
+      for (const install of queue) {
+        if (install.state === "ended" || install.calls.length === 0) continue;
+        listed.push({
+          component: install.component,
+          platform: install.platform,
+          since: install.since,
+          state:
+            install.state === "running" || install.state === "recording"
+              ? "downloading"
+              : "waiting",
+          waiters: install.calls.length,
+        });
+      }
+    }
+    return listed.sort((a, b) => a.since - b.since).slice(0, MAX_LISTED_INSTALLS);
   }
 
   /**
@@ -169,6 +215,7 @@ export class ComponentInstaller {
       component: request.component,
       platform: request.platform,
       requesterId: request.requesterId,
+      since: this.options.clock.now(),
       state: "waiting",
     };
     queue.push(install);

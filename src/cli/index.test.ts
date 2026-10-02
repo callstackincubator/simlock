@@ -1876,6 +1876,40 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
     );
   });
 
+  it("prints each worker's installs in progress under it", async () => {
+    const output = outputCapture();
+    const environment = output.environmentWith({
+      clock: new FakeClock(61_000),
+      connectAdmin: async () =>
+        fakeClient({
+          listWorkers: () =>
+            Promise.resolve({
+              workers: [
+                {
+                  ...connectedWorker,
+                  installs: [
+                    {
+                      component: "26.4",
+                      platform: "ios" as const,
+                      since: 1_000,
+                      state: "downloading" as const,
+                      waiters: 2,
+                    },
+                  ],
+                },
+                { ...connectedWorker, id: "wrk_2", installs: [] },
+              ],
+            }),
+        }),
+    });
+
+    await runCli(["worker", "list"], environment);
+
+    expect(output.stdout).toContain(
+      "1 lease(s)\n  Install ios 26.4: downloading for 60s, 2 waiters\nwrk_2 (mac-mini-1): connected",
+    );
+  });
+
   it("says so plainly when no worker has ever connected", async () => {
     const output = outputCapture();
     const environment = output.environmentWith({ connectAdmin: async () => fakeClient() });
@@ -2101,6 +2135,67 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     await runCli(["status"], environment);
 
     expect(output.stdout).toContain("Host: macOS 15.5 arm64; xcode 16.4 (16F6)\n");
+  });
+
+  it("prints an install line while one runs and none after", async () => {
+    const install = {
+      component: "26.4",
+      platform: "ios" as const,
+      since: 1_000,
+      state: "downloading" as const,
+      waiters: 1,
+    };
+    const print = async (installs: StatusGetOutput["installs"]) => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          clock: new FakeClock(43_000),
+          connectAdmin: async () =>
+            fakeClient({ getStatus: () => Promise.resolve({ ...EMPTY_STATUS, installs }) }),
+        }),
+      );
+      return output.stdout;
+    };
+
+    expect(await print([install])).toContain("Install ios 26.4: downloading for 42s, 1 waiter\n");
+    expect(await print([])).not.toContain("Install ");
+  });
+
+  it("prints a gateway's installs once each, naming the worker, not again under the worker", async () => {
+    const output = outputCapture();
+    const install = {
+      component: "35",
+      platform: "android" as const,
+      since: 0,
+      state: "waiting" as const,
+      waiters: 3,
+    };
+    const status: StatusGetOutput = {
+      ...EMPTY_STATUS,
+      daemon: { health: "running", mode: "gateway" },
+      installs: [{ ...install, workerId: "wrk_1" }],
+      workers: [
+        {
+          catalog: [],
+          connection: "connected",
+          devices: [],
+          drained: false,
+          id: "wrk_1",
+          installs: [install],
+          lastSeenAt: 1,
+          leases: [],
+        },
+      ],
+    };
+    const environment = output.environmentWith({
+      connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+    });
+
+    await runCli(["status"], environment);
+
+    expect(output.stdout.match(/Install /g)).toHaveLength(1);
+    expect(output.stdout).toContain("Install android 35 on wrk_1: waiting for 0s, 3 waiters\n");
   });
 
   it("says worker on a worker, and leaves its devices and leases unqualified", async () => {

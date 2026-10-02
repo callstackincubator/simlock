@@ -5,7 +5,12 @@
  */
 import type { z } from "zod";
 
-import { CATALOG_LIST_LIMITS, OPERATIONS, type Platform } from "../contract/index.js";
+import {
+  CATALOG_LIST_LIMITS,
+  INSTALL_LIST_LIMIT,
+  OPERATIONS,
+  type Platform,
+} from "../contract/index.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
 
@@ -75,6 +80,7 @@ export function aggregateStatus(
     capacity: sumCapacity(views.filter((view) => view.connection === "connected")),
     daemon: { health: options.health, mode: "gateway" },
     host: options.host,
+    installs: fleetInstalls(views),
     devices: views.flatMap((view) =>
       view.devices.map((device) => ({ ...device, workerId: view.id })),
     ),
@@ -88,6 +94,19 @@ export function aggregateStatus(
     queueDepth: options.queueDepth,
     workers: [...views],
   };
+}
+
+/**
+ * ADR 0010 §3/§7: the connected workers' installs, each naming its worker. Connected only, like
+ * capacity: what a machine that dropped off was installing is a last-known fact, not one in
+ * progress. The fleet list has the same bound as one worker's, so it keeps the oldest.
+ */
+function fleetInstalls(views: readonly WorkerView[]): NonNullable<StatusOutput["installs"]> {
+  return views
+    .filter((view) => view.connection === "connected")
+    .flatMap((view) => (view.installs ?? []).map((install) => ({ ...install, workerId: view.id })))
+    .sort((a, b) => a.since - b.since)
+    .slice(0, INSTALL_LIST_LIMIT);
 }
 
 function sumCapacity(views: readonly WorkerView[]): StatusCapacity {

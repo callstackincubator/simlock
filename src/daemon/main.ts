@@ -347,6 +347,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     capacity: leaseEngine,
     catalog: leaseEngine,
     clock,
+    components,
     config,
     doctor,
     driverRejections: rejections,
