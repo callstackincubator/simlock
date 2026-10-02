@@ -1,6 +1,6 @@
 # 0012. A worker answers the fleet operations as a fleet of one
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-02
 - **Issue:** [#88](https://github.com/callstackincubator/simlock/issues/88)
 - **Supersedes:** nothing. Narrows [ADR
