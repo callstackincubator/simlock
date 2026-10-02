@@ -1397,6 +1397,32 @@ describe("ComponentInstaller.remove", () => {
     expect(harness.registry.snapshot.components).toHaveLength(1);
   });
 
+  it("refuses a record whose version is no longer installed saying none is installed, and a record whose version was installed again saying that one is not Simlock's, in a removal and a dry run alike", async () => {
+    // 26.5 is on the machine with another receipt; 25.0 is not on the machine at all.
+    const harness = await createHarness();
+    for (const version of ["25.0", "26.5"]) {
+      await harness.registry.recordComponent({
+        installedAt: 1_000,
+        platform: "ios",
+        receipt: { install: "1", version },
+        version,
+      });
+    }
+
+    for (const dryRun of [false, true]) {
+      await expect(harness.installer.remove(removeIos("25.0", { dryRun }))).rejects.toMatchObject({
+        message: "No ios 25.0 is installed now, so there is nothing to remove",
+        name: "ComponentNotOwnedError",
+      });
+      await expect(harness.installer.remove(removeIos("26.5", { dryRun }))).rejects.toMatchObject({
+        message:
+          "The ios 26.5 installed now is not the one Simlock installed, so Simlock will not remove it",
+        name: "ComponentNotOwnedError",
+      });
+    }
+    expect(removals(harness.ios)).toEqual([]);
+  });
+
   it.each(["provisioning", "ready", "leased", "reclaiming", "quarantined", "shutdown"] as const)(
     "refuses a component a %s registry device uses with ComponentInUseError naming the count, and never calls removeComponent",
     async (state) => {
