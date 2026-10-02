@@ -230,7 +230,9 @@ Each event shows:
 - its time, on your computer's clock face
 - its name, such as `lease.granted`
 - on a gateway, the worker it came from, by its label, or by its id if the
-  worker has no label or the gateway no longer knows it
+  worker has no label or the gateway no longer knows it. A `worker.rejected`
+  event names no worker here: its id is only what the refused worker claimed,
+  and it shows in the payload.
 - its payload, as each key and its value, exactly as the daemon sent it
 
 An event this version of the console does not know still shows, with its

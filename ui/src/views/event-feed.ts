@@ -7,13 +7,22 @@
  * When it loads:
  *
  * - The view opens: the last hour, as `simlock events --since 1h` shows.
- * - The stream opens for the first time: the last hour again. A view opened before the stream
- *   did loads once more after it, so nothing sent between the first load and the stream is lost.
- * - The stream opens again, after a lost daemon or a hidden tab: `since` how long it was closed,
- *   in whole seconds, rounded up.
+ * - The stream opens: what it may have missed. Until the last hour has loaded once, that is the
+ *   last hour again: the stream's first open after a view opened before it, or a view opened
+ *   while the daemon was away. After that, `since` how long the console had not heard from the
+ *   stream, in whole seconds, rounded up.
+ *
+ * A load the daemon refuses shows why, above the events already shown. A load that does not
+ * reach the daemon shows nothing of its own: the connection says the daemon is lost, and the
+ * stream opening again loads what was missed.
  */
 import type { ApiPath } from "../api";
-import type { ResourceState, StreamEvent, StreamOpened } from "../live/connection";
+import {
+  isRefusal,
+  type ResourceState,
+  type StreamEvent,
+  type StreamOpened,
+} from "../live/connection";
 import {
   type ConsoleEvent,
   mergeEvents,
@@ -28,8 +37,10 @@ export class EventFeed {
   readonly #listeners = new Set<() => void>();
   #events: readonly ConsoleEvent[] = [];
   #state: ResourceState<readonly ConsoleEvent[]> = {};
-  /** Whether any load has answered or failed; until then the view says it is loading. */
+  /** Whether a load has answered or been refused; until then the view says it is loading. */
   #settled = false;
+  /** Whether a load has answered. Every load until then is the last hour, so after it only a gap can be missing. */
+  #recentLoaded = false;
   #active = false;
 
   /** `get` reads a route and resolves its JSON body. */
@@ -56,12 +67,13 @@ export class EventFeed {
   /** The stream opened: load what it may have missed. */
   readonly streamOpened = (opened: StreamOpened): void => {
     if (!this.#active) return;
-    this.#load(opened.closedForMs === undefined ? RECENT : sinceFor(opened.closedForMs));
+    const gap = opened.closedForMs;
+    this.#load(gap === undefined || !this.#recentLoaded ? RECENT : sinceFor(gap));
   };
 
   /**
-   * The events, newest first, once a load has settled. `error` is why the latest load failed,
-   * cleared by the next that answers. The same object until it changes.
+   * The events, newest first, once a load has settled. `error` is why the latest load was
+   * refused, cleared by the next that answers. The same object until it changes.
    */
   readonly snapshot = (): ResourceState<readonly ConsoleEvent[]> => this.#state;
 
@@ -73,24 +85,22 @@ export class EventFeed {
   };
 
   #load(since: string): void {
-    this.#get(`/v1/events?since=${since}`).then(
-      (body) => {
-        if (!this.#active) return;
-        let events: readonly ConsoleEvent[];
-        try {
-          events = readReplay(body);
-        } catch (error: unknown) {
-          this.#fail(error);
-          return;
-        }
-        this.#settled = true;
-        this.#events = mergeEvents(this.#events, events);
-        this.#publish({ data: this.#events });
-      },
-      (error: unknown) => {
-        if (this.#active) this.#fail(error);
-      },
-    );
+    this.#get(`/v1/events?since=${since}`)
+      .then(readReplay)
+      .then(
+        (events) => {
+          if (!this.#active) return;
+          this.#recentLoaded = true;
+          this.#settled = true;
+          this.#events = mergeEvents(this.#events, events);
+          this.#publish({ data: this.#events });
+        },
+        (error: unknown) => {
+          if (!this.#active || !isRefusal(error)) return;
+          this.#settled = true;
+          this.#publish({ data: this.#events, error });
+        },
+      );
   }
 
   #add(incoming: readonly ConsoleEvent[]): void {
@@ -98,11 +108,6 @@ export class EventFeed {
     if (merged === this.#events) return;
     this.#events = merged;
     if (this.#settled) this.#publish({ ...this.#state, data: merged });
-  }
-
-  #fail(error: unknown): void {
-    this.#settled = true;
-    this.#publish({ data: this.#events, error });
   }
 
   #publish(state: ResourceState<readonly ConsoleEvent[]>): void {

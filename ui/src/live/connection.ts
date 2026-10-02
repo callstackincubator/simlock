@@ -79,8 +79,14 @@ export interface StreamEvent {
   readonly data: unknown;
 }
 
-/** The stream opened. `closedForMs` is how long it was closed, absent the first time it opens. */
+/** The stream opened. */
 export interface StreamOpened {
+  /**
+   * How long the console has not heard from a stream: since the last message or keepalive the
+   * previous stream sent, or since it opened if it sent none. A stream that died without closing
+   * counts from its last sign of life, not from when the console noticed. Absent the first time
+   * a stream opens.
+   */
   readonly closedForMs?: number;
 }
 
@@ -95,6 +101,15 @@ export interface LiveConnectionOptions {
   readonly api: LiveApi;
   readonly clock: Clock;
   readonly visibility: Visibility;
+}
+
+/**
+ * Whether a failed request means the daemon answered and refused it: an error status, or a body
+ * that is not what was asked for. Anything else means the request did not reach the daemon or
+ * did not come back.
+ */
+export function isRefusal(error: unknown): boolean {
+  return error instanceof ApiError || error instanceof SyntaxError;
 }
 
 export class LiveConnection {
@@ -118,7 +133,9 @@ export class LiveConnection {
   /** The current stream's controller; aborting it closes the stream. */
   #stream: AbortController | undefined;
   #streamIsOpen = false;
-  /** When an open stream last closed; `undefined` until one has been open. */
+  /** When the open stream last sent anything, or opened. */
+  #streamHeardAt: number | undefined;
+  /** When the closed stream last sent anything; `undefined` until one has been open. */
   #streamClosedAt: number | undefined;
 
   constructor(options: LiveConnectionOptions) {
@@ -272,7 +289,7 @@ export class LiveConnection {
    * reached it or never came back.
    */
   #classify(error: unknown): "refused" | "retry" | "lost" {
-    if (error instanceof ApiError || error instanceof SyntaxError) return "refused";
+    if (isRefusal(error)) return "refused";
     if (error instanceof RequestTimeoutError && this.#state.phase === "starting") return "retry";
     return "lost";
   }
@@ -336,7 +353,7 @@ export class LiveConnection {
     if (stream === undefined) return;
     this.#stream = undefined;
     stream.abort();
-    if (this.#streamIsOpen) this.#streamClosedAt = this.#clock.now();
+    if (this.#streamIsOpen) this.#streamClosedAt = this.#streamHeardAt;
     this.#streamIsOpen = false;
   }
 
@@ -394,6 +411,7 @@ export class LiveConnection {
         const { done, value } = await reader.read();
         if (this.#stream !== controller) return false;
         if (done) return true;
+        this.#streamHeardAt = this.#clock.now();
         this.#watchSilence(controller);
         for (const message of parser.push(value)) this.#deliver(message);
       }
@@ -404,6 +422,7 @@ export class LiveConnection {
 
   #streamOpened(): void {
     this.#streamIsOpen = true;
+    this.#streamHeardAt = this.#clock.now();
     const closedAt = this.#streamClosedAt;
     this.#streamClosedAt = undefined;
     const opened: StreamOpened =

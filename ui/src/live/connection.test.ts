@@ -517,3 +517,22 @@ describe("LiveConnection", () => {
     expect(connection.serverNow() - Date.now()).toBe(-30_000);
   });
 });
+
+describe("StreamOpened", () => {
+  it("a stream that died without closing counts as closed from the last thing it sent", async () => {
+    const { connection, daemon } = connect();
+    await settle();
+    await vi.advanceTimersByTimeAsync(10_000);
+    // The daemon's keepalive, then nothing: the stream is dead and the console does not know yet.
+    daemon.openStream()?.send(": keepalive\n\n");
+    await settle();
+    const opened: (number | undefined)[] = [];
+    connection.onStreamOpened((event) => opened.push(event.closedForMs));
+
+    // 40 seconds of silence mark the console disconnected; /v1/healthz answers 1 second later.
+    await vi.advanceTimersByTimeAsync(41_000);
+
+    expect(connection.state().phase).toBe("connected");
+    expect(opened).toEqual([41_000]);
+  });
+});

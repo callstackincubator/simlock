@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ApiPath, ApiResponse } from "../api";
+import { ApiError, type ApiPath, type ApiResponse } from "../api";
 import { connect, settle } from "../live/test-support";
 import { EventFeed } from "./event-feed";
 import { EventList } from "./events";
@@ -28,30 +28,35 @@ function text(html: string): string {
     .trim();
 }
 
+/** What `GET /v1/events` answers: these events, or whatever this returns. */
+type Replay = unknown[] | (() => Promise<unknown>);
+
 /**
  * The events view's feed on a live connection to a scripted daemon. `replay` is what
  * `GET /v1/events` answers, whatever its `since`; every other read answers `{}`.
  */
-function openView() {
+function openView(first: Replay = []) {
   const live = connect();
   const replays: ApiPath[] = [];
-  let replay: unknown[] = [];
-  live.daemon.reads = (path) => {
-    if (path.startsWith("/v1/events?")) replays.push(path);
-    const body = path.startsWith("/v1/events?") ? { events: replay } : {};
-    return Promise.resolve({ body, date: null } satisfies ApiResponse<unknown>);
+  let replay: Replay = first;
+  live.daemon.reads = async (path) => {
+    if (!path.startsWith("/v1/events?")) return { body: {}, date: null };
+    replays.push(path);
+    const body = typeof replay === "function" ? await replay() : { events: replay };
+    return { body, date: null } satisfies ApiResponse<unknown>;
   };
   const feed = new EventFeed(async (path) => (await live.daemon.get(path)).body);
   live.connection.onEvent(feed.streamEvent);
   live.connection.onStreamOpened(feed.streamOpened);
-  feed.start();
+  const stop = feed.start();
   return {
     ...live,
     feed,
     replays,
+    stop,
     /** Sets what `GET /v1/events` answers from now on. */
-    replayWith(events: unknown[]) {
-      replay = events;
+    replayWith(next: Replay) {
+      replay = next;
     },
     /** The events the view shows, as `seq@timestamp`, newest first. */
     shown(): string[] {
@@ -204,21 +209,52 @@ describe("the events view", () => {
       {
         event: "gizmo.frobnicated",
         payload: { count: 3, nested: { deep: true }, reason: "because", workerId: "wrk_1" },
-        seq: 2,
+        seq: 3,
         timestamp: T0,
       },
       // A payload that is not an object at all.
-      { event: "gizmo.listed", payload: ["a", 1], seq: 1, timestamp: T0 - 1_000 },
+      { event: "gizmo.listed", payload: ["a", 1], seq: 2, timestamp: T0 - 1_000 },
+      // No payload at all.
+      { event: "gizmo.pinged", payload: undefined, seq: 1, timestamp: T0 - 2_000 },
     ];
 
-    const shown = text(
-      renderToStaticMarkup(<EventList events={events} workers={[worker("wrk_1", "mac-1")]} />),
+    const html = renderToStaticMarkup(
+      <EventList events={events} workers={[worker("wrk_1", "mac-1")]} />,
     );
+    const shown = text(html);
 
     expect(shown).toContain(
       'gizmo.frobnicated mac-1 count 3 nested {"deep":true} reason because workerId wrk_1',
     );
     expect(shown).toContain('gizmo.listed payload ["a",1]');
+    expect(shown).toMatch(/gizmo\.pinged$/);
+    expect(html.match(/<dl/g)).toHaveLength(2);
+  });
+
+  it("the time is the event's time of day on the browser's clock face", () => {
+    const zone = process.env.TZ;
+    // Five and a half hours ahead of UTC, so neither the hour nor the minute matches UTC's.
+    process.env.TZ = "Asia/Kolkata";
+    try {
+      const event: ConsoleEvent = { event: "lease.granted", payload: {}, seq: 1, timestamp: T0 };
+
+      const html = renderToStaticMarkup(<EventList events={[event]} workers={undefined} />);
+
+      expect(html).toContain(
+        '<time class="mono" dateTime="2026-10-02T11:30:00.000Z">17:00:00</time>',
+      );
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
+  });
+
+  it("an empty list says why it is empty", () => {
+    const render = (filtered: boolean) =>
+      text(renderToStaticMarkup(<EventList events={[]} workers={undefined} filtered={filtered} />));
+
+    expect(render(false)).toBe("No events in the last hour.");
+    expect(render(true)).toBe("No events of this kind.");
   });
 
   it("a worker the console does not know, or that has no label, shows as its id", () => {
@@ -242,18 +278,143 @@ describe("the events view", () => {
     // Before the worker list is read, every worker shows as its id.
     expect(names(undefined)).toEqual(["wrk_1", "wrk_2", "wrk_gone"]);
   });
+  it("a worker.rejected event names no worker, even one the console knows", () => {
+    const rejected: ConsoleEvent = {
+      event: "worker.rejected",
+      payload: { reason: "unauthenticated", workerId: "wrk_1" },
+      seq: 1,
+      timestamp: T0,
+    };
 
-  it("an envelope without a seq, a timestamp that is a date, or a name is not shown", async () => {
+    const html = renderToStaticMarkup(
+      <EventList events={[rejected]} workers={[worker("wrk_1", "mac-1")]} />,
+    );
+
+    expect(html).not.toContain("event-worker");
+    expect(text(html)).not.toContain("mac-1");
+    // The claim is still shown, as the payload the daemon sent.
+    expect(text(html)).toContain("workerId wrk_1");
+  });
+
+  it("an envelope without a numeric seq, a timestamp that is a date, or a name is not shown", async () => {
     const view = openView();
     view.replayWith([
       { event: "lease.granted", timestamp: T0 },
       { event: "lease.granted", seq: 1 },
       { seq: 2, timestamp: T0 },
       { event: "lease.granted", seq: 3, timestamp: 1e300 },
+      // A date, but as a string: not a timestamp.
+      { event: "lease.granted", seq: 5, timestamp: "2026-10-02T11:30:00Z" },
+      { event: "lease.granted", seq: "6", timestamp: T0 },
       envelope(4, T0),
     ]);
     await settle();
 
     expect(view.shown()).toEqual([`4@${T0}`]);
+  });
+
+  it("until the first load answers, the view says it is loading", async () => {
+    let answer: (body: unknown) => void = () => {};
+    const view = openView(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    // The stream opens and sends an event; both loads of the last hour are still out.
+    await settle();
+    view.daemon.openStream()?.send(frame(envelope(2, T0)));
+    await settle();
+    expect(view.feed.snapshot()).toEqual({});
+
+    answer({ events: [envelope(1, T0 - 1_000)] });
+    await settle();
+
+    expect(view.shown()).toEqual([`2@${T0}`, `1@${T0 - 1_000}`]);
+  });
+
+  it("a load the daemon refuses shows why, and keeps the events already shown", async () => {
+    const view = openView();
+    view.replayWith([envelope(1, T0)]);
+    await settle();
+    expect(view.feed.snapshot().error).toBeUndefined();
+
+    // The stream is closed and opens again; the daemon refuses the load that fills the gap.
+    const refusal = new ApiError(500, "INTERNAL", "Internal error");
+    view.replayWith(() => Promise.reject(refusal));
+    view.visibility.set(true);
+    view.visibility.set(false);
+    await settle();
+
+    expect(view.feed.snapshot().error).toBe(refusal);
+    expect(view.shown()).toEqual([`1@${T0}`]);
+
+    // The next load that answers clears it.
+    view.replayWith([envelope(2, T0 + 1_000)]);
+    view.visibility.set(true);
+    view.visibility.set(false);
+    await settle();
+
+    expect(view.feed.snapshot().error).toBeUndefined();
+    expect(view.shown()).toEqual([`2@${T0 + 1_000}`, `1@${T0}`]);
+  });
+
+  it("an answer with no events list is refused as unreadable", async () => {
+    const view = openView(() => Promise.resolve({ items: [envelope(1, T0)] }));
+    await settle();
+
+    const { data, error } = view.feed.snapshot();
+    expect(error).toBeInstanceOf(SyntaxError);
+    expect(data).toEqual([]);
+  });
+
+  it("a view opened while the daemon is away loads the last hour once it is back", async () => {
+    // The daemon is gone: the view's first loads fail at the network level.
+    const view = openView(() => Promise.reject(new TypeError("Failed to fetch")));
+    view.daemon.health = "unreachable";
+    await settle();
+    view.daemon.openStream()?.end();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(view.connection.state().phase).toBe("disconnected");
+    // Nothing of its own: the connection says the daemon is lost.
+    expect(view.feed.snapshot()).toEqual({});
+
+    // Back, with an event from half an hour ago in its log.
+    const earlier = envelope(1, Date.now() - 30 * 60_000);
+    view.replayWith([earlier]);
+    view.daemon.health = "up";
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(view.connection.state().phase).toBe("connected");
+
+    expect(view.replays.at(-1)).toBe("/v1/events?since=1h");
+    expect(view.shown()).toEqual([`1@${earlier.timestamp}`]);
+  });
+
+  it("a closed view ignores what arrives after", async () => {
+    let answer: (body: unknown) => void = () => {};
+    let loads = 0;
+    // The first load answers at once; the one the stream's opening asks for is held.
+    const view = openView(() => {
+      loads += 1;
+      if (loads === 1) return Promise.resolve({ events: [envelope(1, T0 - 1_000)] });
+      return new Promise((resolve) => {
+        answer = resolve;
+      });
+    });
+    await settle();
+    const before = view.feed.snapshot();
+    expect(view.shown()).toEqual([`1@${T0 - 1_000}`]);
+
+    view.stop();
+    view.daemon.openStream()?.send(frame(envelope(2, T0)));
+    answer({ events: [envelope(3, T0 + 1_000)] });
+    await settle();
+    view.visibility.set(true);
+    view.visibility.set(false);
+    await settle();
+
+    expect(view.feed.snapshot()).toBe(before);
+    // The stream opening again asked for nothing.
+    expect(view.replays).toHaveLength(2);
   });
 });

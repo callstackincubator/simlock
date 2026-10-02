@@ -102,11 +102,15 @@ export function subjectOf(name: string): Subject {
 
 /**
  * The worker an event is about, from the `workerId` a gateway adds to each worker's event, or
- * the one a gateway's own `worker.*` events carry. `undefined` on a single host.
+ * the one a gateway's own `worker.*` events carry. `undefined` on a single host, and for
+ * `worker.rejected`: its `workerId` is what a refused dial claimed, so it names no worker, and
+ * shows only in the payload.
  */
 export function workerIdOf(event: ConsoleEvent): string | undefined {
   const { payload } = event;
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
+  if (event.event === "worker.rejected" || typeof payload !== "object" || payload === null) {
+    return undefined;
+  }
   const workerId = (payload as Record<string, unknown>).workerId;
   return typeof workerId === "string" ? workerId : undefined;
 }
