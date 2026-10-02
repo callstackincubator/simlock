@@ -445,32 +445,40 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]?.devices[0]).not.toHaveProperty("driverData");
   });
 
-  it.each(["worker.drain", "worker.undrain", "worker.remove"] as const)(
-    "worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE: %s",
-    async (operation) => {
-      const { dispatcher } = await buildDispatcher();
-
-      await expect(
-        dispatcher.dispatch(operation, { workerId: "instance-1" }, admin),
-      ).rejects.toMatchObject({ code: "UNSUPPORTED_IN_WORKER_MODE", details: { operation } });
-    },
-  );
-
-  it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE: worker.install-component, installing nothing", async () => {
+  it("worker.drain, worker.undrain, worker.remove and worker.install-component on a worker fail with UNSUPPORTED_IN_WORKER_MODE", async () => {
     const { components, dispatcher } = await buildDispatcher();
     const install = vi.spyOn(components, "install");
+    const calls = [
+      ["worker.drain", { workerId: "instance-1" }],
+      ["worker.undrain", { workerId: "instance-1" }],
+      ["worker.remove", { workerId: "instance-1" }],
+      ["worker.install-component", { platform: "ios", version: "27.0", workers: "all" }],
+    ] as const;
 
-    await expect(
-      dispatcher.dispatch(
-        "worker.install-component",
-        { platform: "ios", version: "27.0", workers: "all" },
-        admin,
+    const refusals = await Promise.all(
+      calls.map(([operation, input]) =>
+        dispatcher.dispatch(operation, input, admin).then(
+          () => ({ operation, outcome: "answered" }),
+          (error: unknown) => ({ error, operation }),
+        ),
       ),
-    ).rejects.toMatchObject({
-      code: "UNSUPPORTED_IN_WORKER_MODE",
-      details: { operation: "worker.install-component" },
-    });
+    );
+
+    expect(refusals).toEqual(
+      calls.map(([operation]) => ({
+        error: expect.objectContaining({
+          code: "UNSUPPORTED_IN_WORKER_MODE",
+          details: { operation },
+        }),
+        operation,
+      })),
+    );
+    // The refusal is the whole answer: nothing was installed on this host instead, and the
+    // message says how to install here.
     expect(install).not.toHaveBeenCalled();
+    expect(String((refusals[3] as { error?: unknown } | undefined)?.error)).toContain(
+      "install on this host without naming workers",
+    );
   });
 });
 

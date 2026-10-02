@@ -1648,6 +1648,22 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await client.close();
   });
 
+  it("answers worker.list with this daemon's instance id and the version its hello reports", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const client = await createClient(harness.socketPath);
+    const greeting = await client.request("hello", {
+      clientVersion: "test",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+    });
+    expect(greeting).toMatchObject({ ok: true, payload: { version: "test" } });
+
+    await expect(client.request("worker.list", {})).resolves.toMatchObject({
+      ok: true,
+      payload: { workers: [{ id: "instance-test", version: "test" }] },
+    });
+    await client.close();
+  });
+
   it("answers worker.install-component with UNSUPPORTED_IN_WORKER_MODE: a worker has no workers to install on", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
     const client = await createClient(harness.socketPath);
