@@ -5,6 +5,11 @@ defaults. Only the keys below are recognized; unknown keys are ignored with
 a warning. Inspect the effective, merged configuration at any time with
 `simlock config`.
 
+`simlock config set` writes `config.json` readable and writable by your user
+only (mode `0600`), because it can hold `gateway.token`. A file you create or
+edit yourself keeps the mode you give it; run `chmod 600 ~/.simlock/config.json`
+on one that holds a token.
+
 | Property                          | Description                                                                                                                                                                                                                  | Default                                                        |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `mode`                            | Which shape this daemon runs as: `worker` (owns devices on this machine) or `gateway` (owns none, fronts the workers that join it). See [Modes: gateway and worker](#modes-gateway-and-worker).                              | `worker`                                                        |
