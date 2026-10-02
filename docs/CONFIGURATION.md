@@ -530,7 +530,9 @@ budget counts each one at the size of the mode it has:
 - **A device counts by the mode it has, not the one it asked for.** A
   `slim` request on a runtime that cannot be slimmed gets a full device. A
   slim device whose slimming fails comes up full. Either one counts at the
-  full size from then on, and keeps its lease.
+  full size from then on, and keeps its lease. One exception: when Simlock
+  reboots a leased slim device to recover it, the device comes back full
+  but still counts at the slim size until it is next prepared.
 - **Over the limit.** Restarting with larger sizes than the devices were
   admitted under can put the use above the limit. `simlock status` then
   shows the RAM budget `(over limit)`. Until a device is deleted, no new

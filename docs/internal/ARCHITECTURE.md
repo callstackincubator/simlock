@@ -921,8 +921,9 @@ coordinator's boot reservation, taken by the planner for a shut-down device
 and by the warm pool for a reclaimed device it boots back to warm, counts
 that device as `full` in every decision until released; status leaves every
 reservation out. A boot refused for RAM evicts nothing and waits. Running
-slots ignore mode. A restart with larger sizes, or an unchecked recovery
-reboot, can leave the budget over its limit; the strategy then refuses every
+slots ignore mode. A recovery reboot is not checked and boots full while the
+record keeps its mode (KNOWN-PITFALLS). A restart with larger sizes can
+leave the budget over its limit; the strategy then refuses every
 new device and every boot that adds RAM, and the core stops or reclaims nothing for
 it. `fixed` ignores mode, never refuses a boot, and reports no budget.
 
