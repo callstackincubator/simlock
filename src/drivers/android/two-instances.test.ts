@@ -66,6 +66,7 @@ describe("AndroidDriver with two Simlock instances on one machine (#257)", () =>
     await secondDriver.resolveSpec(spec);
     const provisioned = await secondDriver.provision(spec);
 
+    expect(provisioned.address).toMatch(/^emulator-\d+$/);
     expect(
       machine.avdListeningAt(provisioned.address),
       `the emulator already listening on ${provisioned.address}, the address the second instance gave its new device`,

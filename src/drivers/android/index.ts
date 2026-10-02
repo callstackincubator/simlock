@@ -1978,6 +1978,11 @@ class PortAllocator {
    * exits at once. Each probe is one loopback connect, refused at once on a free port and
    * bounded by the probe's own timeout otherwise; the walk stops at the first free port, so
    * the wait is at most one probe pair per console port in the range.
+   *
+   * The probe sees only an emulator that is running now. A port another instance has handed
+   * out but not booted on -- a device between `provision` and `makeReady`, or one that is
+   * shut down -- still reads free here, and two instances can then reach the same port at
+   * boot.
    */
   async allocate(env: NodeJS.ProcessEnv, tcpProbe: TcpProbe): Promise<number> {
     const previous = this.#lock;
