@@ -187,9 +187,8 @@ Each platform entry carries `modelRuntimes`: for every name in `models`, the
 installed runtimes that model pairs with. A pair listed there can be leased;
 a model and a runtime that are each listed but not paired cannot. An empty
 list means nothing installed pairs with that model. On a gateway a model is
-paired with a runtime when at least one connected worker pairs them; the
-gateway does not yet pick a worker by its pairings, so such a request can
-still go to a worker that cannot pair them and fail there.
+paired with a runtime when at least one connected worker pairs them, and the
+gateway sends a request only to a worker that pairs them.
 
 Each entry also carries `modelAliases`: for a name in `models`, the other
 names a lease request may use for it, in any letter case. Only models that
@@ -199,8 +198,9 @@ system image with its API level (`runtime`, a value from `runtimes`), `tag`,
 and `abi`, including an image whose ABI the host cannot run natively; an iOS
 entry has no `images`. On a gateway `modelAliases` is the union per model and
 `images` the union of each worker's images, absent when no worker's entry
-for that platform has an `images` field. The gateway does not yet route by another name: send it the name from
-`models`.
+for that platform has an `images` field. A gateway accepts any name a worker
+lists for a model, in any letter case, and sends that worker its own name for
+it.
 
 ```json
 { "platforms": [ {
@@ -276,6 +276,13 @@ try again, use a new key. Repeating works across a daemon restart, for
 `platform`, `device`, `os`, or `mode` is `409 IDEMPOTENCY_CONFLICT`. Keys
 belong to your token: another token sending the same key starts a request of
 its own.
+
+Through a **gateway**, `allowDownload` is accepted and has no effect: only
+runtimes already installed on a worker count, and no download is started. The
+gateway sends the request only to a worker whose catalog can serve it: one
+that lists `device` as a model or another name for one, in any letter case,
+and pairs that model with `os` (or, without `os`, with at least one installed
+runtime). The worker is sent its own name for the model.
 
 With `allowDownload: true` the `201` is returned as soon as the request is
 stored — resolving a downloadable runtime can take minutes, so progress and
@@ -704,10 +711,9 @@ simulated (hence the thin Android catalog), trimmed to one worker:
 ```
 
 `downloads.policy` is that worker's own effective policy, read when its
-uplink connects and again on every periodic refresh. Routing needs it to know
-whether a worker may install a missing runtime at all before sending it a
-request that depends on one; it is never an override, since the worker clamps
-`allowDownload` through the same policy regardless.
+uplink connects and again on every periodic refresh. It is shown for
+reference; routing does not read it, since no download is started through a
+gateway.
 
 `catalog` is what that worker can lease, each model with the runtimes it
 pairs with. `host` is the worker's machine, the same block its own

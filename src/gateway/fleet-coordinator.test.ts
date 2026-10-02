@@ -2033,3 +2033,159 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 });
+
+describe("FleetLeaseCoordinator sends a worker only requests its catalog can serve (ADR 0009 §3)", () => {
+  /** Connects a worker with one catalog entry stated in full, so pairings and aliases are explicit. */
+  function connectWithCatalog(
+    workers: WorkerRegistry,
+    workerId: string,
+    entry: Parameters<typeof catalogFixture>[0][number],
+    downloads: "never" | "on-request" | "always" = "on-request",
+  ): void {
+    workers.connected(workerId, undefined, "0.3.0");
+    workers.refresh(workerId, {
+      capacity: statusFixture().capacity,
+      catalog: catalogFixture([entry]).platforms,
+      devices: [],
+      downloads: { policy: downloads },
+      health: "running",
+      leases: [],
+      queueDepth: 0,
+    });
+  }
+
+  function leaseRequests(client: ScriptedWorkerClient): string[] {
+    return client.calls.filter((call) => call.startsWith("lease.request"));
+  }
+
+  it("dispatches a request in another letter case with the worker's own name for the model", async () => {
+    const { coordinator, directory, eventBus, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWithCatalog(workers, "wrk_a", {
+      models: ["iPhone 16 Pro"],
+      platform: "ios",
+      runtimes: ["26.0"],
+    });
+
+    await coordinator.request(
+      { model: "iphone 16 pro", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(client.lastRequestLeaseInput?.model).toBe("iPhone 16 Pro");
+    const requested = eventBus.replay().find((event) => event.event === "lease.requested");
+    expect(requested?.payload).toMatchObject({ requestSpec: { model: "iphone 16 pro" } });
+  });
+
+  it("dispatches a request by an alias to the worker that lists it", async () => {
+    const { coordinator, directory, workers } = harness();
+    const other = new ScriptedWorkerClient();
+    const lister = new ScriptedWorkerClient();
+    directory.add("wrk_a", other);
+    directory.add("wrk_b", lister);
+    lister.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // wrk_a sorts first and has the same free capacity, so only the alias can send it to wrk_b.
+    connectWithCatalog(workers, "wrk_a", {
+      models: ["Pixel 7"],
+      platform: "android",
+      runtimes: ["35"],
+    });
+    connectWithCatalog(workers, "wrk_b", {
+      modelAliases: { "Pixel 7": ["pixel_7"] },
+      models: ["Pixel 7"],
+      platform: "android",
+      runtimes: ["35"],
+    });
+
+    await coordinator.request(
+      { model: "pixel_7", platform: "android" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(leaseRequests(other)).toEqual([]);
+    expect(lister.lastRequestLeaseInput?.model).toBe("Pixel 7");
+  });
+
+  it("passes over a worker with the model and the runtime unpaired for one that pairs them", async () => {
+    const { coordinator, directory, workers } = harness();
+    const unpaired = new ScriptedWorkerClient();
+    const paired = new ScriptedWorkerClient();
+    directory.add("wrk_a", unpaired);
+    directory.add("wrk_b", paired);
+    paired.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // wrk_a lists iPhone 17 and 26.0, but pairs iPhone 17 only with 18.0.
+    connectWithCatalog(workers, "wrk_a", {
+      modelRuntimes: { "iPhone 15": ["26.0"], "iPhone 17": ["18.0"] },
+      models: ["iPhone 17", "iPhone 15"],
+      platform: "ios",
+      runtimes: ["18.0", "26.0"],
+    });
+    connectWithCatalog(workers, "wrk_b", {
+      models: ["iPhone 17"],
+      platform: "ios",
+      runtimes: ["26.0"],
+    });
+
+    await coordinator.request(REQUEST, requestOptions({ noWait: true }));
+
+    expect(leaseRequests(unpaired)).toEqual([]);
+    expect(leaseRequests(paired)).toHaveLength(1);
+  });
+
+  it("with no runtime named, needs a model with at least one paired runtime", async () => {
+    const { coordinator, directory, workers } = harness();
+    const unpaired = new ScriptedWorkerClient();
+    const paired = new ScriptedWorkerClient();
+    directory.add("wrk_a", unpaired);
+    directory.add("wrk_b", paired);
+    paired.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWithCatalog(workers, "wrk_a", {
+      modelRuntimes: { "iPhone 17": [] },
+      models: ["iPhone 17"],
+      platform: "ios",
+      runtimes: ["26.0"],
+    });
+    connectWithCatalog(workers, "wrk_b", {
+      models: ["iPhone 17"],
+      platform: "ios",
+      runtimes: ["26.0"],
+    });
+
+    await coordinator.request(
+      { model: "iPhone 17", platform: "ios" },
+      requestOptions({ noWait: true }),
+    );
+
+    expect(leaseRequests(unpaired)).toEqual([]);
+    expect(leaseRequests(paired)).toHaveLength(1);
+  });
+
+  it("does not make a worker eligible for allowDownload: true, and forwards allowDownload: false", async () => {
+    const { coordinator, directory, workers } = harness();
+    const downloader = new ScriptedWorkerClient();
+    const installed = new ScriptedWorkerClient();
+    directory.add("wrk_a", downloader);
+    directory.add("wrk_b", installed);
+    installed.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    // wrk_a would download 26.0 under its own policy; on main that made it eligible, and it
+    // sorts first with the same free capacity.
+    connectWithCatalog(
+      workers,
+      "wrk_a",
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["18.0"] },
+      "always",
+    );
+    connectWithCatalog(workers, "wrk_b", {
+      models: ["iPhone 17"],
+      platform: "ios",
+      runtimes: ["26.0"],
+    });
+
+    await coordinator.request(REQUEST, requestOptions({ allowDownload: true, noWait: true }));
+
+    expect(leaseRequests(downloader)).toEqual([]);
+    expect(installed.lastRequestLeaseInput?.allowDownload).toBe(false);
+  });
+});

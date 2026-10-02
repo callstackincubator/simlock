@@ -12,11 +12,9 @@ export interface RoutableRequest {
   readonly model: string;
   readonly osVersion?: string;
   /**
-   * The request's own flag, forwarded as-is: a gateway has no `downloads.policy` of its own to
-   * fold it against (that config key is worker-only, ADR 0005 §2), so the clamp the `eligible`
-   * stage applies is only ever the *worker's* declared policy, never a gateway-side one -- the
-   * worker still applies its own `effectiveAllowDownload` when the forwarded `lease.request`
-   * lands.
+   * Read only by the legacy `eligible` stage, which the conformance tests run. The gateway always
+   * routes with `false`: only installed runtimes count, and a client's `allowDownload` has no
+   * effect through a gateway (ADR 0009 §3).
    */
   readonly allowDownload: boolean;
 }

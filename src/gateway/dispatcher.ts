@@ -370,7 +370,8 @@ export class GatewayDispatcher {
         ...(input.mode === undefined ? {} : { mode: input.mode }),
       },
       {
-        allowDownload: input.allowDownload ?? false,
+        // `input.allowDownload` stays accepted and is not passed on: only installed runtimes
+        // count through a gateway (ADR 0009 §3).
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
         requesterId: input.requesterId ?? session.principal,

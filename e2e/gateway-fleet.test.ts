@@ -451,6 +451,54 @@ describe("gateway fleet", () => {
     });
   });
 
+  it("grants --device 'iphone 16 pro' and --device pixel_7 through a gateway by the worker's own names", async () => {
+    const port = await freeLoopbackPort();
+    const gateway = await withDaemon({
+      configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+      driver: "none",
+    });
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret } = minted.json as { secret: string };
+    // The fake driver resolves model names exactly, so a grant proves the gateway sent the
+    // worker its own name for the model.
+    await withDaemon({
+      configOverrides: {
+        gateway: { label: "worker", token: secret, url: `ws://127.0.0.1:${port}` },
+      },
+      driverScript: {
+        android: {
+          availableOsVersions: ["35"],
+          knownModels: ["Pixel 7"],
+          modelAliases: { "Pixel 7": ["pixel_7"] },
+        },
+        ios: { availableOsVersions: ["26.0"], knownModels: ["iPhone 16 Pro"] },
+      },
+    });
+    await waitForWorkers(
+      gateway,
+      (views) =>
+        views.length === 1 && views[0]?.connection === "connected" && views[0].catalog.length === 2,
+      "the worker connected with both catalogs",
+    );
+
+    const lease = async (platform: string, device: string) => {
+      const leased = await gateway.cli(
+        ["lease", "--platform", platform, "--device", device, "--detach", "--no-wait"],
+        { timeout: 30_000 },
+      );
+      expect(leased.code, leased.stderr).toBe(0);
+      const grant = leased.json as {
+        readonly device: { readonly spec: { readonly model: string } };
+        readonly lease: { readonly id: string };
+      };
+      expect((await gateway.cli(["release", grant.lease.id], { timeout: 30_000 })).code).toBe(0);
+      return grant.device.spec.model;
+    };
+
+    await expect(lease("ios", "iphone 16 pro")).resolves.toBe("iPhone 16 Pro");
+    await expect(lease("android", "pixel_7")).resolves.toBe("Pixel 7");
+  });
+
   it("refuses an uplink whose token is not a worker join token", async () => {
     const port = await freeLoopbackPort();
     const gateway = await withDaemon({

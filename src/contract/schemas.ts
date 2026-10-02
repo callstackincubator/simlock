@@ -725,11 +725,10 @@ export const workerViewSchema = z.object({
   capacity: statusCapacitySchema.optional(),
   /**
    * The worker's effective `downloads.policy`, read once with `config.get` when the uplink
-   * connects. It is on the view because it is a *routing input*, not decoration: ADR 0005 §13
-   * says a request that would need a download is only eligible on a worker whose policy allows
-   * one, and #118's policy reads it from here rather than asking at dispatch time. Absent for
-   * a worker whose `config.get` the gateway could not read (an incompatible one, or a call
-   * that failed).
+   * connects. Display only: routing counts installed runtimes and never reads it, and the
+   * gateway forwards every request with `allowDownload: false` (ADR 0009 §3). Absent for a
+   * worker whose `config.get` the gateway could not read (an incompatible one, or a call that
+   * failed).
    */
   downloads: z.object({ policy: z.enum(["never", "on-request", "always"]) }).optional(),
   /**
