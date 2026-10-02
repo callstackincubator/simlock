@@ -203,6 +203,58 @@ describe("Registry lease requests", () => {
     expect(devices[1]?.[1]).toMatchObject({ mode: "slim" });
   });
 
+  it("drops a full key stored before ADR 0007 from a request and from its grant's device spec, and does not write it back", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    const spec = { model: "iPhone 16", osVersion: "26.5", platform: "ios" };
+    await filesystem.writeFileAtomic(
+      statePath,
+      JSON.stringify({
+        devices: [],
+        leaseRequests: [
+          {
+            createdAt: 1_000,
+            grant: {
+              device: {
+                driverDeviceId: "udid",
+                id: "dev_1",
+                mode: "full",
+                spec: { ...spec, full: true },
+              },
+              environment: {},
+              lease: { id: "lse_1" },
+              timing: {},
+            },
+            id: "req_legacy",
+            ownerId: "agent",
+            request: { ...request, full: true },
+            requesterId: "agent",
+            settledAt: 1_000,
+            state: "granted",
+          },
+        ],
+        leases: [],
+      }),
+    );
+
+    const { registry } = await loadRegistry({ filesystem });
+    const [loaded] = registry.leaseRequests();
+    expect(loaded?.request).toEqual(request);
+    expect(loaded?.grant?.device.spec).toEqual(spec);
+
+    await registry.createLeaseRequest(newRequest("other"));
+    const written = JSON.parse(await filesystem.readFile(statePath)) as {
+      readonly leaseRequests: readonly {
+        readonly id: string;
+        readonly request: unknown;
+        readonly grant?: { readonly device: { readonly spec: unknown } };
+      }[];
+    };
+    const stored = written.leaseRequests.find((record) => record.id === "req_legacy");
+    expect(stored?.request).toEqual(request);
+    expect(stored?.grant?.device.spec).toEqual(spec);
+  });
+
   it("settles every open record as failed, leaving settled ones alone", async () => {
     const { registry } = await loadRegistry();
     const open = await registry.createLeaseRequest(newRequest("open"));
@@ -243,7 +295,7 @@ describe("Registry lease-request load", () => {
   it.each([
     ["a failed record whose failure has no code", { failure: { message: "x" }, state: "failed" }],
     ["a settled record without its settlement time", { settledAt: undefined, state: "cancelled" }],
-    ["a request whose full is not a boolean", { request: { ...request, full: "yes" } }],
+    ["a request whose mode is neither slim nor full", { request: { ...request, mode: "fast" } }],
   ])("drops %s and loads the rest", async (_label, broken) => {
     const { registry } = await loadWith([
       { ...valid, id: "req_broken", settledAt: 1_000, ...broken },
@@ -305,7 +357,7 @@ describe("LeaseRequestBook", () => {
   it.each([
     ["a different osVersion", { ...request, osVersion: "18.0" }],
     ["no osVersion where one was named", { model: request.model, platform: request.platform }],
-    ["full where none was asked", { ...request, full: true }],
+    ["a mode where none was named", { ...request, mode: "full" as const }],
   ])("refuses a repeat naming %s as an idempotency conflict", async (_label, different) => {
     const book = bookOver(memoryStore());
     await book.admit(request, keyed, () => granted("lse_1"));
@@ -314,12 +366,12 @@ describe("LeaseRequestBook", () => {
     expect(() => book.replay(different, keyed)).toThrow(IdempotencyConflictError);
   });
 
-  it("treats full: false and an omitted full as the same request", async () => {
+  it("replays a repeat naming the same mode", async () => {
     const book = bookOver(memoryStore());
-    await book.admit(request, keyed, () => granted("lse_1"));
+    await book.admit({ ...request, mode: "slim" }, keyed, () => granted("lse_1"));
     await settled();
 
-    await expect(book.replay({ ...request, full: false }, keyed)).resolves.toEqual({
+    await expect(book.replay({ ...request, mode: "slim" }, keyed)).resolves.toEqual({
       lease: { id: "lse_1" },
     });
   });

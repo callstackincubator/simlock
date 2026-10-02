@@ -47,11 +47,14 @@ async function createHarness() {
 }
 
 async function readyDevice(harness: Awaited<ReturnType<typeof createHarness>>) {
-  await harness.driver.makeReady({
-    address: harness.device.address ?? "",
-    deviceId: harness.device.driverDeviceId,
-    driverData: harness.device.driverData,
-  });
+  await harness.driver.makeReady(
+    {
+      address: harness.device.address ?? "",
+      deviceId: harness.device.driverDeviceId,
+      driverData: harness.device.driverData,
+    },
+    { mode: "full", purpose: "prepare" },
+  );
   return harness.registry.transitionDevice(harness.device.id, "ready", {
     event: "device.ready",
     payload: { bootDuration: 0, deviceId: harness.device.id },
@@ -363,7 +366,7 @@ describe("ManagedDeviceLifecycle", () => {
       const recoveryCall = harness.driver.calls.filter((call) => call.operation === "makeReady")[
         harness.driver.calls.filter((call) => call.operation === "makeReady").length - 1
       ];
-      expect(recoveryCall?.arguments[1]).toEqual({ purpose: "recover" });
+      expect(recoveryCall?.arguments[1]).toEqual({ mode: "full", purpose: "recover" });
     });
   });
 
@@ -604,5 +607,87 @@ describe("ManagedDeviceLifecycle", () => {
     const handoff = await lifecycle.readyProvisionedForLease(device);
 
     expect(handoff?.device.mode).toBe("full");
+  });
+
+  describe("device mode on makeReady", () => {
+    const slimSpec = {
+      mode: "slim",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+
+    async function slimHarness() {
+      const clock = new FakeClock(1_000);
+      const eventBus = new EventBus(clock);
+      const driver = new FakeDriver({ clock, platform: "ios", slimmableOsVersions: ["26.5"] });
+      let nextId = 0;
+      const registry = await Registry.load({
+        clock,
+        eventBus,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => `${nextId++}` },
+        statePath,
+      });
+      const claims = new DeviceOperationClaims();
+      const lifecycle = new ManagedDeviceLifecycle(
+        new DriverCatalog([driver]),
+        registry,
+        new SerializedDecision(),
+        claims,
+        clock,
+      );
+      const driverDevice = await driver.provision(slimSpec);
+      const device = await registry.registerDevice({
+        driverData: driverDevice.driverData,
+        driverDeviceId: driverDevice.deviceId,
+        provisionDuration: 0,
+        spec: slimSpec,
+      });
+      return { claims, device, driver, lifecycle, registry };
+    }
+
+    function makeReadyOptions(driver: FakeDriver): readonly unknown[] {
+      return driver.calls
+        .filter((call) => call.operation === "makeReady")
+        .map((call) => call.arguments[1]);
+    }
+
+    it("passes a slim spec's mode to makeReady on a prepare boot, from provisioning and from shutdown", async () => {
+      const harness = await slimHarness();
+
+      const ready = await harness.lifecycle.readyProvisioned(harness.device);
+      if (ready === undefined) throw new Error("expected a ready device");
+      await harness.lifecycle.shutdown(ready, "test", "cleanup");
+      const shutdown = harness.registry.snapshot.devices[0];
+      if (shutdown === undefined) throw new Error("expected the device");
+      const claim = harness.claims.tryClaim(shutdown.id, "boot");
+      if (claim === undefined) throw new Error("expected boot claim");
+      const handoff = await harness.lifecycle.bootForLease(shutdown, claim);
+
+      expect(makeReadyOptions(harness.driver)).toEqual([
+        { mode: "slim", purpose: "prepare" },
+        { mode: "slim", purpose: "prepare" },
+      ]);
+      expect(ready.mode).toBe("slim");
+      expect(handoff?.device.mode).toBe("slim");
+    });
+
+    it("passes a slim spec's mode on a recovery boot too, under purpose recover", async () => {
+      const harness = await slimHarness();
+      const ready = await harness.lifecycle.readyProvisioned(harness.device);
+      if (ready === undefined) throw new Error("expected a ready device");
+      const lease = await harness.registry.createLease({
+        deviceId: ready.id,
+        ownerId: "agent",
+        requesterId: "agent",
+        ttlDeadline: 10_000,
+        ttlMs: 60_000,
+      });
+
+      await harness.lifecycle.recoverLeased(ready, lease.id);
+
+      expect(makeReadyOptions(harness.driver).at(-1)).toEqual({ mode: "slim", purpose: "recover" });
+    });
   });
 });

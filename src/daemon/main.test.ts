@@ -28,6 +28,7 @@ import {
 } from "../ports/index.js";
 import {
   bridgeAndroidDriverDiagnostic,
+  deviceModeWiring,
   discoverDrivers,
   emitComponentInstallDiagnostic,
   emitSlimDiagnostic,
@@ -821,11 +822,19 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     });
     const android = drivers.find((driver) => driver.platform === "android");
     await expect(
-      android?.makeReady({
-        address: "emulator-5586",
-        deviceId: "simlock_one",
-        driverData: { avdName: "simlock_one", configHash: "", port: 5586, serial: "emulator-5586" },
-      }),
+      android?.makeReady(
+        {
+          address: "emulator-5586",
+          deviceId: "simlock_one",
+          driverData: {
+            avdName: "simlock_one",
+            configHash: "",
+            port: 5586,
+            serial: "emulator-5586",
+          },
+        },
+        { mode: "full", purpose: "prepare" },
+      ),
     ).rejects.toThrow(/Unexpected process invocation/);
 
     expect(processRunner.calls.map((call) => call.args)).toEqual([
@@ -993,6 +1002,18 @@ function discoverIos(
     tcpProbe: new FakeTcpProbe(),
   });
 }
+
+describe("deviceModeWiring", () => {
+  it.each(["slim", "full"] as const)(
+    "maps ios.defaultMode %s to the default-mode map and to whether the iOS default is slim",
+    (defaultMode) => {
+      expect(deviceModeWiring({ ios: { defaultMode, slim: { bootTimeoutMs: 1 } } })).toEqual({
+        defaultModes: { ios: defaultMode },
+        slimByDefault: defaultMode === "slim",
+      });
+    },
+  );
+});
 
 describe("component install diagnostic bridging", () => {
   it("emits component.install-started/-installed/-failed for the bridged platform", () => {

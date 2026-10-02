@@ -51,11 +51,17 @@ export interface FakeDriverOptions {
    */
   readonly fullCleanReclaimEstimateMs?: number;
   /**
-   * The `DriverDevice.mode` `makeReady` reports for every boot -- undefined by default (this
-   * fake, like every real driver except iOS, does not slim anything), settable by a test that
-   * needs to exercise the core's `mode` persistence without a real iOS driver.
+   * The `DriverDevice.mode` `makeReady` reports for every boot, overriding what it would
+   * otherwise report -- settable by a test that needs a slim pass that did not happen, or the
+   * core's `mode` persistence without a real iOS driver.
    */
   readonly mode?: DeviceMode | undefined;
+  /**
+   * The OS versions this fake can slim. A slim request on one of them resolves to a slim spec,
+   * and a prepare boot of a slim-spec device reports `"slim"`. Absent or empty: this fake knows
+   * nothing of modes, like every real driver but iOS, and every request resolves to a full spec.
+   */
+  readonly slimmableOsVersions?: readonly string[];
   readonly knownModels?: readonly string[];
   /**
    * What `listCatalog` reports a model pairs with. A model left out pairs with every available
@@ -92,13 +98,6 @@ export interface FakeDriverOptions {
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
-  /**
-   * `Driver.reducesFeatures` passthrough -- undefined by default (this fake, like every real
-   * driver except iOS with slim mode on, does not reduce anything), settable by a test that
-   * needs to exercise `LeaseAcquisitionCoordinator`'s `full`-stamping decision without a real
-   * iOS driver.
-   */
-  readonly reducesFeatures?: boolean;
 }
 
 export class FakeDriverUnknownDeviceError extends Error {
@@ -111,13 +110,13 @@ export class FakeDriverUnknownDeviceError extends Error {
 export class FakeDriver implements Driver {
   readonly platform: Platform;
   readonly deviceRoot: string;
-  readonly reducesFeatures?: boolean;
   readonly #availableOsVersions: Set<string>;
   readonly #callCounts = new Map<FakeDriverOperation, number>();
   readonly #calls: FakeDriverCall[] = [];
   readonly #clock: Clock;
   readonly #estimateMs: FakeDriverOptions["estimateMs"];
   readonly #mode: DeviceMode | undefined;
+  readonly #slimmableOsVersions: ReadonlySet<string>;
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
@@ -146,6 +145,7 @@ export class FakeDriver implements Driver {
     this.#clock = options.clock;
     this.#estimateMs = options.estimateMs;
     this.#mode = options.mode;
+    this.#slimmableOsVersions = new Set(options.slimmableOsVersions ?? []);
     this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
@@ -159,10 +159,6 @@ export class FakeDriver implements Driver {
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
-
-    if (options.reducesFeatures !== undefined) {
-      this.reducesFeatures = options.reducesFeatures;
-    }
     this.#reclaimResult = options.reclaimResult ?? "ready";
     this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
   }
@@ -212,7 +208,14 @@ export class FakeDriver implements Driver {
       this.#availableOsVersions.add(osVersion);
     }
 
-    return { model: request.model, osVersion, platform: this.platform };
+    return {
+      model: request.model,
+      osVersion,
+      platform: this.platform,
+      ...(request.mode === "slim" && this.#slimmableOsVersions.has(osVersion)
+        ? { mode: "slim" as const }
+        : {}),
+    };
   }
 
   async provision(spec: DeviceSpec): Promise<DriverDevice> {
@@ -228,13 +231,13 @@ export class FakeDriver implements Driver {
 
   /**
    * Each boot re-reads a fresh address, same as the real drivers -- never the caller's.
-   * `options.purpose` is recorded on the call log (`calls`) so a test can assert a caller (e.g.
-   * `ManagedDeviceLifecycle.recoverLeased`) requested `"recover"`, but this fake never reduces
-   * anything regardless of purpose -- there is no configuration-changing behaviour to gate.
+   * `options` is recorded on the call log (`calls`) so a test can assert what a caller passed.
+   * A slimming fake (`slimmableOsVersions`) reports `"slim"` for a prepare boot of a slim-spec
+   * device and nothing on a recover boot, as the iOS driver does; the `mode` option overrides it.
    */
   async makeReady(
     device: DriverDevice,
-    options?: { readonly purpose: "prepare" | "recover" },
+    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
   ): Promise<DriverDevice> {
     await this.#beforeCall("makeReady", device, options);
     this.#requireDevice(device);
@@ -252,8 +255,16 @@ export class FakeDriver implements Driver {
       address: addressFor(device.deviceId, bootCount),
       deviceId: device.deviceId,
       driverData: device.driverData,
-      ...(this.#mode === undefined ? {} : { mode: this.#mode }),
+      ...this.#reportedMode(options),
     };
+  }
+
+  #reportedMode(options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode }): {
+    readonly mode?: DeviceMode;
+  } {
+    if (this.#mode !== undefined) return { mode: this.#mode };
+    if (this.#slimmableOsVersions.size === 0) return {};
+    return { mode: options.mode === "slim" && options.purpose === "prepare" ? "slim" : "full" };
   }
 
   async reclaim(

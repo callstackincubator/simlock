@@ -913,8 +913,8 @@ async function runLease(
     detach: { type: "boolean" },
     device: { type: "string" },
     "export-env": { type: "boolean" },
-    full: { type: "boolean" },
     help: { type: "boolean", short: "h" },
+    mode: { type: "string" },
     "no-wait": { type: "boolean" },
     os: { type: "string" },
     platform: { type: "string" },
@@ -924,9 +924,9 @@ async function runLease(
   if (values.help) {
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> --device <model> [--os <version>]\n" +
-        "                     [--agent-id <id>] [--timeout <duration>] [--no-wait] [--detach]\n" +
-        "                     [--ttl <duration>] [--allow-download] [--full] [--export-env]\n" +
-        "                     [--bind-pid <pid>]\n",
+        "                     [--mode <slim|full>] [--agent-id <id>] [--timeout <duration>]\n" +
+        "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
+        "                     [--export-env] [--bind-pid <pid>]\n",
     );
     return 0;
   }
@@ -1074,7 +1074,9 @@ async function runLease(
         model: values.device,
         ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
         platform,
-        ...(values.full === true ? { full: true } : {}),
+        // Sent as typed: the contract, not the CLI, decides which modes exist, and answers
+        // anything else with `BAD_REQUEST`.
+        ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(ttlMs === undefined ? {} : { ttlMs }),
       },

@@ -14,7 +14,7 @@ export interface LeaseRequestInput {
   readonly timeoutMs?: number;
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
-  readonly full?: boolean;
+  readonly mode?: "slim" | "full";
   /** ADR §27a. Threaded straight through to the shared dispatcher's own `lease.request` input --
    * the same gate every other transport is held to (`FORBIDDEN` for a non-admin token) decides
    * this, not this route (H7, round 2 review: before this, `leaseRequestBodySchema` had no
@@ -208,7 +208,7 @@ export class LeaseRequestTracker {
             model: body.device,
             platform: body.platform,
             ...(body.os === undefined ? {} : { osVersion: body.os }),
-            ...(body.full === undefined ? {} : { full: body.full }),
+            ...(body.mode === undefined ? {} : { mode: body.mode }),
             ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
             ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
             ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }),
@@ -337,9 +337,8 @@ type HttpLeaseProgress =
 /**
  * Structural subsets of the *contract's* `lease.request` output shape (`z.infer<leaseGrantSchema>`
  * -- see `schemas.ts`), not core's `DeviceRecord`/`LeaseRecord`: `dispatch()` always returns
- * contract-shaped data (e.g. `spec.full` is optional there, since the schema declares it
- * `.optional()`, where core's own `DeviceSpec.full` is not), and this module never imports core
- * domain types at all -- everything it needs from a grant is these few fields.
+ * contract-shaped data, which need not match core's own types field for field, and this module
+ * never imports core domain types at all -- everything it needs from a grant is these few fields.
  */
 interface HttpLeaseDevice {
   readonly id: string;

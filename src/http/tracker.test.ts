@@ -29,7 +29,7 @@ const body = { device: "iPhone 17 Pro", platform: "ios" as const };
 async function createTracked(
   tracker: LeaseRequestTracker,
   dispatcher: FakeDispatcher,
-  requestBody: typeof body & { readonly ttlMs?: number } = body,
+  requestBody: typeof body & { readonly ttlMs?: number; readonly mode?: "slim" | "full" } = body,
 ): Promise<{ readonly view: TrackedRequestView; readonly callIndex: number }> {
   const outcomePromise = tracker.submit(identity, requestBody);
   const call = await waitForDispatch(dispatcher, "lease.request");
@@ -276,15 +276,15 @@ describe("LeaseRequestTracker.submit with allowDownload", () => {
   });
 });
 
-describe("LeaseRequestTracker.submit with full", () => {
-  it("passes full through onto the dispatch input, and omits it otherwise", async () => {
+describe("LeaseRequestTracker.submit with a mode", () => {
+  it("passes mode through onto the dispatch input, and omits it when the body names none", async () => {
     const { dispatcher, tracker } = buildTracker();
-    await createTracked(tracker, dispatcher, { ...body, full: true } as typeof body);
-    expect(dispatcher.calls[0]?.input).toMatchObject({ full: true });
+    await createTracked(tracker, dispatcher, { ...body, mode: "slim" });
+    expect(dispatcher.calls[0]?.input).toMatchObject({ mode: "slim" });
 
     const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
     await createTracked(tracker2, dispatcher2);
-    expect(dispatcher2.calls[0]?.input).not.toHaveProperty("full");
+    expect(dispatcher2.calls[0]?.input).not.toHaveProperty("mode");
   });
 });
 

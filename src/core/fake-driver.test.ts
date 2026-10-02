@@ -97,6 +97,29 @@ describe("FakeDriver", () => {
     });
   });
 
+  it.each([
+    ["a prepare boot of a slim-spec device", { mode: "slim", purpose: "prepare" }, "slim"],
+    ["a recover boot of a slim-spec device", { mode: "slim", purpose: "recover" }, "full"],
+    ["a prepare boot of a full-spec device", { mode: "full", purpose: "prepare" }, "full"],
+  ] as const)(
+    "a slimming fake reports the mode the iOS driver would for %s",
+    async (_label, options, reported) => {
+      const driver = new FakeDriver({
+        availableOsVersions: ["26.5"],
+        clock: new FakeClock(),
+        platform: "ios",
+        slimmableOsVersions: ["26.5"],
+      });
+      const device = await driver.provision({
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+      });
+
+      await expect(driver.makeReady(device, options)).resolves.toMatchObject({ mode: reported });
+    },
+  );
+
   it("keeps makeReady pending until released when instructed to hang", async () => {
     const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
     const device = await driver.provision({
@@ -107,7 +130,7 @@ describe("FakeDriver", () => {
     driver.hangMakeReady();
 
     let ready = false;
-    const makeReady = driver.makeReady(device).then(() => {
+    const makeReady = driver.makeReady(device, prepare).then(() => {
       ready = true;
     });
 
@@ -133,7 +156,7 @@ describe("FakeDriver", () => {
     });
 
     let ready = false;
-    const makeReady = driver.makeReady(device).then(() => {
+    const makeReady = driver.makeReady(device, prepare).then(() => {
       ready = true;
     });
     clock.advance(49);
@@ -242,3 +265,5 @@ describe("FakeDriver", () => {
     expect(await new FakeDriver(options).listCatalog()).not.toHaveProperty("images");
   });
 });
+
+const prepare = { mode: "full", purpose: "prepare" } as const;

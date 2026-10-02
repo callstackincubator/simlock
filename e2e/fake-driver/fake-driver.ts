@@ -219,7 +219,13 @@ export class OutOfProcessFakeDriver implements Driver {
     const script = await this.#beforeCall("resolveSpec", [request, options]);
     this.#assertKnownModel(request.model, script);
     const osVersion = this.#resolveOsVersion(request.osVersion, script, options.allowDownload);
-    return { model: request.model, osVersion, platform: this.platform };
+    const slim = request.mode === "slim" && script.slimmableOsVersions?.includes(osVersion);
+    return {
+      model: request.model,
+      osVersion,
+      platform: this.platform,
+      ...(slim === true ? { mode: "slim" as const } : {}),
+    };
   }
 
   #assertKnownModel(model: string, script: FakeDriverPlatformScript): void {
@@ -263,20 +269,25 @@ export class OutOfProcessFakeDriver implements Driver {
 
   /**
    * Re-reads the script's `address` on every boot -- see `FakeDriverPlatformScript.address`.
-   * `options.purpose` is logged alongside the call but otherwise ignored -- this fake never
-   * applies any configuration a `"recover"` boot would need to skip.
+   * `options` is logged alongside the call. A script with `slimmableOsVersions` reports
+   * `"slim"` for a prepare boot of a slim-spec device and `"full"` otherwise, as the iOS driver
+   * does; without it no mode is reported.
    */
   async makeReady(
     device: DriverDevice,
-    options?: { readonly purpose: "prepare" | "recover" },
+    options: { readonly purpose: "prepare" | "recover"; readonly mode: "slim" | "full" },
   ): Promise<DriverDevice> {
     const script = await this.#beforeCall("makeReady", [device, options]);
     this.#devices.set(device.deviceId, "ready");
+    const slims = script.slimmableOsVersions !== undefined;
     return {
       address: script.address ?? defaultAddress(device.deviceId),
       deviceId: device.deviceId,
       driverData: device.driverData,
-    };
+      ...(slims
+        ? { mode: options.mode === "slim" && options.purpose === "prepare" ? "slim" : "full" }
+        : {}),
+    } satisfies DriverDevice;
   }
 
   async reclaim(

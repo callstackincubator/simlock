@@ -928,6 +928,94 @@ describe("Registry", () => {
     ).rejects.toThrow("Invalid device record in registry state");
   });
 
+  describe("a stored spec's mode", () => {
+    async function loadDevice(storedSpec: Record<string, unknown>) {
+      const clock = new FakeClock(1_000);
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(
+        statePath,
+        JSON.stringify({
+          devices: [
+            {
+              createdAt: 500,
+              driverData: {},
+              driverDeviceId: "driver_stored",
+              id: "dev_stored",
+              mode: "full",
+              spec: storedSpec,
+              state: "ready",
+            },
+          ],
+          leases: [],
+        }),
+      );
+      const load = () =>
+        Registry.load({
+          clock,
+          eventBus: new EventBus(clock),
+          filesystem,
+          idGenerator: { generate: () => "new" },
+          statePath,
+        });
+      return { filesystem, load };
+    }
+
+    it.each([true, false])(
+      "ignores a stored spec.full of %s and does not write it back",
+      async (full) => {
+        const { filesystem, load } = await loadDevice({ ...spec, full });
+        const registry = await load();
+
+        expect(registry.snapshot.devices[0]?.spec).toEqual(spec);
+
+        await registry.registerDevice({
+          driverData: {},
+          driverDeviceId: "driver_new",
+          provisionDuration: 0,
+          spec,
+        });
+        const written = JSON.parse(await filesystem.readFile(statePath)) as {
+          devices: { id: string; spec: Record<string, unknown> }[];
+        };
+        expect(written.devices.find((device) => device.id === "dev_stored")?.spec).toEqual(spec);
+      },
+    );
+
+    it("loads a stored slim spec as slim", async () => {
+      const { load } = await loadDevice({ ...spec, mode: "slim" });
+
+      expect((await load()).snapshot.devices[0]?.spec).toEqual({ ...spec, mode: "slim" });
+    });
+
+    it.each(["full", "reduced"])("fails the load on a stored spec.mode of %s", async (mode) => {
+      const { load } = await loadDevice({ ...spec, mode });
+
+      await expect(load()).rejects.toThrow("Invalid device record in registry state");
+    });
+  });
+
+  it("records the planned mode of a slim spec on the device it registers", async () => {
+    const clock = new FakeClock(1_000);
+    const registry = await Registry.load({
+      clock,
+      eventBus: new EventBus(clock),
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "test" },
+      statePath,
+    });
+
+    const device = await registry.registerDevice({
+      driverData: {},
+      driverDeviceId: "driver_test",
+      provisionDuration: 0,
+      spec: { ...spec, mode: "slim" },
+    });
+
+    expect(device.spec).toEqual({ ...spec, mode: "slim" });
+    expect(device.mode).toBe("full");
+  });
+
   it("clears recovery markers as part of the same commit that ends a lease", async () => {
     const clock = new FakeClock(1_000);
     const suffixes = ["device", "lease"];

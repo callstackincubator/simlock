@@ -41,6 +41,18 @@ describe("daemon lifecycle & recovery", () => {
     });
   });
 
+  it("simlock config renders ios.defaultMode, full by default, and no on/off switch under ios.slim", async () => {
+    const env = await withDaemon({ mode: "running" });
+
+    const config = await env.cli(["config"]);
+
+    expect(config.code).toBe(0);
+    const ios = (config.json as { ios: { defaultMode: string; slim: Record<string, unknown> } })
+      .ios;
+    expect(ios.defaultMode).toBe("full");
+    expect(ios.slim).not.toHaveProperty("enabled");
+  });
+
   it("recovers from a kill -9 that leaves a stale socket behind", async () => {
     const env = await withDaemon({ mode: "running" });
     expect(existsSync(env.socketPath)).toBe(true);

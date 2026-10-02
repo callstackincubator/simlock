@@ -47,7 +47,7 @@ const config: Config = {
   stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
   downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
   http: { enabled: false, host: "127.0.0.1", port: 4700 },
-  ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
+  ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
   android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
   idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
   warmPool: {
@@ -295,6 +295,29 @@ describe("WarmPoolCoordinator", () => {
     expect(harness.registry.lastUpdate).toMatchObject({ mode: "slim" });
     expect(harness.registry.snapshot.devices[0]).toMatchObject({ mode: "slim" });
   });
+
+  it.each([
+    ["a slim spec", { ...spec, mode: "slim" as const }, "slim"],
+    ["a full spec", spec, "full"],
+  ] as const)(
+    "passes %s's mode to makeReady on a warm re-boot",
+    async (_label, deviceSpec, mode) => {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
+      const reclaiming = device(
+        "reclaiming",
+        "reclaiming",
+        (await driver.provision(deviceSpec)).deviceId,
+        deviceSpec,
+      );
+      const harness = await createHarness({ devices: [reclaiming], driver });
+
+      await harness.coordinator.reclaim(released(reclaiming));
+
+      const boot = driver.calls.filter((call) => call.operation === "makeReady").at(-1);
+      expect(boot?.arguments[1]).toEqual({ mode, purpose: "prepare" });
+    },
+  );
 
   it("stores full, replacing a stored slim, when a warm re-boot's makeReady reports no mode", async () => {
     const clock = new FakeClock(1_000);

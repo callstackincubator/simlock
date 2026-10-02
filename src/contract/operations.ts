@@ -123,15 +123,17 @@ export const statusGet = defineOperation({
  * No `device`/`os` legacy aliases and no nested `request` wrapper -- both accepted by the
  * pre-ADR-0003 daemon, neither carried forward. `.strict()` on top of dropping the fields: an
  * old client sending `device`/`os`/`request` gets a clear `BAD_REQUEST` instead of those keys
- * silently vanishing. `mode` leaves the same way under ADR 0004 -- there is one kind of lease,
- * so a request that still names a mode is a `BAD_REQUEST` rather than a value silently ignored.
+ * silently vanishing. `mode` is the device mode the request asks for (ADR 0007 §1), absent
+ * when it names none so the worker's default applies; any value but `slim` or `full` -- the
+ * lease mode ADR 0004 retired included -- is a `BAD_REQUEST`. `full` was replaced by `mode`
+ * with no alias, so `.strict()` turns a request that still sends it into a `BAD_REQUEST` too.
  */
 const leaseRequestInputSchema = z
   .object({
     model: z.string().min(1),
     platform: platformSchema,
     osVersion: z.string().optional(),
-    full: z.boolean().optional(),
+    mode: z.enum(["slim", "full"]).optional(),
     requesterId: z.string().optional(),
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),

@@ -137,7 +137,7 @@ describe("readLogFile", () => {
  * 5), and (see "CLI: lease pushes and exit codes" / "CLI: mcp command" / "CLI: daemon logs"
  * below) the CLI's own process-lifecycle and stderr-rendering behaviour that no other suite
  * exercises: the lost-lease exit code and its non-re-release, the `{push:...}` stderr lines
- * including the own-lease-id filter, the `--full`/`--no-wait` flag mapping, the `mcp` command's
+ * including the own-lease-id filter, the `--mode`/`--no-wait` flag mapping, the `mcp` command's
  * lazy module load and startup-failure reporting, and `daemon logs` working without a
  * connection. Deleted from the pre-ADR suite: every test that only re-walked a daemon
  * operation's request/response shape through the CLI (lease grant field-by-field, doctor
@@ -2265,7 +2265,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     });
   });
 
-  it("maps --full and --no-wait onto the contract's full/noWait input fields", async () => {
+  it("maps --mode and --no-wait onto the contract's mode/noWait input fields", async () => {
     const output = outputCapture();
     let capturedInput: Record<string, unknown> | undefined;
     const client = fakeClient({
@@ -2306,16 +2306,34 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
         "--device",
         "iPhone 17 Pro",
         "--detach",
-        "--full",
+        "--mode",
+        "slim",
         "--no-wait",
       ],
       output.environmentWith({ connectAdmin: async () => client }),
     );
-    expect(capturedInput?.full).toBe(true);
+    expect(capturedInput?.mode).toBe("slim");
     expect(capturedInput?.noWait).toBe(true);
   });
 
-  it("omits full and reports noWait: false when neither flag is given", async () => {
+  it("fails the removed full flag as an unknown option, before connecting", async () => {
+    const output = outputCapture();
+    let connected = false;
+    const exitCode = await runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--full"],
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient({});
+        },
+      }),
+    );
+    expect(exitCode).toBe(2);
+    expect(connected).toBe(false);
+    expect(output.stderr).toContain("--full");
+  });
+
+  it("omits mode and reports noWait: false when neither flag is given", async () => {
     const output = outputCapture();
     let capturedInput: Record<string, unknown> | undefined;
     const client = fakeClient({
@@ -2352,7 +2370,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
       output.environmentWith({ connectAdmin: async () => client }),
     );
-    expect(capturedInput?.full).toBeUndefined();
+    expect(capturedInput).not.toHaveProperty("mode");
     expect(capturedInput?.noWait).toBe(false);
   });
 });
@@ -3966,7 +3984,7 @@ function testConfig(): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { slim: { enabled: false, bootTimeoutMs: 600_000 } },
+    ios: { defaultMode: "full", slim: { bootTimeoutMs: 600_000 } },
     android: { emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true } },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
     lease: {
