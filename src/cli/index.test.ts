@@ -2130,6 +2130,35 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Device dev_slim: ready, mode slim");
     expect(output.stdout).toContain("Device dev_full: leased, mode full");
   });
+
+  it("prints the RAM budget, marked over limit when over, and no RAM line when the daemon reports none", async () => {
+    const statusWith = (ramBudget?: NonNullable<StatusGetOutput["capacity"]["ramBudget"]>) => {
+      const status: StatusGetOutput = {
+        ...EMPTY_STATUS,
+        capacity: { ...EMPTY_STATUS.capacity, ...(ramBudget === undefined ? {} : { ramBudget }) },
+      };
+      return status;
+    };
+    const print = async (status: StatusGetOutput) => {
+      const output = outputCapture();
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
+      return output.stdout;
+    };
+    const gib = 1024 ** 3;
+
+    expect(
+      await print(statusWith({ limitBytes: 12 * gib, overLimit: false, usedBytes: 4.5 * gib })),
+    ).toContain("RAM budget: 4.50 GiB/12.00 GiB used\n");
+    expect(
+      await print(statusWith({ limitBytes: 12 * gib, overLimit: true, usedBytes: 13 * gib })),
+    ).toContain("RAM budget: 13.00 GiB/12.00 GiB used (over limit)\n");
+    expect(await print(statusWith())).not.toContain("RAM");
+  });
 });
 
 describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", () => {

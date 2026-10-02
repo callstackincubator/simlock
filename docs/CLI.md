@@ -967,16 +967,28 @@ and `list --devices` well before it crosses the threshold that would make
 Human-oriented overview: daemon health *and mode*, the host it runs on
 (`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
-platform), every managed device with its state and device mode
+platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
+managed device with its state and device mode
 (`Device dev_7: ready, mode slim`), current leases (who — the agent
 id, see [Agent identity](#agent-identity) — since when, and when each was last
 renewed), and queue depth. `--json` for the structured equivalent. `overLimit`
 is true when a lowered limit cannot yet be met, for example because active
 leases consume all running slots.
 
+The RAM budget line appears only under the `resource` capacity strategy
+(see [CONFIGURATION.md](CONFIGURATION.md#capacity-strategies)); under
+`fixed` there is none. In `--json` it is `capacity.ramBudget`:
+`limitBytes` (the machine's RAM minus 4 GiB left for the OS), `usedBytes`
+(the sizes of every listed device that is not deleted, each by its mode) and
+`overLimit`. The line reads `(over limit)` when the use is past the limit,
+for example after a restart with larger per-device sizes; until a device
+is deleted, none is created, and no shut-down slim device boots if its slim
+size is smaller than the full size.
+
 Against a **gateway** (`config.mode: "gateway"`) the same command
 answers for the whole fleet, in the same shape: the daemon line reads
-`running (gateway)`, capacity is summed across the connected workers, one line
+`running (gateway)`, capacity is summed across the connected workers (the RAM
+budget over those that report one, over its limit when any worker is), one line
 per worker precedes the devices, and every device and lease names the worker it
 lives on (`Device dev_7 on wrk_a: leased, mode full`). `--json` gains a `workers` array of
 [worker views](#simlock-worker-listdrainundrainremove) and a `workerId` on each

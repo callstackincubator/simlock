@@ -917,6 +917,26 @@ until the registry commits the resulting running or non-running state. Global
 and platform limits are checked atomically; no driver-specific runtime
 details participate in this decision.
 
+Every capacity device carries a mode (`slim` or `full`), and
+`core/capacity/devices.ts` is the one place a registry record or a spec
+becomes one (ADR 0007 §4, §6, §8). A slim device uses full RAM until its
+slim pass runs, so a device about to be created, and one still
+`provisioning`, counts as `full`; every other device counts by the mode its
+record reports. The `resource` strategy sizes each device by platform and
+mode (a slim size left unset falls back to the full one) and uses one sum
+and one limit for `canProvision`, `canBoot` and `status.get`'s
+`capacity.ramBudget`. `canBoot` refuses with `ram-budget` when the boot's
+extra size (full minus the device's own size) does not fit. The
+coordinator's boot reservation, taken by the planner for a shut-down device
+and by the warm pool for a reclaimed device it boots back to warm, counts
+that device as `full` in every decision until released; status leaves every
+reservation out. A boot refused for RAM evicts nothing and waits. Running
+slots ignore mode. A recovery reboot is not checked and boots full while the
+record keeps its mode (KNOWN-PITFALLS). A restart with larger sizes can
+leave the budget over its limit; the strategy then refuses every
+new device and every boot that adds RAM, and the core stops or reclaims nothing for
+it. `fixed` ignores mode, never refuses a boot, and reports no budget.
+
 At startup, `StartupConverger` restores the persisted TTL timer of **every**
 lease it finds, and re-arms retry timers for devices still `quarantined` (see
 below) from their persisted next-retry deadline. A lease survives a daemon

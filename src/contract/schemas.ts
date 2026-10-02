@@ -277,6 +277,15 @@ export const statusCapacitySchema = z.object({
     used: z.number(),
   }),
   global: runningCapacityEntrySchema.extend({ warm: z.number() }),
+  /** Present only under a strategy that keeps a RAM budget. `usedBytes` counts every
+   * non-deleted device by the mode it reports, without in-flight provisioning. */
+  ramBudget: z
+    .object({
+      limitBytes: z.number().finite(),
+      usedBytes: z.number().finite().nonnegative(),
+      overLimit: z.boolean(),
+    })
+    .optional(),
 });
 
 export const daemonHealthSchema = z.enum(["starting", "running", "failed"]);
@@ -524,7 +533,9 @@ const resourceCapacityConfigSchema = z.object({
     limits: capacityLimitsSchema,
     ramBudget: z.object({
       iosBytesPerDevice: z.number(),
+      iosSlimBytesPerDevice: z.number().optional(),
       androidBytesPerDevice: z.number(),
+      androidSlimBytesPerDevice: z.number().optional(),
     }),
   }),
 });

@@ -750,14 +750,34 @@ otherwise be instant. Depending on capacity, that means either queueing for
 a fresh device to provision or forcing a re-provision of a device already
 running. This is what keeps `full` a guarantee, not a bug to fix.
 
-**A budget sized for slim devices overcommits when full devices are leased.**
-The capacity budget counts every device as one size, whatever its mode. An
-operator who sized `capacity` for slim devices (~0.9 GB each) on a worker
-that also serves `full` requests (~4 GB each) can end up with more full
-devices running than the machine has memory for. Until capacity counts by
-mode ([#174](https://github.com/callstackincubator/simlock/issues/174)),
-size the budget for the mode that is actually leased, or for full devices
-when both are.
+**A RAM budget over its limit clears on delete, not on release (#174).** The
+`resource` strategy counts every device Simlock manages, running or shut
+down, by the mode its record reports. A restart with larger per-device sizes
+than the devices were admitted under can put the budget over its limit. Nothing is stopped or reclaimed
+for it (leases stay granted, safety rule 2): the worker only stops creating
+devices, in either mode, and booting shut-down slim ones smaller than the
+full size, while idle devices
+of a requested spec are still granted. Releasing a lease does not lower the
+use, because the device still exists; the budget comes back under its limit
+when the idle-delete tier (or a device-limit eviction) deletes a device.
+
+**A recovery reboot of a leased slim device is not checked against the RAM
+budget, and leaves it under-counted (#174).** A recovery reboot
+(`purpose: "recover"`) is a plain full boot with no slim pass, so a slim
+device comes back running full. The reboot is not checked against the
+budget: refusing it would leave the holder with a broken device.
+`recoverLeased` does not store the mode the driver reports, so the record
+keeps saying `slim` and the budget counts the slim size until the device is
+next made ready. The machine can then use more RAM than the budget shows.
+Quarantine retries are unchecked in the same way.
+
+**A full request at the device limit can evict a slim device and still wait
+(#174).** Only the device limit evicts (`selectManagedVictim`); the RAM
+budget never does. A full request at the device limit deletes an idle
+device of that platform, which may be slim, and its next plan can then be
+refused on the RAM budget because the freed slim size is smaller than the
+full size it needs. The request waits with one fewer warm device. Evicting
+for RAM is out of scope for #174.
 
 **A cold slim lease outlives a default MCP request timeout.** Measured on
 one machine: a full cold lease took ~28s, a cold slim lease ~160s (two

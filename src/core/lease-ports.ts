@@ -1,4 +1,4 @@
-import type { CapacityPlatform, RunningCapacity } from "./capacity/index.js";
+import type { CapacityPlatform, RamBudget, RunningCapacity } from "./capacity/index.js";
 import type { LeaseRecord, Platform } from "./domain.js";
 import type { DeviceRequest, PassthroughCommand, PassthroughContext } from "./driver.js";
 import type { PlatformCatalog } from "./driver-catalog.js";
@@ -35,6 +35,8 @@ export interface CapacityReader {
   readonly runningCapacity: RunningCapacity;
   /** Managed-device ceiling, taken from the live strategy rather than from config. */
   deviceLimit(platform: CapacityPlatform): number;
+  /** The live strategy's RAM budget over the registered devices; `undefined` when it keeps none. */
+  readonly ramBudget: RamBudget | undefined;
 }
 
 /** Administrative lease expiry used by doctor reconciliation. */

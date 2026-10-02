@@ -11,6 +11,7 @@ import {
   type CapacityDevice,
   type CapacityPlatform,
   type CapacityStrategy,
+  type PlannedCapacityDevice,
   type RunningCapacity,
 } from "../../strategy.js";
 
@@ -38,10 +39,19 @@ class FixedCapacityStrategy implements CapacityStrategy {
     this.#limits = resolveLimits(options);
   }
 
-  canProvision(platform: CapacityPlatform, devices: readonly CapacityDevice[]): CapacityDecision {
-    return withinDeviceLimit(platform, devices, this.#limits)
+  /** One slot per device, whatever its mode. */
+  canProvision(
+    device: PlannedCapacityDevice,
+    devices: readonly CapacityDevice[],
+  ): CapacityDecision {
+    return withinDeviceLimit(device.platform, devices, this.#limits)
       ? { ok: true }
       : { ok: false, reason: "device-limit" };
+  }
+
+  /** No RAM budget, so a boot is limited by running slots alone. */
+  canBoot(): CapacityDecision {
+    return { ok: true };
   }
 
   canReserveRunning(
@@ -61,6 +71,10 @@ class FixedCapacityStrategy implements CapacityStrategy {
 
   deviceLimit(platform: CapacityPlatform): number {
     return this.#limits[platform].maxDevices;
+  }
+
+  ramBudget(): undefined {
+    return undefined;
   }
 }
 
