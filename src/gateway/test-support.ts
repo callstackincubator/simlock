@@ -208,7 +208,7 @@ export class ScriptedWorkerClient {
   status: StatusGetOutput = statusFixture();
   devices: unknown[] = [];
   catalog: CatalogOutput = catalogFixture([]);
-  /** What `config.get` reports; the view carries it as a routing input (ADR 0005 §13). */
+  /** What `config.get` reports; the view carries it for display (ADR 0009 §3). */
   downloadPolicy: DownloadPolicy = "on-request";
   /** What `config.get` reports for `lease.maxTtlMs` (ADR 0005 §15) -- the routing-adjacent
    * counterpart to `downloadPolicy` above. Defaults comfortably above every gateway cap this

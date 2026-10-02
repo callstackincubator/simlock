@@ -99,9 +99,21 @@ describe("matchRequest", () => {
       runtimes: ["26.0"],
     });
 
+    // No pairing: `modelRuntimes.constructor` is inherited, not a list of runtimes.
     expect(
       matchRequest(view, { allowDownload: false, model: "constructor", platform: "ios" }),
     ).toBeUndefined();
+    // No alias: `modelAliases.constructor` is inherited, so asking for another name reads no
+    // alias list for the model and moves on to the next one.
+    const withNext = worker({
+      modelAliases: {},
+      models: ["constructor", "iPhone 17"],
+      platform: "ios",
+      runtimes: ["26.0"],
+    });
+    expect(
+      matchRequest(withNext, { allowDownload: false, model: "iPhone 17", platform: "ios" }),
+    ).toBe("iPhone 17");
   });
 
   it("matches no download: allowDownload does not make an unlisted runtime pair", () => {
