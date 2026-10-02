@@ -34,6 +34,7 @@ import type {
 } from "../ports/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
+  consoleUrlField,
   fitPlatformCatalog,
   OPERATIONS,
   requestedDevice,
@@ -342,7 +343,11 @@ export class Dispatcher {
       // config rather than being assumed, because it is what tells a client whether the device
       // it leased is on this machine (§19c) -- today every daemon configures `worker`, and
       // #117 is what makes `gateway` mean something beyond this field.
-      daemon: { health: this.options.health(), mode: this.options.config.mode },
+      daemon: {
+        health: this.options.health(),
+        mode: this.options.config.mode,
+        ...consoleUrlField(this.options.config.http),
+      },
       host: this.options.hostFacts(),
       installs: [...this.options.components.inProgress()],
       leases: [...snapshot.leases],

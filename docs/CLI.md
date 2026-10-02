@@ -1063,7 +1063,9 @@ A device currently `provisioning` or `reclaiming` carries a derived
 and `list --devices` well before it crosses the threshold that would make
 `doctor` flag it as stalled.
 
-Human-oriented overview: daemon health *and mode*, the host it runs on
+Human-oriented overview: daemon health *and mode*, the web console's address
+when HTTP is enabled (`Console: http://127.0.0.1:4700/`, see
+[CONSOLE.md](CONSOLE.md); `daemon.consoleUrl` in `--json`), the host it runs on
 (`Host: macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9`), managed capacity
 (used/limit per platform), running and reserved capacity (globally and per
 platform), the RAM budget (`RAM budget: 4.50 GiB/12.00 GiB used`), every
@@ -1642,7 +1644,9 @@ Manage the daemon explicitly. Other commands auto-start it on demand; `daemon`
 exists for operators and debugging. `start` starts whichever mode
 `config.mode` selects — a worker (the default) or a gateway — and
 `status` reports it, both in the human line (`Daemon: running (gateway)`) and
-as `daemon.mode` under `--json`. `stop` does not touch leases: they persist,
+as `daemon.mode` under `--json`. With HTTP enabled, `start` and `status` also
+print the web console's address on a `Console:` line (see
+[CONSOLE.md](CONSOLE.md)). `stop` does not touch leases: they persist,
 and the next daemon restores each one's TTL timer from its deadline. What a
 stop does end is the connections to it — a running `simlock lease` cannot
 reconnect, so it exits `1` with a `DAEMON_CONNECTION_LOST` line naming a lease

@@ -101,9 +101,15 @@ export const statusGet = defineOperation({
      * workers that joined it -- which is what `simlock simctl` / `simlock adb` branch on
      * (§19c). They live together in a block because they are both facts about the process and
      * neither is a fact about a device; `health` moved in here from the top level with the
-     * same protocol bump that added `mode`.
+     * same protocol bump that added `mode`. `consoleUrl` is where the daemon serves its web
+     * console (ADR 0011 §3), present only when HTTP is enabled; additive, so an older daemon
+     * simply sends none.
      */
-    daemon: z.object({ health: daemonHealthSchema, mode: daemonModeSchema }),
+    daemon: z.object({
+      health: daemonHealthSchema,
+      mode: daemonModeSchema,
+      consoleUrl: z.string().optional(),
+    }),
     /**
      * ADR 0008 §5: the machine, beside `daemon`, the process. Served from memory, so reading it
      * never makes `status.get` wait.

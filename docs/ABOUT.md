@@ -22,7 +22,9 @@ devices from a self-hosted simlock host over the network (see
 without spawning a `simlock` command at all — agent-device, for
 example — can instead depend on `simlock/client`/`simlock/admin`, the typed
 programmatic client the CLI and MCP frontends are themselves built on (see
-[CLIENT.md](CLIENT.md)).
+[CLIENT.md](CLIENT.md)). With HTTP on, the daemon also serves a web console
+for operators, signed in with an operator token (see
+[CONSOLE.md](CONSOLE.md)).
 
 - `simlock lease` returns a *ready* device — booted and health-checked — that
   no other agent will touch for the duration of the lease.
@@ -73,5 +75,6 @@ registry, and every safety invariant stay on the worker.
   optional MCP server reserves stdout for MCP JSON-RPC.
 
 See [CLI.md](CLI.md) for the command surface,
-[CLIENT.md](CLIENT.md) for the programmatic client, and
-[HTTP-API.md](HTTP-API.md) for the network API.
+[CLIENT.md](CLIENT.md) for the programmatic client,
+[HTTP-API.md](HTTP-API.md) for the network API, and
+[CONSOLE.md](CONSOLE.md) for the web console.

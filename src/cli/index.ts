@@ -1570,13 +1570,17 @@ async function runDaemon(
   if (values.follow && command !== "logs") throw new UsageError("--follow applies only to logs");
   if (command === "start") {
     const client = await connectDaemonClient(environment, token, { launch: true });
+    let status: StatusGetOutput;
     try {
-      await client.getStatus();
+      status = await client.getStatus();
     } finally {
       await client.close();
     }
     if (values.json) writeResult(environment, { status: "running" });
-    else environment.stdout.write("Daemon running\n");
+    else {
+      const lines = ["Daemon running", ...consoleLines(status.daemon)];
+      environment.stdout.write(`${lines.join("\n")}\n`);
+    }
     return 0;
   }
   if (command === "stop") {
@@ -2248,6 +2252,11 @@ function writeResult(environment: CliEnvironment, value: unknown): void {
   environment.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+/** The web console's address line, for `status` and `daemon start`: none when HTTP is off. */
+function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
+  return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
+}
+
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
 function formatStatus(status: StatusGetOutput, now: number): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
@@ -2289,6 +2298,7 @@ function formatStatus(status: StatusGetOutput, now: number): string {
   );
   return [
     `Daemon: ${daemon.health} (${daemon.mode})`,
+    ...consoleLines(daemon),
     `Host: ${formatHost(host)}`,
     globalLine,
     ...capacityLines,

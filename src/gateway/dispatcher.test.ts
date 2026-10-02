@@ -118,7 +118,13 @@ class FakeDirectory implements WorkerDirectory {
   }
 }
 
-function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay"> } = {}) {
+function harness(
+  options: {
+    readonly eventHistory?: Pick<EventHistory, "replay">;
+    /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
+    readonly http?: (typeof gatewayConfig)["http"];
+  } = {},
+) {
   const clock = new FakeClock(1_000);
   const logSink = new MemoryLogSink();
   const eventBus = new EventBus(clock);
@@ -161,7 +167,7 @@ function harness(options: { readonly eventHistory?: Pick<EventHistory, "replay">
     closeUplinksForToken: async (tokenId) => {
       closedUplinkTokens.push(tokenId);
     },
-    config: gatewayConfig,
+    config: options.http === undefined ? gatewayConfig : { ...gatewayConfig, http: options.http },
     coordinator,
     directory,
     eventHistory:
@@ -261,6 +267,22 @@ describe("GatewayDispatcher", () => {
     expect(status.workers).toHaveLength(1);
     expect(status.devices).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
     expect(status.leases).toEqual([expect.objectContaining({ workerId: "wrk_1" })]);
+  });
+
+  it("status.get carries consoleUrl when HTTP is enabled and omits it when disabled", async () => {
+    const enabled = harness({ http: { enabled: true, host: "0.0.0.0", port: 4711 } });
+    const disabled = harness({ http: { enabled: false, host: "0.0.0.0", port: 4711 } });
+
+    const on = await enabled.dispatcher.dispatch("status.get", {}, session());
+    const off = await disabled.dispatcher.dispatch("status.get", {}, session());
+
+    expect(on.daemon).toEqual({
+      consoleUrl: "http://localhost:4711/",
+      health: "running",
+      mode: "gateway",
+    });
+    expect(off.daemon).toEqual({ health: "running", mode: "gateway" });
+    expect("consoleUrl" in off.daemon).toBe(false);
   });
 
   it("lists each worker's installs on status.get with its workerId, and on its view in worker.list", async () => {

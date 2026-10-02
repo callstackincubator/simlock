@@ -35,6 +35,7 @@ import type { z } from "zod";
 
 import type { EventHistory } from "../bus/index.js";
 import {
+  consoleUrlField,
   OPERATIONS,
   requestedDevice,
   type OperationName,
@@ -236,14 +237,20 @@ export class GatewayDispatcher {
 
   // ---- handlers -----------------------------------------------------------------------------
 
-  #statusGet: Handler<"status.get"> = () =>
-    aggregateStatus(this.options.workers.views(), {
+  #statusGet: Handler<"status.get"> = () => {
+    const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
       host: this.options.host,
       // ADR 0005 §20: the gateway's own fleet queue depth.
       queueDepth: this.options.coordinator.queueDepth,
       leaseIndex: this.options.leaseIndex,
     });
+    // ADR 0011 §3: a gateway serves the console on its own listener, as a worker does.
+    return {
+      ...status,
+      daemon: { ...status.daemon, ...consoleUrlField(this.options.config.http) },
+    };
+  };
 
   #catalogGet: Handler<"catalog.get"> = (input) =>
     aggregateCatalog(this.options.workers.views(), input.platform);

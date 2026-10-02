@@ -1,0 +1,100 @@
+# Web console
+
+Part of the user manual: the web console is a page in your browser that shows
+what a Simlock host, or a gateway and its workers, is doing. The daemon serves
+it itself. There is nothing to install and nothing is fetched from the
+internet.
+
+The console is for people who operate Simlock. It needs an operator token.
+Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
+
+This version has sign-in and the console's navigation: Workers, Leases,
+Waiting, Attention and Events. Each page says "Coming soon" until its view is
+built.
+
+## Turn it on
+
+The console comes with the HTTP API. It is on whenever `http.enabled` is
+`true`, and there is no separate switch for it. A gateway always has HTTP on.
+
+On a single host, turn HTTP on and restart the daemon:
+
+```sh
+simlock config set http.enabled true
+simlock daemon stop && simlock daemon start
+```
+
+`http.host` and `http.port` decide where it listens, `127.0.0.1:4700` by
+default (see [CONFIGURATION.md](CONFIGURATION.md)).
+
+## Open it
+
+`simlock daemon start` and `simlock status` print the address:
+
+```
+Daemon running
+Console: http://127.0.0.1:4700/
+```
+
+Open that address in a browser. `simlock status --json` has it as
+`daemon.consoleUrl`. When HTTP is off there is no `Console:` line and no
+`consoleUrl`.
+
+When `http.host` is `0.0.0.0` or `::`, the daemon listens on every interface
+and the address says `localhost`. From another machine, use this host's name
+or address instead. An IPv6 host is shown in brackets, as a browser expects:
+`http://[::1]:4700/`.
+
+The console uses the HTTP listener and nothing else. To reach it from another
+machine, use the same tunnel you use for the HTTP API (Tailscale, cloudflared,
+a reverse proxy). Simlock does not do TLS.
+
+Every page has its own address, such as `/workers`, so you can bookmark a page
+or reload it.
+
+## Sign in
+
+Paste an operator token and press **Sign in**. To make one, run this on the
+host or the gateway:
+
+```sh
+simlock token create --role operator
+```
+
+The secret is printed once. A token works only on the daemon that minted it:
+a gateway's token does not sign in to a worker, and the other way round.
+
+If the console does not accept the token, it says why:
+
+| Message | What it means |
+| --- | --- |
+| This daemon does not know that token. | The token is mistyped, revoked, or from another daemon. |
+| That token is real, but the console needs an operator token. | It is an agent token or a worker join token. |
+| The daemon is starting. Try again in a moment. | The daemon answers, but has not finished starting. |
+| The daemon cannot be reached. | Nothing answers at this address. |
+| The daemon answered with an error (HTTP *n*). | Anything else; the daemon's log says more. |
+
+## Staying signed in
+
+The console keeps the token in this browser tab only.
+
+- **Reload** the page and you stay signed in.
+- **Open a new tab** and it asks for a token again.
+- **Close the tab** and you are signed out.
+- **Sign out** forgets the token at once.
+- If the token is **revoked**, the console signs you out the next time it asks
+  the daemon for anything.
+
+Some browsers copy a tab's storage into a duplicated or reopened tab, so such a
+tab may still be signed in.
+
+## What the page loads
+
+Everything the console needs comes from the daemon: the page, its script, its
+styles and its fonts. The page tells the browser not to send anything to any
+other host, so it works without internet access and your token stays with the
+daemon.
+
+The console's own files need no token, because they hold no data. Anyone who
+reaches the HTTP listener can load the sign-in page and nothing more. Every
+piece of data comes from the HTTP API, with your token.
