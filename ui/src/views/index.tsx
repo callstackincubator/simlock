@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 
 import { AttentionCount, AttentionView } from "./attention";
-import { ComingSoon } from "./coming-soon";
+import { EventsView } from "./events";
 import { LeasesView } from "./leases";
 import { WaitingView } from "./waiting";
 import { WorkersView } from "./workers";
@@ -25,7 +25,7 @@ export const VIEWS: readonly View[] = [
   { path: "/leases", label: "Leases", Component: LeasesView },
   { path: "/waiting", label: "Waiting", Component: WaitingView },
   { path: "/attention", label: "Attention", Component: AttentionView, Badge: AttentionCount },
-  { path: "/events", label: "Events", Component: () => <ComingSoon title="Events" /> },
+  { path: "/events", label: "Events", Component: EventsView },
 ];
 
 /**

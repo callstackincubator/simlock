@@ -8,10 +8,8 @@ internet.
 The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
-This version has sign-in, the console's navigation (Workers, Leases, Waiting,
-Attention and Events), the Workers and Leases pages, the Waiting page and
-the Attention page. The other pages say "Coming soon" until their views are
-built.
+This version has sign-in and a page for each entry in the console's
+navigation: Workers, Leases, Waiting, Attention and Events.
 
 ## Turn it on
 
@@ -221,6 +219,36 @@ Each item shows within about a second of the daemon reporting it. A stalled
 device is the exception on a gateway: a device becomes stalled when its time
 runs out, not by anything happening, so the gateway sees it the next time it
 reads that worker, which it does at least every 30 seconds.
+
+## Events
+
+**Events** lists recent events, newest first: the same events as
+`simlock events --since 1h`. New events appear at the top as they happen.
+
+Each event shows:
+
+- its time, on your computer's clock face
+- its name, such as `lease.granted`
+- on a gateway, the worker it came from, by its label, or by its id if the
+  worker has no label or the gateway no longer knows it
+- its payload, as each key and its value, exactly as the daemon sent it
+
+An event this version of the console does not know still shows, with its
+whole payload.
+
+**Show** picks which events to list: all of them, or only those about leases,
+devices, workers or components. **Other** lists the rest, such as
+`daemon.started`.
+
+The page keeps the newest 1000 events. Older ones drop off the end. When it
+holds 1000 it says so.
+
+When the console loses the daemon, or the tab was hidden, it loads the events
+it missed as soon as it is back, so the list has no gap. An event the console
+already shows is never shown twice, also after the daemon restarts.
+
+The console shows what the daemon sends. The daemon keeps secrets, such as a
+worker's join token, out of its events.
 
 ## Live updates
 
