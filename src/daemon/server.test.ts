@@ -40,6 +40,7 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
+import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { AdminAuthenticationFailedError, type SessionRoleResolver } from "./session.js";
 import { DaemonServer } from "./server.js";
@@ -1689,6 +1690,16 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
 
     expect(catalogReads).toHaveBeenCalledTimes(2);
     await client.close();
+  });
+
+  it("disposes the worker's dispatcher, ending its bus subscriptions, when the daemon stops", async () => {
+    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+    const dispose = vi.spyOn(Dispatcher.prototype, "dispose");
+
+    await harness.daemon.stop("test");
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    dispose.mockRestore();
   });
 
   it("answers worker.install-component with UNSUPPORTED_IN_WORKER_MODE: a worker has no workers to install on", async () => {

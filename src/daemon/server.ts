@@ -335,6 +335,8 @@ export class DaemonServer {
    */
   readonly #parkedDispatches = new Set<Promise<void>>();
   readonly #dispatcher: ContractDispatcher;
+  /** The worker's own dispatcher, held to dispose on stop; absent on a gateway. */
+  readonly #workerDispatcher: Dispatcher | undefined;
   readonly #resolveRole: SessionRoleResolver;
   /**
    * The worker engine, or `undefined` in gateway mode (ADR 0005 §33: a gateway has no
@@ -363,10 +365,11 @@ export class DaemonServer {
       const engine: DaemonServerEngineOptions = options;
       this.#engine = engine;
       this.#ownerRoutedFacts = new OwnerRoutedFactBus(options.eventBus, engine.registry);
-      this.#dispatcher = buildDispatcher(options, {
+      this.#workerDispatcher = buildDispatcher(options, {
         awaitReady: () => this.#awaitReady(),
         health: () => this.#health,
       });
+      this.#dispatcher = this.#workerDispatcher;
     } else {
       // Gateway mode (ADR 0005 §32): the handlers come ready-made, and there is no engine to
       // hold. Owner-routed facts are inert here, deliberately: the gateway issues no leases of
@@ -611,6 +614,7 @@ export class DaemonServer {
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
+    this.#workerDispatcher?.dispose();
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();
     // ADR 0004 §3: a stop releases nothing. Every lease persists with its deadline, and the

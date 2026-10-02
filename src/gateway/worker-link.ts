@@ -16,7 +16,12 @@
  * admin, so the gateway may read it.
  */
 import type { EventBus, EventName } from "../bus/index.js";
-import { grantedDeviceSchema, isSimlockError, workerViewFields } from "../contract/index.js";
+import {
+  grantedDeviceSchema,
+  isSimlockError,
+  WORKER_VIEW_CATALOG_EVENTS,
+  workerViewFields,
+} from "../contract/index.js";
 import type { SimlockAdminClient } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
@@ -487,7 +492,9 @@ export class WorkerLink {
     this.options.eventBus.emit(envelope.event as EventName, payload as never, envelope.module);
     // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
     if (changesCapacityOrLeases(envelope.event))
-      void this.refresh({ includeCatalog: envelope.event === "component.installed" });
+      void this.refresh({
+        includeCatalog: (WORKER_VIEW_CATALOG_EVENTS as readonly string[]).includes(envelope.event),
+      });
   }
 }
 

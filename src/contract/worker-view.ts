@@ -23,6 +23,14 @@ import { statusDeviceSchema, type workerViewSchema } from "./schemas.js";
  */
 export const WORKER_VIEW_REFRESH_INTERVAL_MS = 30_000;
 
+/**
+ * The events after which a worker view's catalog is read again at once, rather than on the
+ * interval above. One list, read by a gateway's `WorkerLink` and by a worker answering
+ * `worker.list`, so both re-read on the same events (architecture rule 10). An installed
+ * component is a new catalog entry (ADR 0010 §7); a removal shows on the next interval.
+ */
+export const WORKER_VIEW_CATALOG_EVENTS = ["component.installed"] as const;
+
 type Output<Name extends keyof typeof OPERATIONS> = z.infer<(typeof OPERATIONS)[Name]["output"]>;
 type WorkerView = z.infer<typeof workerViewSchema>;
 

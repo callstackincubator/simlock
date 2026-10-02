@@ -39,6 +39,7 @@ import {
   requestedDevice,
   type ComponentProgress,
   type OperationName,
+  WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
   workerViewFields,
 } from "../contract/index.js";
@@ -150,9 +151,9 @@ export interface DispatcherOptions {
   /** This daemon's own version, the one its `hello` reply carries; `worker.list`'s `version`. */
   readonly version: string;
   /**
-   * Where `worker.list` hears that a component was installed or removed, so its kept catalog is
-   * read again at once rather than on its next interval. Optional for the tests that never call
-   * `worker.list`; without it the kept catalog is only re-read on the interval.
+   * Where `worker.list` hears `WORKER_VIEW_CATALOG_EVENTS`, so its kept catalog is read again at
+   * once rather than on its next interval. Optional for the tests that never call `worker.list`;
+   * without it the kept catalog is only re-read on the interval.
    */
   readonly eventBus?: Pick<EventBus, "subscribe">;
 }
@@ -207,21 +208,24 @@ export class Dispatcher {
   /**
    * `worker.list`'s catalog: the last `catalog.get` answer and when it was read. Kept for
    * `WORKER_VIEW_REFRESH_INTERVAL_MS`, the rhythm a gateway re-reads a worker's catalog at, and
-   * dropped when a component is installed or removed. Without it every `worker.list` runs each
-   * driver's catalog read (`simctl list` on iOS), and the console polls that route every second.
-   * Holds the promise, so calls that arrive while a read runs share it; a read that fails is
-   * dropped, so the next call reads again.
+   * dropped on `WORKER_VIEW_CATALOG_EVENTS`, the events a gateway re-reads it on. Without it
+   * every `worker.list` runs each driver's catalog read (`simctl list` on iOS), and the console
+   * polls that route every second. Holds the promise, so calls that arrive while a read runs
+   * share it; a read that fails is dropped, so the next call reads again.
    */
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
+  /** Ends the bus subscriptions that drop `#viewCatalog`; see `dispose`. */
+  readonly #unsubscribe: (() => void)[] = [];
 
   constructor(private readonly options: DispatcherOptions) {
     this.#logger = options.logger ?? new NoopLogger();
     // Observers only (architecture rule 5): dropping a kept read decides nothing.
-    const dropViewCatalog = () => {
-      this.#viewCatalog = undefined;
-    };
-    options.eventBus?.subscribe("component.installed", dropViewCatalog);
-    options.eventBus?.subscribe("component.removed", dropViewCatalog);
+    for (const event of WORKER_VIEW_CATALOG_EVENTS) {
+      const unsubscribe = options.eventBus?.subscribe(event, () => {
+        this.#viewCatalog = undefined;
+      });
+      if (unsubscribe !== undefined) this.#unsubscribe.push(unsubscribe);
+    }
     this.#dispatchLogger = this.#logger.child("dispatch");
     this.#handlers = {
       "catalog.get": this.#catalogGet,
@@ -259,6 +263,12 @@ export class Dispatcher {
       // "daemon.stop" deliberately absent -- see the class comment; `DaemonServer` never calls
       // `dispatch()` for a frame type this map has no entry for.
     };
+  }
+
+  /** Ends this dispatcher's bus subscriptions. `DaemonServer` calls it when the daemon stops. */
+  dispose(): void {
+    for (const unsubscribe of this.#unsubscribe.splice(0)) unsubscribe();
+    this.#viewCatalog = undefined;
   }
 
   /** ADR 0003 §2's pipeline, run by the shared `runDispatch` (see `./dispatch.js`) over this
@@ -668,18 +678,28 @@ export class Dispatcher {
     };
   };
 
-  /** The kept catalog for `worker.list`, read again once it is older than the interval. */
+  /**
+   * The kept catalog for `worker.list`, read again once it is older than the interval. The age
+   * is wall-clock time, so one that is negative (the clock was set back) counts as stale rather
+   * than keeping the catalog for as long as the clock went back. A failed read drops whatever is
+   * kept, at worst one read newer than it, which costs one more read.
+   */
   #keptViewCatalog(session: DispatchSession): Promise<unknown> {
     const now = this.options.clock.now();
     const kept = this.#viewCatalog;
-    if (kept !== undefined && now - kept.readAt < WORKER_VIEW_REFRESH_INTERVAL_MS) {
+    const age = kept === undefined ? undefined : now - kept.readAt;
+    if (
+      kept !== undefined &&
+      age !== undefined &&
+      age >= 0 &&
+      age < WORKER_VIEW_REFRESH_INTERVAL_MS
+    ) {
       return kept.catalog;
     }
     const catalog = Promise.resolve(this.#catalogGet({}, session));
-    const entry = { catalog, readAt: now };
-    this.#viewCatalog = entry;
+    this.#viewCatalog = { catalog, readAt: now };
     catalog.catch(() => {
-      if (this.#viewCatalog === entry) this.#viewCatalog = undefined;
+      this.#viewCatalog = undefined;
     });
     return catalog;
   }

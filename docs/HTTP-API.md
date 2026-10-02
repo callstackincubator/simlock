@@ -1071,9 +1071,9 @@ its workers. `id` is the id the host presents to a gateway, `label` is its
 `gateway.label` (absent when unset), `connection` is `connected`, `drained`
 is `false`, and `lastSeenAt` is the time of the request. Every other field
 comes from the host's own status, devices, catalog and config. Status and
-devices are read on every request. The catalog is read again at most every
-30 seconds, and straight after a component is installed or removed, as a
-gateway reads its workers' catalogs. A host that
+devices are read on every request. The catalog is read again every 30
+seconds, and straight after a component is installed, as a gateway reads its
+workers' catalogs; a removed component leaves it on the next read. A host that
 has joined a gateway still answers about itself: its `drained` is `false`
 even when the gateway has drained it, because that flag is the gateway's.
 

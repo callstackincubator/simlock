@@ -22,6 +22,7 @@ import {
 import {
   OPERATIONS,
   statusDeviceSchema,
+  WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
 } from "../contract/index.js";
 import type { FakeDriverOptions } from "../core/fake-driver.js";
@@ -106,6 +107,19 @@ function fakePassthroughOptions(
     },
     passthroughTool: tool,
   };
+}
+
+/** A fake clock that can also be set back, as a wall clock can be. */
+class SettableClock extends FakeClock {
+  #offset = 0;
+
+  setBack(ms: number): void {
+    this.#offset -= ms;
+  }
+
+  override now(): number {
+    return super.now() + this.#offset;
+  }
 }
 
 /** `config` with `gateway.label` set, or unchanged when there is no label. */
@@ -407,15 +421,69 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     const { clock, dispatcher, driver } = await buildDispatcher();
     const catalogReads = vi.spyOn(driver, "listCatalog");
 
-    for (let poll = 0; poll < 5; poll += 1) {
-      await dispatcher.dispatch("worker.list", {}, admin);
+    // A console polls every second; every poll up to the last millisecond of the interval
+    // answers from the one read.
+    await dispatcher.dispatch("worker.list", {}, admin);
+    for (let elapsed = 1_000; elapsed < WORKER_VIEW_REFRESH_INTERVAL_MS; elapsed += 1_000) {
       clock.advance(1_000);
+      await dispatcher.dispatch("worker.list", {}, admin);
     }
+    clock.advance(999);
+    await dispatcher.dispatch("worker.list", {}, admin);
     expect(catalogReads).toHaveBeenCalledTimes(1);
 
-    clock.advance(WORKER_VIEW_REFRESH_INTERVAL_MS);
+    clock.advance(1);
     await dispatcher.dispatch("worker.list", {}, admin);
     expect(catalogReads).toHaveBeenCalledTimes(2);
+  });
+
+  it("worker.list on a worker shares one catalog read between calls that arrive while it runs", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+
+    await Promise.all([
+      dispatcher.dispatch("worker.list", {}, admin),
+      dispatcher.dispatch("worker.list", {}, admin),
+      dispatcher.dispatch("worker.list", {}, admin),
+    ]);
+
+    expect(catalogReads).toHaveBeenCalledTimes(1);
+  });
+
+  it("worker.list on a worker reads the catalog again when the clock is set back", async () => {
+    const clock = new SettableClock(100_000);
+    const { dispatcher, driver } = await buildDispatcher({ clock });
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+    await dispatcher.dispatch("worker.list", {}, admin);
+
+    clock.setBack(60_000);
+    await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(catalogReads).toHaveBeenCalledTimes(2);
+  });
+
+  it("worker.list on a worker re-reads its catalog on each event a gateway re-reads a worker's catalog on, until disposed", async () => {
+    const { dispatcher, driver, eventBus } = await buildDispatcher();
+    const catalogReads = vi.spyOn(driver, "listCatalog");
+    const payload = {
+      alreadyPresent: false,
+      componentId: "27.0",
+      durationMs: 1,
+      platform: "ios",
+      version: "27.0",
+    };
+    expect(WORKER_VIEW_CATALOG_EVENTS).toEqual(["component.installed"]);
+    await dispatcher.dispatch("worker.list", {}, admin);
+
+    eventBus.emit("component.installed", payload, "test");
+    await dispatcher.dispatch("worker.list", {}, admin);
+    expect(catalogReads).toHaveBeenCalledTimes(2);
+
+    dispatcher.dispose();
+    await dispatcher.dispatch("worker.list", {}, admin);
+    eventBus.emit("component.installed", payload, "test");
+    await dispatcher.dispatch("worker.list", {}, admin);
+    expect(catalogReads).toHaveBeenCalledTimes(3);
   });
 
   it("worker.list on a worker lists a runtime installed since its last read, without waiting for the interval", async () => {
@@ -429,24 +497,6 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     await components.install({ component: "27.0", platform: "ios" });
 
     expect(await runtimes()).toEqual(expect.arrayContaining(["26.5", "27.0"]));
-  });
-
-  it("worker.list on a worker drops a removed runtime without waiting for the interval", async () => {
-    const { components, dispatcher } = await buildDispatcher();
-    const runtimes = async () =>
-      (await dispatcher.dispatch("worker.list", {}, admin)).workers[0]?.catalog.flatMap(
-        (entry) => entry.runtimes,
-      );
-    await components.install({ component: "27.0", platform: "ios" });
-    expect(await runtimes()).toEqual(expect.arrayContaining(["27.0"]));
-
-    await expect(
-      components.remove({ platform: "ios", requesterId: "operator", version: "27.0" }),
-    ).resolves.toMatchObject({
-      outcome: "removed",
-    });
-
-    expect(await runtimes()).not.toContain("27.0");
   });
 
   it("worker.list on a worker reads the catalog again after a read that failed", async () => {

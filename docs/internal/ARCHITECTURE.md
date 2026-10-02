@@ -524,7 +524,10 @@ a field. The catalog is the one read the worker keeps: `catalog.get` runs
 each driver's catalog read (`simctl list` on iOS), and the console polls
 `GET /v1/workers` every second, so the dispatcher re-reads it only once
 `WORKER_VIEW_REFRESH_INTERVAL_MS` (the gateway's own refresh tick) has
-passed, or after `component.installed` or `component.removed`. `worker.drain`, `worker.undrain`, `worker.remove` and
+passed, or after one of `WORKER_VIEW_CATALOG_EVENTS`. Both constants live
+in `src/contract/worker-view.ts`, and `WorkerLink` reads the same two, so a
+host's view of itself and a gateway's view of it re-read the catalog on the
+same rhythm. The dispatcher's subscriptions end when `DaemonServer` stops. `worker.drain`, `worker.undrain`, `worker.remove` and
 `worker.install-component` answer `UNSUPPORTED_IN_WORKER_MODE` (`501`, exit
 `2`), the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The `/v1/workers*` routes
 are registered in both modes.
