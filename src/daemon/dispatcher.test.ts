@@ -1506,6 +1506,10 @@ describe("Dispatcher: component.install", () => {
     expect(String(fraction)).toBe("0.641");
   });
 
+  it("sends a percentage of 99.96 as 0.999, keeping a fraction of 1 for 100", async () => {
+    await expect(fractionsFor([99.96, 100])).resolves.toEqual([0.999, 1]);
+  });
+
   it("sends no fraction with more than three decimals for any percentage from 0 to 100 in steps of 0.1", async () => {
     // Summed rather than computed, so the percentages carry the noise a driver's own arithmetic
     // would.

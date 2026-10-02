@@ -1254,7 +1254,7 @@ Progress is JSON lines on stderr, the result one JSON line on stdout:
 already there; running the command again changes nothing and succeeds.
 `version` is the exact version installed. `fraction`, from 0 to 1 with at
 most three decimals, is present when the platform's installer reports one;
-an install that succeeds reports 1 before its result. The installed component
+an install that ends `installed` reports 1 before its result. The installed component
 appears in `simlock catalog` at once.
 
 - **Consent.** The command is the consent to download, so no

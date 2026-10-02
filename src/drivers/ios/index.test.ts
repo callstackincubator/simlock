@@ -3143,7 +3143,8 @@ describe("IosSimctlDriver", () => {
       });
 
       it("states the measured sizes of several leftover downloads as one total", async () => {
-        // The iOS 18.6 and 18.4 downloads measured on a real machine.
+        // The sizes of the iOS 18.6 and 18.4 downloads measured on a real machine; this catalog
+        // installs 18.4, so the second bundle is labelled 18.3 to be reported.
         const filesystem = new SizedFilesystem(
           new Map([
             [`${IOS_RUNTIME_ASSET_ROOT}/c3.asset`, 8_917_036 * 1024],
@@ -3676,6 +3677,36 @@ describe("IosSimctlDriver listComponents()", () => {
       const sizeIn = (text: string | undefined) => /its download \(([^)]+)\)/.exec(text ?? "")?.[1];
       expect(sizeIn(residue)).toBe("8.5 GiB");
       expect(sizeIn(advisory?.message)).toBe(sizeIn(residue));
+    });
+
+    it("states the total size of two downloads the removed build leaves, as downloads of one runtime", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        deleted,
+        imagesListed([]),
+        imagesListed([]),
+        defaultSetListed({}),
+      ]);
+      const filesystem = new SizedFilesystem(
+        new Map([
+          [`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`, 8_917_036 * 1024],
+          [`${IOS_RUNTIME_ASSET_ROOT}/bundle-1.asset`, 8_916_744 * 1024],
+        ]),
+      );
+      await addAssets(filesystem, [
+        ["26.4", "23E244"],
+        ["26.4", "23E244"],
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), filesystem);
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal.residue).toContain(
+        "iOS 26.4 (23E244) is no longer installed, but its downloads (17.0 GiB in all) are " +
+          "still in",
+      );
+      expect(removal.residue).toContain("does not reclaim them");
     });
 
     it("states no size in residue when the download's size cannot be read", async () => {

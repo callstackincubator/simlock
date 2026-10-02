@@ -307,7 +307,7 @@ const result = await admin.installComponent(
 - `onProgress` hears `waiting` while another download on the platform runs
   first, then `downloading`, with `fraction` from 0 to 1, at most three
   decimals, when the platform's installer reports one. An install that
-  succeeds reports 1 before the call resolves.
+  ends `installed` reports 1 before the call resolves.
 - The call is the consent to download. Under `downloads.policy: "never"` it
   rejects with `DOWNLOADS_DISABLED`. Other rejections: `FORBIDDEN` for an
   agent session, `NO_DRIVER`, `INSUFFICIENT_DISK_SPACE`,
