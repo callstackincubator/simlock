@@ -27,9 +27,7 @@ export interface TokenList {
 export interface LeaseDetails {
   readonly id: string;
   readonly requestId?: string;
-  readonly platform: string;
   readonly device: string;
-  readonly os: string;
   readonly udid: string;
   readonly deviceId: string;
   readonly createdAt: string;

@@ -336,7 +336,7 @@ test.describe("the leases views", () => {
       await expect(expiry).toHaveText(/^1 min \d+ s$/);
 
       const renewed = await fetch(new URL(`/v1/leases/${granted.id}/renew`, host.url), {
-        body: JSON.stringify({ ttlMs: 3_600_000 }),
+        body: JSON.stringify({ ttlMs: 3_000_000 }),
         headers: { Authorization: `Bearer ${ci.secret}`, "Content-Type": "application/json" },
         method: "POST",
       });
@@ -347,7 +347,7 @@ test.describe("the leases views", () => {
         ),
       );
 
-      await expect(expiry).toHaveText(/^59 min \d+ s$/, { timeout: 1_000 });
+      await expect(expiry).toHaveText(/^(49|50) min( \d+ s)?$/, { timeout: 1_000 });
     } finally {
       await host.dispose();
     }
@@ -383,12 +383,16 @@ test.describe("the leases views", () => {
     try {
       const ci = await labelledToken(host, "ci-runner-3");
       const granted = await leaseOverHttp(host, ci.secret);
-      /** Tabs forward until the link named `label` has focus, and follows it with Enter. */
-      const follow = async (label: string) => {
+      /**
+       * Tabs until the link named `label` has focus, forward or, for a link earlier on the page
+       * such as the navigation, backward, and follows it with Enter.
+       */
+      const follow = async (label: string, direction: "forward" | "backward" = "forward") => {
         const link = page.getByRole("link", { name: label, exact: true });
+        const key = direction === "forward" ? tab : `Shift+${tab}`;
         for (let step = 0; step < 30; step += 1) {
           if (await link.evaluate((element) => element === document.activeElement)) break;
-          await page.keyboard.press(tab);
+          await page.keyboard.press(key);
         }
         await expect(link).toBeFocused();
         await page.keyboard.press("Enter");
@@ -405,6 +409,17 @@ test.describe("the leases views", () => {
       await expect(page.getByRole("heading", { level: 1, name: granted.id })).toBeVisible();
       await follow("All leases");
       await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
+
+      // The same lease, from the table on its worker's page.
+      const [view] = (
+        (await host.cli(["worker", "list", "--json"])).json as { workers: { id: string }[] }
+      ).workers;
+      const name = view?.id ?? "";
+      await follow("Workers", "backward");
+      await follow(name);
+      await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+      await follow(granted.id);
+      await expect(page.getByRole("heading", { level: 1, name: granted.id })).toBeVisible();
     } finally {
       await host.dispose();
     }

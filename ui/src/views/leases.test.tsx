@@ -117,7 +117,7 @@ describe("the leases views", () => {
     expect(leasesOnWorker([local], "wrk_host")).toEqual([local]);
   });
 
-  it("a gateway lease's page path survives a reload and names the lease again", () => {
+  it("a gateway lease's page path has no `.` in its last segment, and names the lease again", () => {
     const id = "3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c";
     const path = leasePath(id);
 
@@ -135,8 +135,6 @@ describe("the leases views", () => {
       expiresAt: new Date(NOW + 125_000).toISOString(),
       id: "lse_1",
       mode: "slim",
-      os: "18.4",
-      platform: "ios",
       requestId: "req_7d1a",
       udid: "ABCD-1234",
     };

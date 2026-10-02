@@ -146,9 +146,9 @@ Each lease shows:
 | Expires in | How long until the lease expires unless it is renewed. It counts down every second. |
 | Last renewed | How long ago the lease was last renewed, or granted if it never was |
 
-Select a lease to open its page. It shows the same facts, the platform and
-runtime, the device's UDID, and the id of the request that was granted the
-lease, while the daemon still keeps it. A lease that has been released or has
+Select a lease to open its page. It shows the same facts, the device's UDID,
+and the id of the request that was granted the lease, while the daemon still
+keeps it. A lease that has been released or has
 expired says "Lease not found".
 
 ### Who holds a lease

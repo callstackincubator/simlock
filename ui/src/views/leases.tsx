@@ -19,7 +19,7 @@ import {
   type TokenRecord,
   workerNameOfLease,
 } from "./leases-model";
-import { platformName, type WorkerList, type WorkerView } from "./workers-model";
+import type { WorkerList, WorkerView } from "./workers-model";
 
 /**
  * The leases views (ADR 0013 §1): every lease at `/leases`, from `GET /v1/leases`, and one lease
@@ -247,10 +247,7 @@ export function LeaseFacts(props: {
         {record === undefined ? "—" : <HolderName holder={holderOf(record.requesterId, tokens)} />}
       </Fact>
       <Fact label="Worker">{worker ?? "—"}</Fact>
-      <Fact label="Device">
-        {lease.device} <span className="muted">{platformName(lease.platform)}</span>{" "}
-        <span className="mono">{lease.os}</span>
-      </Fact>
+      <Fact label="Device">{lease.device}</Fact>
       <Fact label="Device id" mono>
         {lease.deviceId}
       </Fact>
