@@ -479,6 +479,22 @@ describe("gateway smoke", () => {
     const first = await submit();
     const firstRead = await readGranted(first.request.id);
     await release(firstRead);
+    // The release answers before the worker has reclaimed the device. The second request is
+    // granted inside its own `201` only once the gateway's view shows that device ready again.
+    await waitFor(
+      async () => {
+        const status = (await (await fetch(`${baseUrl}/v1/status`, { headers: auth })).json()) as {
+          devices: { state: string }[];
+          leases: unknown[];
+        };
+        return (
+          status.leases.length === 0 &&
+          status.devices.length > 0 &&
+          status.devices.every((device) => device.state === "ready")
+        );
+      },
+      { label: "the released device ready again in the gateway's view", timeout: 30_000 },
+    );
 
     const second = await submit();
     const secondRead = await readGranted(second.request.id);

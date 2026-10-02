@@ -205,6 +205,9 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", worker);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
 
+    for (const device of harness.service.workers.view("wrk_1")?.devices ?? []) {
+      expect(device).not.toHaveProperty("driverDeviceId");
+    }
     expect(harness.service.workers.grantedDevices()).toEqual([
       {
         driverDeviceId: "UDID-1",

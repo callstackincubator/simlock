@@ -152,6 +152,30 @@ describe("WorkerRegistry", () => {
     expect(workers.view("wrk_1")).toBeUndefined();
   });
 
+  it("lists each worker's granted devices under that worker's id, and keeps them through a refresh that carries none", () => {
+    const { workers } = registry();
+    const granted = (udid: string) => ({
+      driverDeviceId: udid,
+      id: "dev_1",
+      mode: "full" as const,
+      spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" as const },
+    });
+    workers.connected("wrk_a", undefined, "0.3.0");
+    workers.connected("wrk_b", undefined, "0.3.0");
+    workers.refresh("wrk_a", { grantedDevices: [granted("UDID-A")] });
+    workers.refresh("wrk_b", { grantedDevices: [granted("UDID-B")] });
+    workers.refresh("wrk_b", { queueDepth: 1 });
+
+    expect(
+      workers
+        .grantedDevices()
+        .map(({ driverDeviceId, workerId }) => ({ driverDeviceId, workerId })),
+    ).toEqual([
+      { driverDeviceId: "UDID-A", workerId: "wrk_a" },
+      { driverDeviceId: "UDID-B", workerId: "wrk_b" },
+    ]);
+  });
+
   it("forgets a worker's granted devices with its view, so a worker re-added under that id lists none until it refreshes", async () => {
     const { workers } = registry();
     workers.connected("wrk_1", undefined, "0.3.0");
