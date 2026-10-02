@@ -705,7 +705,7 @@ describe("aggregateCatalog", () => {
       expect(catalog.platforms[0]?.customModels).toEqual(["My Tablet"]);
     });
 
-    it("omits customModels when no worker marks a model", () => {
+    it("omits customModels when no worker marks a model it lists", () => {
       const catalog = aggregateCatalog([
         view({ catalog: [androidOn({ customModels: ["Ghost"] })], id: "wrk_a" }),
       ]);
