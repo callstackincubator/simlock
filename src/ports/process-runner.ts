@@ -46,7 +46,17 @@ export interface ProcessRunOptions {
    * Omitted means stdin is left open and unwritten, exactly as before this option existed.
    */
   readonly input?: string;
+  /**
+   * Where `spawn`'s `stdout` and `stderr` iterables end a line. `"newline"` (the default) ends
+   * one only at `\n`. `"carriage-return-too"` also ends one at a bare `\r`, and yields no empty
+   * lines: an installer (`sdkmanager`, `xcodebuild -downloadPlatform`) redraws its progress bar
+   * in place with `\r`, so without this every update waits in one unfinished line until the
+   * process prints its final newline. The captured `ProcessResult` text is the same either way.
+   */
+  readonly lineEnd?: LineEnd;
 }
+
+export type LineEnd = "newline" | "carriage-return-too";
 
 export interface ProcessResult {
   readonly code: number | null;
@@ -229,7 +239,7 @@ export class NodeProcessRunner implements ProcessRunner {
       child.stdin?.end(options.input);
     }
 
-    return new NodeProcessHandle(child, child.pid);
+    return new NodeProcessHandle(child, child.pid, options.lineEnd ?? "newline");
   }
 
   spawnStreaming(
@@ -525,10 +535,11 @@ class NodeProcessHandle implements ProcessHandle {
   constructor(
     private readonly child: ChildProcess,
     pid: number,
+    lineEnd: LineEnd,
   ) {
     this.pid = pid;
-    captureLines(child.stdout, this.stdout, this.#stdoutChunks);
-    captureLines(child.stderr, this.stderr, this.#stderrChunks);
+    captureLines(child.stdout, this.stdout, this.#stdoutChunks, lineEnd);
+    captureLines(child.stderr, this.stderr, this.#stderrChunks, lineEnd);
     this.#result = new Promise<ProcessResult>((resolve, reject) => {
       child.once("error", reject);
 
@@ -648,7 +659,11 @@ export class ScriptedProcessRunner implements ProcessRunner {
       throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
     }
 
-    const handle = new ScriptedProcessHandle(this.#nextPid++, expectation);
+    const handle = new ScriptedProcessHandle(
+      this.#nextPid++,
+      expectation,
+      options.lineEnd ?? "newline",
+    );
     this.handles.push(handle);
     return handle;
   }
@@ -769,12 +784,13 @@ class ScriptedProcessHandle implements ProcessHandle {
   constructor(
     readonly pid: number,
     private readonly expectation: ScriptedProcessExpectation,
+    lineEnd: LineEnd,
   ) {
     this.#result = new Promise<ProcessResult>((resolve) => {
       this.#resolve = resolve;
     });
-    this.#writeLines(expectation.stdoutLines, this.stdout);
-    this.#writeLines(expectation.stderrLines, this.stderr);
+    this.#writeLines(expectation.stdoutLines, this.stdout, lineEnd);
+    this.#writeLines(expectation.stderrLines, this.stderr, lineEnd);
 
     if (!expectation.hangs) {
       this.#finish(expectation.result ?? defaultResult(expectation));
@@ -794,9 +810,19 @@ class ScriptedProcessHandle implements ProcessHandle {
     return this.#result;
   }
 
-  #writeLines(lines: readonly string[] | undefined, destination: LineBuffer): void {
+  /**
+   * Each scripted line is replayed as the child would have printed it, `\n`-terminated, through
+   * the same splitter the real handle uses -- so a scripted line holding `\r` redraws splits
+   * exactly as real output would under the caller's `lineEnd`.
+   */
+  #writeLines(
+    lines: readonly string[] | undefined,
+    destination: LineBuffer,
+    lineEnd: LineEnd,
+  ): void {
+    const splitter = new LineSplitter(lineEnd);
     for (const line of lines ?? []) {
-      destination.push(line);
+      for (const split of splitter.feed(`${line}\n`)) destination.push(split);
     }
   }
 
@@ -862,10 +888,43 @@ class LineBuffer implements AsyncIterable<string> {
   }
 }
 
+/**
+ * The one place process output is cut into lines, for the real handle and the scripted one.
+ * `\r\n` is always a single line end. Under `"carriage-return-too"` a bare `\r` ends a line as
+ * well, and empty lines are dropped -- which is also what keeps a `\r\n` pair split across two
+ * chunks one line end rather than a line plus an empty one.
+ */
+class LineSplitter {
+  #remainder = "";
+
+  constructor(private readonly lineEnd: LineEnd) {}
+
+  /** The lines `chunk` completes; an unfinished tail is held for the next chunk. */
+  feed(chunk: string): string[] {
+    const parts = `${this.#remainder}${chunk}`.split(
+      this.lineEnd === "carriage-return-too" ? /\r\n|\r|\n/ : /\r?\n/,
+    );
+    this.#remainder = parts.pop() ?? "";
+    return this.#kept(parts);
+  }
+
+  /** The unfinished tail at end of output, if any. */
+  end(): string[] {
+    const tail = this.#remainder;
+    this.#remainder = "";
+    return tail === "" ? [] : this.#kept([tail]);
+  }
+
+  #kept(lines: string[]): string[] {
+    return this.lineEnd === "carriage-return-too" ? lines.filter((line) => line !== "") : lines;
+  }
+}
+
 function captureLines(
   stream: NodeJS.ReadableStream | null,
   destination: LineBuffer,
   chunks: string[],
+  lineEnd: LineEnd,
 ): void {
   // No pipe means the child was spawned with `stdio: "ignore"`. Closing the buffer
   // straight away is what keeps `for await (const line of handle.stdout)` a loop that
@@ -875,20 +934,17 @@ function captureLines(
     return;
   }
 
-  let remainder = "";
+  const splitter = new LineSplitter(lineEnd);
   stream.setEncoding("utf8");
   stream.on("data", (chunk: string) => {
     chunks.push(chunk);
-    const completeLines = `${remainder}${chunk}`.split(/\r?\n/);
-    remainder = completeLines.pop() ?? "";
-
-    for (const line of completeLines) {
+    for (const line of splitter.feed(chunk)) {
       destination.push(line);
     }
   });
   stream.on("end", () => {
-    if (remainder !== "") {
-      destination.push(remainder);
+    for (const line of splitter.end()) {
+      destination.push(line);
     }
     destination.close();
   });

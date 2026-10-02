@@ -325,6 +325,16 @@ If Xcode doesn't have a build matching that bare major version, the download
 fails and the request fails with it; passing `--os <version>` explicitly is
 the way out.
 
+**Installers redraw their progress with a carriage return.** Seen through a
+pipe, `sdkmanager` prints its whole progress bar as one long line, each
+update starting with a bare `\r` and only the last one ending in `\n`.
+`ProcessRunner` normally ends a line only at `\n`, so a reader would see a
+single line, read when the install is already over, whose last percentage is
+100. `runInstallerProcess` therefore spawns with
+`lineEnd: "carriage-return-too"`, which ends a line at a bare `\r` as well.
+Anything else that reads an installer's progress must do the same, or it
+reports nothing until the end.
+
 ## An iOS runtime download outlives the runtime, and only Xcode can reclaim it (#79)
 
 `xcrun simctl runtime delete` unregisters a runtime from CoreSimulator and

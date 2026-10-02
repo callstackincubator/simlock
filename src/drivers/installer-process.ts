@@ -27,8 +27,8 @@ export interface InstallerProcessOutcome {
 /**
  * Runs one platform installer (`xcodebuild -downloadPlatform`, `sdkmanager --install`) with no
  * timeout of its own -- the caller's budget is `ComponentInstaller`'s, and reaches this process
- * only through `signal`, which ends it. Every output line is scanned for a percentage and
- * reported as progress; a line with none yields nothing. Shared by both drivers so the two
+ * only through `signal`, which ends it. Every output line, ended at `\n` or at a bare `\r`, is
+ * scanned for a percentage and reported as progress; a line with none yields nothing. Shared by both drivers so the two
  * cannot end or read their installers differently.
  */
 export async function runInstallerProcess(
@@ -41,11 +41,12 @@ export async function runInstallerProcess(
   if (options.signal.aborted) {
     return { result: { code: null, stderr: "", stdout: "" }, stopped: true };
   }
-  const handle = runner.spawn(
-    command,
-    args,
-    options.input === undefined ? {} : { input: options.input },
-  );
+  // Installers redraw their progress bar in place with a bare `\r`; ending a line there is what
+  // lets each redraw be read as it happens instead of all at once when the process exits.
+  const handle = runner.spawn(command, args, {
+    lineEnd: "carriage-return-too",
+    ...(options.input === undefined ? {} : { input: options.input }),
+  });
   let killTimer: ReturnType<Clock["setTimer"]> | undefined;
   const stop = (): void => {
     killQuietly(handle, "SIGTERM");
