@@ -140,6 +140,41 @@ describe("startDaemon", () => {
     expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
   });
 
+  it("runs no prerequisite check at startup convergence, and runs every check on each doctor.run", async () => {
+    let runs = 0;
+    const missing = { message: "gone", prerequisite: "android-emulator", remedy: "install it" };
+    const { daemon } = await start({
+      prerequisiteChecks: [
+        {
+          check: () => {
+            runs += 1;
+            return Promise.resolve([missing]);
+          },
+          platform: "android",
+        },
+      ],
+    });
+    const admin = {
+      manageEventSubscription: () => undefined,
+      principal: "operator",
+      role: "admin",
+    } as const;
+
+    // doctor.run parks until startup convergence has finished, so by the time it answers,
+    // convergence's own reconcile has run -- and must not have counted.
+    const first = (await daemon.dispatch("doctor.run", {}, admin)) as {
+      readonly findings: readonly { readonly kind: string; readonly prerequisite?: string }[];
+    };
+    expect(runs).toBe(1);
+    // Android has no driver in this daemon, so the finding is the platform's, not running.
+    expect(first.findings).toContainEqual(
+      expect.objectContaining({ kind: "prerequisite-missing", platform: "android" }),
+    );
+
+    await daemon.dispatch("doctor.run", {}, admin);
+    expect(runs).toBe(2);
+  });
+
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {
     const filesystem = new MemoryFilesystem();
     const { daemon, directory } = await start({
@@ -723,6 +758,22 @@ describe("discoverDrivers", () => {
     expect(rejections).toEqual([]);
   });
 
+  it("builds no iOS prerequisite check on a host that is not macOS, and an Android one", async () => {
+    const { prerequisiteChecks } = await discoverIos({ hostPlatform: "linux" });
+
+    expect(prerequisiteChecks.map((check) => check.platform)).toEqual(["android"]);
+  });
+
+  it("builds both prerequisite checks on macOS, whether or not a driver started", async () => {
+    // The refused root costs the iOS driver; it must not cost the check that explains it.
+    const { drivers, prerequisiteChecks } = await discoverIos({
+      filesystem: await foreignOwnedRoot(),
+    });
+
+    expect(drivers.some((driver) => driver.platform === "ios")).toBe(false);
+    expect(prerequisiteChecks.map((check) => check.platform)).toEqual(["ios", "android"]);
+  });
+
   it("starts the iOS driver on a host with simctl, with the root it validated", async () => {
     const filesystem = new MemoryFilesystem();
 
@@ -1221,6 +1272,17 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     );
   });
 
+  it("takes the module's prerequisiteChecks export in place of the real checks", async () => {
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers() { return []; }
+       export const prerequisiteChecks = [{ platform: "android", fromModule: true, check: async () => [] }];`,
+    );
+
+    const { prerequisiteChecks } = await discover(new MemoryLogSink());
+
+    expect(prerequisiteChecks).toEqual([expect.objectContaining({ fromModule: true })]);
+  });
+
   it("hands config's android.emulator block to driver discovery when the daemon starts", async () => {
     const key = "__simlockDiscoveredAndroidEmulator";
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
@@ -1278,7 +1340,12 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       `export function createDrivers() { return []; }`,
     );
 
-    await expect(discover(new MemoryLogSink())).resolves.toEqual({ drivers: [], rejections: [] });
+    // No `prerequisiteChecks` export: `doctor` runs no check rather than the real ones.
+    await expect(discover(new MemoryLogSink())).resolves.toEqual({
+      drivers: [],
+      prerequisiteChecks: [],
+      rejections: [],
+    });
   });
 
   it("fails loudly when the module has no createDrivers export", async () => {

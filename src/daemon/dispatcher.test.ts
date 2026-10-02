@@ -404,18 +404,30 @@ describe("Dispatcher: role rejection", () => {
   // `doctor --purge-orphans` prompted for confirmation and then destroyed nothing. The flag
   // stays its own all the way down -- an unattended `--fix` must not acquire a destructive
   // behaviour by upgrading (ADR 0001, decision 6) -- which is only true if it also *arrives*.
-  it("doctor.run forwards purgeOrphans to the Doctor, distinctly from fix", async () => {
+  it("doctor.run forwards purgeOrphans to the Doctor, distinctly from fix, and always asks for prerequisites", async () => {
     const { dispatcher, doctor } = await buildDispatcher();
     const reconcile = vi.spyOn(doctor, "reconcile");
 
     await dispatcher.dispatch("doctor.run", {}, session({ role: "admin" }));
-    expect(reconcile).toHaveBeenLastCalledWith({ fix: false, purgeOrphans: false });
+    expect(reconcile).toHaveBeenLastCalledWith({
+      fix: false,
+      prerequisites: true,
+      purgeOrphans: false,
+    });
 
     await dispatcher.dispatch("doctor.run", { fix: true }, session({ role: "admin" }));
-    expect(reconcile).toHaveBeenLastCalledWith({ fix: true, purgeOrphans: false });
+    expect(reconcile).toHaveBeenLastCalledWith({
+      fix: true,
+      prerequisites: true,
+      purgeOrphans: false,
+    });
 
     await dispatcher.dispatch("doctor.run", { purgeOrphans: true }, session({ role: "admin" }));
-    expect(reconcile).toHaveBeenLastCalledWith({ fix: false, purgeOrphans: true });
+    expect(reconcile).toHaveBeenLastCalledWith({
+      fix: false,
+      prerequisites: true,
+      purgeOrphans: true,
+    });
   });
 
   // `driver.passthrough` was declared in the contract and dispatched by the socket switch while

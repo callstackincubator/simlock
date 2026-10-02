@@ -1305,6 +1305,44 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(seen).toEqual([{ fix: false, purgeOrphans: true }]);
   });
 
+  it("prints one stderr line per prerequisite finding, keeps the JSON report on stdout, and exits 0", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        kind: "prerequisite-missing" as const,
+        message: "The Android emulator package is not installed.",
+        platform: "android" as const,
+        prerequisite: "android-emulator",
+        remedy: "Run `sdkmanager --install emulator`.",
+      },
+      {
+        kind: "prerequisite-missing" as const,
+        message: "Xcode is not installed.",
+        platform: "ios" as const,
+        prerequisite: "xcode",
+        remedy: "Run `xcode-select`.",
+      },
+      { deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" },
+    ];
+
+    await expect(
+      runCli(
+        ["doctor"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    // The harness has no admin credential, so a connection notice precedes these lines.
+    expect(output.stderr.split("\n").filter((line) => line.startsWith("Missing"))).toEqual([
+      "Missing [android] android-emulator: The Android emulator package is not installed. " +
+        "Run `sdkmanager --install emulator`.",
+      "Missing [ios] xcode: Xcode is not installed. Run `xcode-select`.",
+    ]);
+    expect(JSON.parse(output.stdout)).toEqual({ findings });
+  });
+
   it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];

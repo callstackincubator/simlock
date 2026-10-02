@@ -206,6 +206,32 @@ describe("doctor and drift", () => {
     await heldB.waitForExit(15_000).catch(() => undefined);
   });
 
+  it("reports a scripted missing prerequisite in the JSON report and on stderr, and stops once it is installed", async () => {
+    const env = await withDaemon();
+    const emulator = {
+      prerequisite: "android-emulator",
+      message: "The Android emulator package is not installed.",
+      remedy: "Run `sdkmanager --install emulator`.",
+    };
+    await env.driverScript.set({ android: { missingPrerequisites: [emulator] } });
+
+    const missing = await env.cli(["doctor"]);
+    expect(missing.code).toBe(0);
+    expect((missing.json as { findings: unknown[] }).findings).toEqual([
+      { kind: "prerequisite-missing", platform: "android", ...emulator },
+    ]);
+    expect(missing.stderr).toContain(
+      "Missing [android] android-emulator: The Android emulator package is not installed. " +
+        "Run `sdkmanager --install emulator`.",
+    );
+
+    // Same daemon, no restart: the next run looks again.
+    await env.driverScript.set({ android: {} });
+    const installed = await env.cli(["doctor"]);
+    expect((installed.json as { findings: unknown[] }).findings).toEqual([]);
+    expect(installed.stderr).not.toContain("Missing [");
+  });
+
   it("purges orphans only when asked and confirmed and the root re-proves first, while --fix only reports them", async () => {
     const env = await withDaemon();
     const orphanScript = {

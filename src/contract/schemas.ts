@@ -479,6 +479,13 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     code: z.string(),
     message: z.string(),
   }),
+  z.object({
+    kind: z.literal("prerequisite-missing"),
+    platform: platformSchema,
+    prerequisite: z.string(),
+    message: z.string(),
+    remedy: z.string(),
+  }),
 ]);
 
 export const doctorReportSchema = z.object({ findings: z.array(doctorFindingSchema) });

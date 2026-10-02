@@ -114,6 +114,15 @@ export interface FakeDriverPlatformScript {
    * Defaults to `<deviceId>-address`.
    */
   readonly address?: string;
+  /**
+   * What this platform's `prerequisiteChecks` entry reports missing, read fresh on every
+   * `doctor` run. None by default.
+   */
+  readonly missingPrerequisites?: readonly {
+    readonly prerequisite: string;
+    readonly message: string;
+    readonly remedy: string;
+  }[];
 }
 
 /** Top-level script file shape, read fresh on every driver operation. */

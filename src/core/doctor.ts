@@ -15,8 +15,10 @@ import type {
   DriverDevice,
   DriverRejection,
   DriverRejectionReason,
+  MissingPrerequisite,
   ObservedDevice,
   ObservedMark,
+  PrerequisiteCheck,
 } from "./driver.js";
 import type { LeaseExpirer } from "./lease-ports.js";
 import type { Registry } from "./registry.js";
@@ -83,6 +85,20 @@ export type DoctorFinding =
       readonly platform: Platform;
       readonly code: string;
       readonly message: string;
+    }
+  | {
+      /**
+       * A tool the platform needs and Simlock does not install, from that platform's
+       * `PrerequisiteCheck`. `prerequisite`, `message` and `remedy` are the driver module's own
+       * text, carried unread -- except `daemon-restart`, the one this file adds itself. Like
+       * `driver-advisory` it is not drift: `--fix` never acts on it and `doctor.reconciled`
+       * does not carry it.
+       */
+      readonly kind: "prerequisite-missing";
+      readonly platform: Platform;
+      readonly prerequisite: string;
+      readonly message: string;
+      readonly remedy: string;
     };
 
 /**
@@ -128,6 +144,14 @@ export interface DoctorOptions {
    */
   readonly driverRejections?: readonly DriverRejection[];
   readonly logger?: Logger;
+  /** One per platform this host could run, whether or not its driver started. */
+  readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+  /**
+   * The platforms whose driver is serving. Defaults to the platforms of `drivers`. A platform
+   * outside it gets the restart sentence on every prerequisite finding, because only a daemon
+   * restart retries driver discovery.
+   */
+  readonly runningPlatforms?: () => readonly Platform[];
   readonly registry: Registry;
 }
 
@@ -139,6 +163,11 @@ export interface DoctorReconcileOptions {
    * CI must not acquire a destructive behaviour by upgrading (ADR 0001, decision 6).
    */
   readonly purgeOrphans?: boolean;
+  /**
+   * Runs every `PrerequisiteCheck`. Off by default so startup convergence starts no tool;
+   * `doctor.run` turns it on, so the machine is looked at again on every run.
+   */
+  readonly prerequisites?: boolean;
 }
 
 export class Doctor {
@@ -151,6 +180,7 @@ export class Doctor {
   async reconcile({
     fix = false,
     purgeOrphans = false,
+    prerequisites = false,
   }: DoctorReconcileOptions = {}): Promise<DoctorReport> {
     const snapshot = this.options.registry.snapshot;
     const realities = await Promise.all(
@@ -217,6 +247,7 @@ export class Doctor {
     findings.push(...orphanFindings(realities, registryDeviceKeys));
     findings.push(...expiredLeaseFindings(snapshot.leases, this.options.clock.now()));
     findings.push(...(await this.#collectAdvisories()));
+    findings.push(...(await this.#collectPrerequisites(prerequisites)));
 
     if (fix) {
       await this.#applySafeFixes(findings, driversByPlatform);
@@ -232,12 +263,12 @@ export class Doctor {
       {
         // `driftFindings` is a stable payload contract (events rule 6: additive changes only)
         // that has always meant "things `--fix` might correct" -- every finding kind so far.
-        // A `driver-advisory` is neither drift nor ever actionable by `--fix` (see
-        // `#applySafeFix`), so folding it into this field would silently redefine what an
-        // existing consumer is entitled to assume about every entry in it. It stays available
-        // through `DoctorReport.findings` (what `doctor.run` returns to a caller) but is
-        // filtered out of the event payload.
-        driftFindings: remaining.filter((finding) => finding.kind !== "driver-advisory"),
+        // A `driver-advisory` or `prerequisite-missing` is neither drift nor ever actionable by
+        // `--fix` (see `#applySafeFix`), so folding it into this field would silently redefine
+        // what an existing consumer is entitled to assume about every entry in it. Both stay
+        // available through `DoctorReport.findings` (what `doctor.run` returns to a caller) but
+        // are filtered out of the event payload.
+        driftFindings: remaining.filter(isDrift),
       },
       "doctor",
     );
@@ -423,6 +454,47 @@ export class Doctor {
     return perDriver.flat();
   }
 
+  /**
+   * Every platform's prerequisite check, run now: a package installed since the last run is
+   * no longer reported, with no restart. A check that rejects could not tell, so it is logged
+   * and contributes nothing, as a rejecting `advisories()` does.
+   *
+   * Driver discovery, though, ran once at startup. So a platform that is not running gets the
+   * restart sentence on each finding, and one whose prerequisites are all present gets a
+   * finding of its own that says so -- unless its driver was refused, which `driver-unavailable`
+   * already explains.
+   */
+  async #collectPrerequisites(enabled: boolean): Promise<DoctorFinding[]> {
+    if (!enabled) return [];
+    const running = new Set(
+      this.options.runningPlatforms?.() ?? this.options.drivers.map((driver) => driver.platform),
+    );
+    const rejected = new Set(
+      (this.options.driverRejections ?? []).map((rejection) => rejection.platform),
+    );
+    const perCheck = await Promise.all(
+      (this.options.prerequisiteChecks ?? []).map(async (check): Promise<DoctorFinding[]> => {
+        let missing: readonly MissingPrerequisite[];
+        try {
+          missing = await check.check();
+        } catch (error: unknown) {
+          this.#logger.warn("Could not check platform prerequisites", {
+            platform: check.platform,
+            reason: errorMessage(error),
+          });
+          return [];
+        }
+        return prerequisiteFindings(
+          check.platform,
+          missing,
+          running.has(check.platform),
+          rejected.has(check.platform),
+        );
+      }),
+    );
+    return perCheck.flat();
+  }
+
   #emitFindingEvents(findings: readonly DoctorFinding[]): void {
     for (const finding of findings) {
       if (finding.kind === "foreign-state-change") {
@@ -507,6 +579,9 @@ export class Doctor {
         break;
       case "driver-advisory":
         // Information, not drift: `--fix` never acts on a driver advisory.
+        break;
+      case "prerequisite-missing":
+        // Simlock installs no prerequisite (safety rule 4), `--fix` included.
         break;
     }
   }
@@ -826,6 +901,40 @@ function driverUnavailableFindings(rejections: readonly DriverRejection[]): Doct
     kind: "driver-unavailable" as const,
     platform: rejection.platform,
     reason: rejection.reason,
+  }));
+}
+
+/** Whether a finding belongs in `doctor.reconciled`'s `driftFindings` -- see the emit call. */
+function isDrift(finding: DoctorFinding): boolean {
+  return finding.kind !== "driver-advisory" && finding.kind !== "prerequisite-missing";
+}
+
+/** One platform's check result, as findings -- see `Doctor#collectPrerequisites`. */
+function prerequisiteFindings(
+  platform: Platform,
+  missing: readonly MissingPrerequisite[],
+  running: boolean,
+  rejected: boolean,
+): DoctorFinding[] {
+  if (missing.length === 0) {
+    return running || rejected
+      ? []
+      : [
+          {
+            kind: "prerequisite-missing",
+            message: "Every prerequisite is present, but the daemon started without this platform.",
+            platform,
+            prerequisite: "daemon-restart",
+            remedy: DRIVER_RETRY_REMEDY,
+          },
+        ];
+  }
+  return missing.map((found) => ({
+    kind: "prerequisite-missing" as const,
+    message: found.message,
+    platform,
+    prerequisite: found.prerequisite,
+    remedy: running ? found.remedy : `${found.remedy} ${DRIVER_RETRY_REMEDY}`,
   }));
 }
 
