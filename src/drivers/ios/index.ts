@@ -2210,8 +2210,7 @@ function describeFailedChunk(outcome: ProcessOutcome): string {
   if (outcome.kind === "timed-out") {
     return `timed out after ${String(SLIM_CHUNK_TIMEOUT_MS)}ms`;
   }
-  const stderr = outcome.result.stderr.trim();
-  return `exit ${String(outcome.result.code)}: ${stderr === "" ? "(no stderr)" : stderr}`;
+  return `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
 }
 
 function chunk<T>(items: readonly T[], size: number): readonly (readonly T[])[] {

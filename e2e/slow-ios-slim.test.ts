@@ -148,10 +148,8 @@ async function slimSkips(env: TestEnv): Promise<string> {
   return skips.length === 0 ? "the daemon logged no skipped slim" : skips.join("\n");
 }
 
-async function expectSlim(env: TestEnv, grant: LeaseGrant, message: string): Promise<void> {
-  expect(grant.mode, `${message}\n${grant.mode === "slim" ? "" : await slimSkips(env)}`).toBe(
-    "slim",
-  );
+async function expectSlim(env: TestEnv, mode: LeaseGrant["mode"], message: string): Promise<void> {
+  expect(mode, `${message}\n${mode === "slim" ? "" : await slimSkips(env)}`).toBe("slim");
 }
 
 const ALL_LABELS = new Set(labelsFor(SLIM_CATEGORIES));
@@ -201,7 +199,7 @@ describe.skipIf(process.platform !== "darwin")(
           "--mode",
           "slim",
         ]);
-        await expectSlim(env, slimGrant, "--mode slim must be slim on a default-full worker");
+        await expectSlim(env, slimGrant.mode, "--mode slim must be slim on a default-full worker");
         expect(slimGrant.udid, "a slim request must not reuse the idle full device").not.toBe(
           grant.udid,
         );
@@ -224,7 +222,7 @@ describe.skipIf(process.platform !== "darwin")(
         const slimGrant = await leaseDetached(env, model, os, "slim-cold");
         const slimDurationMs = Date.now() - slimStart;
 
-        await expectSlim(env, slimGrant, "a slim lease's grant must carry mode: slim");
+        await expectSlim(env, slimGrant.mode, "a slim lease's grant must carry mode: slim");
 
         const slimDisabled = await printDisabled(slimGrant);
         const missing = [...ALL_LABELS].filter((label) => !slimDisabled.has(label));
@@ -320,7 +318,7 @@ describe.skipIf(process.platform !== "darwin")(
         // that it's skipped. We assert that documented behaviour here.
         const relet = await leaseDetached(env, model, os, "slim-cold");
         expect(relet.udid, "expected the warm-pooled device to be reused").toBe(slimGrant.udid);
-        await expectSlim(env, relet, "re-leased device must still report mode: slim");
+        await expectSlim(env, relet.mode, "re-leased device must still report mode: slim");
 
         const eventsAfterRelease = await env.expectEvents(["device.slimmed", "device.slimmed"], {
           since: "1h",
@@ -359,7 +357,7 @@ describe.skipIf(process.platform !== "darwin")(
 
         // --- scenario 5 ---
         const grant = await leaseDetached(env, model, os, "slim-subset");
-        await expectSlim(env, grant, "a default-slim lease must be slim");
+        await expectSlim(env, grant.mode, "a default-slim lease must be slim");
         const disabled = await printDisabled(grant);
 
         const missingSiri = [...siriLabels].filter((label) => !disabled.has(label));
@@ -386,7 +384,7 @@ describe.skipIf(process.platform !== "darwin")(
           { ios: { defaultMode: "slim", slim: { categories: ["siri", "no-such-category"] } } },
           async () => {
             const grant2 = await leaseDetached(env, model, os, "slim-unknown-category");
-            await expectSlim(env, grant2, "lease must still succeed and be slim");
+            await expectSlim(env, grant2.mode, "lease must still succeed and be slim");
             const disabled2 = await printDisabled(grant2);
             const missingSiri2 = [...siriLabels].filter((label) => !disabled2.has(label));
             expect(missingSiri2, "expected every siri label disabled").toEqual([]);
@@ -407,7 +405,7 @@ describe.skipIf(process.platform !== "darwin")(
         });
         const { model, os } = await catalogModelAndOs(env);
         const grant = await leaseDetached(env, model, os, "slim-recovery", []);
-        await expectSlim(env, grant, "a default-slim lease must be slim");
+        await expectSlim(env, grant.mode, "a default-slim lease must be slim");
         const disabledBefore = await printDisabled(grant);
         expect([...ALL_LABELS].filter((label) => !disabledBefore.has(label)).length).toBe(0);
 
@@ -487,10 +485,11 @@ describe.skipIf(process.platform !== "darwin")(
           device: { mode: "slim" | "full" };
           lease: { id: string };
         };
-        expect(
+        await expectSlim(
+          env,
           slimLeased.device.mode,
           "MCP lease naming no mode on a default-slim worker must report mode: slim",
-        ).toBe("slim");
+        );
 
         await mcp.client.callTool({
           name: "release_simulator",
