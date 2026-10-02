@@ -1109,7 +1109,16 @@ Conclusions baked into the drivers:
   before reuse after invalidation.
 - **Readiness probes**: iOS `simctl bootstatus` (variance observed up to
   ~30% — use generous timeouts, not a hard SLA). Android:
-  `sys.boot_completed == 1` AND (`init.svc.bootanim == "stopped"` OR unset).
+  `sys.boot_completed == 1` AND (`init.svc.bootanim == "stopped"` OR unset),
+  then `adb emu avd path` must name the device's own `<deviceRoot>/<avd>.avd`
+  (whole path, or the same directory by `realpath`). Whatever answers on the
+  serial is whoever holds the console port, so a collision fails the boot with
+  `DriverCrashError` before a mark or a baseline capture touches that emulator,
+  and a shutdown or destroy that follows in the same daemon process sends it
+  no `emu kill`; an AVD name proves nothing (safety rule 8). Not covered yet: a
+  shutdown or destroy of a device that was never refused (or after a daemon
+  restart) still sends `emu kill` to its stored serial unchecked, and reclaim's
+  `emu avd snapshot load` goes to the serial before its readiness wait checks it.
 
 ## Leases
 

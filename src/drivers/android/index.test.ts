@@ -23,6 +23,8 @@ import {
   NodeTcpProbe,
   ScriptedProcessRunner,
   type ProcessHandle,
+  type ProcessResult,
+  type ProcessRunner,
   type ProcessRunOptions,
   type ScriptedProcessExpectation,
   SystemClock,
@@ -703,6 +705,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -744,6 +747,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -909,6 +913,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
     ];
 
     it.each([
@@ -1068,6 +1073,7 @@ describe("AndroidDriver", () => {
           ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
           "",
         ),
+        avdPathExpectation("emulator-5586"),
       ];
       const { filesystem, runner } = await bootAfterRestartWith(
         { ...defaults, headless: true },
@@ -1585,6 +1591,7 @@ describe("AndroidDriver", () => {
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", "device-3"),
     ]);
     const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
@@ -2736,6 +2743,154 @@ describe("AndroidDriver ownership", () => {
   });
 });
 
+describe("AndroidDriver readiness on a taken console port", () => {
+  it("refuses to ready a device whose serial an emulator of an AVD outside its root answers, and changes nothing on that emulator, even when the device is then shut down (#256)", async () => {
+    const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const machine = new PortTakingMachine(host);
+    const driver = await createDriver(filesystem, machine.runner(), { ids: ["one"] });
+    await driver.resolveSpec(spec);
+    // Booted and stopped once, the device has its clean baseline and boots from it next
+    // time, as it does for every lease after its first.
+    const stopped = await driver.makeReady(await driver.provision(spec));
+    await driver.shutdown(stopped);
+
+    // Another emulator takes the device's console port before its own emulator binds it --
+    // whatever freed the port for it (#52, a second Simlock instance, the user's own
+    // emulator). Its AVD is named like Simlock's but lives in the user's AVD home: a name
+    // proves nothing, root membership does (safety rule 8).
+    const otherPath = `${home}/.android/avd/simlock_one.avd`;
+    const other = machine.takePortOnNextBoot(otherPath);
+
+    const readied = await driver.makeReady(stopped).then(
+      (ready) => machine.avdPathAnswering(ready.address),
+      (error: unknown) => driverCrashMessage(error),
+    );
+    // What the core does with a device whose boot failed: it destroys it, and destroying a
+    // device starts by shutting it down.
+    await driver.shutdown(stopped);
+
+    // A DriverCrashError naming both directories: the one that answered, and the device's own.
+    const ownPath = `${avdDirectory}/simlock_one.avd`;
+    expect({ readied, other: other.observed() }).toEqual({
+      readied: {
+        refused: expect.stringMatching(
+          new RegExp(`"${escapeRegExp(otherPath)}".* ${escapeRegExp(ownPath)}(\\s|$)`),
+        ),
+      },
+      other: { running: true, sentByDriver: [] },
+    });
+  });
+
+  it.each<{
+    readonly reported: string;
+    readonly answer: string;
+    readonly filesystem?: () => MemoryFilesystem;
+  }>([
+    { answer: `${avdDirectory}/simlock_one.avd\r\nOK\r\n`, reported: "exactly" },
+    { answer: `${avdDirectory}/simlock_one.avd/\r\nOK\r\n`, reported: "with a trailing slash" },
+    // `/private/home` is a link to `/home`: the link is on the answer's side.
+    {
+      answer: `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
+      reported: "through a link to the device root's directory",
+    },
+    // `/home` is a link to `/private/home`, as macOS's `/var` is to `/private/var`: the link
+    // is on the device root's side, and the emulator answers with the resolved path.
+    {
+      answer: `/private${avdDirectory}/simlock_one.avd\r\nOK\r\n`,
+      filesystem: () => new LinkedHomeFilesystem(),
+      reported: "resolved, when the device root's own path runs through a link",
+    },
+  ])(
+    "readies a device whose emulator reports its AVD directory $reported",
+    async ({ answer, filesystem: createFilesystem, reported }) => {
+      const filesystem = await androidFilesystem({}, createFilesystem?.());
+      if (createFilesystem === undefined) filesystem.defineSymlink("/private/home", "/home");
+      const host = new EmulatorHost(filesystem);
+      const runner = answeringAvdPath(host.runner(), ok(answer));
+      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+      const spec = await driver.resolveSpec({
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+      const device = await driver.provision(spec);
+      if (reported === "exactly") {
+        // An exact answer needs nothing from the filesystem: a directory that cannot be
+        // resolved this moment does not fail the boot.
+        filesystem.defineFailure(`${avdDirectory}/simlock_one.avd`, "EACCES");
+      }
+
+      const ready = await driver.makeReady(device);
+
+      expect(ready.address).toBe("emulator-5586");
+    },
+  );
+
+  it.each<{
+    readonly answered: string;
+    readonly answer: ProcessResult;
+    readonly filesystem?: () => MemoryFilesystem;
+    readonly existing?: string;
+  }>([
+    { answer: ok("KO: unknown command\r\n"), answered: "a console error" },
+    {
+      answer: { code: 1, stderr: "error: could not connect to console", stdout: "" },
+      answered: "a failed adb call",
+    },
+    {
+      answer: ok(`/private/elsewhere/simlock_one.avd\r\nOK\r\n`),
+      answered: "a directory that does not exist",
+    },
+    {
+      answer: ok(`${avdDirectory}/simlock_two.avd\r\nOK\r\n`),
+      answered: "another device's directory in the same root",
+      existing: `${avdDirectory}/simlock_two.avd`,
+    },
+    {
+      answer: ok(`${home}/.android/avd/simlock_one.avd\r\nOK\r\n`),
+      answered: "a directory of the same name outside the root",
+      existing: `${home}/.android/avd/simlock_one.avd`,
+    },
+    {
+      answer: ok(`\r\n${avdDirectory}/simlock_one.avd\r\nOK\r\n`),
+      answered: "its own directory below a blank first line",
+    },
+    {
+      // Resolved against the daemon's working directory, which here is the device root, a
+      // relative answer would name the device's own directory -- by accident.
+      answer: ok("simlock_one.avd\r\nOK\r\n"),
+      answered: "a relative path",
+      filesystem: () => new WorkingDirectoryFilesystem(avdDirectory),
+    },
+  ])(
+    "refuses to ready a device whose emulator answers the AVD path query with $answered, and stops that emulator",
+    async ({ answer, existing, filesystem: createFilesystem }) => {
+      const filesystem = await androidFilesystem({}, createFilesystem?.());
+      if (existing !== undefined) await filesystem.mkdirp(existing);
+      const host = new EmulatorHost(filesystem);
+      const runner = answeringAvdPath(host.runner(), answer);
+      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+      const spec = await driver.resolveSpec({
+        model: "Pixel 8",
+        osVersion: "34",
+        platform: "android",
+      });
+
+      const readied = await driver.makeReady(await driver.provision(spec)).then(
+        () => "readied",
+        (error: unknown) => driverCrashMessage(error),
+      );
+
+      expect({ readied, running: host.avdAnswering("emulator-5586") }).toEqual({
+        readied: { refused: expect.any(String) },
+        running: undefined,
+      });
+    },
+  );
+});
+
 describe("AndroidDriver emulator registration", () => {
   it("sweeps its own console range when it takes over a server, and nobody else's", async () => {
     // A running emulator announced itself exactly once, to a server a previous daemon has
@@ -3329,6 +3484,7 @@ async function provisionedHarness(
         ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
         "",
       ),
+      avdPathExpectation("emulator-5586"),
       markWriteExpectation("emulator-5586", secondMarkToken),
     );
   }
@@ -3410,7 +3566,7 @@ describe("AndroidDriver toolVersions()", () => {
 
 async function createDriver(
   filesystem: Filesystem,
-  processRunner: ScriptedProcessRunner,
+  processRunner: ProcessRunner,
   options: {
     readonly acceptAndroidLicenses?: boolean;
     /** `ANDROID_AVD_HOME` in the environment the daemon started with; unset by default. */
@@ -3617,6 +3773,7 @@ function baselineBuildExpectations(options: {
       ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
       "",
     ),
+    avdPathExpectation("emulator-5586"),
     processResult(binaries.adb, [
       "-s",
       "emulator-5586",
@@ -3659,6 +3816,7 @@ function baselineBuildExpectations(options: {
       ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
       "",
     ),
+    avdPathExpectation("emulator-5586"),
   );
   return expectations;
 }
@@ -3720,6 +3878,144 @@ class InstallReflectingProcessRunner extends ScriptedProcessRunner {
   }
 }
 
+/**
+ * The emulators on one machine, which outlive any one daemon: as much of `avdmanager`,
+ * `emulator` and `adb` as provisioning, booting, capturing a baseline and stopping use. Each
+ * `runner()` is one daemon process's view of it -- the driver keeps its port reservations per
+ * runner, as a real daemon keeps them per process.
+ *
+ * Two behaviours are the real tools', not Simlock's. An emulator told to take a console port
+ * another one holds exits at once: `emulator -help` (36.1.9) says that "if any of these ports
+ * is already used, the emulator will fail to start". And a serial is answered by whichever
+ * emulator is listening on its port.
+ */
+class EmulatorHost {
+  /** Console port -> the AVD whose emulator is listening on it. */
+  readonly #listening = new Map<number, string>();
+  readonly #exits = new Map<number, () => void>();
+  #nextPid = 1;
+
+  constructor(private readonly filesystem: MemoryFilesystem) {}
+
+  /** The AVD whose emulator answers `serial`, or `undefined` when nothing does. */
+  avdAnswering(serial: string | undefined): string | undefined {
+    return this.#listening.get(consolePortOf(serial));
+  }
+
+  runner(): ProcessRunner {
+    return {
+      run: (command, args) => this.#run(command, args),
+      spawn: (command, args) => this.#spawn(command, args),
+      spawnStreaming: (command, args) => {
+        throw new Error(`Unexpected streaming invocation: ${command} ${args.join(" ")}`);
+      },
+    };
+  }
+
+  async #run(command: string, args: readonly string[]): Promise<ProcessResult> {
+    const result =
+      command === binaries.avdmanager
+        ? await this.#avdmanager(args)
+        : command === binaries.adb
+          ? this.#adb(args)
+          : command === binaries.emulator && args[0] === "-version"
+            ? ok("Android emulator version 36.1.9")
+            : undefined;
+    if (result === undefined) {
+      throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
+    }
+    return result;
+  }
+
+  async #avdmanager(args: readonly string[]): Promise<ProcessResult | undefined> {
+    if (args[0] === "list") return ok(pixelDevices);
+    if (args[0] !== "create") return undefined;
+    const avdName = args[args.indexOf("-n") + 1] ?? "";
+    await this.filesystem.mkdirp(`${avdDirectory}/${avdName}.avd`);
+    await this.filesystem.writeFileAtomic(
+      `${avdDirectory}/${avdName}.avd/config.ini`,
+      "hw.ramSize=2048\n",
+    );
+    return ok();
+  }
+
+  #adb(args: readonly string[]): ProcessResult | undefined {
+    if (args[0] === "devices") {
+      const lines = [...this.#listening.keys()].map((port) => `emulator-${port}\tdevice\n`);
+      return ok(`List of devices attached\n${lines.join("")}`);
+    }
+    if (args[0] !== "-s") return undefined;
+    const port = consolePortOf(args[1]);
+    if (!this.#listening.has(port)) {
+      return { code: 1, stderr: `adb: device '${args[1]}' not found`, stdout: "" };
+    }
+    const rest = args.slice(2).join(" ");
+    if (rest === "emu kill") {
+      this.#exit(port);
+      return ok("OK: killing emulator, bye bye\n");
+    }
+    if (rest.startsWith("shell echo ")) return ok();
+    const answer = ADB_ANSWERS.get(rest);
+    return answer === undefined ? undefined : ok(answer);
+  }
+
+  #spawn(command: string, args: readonly string[]): ProcessHandle {
+    if (command !== binaries.emulator || args[0] !== "-avd") {
+      throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
+    }
+    const avdName = args[1] ?? "";
+    const port = Number(args[args.indexOf("-port") + 1]);
+    let exit!: (result: ProcessResult) => void;
+    const exited = new Promise<ProcessResult>((resolve) => {
+      exit = resolve;
+    });
+    const bound = !this.#listening.has(port);
+    if (bound) {
+      this.#listening.set(port, avdName);
+      this.#exits.set(port, () => exit({ code: 0, stderr: "", stdout: "" }));
+    } else {
+      exit({ code: 1, stderr: `console port ${port} is already used`, stdout: "" });
+    }
+    return {
+      // Killing an emulator that never bound must not stop the one that did.
+      kill: () => {
+        if (bound && this.#listening.get(port) === avdName) this.#exit(port);
+      },
+      pid: this.#nextPid++,
+      stderr: emptyLines(),
+      stdout: emptyLines(),
+      unref: () => undefined,
+      wait: () => exited,
+    };
+  }
+
+  #exit(port: number): void {
+    this.#listening.delete(port);
+    this.#exits.get(port)?.();
+    this.#exits.delete(port);
+  }
+}
+
+/** What a booted emulator answers to the `adb -s <serial>` commands a boot and a baseline capture send. */
+const ADB_ANSWERS = new Map([
+  ["shell getprop sys.boot_completed", "1\n"],
+  ["shell getprop init.svc.bootanim", "stopped\n"],
+  ["emu avd snapshot save simlock_clean_baseline", "OK\n"],
+  ["emu avd snapshot list", "simlock_clean_baseline\n"],
+]);
+
+function consolePortOf(serial: string | undefined): number {
+  return Number(/^emulator-(\d+)$/.exec(serial ?? "")?.[1]);
+}
+
+function ok(stdout = ""): ProcessResult {
+  return { code: 0, stderr: "", stdout };
+}
+
+async function* emptyLines(): AsyncIterable<string> {
+  // An emulator Simlock spawns is never read from.
+}
+
 /** `installComponent` with a no-op progress callback and a signal that never fires. */
 function installFor(
   driver: AndroidDriver,
@@ -3747,6 +4043,19 @@ function processResult(command: string, args: readonly (string | RegExp)[], stdo
   };
 }
 
+/**
+ * The `emu avd path` query every readiness wait ends with, answered by the emulator of
+ * `avdName` in Simlock's device root -- with the console's own CRLF line endings and its
+ * closing `OK` line.
+ */
+function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedProcessExpectation {
+  return processResult(
+    binaries.adb,
+    ["-s", serial, "emu", "avd", "path"],
+    `${avdDirectory}/${avdName}.avd\r\nOK\r\n`,
+  );
+}
+
 /** The adb shell call `#writeErasableMark` makes as the second half of every mark write. */
 function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {
   return processResult(binaries.adb, [
@@ -3755,4 +4064,171 @@ function markWriteExpectation(serial: string, token: string): ScriptedProcessExp
     "shell",
     `echo '${JSON.stringify({ token })}' > /data/local/tmp/simlock-mark.json`,
   ]);
+}
+
+/**
+ * An `EmulatorHost` on which another emulator takes a device's console port just before the
+ * device's own emulator is spawned on it, and which answers the queries that tell emulators
+ * apart: `emu avd path`, `emu avd name` and `getprop ro.boot.qemu.avd_name`.
+ *
+ * The device's emulator cannot bind the taken port and exits -- but not before the other
+ * emulator has answered the readiness poll, as it does on a real machine, where the other
+ * emulator answers at once and the spawned one checks its ports only once it has started.
+ * So in this fake its exit is seen only once it is killed: a driver that waited for that
+ * exit would already have readied the device.
+ */
+class PortTakingMachine {
+  readonly #inner: ProcessRunner;
+  /** Console port -> the path of the AVD the other emulator runs. */
+  readonly #otherPaths = new Map<number, string>();
+  #takeOnNextBoot: ((port: number) => void) | undefined;
+
+  constructor(private readonly host: EmulatorHost) {
+    this.#inner = host.runner();
+  }
+
+  /** The AVD path whose emulator answers `serial`, or `undefined` when nothing does. */
+  avdPathAnswering(serial: string | undefined): string | undefined {
+    const name = this.host.avdAnswering(serial);
+    if (name === undefined) return undefined;
+    return this.#otherPaths.get(consolePortOf(serial)) ?? `${avdDirectory}/${name}.avd`;
+  }
+
+  /**
+   * On the next emulator spawn, first starts another emulator, of the AVD at `avdPath`, on
+   * the port that spawn names. Returns what became of that other emulator.
+   */
+  takePortOnNextBoot(avdPath: string): {
+    observed(): { running: boolean; sentByDriver: string[] };
+  } {
+    let running = false;
+    let port = Number.NaN;
+    const sent: string[] = [];
+    this.#takeOnNextBoot = (taken) => {
+      port = taken;
+      const avdName = /([^/]+)\.avd$/.exec(avdPath)?.[1] ?? "";
+      const handle = this.#inner.spawn(
+        binaries.emulator,
+        ["-avd", avdName, "-port", String(taken)],
+        emulatorOptions,
+      );
+      running = true;
+      void handle.wait().then(() => {
+        running = false;
+      });
+      this.#otherPaths.set(taken, avdPath);
+    };
+    this.#sentTo = (serial, command) => {
+      if (consolePortOf(serial) === port && running && !QUERIES.test(command)) sent.push(command);
+    };
+    return { observed: () => ({ running, sentByDriver: sent }) };
+  }
+
+  #sentTo: (serial: string, command: string) => void = () => undefined;
+
+  runner(): ProcessRunner {
+    return {
+      run: async (command, args, options) => {
+        if (command === binaries.adb && args[0] === "-s") {
+          const serial = args[1] ?? "";
+          const rest = args.slice(2).join(" ");
+          this.#sentTo(serial, rest);
+          const answer = this.#identity(serial, rest);
+          if (answer !== undefined) return answer;
+        }
+        return this.#inner.run(command, args, options);
+      },
+      spawn: (command, args, options) => {
+        const take = this.#takeOnNextBoot;
+        if (take === undefined || command !== binaries.emulator) {
+          return this.#inner.spawn(command, args, options);
+        }
+        this.#takeOnNextBoot = undefined;
+        take(Number(args[args.indexOf("-port") + 1]));
+        const handle = this.#inner.spawn(command, args, options);
+        let killed!: () => void;
+        const exitSeen = new Promise<void>((resolve) => {
+          killed = resolve;
+        });
+        return {
+          ...handle,
+          kill: (signal) => {
+            handle.kill(signal);
+            killed();
+          },
+          wait: async () => {
+            await exitSeen;
+            return handle.wait();
+          },
+        };
+      },
+      spawnStreaming: (command, args, options) =>
+        this.#inner.spawnStreaming(command, args, options),
+    };
+  }
+
+  #identity(serial: string, command: string): ProcessResult | undefined {
+    const path = this.avdPathAnswering(serial);
+    if (path === undefined) return undefined;
+    const name = /([^/]+)\.avd$/.exec(path)?.[1] ?? "";
+    if (command === "emu avd path") return ok(`${path}\nOK\n`);
+    if (command === "emu avd name") return ok(`${name}\nOK\n`);
+    if (command === "shell getprop ro.boot.qemu.avd_name") return ok(`${name}\n`);
+    return undefined;
+  }
+}
+
+/** `inner`, with every `adb -s <serial> emu avd path` answered by `answer`. */
+function answeringAvdPath(inner: ProcessRunner, answer: ProcessResult): ProcessRunner {
+  return {
+    run: async (command, args, options) =>
+      command === binaries.adb && args[0] === "-s" && args.slice(2).join(" ") === "emu avd path"
+        ? answer
+        : inner.run(command, args, options),
+    spawn: (command, args, options) => inner.spawn(command, args, options),
+    spawnStreaming: (command, args, options) => inner.spawnStreaming(command, args, options),
+  };
+}
+
+/**
+ * A filesystem whose `realpath` resolves a relative path against `workingDirectory`, as
+ * Node's does against the process's working directory.
+ */
+class WorkingDirectoryFilesystem extends MemoryFilesystem {
+  constructor(private readonly workingDirectory: string) {
+    super();
+  }
+
+  override async realpath(path: string): Promise<string> {
+    return super.realpath(path.startsWith("/") ? path : `${this.workingDirectory}/${path}`);
+  }
+}
+
+/**
+ * A filesystem on which `/home` is a link to `/private/home`, as `/var` is to `/private/var`
+ * on macOS: every path under either spelling resolves to the `/private/home` one.
+ */
+class LinkedHomeFilesystem extends MemoryFilesystem {
+  override async realpath(path: string): Promise<string> {
+    const resolved = await super.realpath(path.replace(/^\/private\/home\//, "/home/"));
+    return resolved.replace(/^\/home\//, "/private/home/");
+  }
+}
+
+/** Commands that only read an emulator's state. */
+const QUERIES = /^(shell getprop \S+|emu avd (name|path|id|status|discoverypath))$/;
+
+/**
+ * The message of the driver's `DriverCrashError`; anything else -- a boot timeout, the fake's
+ * own complaint about an unscripted call -- is rethrown, so it fails the test as itself.
+ */
+function driverCrashMessage(error: unknown): { readonly refused: string } {
+  if (error instanceof Error && error.name === "DriverCrashError") {
+    return { refused: error.message };
+  }
+  throw error;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
