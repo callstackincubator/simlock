@@ -989,12 +989,14 @@ describe("Dispatcher: image tags", () => {
     const asked: unknown[] = [];
     const { dispatcher } = await buildDispatcher({
       components: {
+        claimProvision: () => () => undefined,
         inProgress: () => [],
         install: async (call) => {
           asked.push(call);
           return { outcome: "installed", version: "35" };
         },
         list: async () => [],
+        remove: () => Promise.reject(new Error("unreachable")),
       },
       downloadsPolicy: "always",
       driverOptions: androidImages,
