@@ -65,4 +65,5 @@ Maintainer/agent docs live under [docs/internal/](docs/internal/):
 - [EVENTS.md](docs/internal/EVENTS.md) — the same catalog with rationale and ADR references
 - [IDEAS.md](docs/internal/IDEAS.md) — post-v1 ideas; don't implement these unless asked
 - [KNOWN-PITFALLS.md](docs/internal/KNOWN-PITFALLS.md) — accepted gaps and their planned fixes
+- [LOOP.md](docs/internal/LOOP.md) — historical instructions for implementing a stage
 - [adr/](docs/internal/adr/) — architecture decision records and their status

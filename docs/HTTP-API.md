@@ -493,11 +493,7 @@ not distinguish them.
 (`lease.renew`, `lease.release`, `device.exec`) directly, so another
 requester's own, still-live lease answers `403 FORBIDDEN` from them — the
 same answer the socket transport gives, via the same operation's `ownsLease`
-authorize hook. (0.3.0 briefly had every lease route answering `404` here;
-that overcorrected the lease-*request* routes' old `403` and is why renew
-and release were moved off the `lease.list`-filtered lookup — see
-`docs/internal/KNOWN-PITFALLS.md`. `exec` arrives on the dispatching side of that
-split, with renew and release.)
+authorize hook.
 
 This is different again from the lease-*request* routes below
 (`/v1/lease-requests/{id}` and friends), which answer `403 FORBIDDEN` for a
