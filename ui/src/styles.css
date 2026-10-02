@@ -261,11 +261,23 @@ input[aria-invalid="true"] {
 .shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto 1fr;
   grid-template-areas:
     "topbar"
+    "connection"
     "nav"
     "main";
   min-height: 100vh;
+}
+
+/* The connection banner: one quiet line under the header, whatever the state. */
+
+.connection {
+  grid-area: connection;
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--text-sm);
 }
 
 .topbar {
@@ -320,13 +332,202 @@ input[aria-invalid="true"] {
   outline: none;
 }
 
+/* A view's own headings and text. */
+
+.view h2 {
+  margin: var(--space-8) 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.back {
+  font-size: var(--text-sm);
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plain-list li + li {
+  margin-top: var(--space-1);
+}
+
+/* A status: the daemon's word, with a square of its colour before it. Never the accent. */
+
+.status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  align-self: center;
+}
+
+.status-ok .status-dot {
+  background: var(--status-ok);
+}
+
+.status-warn .status-dot {
+  background: var(--status-warn);
+}
+
+.status-error .status-dot {
+  background: var(--status-error);
+}
+
+.status-idle .status-dot {
+  background: var(--status-idle);
+}
+
+.statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+/* Cards: one per worker. */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.view .card-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+
+.card .muted {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+/* Facts: a label and its value, side by side. */
+
+.facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+}
+
+.facts > div {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.facts dt {
+  color: var(--text-muted);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.facts dd p {
+  margin: 0;
+}
+
+/* Tables: a row per item. Under 768px each row stacks into labelled lines, so the page never
+ * scrolls sideways. */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.table th,
+.table td {
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.table th {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+@media (max-width: 767.98px) {
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table,
+  .table tbody,
+  .table tr {
+    display: block;
+  }
+
+  .table tr {
+    margin-bottom: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+  }
+
+  .table td {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-1) 0;
+    border: 0;
+  }
+
+  .table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+}
+
 @media (min-width: 768px) {
   .shell {
     grid-template-columns: 200px minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
     grid-template-areas:
       "topbar topbar"
+      "connection connection"
       "nav main";
+  }
+
+  .connection {
+    padding: var(--space-1) var(--space-8);
   }
 
   .nav {

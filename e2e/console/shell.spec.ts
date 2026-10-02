@@ -48,10 +48,14 @@ test.describe("the shell", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 
-    // Every focusable control in the shell, then the order Tab visits them in.
+    // Every focusable control in the shell, outside the view, then the order Tab visits them in.
     const controls = await page
       .locator("a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
-      .evaluateAll((elements) => elements.map((element) => element.textContent?.trim() ?? ""));
+      .evaluateAll((elements) =>
+        elements
+          .filter((element) => element.closest("#main") === null)
+          .map((element) => element.textContent?.trim() ?? ""),
+      );
     const visited: string[] = [];
     for (let step = 0; step < controls.length; step += 1) {
       await page.keyboard.press(tab);

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { useApi, useSession } from "./console-context";
+import { ConnectionBanner } from "./live/connection-banner";
 import { Link, navigate, usePath } from "./router";
 import { VIEWS, viewFor } from "./views/index";
 import { NotFound } from "./views/not-found";
@@ -40,6 +41,7 @@ export function Shell() {
           Sign out
         </button>
       </header>
+      <ConnectionBanner />
       <nav className="nav" aria-label="Console">
         <ul>
           {VIEWS.map((entry) => (

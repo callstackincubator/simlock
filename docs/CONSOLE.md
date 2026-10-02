@@ -8,9 +8,9 @@ internet.
 The console is for people who operate Simlock. It needs an operator token.
 Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
 
-This version has sign-in and the console's navigation: Workers, Leases,
-Waiting, Attention and Events. Each page says "Coming soon" until its view is
-built.
+This version has sign-in, the console's navigation (Workers, Leases, Waiting,
+Attention and Events), and the Workers pages. The other pages say "Coming
+soon" until their views are built.
 
 ## Turn it on
 
@@ -87,6 +87,65 @@ The console keeps the token in this browser tab only.
 
 Some browsers copy a tab's storage into a duplicated or reopened tab, so such a
 tab may still be signed in.
+
+## Workers
+
+**Workers** lists every worker the daemon knows, as `simlock worker list`
+does. On a gateway that is every worker that has joined it. On a single host
+it is one worker: the host itself. The console looks the same either way.
+
+Each worker shows:
+
+| Fact | What it says |
+| --- | --- |
+| Connection | `connected`, `disconnected` or `incompatible`, and `drained` when the gateway sends it no new leases |
+| Health | The worker daemon's own health: `running`, `starting` or `failed` |
+| Protocol | `compatible`, or `incompatible` with the protocol versions each side speaks, so you can see which one to upgrade |
+| Version | The worker's Simlock version |
+| Devices | How many devices are running, and how many are leased |
+| Capacity | Devices running out of the limit, per platform |
+
+A worker the gateway could not read from yet says "Not reported" where it
+has nothing to show.
+
+Select a worker to open its page. It adds:
+
+- **Devices**: every device on the worker, with its state, platform, model,
+  runtime, mode and image tag. A leased device shows how long ago its lease
+  was granted, and a device being provisioned or reclaimed how long that has
+  taken so far. Other states show `—`: the daemon reports no time for them.
+- **Host**: the operating system, the CPU architecture, and the version of
+  each platform tool, such as Xcode or the Android emulator.
+- **Catalog**: the models and runtimes the worker can lease.
+- **Installs in progress**: each runtime or system image being downloaded or
+  waiting to, how long it has been going, and how many requests wait on it.
+
+A page the daemon cannot answer on a single host says "Not available on a
+single host" in place of its content.
+
+## Live updates
+
+Every page keeps itself current. A change on the daemon, such as a lease
+being granted or a worker disconnecting, shows within about a second, with
+no reload. Durations count up every second on their own. They are measured
+by the daemon's clock, so a browser whose clock is wrong still shows them
+right.
+
+A hidden tab stops asking the daemon for anything. When you come back to it,
+it catches up at once.
+
+The line under the header says how the console's connection is:
+
+| It says | What it means |
+| --- | --- |
+| Connected | Up to date. |
+| Reconnecting — data from 12 s ago | The console lost the daemon. What you see is as old as it says. |
+| Daemon is starting | The daemon is back, and is still starting up. |
+
+While reconnecting, the console keeps the last data on screen and tries the
+daemon again after 1, 2, 4 and 8 seconds, then every 10 seconds. When the
+daemon answers, the console refreshes the page and the line goes back to
+Connected. You do not need to reload.
 
 ## What the page loads
 
