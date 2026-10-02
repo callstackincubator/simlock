@@ -23,7 +23,7 @@ import type { SimlockAdminClient } from "../admin/index.js";
 import { connectSimlockAdmin } from "../admin/index.js";
 import type { AcceptedUplink, Clock, IpcConnection, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import type { WorkerRegistry, WorkerViewSnapshot } from "./worker-registry.js";
+import type { WorkerGrantedDevice, WorkerRegistry, WorkerViewSnapshot } from "./worker-registry.js";
 
 /**
  * How long the gateway waits for one round trip to a worker before giving up on it.
@@ -111,8 +111,15 @@ const viewDevicesSchema = z.array(statusDeviceSchema);
 
 /** The same `list.get` answer narrowed to the grant shape instead, which keeps `driverDeviceId`
  * for the lease payload a gateway serves its holder (`GET /v1/leases/{id}`). Kept off the view,
- * in the registry beside it: see `WorkerGrantedDevice`. */
-const grantedDevicesSchema = z.array(grantedDeviceSchema);
+ * in the registry beside it: see `WorkerGrantedDevice`. `list.get`'s contract also admits a
+ * device without `driverDeviceId`, so one that does not parse is left out on its own rather than
+ * failing the view's refresh; its lease then answers `UNKNOWN_LEASE` rather than a made-up udid. */
+function grantedDevices(devices: readonly unknown[]): WorkerGrantedDevice[] {
+  return devices.flatMap((device) => {
+    const parsed = grantedDeviceSchema.safeParse(device);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 export class WorkerLink {
   readonly workerId: string;
@@ -376,7 +383,7 @@ export class WorkerLink {
     this.options.registry.refresh(this.workerId, {
       ...viewStatus(status),
       devices: viewDevicesSchema.parse(devices),
-      grantedDevices: grantedDevicesSchema.parse(devices),
+      grantedDevices: grantedDevices(devices),
       version: client.daemonVersion,
       ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
       ...(config === undefined ? {} : viewConfig(config)),

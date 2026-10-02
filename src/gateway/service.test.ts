@@ -188,6 +188,36 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("keeps a worker's devices in the grant shape beside its view, with driverDeviceId, leaving out one that has none", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    worker.devices = [
+      {
+        ...deviceFixture("dev_1"),
+        createdAt: 1,
+        driverData: { secret: "a driver's private blob" },
+        driverDeviceId: "UDID-1",
+      },
+      { ...deviceFixture("dev_2"), createdAt: 1, driverData: {} },
+    ];
+
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.devices).toHaveLength(2));
+
+    expect(harness.service.workers.grantedDevices()).toEqual([
+      {
+        driverDeviceId: "UDID-1",
+        id: "dev_1",
+        mode: "full",
+        spec: { model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+        workerId: "wrk_1",
+      },
+    ]);
+
+    await harness.service.stop();
+  });
+
   it("keeps each worker device's mode in the view", async () => {
     const harness = fleet();
     await harness.service.start();
