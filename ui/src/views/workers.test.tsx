@@ -101,4 +101,37 @@ describe("the workers views", () => {
     expect(failed).toContain('role="alert"');
     expect(text(failed)).toBe("Internal error");
   });
+
+  it("a refusal after earlier answers shows above the data kept from them", () => {
+    const html = renderToStaticMarkup(
+      <Loaded state={{ data: "the view", error: new ApiError(500, "INTERNAL", "Internal error") }}>
+        {(data) => data}
+      </Loaded>,
+    );
+
+    expect(html).toContain('role="alert"');
+    expect(text(html)).toBe("Internal error the view");
+  });
+
+  it("a disconnected worker shows no time for a device mid-provisioning", () => {
+    const provisioning = {
+      id: "dev_new",
+      mode: "full",
+      spec: { model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+      state: "provisioning",
+      transitionAgeMs: 4_000,
+    } as const;
+    const render = (connection: WorkerView["connection"]) =>
+      text(
+        renderToStaticMarkup(
+          <DeviceTable
+            worker={worker({ connection, devices: [provisioning], lastSeenAt: NOW - 10_000 })}
+            now={NOW}
+          />,
+        ),
+      );
+
+    expect(render("connected")).toContain("dev_new provisioning 14 s");
+    expect(render("disconnected")).toContain("dev_new provisioning —");
+  });
 });

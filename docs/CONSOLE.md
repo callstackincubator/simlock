@@ -112,8 +112,9 @@ Select a worker to open its page. It adds:
 
 - **Devices**: every device on the worker, with its state, platform, model,
   runtime, mode and image tag. A leased device shows how long ago its lease
-  was granted, and a device being provisioned or reclaimed how long that has
-  taken so far. Other states show `—`: the daemon reports no time for them.
+  was granted, and a device being provisioned or reclaimed on a connected
+  worker how long that has taken so far. Other states show `—`: the daemon
+  reports no time for them.
 - **Host**: the operating system, the CPU architecture, and the version of
   each platform tool, such as Xcode or the Android emulator.
 - **Catalog**: the models and runtimes the worker can lease.
@@ -128,8 +129,10 @@ single host" in place of its content.
 Every page keeps itself current. A change on the daemon, such as a lease
 being granted or a worker disconnecting, shows within about a second, with
 no reload. Durations count up every second on their own. They are measured
-by the daemon's clock, so a browser whose clock is wrong still shows them
-right.
+by the clock of the daemon the console talks to, so a browser whose clock is
+wrong still shows them right. On a gateway, a worker's lease and install times
+come from that worker's clock: if it is far from the gateway's, its durations
+are off by as much.
 
 A hidden tab stops asking the daemon for anything. When you come back to it,
 it catches up at once.

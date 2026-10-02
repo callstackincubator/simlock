@@ -70,15 +70,16 @@ export function capacityByPlatform(
 }
 
 /**
- * When a device entered the state it is in, by the daemon's clock, where the data says:
- * a leased device since its lease was granted, a device mid-provisioning or mid-reclaim from the
- * age the worker reported at `lastSeenAt`. `undefined` for any other state, which the worker
- * view carries no time for.
+ * When a device entered the state it is in, where the data says: a leased device since its
+ * lease was granted, a device mid-provisioning or mid-reclaim from the age the worker reported
+ * at `lastSeenAt`. That age is read only from a connected worker: a gateway moves `lastSeenAt`
+ * when a worker disconnects, without reading its devices again. `undefined` for any other
+ * state, which the worker view carries no time for.
  */
 export function stateEnteredAt(device: WorkerDevice, worker: WorkerView): number | undefined {
   if (device.state === "leased") {
     return worker.leases.find((lease) => lease.deviceId === device.id)?.grantedAt;
   }
-  if (device.transitionAgeMs !== undefined) return worker.lastSeenAt - device.transitionAgeMs;
-  return undefined;
+  if (device.transitionAgeMs === undefined || worker.connection !== "connected") return undefined;
+  return worker.lastSeenAt - device.transitionAgeMs;
 }

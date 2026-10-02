@@ -176,8 +176,9 @@ test.describe("the workers views", () => {
 
   test("an incompatible worker shows both protocol ranges", async ({ page }) => {
     const gateway = await startDaemon("gateway");
-    const hangUp = await joinOldWorker(gateway, { id: "wrk_old", label: "old-worker" });
+    let hangUp = () => {};
     try {
+      hangUp = await joinOldWorker(gateway, { id: "wrk_old", label: "old-worker" });
       let view: WorkerView | undefined;
       await waitFor(
         async () => {
@@ -237,26 +238,31 @@ test.describe("the workers views", () => {
       );
       const { devices } = await status(host);
       const [view] = await workerList(host);
-      expect(devices.length).toBeGreaterThanOrEqual(2);
+      expect(devices.map((device) => device.state).sort()).toEqual(
+        expect.arrayContaining(["leased", "ready"]),
+      );
+      // The browser's clock is three hours fast; durations are by the daemon's clock all the same.
+      await page.clock.setSystemTime(Date.now() + 3 * 60 * 60 * 1000);
 
       await openConsole(page, host);
       await page.getByRole("link", { name: view?.id ?? "" }).click();
 
       await expect(page.locator("tbody tr")).toHaveCount(devices.length);
       for (const device of devices) {
-        await expect(deviceRow(page, device.id).getByRole("cell").nth(1)).toHaveText(device.state);
+        const cells = deviceRow(page, device.id).getByRole("cell");
+        await expect(cells.nth(1)).toHaveText(device.state);
+        const held = view?.leases.find((candidate) => candidate.deviceId === device.id);
+        if (held === undefined) {
+          // A ready device: the worker view carries no time for that state.
+          await expect(cells.nth(2), device.id).toHaveText("—");
+          continue;
+        }
+        // A leased device: in that state since its lease was granted, counting on with no reload.
+        await expect(cells.nth(2), device.id).toHaveText(/^\d+ s$/);
+        const shown = Number.parseInt((await cells.nth(2).textContent()) ?? "", 10);
+        expect(Math.abs(shown - (Date.now() - held.grantedAt) / 1000)).toBeLessThanOrEqual(2);
+        await expect(cells.nth(2)).not.toHaveText(`${shown} s`);
       }
-      const held = view?.leases[0];
-      expect(held).toBeDefined();
-      const inState = deviceRow(page, held?.deviceId ?? "")
-        .getByRole("cell")
-        .nth(2);
-      await expect(inState).toHaveText(/^\d+ s$/);
-      const shownSeconds = Number.parseInt((await inState.textContent()) ?? "", 10);
-      const expectedSeconds = (Date.now() - (held?.grantedAt ?? 0)) / 1000;
-      expect(Math.abs(shownSeconds - expectedSeconds)).toBeLessThanOrEqual(2);
-      // It counts on with no reload.
-      await expect(inState).not.toHaveText(`${shownSeconds} s`);
     } finally {
       await host.dispose();
     }
@@ -417,8 +423,9 @@ test.describe("the workers views", () => {
       { driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
     ]);
-    const hangUp = await joinOldWorker(fleet.gateway, { id: "wrk_old", label: "old-worker" });
+    let hangUp = () => {};
     try {
+      hangUp = await joinOldWorker(fleet.gateway, { id: "wrk_old", label: "old-worker" });
       const b = (await workerList(fleet.gateway)).find((view) => view.label === "worker-b");
       expect((await fleet.gateway.cli(["worker", "drain", b?.id ?? ""])).code).toBe(0);
       await lease(fleet.workers[0] as RunningDaemon, "console-e2e");

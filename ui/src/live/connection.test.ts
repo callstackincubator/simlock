@@ -197,6 +197,132 @@ describe("LiveConnection", () => {
     expect(phases).toEqual(["starting", "connected"]);
     expect(daemon.openStream()).toBe(daemon.streams[1]);
     expect(opened).toEqual([7_000]);
+
+    // And the poll is back.
+    daemon.reads = "answer";
+    const recovered = daemon.gets.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(daemon.gets).toHaveLength(recovered + 1);
+  });
+
+  it("while the daemon is starting, a request that gives up is sent again rather than marking the console disconnected", async () => {
+    const { connection, daemon } = connect();
+    connection.watch("/v1/workers", () => {});
+    await settle();
+    daemon.openStream()?.end();
+    await settle();
+    // A starting daemon holds both until each gives up, 10 seconds later.
+    const givesUp = (path: ApiPath) =>
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new RequestTimeoutError(path)), 10_000);
+      });
+    daemon.reads = givesUp;
+    daemon.refuseStreams = () => givesUp("/v1/events/stream");
+    const reads = daemon.gets.length;
+    const streams = daemon.streams.length;
+
+    // /v1/healthz answers after a second, then two rounds of giving up.
+    await vi.advanceTimersByTimeAsync(21_000);
+
+    expect(connection.state().phase).toBe("starting");
+    expect(daemon.gets.length - reads).toBe(3);
+    expect(daemon.streams.length - streams).toBe(3);
+    expect(daemon.healthChecks).toHaveLength(1);
+  });
+
+  it("a tab shown again while disconnected asks /v1/healthz at once", async () => {
+    const { connection, daemon, visibility } = connect();
+    await settle();
+    daemon.health = "down";
+    daemon.openStream()?.end();
+    await settle();
+    visibility.set(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(daemon.healthChecks).toEqual([]);
+
+    visibility.set(false);
+    await settle();
+
+    expect(daemon.healthChecks).toEqual([Date.now()]);
+    expect(connection.state().phase).toBe("disconnected");
+  });
+
+  it("a refused read keeps the data the console had and the console connected", async () => {
+    const { connection, daemon } = connect();
+    connection.watch("/v1/workers", () => {});
+    await settle();
+    const before = connection.resource("/v1/workers").data;
+    expect(before).toBeDefined();
+
+    daemon.reads = () => Promise.reject(new ApiError(500, "INTERNAL", "Internal error"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connection.resource("/v1/workers")).toEqual({
+      data: before,
+      error: expect.any(ApiError),
+    });
+
+    // A body that is not JSON is the daemon answering too.
+    daemon.reads = () => Promise.reject(new SyntaxError("Unexpected token <"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connection.resource("/v1/workers").error).toBeInstanceOf(SyntaxError);
+    expect(connection.state().phase).toBe("connected");
+  });
+
+  it("a daemon that is starting and refuses a read is ready", async () => {
+    const { connection, daemon } = connect();
+    connection.watch("/v1/workers", () => {});
+    await settle();
+    daemon.openStream()?.end();
+    await settle();
+    daemon.reads = () => Promise.reject(new ApiError(501, "UNSUPPORTED_IN_WORKER_MODE", "No"));
+    daemon.holdStreams = true;
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(connection.state().phase).toBe("connected");
+  });
+
+  it("a refused stream leaves the console connected and is asked for again with the next poll", async () => {
+    const { connection, daemon } = connect();
+    await settle();
+    daemon.refuseStreams = () => Promise.reject(new ApiError(503, "INTERNAL", "Busy"));
+    daemon.openStream()?.end();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const streams = daemon.streams.length;
+    daemon.refuseStreams = undefined;
+
+    // Recovery opened one and it was refused; the console is back, and the poll asks again.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(connection.state().phase).toBe("connected");
+    expect(daemon.streams).toHaveLength(streams + 1);
+    expect(daemon.openStream()).toBe(daemon.streams.at(-1));
+  });
+
+  it("a stream that breaks mid-read marks the console disconnected", async () => {
+    const { connection, daemon } = connect();
+    await settle();
+
+    daemon.openStream()?.break();
+    await settle();
+
+    expect(connection.state().phase).toBe("disconnected");
+  });
+
+  it("every event reaches the event listeners, its data parsed", async () => {
+    const { connection, daemon } = connect();
+    const events: unknown[] = [];
+    connection.onEvent((event) => events.push(event));
+    await settle();
+
+    daemon.openStream()?.send(EVENT);
+    daemon.openStream()?.send("event: odd\ndata: not json\n\n");
+    await settle();
+
+    expect(events).toEqual([
+      { data: { event: "lease.granted", seq: 1, timestamp: 1 }, event: "lease.granted" },
+      { data: undefined, event: "odd" },
+    ]);
   });
 
   it("the data's age is the time of the latest answer to a read", async () => {
@@ -211,7 +337,7 @@ describe("LiveConnection", () => {
     expect(connection.state()).toEqual({ answeredAt: lastAnswer, phase: "disconnected" });
   });
 
-  it("signing out closes the stream and stops every timer", async () => {
+  it("disposing the connection closes the stream and stops every timer", async () => {
     const { connection, daemon } = connect();
     connection.watch("/v1/workers", () => {});
     await settle();
@@ -224,6 +350,20 @@ describe("LiveConnection", () => {
 
     expect(stream?.closedByConsole()).toBe(true);
     expect(daemon.gets).toHaveLength(reads);
+    expect(daemon.healthChecks).toEqual([]);
+  });
+
+  it("disposing a disconnected connection stops its health checks", async () => {
+    const { connection, daemon } = connect();
+    await settle();
+    daemon.health = "down";
+    daemon.openStream()?.end();
+    await settle();
+
+    connection.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+
     expect(daemon.healthChecks).toEqual([]);
   });
 

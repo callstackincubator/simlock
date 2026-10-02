@@ -5,27 +5,35 @@ import type { ResourceState } from "./connection";
 
 /**
  * A view's data, or what to show instead: "Loading" before the first answer, and the daemon's
- * refusal when it refused. A route a single host does not answer (`501`
- * `UNSUPPORTED_IN_WORKER_MODE`) is not an error there: the view says it is not available.
+ * refusal when it refused. A refusal after earlier answers shows above the data kept from them.
+ * A route a single host does not answer (`501` `UNSUPPORTED_IN_WORKER_MODE`) is not an error
+ * there: the view says it is not available, in place of its content.
  */
 export function Loaded<T>(props: {
   readonly state: ResourceState<T>;
   readonly children: (data: T) => ReactNode;
 }) {
   const { children, state } = props;
-  if (state.error !== undefined) return <RouteRefusal error={state.error} />;
-  if (state.data === undefined) return <p className="muted">Loading…</p>;
-  return children(state.data);
+  const { data, error } = state;
+  if (isUnsupportedHere(error)) return <p className="muted">Not available on a single host.</p>;
+  if (data === undefined) {
+    return error === undefined ? <p className="muted">Loading…</p> : <Refusal error={error} />;
+  }
+  return (
+    <>
+      {error === undefined ? null : <Refusal error={error} />}
+      {children(data)}
+    </>
+  );
 }
 
-function RouteRefusal({ error }: { readonly error: unknown }) {
-  if (
-    error instanceof ApiError &&
-    error.status === 501 &&
-    error.code === "UNSUPPORTED_IN_WORKER_MODE"
-  ) {
-    return <p className="muted">Not available on a single host.</p>;
-  }
+function isUnsupportedHere(error: unknown): boolean {
+  return (
+    error instanceof ApiError && error.status === 501 && error.code === "UNSUPPORTED_IN_WORKER_MODE"
+  );
+}
+
+function Refusal({ error }: { readonly error: unknown }) {
   const message =
     error instanceof ApiError ? error.message : "The daemon's answer could not be read.";
   return (

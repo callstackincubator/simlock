@@ -16,6 +16,8 @@
  *   disconnected nothing is polled and the stream stays closed; `/v1/healthz` is asked after 1,
  *   2, 4 and 8 seconds, then every 10. When it answers, the screen is refetched and the stream
  *   reopened, and the console says the daemon is starting until the daemon answers a read.
+ * - A request the daemon refuses is a fact about its route, not about the connection. A refused
+ *   stream is asked for again with the next poll.
  */
 import { ApiError, type ApiClient, type ApiPath, RequestTimeoutError } from "../api";
 import { createSseParser, type SseMessage } from "./sse";
@@ -242,21 +244,32 @@ export class LiveConnection {
   }
 
   #failed(resource: Resource, error: unknown): void {
-    if (error instanceof RequestTimeoutError) {
-      // A daemon that is starting holds its reads until it is ready: still starting, ask again.
-      if (this.#state.phase === "starting") resource.again = true;
-      else this.#lose();
-      return;
+    switch (this.#classify(error)) {
+      case "refused": {
+        // A fact about this route, not about the connection.
+        this.#daemonAnswered();
+        const { data } = resource.state;
+        this.#update(resource, data === undefined ? { error } : { data, error });
+        return;
+      }
+      case "retry":
+        resource.again = true;
+        return;
+      case "lost":
+        this.#lose();
     }
-    if (error instanceof ApiError || error instanceof SyntaxError) {
-      // The daemon answered, with a refusal or a body that is not JSON: a fact about this route.
-      this.#daemonAnswered();
-      const { data } = resource.state;
-      this.#update(resource, data === undefined ? { error } : { data, error });
-      return;
-    }
-    // Anything else never reached the daemon or never came back: the network failed.
-    this.#lose();
+  }
+
+  /**
+   * What a failed request says about the daemon, for reads and the stream alike. `refused`: it
+   * answered, with an error status or a body that is not JSON. `retry`: it is starting, and holds
+   * every request until it is ready, so the request gave up waiting. `lost`: the request never
+   * reached it or never came back.
+   */
+  #classify(error: unknown): "refused" | "retry" | "lost" {
+    if (error instanceof ApiError || error instanceof SyntaxError) return "refused";
+    if (error instanceof RequestTimeoutError && this.#state.phase === "starting") return "retry";
+    return "lost";
   }
 
   #update(resource: Resource, state: ResourceState<unknown>): void {
@@ -293,6 +306,7 @@ export class LiveConnection {
       this.#pollTimer = undefined;
       if (!this.#reading() || this.#state.phase !== "connected") return;
       this.#refetchScreen();
+      if (this.#stream === undefined) this.#openStream();
       this.#schedulePoll();
     }, POLL_INTERVAL_MS);
   }
@@ -345,11 +359,13 @@ export class LiveConnection {
       return response.body;
     } catch (error: unknown) {
       if (this.#stream !== controller) return undefined;
-      // A starting daemon holds the stream until it is ready, as it holds reads: ask again.
-      if (error instanceof RequestTimeoutError && this.#state.phase === "starting") {
-        this.#openStream();
-      } else {
-        this.#lose();
+      const outcome = this.#classify(error);
+      if (outcome === "retry") this.#openStream();
+      else if (outcome === "lost") this.#lose();
+      else {
+        // Refused: the daemon is there. No stream for now; the next poll asks for one again.
+        this.#stream = undefined;
+        this.#daemonAnswered();
       }
       return undefined;
     }

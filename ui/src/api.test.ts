@@ -104,4 +104,42 @@ describe("createApiClient", () => {
     );
     expect(calls).toHaveLength(1);
   });
+
+  it("a read hands back the response's Date header with its body", async () => {
+    const date = "Fri, 02 Oct 2026 12:00:00 GMT";
+    const fetch: Fetch = async () =>
+      new Response(JSON.stringify({ workers: [] }), { headers: { Date: date }, status: 200 });
+    const api = createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" });
+
+    expect(await api.get("/v1/workers")).toEqual({ body: { workers: [] }, date });
+  });
+
+  it("aborting a stream's signal closes its body after the headers arrived", async () => {
+    vi.useFakeTimers();
+    let closedWith: unknown;
+    const fetch: Fetch = async (_input, init) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            init.signal?.addEventListener("abort", () => {
+              closedWith = init.signal?.reason;
+              controller.error(init.signal?.reason);
+            });
+          },
+        }),
+        { status: 200 },
+      );
+    const api = createApiClient({ fetch, signOut: () => {}, token: () => "slk_op" });
+    const controller = new AbortController();
+
+    const { body } = await api.stream("/v1/events/stream", controller.signal);
+    // The 10 seconds cover the headers only: an open stream outlives them.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(closedWith).toBeUndefined();
+
+    controller.abort();
+
+    expect(closedWith).toBeDefined();
+    await expect(body.getReader().read()).rejects.toBeDefined();
+  });
 });

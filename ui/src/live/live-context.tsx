@@ -115,7 +115,10 @@ interface Ticker {
   readonly dispose: () => void;
 }
 
-/** One timer for every duration on screen, running only while something shows one. */
+/**
+ * One timer for every duration on screen, running while anything reads it. The connection
+ * banner does, on every signed-in page, for the data's age.
+ */
 function createTicker(clock: Clock, serverNow: () => number): Ticker {
   const listeners = new Set<() => void>();
   const read = (): Now => ({ browser: clock.now(), server: serverNow() });

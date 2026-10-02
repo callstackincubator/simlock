@@ -19,6 +19,8 @@ interface FakeStream {
   send(text: string): void;
   /** The daemon ends the stream. */
   end(): void;
+  /** The connection breaks in the middle of the stream. */
+  break(): void;
   readonly closedByConsole: () => boolean;
 }
 
@@ -50,6 +52,8 @@ class FakeDaemon implements LiveApi {
   reads: "answer" | "hold" | ((path: ApiPath) => Promise<ApiResponse<unknown>>) = "answer";
   /** Whether a new stream's headers wait for `release()`, as a starting daemon's do. */
   holdStreams = false;
+  /** When set, every new stream fails to open as the promise this returns does. */
+  refuseStreams: (() => Promise<never>) | undefined;
   /** What `/v1/healthz` does: answer up, answer down, or fail at the network level. */
   health: "up" | "down" | "unreachable" = "up";
   /** The `Date` header every answer carries. */
@@ -100,10 +104,12 @@ class FakeDaemon implements LiveApi {
       }
     });
     this.streams.push({
+      break: () => controller.error(new TypeError("network error")),
       closedByConsole: () => closed,
       end: () => controller.close(),
       send: (text) => controller.enqueue(this.#encoder.encode(text)),
     });
+    if (this.refuseStreams !== undefined) return this.refuseStreams();
     const response = { body, date: this.date };
     if (!this.holdStreams) return Promise.resolve(response);
     return new Promise((resolve) => this.#heldStreams.push(() => resolve(response)));
