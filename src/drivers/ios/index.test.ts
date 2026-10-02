@@ -1665,7 +1665,7 @@ describe("IosSimctlDriver", () => {
     }
 
     expect(message).toMatch(/shared with Xcode/);
-    expect(message).not.toMatch(/allow-download|cannot install|download one back/);
+    expect(message).not.toMatch(/download|install/i);
   });
 
   it("still proxies the runtime operations that only read", async () => {
