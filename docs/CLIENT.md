@@ -16,7 +16,7 @@ import { connectSimlockAdmin } from "simlock/admin"; // agent + admin role
 `connectSimlockAdmin` returns a superset of `connectSimlock`'s client — every
 agent-role method plus the admin-role ones (`list`, `runCleanup`, `runNuke`,
 `getConfig`, `stopDaemon`, `replayEvents`/`subscribeEvents`,
-`createToken`/`listTokens`/`revokeToken`, `installComponent`). The split exists so
+`createToken`/`listTokens`/`revokeToken`, `installComponent`, `removeComponent`). The split exists so
 `simlock/client` doesn't even show admin methods in a caller's editor; the
 daemon's own role check is what actually stops an agent-role session from
 calling one — this is a discoverability choice, not the
@@ -354,6 +354,43 @@ const { components } = await client.listComponents({ platform: "android" });
   component: simulators in Xcode's default device set, AVDs in the user's
   own AVD home.
 - A gateway rejects it with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
+## Removing a runtime: `removeComponent`
+
+`removeComponent({ platform, version, dryRun? })` on the admin client removes
+one iOS simulator runtime or Android system image that Simlock installed —
+the call behind `simlock component remove`. It does not ask for
+confirmation; that is the caller's to do. `dryRun: true` runs every check a
+removal runs and removes nothing.
+
+```ts
+const result = await admin.removeComponent({ platform: "ios", version: "26.4" });
+// { platform: "ios", version: "26.4", outcome: "removed", sizeBytes: 9103456789 }
+```
+
+- `outcome` is `removed`, or `would-remove` for a dry run. `sizeBytes` is
+  absent when it could not be read. The catalog stops listing the component
+  at once.
+- `residue`, when present, says what stayed on disk and how to reclaim it:
+  on iOS, macOS can keep the runtime's download in its asset store, which
+  Xcode's Settings, under Platforms, removes.
+- It rejects, removing nothing, with `COMPONENT_NOT_OWNED` when Simlock did
+  not install the component or it changed on disk since,
+  `COMPONENT_IN_USE` when a device uses it, Simlock's or not (`details`
+  carries `devices` and `foreignDevices`), and `COMPONENT_BUSY` while an
+  install or removal runs or waits on that platform. Other rejections:
+  `FORBIDDEN` for an agent session, `NO_DRIVER`, and
+  `UNSUPPORTED_IN_GATEWAY_MODE` from a gateway.
+
+```ts
+try {
+  await admin.removeComponent({ platform: "ios", version: "26.4" });
+} catch (error) {
+  if (isSimlockError(error) && error.code === "COMPONENT_IN_USE") {
+    console.error(`${error.details.devices} Simlock and ${error.details.foreignDevices} other devices use it`);
+  }
+}
+```
 
 ## What machine answered: `getStatus().host`
 

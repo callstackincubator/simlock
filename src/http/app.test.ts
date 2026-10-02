@@ -317,6 +317,83 @@ describe("GET /v1/components", () => {
   });
 });
 
+describe("DELETE /v1/components/{platform}/{version}", () => {
+  it("dispatches component.remove with the path's platform and version, and answers its result as JSON", async () => {
+    const { app, dispatcher } = buildHarness();
+    const answer = { outcome: "removed", platform: "ios", sizeBytes: 7, version: "26.4" };
+    dispatcher.handlers["component.remove"] = (input) => {
+      expect(input).toEqual({ platform: "ios", version: "26.4" });
+      return answer;
+    };
+
+    const response = await app.request("/v1/components/ios/26.4", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/application\/json/);
+    expect(await response.json()).toEqual(answer);
+  });
+
+  it.each([
+    ["true", true],
+    ["false", false],
+  ])("passes ?dryRun=%s through as dryRun", async (query, dryRun) => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["component.remove"] = (input) => {
+      expect(input).toEqual({ dryRun, platform: "android", version: "35" });
+      return { outcome: "would-remove", platform: "android", version: "35" };
+    };
+
+    const response = await app.request(`/v1/components/android/35?dryRun=${query}`, {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("400s a dryRun that is not true or false, before ever dispatching", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["component.remove"] = () => {
+      throw new Error("should not be called");
+    };
+
+    const response = await app.request("/v1/components/ios/26.4?dryRun=yes", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it("answers COMPONENT_IN_USE with 409 and both counts in the body", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["component.remove"] = () => {
+      throw new DispatchError("COMPONENT_IN_USE", "ios 26.4 is in use", {
+        devices: 1,
+        foreignDevices: 2,
+      });
+    };
+
+    const response = await app.request("/v1/components/ios/26.4", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "COMPONENT_IN_USE",
+        devices: 1,
+        foreignDevices: 2,
+        message: "ios 26.4 is in use",
+      },
+    });
+  });
+});
+
 describe("POST /v1/lease-requests", () => {
   it("creates a request resource, 201 with a Location header", async () => {
     const { app, dispatcher } = buildHarness();

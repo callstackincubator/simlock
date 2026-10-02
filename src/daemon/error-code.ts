@@ -20,8 +20,10 @@
  * dispatcher, so it never reaches HTTP either) -- that stays local to `server.ts`.
  */
 import {
+  ComponentBusyError,
   ComponentInstallerClosedError,
   ComponentInstallTimeoutError,
+  ComponentNotOwnedError,
   IdempotencyConflictError,
   InsufficientDiskSpaceError,
   LeaseRequestForbiddenError,
@@ -135,6 +137,14 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   // against the restarted daemon, is the recovery.
   if (error instanceof ComponentInstallerClosedError) {
     return "DAEMON_STOPPING";
+  }
+  // ADR 0010 §8's refused removals. `COMPONENT_IN_USE` carries its counts as details, so the
+  // dispatcher's `component.remove` handler raises it as a `DispatchError` (above).
+  if (error instanceof ComponentNotOwnedError) {
+    return "COMPONENT_NOT_OWNED";
+  }
+  if (error instanceof ComponentBusyError) {
+    return "COMPONENT_BUSY";
   }
   if (error instanceof UnknownLeaseError) {
     return "UNKNOWN_LEASE";

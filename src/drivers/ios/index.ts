@@ -5,6 +5,8 @@ import {
   type ComponentInstallProgress,
   type ComponentInstallResult,
   type ComponentReceipt,
+  type ComponentRemoval,
+  COMPONENT_REMOVAL_TIMEOUT_MS,
   type DeviceRequest,
   type Driver,
   type DriverAdvisory,
@@ -24,6 +26,7 @@ import {
   type PassthroughCommand,
   PassthroughRefusedError,
   type ObservedRunState,
+  removeListedComponent,
   RuntimeMissingError,
   sameReceipt,
   UnknownModelError,
@@ -37,7 +40,7 @@ import type {
   ProcessResult,
   ProcessRunner,
 } from "../../ports/index.js";
-import { runInstallerProcess } from "../installer-process.js";
+import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -532,6 +535,81 @@ export class IosSimctlDriver implements Driver {
    * An image that reports no version names no component and is left out.
    */
   async listComponents(): Promise<readonly DriverComponent[]> {
+    return (await this.#listedImages()).map(({ image: _image, ...component }) => component);
+  }
+
+  /**
+   * Removes the runtime image whose receipt this is with `simctl runtime delete <image>` -- no
+   * `--keep-asset`, so CoreSimulator is asked to let go of its download too -- through the steps
+   * every driver takes (`removeListedComponent`): refused when a device in the machine's default
+   * set uses it, verified gone afterwards. When the download is still in the macOS asset store
+   * afterwards (#79), `residue` says so and how to reclaim it; Simlock never deletes a file there.
+   */
+  async removeComponent(
+    receipt: ComponentReceipt,
+    options: { readonly signal: AbortSignal },
+  ): Promise<ComponentRemoval> {
+    return removeListedComponent({
+      list: () => this.#listedImages(),
+      platform: this.platform,
+      receipt,
+      remove: async ({ image, version }) => {
+        await this.#deleteRuntimeImage(image.identifier, options.signal);
+        return this.#downloadResidue(image, version);
+      },
+    });
+  }
+
+  /**
+   * `simctl runtime delete <image>`, scoped like every other call, through the same bounded
+   * runner the Android removal uses: it ends at `COMPONENT_REMOVAL_TIMEOUT_MS` or when `signal`
+   * fires, `SIGTERM` then `SIGKILL`, and answers only once the process has exited.
+   */
+  async #deleteRuntimeImage(identifier: string, signal: AbortSignal): Promise<void> {
+    const args = ["runtime", "delete", identifier];
+    const command = `simctl ${args.join(" ")}`;
+    let outcome;
+    try {
+      outcome = await runBoundedProcess(
+        this.#processRunner,
+        this.#clock,
+        "xcrun",
+        this.#scopedSimctlArgv(args),
+        { signal, timeoutMs: COMPONENT_REMOVAL_TIMEOUT_MS },
+      );
+    } catch (error: unknown) {
+      throw new DriverCrashError(`${command} failed: ${errorMessage(error)}`);
+    }
+    if (outcome.timedOut) {
+      throw new DriverCrashError(
+        `${command} timed out after ${String(COMPONENT_REMOVAL_TIMEOUT_MS)}ms`,
+      );
+    }
+    if (outcome.stopped) throw new DriverCrashError(`${command} was ended before it finished`);
+    this.#assertSuccessful(args, outcome.result);
+  }
+
+  /**
+   * What `removeComponent` reports when the removed image's download is still in the asset
+   * store: matched by build, or by version for an image that names no build.
+   */
+  async #downloadResidue(image: RuntimeImage, version: string): Promise<{ residue?: string }> {
+    const left = (await this.#downloadedRuntimeAssets()).some((asset) =>
+      image.build === undefined ? asset.version === version : asset.build === image.build,
+    );
+    if (!left) return {};
+    const label = image.build === undefined ? version : `${version} (${image.build})`;
+    return {
+      residue:
+        `The download of iOS ${label} (${IOS_RUNTIME_ASSET_APPROX_SIZE}) is still in ` +
+        `${IOS_RUNTIME_ASSET_ROOT}; \`simctl runtime delete\` did not reclaim it and Simlock ` +
+        "does not delete files there -- remove the platform in Xcode's Settings -> Platforms " +
+        "to get the space back",
+    };
+  }
+
+  /** `listComponents`' entries, each with the runtime image it describes. */
+  async #listedImages(): Promise<(DriverComponent & { readonly image: RuntimeImage })[]> {
     const [images, defaultSet] = await Promise.all([
       this.#loadRuntimeImages(),
       this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS),
@@ -543,19 +621,22 @@ export class IosSimctlDriver implements Driver {
       if (error instanceof DriverCrashError) throw error;
       throw new DriverCrashError(`Could not parse simctl device list: ${errorMessage(error)}`);
     }
-    return images.filter(isIosImage).flatMap((image): DriverComponent[] =>
-      image.version === undefined
-        ? []
-        : [
-            {
-              foreignDevices: foreign.get(image.runtimeIdentifier) ?? 0,
-              receipt: imageReceipt(image),
-              version: image.version,
-              ...(image.build === undefined ? {} : { variant: image.build }),
-              ...(image.sizeBytes === undefined ? {} : { sizeBytes: image.sizeBytes }),
-            },
-          ],
-    );
+    return images
+      .filter(isIosImage)
+      .flatMap((image): (DriverComponent & { readonly image: RuntimeImage })[] =>
+        image.version === undefined
+          ? []
+          : [
+              {
+                foreignDevices: foreign.get(image.runtimeIdentifier) ?? 0,
+                image,
+                receipt: imageReceipt(image),
+                version: image.version,
+                ...(image.build === undefined ? {} : { variant: image.build }),
+                ...(image.sizeBytes === undefined ? {} : { sizeBytes: image.sizeBytes }),
+              },
+            ],
+      );
   }
 
   /** The receipt of every runtime installed right now, before an installer run. */
@@ -1334,7 +1415,7 @@ export class IosSimctlDriver implements Driver {
     if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
       this.#refuse(
         "runtime delete",
-        "it deletes a runtime shared with Xcode and other tools. Delete it through Xcode if that is really what you meant.",
+        "it deletes a runtime shared with Xcode and other tools. To remove a runtime Simlock added, use `simlock component remove ios <version>`; delete any other through Xcode.",
       );
     }
   }
@@ -1552,12 +1633,16 @@ export class IosSimctlDriver implements Driver {
   /**
    * The single insertion point for `--set`, which scopes every subcommand to the root this
    * driver owns and must therefore precede the subcommand. Every call in this file is
-   * spawned through here or through `#invokeLegacySimctl`, and nothing else: a scoped call
-   * that slipped past both would address the machine's default set, where Simlock can prove
-   * nothing about what it touches.
+   * spawned with these arguments or through `#invokeLegacySimctl`, and nothing else: a scoped
+   * call that slipped past both would address the machine's default set, where Simlock can
+   * prove nothing about what it touches.
    */
+  #scopedSimctlArgv(args: readonly string[]): string[] {
+    return ["simctl", "--set", this.#deviceRoot, ...args];
+  }
+
   async #invokeSimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
-    return this.#invokeXcrun(["simctl", "--set", this.#deviceRoot, ...args], timeoutMs);
+    return this.#invokeXcrun(this.#scopedSimctlArgv(args), timeoutMs);
   }
 
   /**

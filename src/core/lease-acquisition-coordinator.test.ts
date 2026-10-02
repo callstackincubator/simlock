@@ -141,7 +141,15 @@ async function createHarness(
     ),
   );
   const lifecycle = new ManagedDeviceLifecycle(catalog, registry, decisions, claims, clock);
-  const provisioner = new DeviceProvisioner({ catalog, clock, decisions, lifecycle, registry });
+  const provisioner = new DeviceProvisioner({
+    catalog,
+    clock,
+    // Never refuses: what a removal does to provisioning is `DeviceProvisioner`'s own test.
+    components: { claimProvision: () => () => undefined },
+    decisions,
+    lifecycle,
+    registry,
+  });
   const expiry = new LeaseExpiryScheduler(clock, async () => undefined);
   const leases = new LeaseLifecycle({
     clock,

@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BootTimeoutError,
+  ComponentInUseError,
+  ComponentNotOwnedError,
   DriverCrashError,
   OwnedRootError,
   OWNED_ROOT_MARKER_FILE,
@@ -1582,6 +1584,14 @@ describe("IosSimctlDriver", () => {
 
     expect(message).toMatch(/shared with Xcode/);
     expect(message).not.toMatch(/download|install/i);
+  });
+
+  it("points the runtime delete refusal at simlock component remove", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+
+    expect(() => driver.passthrough(["runtime", "delete", "26.5"])).toThrow(
+      /use `simlock component remove ios <version>`/,
+    );
   });
 
   it("still proxies the runtime operations that only read", async () => {
@@ -3384,7 +3394,205 @@ describe("IosSimctlDriver listComponents()", () => {
 
     await expect(driver.listComponents()).rejects.toBeInstanceOf(DriverCrashError);
   });
+
+  describe("removeComponent()", () => {
+    const target = image("26.4", "23E244", { sizeBytes: 7_000_000_000 });
+    const other = image("18.4", "22E238");
+    const receipt = { build: "23E244", image: "IMG-26.4-23E244" };
+    const deleteInvocation = simctl("runtime", "delete", "IMG-26.4-23E244");
+    const deleted = { match: deleteInvocation, result: { code: 0, stderr: "", stdout: "" } };
+    const signal = () => new AbortController().signal;
+
+    async function assetStore(builds: readonly (readonly [string, string])[]): Promise<Filesystem> {
+      const filesystem = new MemoryFilesystem();
+      for (const [index, [version, build]] of builds.entries()) {
+        const bundle = `${IOS_RUNTIME_ASSET_ROOT}/bundle-${String(index)}.asset`;
+        await filesystem.mkdirp(bundle);
+        await filesystem.writeFileAtomic(`${bundle}/Info.plist`, assetInfoPlist(version, build));
+      }
+      return filesystem;
+    }
+
+    it("deletes the image the receipt names with simctl runtime delete and no --keep-asset, and reports no residue when its download is gone", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target, other]),
+        defaultSetListed({}),
+        deleted,
+        imagesListed([other]),
+        defaultSetListed({}),
+      ]);
+      // Other builds' downloads are in the store, one of them of the same version; this one's
+      // is not.
+      const filesystem = await assetStore([
+        ["18.4", "22E238"],
+        ["26.4", "23E200"],
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), filesystem);
+
+      await expect(driver.removeComponent(receipt, { signal: signal() })).resolves.toEqual({
+        sizeBytes: 7_000_000_000,
+      });
+      expect(runner.calls[2]?.args).toEqual(deleteInvocation.args);
+    });
+
+    it("reports residue naming Xcode's Settings -> Platforms when the build's download is still in the asset store", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        deleted,
+        imagesListed([]),
+        defaultSetListed({}),
+      ]);
+      const filesystem = await assetStore([["26.4", "23E244"]]);
+      const driver = await createDriver(runner, new FakeClock(), filesystem);
+
+      const removal = await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(removal.residue).toContain("26.4 (23E244)");
+      expect(removal.residue).toContain(IOS_RUNTIME_ASSET_ROOT);
+      expect(removal.residue).toContain("Xcode's Settings -> Platforms");
+      // Read only: the bundle is still there.
+      await expect(filesystem.exists(`${IOS_RUNTIME_ASSET_ROOT}/bundle-0.asset`)).resolves.toBe(
+        true,
+      );
+    });
+
+    it("fails with simctl's own error when runtime delete exits non-zero", async () => {
+      // No listing after the failure: the scripted runner fails any call it was not given.
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        {
+          match: deleteInvocation,
+          result: { code: 1, stderr: "Unable to delete runtime: in use", stdout: "" },
+        },
+      ]);
+      const driver = await createDriver(runner);
+
+      await expect(driver.removeComponent(receipt, { signal: signal() })).rejects.toThrow(
+        "Unable to delete runtime: in use",
+      );
+      expect(runner.calls).toHaveLength(3);
+    });
+
+    it("refuses with ComponentInUseError when a device in the default device set uses the runtime, and deletes nothing", async () => {
+      // The scripted runner fails any call it was not given, so a delete would fail this test.
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({ [target.runtime]: 1 }),
+      ]);
+      const driver = await createDriver(runner);
+
+      const error = await driver
+        .removeComponent(receipt, { signal: signal() })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ComponentInUseError);
+      expect(error).toMatchObject({ foreignDevices: 1 });
+      expect(runner.calls).toHaveLength(2);
+    });
+
+    it("refuses with ComponentNotOwnedError when no listed image has the receipt, and deletes nothing", async () => {
+      const runner = new ScriptedProcessRunner([imagesListed([target]), defaultSetListed({})]);
+      const driver = await createDriver(runner);
+
+      await expect(
+        driver.removeComponent({ build: "23E244", image: "IMG-OTHER" }, { signal: signal() }),
+      ).rejects.toBeInstanceOf(ComponentNotOwnedError);
+      expect(runner.calls).toHaveLength(2);
+    });
+
+    it("fails when the image is still listed after simctl answered", async () => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        deleted,
+        imagesListed([target]),
+        defaultSetListed({}),
+      ]);
+      const driver = await createDriver(runner);
+
+      await expect(driver.removeComponent(receipt, { signal: signal() })).rejects.toThrow(
+        "ios 26.4 is still installed after it was removed",
+      );
+    });
+
+    it("ends simctl runtime delete after five minutes, SIGTERM then SIGKILL, and answers only once it has exited", async () => {
+      // Ignores SIGTERM: only the SIGKILL ten seconds later ends it.
+      const stubborn = { hangs: true, ignoresSigterm: true, match: deleteInvocation };
+      const clock = new FakeClock();
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        stubborn,
+      ]);
+      const driver = await createDriver(runner, clock);
+      let settled = false;
+      const removal = driver
+        .removeComponent(receipt, { signal: signal() })
+        .catch((caught: unknown) => caught)
+        .finally(() => {
+          settled = true;
+        });
+      await vi.waitFor(() => expect(runner.calls).toHaveLength(3));
+
+      clock.advance(5 * 60_000);
+      await flushMicrotasks221();
+      expect(settled).toBe(false);
+      clock.advance(10_000);
+
+      expect(await settledValue(removal)).toMatchObject({
+        message: expect.stringMatching(/timed out after 300000ms/),
+      });
+    });
+
+    it("ends simctl runtime delete when its signal fires, and starts none when it already has", async () => {
+      const abort = new AbortController();
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target]),
+        defaultSetListed({}),
+        { hangs: true, match: deleteInvocation },
+      ]);
+      const driver = await createDriver(runner);
+      const aborted = driver
+        .removeComponent(receipt, { signal: abort.signal })
+        .catch((caught: unknown) => caught);
+      await vi.waitFor(() => expect(runner.calls).toHaveLength(3));
+      abort.abort();
+      expect(await settledValue(aborted)).toMatchObject({
+        message: expect.stringMatching(/was ended before it finished/),
+      });
+
+      // The scripted runner fails any call it was not given, so a delete would fail this.
+      const lateRunner = new ScriptedProcessRunner([imagesListed([target]), defaultSetListed({})]);
+      const lateDriver = await createDriver(lateRunner);
+      await expect(
+        lateDriver.removeComponent(receipt, { signal: AbortSignal.abort() }),
+      ).rejects.toThrow(/was ended before it finished/);
+      expect(lateRunner.calls).toHaveLength(2);
+    });
+  });
 });
+
+/** Lets queued continuations run, so a test can see that something has not happened yet. */
+async function flushMicrotasks221(): Promise<void> {
+  for (let count = 0; count < 100; count += 1) await Promise.resolve();
+}
+
+/**
+ * What a promise settled with, once it has: a promise still open fails a named assertion rather
+ * than the test's own timeout, so a deadline that never ends anything reads as that.
+ */
+async function settledValue(promise: Promise<unknown>): Promise<unknown> {
+  const state: { done: boolean; value: unknown } = { done: false, value: undefined };
+  const settle = (value: unknown): void => {
+    state.done = true;
+    state.value = value;
+  };
+  void promise.then(settle, settle);
+  await vi.waitFor(() => expect(state.done).toBe(true));
+  return state.value;
+}
 
 describe("IosSimctlDriver toolVersions()", () => {
   it("reports the Xcode version and build that xcodebuild -version prints", async () => {

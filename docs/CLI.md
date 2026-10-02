@@ -72,6 +72,7 @@ command starts it again) to bring the platform up.
 | 10 | `EXEC_TIMEOUT` | a `simctl`/`adb` command run through `device.exec` outlived `exec.timeoutMs` and was killed |
 | 10 | `DOWNLOAD_TIMEOUT` | a runtime download, including the time spent waiting for another download on the same platform, outlived `downloads.timeoutMs` |
 | 11 | `NO_CAPACITY` | capacity reached and `--no-wait` was set |
+| 11 | `COMPONENT_BUSY` | `component remove` while a component install or removal runs or waits on that platform; try again once it ends |
 | 12 | `NO_DRIVER` | no driver registered for the requested platform |
 | 12 | `RUNTIME_MISSING` | runtime not installed and no `--allow-download` |
 | 12 | `UNKNOWN_MODEL` | unknown device model for the platform |
@@ -79,6 +80,8 @@ command starts it again) to bring the platform up.
 | 12 | `LICENSE_NOT_ACCEPTED` | a required license (e.g. an Android SDK license) is not accepted |
 | 12 | `UNKNOWN_WORKER` | `worker drain`/`undrain` or `component install --worker` naming a worker the gateway does not know |
 | 12 | `DOWNLOADS_DISABLED` | `component install` on a machine whose `downloads.policy` is `"never"` |
+| 12 | `COMPONENT_NOT_OWNED` | `component remove` of a component Simlock did not install, or one that changed on disk since |
+| 12 | `COMPONENT_IN_USE` | `component remove` of a component a device uses, Simlock's or your own |
 | 13 | `REQUESTER_ALREADY_LEASED` | requester already holds a lease or has a pending request — one lease per agent in v1; release the named lease first |
 | 14 | — | `lease` without `--detach` only: the daemon ended the lease without the holder asking (TTL expiry, operator `release`, or an unrecoverable device) |
 | 15 | — | `component install --worker`/`--all-workers` on a gateway only: at least one worker did not end `installed` or `already-installed` (it refused, failed, was skipped, or its result is unknown) |
@@ -107,10 +110,11 @@ implement them:
   means for `USAGE` and `BAD_REQUEST`. Neither is retryable as written: the
   fix is a different command, or the same command against a different daemon.
   `UNSUPPORTED_IN_GATEWAY_MODE` in particular is permanent, not provisional:
-  `nuke`, `cleanup`, `doctor`, `driver.passthrough` and `component list`
-  stay per-worker operations rather than waiting on some later fleet-wide
-  version. `component install` without a worker flag answers it too; with
-  `--worker` or `--all-workers` it installs on the workers you name.
+  `nuke`, `cleanup`, `doctor`, `driver.passthrough`, `component list` and
+  `component remove` stay per-worker operations rather than waiting on some
+  later fleet-wide version. `component install` without a worker flag answers
+  it too; with `--worker` or `--all-workers` it installs on the workers you
+  name.
 - `UNKNOWN_WORKER` takes `12`, the number the table already gives to "the
   thing you named cannot be resolved" (`UNKNOWN_MODEL`, `NO_DRIVER`), because
   that is what it is: a worker id the gateway has no record of.
@@ -495,10 +499,10 @@ Refused, all exit 2 with `USAGE` and a message naming what to run instead:
 - `shutdown all` — it stops every device in the set, for every agent, and each
   interrupted lease spends its recovery budget rebooting; one that runs out
   ends as `lease_lost`. `shutdown <udid>` of a single device is allowed.
-- `runtime delete` — it deletes a runtime shared with Xcode.
-  It does not free the disk the runtime's download
-  takes either (see `doctor`'s `runtime-cache-unreclaimable` finding). Delete
-  it through Xcode if that is what you mean.
+- `runtime delete` — it deletes a runtime shared with Xcode. To remove a
+  runtime Simlock installed, use
+  [`simlock component remove ios <version>`](#simlock-component-remove-iosandroid-version---dry-run---yes),
+  which refuses while any simulator uses it. Delete any other through Xcode.
 - `--set` and `--profiles`, wherever they appear *before* the subcommand and
   however they are spelled (`-set`, `--set <path>`, `--set=<path>`) —
   `simlock simctl` supplies the device set itself. A caller-supplied one would
@@ -1370,6 +1374,75 @@ A platform whose tools cannot answer is left out, and the other platform is
 still listed. A gateway answers `UNSUPPORTED_IN_GATEWAY_MODE`; run the
 command against the worker. A platform other than `ios` or `android`, or a
 positional argument, is a usage error (exit 2).
+
+## `simlock component remove <ios|android> <version> [--dry-run] [--yes]`
+
+Removes an iOS simulator runtime or Android system image that Simlock
+installed, to get its disk back. Admin only: an agent session gets
+`FORBIDDEN`.
+
+```sh
+simlock component remove ios 26.4 --dry-run   # what would go, and how much disk it frees
+simlock component remove ios 26.4             # asks first
+simlock component remove android 35 --yes     # no question, for scripts
+```
+
+Without `--dry-run` the command asks for confirmation. Where it cannot ask,
+because there is no terminal, it refuses with a usage error (exit 2) unless
+you pass `--yes`. `--dry-run` never asks.
+
+The result is one JSON line on stdout:
+
+```text
+{"platform":"ios","version":"26.4","outcome":"removed","sizeBytes":9103456789}
+```
+
+`outcome` is `removed`, or `would-remove` for a dry run. `sizeBytes` is the
+disk the component took, left out when it could not be read. A removed
+component leaves `simlock catalog` and `simlock component list` at once.
+
+Simlock removes a component only when all of these hold. A dry run checks
+every one of them and removes nothing.
+
+- **Simlock installed it.** It was installed with `component install` or by
+  a lease with `--allow-download`, and it is still the same one on disk:
+  `installedBySimlock` is `true` in `simlock component list`. Otherwise the
+  command fails with `COMPONENT_NOT_OWNED` (exit 12). A component that was on
+  the machine before, or that was deleted and installed again some other
+  way, is never removed, and there is no flag to force it.
+- **No device uses it.** None of Simlock's own devices of that platform and
+  version, in any state, leased ones included, and none of yours: a
+  simulator in Xcode's default device set or an AVD in your own AVD home,
+  booted or not. Otherwise it fails with `COMPONENT_IN_USE` (exit 12), and
+  the error says how many of each use it. Delete those devices first.
+- **Nothing else is installing or removing on that platform.** Otherwise it
+  fails with `COMPONENT_BUSY` (exit 11). Run it again once that ends. A
+  `component install` or lease download that arrives while a removal runs
+  waits for it, and no new Simlock device is created on the component being
+  removed: a lease request for it fails with `RUNTIME_MISSING`.
+
+An iOS runtime is removed with `simctl runtime delete`. macOS can keep the
+runtime's download in its own asset store afterwards. When it does, the
+result carries `residue`, a sentence that says so and how to get the space
+back: remove the platform in Xcode's Settings, under Platforms. Simlock never
+deletes files there itself. An Android image is removed with
+`sdkmanager --uninstall`.
+
+```text
+{"platform":"ios","version":"26.4","outcome":"removed","sizeBytes":9103456789,"residue":"The download of iOS 26.4 (23E244) ..."}
+```
+
+Every removal emits `component.removed`, naming the component and who asked;
+see [EVENTS.md](EVENTS.md#components). Nothing removes a component on its
+own: no cleanup rule, idle timer or low-disk reaction does. Stopping the
+daemon ends a removal that is running; nothing resumes it. A gateway answers
+`UNSUPPORTED_IN_GATEWAY_MODE`; run the command against the worker. A missing
+or extra argument, or a platform other than `ios` or `android`, is a usage
+error (exit 2).
+
+Simlock counts only the devices it can see. A device you create while a
+removal runs, or a device of another Simlock instance on the same machine,
+is not counted.
 
 ## `simlock cleanup [--dry-run] [--rule <name>]`
 

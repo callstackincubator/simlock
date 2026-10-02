@@ -43,10 +43,11 @@ export interface LeaseEngineOptions {
   readonly clock: Clock;
   /**
    * The daemon's one `ComponentInstaller`, built and closed by the composition root. Only the
-   * lease path reaches it: warm-pool provisioning and startup convergence never do (safety
-   * rule 4).
+   * lease path installs through it: warm-pool provisioning and startup convergence never do
+   * (safety rule 4). Every device provisioned is claimed through it, so none is created on a
+   * component being removed (ADR 0010 §8).
    */
-  readonly components: Pick<ComponentInstaller, "install">;
+  readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
   readonly config: Config;
   /**
    * The one decision gate every registry write runs inside. Passed in rather than built here
@@ -138,6 +139,7 @@ export class LeaseEngine {
     this.#provisioner = new DeviceProvisioner({
       catalog: this.#drivers,
       clock: options.clock,
+      components: options.components,
       decisions: this.#decisions,
       lifecycle: this.#deviceLifecycle,
       ...(options.logger === undefined ? {} : { logger: options.logger }),

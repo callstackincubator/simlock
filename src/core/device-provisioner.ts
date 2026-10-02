@@ -1,6 +1,7 @@
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import { stableError } from "./stable-error.js";
 import type { CapacityReservation } from "./capacity/index.js";
+import type { ComponentInstaller } from "./component-installer.js";
 import type { DeviceRecord, DeviceSpec } from "./domain.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
@@ -25,6 +26,11 @@ export interface DeviceProvisionerRegistry {
 export interface DeviceProvisionerOptions {
   readonly catalog: DriverCatalog;
   readonly clock: Clock;
+  /**
+   * The one installer (ADR 0010 §8). Every device record is created here, so this is where a
+   * component being removed refuses a new device, on every path that provisions one.
+   */
+  readonly components: Pick<ComponentInstaller, "claimProvision">;
   readonly decisions: SerializedDecision;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "destroy" | "readyProvisionedForLease">;
   readonly registry: DeviceProvisionerRegistry;
@@ -46,6 +52,17 @@ export class DeviceProvisioner {
 
   async provision(spec: DeviceSpec, options: ProvisionDeviceOptions): Promise<ReadyDeviceHandoff> {
     const driver = this.options.catalog.get(spec.platform);
+    // Claimed inside the gate, so a removal's own count in the gate sees this device before the
+    // driver creates it, or this claim sees the removal's mark and refuses.
+    let releaseClaim: () => void;
+    try {
+      releaseClaim = await this.options.decisions.run(() =>
+        this.options.components.claimProvision(spec),
+      );
+    } catch (error: unknown) {
+      options.reservation.release();
+      throw error;
+    }
     const startedAt = this.options.clock.now();
     let driverDevice: DriverDevice;
     try {
@@ -55,20 +72,27 @@ export class DeviceProvisioner {
       });
       driverDevice = await driver.provision(spec);
     } catch (error: unknown) {
+      releaseClaim();
       options.reservation.release();
       throw error;
     }
 
     let device: DeviceRecord;
     try {
-      device = await this.options.decisions.run(() =>
-        this.options.registry.registerDevice({
-          driverData: driverDevice.driverData,
-          driverDeviceId: driverDevice.deviceId,
-          provisionDuration: this.options.clock.now() - startedAt,
-          spec,
-        }),
-      );
+      // The claim ends in the section that commits the record, so the device is counted by one
+      // of the two at every moment.
+      device = await this.options.decisions.run(async () => {
+        try {
+          return await this.options.registry.registerDevice({
+            driverData: driverDevice.driverData,
+            driverDeviceId: driverDevice.deviceId,
+            provisionDuration: this.options.clock.now() - startedAt,
+            spec,
+          });
+        } finally {
+          releaseClaim();
+        }
+      });
     } catch (error: unknown) {
       options.reservation.release();
       throw error;

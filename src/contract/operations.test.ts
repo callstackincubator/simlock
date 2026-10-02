@@ -73,6 +73,8 @@ const ROLE_MATRIX: ReadonlyArray<{
     input: { platform: "ios", version: "26.4", workers: "all" },
     role: "admin",
   },
+  // ADR 0010 §8: removal is destructive, so admin-only.
+  { name: "component.remove", input: { platform: "ios", version: "26.4" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -143,6 +145,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
     input: { platform: "ios", version: "26.4", workers: "all" },
     effect: "write",
   },
+  { name: "component.remove", input: { platform: "ios", version: "26.4" }, effect: "write" },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {

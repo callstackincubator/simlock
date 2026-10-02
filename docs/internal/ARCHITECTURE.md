@@ -177,8 +177,8 @@ agent / console ──token auth──>  │ HTTP frontend + unix socket        
   on HTTP — that is how agents reach it and what the uplink upgrades from — so
   `http.enabled: false` in gateway mode fails the start rather than being
   silently overridden. `nuke.run`, `cleanup.run`, `doctor.run`,
-  `driver.passthrough`, `component.install` and `component.list` answer
-  `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they act on one machine's devices
+  `driver.passthrough`, `component.install`, `component.list` and
+  `component.remove` answer `UNSUPPORTED_IN_GATEWAY_MODE` permanently: they act on one machine's devices
   or components, and stay per-worker. Installing through a gateway is its own
   gateway-only operation, `worker.install-component`, which names the
   workers (see "Through a gateway" under Components). The lease lifecycle
@@ -1395,7 +1395,8 @@ install components; they do not decide when. `resolveSpec` never downloads:
 when a download could satisfy a request it throws `RuntimeMissingError` with
 `downloadable: true` and `component`, the string to install — a version, or a
 driver's word for "newest" (`latest` on iOS; the bare major of a model's upper
-bound when the model has one). A driver offers two verbs and an estimate:
+bound when the model has one). For installs a driver offers two verbs and an
+estimate (`listComponents` and `removeComponent` are below):
 
 - `findComponent(component)` — a read: the installed version and its receipt,
   or nothing. A string that is not a version answers nothing.
@@ -1500,11 +1501,69 @@ registry: `installedBySimlock` is true when a `ComponentRecord` of that
 platform has a receipt equal (`sameReceipt`) to the entry's, and
 `installedAt` is that record's time — the record is the only proof (ADR 0010
 §5, safety rule 8). `devices` counts registry devices of that platform and
-version in any state but `deleted`; the core cannot tell variants apart, so
+version in any state but `deleted`, plus every device `DeviceProvisioner` has
+claimed and not registered yet (below); the core cannot tell variants apart, so
 two variants of one version show the same count. A driver whose listing
 rejects is left out and logged, and the other platform is still listed.
 Entries are ordered by platform, then version, then variant. A gateway
 answers `UNSUPPORTED_IN_GATEWAY_MODE`.
+
+Removal is `component.remove` (ADR 0010 §8), an admin operation with input
+`{ platform, version, dryRun? }`, behind `simlock component remove` (which
+confirms or requires `--yes`, safety rule 5), `removeComponent` on the admin
+client and `DELETE /v1/components/{platform}/{version}` (`?dryRun=true`, one
+JSON answer). The dispatcher passes the session principal as `requesterId`
+and turns `ComponentInUseError` into `COMPONENT_IN_USE` with its two counts
+as details. `ComponentInstaller.remove` is the only caller of
+`Driver.removeComponent`:
+
+1. **Prove ownership.** The registry's `ComponentRecord` of that platform and
+   version, and an entry of the driver's listing — the same `#listDriver`
+   `list` answers from (architecture rule 10) — whose receipt equals the
+   record's. Either missing is `ComponentNotOwnedError`
+   (`COMPONENT_NOT_OWNED`). A listing that rejects rejects the removal: an
+   unreadable foreign count is never "no users".
+2. **Refuse users.** `devices` or `foreignDevices` above zero is
+   `ComponentInUseError` (`COMPONENT_IN_USE`).
+3. **Refuse a busy platform.** Anything in the platform's install queue, or a
+   removal already holding its turn, is `ComponentBusyError`
+   (`COMPONENT_BUSY`). A dry run stops here with `would-remove` and the
+   listed size; it has run every check.
+4. **Take the turn.** Checked and taken with no `await` between them; while
+   a removal holds it, `#pump` starts no install on that platform, and an
+   install that arrives is told it waits.
+5. **Mark, inside the decision gate.** It counts Simlock's devices again and
+   marks the platform and version as being removed. Device records are
+   created in one place, `DeviceProvisioner.provision`, which first calls
+   `ComponentInstaller.claimProvision(spec)` inside the gate: a marked
+   component refuses with `ComponentBeingRemovedError` (a
+   `RuntimeMissingError`, so `RUNTIME_MISSING`) before the driver creates
+   anything, and the lease path rejects the request instead of retrying. An
+   unmarked one counts the claim as a Simlock device until the device's
+   record is committed, in the same gate section, or the provision fails. So
+   the gate orders every new device against every removal: either the
+   removal's count sees it, or it sees the mark.
+6. **Remove.** `driver.removeComponent(receipt, { signal })`, then delete the
+   record inside the gate, then emit `component.removed`. A failure is logged
+   with who asked, keeps the record, and rethrows. The mark and the turn live
+   in one record, `#removals`, which every exit clears. `close()` aborts a
+   running removal through its signal, which answers `DAEMON_STOPPING`, and
+   resolves once the driver call has returned.
+
+Every driver's `removeComponent` is `removeListedComponent` (`src/core/driver.ts`)
+over its own listing: prove the receipt again, refuse a foreign user again,
+run the platform step under `COMPONENT_REMOVAL_TIMEOUT_MS` (five minutes) and
+the signal, and list again to verify the component is gone. Both platform
+steps run through `runBoundedProcess` (`src/drivers/installer-process.ts`),
+which ends the process `SIGTERM` then `SIGKILL` and answers only once it has
+exited. iOS runs `simctl --set <root> runtime delete <image>` without
+`--keep-asset` (the `--set` from `#scopedSimctlArgv`, like every scoped call),
+then reads the asset store (#79) and reports `residue` when the build's
+download is still there; `simlock simctl runtime delete` stays refused and
+points at `simlock component remove`. Android runs
+`sdkmanager --uninstall <package>`. A second
+Simlock instance's devices and a foreign device created after the driver's
+last count are not seen; see KNOWN-PITFALLS.md.
 
 #### Through a gateway
 

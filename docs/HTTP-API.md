@@ -116,8 +116,9 @@ Routes, status codes, and every other field are unchanged.
 Gateway/worker fleet mode is purely additive on top of
 that: the same routes answer identically whether the daemon behind them is a
 worker or a **gateway** fronting a fleet of workers (except
-`POST /v1/components/install` and `GET /v1/components`, which only a worker
-serves; a gateway answers `501 UNSUPPORTED_IN_GATEWAY_MODE`), and what it adds are new
+`POST /v1/components/install`, `GET /v1/components` and
+`DELETE /v1/components/{platform}/{version}`, which only a worker serves; a
+gateway answers `501 UNSUPPORTED_IN_GATEWAY_MODE`), and what it adds are new
 routes (`/v1/uplink`, `/v1/workers*`, `POST /v1/leases/{id}/exec`), new
 fields (`mode` on status, `workers[]`, `workerId`, `worker` on the lease),
 and new error codes. Nothing existing changes shape, and a client that
@@ -815,6 +816,54 @@ A platform whose tools cannot answer is left out. `400 BAD_REQUEST` for a
 `platform` other than `ios` or `android`; `501 UNSUPPORTED_IN_GATEWAY_MODE`
 from a gateway, which owns no components — ask the worker.
 
+### `DELETE /v1/components/{platform}/{version}`
+
+Role: `operator`. Removes one iOS simulator runtime or Android system image
+that Simlock installed on this machine, to get its disk back — the same
+operation as `simlock component remove`. `?dryRun=true` runs every check a
+removal runs and removes nothing.
+
+```
+DELETE /v1/components/ios/26.4
+DELETE /v1/components/ios/26.4?dryRun=true
+```
+
+The answer is one JSON body, not a stream:
+
+```json
+{ "platform": "ios", "version": "26.4", "outcome": "removed", "sizeBytes": 9103456789 }
+```
+
+`outcome` is `removed`, or `would-remove` for a dry run. `sizeBytes` is the
+disk the component took, left out when it could not be read. `residue`
+appears when something stayed on disk after the removal: on iOS, macOS can
+keep the runtime's download in its own asset store, and `residue` says so and
+how to reclaim it (remove the platform in Xcode's Settings, under Platforms).
+A removed component leaves `GET /v1/catalog` and `GET /v1/components` at once,
+and the removal is reported as a `component.removed` event naming who asked.
+
+A component is removed only when Simlock installed it and it is still the same
+one on disk, no device uses it, and nothing else installs or removes on that
+platform. Each refusal removes nothing:
+
+- `409 COMPONENT_NOT_OWNED` — Simlock did not install it, or it changed on
+  disk since. There is no way to force it.
+- `409 COMPONENT_IN_USE` — a device uses it: one of Simlock's, in any state,
+  leased ones included, or one outside Simlock (a simulator in Xcode's
+  default device set, an AVD in the user's own AVD home). The body carries
+  `devices` and `foreignDevices`, how many of each.
+- `409 COMPONENT_BUSY` — an install or removal runs or waits on that
+  platform; try again once it ends.
+- `403 FORBIDDEN` — an `agent` token.
+- `400 BAD_REQUEST` — a platform other than `ios` or `android`, a malformed
+  version, or a `dryRun` other than `true` or `false`.
+- `501 UNSUPPORTED_IN_GATEWAY_MODE` — the daemon is a gateway, which owns no
+  components; ask the worker.
+
+```json
+{ "error": { "code": "COMPONENT_IN_USE", "message": "...", "devices": 1, "foreignDevices": 2 } }
+```
+
 ### `DELETE /v1/leases/{id}`
 
 Role: `agent` (own lease); `operator` may release any lease.
@@ -1042,9 +1091,9 @@ Every failure is the same shape the daemon protocol uses:
 | 401 | `UNAUTHENTICATED` (missing or unrecognized token) |
 | 403 | `FORBIDDEN` (role doesn't permit the route — including a `worker` token on any `/v1` route other than `/v1/uplink`, and an `agent`/`operator` token at `/v1/uplink`; a `/v1/lease-requests/*` route whose request another token sent; or `POST /v1/leases/{id}/renew`/`DELETE /v1/leases/{id}`/`POST /v1/leases/{id}/exec` naming another requester's still-live lease), `DOWNLOADS_DISABLED` (`POST /v1/components/install` under `downloads.policy: "never"`) |
 | 404 | `UNKNOWN_WORKER` (`POST`/`DELETE /v1/workers/{id}/drain` naming a worker the gateway does not know), `UNKNOWN_LEASE_REQUEST` (unknown request id), `UNKNOWN_LEASE` (unknown lease id, expired/released, **or `GET /v1/leases/{id}`/`GET /v1/leases/{id}/events` naming another requester's lease** — see [`GET /v1/leases/{id}`](#get-v1leasesid)) |
-| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open) |
+| 409 | `REQUESTER_ALREADY_LEASED` (body names the existing lease id; fleet-wide on a gateway), `IDEMPOTENCY_CONFLICT` (an `Idempotency-Key` repeated with a different device), `REQUEST_NOT_CANCELLABLE` (body names the lease id if the request had already been granted), `WORKER_CONNECTED` (`DELETE /v1/workers/{id}` while its uplink is open), `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (body carries `devices` and `foreignDevices`), `COMPONENT_BUSY` (the three refusals of `DELETE /v1/components/{platform}/{version}`) |
 | 422 | `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `PASSTHROUGH_REFUSED` (a refused `exec` verb, a caller-supplied `--set`/`-P`, a bare `adb shell`), `UNKNOWN_PASSTHROUGH_TOOL` |
-| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`) |
+| 501 | `UNSUPPORTED_IN_GATEWAY_MODE` (an operation that acts on one machine, asked of a gateway: `POST /v1/components/install`, `GET /v1/components`, `DELETE /v1/components/{platform}/{version}`) |
 | 503 | `NO_CAPACITY` (only with `noWait: true`; response carries `Retry-After`), `WORKER_UNREACHABLE` (a gateway could not reach the worker holding this lease or request) |
 | 504 | `EXEC_TIMEOUT` (a `device.exec` command outlived `exec.timeoutMs`), `DOWNLOAD_TIMEOUT` (a runtime download, waiting for another download included, outlived `downloads.timeoutMs`) |
 
@@ -1058,18 +1107,19 @@ behind this is not reachable right now" is the same answer in all four cases,
 and a client with one retry rule for `transport` should not need a second one
 because the unreachable thing happened to be a worker.
 
-`UNSUPPORTED_IN_GATEWAY_MODE` comes from two routes in this version,
-`POST /v1/components/install` without `workers` and `GET /v1/components`
-asked of a gateway — `nuke`, `cleanup`, and
+`UNSUPPORTED_IN_GATEWAY_MODE` comes from three routes in this version,
+`POST /v1/components/install` without `workers`, `GET /v1/components` and
+`DELETE /v1/components/{platform}/{version}` asked of a gateway — `nuke`,
+`cleanup`, and
 `doctor` are absent from the HTTP surface (see
 [Not implemented](#not-implemented)), and the status is fixed so adding
 `POST /v1/doctor` or `POST /v1/cleanup` later is additive rather than a fresh
 decision. `501` is the honest status for it: this is not a temporary
 condition to retry past, it is an operation this daemon will never perform,
 and `nuke`/`cleanup`/`doctor`/`driver.passthrough` and component listings
-stay per-worker permanently rather than pending some later fan-out. A
-component install through a gateway is a different request, one that names
-its workers.
+and removals stay per-worker permanently rather than pending some later
+fan-out. A component install through a gateway is a different request, one
+that names its workers.
 
 `EXEC_TIMEOUT`'s `504` is documented for completeness rather than for the
 exec route: `POST /v1/leases/{id}/exec` has already answered `200` and begun

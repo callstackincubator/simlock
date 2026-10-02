@@ -13,12 +13,12 @@ import { SerializedDecision } from "./serialized-decision.js";
  * that passes its own `components` gets the gate alone.
  */
 export function testComponentWiring<
-  Components extends Pick<ComponentInstaller, "install"> = ComponentInstaller,
+  Components extends Pick<ComponentInstaller, "claimProvision" | "install"> = ComponentInstaller,
 >(options: {
   readonly clock: Clock;
   readonly drivers: readonly Driver[];
   readonly eventBus: Pick<EventBus, "emit">;
-  readonly registry: Pick<Registry, "recordComponent" | "snapshot">;
+  readonly registry: Pick<Registry, "deleteComponent" | "recordComponent" | "snapshot">;
   /** Stands in for the installer, when a test needs to see whether it was reached at all. */
   readonly components?: Components | undefined;
 }): {

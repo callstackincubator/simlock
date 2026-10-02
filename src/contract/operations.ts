@@ -803,6 +803,35 @@ export const workerInstallComponent = defineOperation({
   output: z.object({ results: z.array(workerInstallResultSchema) }),
 });
 
+// ---- component.remove (ADR 0010 §8) ---------------------------------------------------------
+
+/**
+ * Removes one component Simlock installed: refused with `COMPONENT_NOT_OWNED` when Simlock has
+ * no record of installing exactly what is installed now, `COMPONENT_IN_USE` while any device
+ * uses it, Simlock's or not, and `COMPONENT_BUSY` while an install or removal runs or waits on
+ * that platform. `dryRun` runs every one of those checks and removes nothing, answering
+ * `would-remove`. Admin-only. `sizeBytes` is the component's size as listed, when known;
+ * `residue` says what stayed on disk after a removal and how to reclaim it.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const componentRemove = defineOperation({
+  name: "component.remove",
+  role: "admin",
+  effect: "write",
+  input: z.object({
+    platform: platformSchema,
+    version: componentVersionSchema,
+    dryRun: z.boolean().optional(),
+  }),
+  output: z.object({
+    platform: platformSchema,
+    version: z.string(),
+    outcome: z.enum(["removed", "would-remove"]),
+    sizeBytes: z.number().int().nonnegative().optional(),
+    residue: z.string().optional(),
+  }),
+});
+
 // ---- the full registry ----------------------------------------------------------------------
 
 export const OPERATIONS = {
@@ -835,6 +864,7 @@ export const OPERATIONS = {
   "component.install": componentInstall,
   "component.list": componentList,
   "worker.install-component": workerInstallComponent,
+  "component.remove": componentRemove,
 } as const;
 
 /**

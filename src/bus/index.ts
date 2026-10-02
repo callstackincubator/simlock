@@ -151,6 +151,19 @@ export interface EventMap {
     readonly error: string;
     readonly requesterId?: string;
   };
+  "component.removed": {
+    readonly platform: string;
+    /** The component string the removal was asked for: the version, as the catalog lists it. */
+    readonly componentId: string;
+    /** The exact version removed: the version of Simlock's record of installing it. */
+    readonly version: string;
+    /** The component's size as listed just before it was removed, when the driver could read it. */
+    readonly sizeBytes?: number;
+    /** What stayed on disk after the removal, and how to reclaim it, when something did. */
+    readonly residue?: string;
+    /** The principal of the admin session that asked. */
+    readonly requesterId: string;
+  };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "disk.pressure-detected": { readonly freeBytes: number; readonly threshold: number };

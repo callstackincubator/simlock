@@ -16,7 +16,8 @@
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`
  *    and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole --
  *    and `component.install` (ADR 0010 §7), which installs on one machine; its message points at
- *    `worker.install-component`, which names the workers to install on.
+ *    `worker.install-component`, which names the workers to install on. `component.list` and
+ *    `component.remove` (§8) list and remove one machine's components.
  * 3. *(Formerly "refused until #118" -- the fleet queue, routing, and lease/exec forwarding this
  *    module now implements. Nothing is left in this population; the type below still enforces
  *    that every operation but `daemon.stop` is accounted for.)*
@@ -181,6 +182,10 @@ export class GatewayDispatcher {
       "component.list": unsupportedByDesign(
         "component.list",
         "component.list lists one machine's components; run it against a worker",
+      ),
+      "component.remove": unsupportedByDesign(
+        "component.remove",
+        "component.remove removes a component from one machine; run it against a worker",
       ),
 
       "lease.request": this.#leaseRequest,

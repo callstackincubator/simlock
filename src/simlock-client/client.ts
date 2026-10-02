@@ -35,6 +35,8 @@ import type {
   ComponentInstallOutput,
   ComponentListInput,
   ComponentListOutput,
+  ComponentRemoveInput,
+  ComponentRemoveOutput,
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
@@ -92,6 +94,8 @@ export type {
   ComponentInstallProgress,
   ComponentListInput,
   ComponentListOutput,
+  ComponentRemoveInput,
+  ComponentRemoveOutput,
   DaemonStopOutput,
   DeviceRecoveredPush,
   DeviceUnhealthyPush,
@@ -265,6 +269,13 @@ export interface SimlockAdminClient extends SimlockClient {
     input: WorkerInstallComponentInput,
     options?: InstallComponentOnWorkersOptions,
   ): Promise<WorkerInstallComponentOutput>;
+
+  /**
+   * ADR 0010 §8: removes one component Simlock installed, or with `dryRun: true` runs every
+   * check and removes nothing. Refused with `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE` (with the
+   * counts as details) or `COMPONENT_BUSY`.
+   */
+  removeComponent(input: ComponentRemoveInput): Promise<ComponentRemoveOutput>;
 }
 
 /** Internal: builds either client. `admin` toggles only which methods the returned object
@@ -394,6 +405,7 @@ function buildDegradedClient(
     removeWorker: () => rejected(),
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
+    removeComponent: () => rejected(),
   };
   return client;
 }
@@ -634,6 +646,10 @@ class SimlockClientImpl {
 
   removeWorker(input: WorkerDrainInput): Promise<WorkerRemoveOutput> {
     return this.#call("worker.remove", input);
+  }
+
+  removeComponent(input: ComponentRemoveInput): Promise<ComponentRemoveOutput> {
+    return this.#call("component.remove", input);
   }
 
   // ---- abort (ADR §10) ------------------------------------------------------------------------

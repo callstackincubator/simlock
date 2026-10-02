@@ -141,6 +141,7 @@ describe("EventBus", () => {
       | "component.install-started"
       | "component.installed"
       | "component.install-failed"
+      | "component.removed"
       | "device.foreign-state-detected"
       | "device.foreign-provenance-detected"
       | "device.stalled-transition-detected"

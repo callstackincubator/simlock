@@ -195,6 +195,23 @@ describe("connectSimlock: handshake", () => {
     await expect(callPromise).resolves.toEqual(answer);
   });
 
+  it("removes a component from an admin client with component.remove, sending the input and returning the daemon's answer", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlockAdmin({ connection, credential: "operator-secret" });
+    await flushMicrotasks();
+    completeHello(connection, { role: "admin" });
+    const client = await connectPromise;
+    const answer = { outcome: "would-remove", platform: "ios", sizeBytes: 7, version: "26.4" };
+
+    const callPromise = client.removeComponent({ dryRun: true, platform: "ios", version: "26.4" });
+    await flushMicrotasks();
+    const call = connection.lastSentOf("component.remove")!;
+    expect(call.payload).toEqual({ dryRun: true, platform: "ios", version: "26.4" });
+    connection.reply(call.id, answer);
+
+    await expect(callPromise).resolves.toEqual(answer);
+  });
+
   it("wraps a malformed daemon response instead of throwing a raw parse failure", async () => {
     const connection = new ScriptedConnection();
     const connectPromise = connectSimlock({ connection });

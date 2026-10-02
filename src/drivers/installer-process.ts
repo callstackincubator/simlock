@@ -106,3 +106,38 @@ function killQuietly(handle: ProcessHandle, signal: NodeJS.Signals): void {
     // Already exited.
   }
 }
+
+/**
+ * Runs one platform removal (`sdkmanager --uninstall`) like `runInstallerProcess`, with a
+ * deadline of its own as well as `signal`: whichever comes first ends the process, `SIGTERM`
+ * then `SIGKILL`. `timedOut` says the deadline did it.
+ */
+export async function runBoundedProcess(
+  runner: ProcessRunner,
+  clock: Clock,
+  command: string,
+  args: readonly string[],
+  options: { readonly signal: AbortSignal; readonly timeoutMs: number },
+): Promise<InstallerProcessOutcome & { readonly timedOut: boolean }> {
+  const bounded = new AbortController();
+  let timedOut = false;
+  const timer = clock.setTimer(options.timeoutMs, () => {
+    timedOut = true;
+    bounded.abort();
+  });
+  const forward = (): void => {
+    bounded.abort();
+  };
+  if (options.signal.aborted) bounded.abort();
+  else options.signal.addEventListener("abort", forward, { once: true });
+  try {
+    const outcome = await runInstallerProcess(runner, clock, command, args, {
+      onProgress: () => undefined,
+      signal: bounded.signal,
+    });
+    return { ...outcome, timedOut };
+  } finally {
+    clock.cancel(timer);
+    options.signal.removeEventListener("abort", forward);
+  }
+}
