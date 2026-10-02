@@ -253,14 +253,15 @@ export class UserDeviceProfileSource implements DeviceProfileSource {
   }
 
   async #devicesXmlProfiles(): Promise<readonly DevicesXmlProfile[]> {
-    if (!(await this.#filesystem.exists(this.#path))) {
-      // Android Studio never having run, or never having any custom profiles, is the common
-      // case, not a diagnostic-worthy one.
-      return [];
-    }
-
     let contents: string;
     try {
+      // `exists` answers false only when the file is absent; any other failure to check (an
+      // `.android` the daemon may not search, or one that is a file) is unreadable, below.
+      if (!(await this.#filesystem.exists(this.#path))) {
+        // Android Studio never having run, or never having any custom profiles, is the common
+        // case, not a diagnostic-worthy one.
+        return [];
+      }
       contents = await this.#filesystem.readFile(this.#path);
     } catch (error: unknown) {
       this.#reportUnreadable(errorMessage(error));

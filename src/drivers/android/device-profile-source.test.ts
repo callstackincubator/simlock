@@ -402,6 +402,39 @@ describe("DeviceProfileRegistry", () => {
     }
   });
 
+  it("yields the built-in models and an unreadable diagnostic when checking whether devices.xml exists fails", async () => {
+    // What `NodeFilesystem.exists` does for anything but ENOENT: an `.android` the daemon may
+    // not search (EACCES), or an `.android` that is a file (ENOTDIR).
+    const failures = [
+      { code: "EACCES", message: `EACCES: permission denied, stat '${devicesXmlPath}'` },
+      { code: "ENOTDIR", message: `ENOTDIR: not a directory, stat '${devicesXmlPath}'` },
+    ];
+
+    for (const failure of failures) {
+      const filesystem = await filesystemWithDevicesXml(devicesXml());
+      filesystem.exists = () => Promise.reject(Object.assign(new Error(failure.message), failure));
+      const diagnostics: DeviceProfileSourceDiagnostic[] = [];
+      const registry = new DeviceProfileRegistry([
+        new BuiltinDeviceProfileSource(
+          avdmanager,
+          new ScriptedProcessRunner([processResult(pixelDevices)]),
+        ),
+        new UserDeviceProfileSource(devicesXmlPath, filesystem, (diagnostic) =>
+          diagnostics.push(diagnostic),
+        ),
+      ]);
+
+      await expect(registry.catalog()).resolves.toEqual({
+        customModels: [],
+        modelAliases: { "Pixel 8": ["pixel_8"] },
+        models: ["Pixel 8"],
+      });
+      expect(diagnostics).toEqual([
+        { kind: "device-profile-source-unreadable", path: devicesXmlPath, reason: failure.message },
+      ]);
+    }
+  });
+
   it("resolves every model in customModels to a profile of kind properties", async () => {
     // `pixel_8` is listed, since no earlier profile is named that, but the built-in Pixel 8
     // answers to it, so it resolves to the built-in and must not be marked custom.
