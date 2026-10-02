@@ -162,11 +162,13 @@ them apart:
 simlock token create --role agent --label ci-runner-3
 ```
 
-A token created without `--label` shows as its id alone. So does a lease
-taken through the CLI or the MCP server on the host itself: it is held by the
-agent id it was taken with, not by a token. On a gateway the labels are the
-gateway's own tokens. A lease taken on a worker directly shows its holder's id
-as that worker reports it.
+A token created without `--label` shows as its id alone. A lease taken
+through the CLI or the MCP server on the host itself is held by the agent id
+it was taken with, and shows that id. The console matches a lease to a token
+by id only, so an agent id that happens to equal a token's id shows that
+token's label: the label names who the lease says holds it, not proof. On a
+gateway the labels are the gateway's own tokens. A lease taken on a worker
+directly shows its holder's id as that worker reports it.
 
 ## Waiting
 

@@ -1123,7 +1123,9 @@ take the host out of rotation or forget it.
 
 ### Operator routes
 
-Role: `operator` for all six. An `agent` token gets `403 FORBIDDEN`.
+Role: `operator` for all six. `GET /v1/leases` also answers an `agent`
+token, with only its own leases. `GET /v1/lease-requests` and `GET /v1/tokens`
+answer it `403 FORBIDDEN`.
 
 `DELETE /v1/leases/{id}` with an `operator` token already releases any single
 lease, on a gateway as anywhere else. The fleet-wide form of that — the CLI's

@@ -162,4 +162,29 @@ describe("the leases views", () => {
     expect(withRequest).toContain("Request req_7d1a");
     expect(withoutRequest).not.toContain("Request");
   });
+
+  it("a lease's worker is named from the lease itself when no worker view has it", () => {
+    const details: LeaseDetails = {
+      createdAt: new Date(NOW).toISOString(),
+      device: "iPhone 16",
+      deviceId: "dev_1",
+      expiresAt: new Date(NOW + 60_000).toISOString(),
+      id: "wrk_gone.lse_1",
+      mode: "full",
+      udid: "ABCD-1234",
+    };
+    const worker = (shown: LeaseDetails) =>
+      /Worker (\S+)/.exec(
+        text(
+          renderToStaticMarkup(
+            <LeaseFacts lease={shown} record={undefined} tokens={[]} workers={[]} now={NOW} />,
+          ),
+        ),
+      )?.[1];
+
+    expect(worker({ ...details, worker: { id: "wrk_gone", label: "mac-studio-2" } })).toBe(
+      "mac-studio-2",
+    );
+    expect(worker({ ...details, workerId: "wrk_gone" })).toBe("wrk_gone");
+  });
 });

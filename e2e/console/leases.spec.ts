@@ -241,12 +241,15 @@ test.describe("the leases views", () => {
   });
 
   test("a lease opens to its details on a gateway", async ({ page }) => {
-    const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
+    const fleet = await startFleet([
+      { driverScript: { ios: IOS }, label: "worker-a" },
+      { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
+    ]);
     try {
-      const [workerA] = fleet.workers as [RunningDaemon];
+      const [, workerB] = fleet.workers as [RunningDaemon, RunningDaemon];
       const ci = await labelledToken(fleet.gateway, "ci-runner-3");
       const granted = await leaseOverHttp(fleet.gateway, ci.secret);
-      await leaseOverSocket(workerA, "local-agent");
+      await leaseOverSocket(workerB, "local-agent", "iPhone 17");
       await waitFor(async () => (await listLeases(fleet.gateway)).length === 2, {
         label: "the gateway lists both leases",
       });
@@ -274,7 +277,7 @@ test.describe("the leases views", () => {
       await page.getByRole("link", { name: local?.id ?? "", exact: true }).click();
       await expect(page.getByRole("heading", { level: 1, name: local?.id ?? "" })).toBeVisible();
       await expect(fact(page, "Holder")).toHaveText("local-agent");
-      await expect(fact(page, "Worker")).toHaveText("worker-a");
+      await expect(fact(page, "Worker")).toHaveText("worker-b");
       await expect(fact(page, "UDID")).not.toHaveText("—");
     } finally {
       await disposeFleet(fleet);
@@ -320,6 +323,24 @@ test.describe("the leases views", () => {
 
       await expect(leaseRow(page, released.id)).toHaveCount(0, { timeout: 1_000 });
       await expect(leaseRow(page, kept.id)).toBeVisible();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  test("a lease's page says it is not found once the lease is released", async ({ page }) => {
+    const host = await startDaemon("worker", { driverScript: { ios: IOS } });
+    try {
+      await leaseOverSocket(host, "agent-1");
+      const [released] = (await listLeases(host)) as [ListedLease];
+      await openLeases(page, host);
+      await page.getByRole("link", { name: released.id, exact: true }).click();
+      await expect(page.getByRole("heading", { level: 1, name: released.id })).toBeVisible();
+
+      expect((await host.cli(["release", released.id])).code).toBe(0);
+
+      await expect(page.getByRole("heading", { level: 1, name: "Lease not found" })).toBeVisible();
+      await expect(fact(page, "UDID")).toHaveCount(0);
     } finally {
       await host.dispose();
     }
