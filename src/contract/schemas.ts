@@ -257,6 +257,14 @@ export const passthroughCommandSchema = z.object({
 
 export const leaseProgressSchema = z.discriminatedUnion("stage", [
   z.object({ stage: z.literal("queued"), queuePosition: z.number() }),
+  // ADR 0010 §3: the request waits on a component download. Bounded here so a gateway checks a
+  // worker's push before relaying it (safety rule 10).
+  z.object({
+    stage: z.literal("downloading"),
+    component: z.string().max(64),
+    waiting: z.boolean(),
+    percent: z.number().int().min(0).max(100).optional(),
+  }),
   z.object({ stage: z.literal("provisioning"), etaMs: z.number() }),
   z.object({ stage: z.literal("booting"), etaMs: z.number() }),
   z.object({ stage: z.literal("reclaiming"), etaMs: z.number() }),

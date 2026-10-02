@@ -65,8 +65,7 @@ putting in front of every event-bus consumer.
 These fire once per install, however many requests joined it. A request that
 needs no install emits none: one whose component turned out to be installed
 already, one another install made unnecessary while it waited, or one refused
-for lack of disk before anything started. The requester's own progress stream
-does not yet reflect an in-flight download.
+for lack of disk before anything started.
 
 ## System
 

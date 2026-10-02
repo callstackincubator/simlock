@@ -987,6 +987,28 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(grant.lease.worker?.id).toBe("wrk_a");
   });
 
+  it("relays a worker's downloading pushes to the requester unchanged", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    const pushed = [
+      { component: "26.4", stage: "downloading", waiting: true },
+      { component: "26.4", stage: "downloading", waiting: false },
+      { component: "26.4", percent: 41, stage: "downloading", waiting: false },
+      { etaMs: 5_000, stage: "provisioning" },
+    ] as const;
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant", progress: pushed });
+    const heard: unknown[] = [];
+
+    await coordinator.request(
+      REQUEST,
+      requestOptions({ allowDownload: true, onProgress: (progress) => heard.push(progress) }),
+    );
+
+    expect(heard).toEqual(pushed);
+  });
+
   it("emits request.dispatched when a grant lands with no progress push at all -- the ADR §11 rule's other half", async () => {
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();

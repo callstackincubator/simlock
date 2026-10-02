@@ -1433,7 +1433,10 @@ counted together, and one that does not fit is refused with
 `component.install-started` and calls the driver. On `installed` it stores a
 `ComponentRecord` (platform, version, time, receipt) in the registry inside the
 decision gate, then emits `component.installed`. Progress fans out to every
-joined call; a call behind another install hears `waiting`.
+joined call; a call behind another install hears `waiting`. When an install
+starts running, its calls hear `downloading` with no percentage before the
+driver reports anything, and a call that joins a running install hears that
+install's latest report at once.
 
 Every call has one budget, `downloads.timeoutMs`, measured on the `Clock` from
 the moment it arrives; waiting spends it and nothing restarts it (architecture
@@ -1447,7 +1450,11 @@ The lease path reaches the installer directly (architecture rule 5):
 `LeaseAcquisitionCoordinator` resolves the spec, and when the runtime is
 missing, downloadable, and the request may download, calls the installer with
 `stillNeeded` = "`resolveSpec` still throws `RuntimeMissingError`" and resolves
-once more. Without `allowDownload` the first error stands. Warm-pool
+once more. The installer's reports reach the requester as the `downloading`
+lease-progress stage, sent through the wait queue like every other stage:
+`waiting` becomes `waiting: true`, the install's own reports `waiting: false`
+with the percentage rounded down, and a report equal to the last one sent is
+skipped. Without `allowDownload` the first error stands. Warm-pool
 re-readiness and startup convergence never reach the installer (safety rule 4).
 
 The operator path is `component.install` (ADR 0010 §6), an admin operation

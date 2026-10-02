@@ -30,7 +30,12 @@ import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import { QueueTimeoutError, RequesterAlreadyLeasedError, WaitQueue } from "./wait-queue.js";
+import {
+  type LeaseRequestOptions,
+  QueueTimeoutError,
+  RequesterAlreadyLeasedError,
+  WaitQueue,
+} from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
 const statePath = "/home/agent/.simlock/state.json";
@@ -246,13 +251,13 @@ async function seedShutdown(
   });
 }
 
-describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
-  function installs(driver: FakeDriver): readonly unknown[] {
-    return driver.calls
-      .filter((call) => call.operation === "installComponent")
-      .map((call) => call.arguments[0]);
-  }
+function installs(driver: FakeDriver): readonly unknown[] {
+  return driver.calls
+    .filter((call) => call.operation === "installComponent")
+    .map((call) => call.arguments[0]);
+}
 
+describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
   it("installs once for two lease requests for the same missing runtime, and grants both", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
@@ -397,6 +402,224 @@ describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
       harness.coordinator.request(request, { allowDownload: true, ownerId: "a", requesterId: "a" }),
     ).rejects.toMatchObject({ name: "InsufficientDiskSpaceError" });
     expect(installs(driver)).toEqual([]);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator: download progress", () => {
+  type Progress = Parameters<NonNullable<LeaseRequestOptions["onProgress"]>>[0];
+
+  function downloading(progress: readonly Progress[]): readonly Progress[] {
+    return progress.filter((report) => report.stage === "downloading");
+  }
+
+  it("tells a request that starts a download downloading, naming the component and not waiting, before provisioning", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ drivers: [driver] });
+    const progress: Progress[] = [];
+
+    await harness.coordinator.request(request, {
+      allowDownload: true,
+      onProgress: (report) => progress.push(report),
+      ownerId: "a",
+      requesterId: "a",
+    });
+
+    expect(progress[0]).toEqual({ component: "26.5", stage: "downloading", waiting: false });
+    const provisioning = progress.findIndex((report) => report.stage === "provisioning");
+    expect(provisioning).toBeGreaterThan(0);
+    expect(progress.slice(provisioning).some((report) => report.stage === "downloading")).toBe(
+      false,
+    );
+  });
+
+  it("tells a request behind another download on its platform that it is waiting, then not waiting when its own install starts", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.holdInstalls();
+    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
+    const progress: Progress[] = [];
+
+    const first = harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "a",
+      requesterId: "a",
+    });
+    const second = harness.coordinator.request(
+      { ...request, osVersion: "27.0" },
+      {
+        allowDownload: true,
+        onProgress: (report) => progress.push(report),
+        ownerId: "b",
+        requesterId: "b",
+      },
+    );
+    await flush();
+    expect(progress).toEqual([{ component: "27.0", stage: "downloading", waiting: true }]);
+
+    driver.releaseInstalls();
+    await first;
+    await settle();
+    expect(installs(driver)).toEqual(["26.5", "27.0"]);
+    expect(downloading(progress)).toEqual([
+      { component: "27.0", stage: "downloading", waiting: true },
+      { component: "27.0", stage: "downloading", waiting: false },
+    ]);
+
+    // Issue #226: nothing wakes a request queued behind a device that was granted meanwhile.
+    harness.coordinator.kick();
+    await expect(second).resolves.toMatchObject({ device: { spec: { osVersion: "27.0" } } });
+  });
+
+  it("tells a request that joins a download already running its latest percentage at once", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: [],
+      clock,
+      installProgress: [12, 41],
+      platform: "ios",
+    });
+    driver.holdInstalls();
+    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
+    const joined: Progress[] = [];
+
+    const first = harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "a",
+      requesterId: "a",
+    });
+    await flush();
+    expect(installs(driver)).toEqual(["26.5"]);
+    const second = harness.coordinator.request(request, {
+      allowDownload: true,
+      onProgress: (report) => joined.push(report),
+      ownerId: "b",
+      requesterId: "b",
+    });
+    await flush();
+
+    // The driver is still holding: this is the replay, not a later report.
+    expect(joined).toEqual([
+      { component: "26.5", percent: 41, stage: "downloading", waiting: false },
+    ]);
+    driver.releaseInstalls();
+    await Promise.all([first, second]);
+    expect(installs(driver)).toEqual(["26.5"]);
+  });
+
+  it("sends a percentage the driver reports twice to the requester once", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: [],
+      clock,
+      installProgress: [30, 30, 60],
+      platform: "ios",
+    });
+    const harness = await createHarness({ drivers: [driver] });
+    const progress: Progress[] = [];
+
+    await harness.coordinator.request(request, {
+      allowDownload: true,
+      onProgress: (report) => progress.push(report),
+      ownerId: "a",
+      requesterId: "a",
+    });
+
+    expect(downloading(progress)).toEqual([
+      { component: "26.5", stage: "downloading", waiting: false },
+      { component: "26.5", percent: 30, stage: "downloading", waiting: false },
+      { component: "26.5", percent: 60, stage: "downloading", waiting: false },
+    ]);
+  });
+
+  it("sends a percentage of 41.7 as 41, and one that rounds down to the last sent not at all", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({
+      availableOsVersions: [],
+      clock,
+      installProgress: [41.2, 41.7],
+      platform: "ios",
+    });
+    const harness = await createHarness({ drivers: [driver] });
+    const progress: Progress[] = [];
+
+    await harness.coordinator.request(request, {
+      allowDownload: true,
+      onProgress: (report) => progress.push(report),
+      ownerId: "a",
+      requesterId: "a",
+    });
+
+    expect(downloading(progress)).toEqual([
+      { component: "26.5", stage: "downloading", waiting: false },
+      { component: "26.5", percent: 41, stage: "downloading", waiting: false },
+    ]);
+  });
+
+  it("sends no downloading stage to a request whose runtime is installed", async () => {
+    const harness = await createHarness();
+    const progress: Progress[] = [];
+
+    await harness.coordinator.request(request, {
+      allowDownload: true,
+      onProgress: (report) => progress.push(report),
+      ownerId: "a",
+      requesterId: "a",
+    });
+
+    expect(progress.map((report) => report.stage)).toContain("provisioning");
+    expect(downloading(progress)).toEqual([]);
+  });
+
+  it("sends no downloading stage to a request without allowDownload for a missing runtime", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const harness = await createHarness({ drivers: [driver] });
+    const progress: Progress[] = [];
+
+    await expect(
+      harness.coordinator.request(request, {
+        onProgress: (report) => progress.push(report),
+        ownerId: "a",
+        requesterId: "a",
+      }),
+    ).rejects.toMatchObject({ name: "RuntimeMissingError" });
+    expect(progress).toEqual([]);
+  });
+
+  it("tells a request that waited and then needed no install that it was waiting, then provisioning, and never not waiting", async () => {
+    const clock = new FakeClock(1_000);
+    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    driver.holdInstalls();
+    const harness = await createHarness({ drivers: [driver], maxDevices: 2, maxRunning: 2 });
+    const progress: Progress[] = [];
+
+    const byVersion = harness.coordinator.request(request, {
+      allowDownload: true,
+      ownerId: "a",
+      requesterId: "a",
+    });
+    // No version: the fake names its word for newest, a different component that waits its turn
+    // and finds, at the front, that the first install made its runtime available.
+    const newest = harness.coordinator.request(
+      { model: "iPhone 16", platform: "ios" },
+      {
+        allowDownload: true,
+        onProgress: (report) => progress.push(report),
+        ownerId: "b",
+        requesterId: "b",
+      },
+    );
+    await flush();
+    driver.releaseInstalls();
+    await Promise.all([byVersion, newest]);
+
+    expect(installs(driver)).toEqual(["26.5"]);
+    expect(progress[0]).toMatchObject({ stage: "downloading", waiting: true });
+    expect(
+      downloading(progress).every((report) => report.stage === "downloading" && report.waiting),
+    ).toBe(true);
+    expect(progress[1]).toMatchObject({ stage: "provisioning" });
   });
 });
 

@@ -362,11 +362,26 @@ once `wait` elapses. `wait` is capped at 60 seconds — a larger value is
 clamped, not rejected, and the poll simply returns (unchanged) sooner than
 asked; re-poll to keep waiting.
 
-States: `queued | reclaiming | provisioning | booting | granted | failed |
-cancelled`, carrying `queuePosition` (`queued`) or `etaSeconds`
-(`reclaiming`/`provisioning`/`booting`) where the stage has one. Terminal
-`granted` embeds the [lease object](#the-lease-object); terminal `failed`
-embeds `{ code, message }`.
+States: `queued | downloading | reclaiming | provisioning | booting |
+granted | failed | cancelled`, carrying `queuePosition` (`queued`) or
+`etaSeconds` (`reclaiming`/`provisioning`/`booting`) where the stage has one.
+Terminal `granted` embeds the [lease object](#the-lease-object); terminal
+`failed` embeds `{ code, message }`.
+
+`downloading` is a request with `allowDownload: true` waiting on the download
+of a missing runtime, before any device work:
+
+```json
+{ "request": { "id": "req_7d1a", "state": "downloading", "component": "26.4", "waiting": false, "percent": 41, "createdAt": "2026-09-01T09:12:00Z" } }
+```
+
+`component` names what is being downloaded, as the platform names it: an iOS
+version or an Android API level, for example. `waiting` is `true` while
+another download on the same platform runs ahead of this one, and `false`
+once this download runs. `percent`, a whole number from 0 to 100, is there
+when the platform's installer printed one. A request that joins a download
+already running shows that download's latest state at once. A request that
+needs no download never shows this state.
 
 The request is the one Simlock stored, so `GET` answers across a daemon
 restart and for a request your token sent over the socket too. A finished
@@ -377,7 +392,8 @@ the current deadline from [`GET /v1/leases/{id}`](#get-v1leasesid).
 ### `GET /v1/lease-requests/{id}/events`
 
 Role: `agent` (ownership as above). Server-Sent Events stream of the same
-progress objects, one event per state change, ending with `granted` or
+progress objects, one event per state change, named after the state
+(`queued`, `downloading`, `provisioning`, ...), ending with `granted` or
 `failed`. A `: keepalive` comment every ~15s keeps idle tunnels from closing
 the stream.
 
@@ -386,7 +402,7 @@ the stream.
 Role: `agent` (ownership as above). Cancel a pending request.
 
 → `204` if it was still cancellable (no device work claimed for it yet).
-`409 REQUEST_NOT_CANCELLABLE` once device work is in flight, or the request
+`409 REQUEST_NOT_CANCELLABLE` once a download or device work is in flight, or the request
 already reached a terminal state — the body names the lease id if it was
 `granted` (release that instead). `404 UNKNOWN_LEASE_REQUEST` if unknown.
 

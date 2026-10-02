@@ -703,6 +703,11 @@ function serializeRequest(
   switch (view.state.stage) {
     case "queued":
       return { ...base, queuePosition: view.state.queuePosition };
+    case "downloading": {
+      // `component`, `waiting` and `percent` when there is one, as the tracker built them.
+      const { stage: _stage, ...download } = view.state;
+      return { ...base, ...download };
+    }
     case "provisioning":
     case "booting":
     case "reclaiming":

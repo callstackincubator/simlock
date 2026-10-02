@@ -53,7 +53,100 @@ describe("lease-triggered component installs", () => {
       .map((entry) => entry.event);
     expect(componentEvents).toEqual(["component.install-started", "component.installed"]);
   });
+
+  it("prints downloading progress lines that name the component, with a rising percent, before provisioning", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: { availableOsVersions: ["18.4"], installProgress: [20, 60], knownModels: ["iPhone 16"] },
+    });
+
+    const result = await env.cli([...MISSING, "--allow-download", "--detach"], { timeout: 30_000 });
+
+    expect(result.code, result.stderr).toBe(0);
+    const stages = progressLines(result);
+    expect(stages.filter((line) => line["stage"] === "downloading")).toEqual([
+      { component: "19.0", push: "progress", stage: "downloading", waiting: false },
+      { component: "19.0", percent: 20, push: "progress", stage: "downloading", waiting: false },
+      { component: "19.0", percent: 60, push: "progress", stage: "downloading", waiting: false },
+    ]);
+    const lastDownloading = stages.findLastIndex((line) => line["stage"] === "downloading");
+    const provisioning = stages.findIndex((line) => line["stage"] === "provisioning");
+    expect(provisioning).toBeGreaterThan(lastDownloading);
+  });
+
+  it("shows the downloading stage to a second request that joins a download already running", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: {
+        availableOsVersions: ["18.4"],
+        knownModels: ["iPhone 16"],
+        latencyMs: { installComponent: 3_000 },
+      },
+    });
+    await env.driverLog.clear();
+
+    const first = env.cliBackground([
+      ...MISSING,
+      "--allow-download",
+      "--agent-id",
+      "agent-a",
+      "--detach",
+    ]);
+    await waitFor(async () => (await installCalls(env)).length === 1, {
+      label: "the first lease's install started",
+    });
+    const second = await env.cli(
+      [...MISSING, "--allow-download", "--agent-id", "agent-b", "--detach"],
+      { timeout: 30_000 },
+    );
+    await first.waitForExit(30_000);
+
+    expect(second.code, second.stderr).toBe(0);
+    expect(progressLines(second)).toContainEqual({
+      component: "19.0",
+      push: "progress",
+      stage: "downloading",
+      waiting: false,
+    });
+    expect(await installCalls(env)).toEqual([["19.0"]]);
+  });
+
+  it("never shows the downloading stage to a request whose runtime is installed", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: { availableOsVersions: ["18.4"], installProgress: [50], knownModels: ["iPhone 16"] },
+    });
+
+    const result = await env.cli(
+      [
+        "lease",
+        "--platform",
+        "ios",
+        "--device",
+        "iPhone 16",
+        "--os",
+        "18.4",
+        "--allow-download",
+        "--detach",
+      ],
+      { timeout: 30_000 },
+    );
+
+    expect(result.code, result.stderr).toBe(0);
+    const stages = progressLines(result).map((line) => line["stage"]);
+    expect(stages).toContain("provisioning");
+    expect(stages).not.toContain("downloading");
+  });
 });
+
+/** The CLI's `progress` lines on stderr, parsed; other stderr lines are left out. */
+function progressLines(result: CliResult): Record<string, unknown>[] {
+  return result.stderr
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((line) => line["push"] === "progress");
+}
 
 /** Every stderr line the CLI wrote, parsed. */
 function stderrLines(result: CliResult): unknown[] {
@@ -217,6 +310,8 @@ describe("POST /v1/components/install", () => {
     });
     expect(response.status).toBe(200);
     expect(await readSse(response)).toEqual([
+      // The install's start, before the driver's own percentage.
+      { data: { stage: "downloading" }, event: "progress" },
       { data: { fraction: 0.41, stage: "downloading" }, event: "progress" },
       {
         data: { component: "35", outcome: "installed", platform: "android", version: "35" },
@@ -247,6 +342,8 @@ describe("POST /v1/components/install", () => {
 
     const repeat = await install(operator, { platform: "android", version: "35" });
     expect(await readSse(repeat)).toEqual([
+      // Joining a running install, it hears that install's latest progress at once.
+      { data: { stage: "downloading" }, event: "progress" },
       {
         data: { component: "35", outcome: "installed", platform: "android", version: "35" },
         event: "result",

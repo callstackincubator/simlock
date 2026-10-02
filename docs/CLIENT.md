@@ -53,6 +53,28 @@ Spotlight, StoreKit sheets, universal links, system pickers — so check it
 before treating such a failure as a bug. Every device in `getStatus()` and in
 an admin's `list({ kind: "devices" })` carries the same `mode`.
 
+`requestLease` takes an optional `onProgress` in its second argument, called
+with the request's `LeaseProgress` as it moves along:
+
+```ts
+type LeaseProgress =
+  | { stage: "queued"; queuePosition: number }
+  | { stage: "downloading"; component: string; waiting: boolean; percent?: number }
+  | { stage: "provisioning"; etaMs: number }
+  | { stage: "booting"; etaMs: number }
+  | { stage: "reclaiming"; etaMs: number };
+```
+
+`downloading` is a request with `allowDownload: true` waiting on the download
+of a missing runtime, before any device work. `component` names what is
+being downloaded, as the platform names it: an iOS version or an Android API
+level, for example. `waiting` is `true` while another download on the same
+platform runs ahead of this one, and `false` once this download runs.
+`percent`, a whole number from 0 to 100, is there when the platform's
+installer printed one. A request that joins a download already running hears
+that download's latest progress at once. A request that needs no download
+never hears this stage.
+
 **Keeping the lease alive is yours to do.** Every lease is TTL-bound: it expires at
 `grant.lease.ttlDeadline` unless a `renewLease` call lands first, and the
 daemon does nothing on its own to keep it. `requestLease` takes an optional
@@ -458,8 +480,9 @@ Four cases, by when the signal fires:
 - **While the request is still queued** — sends `lease.cancel`, waits for
   the original request to actually reject, then surfaces `CANCELLED`
   regardless of what that rejection's own code/message was.
-- **While device work is already in flight** (provisioning, booting,
-  reclaiming) — `lease.cancel` answers `not-cancellable` at this stage; the
+- **While a download or device work is already in flight** (downloading,
+  provisioning, booting, reclaiming) — `lease.cancel` answers
+  `not-cancellable` at this stage; the
   client waits for the request's real outcome. If a grant still lands, it is
   released immediately (`releaseLease`, best-effort) so the caller never
   ends up holding a device it already told the client it didn't want, and

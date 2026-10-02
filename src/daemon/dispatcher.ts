@@ -684,7 +684,10 @@ export class Dispatcher {
  */
 function toWireProgress(progress: ComponentInstallerProgress): ComponentProgress {
   if (progress.stage === "waiting") return { stage: "waiting" };
-  if (!Number.isFinite(progress.percent)) return { stage: "downloading" };
+  // No percentage: the install has started and the driver has not reported one yet.
+  if (progress.percent === undefined || !Number.isFinite(progress.percent)) {
+    return { stage: "downloading" };
+  }
   return { fraction: Math.min(1, Math.max(0, progress.percent / 100)), stage: "downloading" };
 }
 

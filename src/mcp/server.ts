@@ -21,16 +21,18 @@ import {
 const SERVER_INFO = { name: "simlock", version: "1.0.0" };
 
 /**
- * Progress is reported on a 3-stage scale (queued / provisioning-or-reclaiming / booting), each
- * worth 1000 units, so a fresh stage's base always exceeds the previous stage's maximum.
+ * Progress is reported on a 4-stage scale (queued / downloading / provisioning-or-reclaiming /
+ * booting), each worth 1000 units, so a fresh stage's base always exceeds the previous stage's
+ * maximum.
  */
 const STAGE_BASE_PROGRESS: Record<LeaseProgressNotice["stage"], number> = {
-  booting: 2_000,
-  provisioning: 1_000,
+  booting: 3_000,
+  downloading: 1_000,
+  provisioning: 2_000,
   queued: 0,
-  reclaiming: 1_000,
+  reclaiming: 2_000,
 };
-const TOTAL_PROGRESS = 3_000;
+const TOTAL_PROGRESS = 4_000;
 
 /** Maps a lease progress push onto an MCP progress notification's `params`. */
 function leaseProgressParams(progress: LeaseProgressNotice): {
@@ -47,6 +49,23 @@ function leaseProgressParams(progress: LeaseProgressNotice): {
           : `Queued behind ${position} other request${position === 1 ? "" : "s"}`,
       progress: base + withinStageProgress(position),
     };
+  }
+  if (progress.stage === "downloading") {
+    // A request still behind another download sits at the stage's base; its own download climbs
+    // with the installer's percentage, reaching the next stage's base at 100.
+    if (progress.waiting) {
+      return {
+        message: `Waiting for another download before downloading ${progress.component}`,
+        progress: base,
+      };
+    }
+    const { percent } = progress;
+    return percent === undefined
+      ? { message: `Downloading ${progress.component}`, progress: base }
+      : {
+          message: `Downloading ${progress.component} (${percent}%)`,
+          progress: base + Math.min(100, Math.max(0, percent)) * 10,
+        };
   }
   const etaSeconds = Math.max(0, Math.ceil(progress.etaMs / 1_000));
   const verb =

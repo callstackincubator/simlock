@@ -601,6 +601,71 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     const last = frames.at(-1)?.data as { lease: { id: string } };
     expect(last.lease.id).toBe("lse_sse");
   });
+
+  it("shows downloading with its component, whether it waits, and its percent on GET while the install runs", async () => {
+    const { app, dispatcher } = buildHarness();
+    const { id, callIndex } = await createLeaseRequest(app, dispatcher, {
+      ...defaultBody,
+      allowDownload: true,
+    });
+    const read = async () =>
+      (
+        (await (await app.request(`/v1/lease-requests/${id}`, { headers: agentAuth })).json()) as {
+          request: unknown;
+        }
+      ).request;
+
+    const session = dispatcher.calls[callIndex]?.session;
+    session?.onProgress?.({ component: "26.4", stage: "downloading", waiting: true });
+    expect(await read()).toEqual({
+      component: "26.4",
+      createdAt: expect.any(String),
+      id,
+      state: "downloading",
+      waiting: true,
+    });
+
+    session?.onProgress?.({ component: "26.4", percent: 41, stage: "downloading", waiting: false });
+    expect(await read()).toEqual({
+      component: "26.4",
+      createdAt: expect.any(String),
+      id,
+      percent: 41,
+      state: "downloading",
+      waiting: false,
+    });
+  });
+
+  it("sends a downloading event on the lease-request event stream", async () => {
+    const { app, dispatcher } = buildHarness();
+    const { id, callIndex } = await createLeaseRequest(app, dispatcher, {
+      ...defaultBody,
+      allowDownload: true,
+    });
+
+    const streamResponse = await app.request(`/v1/lease-requests/${id}/events`, {
+      headers: agentAuth,
+    });
+    const framesPromise = readSseFrames(streamResponse, 3);
+    dispatcher.calls[callIndex]?.session.onProgress?.({
+      component: "26.4",
+      percent: 41,
+      stage: "downloading",
+      waiting: false,
+    });
+    dispatcher.calls[callIndex]?.resolve(makeGrant({ lease: { id: "lse_download" } }));
+    const frames = await framesPromise;
+
+    expect(frames.map((frame) => frame.event)).toEqual(["queued", "downloading", "granted"]);
+    expect(frames[1]?.data).toEqual({
+      component: "26.4",
+      createdAt: expect.any(String),
+      id,
+      percent: 41,
+      state: "downloading",
+      waiting: false,
+    });
+  });
 });
 
 describe("GET /v1/lease-requests/:id across a daemon restart", () => {

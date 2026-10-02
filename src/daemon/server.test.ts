@@ -617,6 +617,11 @@ describe("DaemonServer", () => {
       payload: { component: "27.0", outcome: "installed", platform: "ios", version: "27.0" },
     });
     expect(client.frames().filter((frame) => frame.push === "component-progress")).toEqual([
+      // The install's start, with no fraction: the schema accepts it as a push.
+      {
+        payload: { progress: { stage: "downloading" }, requestId: "install-frame" },
+        push: "component-progress",
+      },
       {
         payload: { progress: { fraction: 0.5, stage: "downloading" }, requestId: "install-frame" },
         push: "component-progress",
