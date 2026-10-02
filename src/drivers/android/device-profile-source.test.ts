@@ -374,22 +374,32 @@ describe("DeviceProfileRegistry", () => {
     });
   });
 
-  it("yields the built-in models and no customModels when devices.xml is unreadable", async () => {
-    const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner([processResult(pixelDevices)]),
-      ),
-      new UserDeviceProfileSource(
-        devicesXmlPath,
-        await filesystemWithDevicesXml("not even close to xml {{{"),
-      ),
-    ]);
+  it("yields the built-in models and no customModels when devices.xml cannot be read or parsed", async () => {
+    // A file that exists but whose read fails, the way a file without read permission does.
+    const unreadable = await filesystemWithDevicesXml(devicesXml());
+    unreadable.readFile = () =>
+      Promise.reject(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+    const malformed = await filesystemWithDevicesXml("not even close to xml {{{");
 
-    await expect(registry.catalog()).resolves.toMatchObject({
-      customModels: [],
-      models: ["Pixel 8"],
-    });
+    for (const filesystem of [unreadable, malformed]) {
+      const diagnostics: DeviceProfileSourceDiagnostic[] = [];
+      const registry = new DeviceProfileRegistry([
+        new BuiltinDeviceProfileSource(
+          avdmanager,
+          new ScriptedProcessRunner([processResult(pixelDevices)]),
+        ),
+        new UserDeviceProfileSource(devicesXmlPath, filesystem, (diagnostic) =>
+          diagnostics.push(diagnostic),
+        ),
+      ]);
+
+      await expect(registry.catalog()).resolves.toMatchObject({
+        customModels: [],
+        models: ["Pixel 8"],
+      });
+      // The source was reached and gave up, rather than never being asked.
+      expect(diagnostics).toHaveLength(1);
+    }
   });
 
   it("resolves every model in customModels to a profile of kind properties", async () => {

@@ -1100,7 +1100,7 @@ describe("AndroidDriver", () => {
     expect(catalog).not.toHaveProperty("customModels");
   });
 
-  it("lists the built-in models and no customModels field when devices.xml is unreadable", async () => {
+  it("lists the built-in models and no customModels field when devices.xml cannot be parsed", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.mkdirp(`${home}/.android`);
     await filesystem.writeFileAtomic(`${home}/.android/devices.xml`, "not xml at all {{{");

@@ -425,6 +425,23 @@ export const platformCatalogSchema = z.object({
   runtimeWorkers: z.record(z.string(), z.array(z.string())).optional(),
 });
 
+/**
+ * Brings a catalog entry a daemon built from its own machine within `customModels`' bounds, so
+ * a custom profile name the platform's tools never checked cannot fail the whole `catalog.get`
+ * answer. A name that does not fit loses its mark and stays in `models`; the list stops at its
+ * maximum, and an empty list is left out. Lives beside the schema so the bounds are written once.
+ */
+export function fitPlatformCatalog<Entry extends { readonly customModels?: readonly string[] }>(
+  entry: Entry,
+): Entry {
+  if (entry.customModels === undefined) return entry;
+  const { customModels, ...rest } = entry;
+  const fitting = customModels
+    .filter((model) => model.length <= CATALOG_NAME_MAX)
+    .slice(0, CATALOG_CUSTOM_MODELS_MAX);
+  return (fitting.length === 0 ? rest : { ...rest, customModels: fitting }) as Entry;
+}
+
 export const proposalSchema = z.object({
   action: z.enum(["shutdown", "destroy"]),
   reason: z.string(),
