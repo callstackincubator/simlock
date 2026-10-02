@@ -68,19 +68,31 @@ function row(page: Page, name: string, value: string): Locator {
     .filter({ has: page.locator("dd", { hasText: new RegExp(`^${value}$`) }) });
 }
 
-/** Each event the view shows, as its time and name, in the order shown. */
+/** Each event the view shows, as its time, name and payload, in the order shown. */
 async function shownEvents(page: Page): Promise<string[]> {
   return rows(page).evaluateAll((items) =>
-    items.map(
-      (item) =>
-        `${item.querySelector("time")?.getAttribute("datetime") ?? ""} ` +
-        `${item.querySelector(".event-name")?.textContent ?? ""}`,
+    items.map((item) =>
+      [
+        item.querySelector("time")?.getAttribute("datetime") ?? "",
+        item.querySelector(".event-name")?.textContent ?? "",
+        ...[...item.querySelectorAll(".event-payload > div")].map(
+          (pair) =>
+            `${pair.querySelector("dt")?.textContent ?? ""}=${pair.querySelector("dd")?.textContent ?? ""}`,
+        ),
+      ].join(" "),
     ),
   );
 }
 
+/** An event from the CLI, written as {@link shownEvents} reads the view: strings as themselves. */
 function asShown(event: Envelope): string {
-  return `${new Date(event.timestamp).toISOString()} ${event.event}`;
+  return [
+    new Date(event.timestamp).toISOString(),
+    event.event,
+    ...Object.entries(event.payload).map(
+      ([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`,
+    ),
+  ].join(" ");
 }
 
 /** Whether the page itself scrolls sideways. */

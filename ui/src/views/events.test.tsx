@@ -6,6 +6,7 @@ import { connect, settle } from "../live/test-support";
 import { EventFeed } from "./event-feed";
 import { EventList } from "./events";
 import { type ConsoleEvent, MAX_EVENTS } from "./events-model";
+import type { WorkerView } from "./workers-model";
 
 const T0 = Date.parse("2026-10-02T11:30:00Z");
 
@@ -56,6 +57,20 @@ function openView() {
     shown(): string[] {
       return (feed.snapshot().data ?? []).map((event) => `${event.seq}@${event.timestamp}`);
     },
+  };
+}
+
+/** A worker the daemon lists, with a label or without one. */
+function worker(id: string, label?: string): WorkerView {
+  return {
+    catalog: [],
+    connection: "connected",
+    devices: [],
+    drained: false,
+    id,
+    lastSeenAt: T0,
+    leases: [],
+    ...(label === undefined ? {} : { label }),
   };
 }
 
@@ -143,10 +158,13 @@ describe("the events view", () => {
 
     view.visibility.set(true);
     await vi.advanceTimersByTimeAsync(4_001);
+    const missed = envelope(5, Date.now() - 2_000);
+    view.replayWith([missed]);
     view.visibility.set(false);
     await settle();
 
     expect(view.replays.slice(2)).toEqual(["/v1/events?since=5s"]);
+    expect(view.shown()).toEqual([`5@${missed.timestamp}`]);
   });
 
   it("a view opened before the stream loads the recent events again once the stream opens", async () => {
@@ -194,9 +212,7 @@ describe("the events view", () => {
     ];
 
     const shown = text(
-      renderToStaticMarkup(
-        <EventList events={events} workerName={(id) => (id === "wrk_1" ? "mac-1" : id)} />,
-      ),
+      renderToStaticMarkup(<EventList events={events} workers={[worker("wrk_1", "mac-1")]} />),
     );
 
     expect(shown).toContain(
@@ -205,17 +221,26 @@ describe("the events view", () => {
     expect(shown).toContain('gizmo.listed payload ["a",1]');
   });
 
-  it("a worker the console does not know shows as its id", () => {
-    const event: ConsoleEvent = {
+  it("a worker the console does not know, or that has no label, shows as its id", () => {
+    const about = (workerId: string, seq: number): ConsoleEvent => ({
       event: "lease.granted",
-      payload: { workerId: "wrk_gone" },
-      seq: 1,
-      timestamp: T0,
-    };
+      payload: { workerId },
+      seq,
+      timestamp: T0 - seq,
+    });
+    const events = [about("wrk_1", 1), about("wrk_2", 2), about("wrk_gone", 3)];
+    const workers = [worker("wrk_1", "mac-1"), worker("wrk_2")];
+    const names = (listed: readonly WorkerView[] | undefined) =>
+      [
+        ...renderToStaticMarkup(<EventList events={events} workers={listed} />).matchAll(
+          /<span class="event-worker">([^<]*)<\/span>/g,
+        ),
+      ].map((match) => match[1]);
 
-    const html = renderToStaticMarkup(<EventList events={[event]} workerName={(id) => id} />);
-
-    expect(html).toContain('<span class="event-worker">wrk_gone</span>');
+    // Newest first: wrk_1, then wrk_2, then wrk_gone.
+    expect(names(workers)).toEqual(["mac-1", "wrk_2", "wrk_gone"]);
+    // Before the worker list is read, every worker shows as its id.
+    expect(names(undefined)).toEqual(["wrk_1", "wrk_2", "wrk_gone"]);
   });
 
   it("an envelope without a seq, a timestamp that is a date, or a name is not shown", async () => {

@@ -240,8 +240,7 @@ whole payload.
 devices, workers or components. **Other** lists the rest, such as
 `daemon.started`.
 
-The page keeps the newest 1000 events. Older ones drop off the end. When it
-holds 1000 it says so.
+The page keeps the newest 1000 events. Older ones drop off the end.
 
 When the console loses the daemon, or the tab was hidden, it loads the events
 it missed as soon as it is back, so the list has no gap. An event the console

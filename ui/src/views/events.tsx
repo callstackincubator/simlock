@@ -6,14 +6,13 @@ import { Loaded } from "../live/route-state";
 import { EventFeed } from "./event-feed";
 import {
   type ConsoleEvent,
-  MAX_EVENTS,
   payloadPairs,
   type Subject,
   subjectOf,
   timeOfDay,
   workerIdOf,
 } from "./events-model";
-import type { WorkerList } from "./workers-model";
+import { type WorkerList, type WorkerView, workerName } from "./workers-model";
 
 const FILTERS: readonly { readonly value: Subject | "all"; readonly label: string }[] = [
   { label: "All", value: "all" },
@@ -38,7 +37,6 @@ export function EventsView() {
   const state = useSyncExternalStore(feed.subscribe, feed.snapshot);
   const workers = useLiveResource<WorkerList>("/v1/workers").data?.workers;
   const [filter, setFilter] = useState<Subject | "all">("all");
-  const labels = new Map(workers?.map((worker) => [worker.id, worker.label ?? worker.id]));
   return (
     <section className="view">
       <h1>Events</h1>
@@ -65,7 +63,7 @@ export function EventsView() {
                 ? events
                 : events.filter((event) => subjectOf(event.event) === filter)
             }
-            workerName={(id) => labels.get(id) ?? id}
+            workers={workers}
             filtered={filter !== "all"}
           />
         )}
@@ -77,11 +75,11 @@ export function EventsView() {
 /** The events, newest first. Each one's payload is a list of its keys and values. */
 export function EventList(props: {
   readonly events: readonly ConsoleEvent[];
-  /** The name to show for a worker id: its label when the worker is known. */
-  readonly workerName: (id: string) => string;
+  /** The workers the daemon lists, to name an event's worker; `undefined` until read. */
+  readonly workers: readonly WorkerView[] | undefined;
   readonly filtered?: boolean;
 }) {
-  const { events, filtered = false, workerName } = props;
+  const { events, filtered = false, workers } = props;
   if (events.length === 0) {
     return (
       <p className="muted">
@@ -90,41 +88,43 @@ export function EventList(props: {
     );
   }
   return (
-    <>
-      <p className="hint">
-        {events.length === MAX_EVENTS
-          ? `The newest ${MAX_EVENTS} events.`
-          : `${events.length} ${events.length === 1 ? "event" : "events"}.`}
-      </p>
-      <ol className="events">
-        {events.map((event) => {
-          const workerId = workerIdOf(event);
-          const pairs = payloadPairs(event.payload);
-          return (
-            <li key={`${event.seq}:${event.timestamp}`} className="event">
-              <p className="event-head">
-                <time className="mono" dateTime={new Date(event.timestamp).toISOString()}>
-                  {timeOfDay(event.timestamp)}
-                </time>
-                <span className="event-name mono">{event.event}</span>
-                {workerId === undefined ? null : (
-                  <span className="event-worker">{workerName(workerId)}</span>
-                )}
-              </p>
-              {pairs.length === 0 ? null : (
-                <dl className="event-payload">
-                  {pairs.map((pair) => (
-                    <div key={pair.key}>
-                      <dt className="mono">{pair.key}</dt>
-                      <dd className="mono">{pair.value}</dd>
-                    </div>
-                  ))}
-                </dl>
+    <ol className="events">
+      {events.map((event) => {
+        const workerId = workerIdOf(event);
+        const pairs = payloadPairs(event.payload);
+        return (
+          <li key={`${event.seq}:${event.timestamp}`} className="event">
+            <p className="event-head">
+              <time className="mono" dateTime={new Date(event.timestamp).toISOString()}>
+                {timeOfDay(event.timestamp)}
+              </time>
+              <span className="event-name mono">{event.event}</span>
+              {workerId === undefined ? null : (
+                <span className="event-worker">{eventWorkerName(workerId, workers)}</span>
               )}
-            </li>
-          );
-        })}
-      </ol>
-    </>
+            </p>
+            {pairs.length === 0 ? null : (
+              <dl className="event-payload">
+                {pairs.map((pair) => (
+                  <div key={pair.key}>
+                    <dt className="mono">{pair.key}</dt>
+                    <dd className="mono">{pair.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </li>
+        );
+      })}
+    </ol>
   );
+}
+
+/**
+ * The name to show for the worker an event is about: its label when the daemon lists it, its
+ * id when the worker has no label or is not listed (yet, or any more).
+ */
+function eventWorkerName(id: string, workers: readonly WorkerView[] | undefined): string {
+  const worker = workers?.find((candidate) => candidate.id === id);
+  return worker === undefined ? id : workerName(worker);
 }
