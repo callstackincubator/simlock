@@ -415,6 +415,42 @@ describe("AndroidDriver", () => {
     ]);
   });
 
+  // Another Simlock instance's emulator is announced only to that instance's adb server, so
+  // its own `adb devices` lists nothing here; only the machine's TCP ports show it (#257).
+  it.each([
+    ["its console port", 5586],
+    ["the adb port above its console port", 5587],
+  ])(
+    "skips a console port when something listens on %s that its own adb server does not list",
+    async (_, listeningPort) => {
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.avdmanager, [
+          "create",
+          "avd",
+          "-n",
+          "simlock_one",
+          "-k",
+          /.+/,
+          "-d",
+          "pixel_8",
+        ]),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      const driver = await createDriver(await androidFilesystem(), runner, {
+        ids: ["one"],
+        tcpProbe: new FakeTcpProbe([adbServerPort, listeningPort]),
+      });
+      const spec = { model: "Pixel 8", osVersion: "34", platform: "android" } as const;
+      await driver.resolveSpec(spec);
+
+      const device = await driver.provision(spec);
+
+      expect(device.driverData).toMatchObject({ avdName: "simlock_one", port: 5588 });
+    },
+  );
+
   it("cold boots without loading or automatically saving snapshots", async () => {
     const harness = await provisionedHarness();
 
