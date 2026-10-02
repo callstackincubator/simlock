@@ -342,6 +342,27 @@ describe("DeviceProfileRegistry", () => {
     });
   });
 
+  it("lists a devices.xml model in customModels when avdmanager also lists it as a User profile", async () => {
+    // `avdmanager list device` reads devices.xml itself and prints each of its profiles with
+    // `OEM : User` (seen on a real SDK, issue #236), so the built-in source returns the name too.
+    const withUserProfile =
+      `${pixelDevices}---------\n` +
+      `id: 1 or "My Custom Phone"\n    Name: My Custom Phone\n    OEM : User\n`;
+    const registry = new DeviceProfileRegistry([
+      new BuiltinDeviceProfileSource(
+        avdmanager,
+        new ScriptedProcessRunner([processResult(withUserProfile)]),
+      ),
+      new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
+    ]);
+
+    await expect(registry.catalog()).resolves.toEqual({
+      customModels: ["My Custom Phone"],
+      modelAliases: { "Pixel 8": ["pixel_8"] },
+      models: ["Pixel 8", "My Custom Phone"],
+    });
+  });
+
   it("does not list a built-in model in customModels", async () => {
     const registry = new DeviceProfileRegistry([
       new BuiltinDeviceProfileSource(
