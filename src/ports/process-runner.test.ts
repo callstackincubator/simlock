@@ -685,10 +685,10 @@ describe("NodeProcessRunner: line ends", () => {
     return read;
   }
 
-  it('ends a line at each bare carriage return on stdout and stderr with lineEnd "carriage-return-too"', async () => {
+  it('ends a line at each bare carriage return on stdout and stderr with lineEnd "carriage-return-too", and still yields an unended last line', async () => {
     const handle = new NodeProcessRunner().spawn(
       process.execPath,
-      ["-e", "process.stdout.write('10%\\r20%\\r30%\\n'); process.stderr.write('a\\rb\\n')"],
+      ["-e", "process.stdout.write('10%\\r20%\\r30%\\n'); process.stderr.write('a\\rb')"],
       { lineEnd: "carriage-return-too" },
     );
 
@@ -713,19 +713,6 @@ describe("NodeProcessRunner: line ends", () => {
       const handle = new NodeProcessRunner().spawn(
         process.execPath,
         ["-e", "process.stdout.write('a\\r\\nb\\r\\n')"],
-        { lineEnd },
-      );
-
-      expect(await linesOf(handle.stdout)).toEqual(["a", "b"]);
-    },
-  );
-
-  it.each(["newline", "carriage-return-too"] as const)(
-    "reads a \\r ending one chunk and a \\n starting the next as one line end, with lineEnd %s",
-    async (lineEnd) => {
-      const handle = new NodeProcessRunner().spawn(
-        process.execPath,
-        ["-e", writeChunks, "a\r", "\nb\n"],
         { lineEnd },
       );
 
@@ -784,6 +771,27 @@ describe("ScriptedProcessRunner: line ends", () => {
       for await (const line of handle.stdout) lines.push(line);
 
       expect(lines).toEqual(expected);
+    },
+  );
+
+  it.each(["newline", "carriage-return-too"] as const)(
+    "reads a \\r ending one chunk and a \\n starting the next as one line end, with lineEnd %s",
+    async (lineEnd) => {
+      const runner = new ScriptedProcessRunner([
+        {
+          chunks: [
+            { chunk: "a\r", stream: "stdout" },
+            { chunk: "\nb\n", stream: "stdout" },
+          ],
+          match: { args: [], command: "installer" },
+        },
+      ]);
+      const handle = runner.spawn("installer", [], { lineEnd });
+      const lines: string[] = [];
+      for await (const line of handle.stdout) lines.push(line);
+
+      expect(lines).toEqual(["a", "b"]);
+      await expect(handle.wait()).resolves.toEqual({ code: 0, stderr: "", stdout: "a\r\nb\n" });
     },
   );
 });

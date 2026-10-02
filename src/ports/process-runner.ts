@@ -614,6 +614,8 @@ export interface ScriptedProcessExpectation {
    * no ordering between them. A test asserting that interleaved output reaches a caller in
    * arrival order needs that, so it is stated here rather than inferred. When absent,
    * `spawnStreaming` falls back to the line lists (stdout then stderr, newline-terminated).
+   * `spawn` replays them too, in place of the line lists, through the same line splitting a
+   * real child's output gets -- so a test can say exactly where one chunk ends.
    */
   readonly chunks?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
   /**
@@ -789,8 +791,12 @@ class ScriptedProcessHandle implements ProcessHandle {
     this.#result = new Promise<ProcessResult>((resolve) => {
       this.#resolve = resolve;
     });
-    this.#writeLines(expectation.stdoutLines, this.stdout, lineEnd);
-    this.#writeLines(expectation.stderrLines, this.stderr, lineEnd);
+    if (expectation.chunks === undefined) {
+      this.#writeLines(expectation.stdoutLines, this.stdout, lineEnd);
+      this.#writeLines(expectation.stderrLines, this.stderr, lineEnd);
+    } else {
+      this.#writeChunks(expectation.chunks, lineEnd);
+    }
 
     if (!expectation.hangs) {
       this.#finish(expectation.result ?? defaultResult(expectation));
@@ -823,6 +829,16 @@ class ScriptedProcessHandle implements ProcessHandle {
     const splitter = new LineSplitter(lineEnd);
     for (const line of lines ?? []) {
       for (const split of splitter.feed(`${line}\n`)) destination.push(split);
+    }
+  }
+
+  #writeChunks(chunks: NonNullable<ScriptedProcessExpectation["chunks"]>, lineEnd: LineEnd): void {
+    const splitters = { stderr: new LineSplitter(lineEnd), stdout: new LineSplitter(lineEnd) };
+    for (const { chunk, stream } of chunks) {
+      for (const line of splitters[stream].feed(chunk)) this[stream].push(line);
+    }
+    for (const stream of ["stdout", "stderr"] as const) {
+      for (const line of splitters[stream].end()) this[stream].push(line);
     }
   }
 
@@ -963,6 +979,14 @@ function matchesPart(matcher: string | RegExp, value: string): boolean {
 }
 
 function defaultResult(expectation: ScriptedProcessExpectation): ProcessResult {
+  if (expectation.chunks !== undefined) {
+    const text = (stream: "stdout" | "stderr"): string =>
+      expectation.chunks
+        ?.filter((chunk) => chunk.stream === stream)
+        .map(({ chunk }) => chunk)
+        .join("") ?? "";
+    return { code: 0, stderr: text("stderr"), stdout: text("stdout") };
+  }
   return {
     code: 0,
     stderr: (expectation.stderrLines ?? []).join("\n"),
