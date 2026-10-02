@@ -695,22 +695,26 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     });
   }
 
+  /**
+   * Wakes the queue whether or not the grant happened: releasing the capacity reservation
+   * frees a slot either way, and a request that planned while this device was still being
+   * readied may have queued only because that reservation counted.
+   */
   async #grantHandoff(
     waiter: AcquisitionWaiter,
     handoff: ReadyDeviceHandoff,
     capacityReservation?: CapacityReservation,
   ): Promise<void> {
-    const granted = await this.options.decisions.run(async () => {
+    await this.options.decisions.run(async () => {
       try {
-        if (waiter.state === "rejected") return false;
+        if (waiter.state === "rejected") return;
         await this.#grant(waiter, handoff.device.id);
-        return true;
       } finally {
         capacityReservation?.release();
         handoff.claim.release();
       }
     });
-    if (!granted) this.#wakeQueue();
+    this.#wakeQueue();
   }
 
   #enqueue(waiter: AcquisitionWaiter): void {

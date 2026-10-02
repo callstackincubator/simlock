@@ -318,10 +318,6 @@ describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
     await first;
     await settle();
     expect(installs(driver)).toEqual(["26.5", "27.0"]);
-    // The second request planned while the first device was provisioning, when that device and
-    // its capacity reservation both counted, so it queued; nothing wakes the queue when the first
-    // is granted (true before this change too). A kick stands in for the next release.
-    harness.coordinator.kick();
     await expect(second).resolves.toMatchObject({ device: { spec: { osVersion: "27.0" } } });
   });
 
@@ -479,9 +475,6 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
       { component: "27.0", stage: "downloading", waiting: true },
       { component: "27.0", stage: "downloading", waiting: false },
     ]);
-
-    // Issue #226: nothing wakes a request queued behind a device that was granted meanwhile.
-    harness.coordinator.kick();
     await expect(second).resolves.toMatchObject({ device: { spec: { osVersion: "27.0" } } });
   });
 
@@ -816,6 +809,37 @@ describe("LeaseAcquisitionCoordinator", () => {
       secondGranted: secondDeviceId !== undefined,
       sameDevice: secondDeviceId === firstGrant.device.id,
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
+  });
+
+  it("leaves a request that still cannot be served queued once, with no new work, when the device it queued behind is granted", async () => {
+    const harness = await createHarness({ maxDevices: 1, maxRunning: 1 });
+    harness.driver.hangMakeReady();
+    const queuedEvents: unknown[] = [];
+    harness.bus.subscribe("lease.queued", (envelope) => {
+      queuedEvents.push(envelope.payload);
+    });
+    const progress: string[] = [];
+
+    const first = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
+    await settle();
+    const second = harness.coordinator.request(request, {
+      onProgress: (update) => progress.push(update.stage),
+      ownerId: "b",
+      requesterId: "b",
+    });
+    void second.catch(() => undefined);
+    await settle();
+
+    harness.driver.releaseMakeReady();
+    await first;
+    await settle();
+
+    expect({
+      progress,
+      provisions: harness.driver.calls.filter((call) => call.operation === "provision").length,
+      queueDepth: harness.coordinator.queueDepth,
+      queuedEvents: queuedEvents.length,
+    }).toEqual({ progress: ["queued"], provisions: 1, queueDepth: 1, queuedEvents: 1 });
   });
 
   it("retries provisioning once and rejects boot failures", async () => {
