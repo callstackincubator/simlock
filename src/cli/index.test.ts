@@ -1741,6 +1741,31 @@ describe("CLI: config set and the file mode of config.json (#252)", () => {
       replaced: (await tightened.stat("/simlock/config.json")).mode?.toString(8),
     }).toEqual({ created: "600", replaced: "600" });
   });
+
+  it("makes a config.json that others could read owner-only on the next config set", async () => {
+    // A file written by hand or by an older simlock: readable by group and others. `config set`
+    // must not carry that mode over to the file it writes in its place.
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/simlock");
+    await filesystem.writeFileAtomic(
+      "/simlock/config.json",
+      `${JSON.stringify({ gateway: { url: "wss://gw.example:4700", token: "slk_old" } })}\n`,
+      { mode: 0o644 },
+    );
+
+    const exit = await runCli(
+      ["config", "set", "gateway.label", "build-mac"],
+      outputCapture(realCliEnvironmentPorts(filesystem)).environmentWith(),
+    );
+
+    expect(exit).toBe(0);
+    expect(JSON.parse(await filesystem.readFile("/simlock/config.json")).gateway).toEqual({
+      url: "wss://gw.example:4700",
+      token: "slk_old",
+      label: "build-mac",
+    });
+    expect((await filesystem.stat("/simlock/config.json")).mode?.toString(8)).toBe("600");
+  });
 });
 
 describe("CLI: --json shape is the contract, as-is (ADR 0003 §11)", () => {
