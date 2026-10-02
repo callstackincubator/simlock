@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,16 @@ const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
   maxBuffer: 32 * 1024 * 1024,
 })
   .split("\0")
-  .filter((name) => name.length > 0);
+  .filter((name) => name.length > 0)
+  // A path deleted from the working tree is still listed by `git ls-files`; only regular files
+  // can be read.
+  .filter((name) => {
+    try {
+      return statSync(join(REPO_ROOT, name)).isFile();
+    } catch {
+      return false;
+    }
+  });
 
 /** `README.md` and every markdown file under `docs/` that is not under `docs/internal/`. */
 const endUserDocs = trackedFiles.filter(
@@ -24,8 +33,9 @@ const endUserDocs = trackedFiles.filter(
 );
 
 /**
- * File names that exist only under `docs/internal/`. `EVENTS.md` and `README.md` are left out:
- * an end-user doc of the same name exists, so the bare name says nothing about the audience.
+ * File names that exist only under `docs/internal/`, compared ignoring case. `EVENTS.md`,
+ * `events.md` and `README.md` are left out: an end-user doc of the same name exists, so the
+ * bare name says nothing about the audience.
  */
 const internalOnlyNames = [
   ...new Set(
@@ -33,26 +43,28 @@ const internalOnlyNames = [
       .filter((name) => name.startsWith("docs/internal/") && name.endsWith(".md"))
       .map((name) => basename(name)),
   ),
-].filter((name) => !endUserDocs.some((doc) => basename(doc) === name));
+].filter((name) => !endUserDocs.some((doc) => basename(doc).toLowerCase() === name.toLowerCase()));
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** What documentation rule 2 forbids an end-user doc from naming. */
 const FORBIDDEN: RegExp[] = [
   /docs\/internal\b/,
-  /\]\((?:\.\/)?internal\//,
-  /\bADRs?\b/,
-  /\badr\//,
-  ...internalOnlyNames.map((name) => new RegExp(`(?<![\\w-])${escape(name)}(?![\\w-])`)),
+  // `internal/` starting a path: an inline, angle-bracket, reference-style or HTML link from
+  // `docs/`, or the same path in backticks or prose.
+  /(?<![\w./-])(?:\.\/)?internal\//,
+  /\bADRs?\b/i,
+  /\bdecision records?\b/i,
+  ...internalOnlyNames.map((name) => new RegExp(`(?<![\\w-])${escape(name)}(?![\\w-])`, "i")),
 ];
 
 /**
  * Documentation rule 2 (`docs/internal/agent-rules/documentation.md`): an end-user doc never
  * cites an ADR and never points into `docs/internal/` -- by link, by path, or by an internal
- * doc's bare file name ("see ARCHITECTURE.md").
+ * doc's bare file name, in any case ("see ARCHITECTURE.md").
  */
 describe("end-user docs", () => {
-  it("were enumerated from the git index", () => {
+  it("include the known end-user docs, beside a list of internal-only names", () => {
     // Without this, an empty enumeration would leave the scan below with nothing to read and
     // the suite would pass while checking no doc at all.
     expect(endUserDocs).toEqual(
@@ -98,11 +110,13 @@ function section(markdown: string, from: string, to: string): string {
 /**
  * Documentation rule 1: `docs/` is the end-user directory, and a doc for maintainers or agents
  * goes under `docs/internal/`. The two places that name the end-user docs -- AGENTS.md's list
- * and rule 2's list -- are what a file directly in `docs/` has to be one of.
+ * and rule 2's list -- are what a markdown file under `docs/` and outside `docs/internal/` has
+ * to be one of. Both lists name files directly in `docs/`, so a doc in any other subdirectory
+ * of `docs/` fails.
  */
-describe("the files directly in docs/", () => {
-  const inDocsDir = trackedFiles
-    .filter((name) => /^docs\/[^/]+\.md$/.test(name))
+describe("the markdown files under docs/ outside docs/internal/", () => {
+  const inDocsDir = endUserDocs
+    .filter((name) => name !== "README.md")
     .toSorted((a, b) => a.localeCompare(b));
 
   const listedInAgents = [
