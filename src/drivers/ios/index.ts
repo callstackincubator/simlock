@@ -620,7 +620,8 @@ export class IosSimctlDriver implements Driver {
    * Lists the runtime images every `DELETING_POLL_MS` while the image `identifier` is listed as
    * being deleted (`isBeingDeleted`), and answers once it is gone or listed in any other state;
    * `removeListedComponent`'s check then decides. Still being deleted at `deadline`, or when
-   * `signal` fires, is `DriverCrashError`, so the removal fails and the record is kept.
+   * `signal` fires, is `DriverCrashError`, so the removal fails and the record is kept. A listing
+   * already running is not cut short by either: it ends on its own `COMMAND_TIMEOUT_MS` first.
    */
   async #waitWhileDeleting(
     identifier: string,
