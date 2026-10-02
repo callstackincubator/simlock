@@ -277,8 +277,9 @@ try again, use a new key. Repeating works across a daemon restart, for
 belong to your token: another token sending the same key starts a request of
 its own.
 
-Through a **gateway**, `allowDownload` is accepted and has no effect: only
-runtimes already installed on a worker count, and no download is started. The
+Through a **gateway**, `allowDownload` does not change which worker is picked
+and never starts a download: only runtimes already installed on a worker
+count. It still makes the `POST` answer early, as described below. The
 gateway sends the request only to a worker whose catalog can serve it: one
 that lists `device` as a model or another name for one, in any letter case,
 and pairs that model with `os` (or, without `os`, with at least one installed
