@@ -335,7 +335,10 @@ test.describe("the workers views", () => {
         // A leased device: in that state since its lease was granted, counting on with no reload.
         await expect(cells.nth(2), device.id).toHaveText(/^\d+ s$/);
         const shown = Number.parseInt((await cells.nth(2).textContent()) ?? "", 10);
-        expect(Math.abs(shown - (Date.now() - held.grantedAt) / 1000)).toBeLessThanOrEqual(2);
+        // Within 3 seconds: the Date header counts whole seconds, the page shows whole seconds,
+        // and the page is read a moment before the expected value is worked out. Three hours
+        // off, as the browser's own clock would make it, is far outside.
+        expect(Math.abs(shown - (Date.now() - held.grantedAt) / 1000)).toBeLessThanOrEqual(3);
         await expect(cells.nth(2)).not.toHaveText(`${shown} s`);
       }
     } finally {
