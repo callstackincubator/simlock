@@ -761,7 +761,7 @@ describe("ScriptedProcessRunner: line ends", () => {
     ["newline", ["10%\r20%", "30%"]],
     ["carriage-return-too", ["10%", "20%", "30%"]],
   ] as const)(
-    "splits a scripted line the way real output is split, with lineEnd %s",
+    "splits a scripted line at a bare \\r only under carriage-return-too, with lineEnd %s",
     async (lineEnd, expected) => {
       const runner = new ScriptedProcessRunner([
         { match: { args: [], command: "installer" }, stdoutLines: ["10%\r20%", "30%"] },
@@ -775,13 +775,13 @@ describe("ScriptedProcessRunner: line ends", () => {
   );
 
   it.each(["newline", "carriage-return-too"] as const)(
-    "reads a \\r ending one chunk and a \\n starting the next as one line end, with lineEnd %s",
+    "reads a \\r ending one chunk and a \\n starting the next as one line end, and keeps an unended last line, with lineEnd %s",
     async (lineEnd) => {
       const runner = new ScriptedProcessRunner([
         {
           chunks: [
             { chunk: "a\r", stream: "stdout" },
-            { chunk: "\nb\n", stream: "stdout" },
+            { chunk: "\nb", stream: "stdout" },
           ],
           match: { args: [], command: "installer" },
         },
@@ -791,7 +791,7 @@ describe("ScriptedProcessRunner: line ends", () => {
       for await (const line of handle.stdout) lines.push(line);
 
       expect(lines).toEqual(["a", "b"]);
-      await expect(handle.wait()).resolves.toEqual({ code: 0, stderr: "", stdout: "a\r\nb\n" });
+      await expect(handle.wait()).resolves.toEqual({ code: 0, stderr: "", stdout: "a\r\nb" });
     },
   );
 });

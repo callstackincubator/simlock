@@ -49,9 +49,9 @@ export interface ProcessRunOptions {
   /**
    * Where `spawn`'s `stdout` and `stderr` iterables end a line. `"newline"` (the default) ends
    * one only at `\n`. `"carriage-return-too"` also ends one at a bare `\r`, and yields no empty
-   * lines: an installer (`sdkmanager`, `xcodebuild -downloadPlatform`) redraws its progress bar
-   * in place with `\r`, so without this every update waits in one unfinished line until the
-   * process prints its final newline. The captured `ProcessResult` text is the same either way.
+   * lines: an installer such as `sdkmanager` redraws its progress bar in place with `\r`, so
+   * without this every update waits in one unfinished line until the process prints its final
+   * newline. The captured `ProcessResult` text is the same either way.
    */
   readonly lineEnd?: LineEnd;
 }

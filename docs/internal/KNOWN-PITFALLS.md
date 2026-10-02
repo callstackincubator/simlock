@@ -297,7 +297,7 @@ machine need distinct values for it.
 A lease request that may download and whose runtime is missing calls
 `ComponentInstaller` (`src/core/component-installer.ts`, ADR 0010 §3), which
 runs `xcodebuild -downloadPlatform iOS` or `sdkmanager --install` through the
-driver. Two things worth knowing about that path:
+driver. Three things worth knowing about that path:
 
 **A platform runs one download at a time.** Installs queue per platform,
 first come first served. Requests for the *same* component join one install;
